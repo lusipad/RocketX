@@ -1,0 +1,12 @@
+{
+  "name": "rocketchatx",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.12.0",
+  "scripts": {
+    "dev": "pnpm --filter @rcx/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "bridge": "pnpm --filter @rcx/ado-bridge dev"
+  }
+}

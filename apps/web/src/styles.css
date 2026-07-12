@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+
+/* 飞书视觉体系配色 */
+@theme {
+  --color-primary: #3370ff;
+  --color-primary-hover: #4e83fd;
+  --color-primary-active: #245bdb;
+  --color-primary-light: #e1eaff;
+  --color-ink: #1f2329;
+  --color-ink-2: #646a73;
+  --color-ink-3: #8f959e;
+  --color-line: #dee0e3;
+  --color-fill-1: #f2f3f5;
+  --color-fill-2: #f5f6f7;
+  --color-fill-hover: #eff0f1;
+  --color-danger: #f54a45;
+  --color-success: #34c724;
+  /* 深色左侧框架（导航/分组/会话列表），取自飞书网页版 */
+  --color-dark-1: #16171c;
+  --color-dark-2: #1e2025;
+  --color-dark-3: #24262c;
+  --color-dark-hover: #2f3138;
+  --color-dark-active: #35373f;
+  --color-dark-ink: #f0f1f2;
+  --color-dark-ink-2: #a3a6ad;
+  --color-dark-ink-3: #757a82;
+  --color-dark-line: #33353c;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    'Helvetica Neue', Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 细滚动条，接近飞书质感 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c9cdd4 transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #c9cdd4;
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

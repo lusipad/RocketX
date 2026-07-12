@@ -1,0 +1,47 @@
+# 本地开发用 Rocket.Chat 服务（原版镜像，不做任何修改）
+# 启动：docker compose -f docker/docker-compose.yml up -d
+# 用 3300 端口以避开本机其他服务；开发管理员 admin / rcxdev123
+name: rcx-dev
+services:
+  rocketchat:
+    image: registry.rocket.chat/rocketchat/rocket.chat:latest
+    restart: unless-stopped
+    environment:
+      MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
+      MONGO_OPLOG_URL: mongodb://mongodb:27017/local?replicaSet=rs0
+      ROOT_URL: http://localhost:3300
+      PORT: 3000
+      DEPLOY_METHOD: docker
+      # 以下仅供本地开发：自动创建管理员并跳过安装向导，生产环境请删除
+      ADMIN_USERNAME: admin
+      ADMIN_PASS: rcxdev123
+      ADMIN_EMAIL: admin@rcx.local
+      OVERWRITE_SETTING_Show_Setup_Wizard: completed
+      # 允许中文群组/频道名（默认正则只放行英文数字）
+      OVERWRITE_SETTING_UTF8_Channel_Names_Validation: '[0-9a-zA-Z-_.一-龥぀-ヿ]+'
+      # 消息搜索用正则（子串匹配）替代 Mongo 文本索引，中文搜索必需
+      OVERWRITE_SETTING_Message_AlwaysSearchRegExp: 'true'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3300:3000"
+
+  mongodb:
+    image: mongo:7.0
+    restart: unless-stopped
+    command: mongod --replSet rs0 --oplogSize 128 --bind_ip_all
+    volumes:
+      - mongodb_data:/data/db
+    # 健康检查顺带完成副本集初始化（Rocket.Chat 必须使用副本集）
+    healthcheck:
+      test: >
+        mongosh --quiet --eval
+        "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}).ok }"
+      interval: 10s
+      timeout: 10s
+      start_period: 10s
+      retries: 30
+
+volumes:
+  mongodb_data:
