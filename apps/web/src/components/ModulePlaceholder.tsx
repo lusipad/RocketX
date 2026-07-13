@@ -4,7 +4,7 @@ import type { ModuleKey } from '../stores/ui';
 /** 仅用于尚未实现的模块（messages/contacts/workbench/settings 有各自页面） */
 export type PlaceholderModule = Exclude<
   ModuleKey,
-  'messages' | 'contacts' | 'workbench' | 'settings'
+  'messages' | 'todos' | 'contacts' | 'workbench' | 'settings'
 >;
 
 const META: Record<PlaceholderModule, { icon: typeof Calendar; title: string; desc: string }> = {

@@ -1,72 +1,47 @@
-/** emoji 短代码表：短代码需与 Rocket.Chat（emojione 命名）一致，chat.react 直接用 */
+import { EMOJI_MAP } from './emoji-map';
+
+/**
+ * emoji 短代码。
+ *
+ * 短代码体系必须与 Rocket.Chat 一致（JoyPixels / emojione），
+ * 因为 chat.react 的 reaction key 就是 `:code:`，服务端和官方客户端都按这套认。
+ * 完整表由 scripts/gen-emoji.ts 从 emoji-toolkit 生成（含 :cowboy: 这类别名）。
+ *
+ * 只有 map 进主包——渲染消息时要同步查表。选择器的分类数据（3400+ 项）
+ * 只有点开选择器才用得上，见 loadEmojiSections()。
+ */
 export interface EmojiEntry {
   code: string;
   char: string;
 }
 
-export const EMOJI_LIST: EmojiEntry[] = [
-  { code: 'grinning', char: '😀' },
-  { code: 'smile', char: '😄' },
-  { code: 'laughing', char: '😆' },
-  { code: 'joy', char: '😂' },
-  { code: 'blush', char: '😊' },
-  { code: 'heart_eyes', char: '😍' },
-  { code: 'kissing_heart', char: '😘' },
-  { code: 'stuck_out_tongue_winking_eye', char: '😜' },
-  { code: 'thinking', char: '🤔' },
-  { code: 'sunglasses', char: '😎' },
-  { code: 'upside_down', char: '🙃' },
-  { code: 'sleeping', char: '😴' },
-  { code: 'cry', char: '😢' },
-  { code: 'sob', char: '😭' },
-  { code: 'rage', char: '😡' },
-  { code: 'scream', char: '😱' },
-  { code: 'exploding_head', char: '🤯' },
-  { code: 'pleading_face', char: '🥺' },
-  { code: 'partying_face', char: '🥳' },
-  { code: 'wave', char: '👋' },
-  { code: 'thumbsup', char: '👍' },
-  { code: 'thumbsdown', char: '👎' },
-  { code: 'ok_hand', char: '👌' },
-  { code: 'pray', char: '🙏' },
-  { code: 'clap', char: '👏' },
-  { code: 'muscle', char: '💪' },
-  { code: 'handshake', char: '🤝' },
-  { code: 'v', char: '✌️' },
-  { code: 'eyes', char: '👀' },
-  { code: 'raised_hands', char: '🙌' },
-  { code: 'heart', char: '❤️' },
-  { code: 'broken_heart', char: '💔' },
-  { code: 'tada', char: '🎉' },
-  { code: 'confetti_ball', char: '🎊' },
-  { code: 'star', char: '⭐' },
-  { code: 'fire', char: '🔥' },
-  { code: '100', char: '💯' },
-  { code: 'sparkles', char: '✨' },
-  { code: 'rocket', char: '🚀' },
-  { code: 'zap', char: '⚡' },
-  { code: 'white_check_mark', char: '✅' },
-  { code: 'x', char: '❌' },
-  { code: 'warning', char: '⚠️' },
-  { code: 'question', char: '❓' },
-  { code: 'exclamation', char: '❗' },
-  { code: 'bulb', char: '💡' },
-  { code: 'pushpin', char: '📌' },
-  { code: 'calendar', char: '📅' },
-  { code: 'alarm_clock', char: '⏰' },
-  { code: 'bell', char: '🔔' },
-];
+export { EMOJI_MAP };
 
-export const EMOJI_MAP: Record<string, string> = Object.fromEntries(
-  EMOJI_LIST.map((e) => [e.code, e.char]),
-);
-// 常见别名
-EMOJI_MAP['+1'] = '👍';
-EMOJI_MAP['-1'] = '👎';
-EMOJI_MAP['grin'] = '😀';
-EMOJI_MAP['slight_smile'] = '🙂';
+export interface EmojiSection {
+  label: string;
+  items: EmojiEntry[];
+}
 
+let sectionsCache: EmojiSection[] | null = null;
+
+/** 懒加载选择器分类数据（单独成块，不进首屏） */
+export async function loadEmojiSections(): Promise<EmojiSection[]> {
+  if (sectionsCache) return sectionsCache;
+  const { EMOJI_GROUPS } = await import('./emoji-groups');
+  sectionsCache = EMOJI_GROUPS.map((g) => ({
+    label: g.label,
+    items: g.codes.map((code) => ({ code, char: EMOJI_MAP[code] })),
+  }));
+  return sectionsCache;
+}
+
+/** 认不出来的短代码原样返回，别让消息里出现空白 */
 export function emojiFromShortcode(code: string): string {
   const name = code.replace(/:/g, '');
   return EMOJI_MAP[name] ?? `:${name}:`;
+}
+
+/** 把纯文本里的 :code: 全部替换成 emoji（摘要、预览等不走 markdown 渲染的地方用） */
+export function emojify(text: string): string {
+  return text.replace(/:([a-z0-9_+-]+):/gi, (m, code: string) => EMOJI_MAP[code] ?? m);
 }

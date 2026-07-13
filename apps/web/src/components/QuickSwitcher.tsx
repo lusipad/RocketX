@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { Hash, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
+import { displayName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
 import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
@@ -59,17 +60,23 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
     () => buildConversations(subscriptions, rooms),
     [subscriptions, rooms],
   );
-  // 会话名多为中文，支持拼音全拼与首字母（「核心项目」← hxxm / hexinxiangmu）
+  // 会话名多为中文，支持拼音全拼与首字母（「核心项目」← hxxm / hexinxiangmu）。
+  // 备注名也参与匹配，否则「给人起了备注却搜不到」。
   const pinyinReady = usePinyinReady();
+  const aliases = useAliases((s) => s.aliases);
   const filteredConvs = useMemo(
     () =>
       (keyword
         ? conversations
-            .filter((c) => pinyinMatch(keyword, c.name))
-            .sort((a, b) => pinyinScore(keyword, a.name) - pinyinScore(keyword, b.name))
+            .filter((c) => pinyinMatch(keyword, displayName(aliases, c), c.name))
+            .sort(
+              (a, b) =>
+                pinyinScore(keyword, displayName(aliases, a)) -
+                pinyinScore(keyword, displayName(aliases, b)),
+            )
         : conversations
       ).slice(0, 8),
-    [conversations, keyword, pinyinReady],
+    [conversations, keyword, aliases, pinyinReady],
   );
 
   useEffect(() => inputRef.current?.focus(), [tab]);
@@ -213,8 +220,8 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                   i === index ? 'bg-primary-light' : ''
                 }`}
               >
-                <Avatar name={c.name} username={c.avatarUsername} size={28} />
-                <span className="truncate text-sm text-ink">{c.name}</span>
+                <Avatar name={displayName(aliases, c)} username={c.avatarUsername} size={28} />
+                <span className="truncate text-sm text-ink">{displayName(aliases, c)}</span>
                 {c.isDiscussion && (
                   <span className="rounded bg-fill-1 px-1 text-[10px] text-ink-3">讨论</span>
                 )}

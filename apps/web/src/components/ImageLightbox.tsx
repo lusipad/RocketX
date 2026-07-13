@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Maximize2, Minus, Plus, X } from 'lucide-react';
-import AuthImage, { downloadAuthedFile } from './AuthImage';
+import AuthImage from './AuthImage';
+import { saveFile } from '../lib/download';
+import { toast } from '../stores/toast';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
@@ -99,7 +101,7 @@ export default function ImageLightbox({
         <button
           title="下载"
           className={btn}
-          onClick={() => void downloadAuthedFile(path, fileName).catch(() => {})}
+          onClick={() => void saveFile(path, fileName).catch((err) => toast.error(err, '下载失败'))}
         >
           <Download size={16} />
         </button>

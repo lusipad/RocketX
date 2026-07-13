@@ -5,12 +5,55 @@ import { create } from 'zustand';
  * Rocket.Chat 没有这个数据模型，存在本地（跨设备不同步）。
  * 一个会话可以属于多个分组。
  */
+/** 规则匹配方式 */
+export type RuleMode = 'prefix' | 'contains' | 'regex';
+
+export interface FolderRule {
+  mode: RuleMode;
+  /** 匹配串（prefix/contains 不区分大小写；regex 为正则源码） */
+  value: string;
+}
+
 export interface Folder {
   id: string;
   name: string;
-  /** 会话 rid 列表（顺序即显示顺序） */
+  /** 手工拖进来的会话 rid（顺序即显示顺序） */
   rids: string[];
+  /**
+   * 规则：命中会话名的自动进组，和手工拖入并存。
+   * 典型用法：前缀 WI —— 所有「WI-1234 xxx」的会话自动归到一组。
+   */
+  rules?: FolderRule[];
 }
+
+/** 会话名是否命中某条规则 */
+export function ruleMatches(rule: FolderRule, name: string): boolean {
+  const v = rule.value.trim();
+  if (!v) return false;
+  if (rule.mode === 'regex') {
+    try {
+      return new RegExp(v, 'i').test(name);
+    } catch {
+      // 正则写错了不能让整个列表炸掉，当作不匹配
+      return false;
+    }
+  }
+  const lower = name.toLowerCase();
+  const needle = v.toLowerCase();
+  return rule.mode === 'prefix' ? lower.startsWith(needle) : lower.includes(needle);
+}
+
+/** 会话是否属于该分组：手工加入 或 命中任一规则 */
+export function inFolder(folder: Folder, conv: { rid: string; name: string }): boolean {
+  if (folder.rids.includes(conv.rid)) return true;
+  return (folder.rules ?? []).some((r) => ruleMatches(r, conv.name));
+}
+
+export const RULE_LABELS: Record<RuleMode, string> = {
+  prefix: '名称以…开头',
+  contains: '名称包含…',
+  regex: '正则匹配',
+};
 
 const KEY = 'rcx-folders';
 const COLLAPSE_KEY = 'rcx-collapsed';
@@ -58,6 +101,8 @@ interface FoldersState {
    * 不清理的话分组计数会一直虚高，点进去却是空的。
    */
   prune: (validRids: Set<string>) => void;
+  /** 整体替换某个分组的规则 */
+  setRules: (folderId: string, rules: FolderRule[]) => void;
   /** 会话所属的分组 id 列表 */
   foldersOf: (rid: string) => string[];
   toggleCollapse: (key: string) => void;
@@ -112,6 +157,13 @@ export const useFolders = create<FoldersState>((set, get) => ({
     const folders = get().folders.map((f) =>
       f.id === folderId ? { ...f, rids: f.rids.filter((r) => r !== rid) } : f,
     );
+    set({ folders });
+    persist(folders);
+  },
+
+  setRules: (folderId, rules) => {
+    const clean = rules.filter((r) => r.value.trim());
+    const folders = get().folders.map((f) => (f.id === folderId ? { ...f, rules: clean } : f));
     set({ folders });
     persist(folders);
   },

@@ -11,6 +11,7 @@ import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
 import Toaster from '../components/Toaster';
 import ContactsPage from './ContactsPage';
+import TodosPage from './TodosPage';
 import WorkbenchPage from './WorkbenchPage';
 import SettingsPage from './SettingsPage';
 
@@ -66,6 +67,8 @@ export default function MainPage() {
           <ConversationList />
           <ChatArea />
         </>
+      ) : module === 'todos' ? (
+        <TodosPage />
       ) : module === 'contacts' ? (
         <ContactsPage />
       ) : module === 'workbench' ? (

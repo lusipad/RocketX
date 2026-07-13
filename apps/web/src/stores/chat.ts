@@ -9,6 +9,7 @@ import {
   type RealtimeStatus,
 } from '@rcx/rc-client';
 import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
+import { emojify } from '../lib/emoji';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { humanError, toast } from './toast';
@@ -27,6 +28,8 @@ export interface Conversation {
   muted: boolean;
   /** 讨论（Discussion，父房间的子会话） */
   isDiscussion: boolean;
+  /** 多人直聊：RC 里 t 仍是 'd'，但成员多于两人——对用户来说是群聊 */
+  isMultiDM: boolean;
   /** 讨论所属的父会话名 */
   parentName?: string;
   /** Team 主频道 */
@@ -64,6 +67,7 @@ export type RightPanel =
   | { kind: 'starred' }
   | { kind: 'members' }
   | { kind: 'search' }
+  | { kind: 'info' }
   | null;
 
 const HISTORY_PAGE = 50;
@@ -133,6 +137,13 @@ interface ChatState {
   toggleMute: (conv: Conversation) => Promise<void>;
   markConvRead: (rid: string) => Promise<void>;
   hideConv: (conv: Conversation) => Promise<void>;
+  /** 改群设置（话题/公告/描述/名称）；无权限时会抛出 */
+  saveRoomSettings: (
+    rid: string,
+    settings: { topic?: string; announcement?: string; description?: string; roomName?: string },
+  ) => Promise<void>;
+  /** 退出群组（DM 只能隐藏） */
+  leaveConv: (conv: Conversation) => Promise<void>;
   forwardMessage: (msg: RcMessage, rids: string[]) => Promise<void>;
   setDraft: (rid: string, text: string) => void;
   /** 发起私聊：创建/打开 DM 并跳转，返回房间 id */
@@ -163,9 +174,11 @@ function messagePreview(msg: RcMessage | undefined): string {
   if (!msg) return '';
   const who = msg.u?.name || msg.u?.username || '';
   if (msg.t) return '[系统消息]';
-  const text = (msg.msg ?? '').replace(QUOTE_LINK_RE, '');
+  // 预览是纯文本，不走 markdown 渲染，所以 :smile: 得在这里换成表情
+  const text = emojify((msg.msg ?? '').replace(QUOTE_LINK_RE, ''));
   if (text) return who ? `${who}: ${text}` : text;
-  if (msg.attachments?.length) return who ? `${who}: [卡片消息]` : '[卡片消息]';
+  if (msg.file?.name) return who ? `${who}: [文件] ${msg.file.name}` : `[文件] ${msg.file.name}`;
+  if (msg.attachments?.length) return who ? `${who}: [图片/附件]` : '[图片/附件]';
   return '';
 }
 
@@ -828,6 +841,34 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
+  saveRoomSettings: async (rid, settings) => {
+    const room = get().rooms[rid];
+    try {
+      await rest.saveRoomSettings(rid, settings);
+      // 服务端不一定推送房间更新，本地先合并一份
+      if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, ...settings } } });
+      toast.success('已保存');
+    } catch (err) {
+      toast.error(err, '保存失败，可能是你没有该群的管理权限');
+      throw err;
+    }
+  },
+
+  leaveConv: async (conv) => {
+    try {
+      // DM 不能「退出」，只能隐藏
+      if (conv.type === 'd') await rest.hideRoom(conv.rid, conv.type);
+      else await rest.leaveRoom(conv.rid, conv.type);
+      const subs = { ...get().subscriptions };
+      delete subs[conv.rid];
+      set({ subscriptions: subs });
+      if (get().activeRid === conv.rid) set({ activeRid: null, rightPanel: null });
+      toast.success(conv.type === 'd' ? `已隐藏「${conv.name}」` : `已退出「${conv.name}」`);
+    } catch (err) {
+      toast.error(err, '退出失败');
+    }
+  },
+
   forwardMessage: async (msg, rids) => {
     const names = rids.map(
       (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
@@ -938,9 +979,23 @@ export function buildConversations(
   for (const sub of Object.values(subscriptions)) {
     if (sub.open === false) continue;
     const room = rooms[sub.rid];
-    const lastTs = Math.max(tsMs(room?.lm), tsMs(room?.lastMessage?.ts), tsMs(sub._updatedAt));
+    /**
+     * 只认「真实的最后一条消息时间」。
+     * 早先这里还兜底取了 sub._updatedAt，可打开会话本身就会更新订阅（清未读、写 ls），
+     * _updatedAt 变成此刻 → 会话直接窜到列表顶部，看起来像「点谁谁置顶」。
+     * 没有任何消息的空会话拿不到时间，排在最后即可。
+     */
+    const lastTs = Math.max(tsMs(room?.lm), tsMs(room?.lastMessage?.ts));
     const prid = sub.prid ?? room?.prid;
     const parent = prid ? rooms[prid] : undefined;
+    /**
+     * 多人直聊：Rocket.Chat 里它的 t 仍然是 'd'，只是成员多于两人
+     * （fname 形如「Rocket.Cat, 张三」）。对用户来说这是群聊，不该混进「单聊」。
+     * room 还没加载时退化用名字里的逗号判断。
+     */
+    const dmSize = room?.uids?.length ?? room?.usersCount;
+    const isMultiDM =
+      sub.t === 'd' && (dmSize !== undefined ? dmSize > 2 : (sub.fname ?? sub.name).includes(','));
     items.push({
       rid: sub.rid,
       name: sub.fname || sub.name,
@@ -951,13 +1006,15 @@ export function buildConversations(
       favorite: !!sub.f,
       muted: !!sub.disableNotifications,
       isDiscussion: !!prid,
+      isMultiDM,
       parentName: parent ? parent.fname || parent.name : undefined,
       // Team 标记在 room 对象上（订阅里没有）
       isTeam: !!(room?.teamMain ?? sub.teamMain),
       teamId: room?.teamId ?? sub.teamId,
       lastTs,
       lastPreview: messagePreview(room?.lastMessage),
-      avatarUsername: sub.t === 'd' ? sub.name : undefined,
+      // 多人直聊没有「对方」，不能拿某个人的头像顶上
+      avatarUsername: sub.t === 'd' && !isMultiDM ? sub.name : undefined,
     });
   }
   // 置顶会话在前，其余按最新消息时间
@@ -970,7 +1027,8 @@ export function sectionOf(conv: Conversation): SectionKey {
   if (conv.favorite) return 'favorites';
   if (conv.isTeam) return 'teams';
   if (conv.isDiscussion) return 'discussions';
-  if (conv.type === 'd') return 'direct';
+  // 多人直聊归到频道/群组区，「私聊」区只放 1 对 1
+  if (conv.type === 'd' && !conv.isMultiDM) return 'direct';
   return 'channels';
 }
 

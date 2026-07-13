@@ -67,15 +67,4 @@ export default function AuthImage({
   return <img src={src ?? undefined} onError={() => setFailed(true)} {...imgProps} />;
 }
 
-/** 带认证下载站内文件并触发保存 */
-export async function downloadAuthedFile(path: string, fileName: string): Promise<void> {
-  const blob = await rest.fetchFile(path);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
+// 下载统一走 lib/download.ts 的 saveFile（桌面端需要原生保存对话框，见那里的说明）

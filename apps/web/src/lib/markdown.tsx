@@ -192,6 +192,143 @@ export function renderMarkdown(text: string, me?: string): ReactNode {
   );
 }
 
+/**
+ * 文档级 Markdown（用于 .md 文件预览）。
+ *
+ * 和聊天里的 renderMarkdown 是两回事：聊天消息不能把「# 号」当标题
+ * （谁发一句「#1 修好了」都会变成大字），而文档就该按标题、有序列表、
+ * 任务列表、表格完整渲染。
+ */
+export function renderMarkdownDoc(text: string): ReactNode {
+  const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <pre
+            key={i}
+            className="my-3 overflow-x-auto rounded-md bg-code-bg p-3 font-mono text-xs leading-relaxed text-code-ink"
+          >
+            {part.replace(/\n$/, '')}
+          </pre>
+        ) : part ? (
+          <Fragment key={i}>{renderDocBlocks(part, String(i))}</Fragment>
+        ) : null,
+      )}
+    </>
+  );
+}
+
+const HEADING_CLS = [
+  'mt-4 mb-2 text-2xl font-semibold',
+  'mt-4 mb-2 text-xl font-semibold',
+  'mt-3 mb-1.5 text-lg font-semibold',
+  'mt-3 mb-1.5 text-base font-semibold',
+  'mt-2 mb-1 text-sm font-semibold',
+  'mt-2 mb-1 text-sm font-medium text-ink-2',
+];
+
+function renderDocBlocks(text: string, keyBase: string): ReactNode[] {
+  const lines = text.split('\n');
+  const nodes: ReactNode[] = [];
+  let para: string[] = [];
+
+  const flushPara = (key: string) => {
+    if (!para.length) return;
+    const content = para.join('\n');
+    para = [];
+    nodes.push(
+      <p key={key} className="my-2 whitespace-pre-wrap">
+        {renderInline(content, undefined, `${key}-p`)}
+      </p>,
+    );
+  };
+
+  lines.forEach((line, li) => {
+    const key = `${keyBase}-d${li}`;
+
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      flushPara(`${key}-fp`);
+      const level = heading[1].length;
+      const Tag = `h${level}` as 'h1';
+      nodes.push(
+        <Tag key={key} className={HEADING_CLS[level - 1]}>
+          {renderInline(heading[2], undefined, key)}
+        </Tag>,
+      );
+      return;
+    }
+
+    // 任务列表要先于普通列表判断，否则 [x] 会被当成正文
+    const task = /^\s*[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
+    if (task) {
+      flushPara(`${key}-fp`);
+      const done = task[1].toLowerCase() === 'x';
+      nodes.push(
+        <div key={key} className="flex items-start gap-2 py-0.5 pl-1">
+          <input type="checkbox" checked={done} readOnly className="mt-1 accent-primary" />
+          <span className={done ? 'text-ink-3 line-through' : ''}>
+            {renderInline(task[2], undefined, key)}
+          </span>
+        </div>,
+      );
+      return;
+    }
+
+    const ordered = /^\s*(\d+)\.\s+(.*)$/.exec(line);
+    if (ordered) {
+      flushPara(`${key}-fp`);
+      nodes.push(
+        <div key={key} className="flex gap-2 py-0.5 pl-1">
+          <span className="shrink-0 text-ink-3">{ordered[1]}.</span>
+          <span>{renderInline(ordered[2], undefined, key)}</span>
+        </div>,
+      );
+      return;
+    }
+
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (bullet) {
+      flushPara(`${key}-fp`);
+      nodes.push(
+        <div key={key} className="flex gap-2 py-0.5 pl-1">
+          <span className="shrink-0 text-ink-3">•</span>
+          <span>{renderInline(bullet[1], undefined, key)}</span>
+        </div>,
+      );
+      return;
+    }
+
+    const quote = /^>\s?(.*)$/.exec(line);
+    if (quote) {
+      flushPara(`${key}-fp`);
+      nodes.push(
+        <blockquote key={key} className="my-1.5 border-l-[3px] border-line pl-3 text-ink-2">
+          {renderInline(quote[1], undefined, key)}
+        </blockquote>,
+      );
+      return;
+    }
+
+    if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
+      flushPara(`${key}-fp`);
+      nodes.push(<hr key={key} className="my-4 border-line" />);
+      return;
+    }
+
+    if (!line.trim()) {
+      flushPara(`${key}-fp`);
+      return;
+    }
+
+    para.push(line);
+  });
+
+  flushPara(`${keyBase}-fp-end`);
+  return nodes;
+}
+
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */
 export function LinkifiedText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s<>"']+)/g);

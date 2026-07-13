@@ -12,13 +12,17 @@ import {
   Lock,
   Pin,
   PinOff,
+  Tag,
   Users,
+  UsersRound,
 } from 'lucide-react';
 import { buildConversations, buildSections, useChat, type Conversation } from '../stores/chat';
-import { useFolders } from '../stores/folders';
+import { displayName, useAliases } from '../stores/aliases';
+import { inFolder, useFolders } from '../stores/folders';
 import { usePrefs } from '../stores/prefs';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { fmtConvTime, useDayTick } from '../lib/format';
+import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 
@@ -40,11 +44,12 @@ function applyFilter(convs: Conversation[], filter: ConvFilter): Conversation[] 
       return convs.filter((c) => c.unread > 0 || c.alert);
     case 'mentions':
       return convs.filter((c) => c.userMentions > 0);
+    // 单聊只算 1 对 1；多人直聊虽然 RC 里也是 t='d'，但用户认知里那是群聊
     case 'dm':
-      return convs.filter((c) => c.type === 'd');
+      return convs.filter((c) => c.type === 'd' && !c.isMultiDM);
     case 'groups':
       return convs.filter(
-        (c) => (c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
+        (c) => (c.isMultiDM || c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
       );
     case 'teams':
       return convs.filter((c) => c.isTeam || !!c.teamId);
@@ -77,14 +82,31 @@ function ConversationItem({
   const showDraft = !!draft && !active;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [aliasOpen, setAliasOpen] = useState(false);
+
+  const aliases = useAliases((s) => s.aliases);
+  const setUserAlias = useAliases((s) => s.setUserAlias);
+  const setRoomAlias = useAliases((s) => s.setRoomAlias);
+  const shownName = displayName(aliases, conv);
+  // 单聊的备注跟着「人」走（在通讯录改了这里也变）；其余会话的备注跟着会话走
+  const aliasIsUser = !!conv.avatarUsername;
+  const currentAlias = aliasIsUser
+    ? aliases[`u:${conv.avatarUsername}`]
+    : aliases[`r:${conv.rid}`];
 
   const folders = useFolders((s) => s.folders);
   const addRoom = useFolders((s) => s.addRoom);
   const removeRoom = useFolders((s) => s.removeRoom);
+  // 规则命中的会话不提供「移出」——移出也会被规则立刻拉回来，只能去改规则
   const inFolders = folders.filter((f) => f.rids.includes(conv.rid));
-  const notInFolders = folders.filter((f) => !f.rids.includes(conv.rid));
+  const notInFolders = folders.filter((f) => !inFolder(f, conv));
 
   const menuItems: MenuItem[] = [
+    {
+      label: currentAlias ? '修改备注名' : '设置备注名',
+      icon: Tag,
+      onClick: () => setAliasOpen(true),
+    },
     {
       label: conv.favorite ? '取消收藏' : '收藏会话',
       icon: conv.favorite ? PinOff : Pin,
@@ -137,7 +159,7 @@ function ConversationItem({
     >
       {showAvatar && (
         <div className="relative shrink-0">
-          <Avatar name={conv.name} username={conv.avatarUsername} size={avatarSize} />
+          <Avatar name={shownName} username={conv.avatarUsername} size={avatarSize} />
           {conv.unread > 0 ? (
             <span
               className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface-2 px-1 text-[10px] font-medium text-white ${
@@ -160,12 +182,16 @@ function ConversationItem({
           <span className="flex min-w-0 items-center gap-1 truncate text-[13.5px] font-medium text-ink">
             {conv.isTeam ? (
               <Users size={12} className="shrink-0 text-ink-3" />
+            ) : conv.isMultiDM ? (
+              <UsersRound size={12} className="shrink-0 text-ink-3" />
             ) : conv.type === 'p' ? (
               <Lock size={12} className="shrink-0 text-ink-3" />
             ) : conv.type === 'c' ? (
               <Hash size={12} className="shrink-0 text-ink-3" />
             ) : null}
-            <span className="truncate">{conv.name}</span>
+            <span className="truncate" title={currentAlias ? `原名：${conv.name}` : undefined}>
+              {shownName}
+            </span>
             {conv.userMentions > 0 && (
               <span
                 className="shrink-0 rounded bg-danger px-1 text-[10px] font-medium text-white"
@@ -211,6 +237,19 @@ function ConversationItem({
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
+      {aliasOpen && (
+        <AliasDialog
+          title={aliasIsUser ? '给联系人设置备注' : '给会话设置备注'}
+          originalName={conv.name}
+          current={currentAlias}
+          onSubmit={(alias) =>
+            aliasIsUser
+              ? setUserAlias(conv.avatarUsername!, alias)
+              : setRoomAlias(conv.rid, alias)
+          }
+          onClose={() => setAliasOpen(false)}
+        />
+      )}
     </button>
   );
 }
@@ -238,12 +277,15 @@ export default function ConversationList() {
         ? a.name.localeCompare(b.name, 'zh-CN')
         : b.lastTs - a.lastTs;
 
-    // 自定义分组视图：只显示该分组里的会话（按加入顺序）
+    // 自定义分组视图：手工拖入的排在前（按加入顺序），规则命中的接在后面
     if (folder) {
-      const items = folder.rids
+      const manual = folder.rids
         .map((rid) => all.find((c) => c.rid === rid))
         .filter((c): c is Conversation => !!c);
-      return [{ key: 'all' as const, label: folder.name, items }];
+      const byRule = all
+        .filter((c) => !folder.rids.includes(c.rid) && inFolder(folder, c))
+        .sort(sortFn);
+      return [{ key: 'all' as const, label: folder.name, items: [...manual, ...byRule] }];
     }
 
     const filtered = applyFilter(all, filter);

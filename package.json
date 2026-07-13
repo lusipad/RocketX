@@ -9,9 +9,11 @@
     "typecheck": "pnpm -r typecheck",
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
     "smoke": "tsx scripts/smoke.ts",
-    "test:pure": "tsx scripts/test-pure.ts"
+    "test:pure": "tsx scripts/test-pure.ts",
+    "gen:emoji": "tsx scripts/gen-emoji.ts"
   },
   "devDependencies": {
+    "emoji-toolkit": "^10.0.0",
     "tsx": "^4.19.0"
   }
 }

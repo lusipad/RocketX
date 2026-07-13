@@ -9,6 +9,12 @@
     {
       "identifier": "http:default",
       "allow": [{ "url": "http://**:*" }, { "url": "https://**:*" }]
+    },
+    "dialog:allow-save",
+    "fs:allow-write-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }]
     }
   ]
 }

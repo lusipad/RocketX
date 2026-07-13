@@ -14,13 +14,15 @@ import {
   Trash2,
   User,
   Users,
+  Wand2,
 } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
-import { useFolders } from '../stores/folders';
+import { inFolder, useFolders } from '../stores/folders';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { toast } from '../stores/toast';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { ConfirmDialog } from './Dialog';
+import FolderRulesDialog from './FolderRulesDialog';
 
 const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'all', label: '消息', icon: MessageSquareText },
@@ -121,6 +123,7 @@ export default function GroupFilter() {
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [rulesFor, setRulesFor] = useState<string | null>(null);
 
   const counts = useMemo(() => {
     const convs = buildConversations(subscriptions, rooms);
@@ -129,17 +132,26 @@ export default function GroupFilter() {
       unread: convs.filter((c) => c.unread > 0 || c.alert).length,
       mentions: convs.reduce((n, c) => n + c.userMentions, 0),
       favorites: convs.filter((c) => c.favorite).length,
-      dm: convs.filter((c) => c.type === 'd').length,
+      dm: convs.filter((c) => c.type === 'd' && !c.isMultiDM).length,
       groups: convs.filter(
-        (c) => (c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
+        (c) => (c.isMultiDM || c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
       ).length,
       teams: convs.filter((c) => c.isTeam || !!c.teamId).length,
       discussions: convs.filter((c) => c.isDiscussion).length,
     } as Record<ConvFilter, number>;
   }, [subscriptions, rooms]);
 
+  // 分组计数要按「实际会渲染出来的条数」算：手工拖入 + 规则命中，且会话确实存在
+  const folderCounts = useMemo(() => {
+    const convs = buildConversations(subscriptions, rooms);
+    const out: Record<string, number> = {};
+    for (const f of folders) out[f.id] = convs.filter((c) => inFolder(f, c)).length;
+    return out;
+  }, [subscriptions, rooms, folders]);
+
   const folderMenuItems = (id: string): MenuItem[] => [
     { label: '重命名', icon: Pencil, onClick: () => setDialog({ mode: 'rename', id }) },
+    { label: '分组规则…', icon: Wand2, onClick: () => setRulesFor(id) },
     { label: '上移', icon: ChevronUp, onClick: () => move(id, -1) },
     { label: '下移', icon: ChevronDown, onClick: () => move(id, 1) },
     {
@@ -230,8 +242,11 @@ export default function GroupFilter() {
             >
               <FolderIcon size={14} className={active ? 'text-primary' : ''} />
               <span className="min-w-0 truncate">{f.name}</span>
-              {f.rids.length > 0 && (
-                <span className="ml-auto text-[11px] text-ink-3">{f.rids.length}</span>
+              {f.rules?.length ? (
+                <Wand2 size={11} className="shrink-0 text-ink-3" />
+              ) : null}
+              {folderCounts[f.id] > 0 && (
+                <span className="ml-auto text-[11px] text-ink-3">{folderCounts[f.id]}</span>
               )}
             </button>
           );
@@ -239,8 +254,8 @@ export default function GroupFilter() {
 
         {folders.length === 0 && (
           <div className="mt-2 px-2 text-[11px] leading-relaxed text-ink-3">
-            点右上角 <FolderPlus size={11} className="inline" /> 新建分组，
-            把会话拖进来分类
+            点右上角 <FolderPlus size={11} className="inline" /> 新建分组。
+            会话可以拖进来，也可以右键分组设「规则」自动归类（比如名称以 WI 开头）。
           </div>
         )}
       </div>
@@ -266,6 +281,12 @@ export default function GroupFilter() {
           y={menu.y}
           items={folderMenuItems(menu.id)}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {rulesFor && folders.find((f) => f.id === rulesFor) && (
+        <FolderRulesDialog
+          folder={folders.find((f) => f.id === rulesFor)!}
+          onClose={() => setRulesFor(null)}
         />
       )}
       {confirmDelete && (

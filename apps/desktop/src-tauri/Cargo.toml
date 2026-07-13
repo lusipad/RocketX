@@ -12,6 +12,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-http = "2"
 tauri-plugin-opener = "2"
+# 文件下载：webview 不认 <a download> + blob，必须走原生保存对话框 + 文件写入
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

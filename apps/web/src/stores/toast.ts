@@ -71,7 +71,8 @@ export function humanError(err: unknown, fallback = '操作失败'): string {
 /** 快捷方法 */
 export const toast = {
   show: (t: Omit<Toast, 'id'>) => useToast.getState().show(t),
-  success: (message: string) => useToast.getState().show({ kind: 'success', message }),
+  success: (message: string, action?: Toast['action']) =>
+    useToast.getState().show({ kind: 'success', message, action }),
   error: (err: unknown, fallback?: string) =>
     useToast.getState().show({ kind: 'error', message: humanError(err, fallback) }),
   info: (message: string) => useToast.getState().show({ kind: 'info', message }),

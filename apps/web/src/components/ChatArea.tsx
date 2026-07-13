@@ -1,5 +1,6 @@
 import { useState, type DragEvent } from 'react';
 import {
+  Info,
   MessageCircle,
   MoreHorizontal,
   Pin,
@@ -10,6 +11,9 @@ import {
   Video,
 } from 'lucide-react';
 import { useChat, type RightPanel } from '../stores/chat';
+import { displayName, useAliases } from '../stores/aliases';
+import Avatar from './Avatar';
+import RoomInfoPanel from './RoomInfoPanel';
 import MessageList from './MessageList';
 import Composer from './Composer';
 import ThreadPanel from './ThreadPanel';
@@ -60,6 +64,7 @@ export default function ChatArea() {
     const p = s.subscriptions[s.activeRid]?.prid ?? s.rooms[s.activeRid]?.prid;
     return p ? s.rooms[p] : undefined;
   });
+  const aliases = useAliases((s) => s.aliases);
   const typingMap = useChat((s) => (s.activeRid ? s.typing[s.activeRid] : undefined));
   const typers = typingMap
     ? Object.entries(typingMap)
@@ -84,8 +89,13 @@ export default function ChatArea() {
     );
   }
 
-  const name = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
-  const memberCount = sub?.t !== 'd' ? room?.usersCount : undefined;
+  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
+  // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像顶上
+  const dmSize = room?.uids?.length ?? room?.usersCount;
+  const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
+  const avatarUsername = sub?.t === 'd' && !isMultiDM ? sub.name : undefined;
+  const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername });
+  const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
@@ -115,9 +125,23 @@ export default function ChatArea() {
         onDrop={onDrop}
       >
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
-          <div className="min-w-0">
+          {/* 头像点开群信息（飞书就是这个交互） */}
+          <button
+            onClick={() => togglePanel({ kind: 'info' })}
+            className="mr-2.5 shrink-0 rounded-lg transition hover:opacity-80"
+            title="查看群信息"
+          >
+            <Avatar name={name} username={avatarUsername} size={36} />
+          </button>
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-[15px] font-semibold text-ink">{name}</span>
+              <button
+                onClick={() => togglePanel({ kind: 'info' })}
+                className="truncate text-[15px] font-semibold text-ink transition hover:text-primary"
+                title="查看群信息"
+              >
+                {name}
+              </button>
               {memberCount ? (
                 <button
                   onClick={() => togglePanel({ kind: 'members' })}
@@ -181,6 +205,16 @@ export default function ChatArea() {
             y={moreMenu.y}
             items={[
               {
+                label: sub?.t === 'd' && !isMultiDM ? '联系人信息' : '群信息',
+                icon: Info,
+                onClick: () => togglePanel({ kind: 'info' }),
+              },
+              {
+                label: '群成员',
+                icon: Users,
+                onClick: () => togglePanel({ kind: 'members' }),
+              },
+              {
                 label: '标记消息',
                 icon: Star,
                 onClick: () => togglePanel({ kind: 'starred' }),
@@ -205,6 +239,7 @@ export default function ChatArea() {
       {rightPanel?.kind === 'starred' && <StarredPanel />}
       {rightPanel?.kind === 'members' && <MembersPanel />}
       {rightPanel?.kind === 'search' && <SearchPanel />}
+      {rightPanel?.kind === 'info' && <RoomInfoPanel />}
     </>
   );
 }

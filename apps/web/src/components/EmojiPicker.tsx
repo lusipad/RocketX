@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search } from 'lucide-react';
-import { EMOJI_LIST, type EmojiEntry } from '../lib/emoji';
+import { EMOJI_MAP, loadEmojiSections, type EmojiEntry, type EmojiSection } from '../lib/emoji';
 
 const RECENT_KEY = 'rcx-recent-emojis';
 
@@ -38,8 +38,21 @@ export default function EmojiPicker({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [keyword, setKeyword] = useState('');
   const [place, setPlace] = useState(pos ?? { x: 0, y: 0 });
+  const [sections, setSections] = useState<EmojiSection[]>([]);
+
+  // 分类数据是独立 chunk，打开选择器时才拉（首次约几十毫秒）
+  useEffect(() => {
+    let alive = true;
+    void loadEmojiSections().then((s) => {
+      if (alive) setSections(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -66,16 +79,27 @@ export default function EmojiPicker({
     });
   }, [pos]);
 
-  const recent = useMemo(() => {
-    const codes = loadRecent();
-    return codes
-      .map((c) => EMOJI_LIST.find((e) => e.code === c))
-      .filter((e): e is EmojiEntry => !!e);
-  }, []);
+  const recent = useMemo(
+    () =>
+      loadRecent()
+        .map((c) => (EMOJI_MAP[c] ? { code: c, char: EMOJI_MAP[c] } : null))
+        .filter((e): e is EmojiEntry => !!e),
+    [],
+  );
 
-  const filtered = useMemo(() => {
-    const q = keyword.trim().toLowerCase();
-    return q ? EMOJI_LIST.filter((e) => e.code.includes(q)) : EMOJI_LIST;
+  /** 搜索命中的平铺结果；不搜索时返回 null，改按分类分区渲染。命中上限 120 个，够用且不卡。 */
+  const results = useMemo(() => {
+    const q = keyword.trim().toLowerCase().replace(/:/g, '');
+    if (!q) return null;
+    const hits: EmojiEntry[] = [];
+    for (const [code, char] of Object.entries(EMOJI_MAP)) {
+      if (code.includes(q)) hits.push({ code, char });
+      if (hits.length >= 120) break;
+    }
+    // 前缀命中的排前面（搜 cat 先给 cat 而不是 bobcat）
+    return hits.sort(
+      (a, b) => Number(b.code.startsWith(q)) - Number(a.code.startsWith(q)),
+    );
   }, [keyword]);
 
   const pick = (e: EmojiEntry) => {
@@ -118,21 +142,67 @@ export default function EmojiPicker({
         </>
       )}
 
-      <div className="grid max-h-52 grid-cols-8 gap-0.5 overflow-y-auto">
-        {filtered.map((e) => (
-          <button
-            key={e.code}
-            title={`:${e.code}:`}
-            onClick={() => pick(e)}
-            className="flex h-7 w-7 items-center justify-center rounded text-lg leading-none transition hover:bg-fill-hover"
-          >
-            {e.char}
-          </button>
-        ))}
-        {filtered.length === 0 && (
-          <div className="col-span-8 py-4 text-center text-xs text-ink-3">没有匹配的表情</div>
+      <div ref={scrollRef} className="max-h-52 overflow-y-auto">
+        {results ? (
+          <div className="grid grid-cols-8 gap-0.5">
+            {results.map((e) => (
+              <button
+                key={e.code}
+                title={`:${e.code}:`}
+                onClick={() => pick(e)}
+                className="flex h-7 w-7 items-center justify-center rounded text-lg leading-none transition hover:bg-fill-hover"
+              >
+                {e.char}
+              </button>
+            ))}
+            {results.length === 0 && (
+              <div className="col-span-8 py-4 text-center text-xs text-ink-3">
+                没有匹配的表情
+              </div>
+            )}
+          </div>
+        ) : (
+          sections.map((section) => (
+            <div key={section.label} data-emoji-section={section.label}>
+              <div className="sticky top-0 bg-surface-4 px-1 py-1 text-[10px] text-ink-3">
+                {section.label}
+              </div>
+              <div className="grid grid-cols-8 gap-0.5">
+                {section.items.map((e) => (
+                  <button
+                    key={e.code}
+                    title={`:${e.code}:`}
+                    onClick={() => pick(e)}
+                    className="flex h-7 w-7 items-center justify-center rounded text-lg leading-none transition hover:bg-fill-hover"
+                  >
+                    {e.char}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))
         )}
       </div>
+
+      {/* 分类跳转：3000+ 个表情，没有这个只能一路滚 */}
+      {!keyword && (
+        <div className="mt-1.5 flex items-center justify-between border-t border-line pt-1.5">
+          {sections.map((s) => (
+            <button
+              key={s.label}
+              title={s.label}
+              onClick={() => {
+                scrollRef.current
+                  ?.querySelector(`[data-emoji-section="${s.label}"]`)
+                  ?.scrollIntoView({ block: 'start' });
+              }}
+              className="flex h-6 w-6 items-center justify-center rounded text-sm leading-none transition hover:bg-fill-hover"
+            >
+              {s.items[0]?.char}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 

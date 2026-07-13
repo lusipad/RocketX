@@ -88,6 +88,12 @@ export interface RcRoom {
   teamId?: string;
   topic?: string;
   announcement?: string;
+  description?: string;
+  /** 只读频道（只有拥有者能发言） */
+  ro?: boolean;
+  /** 创建者 */
+  u?: { _id: string; username: string; name?: string };
+  ts?: RcDate;
   usersCount?: number;
   usernames?: string[];
   uids?: string[];

@@ -10,6 +10,7 @@ import {
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
+import { useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import EmojiPicker from './EmojiPicker';
@@ -61,6 +62,7 @@ export default function Composer() {
   };
 
   const pinyinReady = usePinyinReady();
+  const aliases = useAliases((s) => s.aliases);
   const candidates = useMemo(() => {
     if (mentionQuery === null) return [];
     const q = mentionQuery.trim();
@@ -69,16 +71,15 @@ export default function Composer() {
       { username: 'here', name: '通知在线成员' },
       ...members,
     ];
-    // 支持拼音：打 zhangsan 或 zs 都能补出「张三」
+    // 支持拼音（zhangsan / zs → 张三）与备注名（给谁起了备注就按备注找谁）
+    const label = (u: { username: string; name?: string }) =>
+      aliases[`u:${u.username}`] || u.name || u.username;
     return base
-      .filter((u) => pinyinMatch(q, u.name, u.username))
-      .sort(
-        (a, b) =>
-          pinyinScore(q, a.name || a.username) - pinyinScore(q, b.name || b.username),
-      )
+      .filter((u) => pinyinMatch(q, aliases[`u:${u.username}`], u.name, u.username))
+      .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)))
       .slice(0, 6);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [mentionQuery, members, pinyinReady]);
+  }, [mentionQuery, members, aliases, pinyinReady]);
 
   const refreshMention = (value: string, cursor: number) => {
     const before = value.slice(0, cursor);
@@ -222,10 +223,16 @@ export default function Composer() {
                   <AtSign size={13} />
                 </span>
               ) : (
-                <Avatar name={u.name || u.username} username={u.username} size={24} />
+                <Avatar
+                  name={aliases[`u:${u.username}`] || u.name || u.username}
+                  username={u.username}
+                  size={24}
+                />
               )}
-              <span className="font-medium text-ink">{u.name || u.username}</span>
-              <span className="text-xs text-ink-3">@{u.username}</span>
+              <span className="font-medium text-ink">
+                {aliases[`u:${u.username}`] || u.name || u.username}
+              </span>
+              <span className="truncate text-xs text-ink-3">@{u.username}</span>
             </button>
           ))}
         </div>

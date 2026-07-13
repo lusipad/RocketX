@@ -4,6 +4,7 @@ import {
   Calendar,
   FileText,
   LayoutGrid,
+  ListTodo,
   LogOut,
   MessageCircle,
   MessageCirclePlus,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
+import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useUI, type ModuleKey } from '../stores/ui';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -30,6 +32,7 @@ const MODULES: {
   soon?: boolean;
 }[] = [
   { key: 'messages', label: '消息', icon: MessageCircle },
+  { key: 'todos', label: '待办', icon: ListTodo },
   { key: 'contacts', label: '通讯录', icon: BookUser },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
   { key: 'meetings', label: '会议', icon: Video, soon: true },
@@ -49,6 +52,15 @@ export default function NavRail() {
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
+
+  const todos = useTodos((s) => s.todos);
+  const { todoOpen, todoOverdue } = useMemo(() => {
+    const today = todayKey();
+    return {
+      todoOpen: todos.filter((t) => !t.done).length,
+      todoOverdue: todos.filter((t) => isOverdue(t, today)).length,
+    };
+  }, [todos]);
 
   // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
   const { unreadTotal, hasAlert } = useMemo(() => {
@@ -161,6 +173,17 @@ export default function NavRail() {
                 ) : hasAlert ? (
                   <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                 ) : null)}
+              {/* 待办：有逾期就标红，否则灰色计数 */}
+              {key === 'todos' && todoOpen > 0 && (
+                <span
+                  className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium ${
+                    todoOverdue > 0 ? 'bg-danger text-white' : 'bg-fill-active text-ink-2'
+                  }`}
+                  title={todoOverdue > 0 ? `${todoOverdue} 条已逾期` : `${todoOpen} 条待办`}
+                >
+                  {todoOpen > 99 ? '99+' : todoOpen}
+                </span>
+              )}
             </button>
           );
         })}

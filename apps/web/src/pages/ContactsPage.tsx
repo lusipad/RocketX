@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcRoom, type RcUser } from '@rcx/rc-client';
-import { Hash, Lock, MessageCircle, Search, Users, UsersRound } from 'lucide-react';
+import { Hash, Lock, MessageCircle, Search, Tag, Users, UsersRound } from 'lucide-react';
 import { rest } from '../lib/client';
+import { useAliases } from '../stores/aliases';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
 import { toast } from '../stores/toast';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import AliasDialog from '../components/AliasDialog';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
 import { SkeletonList } from '../components/Skeleton';
@@ -25,6 +27,8 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [aliasFor, setAliasFor] = useState<RcUser | null>(null);
+  const setUserAlias = useAliases((s) => s.setUserAlias);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 首屏花名册：拼音检索只能在本地做（服务端不认 zhangsan/zs），所以先取一页兜底
@@ -64,19 +68,23 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   }, [keyword]);
 
   const pinyinReady = usePinyinReady();
+  const aliases = useAliases((s) => s.aliases);
   const users = useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();
     for (const u of roster) {
-      if (pinyinMatch(keyword, u.name, u.username)) merged.set(u._id, u);
+      // 备注名也参与匹配，否则起了备注反而搜不到人
+      if (pinyinMatch(keyword, aliases[`u:${u.username}`], u.name, u.username)) {
+        merged.set(u._id, u);
+      }
     }
     for (const u of remote) merged.set(u._id, u);
     return [...merged.values()].sort(
       (a, b) =>
-        pinyinScore(keyword, a.name || a.username) -
-        pinyinScore(keyword, b.name || b.username),
+        pinyinScore(keyword, aliases[`u:${a.username}`] || a.name || a.username) -
+        pinyinScore(keyword, aliases[`u:${b.username}`] || b.name || b.username),
     );
-  }, [roster, remote, keyword, pinyinReady]);
+  }, [roster, remote, keyword, aliases, pinyinReady]);
 
   const doDM = async (username: string) => {
     if (busy) return;
@@ -134,38 +142,67 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
         )}
         {!loading &&
           !error &&
-          users.map((u) => (
-            <div
-              key={u._id}
-              onClick={() => onOpenCard(u)}
-              className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
-            >
-              <Avatar name={u.name || u.username} username={u.username} size={36} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-ink">
-                  {u.name || u.username}
-                  {u.username === me && <span className="ml-1 text-xs text-ink-3">（我）</span>}
+          users.map((u) => {
+            const alias = aliases[`u:${u.username}`];
+            const real = u.name || u.username;
+            return (
+              <div
+                key={u._id}
+                onClick={() => onOpenCard(u)}
+                className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
+              >
+                <Avatar name={alias || real} username={u.username} size={36} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-ink">
+                    {alias || real}
+                    {u.username === me && <span className="ml-1 text-xs text-ink-3">（我）</span>}
+                  </div>
+                  <div className="truncate text-xs text-ink-3">
+                    {/* 起了备注就把原名带出来，否则认不出这是谁 */}
+                    {alias ? `${real} · @${u.username}` : `@${u.username}`}
+                  </div>
                 </div>
-                <div className="truncate text-xs text-ink-3">@{u.username}</div>
+                {u.username !== me && (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAliasFor(u);
+                      }}
+                      className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
+                      title={alias ? `当前备注：${alias}` : '给这个人起个备注名'}
+                    >
+                      <Tag size={13} />
+                      {alias ? '改备注' : '备注'}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void doDM(u.username);
+                      }}
+                      className="flex items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white"
+                    >
+                      <MessageCircle size={13} />
+                      {busy === u.username ? '打开中…' : '发消息'}
+                    </button>
+                  </div>
+                )}
               </div>
-              {u.username !== me && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void doDM(u.username);
-                  }}
-                  className="flex shrink-0 items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white group-hover:border-primary group-hover:bg-primary group-hover:text-white"
-                >
-                  <MessageCircle size={13} />
-                  {busy === u.username ? '打开中…' : '发消息'}
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         {!loading && !error && users.length === 0 && (
           <div className="py-10 text-center text-sm text-ink-3">未找到匹配的成员</div>
         )}
       </div>
+      {aliasFor && (
+        <AliasDialog
+          title="给联系人设置备注"
+          originalName={aliasFor.name || aliasFor.username}
+          current={aliases[`u:${aliasFor.username}`]}
+          onSubmit={(alias) => setUserAlias(aliasFor.username, alias)}
+          onClose={() => setAliasFor(null)}
+        />
+      )}
     </>
   );
 }

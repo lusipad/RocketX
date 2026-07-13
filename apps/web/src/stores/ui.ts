@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export type ModuleKey =
   | 'messages'
+  | 'todos'
   | 'contacts'
   | 'docs'
   | 'calendar'

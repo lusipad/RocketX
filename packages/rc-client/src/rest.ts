@@ -381,6 +381,32 @@ export class RcRestClient {
     return res.members ?? [];
   }
 
+  /** 房间完整信息（含 topic / description / announcement / 拥有者） */
+  async getRoomInfo(rid: string): Promise<RcRoom> {
+    const res = await this.request<{ room: RcRoom }>('GET', 'rooms.info', undefined, {
+      roomId: rid,
+    });
+    return res.room;
+  }
+
+  /**
+   * 改房间设置（话题 / 公告 / 描述 / 名称）。
+   * rooms.saveRoomSettings 一次只认它认识的字段，没权限时服务端返回 unauthorized，
+   * 调用方据此把编辑入口藏起来即可。
+   */
+  async saveRoomSettings(
+    rid: string,
+    settings: { topic?: string; announcement?: string; description?: string; roomName?: string },
+  ): Promise<void> {
+    await this.request('POST', 'rooms.saveRoomSettings', { rid, ...settings });
+  }
+
+  /** 退出房间（DM 不支持，用 hideRoom 代替） */
+  async leaveRoom(rid: string, type: RoomType): Promise<void> {
+    const endpoint = type === 'c' ? 'channels.leave' : 'groups.leave';
+    await this.request('POST', endpoint, { roomId: rid });
+  }
+
   /**
    * 上传文件到房间（rooms.media 两段式：上传 → 确认发送）。
    * multipart 体手工构造成字节流——浏览器 fetch 与 Tauri plugin-http

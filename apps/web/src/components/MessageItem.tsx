@@ -14,6 +14,7 @@ import {
   Download,
   File as FileIcon,
   Image as ImageIcon,
+  ListTodo,
   Loader2,
   MessageSquareText,
   MessagesSquare,
@@ -26,7 +27,10 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
-import AuthImage, { downloadAuthedFile } from './AuthImage';
+import AuthImage from './AuthImage';
+import FilePreview, { canPreview } from './FilePreview';
+import { saveFile } from '../lib/download';
+import { toast } from '../stores/toast';
 import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
 import { fmtTime } from '../lib/format';
@@ -36,10 +40,13 @@ import { assetUrl } from '../lib/client';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { useTodos } from '../stores/todos';
+import { useUI } from '../stores/ui';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import ForwardDialog from './ForwardDialog';
+import TodoDialog from './TodoDialog';
 import UserCard from './UserCard';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
@@ -105,7 +112,11 @@ function ImageAttachment({
   );
 }
 
-/** 文件附件卡片：图标 + 文件名 + 大小 + 下载（带认证） */
+/**
+ * 文件附件卡片。
+ * 文本/代码/Markdown/PDF 点一下直接预览（飞书就是这个行为，不必先下载再找），
+ * 其余类型点击即下载。下载按钮永远在，两种类型都能存到本地。
+ */
 function FileAttachment({
   att,
   name: fileName,
@@ -116,31 +127,61 @@ function FileAttachment({
   size?: number;
 }) {
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(false);
   // 优先用 file.name（原始文件名），attachment.title 在旧数据里可能是编码过的
   const name = fileName ?? att.title ?? '文件';
   const path = att.title_link ?? '';
+  const previewable = canPreview(name);
+
+  const download = async () => {
+    if (!path || busy) return;
+    setBusy(true);
+    try {
+      await saveFile(path, name);
+    } catch (err) {
+      toast.error(err, '下载失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <button
-      onClick={() => {
-        if (!path || busy) return;
-        setBusy(true);
-        void downloadAuthedFile(path, name)
-          .catch(() => {})
-          .finally(() => setBusy(false));
-      }}
-      className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-surface-4 p-3 text-left transition hover:border-primary"
-    >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
-        <FileIcon size={18} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-ink">{name}</span>
-        <span className="block text-xs text-ink-3">
-          {busy ? '下载中…' : fmtSize(size) || '点击下载'}
-        </span>
-      </span>
-      <Download size={15} className="shrink-0 text-ink-3" />
-    </button>
+    <>
+      <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary">
+        <button
+          onClick={() => (previewable ? setPreview(true) : void download())}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          title={previewable ? '点击预览' : '点击下载'}
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
+            <FileIcon size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-ink">{name}</span>
+            <span className="block text-xs text-ink-3">
+              {busy ? '下载中…' : `${fmtSize(size)}${previewable ? ' · 点击预览' : ''}`.trim() ||
+                (previewable ? '点击预览' : '点击下载')}
+            </span>
+          </span>
+        </button>
+        <button
+          onClick={() => void download()}
+          disabled={busy}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
+          title="下载"
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={15} />}
+        </button>
+      </div>
+      {preview && (
+        <FilePreview
+          path={path}
+          fileName={name}
+          size={size}
+          onClose={() => setPreview(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -395,6 +436,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
+  const [todoOpen, setTodoOpen] = useState(false);
+
+  const inTodo = useTodos((s) => s.todos.some((t) => t.mid === message._id && !t.done));
+  const setModule = useUI((s) => s.setModule);
+  const roomName = useChat(
+    (s) => s.subscriptions[message.rid]?.fname || s.subscriptions[message.rid]?.name || '会话',
+  );
 
   const displayName = message.u.name || message.u.username;
   const time = fmtTime(tsMs(message.ts));
@@ -437,6 +485,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         ]
       : []),
     ...(message.msg ? [{ label: copied ? '已复制' : '复制', icon: Copy, onClick: copy }] : []),
+    {
+      label: inTodo ? '已在待办中' : '标记为待办',
+      icon: ListTodo,
+      onClick: () => {
+        if (inTodo) setModule('todos');
+        else setTodoOpen(true);
+      },
+    },
     {
       label: message.pinned ? '取消置顶' : '置顶',
       icon: Pin,
@@ -574,6 +630,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     <Star size={12} fill="currentColor" />
                   </span>
                 )}
+                {inTodo && (
+                  <button
+                    onClick={() => setModule('todos')}
+                    className="mr-1 inline-flex items-center text-primary"
+                    title="已加入待办，点击查看"
+                  >
+                    <ListTodo size={12} />
+                  </button>
+                )}
                 {message.msg ? renderMarkdown(message.msg, myUsername) : null}
                 {!message.msg && !message.attachments?.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
@@ -662,6 +727,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
+      {todoOpen && (
+        <TodoDialog
+          source={{
+            rid: message.rid,
+            mid: message._id,
+            roomName,
+            // 待办里存快照：原消息被删了也还看得懂当时是什么事
+            excerpt: stripQuotePrefix(message.msg ?? '').slice(0, 200) ||
+              (message.file?.name ? `[文件] ${message.file.name}` : '[图片/附件]'),
+            author: displayName,
+          }}
+          onClose={() => setTodoOpen(false)}
+        />
+      )}
       {showCard && (
         <UserCard
           user={{ username: message.u.username, name: message.u.name }}
