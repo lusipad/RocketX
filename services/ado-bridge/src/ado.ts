@@ -21,6 +21,19 @@ export interface AdoWorkItem {
   webUrl: string;
 }
 
+export interface AdoBuild {
+  id: number;
+  buildNumber: string;
+  definition: string;
+  project: string;
+  status: string;
+  result: string;
+  requestedFor: string;
+  queueTime: string;
+  finishTime: string;
+  webUrl: string;
+}
+
 export interface AdoPullRequest {
   id: number;
   title: string;
@@ -102,6 +115,96 @@ export class AdoClient {
       changedDate: w.fields['System.ChangedDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     }));
+  }
+
+  /** 单个工作项详情（悬停卡片用） */
+  async getWorkItem(id: number): Promise<AdoWorkItem | null> {
+    const fields = [
+      'System.Title',
+      'System.WorkItemType',
+      'System.State',
+      'System.TeamProject',
+      'System.AssignedTo',
+      'System.ChangedDate',
+      'Microsoft.VSTS.Common.Priority',
+    ].join(',');
+    const detail = await this.request<{ value: { id: number; fields: Record<string, any> }[] }>(
+      'GET',
+      `/_apis/wit/workitems?ids=${id}&fields=${fields}&api-version=7.0`,
+    );
+    const w = detail.value?.[0];
+    if (!w) return null;
+    return {
+      id: w.id,
+      title: w.fields['System.Title'] ?? '',
+      type: w.fields['System.WorkItemType'] ?? '',
+      state: w.fields['System.State'] ?? '',
+      priority: w.fields['Microsoft.VSTS.Common.Priority'],
+      project: w.fields['System.TeamProject'] ?? '',
+      assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
+      changedDate: w.fields['System.ChangedDate'],
+      webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
+    };
+  }
+
+  /**
+   * 给工作项添加讨论评论。走 System.History 字段的 JSON Patch，
+   * 这是 ADO Server 2022 的稳定 API（comments 接口在 Server 上还是 preview）。
+   */
+  async addWorkItemComment(id: number, text: string, author?: string): Promise<void> {
+    const value = author ? `[来自 RocketX，${author}]<br/>${text}` : text;
+    const url = `${this.webBase}/_apis/wit/workitems/${id}?api-version=7.0`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json-patch+json',
+        Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
+      },
+      body: JSON.stringify([{ op: 'add', path: '/fields/System.History', value }]),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`ADO 评论失败: ${res.status} ${body.slice(0, 200)}`);
+    }
+  }
+
+  /** 各项目最近构建（合并排序，工作台构建面板用） */
+  async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
+    const projects = await this.request<{ value: { name: string }[] }>(
+      'GET',
+      '/_apis/projects?api-version=7.0&$top=10',
+    );
+    const lists = await Promise.all(
+      (projects.value ?? []).slice(0, 5).map(async (p) => {
+        try {
+          const res = await this.request<{ value: any[] }>(
+            'GET',
+            `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&api-version=7.0`,
+          );
+          return res.value ?? [];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    return lists
+      .flat()
+      .map((b) => ({
+        id: b.id,
+        buildNumber: b.buildNumber ?? String(b.id),
+        definition: b.definition?.name ?? '',
+        project: b.project?.name ?? '',
+        status: b.status ?? '',
+        result: b.result ?? '',
+        requestedFor: b.requestedFor?.displayName ?? '',
+        queueTime: b.queueTime ?? '',
+        finishTime: b.finishTime ?? '',
+        webUrl:
+          b._links?.web?.href ??
+          `${this.webBase}/${encodeURIComponent(b.project?.name ?? '')}/_build/results?buildId=${b.id}`,
+      }))
+      .sort((a, b) => (b.queueTime > a.queueTime ? 1 : -1))
+      .slice(0, top);
   }
 
   /** 集合内全部活跃 PR（客户端按创建人/评审人过滤） */

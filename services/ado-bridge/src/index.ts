@@ -68,6 +68,51 @@ app.get('/api/ado/pullrequests', async (req, reply) => {
   }
 });
 
+/** 单工作项详情（聊天 #号 悬停卡片） */
+app.get<{ Params: { id: string } }>('/api/ado/workitem/:id', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return reply.code(400).send({ error: '无效的工作项 id' });
+  try {
+    const item = await ado.getWorkItem(id);
+    if (!item) return reply.code(404).send({ error: `工作项 #${id} 不存在` });
+    return { item };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
+  }
+});
+
+/** 给工作项添加讨论评论 */
+app.post<{ Params: { id: string }; Body: { text?: string; author?: string } }>(
+  '/api/ado/workitem/:id/comment',
+  async (req, reply) => {
+    if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+    const id = Number(req.params.id);
+    const text = req.body?.text?.trim();
+    if (!Number.isInteger(id) || id <= 0) return reply.code(400).send({ error: '无效的工作项 id' });
+    if (!text) return reply.code(400).send({ error: '评论内容不能为空' });
+    try {
+      await ado.addWorkItemComment(id, text, req.body?.author);
+      return { ok: true };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 评论失败' });
+    }
+  },
+);
+
+/** 最近构建 */
+app.get('/api/ado/builds', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  try {
+    return { items: await ado.getRecentBuilds() };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
+  }
+});
+
 /**
  * Azure DevOps Server 2022 Service Hooks 入口。
  * 用法：项目设置 → Service hooks → Web Hooks →

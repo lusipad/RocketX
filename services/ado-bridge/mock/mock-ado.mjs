@@ -66,6 +66,42 @@ const PULL_REQUESTS = [
   },
 ];
 
+const BUILDS = [
+  {
+    id: 501,
+    buildNumber: '20260713.2',
+    definition: { name: 'rocketx-ci' },
+    project: { name: 'RocketX' },
+    status: 'completed',
+    result: 'succeeded',
+    requestedFor: { displayName: 'lus' },
+    queueTime: '2026-07-13T02:40:00Z',
+    finishTime: '2026-07-13T02:47:00Z',
+  },
+  {
+    id: 502,
+    buildNumber: '20260713.3',
+    definition: { name: 'rocketx-desktop' },
+    project: { name: 'RocketX' },
+    status: 'inProgress',
+    result: '',
+    requestedFor: { displayName: '张三' },
+    queueTime: '2026-07-13T03:30:00Z',
+    finishTime: '',
+  },
+  {
+    id: 498,
+    buildNumber: '20260712.9',
+    definition: { name: 'platform-nightly' },
+    project: { name: 'Platform' },
+    status: 'completed',
+    result: 'failed',
+    requestedFor: { displayName: 'lus' },
+    queueTime: '2026-07-12T20:00:00Z',
+    finishTime: '2026-07-12T20:12:00Z',
+  },
+];
+
 createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const send = (data) => {
@@ -78,6 +114,19 @@ createServer((req, res) => {
   } else if (url.pathname.endsWith('/_apis/wit/workitems')) {
     const ids = (url.searchParams.get('ids') ?? '').split(',').map(Number);
     send({ value: WORK_ITEMS.filter((w) => ids.includes(w.id)) });
+  } else if (/\/_apis\/wit\/workitems\/\d+$/.test(url.pathname) && req.method === 'PATCH') {
+    // 评论（System.History patch）
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      console.log(`mock: 收到工作项评论 ${url.pathname}:`, body.slice(0, 200));
+      send({ id: Number(url.pathname.split('/').pop()), fields: {} });
+    });
+  } else if (url.pathname.endsWith('/_apis/projects')) {
+    send({ value: [{ name: 'RocketX' }, { name: 'Platform' }] });
+  } else if (url.pathname.endsWith('/_apis/build/builds')) {
+    const project = decodeURIComponent(url.pathname.split('/_apis/')[0].split('/').pop() ?? '');
+    send({ value: BUILDS.filter((b) => b.project.name === project) });
   } else if (url.pathname.endsWith('/_apis/git/pullrequests')) {
     send({ value: PULL_REQUESTS });
   } else {

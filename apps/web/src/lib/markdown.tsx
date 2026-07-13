@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
+import WorkItemLink from '../components/WorkItemLink';
 
 /**
  * 轻量消息 Markdown 渲染（不引第三方库、不用 dangerouslySetInnerHTML）。
@@ -60,21 +61,10 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
         </span>,
       );
     } else if (m[7]) {
-      // #纯数字 且配置过工作台 → 链接到 ADO 工作项
+      // #纯数字 且配置过工作台 → ADO 工作项链接（悬停出详情卡，可快速评论）
       const adoBase = /^#\d+$/.test(full) ? localStorage.getItem('rcx-ado-web') : null;
       if (adoBase) {
-        nodes.push(
-          <a
-            key={key}
-            href={`${adoBase}/_workitems/edit/${full.slice(1)}`}
-            target="_blank"
-            rel="noreferrer"
-            title={`Azure DevOps 工作项 ${full}`}
-            className="font-medium text-primary underline-offset-2 hover:underline"
-          >
-            {full}
-          </a>,
-        );
+        nodes.push(<WorkItemLink key={key} id={Number(full.slice(1))} />);
       } else {
         nodes.push(
           <span key={key} className="font-medium text-primary">

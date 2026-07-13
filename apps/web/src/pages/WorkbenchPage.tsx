@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  CheckCircle2,
   CircleDot,
   ExternalLink,
   GitPullRequest,
   LayoutGrid,
+  Loader2,
+  MinusCircle,
   RefreshCw,
   Settings,
   UserCheck,
+  Wrench,
+  XCircle,
 } from 'lucide-react';
-
-const CONFIG_KEY = 'rcx-workbench';
-/** markdown 渲染器用它把消息里的 #123 链接到 ADO 工作项 */
-export const ADO_WEB_KEY = 'rcx-ado-web';
-
-interface WorkbenchConfig {
-  bridge: string;
-  account: string;
-}
+import {
+  ADO_WEB_KEY,
+  loadWorkbenchConfig,
+  saveWorkbenchConfig,
+  type WorkbenchConfig,
+} from '../lib/ado';
+import { fmtConvTime } from '../lib/format';
 
 interface WorkItem {
   id: number;
@@ -40,13 +43,17 @@ interface PullRequest {
   webUrl: string;
 }
 
-function loadConfig(): WorkbenchConfig | null {
-  try {
-    const raw = localStorage.getItem(CONFIG_KEY);
-    return raw ? (JSON.parse(raw) as WorkbenchConfig) : null;
-  } catch {
-    return null;
-  }
+interface Build {
+  id: number;
+  buildNumber: string;
+  definition: string;
+  project: string;
+  status: string;
+  result: string;
+  requestedFor: string;
+  queueTime: string;
+  finishTime: string;
+  webUrl: string;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -100,7 +107,7 @@ function ConfigCard({
         disabled={!bridge.trim() || !account.trim()}
         onClick={() => {
           const config = { bridge: bridge.trim().replace(/\/+$/, ''), account: account.trim() };
-          localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+          saveWorkbenchConfig(config);
           onSaved(config);
         }}
         className="h-10 w-full rounded-md bg-primary text-sm font-medium text-white transition hover:bg-primary-hover disabled:opacity-40"
@@ -192,12 +199,23 @@ function Panel({
   );
 }
 
+/** 构建状态图标 */
+function BuildStatus({ build }: { build: Build }) {
+  if (build.status === 'inProgress' || build.status === 'notStarted') {
+    return <Loader2 size={14} className="animate-spin text-primary" />;
+  }
+  if (build.result === 'succeeded') return <CheckCircle2 size={14} className="text-success" />;
+  if (build.result === 'failed') return <XCircle size={14} className="text-danger" />;
+  return <MinusCircle size={14} className="text-ink-3" />;
+}
+
 /** 工作台：Azure DevOps Server 2022 面板 */
 export default function WorkbenchPage() {
-  const [config, setConfig] = useState<WorkbenchConfig | null>(loadConfig);
+  const [config, setConfig] = useState<WorkbenchConfig | null>(loadWorkbenchConfig);
   const [editing, setEditing] = useState(false);
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [prs, setPrs] = useState<PullRequest[]>([]);
+  const [builds, setBuilds] = useState<Build[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -205,10 +223,11 @@ export default function WorkbenchPage() {
     setLoading(true);
     setError(null);
     try {
-      const [cfgRes, wiRes, prRes] = await Promise.all([
+      const [cfgRes, wiRes, prRes, buildRes] = await Promise.all([
         fetch(`${c.bridge}/api/ado/config`),
         fetch(`${c.bridge}/api/ado/workitems?assignedTo=${encodeURIComponent(c.account)}`),
         fetch(`${c.bridge}/api/ado/pullrequests`),
+        fetch(`${c.bridge}/api/ado/builds`),
       ]);
       if (!cfgRes.ok || !wiRes.ok || !prRes.ok) {
         const bad = [cfgRes, wiRes, prRes].find((r) => !r.ok)!;
@@ -219,6 +238,8 @@ export default function WorkbenchPage() {
       localStorage.setItem(ADO_WEB_KEY, cfg.webBase);
       setWorkItems(((await wiRes.json()) as { items: WorkItem[] }).items);
       setPrs(((await prRes.json()) as { items: PullRequest[] }).items);
+      // 构建面板容错：接口失败不阻塞其他面板
+      setBuilds(buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : []);
     } catch (err) {
       setError(
         err instanceof Error && err.message !== 'Failed to fetch'
@@ -286,7 +307,7 @@ export default function WorkbenchPage() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 p-5">
+      <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 p-5">
         <Panel icon={CircleDot} title="我的工作项" count={workItems.length}>
           {loading && workItems.length === 0 ? (
             <div className="py-10 text-center text-sm text-ink-3">加载中…</div>
@@ -313,6 +334,32 @@ export default function WorkbenchPage() {
             )}
           </Panel>
         </div>
+
+        <Panel icon={Wrench} title="最近构建" count={builds.length}>
+          {builds.length === 0 ? (
+            <div className="py-8 text-center text-sm text-ink-3">暂无构建记录</div>
+          ) : (
+            builds.map((b) => (
+              <a
+                key={`${b.project}-${b.id}`}
+                href={b.webUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block border-b border-line px-4 py-2.5 transition last:border-b-0 hover:bg-fill-2"
+              >
+                <div className="flex items-center gap-2">
+                  <BuildStatus build={b} />
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{b.definition}</span>
+                  <span className="shrink-0 text-xs text-ink-3">{b.buildNumber}</span>
+                </div>
+                <div className="mt-1 truncate pl-6 text-xs text-ink-3">
+                  {b.project} · {b.requestedFor}
+                  {b.finishTime ? ` · ${fmtConvTime(new Date(b.finishTime).getTime())}` : ' · 进行中'}
+                </div>
+              </a>
+            ))
+          )}
+        </Panel>
       </div>
 
       <div className="px-5 pb-3 text-center text-xs text-ink-3">
