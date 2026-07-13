@@ -24,5 +24,8 @@ jobs:
       - name: 类型检查
         run: pnpm -r typecheck
 
+      - name: 纯函数测试（拼音检索、日期格式）
+        run: pnpm test:pure
+
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build

@@ -4,7 +4,7 @@ import { ArrowDown } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
-import { fmtDayDivider, sameDay, systemMessageText } from '../lib/format';
+import { fmtDayDivider, sameDay, systemMessageText, useDayTick } from '../lib/format';
 import MessageItem from './MessageItem';
 import { SkeletonList } from './Skeleton';
 
@@ -12,6 +12,8 @@ const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
 
 export default function MessageList({ rid }: { rid: string }) {
+  // 跨过零点后「今天/昨天」分割线要跟着变
+  useDayTick();
   const all = useChat((s) => s.messages[rid]);
   const historyLoaded = useChat((s) => s.historyLoaded[rid] ?? false);
   const hasMore = useChat((s) => s.hasMore[rid] ?? false);

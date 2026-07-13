@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 function startOfDay(ms: number): number {
@@ -7,6 +9,45 @@ function startOfDay(ms: number): number {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * 「今天 / 昨天」这类相对日期是渲染那一刻算出来的。
+ * 挂着不关的窗口跨过零点后，昨天的消息还写着「今天」——所以到点主动重算一次。
+ * 全局共用一个定时器，只在日界跳变，不是每分钟空转。
+ */
+const dayListeners = new Set<() => void>();
+let currentDay = startOfDay(Date.now());
+let dayTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDayTick(): void {
+  if (dayTimer) clearTimeout(dayTimer);
+  // +1s 容错，避免定时器早到导致仍算在前一天
+  const delay = currentDay + DAY - Date.now() + 1000;
+  dayTimer = setTimeout(() => {
+    currentDay = startOfDay(Date.now());
+    for (const l of dayListeners) l();
+    scheduleDayTick();
+  }, Math.max(delay, 1000));
+}
+
+/** 订阅日界跳变：跨过零点后组件重渲染，相对日期随之刷新 */
+export function useDayTick(): number {
+  return useSyncExternalStore(
+    (cb) => {
+      dayListeners.add(cb);
+      if (dayListeners.size === 1) scheduleDayTick();
+      return () => {
+        dayListeners.delete(cb);
+        if (dayListeners.size === 0 && dayTimer) {
+          clearTimeout(dayTimer);
+          dayTimer = null;
+        }
+      };
+    },
+    () => currentDay,
+    () => currentDay,
+  );
+}
 
 export function fmtTime(ms: number): string {
   const d = new Date(ms);

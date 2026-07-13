@@ -8,7 +8,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "test:pure": "tsx scripts/test-pure.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.0"

@@ -18,7 +18,7 @@ import { buildConversations, buildSections, useChat, type Conversation } from '.
 import { useFolders } from '../stores/folders';
 import { usePrefs } from '../stores/prefs';
 import { useUI, type ConvFilter } from '../stores/ui';
-import { fmtConvTime } from '../lib/format';
+import { fmtConvTime, useDayTick } from '../lib/format';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 
@@ -216,6 +216,8 @@ function ConversationItem({
 }
 
 export default function ConversationList() {
+  // 跨过零点后「昨天 / 周X」这类相对时间要跟着变
+  useDayTick();
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
