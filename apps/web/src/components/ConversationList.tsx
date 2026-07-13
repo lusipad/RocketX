@@ -12,7 +12,9 @@ import {
   Lock,
   Pin,
   PinOff,
+  Plus,
   Tag,
+  User,
   Users,
   UsersRound,
 } from 'lucide-react';
@@ -25,6 +27,7 @@ import { fmtConvTime, useDayTick } from '../lib/format';
 import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
+import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
 const FILTER_TITLE: Record<ConvFilter, string> = {
   all: '消息',
@@ -259,9 +262,21 @@ function ConversationItem({
   );
 }
 
+/** 每个分类下「新建」对应什么动作；没有对应动作的分类（未读、@我…）不显示入口 */
+const NEW_ACTIONS: Partial<
+  Record<ConvFilter, { label: string; dialog: 'dm' | 'group' | 'team'; icon: typeof Plus }>
+> = {
+  dm: { label: '发起私聊', dialog: 'dm', icon: User },
+  multi: { label: '发起多人聊天', dialog: 'dm', icon: UsersRound },
+  groups: { label: '创建群组', dialog: 'group', icon: Hash },
+  teams: { label: '创建团队', dialog: 'team', icon: Users },
+};
+
 export default function ConversationList() {
   // 跨过零点后「昨天 / 周X」这类相对时间要跟着变
   useDayTick();
+  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
+  const [bgMenu, setBgMenu] = useState<{ x: number; y: number } | null>(null);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
@@ -312,10 +327,41 @@ export default function ConversationList() {
   const showHeaders = !folder && filter === 'all' && (prefs.sidebarGroupByType ?? true);
   const title = folder ? folder.name : FILTER_TITLE[filter];
 
+  /**
+   * 当前分类下「新建」意味着什么。
+   * 在「多人聊天」里想新建，要的显然是多人聊天，而不是让人回到左上角的 + 再选一遍。
+   */
+  const newAction = NEW_ACTIONS[filter];
+
+  const openNew = () => {
+    if (!newAction) return;
+    setDialog(newAction.dialog);
+  };
+
   return (
     <aside className="flex w-[280px] shrink-0 flex-col border-r border-line bg-surface-2">
-      <div className="px-4 pt-4 pb-2 text-[15px] font-semibold text-ink">{title}</div>
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      <div className="flex items-center justify-between px-4 pt-4 pb-2">
+        <span className="text-[15px] font-semibold text-ink">{title}</span>
+        {newAction && (
+          <button
+            onClick={openNew}
+            title={newAction.label}
+            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+          >
+            <Plus size={15} />
+          </button>
+        )}
+      </div>
+      <div
+        className="flex-1 overflow-y-auto px-2 pb-2"
+        onContextMenu={(e) => {
+          // 只处理空白处的右键；会话行自己有菜单，别抢它的
+          if ((e.target as HTMLElement).closest('button')) return;
+          if (!newAction) return;
+          e.preventDefault();
+          setBgMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
         {!ready && <div className="p-4 text-center text-sm text-ink-3">加载会话中…</div>}
         {ready && total === 0 && (
           <div className="p-4 text-center text-sm leading-relaxed text-ink-3">
@@ -324,10 +370,18 @@ export default function ConversationList() {
                 这个分组还是空的
                 <div className="mt-1 text-xs">把会话拖到左侧分组名上，或右键会话「移入分组」</div>
               </>
-            ) : filter === 'all' ? (
-              '暂无会话'
             ) : (
-              '该分组下暂无会话'
+              <>
+                {filter === 'all' ? '暂无会话' : `还没有${FILTER_TITLE[filter]}`}
+                {/* 空列表最该给的是「怎么开始」，而不是一句「暂无」 */}
+                {newAction && (
+                  <div className="mt-2">
+                    <button onClick={openNew} className="text-xs text-primary hover:underline">
+                      {newAction.label}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -365,6 +419,19 @@ export default function ConversationList() {
           );
         })}
       </div>
+
+      {bgMenu && newAction && (
+        <ContextMenu
+          x={bgMenu.x}
+          y={bgMenu.y}
+          items={[{ label: newAction.label, icon: newAction.icon, onClick: openNew }]}
+          onClose={() => setBgMenu(null)}
+        />
+      )}
+      {dialog === 'dm' && <StartDMDialog onClose={() => setDialog(null)} />}
+      {(dialog === 'group' || dialog === 'team') && (
+        <CreateGroupDialog kind={dialog} onClose={() => setDialog(null)} />
+      )}
     </aside>
   );
 }

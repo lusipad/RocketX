@@ -143,6 +143,28 @@ export function installLinkInterceptor(): void {
   );
 }
 
+/**
+ * 桌面端屏蔽 webview 自带的右键菜单。
+ *
+ * 不屏蔽的话，在会话列表空白处点右键弹出来的是浏览器的「返回 / 刷新 / 另存为 /
+ * 打印 / 检查」—— 一个聊天软件里冒出这些，用户当场就出戏了。
+ *
+ * 但输入框和可选中的文本要放行：那里的原生菜单提供复制/粘贴/拼写检查，
+ * 自己重造一套只会更差。
+ */
+export function installContextMenuGuard(): void {
+  if (!isTauri) return;
+  document.addEventListener('contextmenu', (e) => {
+    const el = e.target as HTMLElement | null;
+    if (!el) return;
+    const editable =
+      el.closest('input, textarea, [contenteditable="true"]') !== null ||
+      !!window.getSelection()?.toString();
+    // 组件自己处理过的（会话行、消息、分组）已经 preventDefault 了，这里不会再走到
+    if (!editable) e.preventDefault();
+  });
+}
+
 // 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
 export const rest = new RcRestClient({
   baseUrl: getServerBase(),
