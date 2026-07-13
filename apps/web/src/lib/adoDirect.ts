@@ -289,12 +289,44 @@ function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, 
   };
 }
 
+/**
+ * 服务器认为「我是谁」。
+ * Windows 集成认证下，账号是域账号（如 lus 或 CORP\lus），跟邮箱格式完全不一样——
+ * 与其让用户猜该填什么，不如直接问服务器。
+ */
+export async function directGetIdentity(
+  cfg: DirectConfig,
+): Promise<{ displayName: string; account: string }> {
+  const res = await adoRequest<{
+    authenticatedUser?: {
+      providerDisplayName?: string;
+      customDisplayName?: string;
+      properties?: { Account?: { $value?: string } };
+    };
+  }>(cfg, 'GET', '/_apis/connectionData?api-version=7.0-preview');
+  const u = res.authenticatedUser ?? {};
+  const displayName = u.customDisplayName || u.providerDisplayName || '';
+  return {
+    displayName,
+    account: u.properties?.Account?.$value || displayName,
+  };
+}
+
+/**
+ * 我的工作项。
+ *
+ * assignedTo 留空时用 ADO 的 @Me 宏 —— 由服务器解析成「当前认证的这个人」，
+ * 不用去猜他的账号是 lus、CORP\lus 还是 lus@corp.com。
+ * 只有想看别人的工作项时才需要显式传账号。
+ */
 export async function directGetWorkItems(cfg: DirectConfig, assignedTo: string, top = 50) {
-  const who = assignedTo.replace(/'/g, "''");
+  const who = assignedTo.trim()
+    ? `'${assignedTo.trim().replace(/'/g, "''")}'`
+    : '@Me';
   const wiql = {
     query:
       `SELECT [System.Id] FROM WorkItems ` +
-      `WHERE [System.AssignedTo] = '${who}' ` +
+      `WHERE [System.AssignedTo] = ${who} ` +
       `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ` +
       `ORDER BY [System.ChangedDate] DESC`,
   };

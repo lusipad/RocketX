@@ -109,15 +109,17 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
   setConfig: (config) => {
     saveWorkbenchConfig(config);
-    set({ config });
     // 配置变了，旧数据就作废——别让用户对着上一个服务器的工作项发呆
-    set({ workItems: [], prs: [], builds: [], lastRefresh: null, error: null });
-    if (config.account) void get().refresh();
+    set({ config, workItems: [], prs: [], builds: [], lastRefresh: null, error: null });
+    void get().refresh();
   },
 
   refresh: async () => {
     const c = get().config;
-    if (!c?.account) return;
+    // 账号不是必需的：Windows 集成认证下工作项查询用 @Me 宏，服务器自己知道是谁。
+    // 真正的前提是「连到哪儿」。
+    if (!c) return;
+    if (c.mode === 'direct' ? !c.adoBase : !c.bridge) return;
     set({ loading: true, error: null });
     try {
       if (c.mode === 'direct' && c.adoBase) {

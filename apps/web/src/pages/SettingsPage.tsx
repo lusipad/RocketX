@@ -441,7 +441,7 @@ function WorkbenchSection() {
 
   /**
    * 直连模式：自动探测。用户填的地址可以是项目页地址、带或不带 /tfs，
-   * 程序逐级向上找集合根，并依次试 PAT / Bearer / Windows 集成认证。
+   * 程序逐级向上找集合根，桌面端优先试 Windows 集成认证，再试 PAT / Bearer。
    */
   const test = async () => {
     setTesting(true);
@@ -450,23 +450,36 @@ function WorkbenchSection() {
     try {
       if (config.mode === 'direct') {
         if (!config.adoBase?.trim()) throw new Error('请填写 ADO 地址');
-        const { probeAdo } = await import('../lib/adoDirect');
+        const { probeAdo, directGetIdentity } = await import('../lib/adoDirect');
         const found: ProbeStep[] = [];
         const res = await probeAdo(config.adoBase.trim(), config.pat?.trim() ?? '', (s) => {
           found.push(s);
           setSteps([...found]);
         });
         if (res.found) {
-          // 自动把探测出的正确地址与认证方式写回配置
-          setConfig((c) => ({
-            ...c,
-            adoBase: res.found!.adoBase,
-            auth: res.found!.auth,
-          }));
-          const authLabel = AUTH_LABELS[res.found.auth];
+          const { adoBase, auth } = res.found;
+          // 顺手问服务器「我是谁」：域账号可能是 lus、CORP\lus 或邮箱，
+          // 让用户自己猜该填哪个是没道理的
+          let account = config.account.trim();
+          let who = '';
+          if (!account) {
+            try {
+              const id = await directGetIdentity({ adoBase, pat: config.pat ?? '', auth });
+              account = id.account;
+              who = id.displayName;
+            } catch {
+              /* 拿不到就算了，留空也能用（工作项查询会用 @Me 宏） */
+            }
+          }
+          setConfig((c) => ({ ...c, adoBase, auth, account: account || c.account }));
+          const authLabel = AUTH_LABELS[auth];
           setResult({
             ok: true,
-            msg: `连接成功！集合地址：${res.found.adoBase}（${authLabel}），可见 ${res.found.projects.length} 个项目：${res.found.projects.slice(0, 3).join('、')}。已自动填入，点「保存」生效。`,
+            msg:
+              `连接成功！集合地址：${adoBase}（${authLabel}），` +
+              `可见 ${res.found.projects.length} 个项目：${res.found.projects.slice(0, 3).join('、')}。` +
+              (account ? `已识别你的账号：${who || account}。` : '') +
+              `已自动填入，点「保存」生效。`,
           });
         } else {
           setResult({
@@ -566,11 +579,14 @@ function WorkbenchSection() {
         </Row>
       )}
 
-      <Row label="我的 ADO 账号" hint="用于筛选「我的工作项」「待我评审」">
+      <Row
+        label="我的 ADO 账号"
+        hint="留空即可 —— 点「自动探测」时会向服务器确认你是谁并自动填入。「我的工作项」用 ADO 的 @Me 宏查询，不依赖这一栏。只有想看别人的工作项时才手动改。"
+      >
         <input
           value={config.account}
           onChange={(e) => update({ account: e.target.value })}
-          placeholder="user@example.com 或 DOMAIN\\user"
+          placeholder="自动识别（也可手填 user@corp.com 或 DOMAIN\\user）"
           className={inputCls}
         />
       </Row>
@@ -600,7 +616,11 @@ function WorkbenchSection() {
             toast.success('工作台配置已保存');
             setTimeout(() => setSaved(false), 2500);
           }}
-          disabled={!config.account.trim()}
+          // 账号不再是必填：Windows 集成认证下由服务器识别，工作项查询用 @Me 宏。
+          // 真正的必填是「连到哪儿」——直连要地址，桥接要桥接服务地址。
+          disabled={
+            config.mode === 'direct' ? !config.adoBase?.trim() : !config.bridge?.trim()
+          }
           className={`h-9 rounded-md px-4 text-sm text-white transition disabled:opacity-40 ${
             dirty ? 'bg-primary hover:bg-primary-hover' : 'bg-primary/70 hover:bg-primary'
           }`}

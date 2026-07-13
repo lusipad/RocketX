@@ -306,12 +306,18 @@ export default function WorkbenchPage() {
   const todoOverdue = useMemo(() => todos.filter((t) => isOverdue(t, today)).length, [todos, today]);
   const todayEvents = useMemo(() => eventsForDate(calendarEvents, today), [calendarEvents, today]);
 
+  const account = config?.account ?? '';
+  // 「工作台是否可用」取决于连没连上服务器，而不是用户填没填账号 ——
+  // Windows 集成认证下账号是服务器识别的，用户根本不用填
+  const connected = !!(config && (config.mode === 'direct' ? config.adoBase : config.bridge));
+  // 标题上显示身份：没识别到账号就别硬凑一个空字符串出来
+  const adoTitle = account ? `Azure DevOps · ${account}` : 'Azure DevOps';
+
   // 进入工作台时拉一次；已有数据就不重复拉（切 tab 不该每次都打服务器）
   useEffect(() => {
-    if (config?.account && !lastRefresh && !loading) void refresh();
-  }, [config, lastRefresh, loading, refresh]);
+    if (connected && !lastRefresh && !loading) void refresh();
+  }, [connected, lastRefresh, loading, refresh]);
 
-  const account = config?.account ?? '';
   const reviewPrs = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
   const myPrs = useMemo(() => myPrsOf(prs, account), [prs, account]);
   const failedBuilds = useMemo(() => builds.filter((b) => b.result === 'failed').length, [builds]);
@@ -334,7 +340,7 @@ export default function WorkbenchPage() {
   const tabs: { key: AdoTab; label: string; icon: typeof LayoutGrid; badge?: number; danger?: boolean }[] =
     [
       { key: 'overview', label: '概览', icon: LayoutGrid },
-      ...(config?.account
+      ...(connected
         ? [
             { key: 'workitems' as const, label: '我的工作项', icon: CircleDot, badge: workItems.length },
             { key: 'prs' as const, label: '拉取请求', icon: GitPullRequest, badge: reviewPrs.length },
@@ -349,7 +355,7 @@ export default function WorkbenchPage() {
         : []),
     ];
 
-  const refreshBar = config?.account && (
+  const refreshBar = connected && (
     <div className="flex items-center gap-2">
       {lastRefresh && !loading && (
         <span className="text-xs text-ink-3">{fmtConvTime(lastRefresh)} 更新</span>
@@ -394,7 +400,7 @@ export default function WorkbenchPage() {
           className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
         >
           <Settings size={14} />
-          {config?.account ? '工作台设置' : '连接 Azure DevOps'}
+          {connected ? '工作台设置' : '连接 Azure DevOps'}
         </button>
       </aside>
 
@@ -404,7 +410,7 @@ export default function WorkbenchPage() {
             <span className="text-[15px] font-semibold text-ink">
               {tabs.find((t) => t.key === tab)?.label}
               <span className="ml-2 text-xs font-normal text-ink-3">
-                Azure DevOps · {config?.account}
+                {adoTitle}
               </span>
             </span>
             {refreshBar}
@@ -569,9 +575,9 @@ export default function WorkbenchPage() {
             </section>
 
             {/* ADO 摘要：每块都能点进完整列表 */}
-            {config?.account && (
+            {connected && (
               <section className="rounded-xl border border-line bg-surface-4 p-4">
-                <SectionHeader icon={Wrench} title={`Azure DevOps · ${config.account}`} />
+                <SectionHeader icon={Wrench} title={adoTitle} />
                 {adoError ? (
                   <div className="flex items-center gap-2 py-4 text-xs text-danger">
                     <XCircle size={14} />
@@ -724,7 +730,7 @@ export default function WorkbenchPage() {
               </section>
             )}
 
-            {!config?.account && (
+            {!connected && (
               <section className="rounded-xl border border-line bg-surface-4 p-4">
                 <SectionHeader icon={Wrench} title="Azure DevOps" />
                 <div className="flex flex-col items-center gap-2 py-6">
