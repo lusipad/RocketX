@@ -10,7 +10,8 @@
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
     "smoke": "tsx scripts/smoke.ts",
     "test:pure": "tsx scripts/test-pure.ts",
-    "gen:emoji": "tsx scripts/gen-emoji.ts"
+    "gen:emoji": "tsx scripts/gen-emoji.ts",
+    "test:classify": "tsx scripts/test-classify.ts"
   },
   "devDependencies": {
     "emoji-toolkit": "^10.0.0",
