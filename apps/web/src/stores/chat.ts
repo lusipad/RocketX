@@ -134,6 +134,8 @@ interface ChatState {
 
   /** 拉房间详情并并回 store（rooms.get 的字段不全，公告/禁言名单/归档只有 rooms.info 有） */
   refreshRoomInfo: (rid: string) => Promise<RcRoom | null>;
+  /** 从父频道的「讨论」卡片跳进讨论 */
+  openDiscussion: (drid: string) => Promise<void>;
   loadRoomRoles: (rid: string) => Promise<RcRoomRole[]>;
   kickMember: (rid: string, user: RcUser) => Promise<void>;
   setMemberRole: (
@@ -952,6 +954,23 @@ export const useChat = create<ChatState>((set, get) => ({
       return info;
     } catch {
       return get().rooms[rid] ?? null;
+    }
+  },
+
+  openDiscussion: async (drid) => {
+    // 讨论多半是私有房间（继承父频道），而 openRoom 对不认识的 rid 会按 'c' 去
+    // channels.history 取历史 —— 那会 403。先把房间信息拿回来，类型就对了。
+    if (!get().subscriptions[drid] && !get().rooms[drid]) {
+      const info = await get().refreshRoomInfo(drid);
+      if (!info) {
+        toast.show({ kind: 'error', message: '打不开这个讨论，可能你不在讨论成员里' });
+        return;
+      }
+    }
+    try {
+      await get().openRoom(drid);
+    } catch (err) {
+      toast.error(err, '打不开这个讨论，可能你不在讨论成员里');
     }
   },
 

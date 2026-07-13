@@ -53,10 +53,19 @@ export interface RcMessage {
   _updatedAt?: RcDate;
   editedAt?: RcDate;
   editedBy?: { _id: string; username: string };
-  /** 系统消息类型（uj=加入 ul=离开 等），普通消息无此字段 */
+  /** 系统消息类型（uj=加入 ul=离开 discussion-created=建了讨论 等），普通消息无此字段 */
   t?: string;
   tmid?: string;
   tcount?: number;
+  /**
+   * 讨论房间 id。t='discussion-created' 的消息带这个字段 ——
+   * 它就是父频道里那张「讨论」卡片要跳过去的目标。
+   */
+  drid?: string;
+  /** 讨论里的消息条数（服务端随讨论更新） */
+  dcount?: number;
+  /** 讨论里最后一条消息的时间 */
+  dlm?: RcDate;
   /** 文件消息的文件信息 */
   file?: { _id: string; name: string; type?: string; size?: number };
   /** 消息里 URL 的服务端解析结果（链接卡片预览） */

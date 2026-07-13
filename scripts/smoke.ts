@@ -170,6 +170,16 @@ async function main() {
     assert(d._id && d.prid === channelId, '讨论未正确关联父房间');
     // 讨论是独立房间，删父频道不会连带删掉它
     createdRooms.push({ rid: d._id, type: d.t === 'p' ? 'p' : 'c' });
+
+    // 父频道里会多出一条 t='discussion-created' 的消息，drid 指向讨论房间 ——
+    // 这就是 RC 那张「讨论」卡片的数据来源。没认出 drid 的话，它会掉进系统消息的
+    // 兜底分支，变成一行点不动的灰字
+    const history = await rest.getHistory(channelId, 'c', 10);
+    const card = history.find((m) => m.t === 'discussion-created');
+    assert(!!card, '父频道里没有讨论卡片消息');
+    assert(card!.drid === d._id, `卡片的 drid 指错了：${card!.drid}`);
+    assert(card!.msg === `讨论-${stamp}`, `卡片标题不对：${card!.msg}`);
+    return `父频道生成卡片 → ${card!.msg}`;
   });
 
   // ---- 文件 ----

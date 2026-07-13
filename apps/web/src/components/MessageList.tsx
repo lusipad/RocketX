@@ -6,6 +6,7 @@ import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
 import { fmtDayDivider, sameDay, systemMessageText, useDayTick } from '../lib/format';
 import MessageItem from './MessageItem';
+import DiscussionCard from './DiscussionCard';
 import { SkeletonList } from './Skeleton';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
@@ -180,6 +181,17 @@ export default function MessageList({ rid }: { rid: string }) {
                 <div className="h-px flex-1 bg-line" />
               </div>
             ) : null;
+
+            // 建讨论：RC 在父频道留的是一张可点的卡片，不是一行灰字
+            if (msg.t === 'discussion-created' && msg.drid) {
+              return (
+                <div key={msg._id}>
+                  {divider}
+                  {unreadDivider}
+                  <DiscussionCard message={msg} />
+                </div>
+              );
+            }
 
             if (msg.t) {
               return (

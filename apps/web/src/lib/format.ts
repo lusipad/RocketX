@@ -95,6 +95,9 @@ const SYSTEM_MESSAGES: Record<string, (user: string, msg: string) => string> = {
   'subscription-role-added': (u, m) => `${m} 被设置为 ${u}`,
   'ut': (u) => `${u} 加入了讨论`,
   'wm': (u) => `${u}，欢迎加入`,
+  // 正常情况下这条会被 DiscussionCard 拦下渲染成卡片，
+  // 这里兜的是极少数没有 drid 的脏数据（讨论房间被删了）
+  'discussion-created': (u, m) => `${u} 发起了讨论「${m}」`,
 };
 
 export function systemMessageText(t: string, username: string, msg: string): string {
