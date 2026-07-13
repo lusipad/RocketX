@@ -208,6 +208,70 @@ async function main(): Promise<void> {
   check('账号匹配不区分大小写', matchUser('LUS@example.com', me, 'lus'));
   check('空账号不匹配任何人', !matchUser('', me, 'lus'));
 
+  console.log('\n[工作台 · 待处理队列]');
+  const { buildQueue, queueSummary } = await import('../apps/web/src/lib/queue');
+
+  const t = (id: string, due: string | undefined, done = false) => ({
+    id,
+    rid: 'r',
+    mid: 'm',
+    roomName: '产品群',
+    excerpt: `待办 ${id}`,
+    author: 'a',
+    due,
+    done,
+    createdAt: 0,
+  });
+  const wi = (id: number, priority?: number) => ({
+    id,
+    title: `工作项 ${id}`,
+    type: 'Bug',
+    state: 'Active',
+    priority,
+    project: 'P',
+    webUrl: '',
+  });
+  const bld = (id: number, result: string) => ({
+    id,
+    buildNumber: `b${id}`,
+    definition: `pipe-${id}`,
+    project: 'P',
+    status: 'completed',
+    result,
+    requestedFor: '',
+    queueTime: '',
+    finishTime: '',
+    webUrl: `http://ado/build/${id}`,
+  });
+
+  const q = buildQueue({
+    account: me,
+    today,
+    todos: [t('done', yesterday, true), t('later', undefined), t('overdue', yesterday), t('today', today)],
+    workItems: [wi(1), wi(2, 1)],
+    prs: [prs[0], prs[1], prs[4]], // 待我评审 / 我提的已通过 / 与我无关
+    builds: [bld(1, 'succeeded'), bld(2, 'failed')],
+  });
+  const kinds = q.map((i) => i.kind);
+
+  check(
+    '排序：逾期 → 构建失败 → 待我评审 → 今天到期 → P1工作项 → 已通过PR → 工作项 → 待办',
+    kinds.join(' ') ===
+      'overdue-todo failed-build review-pr today-todo urgent-workitem approved-pr workitem todo',
+    kinds.join(' '),
+  );
+  check('已完成的待办不进队列', !q.some((i) => i.key === 'todo-done'));
+  check('成功的构建不进队列', !q.some((i) => i.key === 'build-P-1'));
+  check('与我无关的 PR 不进队列', !q.some((i) => i.key === 'pr-5'));
+  check('待办带上原消息，可跳回上下文', !!q.find((i) => i.kind === 'overdue-todo')?.todo);
+  check('ADO 条目带外链', !!q.find((i) => i.kind === 'failed-build')?.href);
+  check(
+    '摘要点出需要立刻处理的数量',
+    queueSummary(q).includes('2 项需要立刻处理'),
+    queueSummary(q),
+  );
+  check('队列为空时给出人话', queueSummary([]) === '今天没有待处理的事');
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
 }
