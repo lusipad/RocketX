@@ -15,8 +15,20 @@ import type {
   RoomType,
 } from './types';
 
-/** SHA-256 十六进制。改密码时服务端要的是哈希，不是明文 */
+/**
+ * SHA-256 十六进制。改密码时服务端要的是哈希，不是明文。
+ *
+ * `crypto.subtle` 只在安全上下文里存在（https 或 localhost）。部署到
+ * `http://内网IP` 时它是 undefined —— 不拦的话用户点「修改密码」会看到一句
+ * 「Cannot read properties of undefined (reading 'digest')」。
+ */
 async function sha256Hex(text: string): Promise<string> {
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    throw new RcApiError(
+      '当前不是安全上下文，无法加密密码。请通过 https 访问，或改用桌面客户端。',
+      400,
+    );
+  }
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -536,20 +548,6 @@ export class RcRestClient {
       msg: opts.msg ?? '',
       ...(opts.tmid ? { tmid: opts.tmid } : {}),
     });
-  }
-
-  /**
-   * 消息的永久链接。
-   *
-   * 没有走 `chat.getPermalink`——RC 8.6.1 压根没有这个 REST 端点（实测 404），
-   * 只能照着它前端的路由规则自己拼。
-   */
-  permalink(room: { t: RoomType; name?: string; fname?: string }, msgId: string): string {
-    const seg = room.t === 'c' ? 'channel' : room.t === 'p' ? 'group' : 'direct';
-    const name = room.name ?? room.fname ?? '';
-    const origin =
-      this.baseUrl || (typeof location !== 'undefined' ? location.origin : '');
-    return `${origin}/${seg}/${encodeURIComponent(name)}?msg=${msgId}`;
   }
 
   // ---- 群管理 ----

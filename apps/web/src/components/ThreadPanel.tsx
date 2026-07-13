@@ -4,6 +4,7 @@ import { AtSign, SendHorizontal, Smile } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { parseSlash } from '../lib/slash';
 import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
@@ -14,6 +15,7 @@ export default function ThreadPanel() {
   const rootId = useChat((s) => (s.rightPanel?.kind === 'thread' ? s.rightPanel.mid : null));
   const all = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const send = useChat((s) => s.send);
+  const runSlash = useChat((s) => s.runSlash);
   const emitTyping = useChat((s) => s.emitTyping);
   const myId = useAuth((s) => s.user?._id);
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
@@ -55,6 +57,19 @@ export default function ThreadPanel() {
   const doSend = async () => {
     const value = text.trim();
     if (!value) return;
+
+    // 话题里也得认斜杠命令 —— 不然在话题里打 `/kick @张三`，它会原样广播成一条文本。
+    // 这里没有补全面板（主输入框才有），但拦截是必须的。
+    const slash = parseSlash(value);
+    if (slash) {
+      const known = useChat
+        .getState()
+        .slashCommands.some((c) => c.command.toLowerCase() === slash.command);
+      if (known) setText('');
+      await runSlash(slash.command, slash.params, rootId);
+      return;
+    }
+
     setText('');
     await send(value, { tmid: rootId });
   };

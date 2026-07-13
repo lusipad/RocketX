@@ -1,4 +1,4 @@
-import type { RcRoomRole, RcUser, RoomRole } from '@rcx/rc-client';
+import type { RcRoomRole, RcUser, RoomRole, RoomType } from '@rcx/rc-client';
 
 /**
  * 群里的权限判断。
@@ -7,6 +7,14 @@ import type { RcRoomRole, RcUser, RoomRole } from '@rcx/rc-client';
  *   - 全局角色（user.roles）：admin 通吃所有房间
  *   - 房间角色（channels.roles）：owner / moderator / leader，只在这个房间里有效
  * 判断「能不能管这个群」两层都要看。
+ *
+ * 还有第三个条件：**房间类型**。单聊和多人聊天在 RC 里都是 t='d'，它们**没有**频道那套
+ * 管理能力 —— 实测过，对 DM 调 groups.kick / groups.roles / groups.addModerator 一律
+ * 400，/mute 直接报「d is not a valid room type」。
+ *
+ * 这个判断必须在这里做，不能指望每个面板自己记得加 `!isDM`：全局 admin 的 roles 里有
+ * 'admin'，下面几个函数会无条件放行，于是管理员在多人聊天的成员列表里就看到了
+ * 「移出群聊 / 禁言 / 设管理员」，点一个报一个。
  */
 
 export const ROLE_LABELS: Record<RoomRole, string> = {
@@ -20,17 +28,30 @@ export function rolesOf(roomRoles: RcRoomRole[], userId: string): RoomRole[] {
   return roomRoles.find((r) => r.u._id === userId)?.roles ?? [];
 }
 
+/** DM（单聊和多人聊天，t='d'）没有任何群管理能力 */
+function isManageableType(type: RoomType): boolean {
+  return type === 'c' || type === 'p';
+}
+
 /** 我能不能管理这个群（改设置、踢人、禁言、归档） */
-export function canManageRoom(me: RcUser | null, roomRoles: RcRoomRole[]): boolean {
-  if (!me) return false;
+export function canManageRoom(
+  me: RcUser | null,
+  roomRoles: RcRoomRole[],
+  type: RoomType,
+): boolean {
+  if (!me || !isManageableType(type)) return false;
   if (me.roles?.includes('admin')) return true;
   const mine = rolesOf(roomRoles, me._id);
   return mine.includes('owner') || mine.includes('moderator');
 }
 
 /** 只有群主（和全局管理员）能做的事：设/撤群主、删群 */
-export function canTransferOwnership(me: RcUser | null, roomRoles: RcRoomRole[]): boolean {
-  if (!me) return false;
+export function canTransferOwnership(
+  me: RcUser | null,
+  roomRoles: RcRoomRole[],
+  type: RoomType,
+): boolean {
+  if (!me || !isManageableType(type)) return false;
   if (me.roles?.includes('admin')) return true;
   return rolesOf(roomRoles, me._id).includes('owner');
 }
@@ -45,9 +66,10 @@ export function canActOn(
   me: RcUser | null,
   target: RcUser,
   roomRoles: RcRoomRole[],
+  type: RoomType,
 ): boolean {
   if (!me || target._id === me._id) return false;
-  if (!canManageRoom(me, roomRoles)) return false;
+  if (!canManageRoom(me, roomRoles, type)) return false;
   if (me.roles?.includes('admin')) return true;
   const targetIsOwner = rolesOf(roomRoles, target._id).includes('owner');
   return targetIsOwner ? rolesOf(roomRoles, me._id).includes('owner') : true;

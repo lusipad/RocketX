@@ -136,8 +136,8 @@ interface ChatState {
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
   send: (text: string, opts?: { tmid?: string; quote?: RcMessage }) => Promise<void>;
-  /** 执行斜杠命令。返回 true 表示已作为命令处理（调用方不要再当文本发） */
-  runSlash: (command: string, params: string) => Promise<boolean>;
+  /** 执行斜杠命令。tmid 有值时在话题里执行 */
+  runSlash: (command: string, params: string, tmid?: string) => Promise<void>;
 
   /** 拉房间详情并并回 store（rooms.get 的字段不全，公告/禁言名单/归档只有 rooms.info 有） */
   refreshRoomInfo: (rid: string) => Promise<RcRoom | null>;
@@ -239,6 +239,8 @@ const subscribedRooms = new Set<string>();
 let markReadTimer: ReturnType<typeof setTimeout> | null = null;
 let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
+/** 正在飞的 channels.roles 请求，按房间去重 */
+const rolesInflight = new Map<string, Promise<RcRoomRole[]>>();
 /**
  * 已读回执是 RC 企业版功能。
  *
@@ -271,6 +273,18 @@ function subscribeRoomStreams(rid: string) {
   realtime.subscribe('stream-notify-room', `${rid}/user-activity`);
 }
 
+/**
+ * 房间类型。订阅里没有就退到 rooms —— 从讨论卡片跳进一个自己还没订阅的私有讨论时，
+ * 只有 rooms[rid] 有值。少了这层兜底，'p' 会被当成 'c'，归档/只读/删除全都会打到
+ * channels.* 而不是 groups.*，报「房间不存在」。
+ */
+function roomTypeOf(
+  state: Pick<ChatState, 'subscriptions' | 'rooms'>,
+  rid: string,
+): RcSubscription['t'] {
+  return state.subscriptions[rid]?.t ?? state.rooms[rid]?.t ?? 'c';
+}
+
 function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
   const sub = subs[rid];
   return sub?.t === 'c'
@@ -286,6 +300,18 @@ function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
  */
 function quoteLinkPrefix(quoted: RcMessage, subs: Record<string, RcSubscription>): string {
   return `[ ](${siteUrlSync()}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}) `;
+}
+
+/**
+ * 消息的永久链接（右键「复制消息链接」）。
+ *
+ * 复用 roomPath —— 引用回复用的就是它，而且服务端能正确解析（引用会被展开成附件），
+ * 是被验证过的。**别照着 room.name 另拼一份**：DM 的房间文档根本没有 name / fname
+ * （实测：room.name=undefined，名字只在订阅上），那样拼出来是 `/direct/?msg=xxx`，
+ * 段名为空，打开是个死链。DM 要用 rid。
+ */
+export function permalinkOf(rid: string, mid: string): string {
+  return `${siteUrlSync()}/${roomPath(rid, useChat.getState().subscriptions)}?msg=${mid}`;
 }
 
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
@@ -631,22 +657,21 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  runSlash: async (command, params) => {
+  runSlash: async (command, params, tmid) => {
     const rid = get().activeRid;
-    if (!rid) return false;
+    if (!rid) return;
     // 认不出来的命令**不发**。以前会把 `/kick @张三` 原样广播给全群——
     // 打错一个字母就变成公开处刑，宁可让用户看见「没有这个命令」。
     if (!findCommand(get().slashCommands, command)) {
       toast.show({ kind: 'error', message: `没有 /${command} 这个命令` });
-      return true;
+      return;
     }
     try {
-      await rest.runCommand(command, rid, params);
+      await rest.runCommand(command, rid, params, tmid);
       // 命令的结果由服务端产生（发消息 / 改房间 / 踢人），走实时流回来，这里不用管
     } catch (err) {
       toast.error(err, `/${command} 执行失败`);
     }
-    return true;
   },
 
   resendMessage: async (tempId) => {
@@ -992,21 +1017,32 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   loadRoomRoles: async (rid) => {
-    const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
-    // 单聊没有角色一说
+    const type = roomTypeOf(get(), rid);
+    // 单聊和多人聊天（都是 t='d'）没有角色一说，groups.roles 对它们直接 400
     if (type === 'd') return [];
-    try {
-      const roles = await rest.getRoomRoles(rid, type);
-      set({ roomRoles: { ...get().roomRoles, [rid]: roles } });
-      return roles;
-    } catch {
-      // 拿不到角色就当自己没权限，界面退回只读——不该因此报错打断用户
-      return [];
-    }
+    // 同一房间的并发请求合流：群信息面板和成员面板都会调，成员列表一变（比如踢完人）
+    // effect 还会再跑一次 —— 不去重的话一次「群信息 → 群成员」要打三次 channels.roles
+    const pending = rolesInflight.get(rid);
+    if (pending) return pending;
+
+    const p = (async () => {
+      try {
+        const roles = await rest.getRoomRoles(rid, type);
+        set({ roomRoles: { ...get().roomRoles, [rid]: roles } });
+        return roles;
+      } catch {
+        // 拿不到角色就当自己没权限，界面退回只读——不该因此报错打断用户
+        return [];
+      } finally {
+        rolesInflight.delete(rid);
+      }
+    })();
+    rolesInflight.set(rid, p);
+    return p;
   },
 
   kickMember: async (rid, user) => {
-    const type = get().subscriptions[rid]?.t ?? 'c';
+    const type = roomTypeOf(get(), rid);
     try {
       await rest.kickFromRoom(rid, type, user._id);
       set({
@@ -1022,7 +1058,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setMemberRole: async (rid, user, role, grant) => {
-    const type = get().subscriptions[rid]?.t ?? 'c';
+    const type = roomTypeOf(get(), rid);
     const label = role === 'owner' ? '群主' : role === 'moderator' ? '管理员' : '负责人';
     try {
       await rest.setRoomRole(rid, type, user._id, role, grant);
@@ -1034,18 +1070,23 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   toggleMemberMute: async (rid, user) => {
-    const room = get().rooms[rid];
+    // 禁言名单只在 rooms.info 里，rooms.get 不一定带。拿不到就先补一次 ——
+    // 否则 muted 恒为空，willMute 永远是 true，「解除禁言」点了还是禁言。
+    let room = get().rooms[rid];
+    if (!room?.muted) room = (await get().refreshRoomInfo(rid)) ?? room;
+
     const muted = room?.muted ?? [];
     const willMute = !muted.includes(user.username);
     try {
       await rest.muteUser(rid, user.username, willMute);
       // 禁言走的是斜杠命令，服务端不会推房间更新，本地自己维护 muted 列表
-      if (room) {
+      const cur = get().rooms[rid];
+      if (cur) {
         set({
           rooms: {
             ...get().rooms,
             [rid]: {
-              ...room,
+              ...cur,
               muted: willMute
                 ? [...muted, user.username]
                 : muted.filter((u) => u !== user.username),
@@ -1060,7 +1101,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setRoomReadOnly: async (rid, readOnly) => {
-    const type = get().subscriptions[rid]?.t ?? 'c';
+    const type = roomTypeOf(get(), rid);
     const room = get().rooms[rid];
     try {
       await rest.setReadOnly(rid, type, readOnly);
@@ -1072,7 +1113,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   archiveConv: async (rid, archive) => {
-    const type = get().subscriptions[rid]?.t ?? 'c';
+    const type = roomTypeOf(get(), rid);
     const room = get().rooms[rid];
     try {
       await rest.archiveRoom(rid, type, archive);
@@ -1084,7 +1125,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   deleteConv: async (rid) => {
-    const type = get().subscriptions[rid]?.t ?? 'c';
+    const type = roomTypeOf(get(), rid);
     const name = get().subscriptions[rid]?.fname ?? get().subscriptions[rid]?.name ?? '该群';
     try {
       await rest.deleteRoom(rid, type);

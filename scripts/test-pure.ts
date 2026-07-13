@@ -653,23 +653,31 @@ async function main(): Promise<void> {
     { _id: 'r2', rid: 'R', u: mod, roles: ['moderator'] as const },
   ] as any;
 
-  check('群主能管理', canManageRoom(owner, ROLES));
-  check('管理员能管理', canManageRoom(mod, ROLES));
-  check('普通成员不能管理', !canManageRoom(plain, ROLES));
-  check('系统管理员在任何群都能管理', canManageRoom(sysadmin, ROLES));
-  check('未登录不能管理', !canManageRoom(null, ROLES));
+  check('群主能管理', canManageRoom(owner, ROLES, 'p'));
+  check('管理员能管理', canManageRoom(mod, ROLES, 'p'));
+  check('普通成员不能管理', !canManageRoom(plain, ROLES, 'p'));
+  check('系统管理员在任何群都能管理', canManageRoom(sysadmin, ROLES, 'p'));
+  check('未登录不能管理', !canManageRoom(null, ROLES, 'p'));
+  check('公开频道同样能管理', canManageRoom(owner, ROLES, 'c'));
 
-  check('只有群主能转让群主', canTransferOwnership(owner, ROLES));
-  check('管理员不能转让群主', !canTransferOwnership(mod, ROLES));
-  check('系统管理员能转让群主', canTransferOwnership(sysadmin, ROLES));
+  check('只有群主能转让群主', canTransferOwnership(owner, ROLES, 'p'));
+  check('管理员不能转让群主', !canTransferOwnership(mod, ROLES, 'p'));
+  check('系统管理员能转让群主', canTransferOwnership(sysadmin, ROLES, 'p'));
 
-  // 这两条是「谁能对谁动手」的红线，写错了就是越权
-  check('管理员踢不了群主', !canActOn(mod, owner as any, ROLES));
-  check('管理员能踢普通成员', canActOn(mod, plain as any, ROLES));
-  check('群主能踢管理员', canActOn(owner, mod as any, ROLES));
-  check('谁都不能对自己动手（要走「退出群组」）', !canActOn(owner, owner as any, ROLES));
-  check('普通成员谁也动不了', !canActOn(plain, mod as any, ROLES));
-  check('系统管理员能踢群主', canActOn(sysadmin, owner as any, ROLES));
+  // 这几条是「谁能对谁动手」的红线，写错了就是越权
+  check('管理员踢不了群主', !canActOn(mod, owner as any, ROLES, 'p'));
+  check('管理员能踢普通成员', canActOn(mod, plain as any, ROLES, 'p'));
+  check('群主能踢管理员', canActOn(owner, mod as any, ROLES, 'p'));
+  check('谁都不能对自己动手（要走「退出群组」）', !canActOn(owner, owner as any, ROLES, 'p'));
+  check('普通成员谁也动不了', !canActOn(plain, mod as any, ROLES, 'p'));
+  check('系统管理员能踢群主', canActOn(sysadmin, owner as any, ROLES, 'p'));
+
+  // 单聊 / 多人聊天在 RC 里都是 t='d'，它们没有频道那套管理能力。
+  // 全局 admin 的 roles 里有 'admin'，如果不按房间类型拦一道，管理员就会在多人聊天的
+  // 成员列表里看到「移出群聊 / 禁言 / 设管理员」—— 点一个报一个 400（实测过）
+  check('多人聊天里系统管理员也不能管理', !canManageRoom(sysadmin, [] as any, 'd'));
+  check('多人聊天里系统管理员也不能踢人', !canActOn(sysadmin, plain as any, [] as any, 'd'));
+  check('多人聊天里不能转让群主', !canTransferOwnership(sysadmin, [] as any, 'd'));
 
   check('禁言名单按 username 匹配', isMuted(['lisi'], 'lisi') && !isMuted(['lisi'], 'zhangsan'));
   check('没有禁言名单时不误判', !isMuted(undefined, 'lisi'));

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { RcRoomRole } from '@rcx/rc-client';
 import {
   Archive,
   ArchiveRestore,
@@ -31,13 +32,23 @@ import { ConfirmDialog } from './Dialog';
 import PanelShell from './PanelShell';
 import { SkeletonList } from './Skeleton';
 
-/** 可就地编辑的一行（话题/公告/描述）。无权限时只读，保存失败会退回原值。 */
+/** 稳定的空数组（不能在选择器里现造，见下方 roomRoles 的注释） */
+const NO_ROLES: RcRoomRole[] = [];
+
+/**
+ * 可就地编辑的一行（群名/话题/公告/描述）。
+ *
+ * `readOnly` 时不显示铅笔按钮 —— 以前是所有人都能点开编辑框，普通成员改完保存，
+ * 服务端一个 unauthorized 打回来，内容回退、弹个「保存失败」。一个必然失败的入口，
+ * 不如根本不给。
+ */
 function EditableField({
   label,
   icon: Icon,
   value,
   placeholder,
   multiline,
+  readOnly,
   onSave,
 }: {
   label: string;
@@ -45,6 +56,7 @@ function EditableField({
   value?: string;
   placeholder: string;
   multiline?: boolean;
+  readOnly?: boolean;
   onSave: (next: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -72,7 +84,7 @@ function EditableField({
           <Icon size={12} />
           {label}
         </span>
-        {!editing && (
+        {!editing && !readOnly && (
           <button
             onClick={() => setEditing(true)}
             className="text-ink-3 transition hover:text-primary"
@@ -176,7 +188,9 @@ export default function RoomInfoPanel() {
   const setRoomReadOnly = useChat((s) => s.setRoomReadOnly);
   const archiveConv = useChat((s) => s.archiveConv);
   const deleteConv = useChat((s) => s.deleteConv);
-  const roomRoles = useChat((s) => (s.activeRid ? (s.roomRoles[s.activeRid] ?? []) : []));
+  // `?? NO_ROLES` 不能写进选择器里：那样每次调用都返回新数组，
+  // useSyncExternalStore 会判定状态一直在变 → 无限循环 → 白屏
+  const roomRoles = useChat((s) => (s.activeRid ? s.roomRoles[s.activeRid] : undefined)) ?? NO_ROLES;
   const me = useAuth((s) => s.user);
 
   const aliases = useAliases((s) => s.aliases);
@@ -218,9 +232,10 @@ export default function RoomInfoPanel() {
 
   const isDM = conv.type === 'd';
   const count = info?.usersCount ?? memberCount ?? undefined;
-  // 多人聊天在 RC 里仍是 DM（t='d'），没有频道那套管理能力：改不了名、踢不了人、归不了档
-  const canManage = !isDM && canManageRoom(me, roomRoles);
-  const canDelete = !isDM && canTransferOwnership(me, roomRoles);
+  // 多人聊天在 RC 里仍是 DM（t='d'），没有频道那套管理能力 ——
+  // 这个判断在 canManageRoom 里按房间类型做掉了，这里不用再写 !isDM
+  const canManage = canManageRoom(me, roomRoles, conv.type);
+  const canDelete = canTransferOwnership(me, roomRoles, conv.type);
   const TypeIcon = conv.isTeam
     ? Users
     : conv.isMultiDM
@@ -270,12 +285,14 @@ export default function RoomInfoPanel() {
                     onSave={(v) => saveRoomSettings(rid, { name: v })}
                   />
                 )}
+                {/* 公告/话题/介绍：普通成员看得见，但改不了（服务端也只让管理员改） */}
                 <EditableField
                   label="群公告"
                   icon={Megaphone}
                   value={info?.announcement}
                   placeholder="未设置公告"
                   multiline
+                  readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { announcement: v })}
                 />
                 <EditableField
@@ -283,6 +300,7 @@ export default function RoomInfoPanel() {
                   icon={Tag}
                   value={info?.topic}
                   placeholder="未设置话题（显示在聊天窗顶部）"
+                  readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { topic: v })}
                 />
                 <EditableField
@@ -291,6 +309,7 @@ export default function RoomInfoPanel() {
                   value={info?.description}
                   placeholder="未填写介绍"
                   multiline
+                  readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { description: v })}
                 />
               </>

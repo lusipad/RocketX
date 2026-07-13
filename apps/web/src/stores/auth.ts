@@ -7,10 +7,13 @@ interface AuthState {
   user: RcUser | null;
   error: string | null;
   /**
-   * 头像版本号，换头像后 +1。
+   * 自己头像的版本号，换头像后 +1。
    *
    * Rocket.Chat 的头像地址是 /avatar/:username —— 换了图 URL 还是同一个，
    * 浏览器照旧拿缓存，界面上看不出任何变化。靠这个数字挂到查询串上把缓存打掉。
+   *
+   * 必须持久化：只存在内存里的话，刷新一次就归 0，URL 退回没有 v 参数的那个，
+   * 又命中旧图缓存 —— 换完头像刷新反而看到旧头像。
    */
   avatarVersion: number;
   /** 启动时尝试用本地 token 恢复登录 */
@@ -22,11 +25,22 @@ interface AuthState {
   bumpAvatar: () => void;
 }
 
+const AVATAR_VERSION_KEY = 'rcx-avatar-version';
+
+/** Node 下跑纯函数单测时没有 localStorage，读写都得兜住 */
+function readAvatarVersion(): number {
+  try {
+    return Number(localStorage.getItem(AVATAR_VERSION_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export const useAuth = create<AuthState>((set, get) => ({
   status: 'boot',
   user: null,
   error: null,
-  avatarVersion: 0,
+  avatarVersion: readAvatarVersion(),
 
   resume: async () => {
     const stored = loadStoredAuth();
@@ -86,5 +100,13 @@ export const useAuth = create<AuthState>((set, get) => ({
     }
   },
 
-  bumpAvatar: () => set({ avatarVersion: get().avatarVersion + 1 }),
+  bumpAvatar: () => {
+    const next = get().avatarVersion + 1;
+    try {
+      localStorage.setItem(AVATAR_VERSION_KEY, String(next));
+    } catch {
+      /* 无痕模式 / 非浏览器环境：内存里记着就行 */
+    }
+    set({ avatarVersion: next });
+  },
 }));

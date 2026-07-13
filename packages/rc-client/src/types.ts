@@ -175,10 +175,10 @@ export interface RcPreferences {
 /** 服务器提供的斜杠命令 */
 export interface RcSlashCommand {
   command: string;
+  /** 参数提示。注意可能是 i18n 键名（如 Slash_Topic_Params），要翻译后再显示 */
   params?: string;
+  /** 说明。RC 返回的多半是 i18n 键名（如 Slash_Shrug_Description），别直接渲染 */
   description?: string;
-  clientOnly?: boolean;
-  providesPreview?: boolean;
 }
 
 /** 房间里某人的角色。只有「有角色的人」才会出现在 channels.roles 结果里 */

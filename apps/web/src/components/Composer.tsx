@@ -118,14 +118,24 @@ export default function Composer() {
     setSlashIndex(0);
   };
 
+  /**
+   * 把光标所在的命令名补全，**只替换命令那一段**。
+   *
+   * 之前是 `setText('/' + command + ' ')` —— 整个输入框被换掉。写好 `hello` 之后把光标
+   * 挪到行首打个 `/`，弹出补全一回车，`hello` 就没了。参数也一样：`/kic @张三` 回头补全
+   * 命令名，`@张三` 被吞掉。补全只该动它该动的那几个字符。
+   */
   const insertCommand = (command: string) => {
-    const next = `/${command} `;
+    const el = textareaRef.current;
+    const cursor = el?.selectionStart ?? text.length;
+    const head = `/${command} `;
+    const next = head + text.slice(cursor);
     setText(next);
     setSlashQuery(null);
     requestAnimationFrame(() => {
-      const el = textareaRef.current;
       el?.focus();
-      el?.setSelectionRange(next.length, next.length);
+      // 光标停在命令后面（接着打参数），不是整段文本的末尾
+      el?.setSelectionRange(head.length, head.length);
     });
   };
 

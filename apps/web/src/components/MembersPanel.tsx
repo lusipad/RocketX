@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { RcUser } from '@rcx/rc-client';
+import type { RcRoomRole, RcUser, RoomType } from '@rcx/rc-client';
 import {
   AlertCircle,
   Check,
@@ -28,6 +28,16 @@ import Dialog, { ConfirmDialog } from './Dialog';
 import UserCard, { type UserCardTarget } from './UserCard';
 import { useUserSearch } from './NewChatDialogs';
 import { SkeletonList } from './Skeleton';
+
+/**
+ * 「没有角色」的稳定空数组。
+ *
+ * 千万别在 zustand 的选择器里写 `s.roomRoles[rid] ?? []` —— 那个 `[]` 每次调用都是
+ * 一个新数组，useSyncExternalStore 会认为状态一直在变，直接进入无限循环并把组件搞崩
+ * （React 的报错是「The result of getSnapshot should be cached」，表现就是白屏）。
+ * 角色还没拉回来、或者这是个 DM（根本不拉角色）时，命中的就是这条路径。
+ */
+const NO_ROLES: RcRoomRole[] = [];
 
 /** 添加成员弹窗 */
 function AddMembersDialog({ onClose }: { onClose: () => void }) {
@@ -136,8 +146,19 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
 }
 
 /** 成员的管理菜单：设/撤管理员、禁言、移出。只有能管这个群的人看得见 */
-function MemberMenu({ rid, member, onClose }: { rid: string; member: RcUser; onClose: () => void }) {
-  const roomRoles = useChat((s) => s.roomRoles[rid] ?? []);
+function MemberMenu({
+  rid,
+  type,
+  member,
+  onClose,
+}: {
+  rid: string;
+  type: RoomType;
+  member: RcUser;
+  onClose: () => void;
+}) {
+  // `?? NO_ROLES` 必须在选择器**外面**做，见 NO_ROLES 的注释
+  const roomRoles = useChat((s) => s.roomRoles[rid]) ?? NO_ROLES;
   const muted = useChat((s) => s.rooms[rid]?.muted);
   const me = useAuth((s) => s.user);
   const setMemberRole = useChat((s) => s.setMemberRole);
@@ -149,7 +170,7 @@ function MemberMenu({ rid, member, onClose }: { rid: string; member: RcUser; onC
   const isOwner = memberRoles.includes('owner');
   const isMod = memberRoles.includes('moderator');
   const nowMuted = isMuted(muted, member.username);
-  const canOwner = canTransferOwnership(me, roomRoles);
+  const canOwner = canTransferOwnership(me, roomRoles, type);
 
   const item =
     'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-ink transition hover:bg-fill-hover';
@@ -214,9 +235,13 @@ export default function MembersPanel() {
   const loadMembers = useChat((s) => s.loadMembers);
   const loadRoomRoles = useChat((s) => s.loadRoomRoles);
   const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
-  const roomRoles = useChat((s) => (s.activeRid ? (s.roomRoles[s.activeRid] ?? []) : []));
+  const roomRoles = useChat((s) => (s.activeRid ? s.roomRoles[s.activeRid] : undefined)) ?? NO_ROLES;
   const muted = useChat((s) => (s.activeRid ? s.rooms[s.activeRid]?.muted : undefined));
   const me = useAuth((s) => s.user);
+  // 多人聊天在 RC 里也是 t='d'，它没有频道那套管理能力（踢人/角色/禁言全是 400）
+  const type = useChat((s) =>
+    s.activeRid ? (s.subscriptions[s.activeRid]?.t ?? s.rooms[s.activeRid]?.t ?? 'c') : 'c',
+  );
 
   const [members, setMembers] = useState<RcUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -226,10 +251,15 @@ export default function MembersPanel() {
   const [adding, setAdding] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
+  // 角色单独一个 effect：跟成员列表无关，不能跟着 cachedMembers 一起重跑
+  // （成员一变——比如踢完人——就会再打一次 channels.roles）
+  useEffect(() => {
+    if (rid) void loadRoomRoles(rid);
+  }, [rid, loadRoomRoles]);
+
   // 单一入口拉取（之前两个 effect 都会调用 → 每次打开发两次请求）
   useEffect(() => {
     if (!rid) return;
-    void loadRoomRoles(rid);
     if (cachedMembers) {
       setMembers(cachedMembers);
       setLoading(false);
@@ -245,7 +275,7 @@ export default function MembersPanel() {
       })
       .catch((err: unknown) => setError(humanError(err, '无法获取成员列表')))
       .finally(() => setLoading(false));
-  }, [rid, cachedMembers, loadMembers, loadRoomRoles]);
+  }, [rid, cachedMembers, loadMembers]);
 
   const filtered = useMemo(() => {
     const q = keyword.toLowerCase();
@@ -292,7 +322,7 @@ export default function MembersPanel() {
           !error &&
           filtered.map((m) => {
             const roles = rolesOf(roomRoles, m._id);
-            const manageable = !!rid && canActOn(me, m, roomRoles);
+            const manageable = !!rid && canActOn(me, m, roomRoles, type);
             return (
               <div
                 key={m._id}
@@ -347,7 +377,12 @@ export default function MembersPanel() {
                     </button>
                     {menuFor === m._id && (
                       <div onClick={(e) => e.stopPropagation()}>
-                        <MemberMenu rid={rid} member={m} onClose={() => setMenuFor(null)} />
+                        <MemberMenu
+                          rid={rid}
+                          type={type}
+                          member={m}
+                          onClose={() => setMenuFor(null)}
+                        />
                       </div>
                     )}
                   </div>

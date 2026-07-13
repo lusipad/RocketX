@@ -37,8 +37,8 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
-import { assetUrl, rest } from '../lib/client';
-import { stripQuotePrefix, useChat } from '../stores/chat';
+import { assetUrl } from '../lib/client';
+import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { useTodos } from '../stores/todos';
@@ -457,9 +457,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   };
 
   const copyLink = () => {
-    const room = useChat.getState().rooms[message.rid];
-    if (!room) return;
-    void navigator.clipboard?.writeText(rest.permalink(room, message._id));
+    void navigator.clipboard?.writeText(permalinkOf(message.rid, message._id));
     toast.success('消息链接已复制');
   };
 

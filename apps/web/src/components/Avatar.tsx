@@ -24,14 +24,21 @@ export default function Avatar({
   roomId?: string;
   size?: number;
 }) {
-  // 换过头像就带上版本号，否则 URL 没变、浏览器直接给缓存，新头像永远不显示
+  /**
+   * 换过头像就带上版本号，否则 URL 没变、浏览器直接给缓存，新头像永远不显示。
+   *
+   * **只作用于自己的头像**：以前是无差别挂到每一个 Avatar 上，换一次头像，会话列表和
+   * 消息列表里所有人的头像 URL 全变 —— 桌面端的 blobCache 以 path 为 key，于是整屏头像
+   * 重新 fetch 一遍，旧的 objectURL 还从不 revoke，每换一次泄漏一批。
+   */
   const version = useAuth((s) => s.avatarVersion);
-  const bust = version > 0 ? `&v=${version}` : '';
+  const myUsername = useAuth((s) => s.user?.username);
+  const bust = version > 0 && username && username === myUsername ? `&v=${version}` : '';
 
   const path = username
     ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}${bust}`
     : roomId
-      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}${bust}`
+      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`
       : null;
 
   const style = {
