@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
-import { Search } from 'lucide-react';
+import { AlertCircle, Search } from 'lucide-react';
 import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
-import { fmtConvTime } from '../lib/format';
-import Avatar from './Avatar';
+import { humanError } from '../stores/toast';
 import PanelShell from './PanelShell';
+import MessageResultRow from './MessageResultRow';
+import { SkeletonRows } from './Skeleton';
 
-/** 聊天记录搜索面板（当前会话） */
+/** 聊天记录搜索面板（当前会话），结果可点击跳转 */
 export default function SearchPanel() {
   const rid = useChat((s) => s.activeRid);
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<RcMessage[]>([]);
   const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -23,17 +25,22 @@ export default function SearchPanel() {
     if (!q) {
       setResults([]);
       setTouched(false);
+      setError(null);
       return;
     }
     timer.current = setTimeout(() => {
       setSearching(true);
+      setError(null);
       rest
         .searchMessages(rid, q)
         .then((msgs) => {
           setResults(msgs.sort((a, b) => tsMs(b.ts) - tsMs(a.ts)));
           setTouched(true);
         })
-        .catch(() => setResults([]))
+        .catch((err: unknown) => {
+          setResults([]);
+          setError(humanError(err, '搜索失败'));
+        })
         .finally(() => setSearching(false));
     }, 300);
     return () => {
@@ -56,23 +63,26 @@ export default function SearchPanel() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto px-3 pb-2">
-        {searching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
-        {!searching && touched && results.length === 0 && (
-          <div className="py-8 text-center text-sm text-ink-3">没有找到相关消息</div>
+        {searching && <SkeletonRows rows={3} />}
+        {!searching && error && (
+          <div className="flex flex-col items-center gap-2 py-10 text-center">
+            <AlertCircle size={22} className="text-danger" />
+            <div className="text-sm text-danger">搜索失败</div>
+            <div className="max-w-xs text-xs break-words text-ink-3">{error}</div>
+          </div>
+        )}
+        {!searching && !error && touched && results.length === 0 && (
+          <div className="py-10 text-center text-sm text-ink-3">
+            没有找到相关消息
+            <div className="mt-1 text-xs">中文搜索需要服务端开启正则搜索</div>
+          </div>
+        )}
+        {!searching && !error && !touched && (
+          <div className="py-10 text-center text-sm text-ink-3">输入关键词搜索本会话的消息</div>
         )}
         {!searching &&
-          results.map((m) => (
-            <div key={m._id} className="mb-2 rounded-lg border border-line p-3">
-              <div className="flex items-center gap-2">
-                <Avatar name={m.u.name || m.u.username} username={m.u.username} size={24} />
-                <span className="text-xs font-medium text-ink">{m.u.name || m.u.username}</span>
-                <span className="ml-auto text-xs text-ink-3">{fmtConvTime(tsMs(m.ts))}</span>
-              </div>
-              <div className="mt-1.5 line-clamp-3 text-sm break-words text-ink-2">
-                {m.msg || m.attachments?.[0]?.title || '[卡片消息]'}
-              </div>
-            </div>
-          ))}
+          !error &&
+          results.map((m) => <MessageResultRow key={m._id} message={m} highlight={keyword} />)}
       </div>
     </PanelShell>
   );

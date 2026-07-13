@@ -101,11 +101,36 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
     };
   }, [keyword, tab, conversations]);
 
+  const jumpToMessage = useChat((s) => s.jumpToMessage);
+
   const pickConv = (rid: string) => {
     void openRoom(rid);
     setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
   };
+
+  /** 消息结果：跳转到该消息并高亮 */
+  const pickMessage = (m: RcMessage) => {
+    setModule('messages');
+    void jumpToMessage(m._id, m.rid);
+    onClose();
+  };
+
+  /** 统一的键盘导航：三个 tab 都能用方向键 + Enter */
+  const currentItems: (() => void)[] =
+    tab === 'convs'
+      ? filteredConvs.map((c) => () => pickConv(c.rid))
+      : tab === 'messages'
+        ? messages.map((m) => () => pickMessage(m))
+        : [
+            ...contacts.users.map((u) => () => {
+              void startDM(u.username).then(() => {
+                setModule('messages');
+                onClose();
+              });
+            }),
+            ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
+          ];
 
   const roomName = (rid: string) =>
     subscriptions[rid]?.fname || subscriptions[rid]?.name || rooms[rid]?.fname || rooms[rid]?.name || '会话';
@@ -133,23 +158,23 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onKeyDown={(e) => {
-              if (tab === 'convs') {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setIndex((i) => (i + 1) % Math.max(filteredConvs.length, 1));
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setIndex((i) => (i - 1 + filteredConvs.length) % Math.max(filteredConvs.length, 1));
-                } else if (e.key === 'Enter' && filteredConvs[index]) {
-                  pickConv(filteredConvs[index].rid);
-                }
-              }
-              if (e.key === 'Escape') onClose();
-              if (e.key === 'Tab') {
+              const n = currentItems.length;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIndex((i) => (n ? (i + 1) % n : 0));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setIndex((i) => (n ? (i - 1 + n) % n : 0));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                currentItems[index]?.();
+              } else if (e.key === 'Escape') {
+                onClose();
+              } else if (e.key === 'Tab') {
                 e.preventDefault();
                 const order: Tab[] = ['convs', 'messages', 'contacts'];
-                const next = order[(order.indexOf(tab) + 1) % order.length];
-                setTab(next);
+                const dir = e.shiftKey ? -1 : 1;
+                setTab(order[(order.indexOf(tab) + dir + order.length) % order.length]);
               }
             }}
             placeholder="搜索会话、消息、联系人（Tab 切换范围）"
@@ -208,11 +233,14 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
               {!searching && !keyword.trim() && (
                 <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的消息</div>
               )}
-              {messages.map((m) => (
+              {messages.map((m, i) => (
                 <button
                   key={m._id}
-                  onClick={() => pickConv(m.rid)}
-                  className="flex w-full items-start gap-3 px-4 py-2 text-left hover:bg-fill-hover"
+                  onClick={() => pickMessage(m)}
+                  onMouseEnter={() => setIndex(i)}
+                  className={`flex w-full items-start gap-3 px-4 py-2 text-left ${
+                    i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                  }`}
                 >
                   <Avatar name={m.u.name || m.u.username} username={m.u.username} size={28} />
                   <span className="min-w-0 flex-1">
@@ -242,7 +270,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
               {contacts.users.length > 0 && (
                 <div className="px-4 pt-2 pb-1 text-[11px] text-ink-3">联系人</div>
               )}
-              {contacts.users.map((u) => (
+              {contacts.users.map((u, i) => (
                 <button
                   key={u._id}
                   onClick={() => {
@@ -251,7 +279,10 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                       onClose();
                     });
                   }}
-                  className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-fill-hover"
+                  onMouseEnter={() => setIndex(i)}
+                  className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
+                    i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                  }`}
                 >
                   <Avatar name={u.name || u.username} username={u.username} size={28} />
                   <span className="truncate text-sm text-ink">{u.name || u.username}</span>
@@ -261,11 +292,16 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
               {contacts.rooms.length > 0 && (
                 <div className="px-4 pt-2 pb-1 text-[11px] text-ink-3">频道</div>
               )}
-              {contacts.rooms.map((r) => (
+              {contacts.rooms.map((r, i) => {
+                const idx = contacts.users.length + i;
+                return (
                 <button
                   key={r._id}
                   onClick={() => void openSpotlightRoom(r)}
-                  className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-fill-hover"
+                  onMouseEnter={() => setIndex(idx)}
+                  className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
+                    idx === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                  }`}
                 >
                   <Avatar name={r.fname || r.name || '频道'} size={28} />
                   <span className="truncate text-sm text-ink">{r.fname || r.name}</span>
@@ -273,7 +309,8 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                     <span className="ml-auto text-[11px] text-primary">点击加入</span>
                   )}
                 </button>
-              ))}
+                );
+              })}
               {!searching &&
                 keyword.trim() &&
                 contacts.users.length === 0 &&

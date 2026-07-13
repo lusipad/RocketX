@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { RcUser } from '@rcx/rc-client';
-import { Check, Search, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Search, UserPlus } from 'lucide-react';
 import { useChat } from '../stores/chat';
+import { humanError } from '../stores/toast';
 import Avatar from './Avatar';
 import PanelShell from './PanelShell';
+import Dialog from './Dialog';
 import UserCard, { type UserCardTarget } from './UserCard';
 import { useUserSearch } from './NewChatDialogs';
+import { SkeletonList } from './Skeleton';
 
 /** 添加成员弹窗 */
 function AddMembersDialog({ onClose }: { onClose: () => void }) {
@@ -32,109 +35,108 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
       await inviteMembers(rid, [...selected.values()]);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '邀请失败');
+      setError(humanError(err, '邀请失败'));
       setBusy(false);
     }
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Dialog
+      title="添加成员"
+      width={400}
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => void doInvite()}
+          disabled={selected.size === 0 || busy}
+          className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? '邀请中…' : `添加${selected.size > 0 ? `（${selected.size}）` : ''}`}
+        </button>
+      }
     >
-      <div className="flex max-h-[60vh] w-[400px] flex-col rounded-xl bg-surface-4 shadow-2xl">
-        <header className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="text-[15px] font-semibold text-ink">添加成员</span>
-          <button
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded text-ink-2 hover:bg-fill-hover"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <div className="px-5 pb-2">
-          <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
-            <Search size={14} className="text-ink-3" />
-            <input
-              autoFocus
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索用户"
-              className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
-            />
-          </div>
+      <div className="px-5 pb-2">
+        <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
+          <Search size={14} className="text-ink-3" />
+          <input
+            autoFocus
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索用户"
+            className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
+          />
         </div>
-        <div className="min-h-32 flex-1 overflow-y-auto px-2">
-          {users.map((u) => {
-            const checked = selected.has(u._id);
-            return (
-              <button
-                key={u._id}
-                onClick={() => toggle(u)}
-                className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-fill-hover"
-              >
-                <span
-                  className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition ${
-                    checked ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
-                  }`}
-                >
-                  {checked && <Check size={12} strokeWidth={3} />}
-                </span>
-                <Avatar name={u.name || u.username} username={u.username} size={28} />
-                <span className="truncate text-sm text-ink">{u.name || u.username}</span>
-                <span className="text-xs text-ink-3">@{u.username}</span>
-              </button>
-            );
-          })}
-        </div>
-        {error && <div className="px-5 pt-1 text-xs text-danger">{error}</div>}
-        <footer className="flex justify-end px-5 py-3.5">
-          <button
-            onClick={() => void doInvite()}
-            disabled={selected.size === 0 || busy}
-            className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? '邀请中…' : `添加${selected.size > 0 ? `（${selected.size}）` : ''}`}
-          </button>
-        </footer>
       </div>
-    </div>
+      <div className="min-h-32 px-2">
+        {users.map((u) => {
+          const checked = selected.has(u._id);
+          return (
+            <button
+              key={u._id}
+              onClick={() => toggle(u)}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-fill-hover"
+            >
+              <span
+                className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition ${
+                  checked ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
+                }`}
+              >
+                {checked && <Check size={12} strokeWidth={3} />}
+              </span>
+              <Avatar name={u.name || u.username} username={u.username} size={28} />
+              <span className="truncate text-sm text-ink">{u.name || u.username}</span>
+              <span className="text-xs text-ink-3">@{u.username}</span>
+            </button>
+          );
+        })}
+        {users.length === 0 && (
+          <div className="py-8 text-center text-sm text-ink-3">
+            {keyword ? '未找到匹配的用户' : '输入用户名搜索'}
+          </div>
+        )}
+      </div>
+      {error && <div className="px-5 pt-1 text-xs text-danger">{error}</div>}
+    </Dialog>
   );
 }
 
-/** 群成员面板：搜索 + 成员列表 */
+/** 群成员面板：搜索 + 成员列表 + 添加成员 */
 export default function MembersPanel() {
   const rid = useChat((s) => s.activeRid);
   const loadMembers = useChat((s) => s.loadMembers);
+  const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
   const [members, setMembers] = useState<RcUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
   const [card, setCard] = useState<UserCardTarget | null>(null);
   const [adding, setAdding] = useState(false);
-  const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
 
-  // 邀请成功后 store 会清缓存，这里跟着重新拉取
-  useEffect(() => {
-    if (!rid || cachedMembers) return;
-    void loadMembers(rid).then(setMembers);
-  }, [rid, cachedMembers, loadMembers]);
-
+  // 单一入口拉取（之前两个 effect 都会调用 → 每次打开发两次请求）
   useEffect(() => {
     if (!rid) return;
+    if (cachedMembers) {
+      setMembers(cachedMembers);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
+    setError(null);
     void loadMembers(rid)
-      .then(setMembers)
+      .then((list) => {
+        setMembers(list);
+        if (list.length === 0) setError(null);
+      })
+      .catch((err: unknown) => setError(humanError(err, '无法获取成员列表')))
       .finally(() => setLoading(false));
-  }, [rid, loadMembers]);
+  }, [rid, cachedMembers, loadMembers]);
 
   const filtered = useMemo(() => {
     const q = keyword.toLowerCase();
     return q
       ? members.filter(
-          (m) =>
-            m.username.toLowerCase().includes(q) || (m.name ?? '').toLowerCase().includes(q),
+          (m) => m.username.toLowerCase().includes(q) || (m.name ?? '').toLowerCase().includes(q),
         )
       : members;
   }, [members, keyword]);
@@ -160,9 +162,17 @@ export default function MembersPanel() {
         </button>
       </div>
       {adding && <AddMembersDialog onClose={() => setAdding(false)} />}
+
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {loading && <div className="py-8 text-center text-sm text-ink-3">加载中…</div>}
+        {loading && <SkeletonList rows={5} avatar={32} />}
+        {!loading && error && (
+          <div className="flex flex-col items-center gap-2 py-10 text-center">
+            <AlertCircle size={22} className="text-danger" />
+            <div className="max-w-xs text-xs break-words text-ink-3">{error}</div>
+          </div>
+        )}
         {!loading &&
+          !error &&
           filtered.map((m) => (
             <div
               key={m._id}
@@ -181,7 +191,7 @@ export default function MembersPanel() {
                     m.status === 'online'
                       ? 'bg-success'
                       : m.status === 'away'
-                        ? 'bg-[#ff8800]'
+                        ? 'bg-warning'
                         : m.status === 'busy'
                           ? 'bg-danger'
                           : 'bg-line'
@@ -190,8 +200,10 @@ export default function MembersPanel() {
               )}
             </div>
           ))}
-        {!loading && filtered.length === 0 && (
-          <div className="py-8 text-center text-sm text-ink-3">未找到匹配的成员</div>
+        {!loading && !error && filtered.length === 0 && (
+          <div className="py-8 text-center text-sm text-ink-3">
+            {keyword ? '未找到匹配的成员' : '暂无成员'}
+          </div>
         )}
       </div>
       {card && <UserCard user={card} onClose={() => setCard(null)} />}

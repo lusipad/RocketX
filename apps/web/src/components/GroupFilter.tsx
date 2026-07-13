@@ -18,7 +18,9 @@ import {
 import { buildConversations, useChat } from '../stores/chat';
 import { useFolders } from '../stores/folders';
 import { useUI, type ConvFilter } from '../stores/ui';
+import { toast } from '../stores/toast';
 import ContextMenu, { type MenuItem } from './ContextMenu';
+import { ConfirmDialog } from './Dialog';
 
 const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'all', label: '消息', icon: MessageSquareText },
@@ -111,6 +113,7 @@ export default function GroupFilter() {
   const [dialog, setDialog] = useState<{ mode: 'create' | 'rename'; id?: string } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const counts = useMemo(() => {
     const convs = buildConversations(subscriptions, rooms);
@@ -136,10 +139,7 @@ export default function GroupFilter() {
       label: '删除分组',
       icon: Trash2,
       danger: true,
-      onClick: () => {
-        remove(id);
-        if (activeFolder === id) setActiveFolder(null);
-      },
+      onClick: () => setConfirmDelete(id),
     },
   ];
 
@@ -259,6 +259,19 @@ export default function GroupFilter() {
           y={menu.y}
           items={folderMenuItems(menu.id)}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          title="删除分组"
+          message={`确定删除分组「${folders.find((f) => f.id === confirmDelete)?.name}」吗？分组里的会话不会被删除，只是不再归入该分组。`}
+          confirmLabel="删除"
+          onConfirm={() => {
+            remove(confirmDelete);
+            if (activeFolder === confirmDelete) setActiveFolder(null);
+            toast.success('分组已删除');
+          }}
+          onClose={() => setConfirmDelete(null)}
         />
       )}
     </aside>

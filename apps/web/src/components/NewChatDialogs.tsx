@@ -5,6 +5,7 @@ import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
+import Dialog from './Dialog';
 
 /**
  * 用户搜索（300ms 防抖），排除自己。
@@ -32,37 +33,8 @@ export function useUserSearch(keyword: string): RcUser[] {
   return users;
 }
 
-function DialogShell({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex max-h-[70vh] w-[420px] flex-col rounded-xl bg-surface-4 shadow-2xl">
-        <header className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="text-[15px] font-semibold text-ink">{title}</span>
-          <button
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded text-ink-2 hover:bg-fill-hover"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        {children}
-      </div>
-    </div>
-  );
-}
+/** 统一弹窗外壳（含 Esc 关闭） */
+const DialogShell = Dialog;
 
 /** 发起私聊：搜索用户 → 点击直达会话 */
 export function StartDMDialog({ onClose }: { onClose: () => void }) {
@@ -234,7 +206,7 @@ export function CreateGroupDialog({
         })}
       </div>
       {error && <div className="px-5 pt-1 text-xs text-danger">{error}</div>}
-      <footer className="flex items-center justify-between px-5 py-3.5">
+      <div className="flex items-center justify-between px-5 py-3.5">
         <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-2">
           <input
             type="checkbox"
@@ -252,7 +224,7 @@ export function CreateGroupDialog({
         >
           {busy ? '创建中…' : '创建'}
         </button>
-      </footer>
+      </div>
     </DialogShell>
   );
 }

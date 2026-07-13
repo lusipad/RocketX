@@ -21,13 +21,19 @@ import Avatar from './Avatar';
 import UserCard from './UserCard';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
-const MODULES: { key: ModuleKey; label: string; icon: typeof MessageCircle }[] = [
+const MODULES: {
+  key: ModuleKey;
+  label: string;
+  icon: typeof MessageCircle;
+  /** 尚未实现，导航项上给出标识，避免用户点进去才发现是占位页 */
+  soon?: boolean;
+}[] = [
   { key: 'messages', label: '消息', icon: MessageCircle },
-  { key: 'meetings', label: '会议', icon: Video },
-  { key: 'calendar', label: '日历', icon: Calendar },
-  { key: 'docs', label: '云文档', icon: FileText },
   { key: 'contacts', label: '通讯录', icon: BookUser },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
+  { key: 'meetings', label: '会议', icon: Video, soon: true },
+  { key: 'calendar', label: '日历', icon: Calendar, soon: true },
+  { key: 'docs', label: '云文档', icon: FileText, soon: true },
 ];
 
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
@@ -120,7 +126,7 @@ export default function NavRail() {
 
       {/* 模块列表 */}
       <div className="flex flex-1 flex-col gap-0.5">
-        {MODULES.map(({ key, label, icon: Icon }) => {
+        {MODULES.map(({ key, label, icon: Icon, soon }) => {
           const isActive = key === active;
           return (
             <button
@@ -130,7 +136,7 @@ export default function NavRail() {
                 isActive
                   ? 'bg-fill-active font-medium text-ink'
                   : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
-              }`}
+              } ${soon ? 'opacity-60' : ''}`}
             >
               <span
                 className={`flex h-6 w-6 items-center justify-center rounded-md ${
@@ -140,6 +146,11 @@ export default function NavRail() {
                 <Icon size={isActive ? 15 : 17} />
               </span>
               {label}
+              {soon && (
+                <span className="ml-auto rounded bg-fill-active px-1 text-[9px] text-ink-3">
+                  待开发
+                </span>
+              )}
               {key === 'messages' &&
                 (unreadTotal > 0 ? (
                   <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-medium text-white">

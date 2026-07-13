@@ -8,6 +8,7 @@ import { useAuth } from '../stores/auth';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
+import { SkeletonList } from '../components/Skeleton';
 
 type Tab = 'members' | 'groups';
 
@@ -73,10 +74,15 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
-        <span className="text-xs text-ink-3">共 {total} 人</span>
+        <span className="text-xs text-ink-3">
+          共 {total} 人
+          {total > users.length && !keyword && (
+            <span className="ml-1 text-warning">（显示前 {users.length} 人，搜索可找到更多）</span>
+          )}
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto rounded-lg border border-line">
-        {loading && <div className="py-10 text-center text-sm text-ink-3">加载中…</div>}
+        {loading && <SkeletonList rows={6} avatar={36} />}
         {!loading && error && (
           <div className="px-6 py-10 text-center">
             <div className="text-sm text-danger">无法获取成员列表</div>
@@ -111,7 +117,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                     e.stopPropagation();
                     void doDM(u.username);
                   }}
-                  className="hidden items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-xs text-white transition group-hover:flex hover:bg-primary-hover"
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white group-hover:border-primary group-hover:bg-primary group-hover:text-white"
                 >
                   <MessageCircle size={13} />
                   {busy === u.username ? '打开中…' : '发消息'}
