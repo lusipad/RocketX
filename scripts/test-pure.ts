@@ -459,6 +459,42 @@ async function main(): Promise<void> {
   const noWd = hits(ev('2026-07-15', { type: 'custom', interval: 1, weekdays: [] }), '2026-07-15', 10);
   check('自定义重复但没选星期几 → 不重复', noWd.length === 0, noWd.join(','));
 
+  console.log('\n[日历 · 标记完成]');
+  const { isEventDone } = cal;
+  const weekly = ev('2026-07-13', { type: 'weekly', interval: 1 }); // 每周一
+  weekly.doneDates = ['2026-07-13'];
+
+  check('标记完成的那一天：已完成', isEventDone(weekly, '2026-07-13'));
+  check(
+    '重复日程按天记：这周开了不代表下周也开了',
+    !isEventDone(weekly, '2026-07-20'),
+    '下周一仍应是未完成',
+  );
+  check('未标记的日程：未完成', !isEventDone(ev('2026-07-13'), '2026-07-13'));
+
+  // 已完成的日程不该再占工作台队列
+  const doneToday = {
+    id: 'c9',
+    title: '已开完的会',
+    date: today,
+    startTime: '09:00',
+    allDay: false,
+    color: '#000',
+    source: 'manual',
+    doneDates: [today],
+    createdAt: 0,
+  } as any;
+  const q2 = buildQueue({
+    account: me,
+    today,
+    todos: [],
+    workItems: [],
+    prs: [],
+    builds: [],
+    events: [doneToday],
+  });
+  check('已完成的日程不进待处理队列', q2.length === 0, `${q2.length} 项`);
+
   console.log('\n[日历 · 网格]');
   const grid = monthGrid(2026, 6); // 2026 年 7 月
   check('周一起始：月视图第一格是周一', grid[0].getDay() === 1, `getDay=${grid[0].getDay()}`);

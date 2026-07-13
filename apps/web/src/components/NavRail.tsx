@@ -18,7 +18,7 @@ import {
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
-import { useCalendar, eventsForDate } from '../stores/calendar';
+import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI, type ModuleKey } from '../stores/ui';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -72,7 +72,7 @@ export default function NavRail() {
   const todayEventCount = useMemo(() => {
     const today = todayKey();
     return (
-      eventsForDate(calendarEvents, today).length +
+      eventsForDate(calendarEvents, today).filter((e) => !isEventDone(e, today)).length +
       todos.filter((t) => !t.done && t.due === today).length
     );
   }, [calendarEvents, todos]);
@@ -113,7 +113,7 @@ export default function NavRail() {
                     setPlusMenu(false);
                     setDialog('dm');
                   }}
-                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
                   <MessageCirclePlus size={15} className="text-ink-2" />
                   发起聊天
@@ -123,7 +123,7 @@ export default function NavRail() {
                     setPlusMenu(false);
                     setDialog('group');
                   }}
-                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
                   <UsersRound size={15} className="text-ink-2" />
                   创建群组
@@ -133,7 +133,7 @@ export default function NavRail() {
                     setPlusMenu(false);
                     setDialog('team');
                   }}
-                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
                   <Users size={15} className="text-ink-2" />
                   创建团队
@@ -147,7 +147,7 @@ export default function NavRail() {
       {/* 全局搜索（打开 Ctrl+K 快速切换） */}
       <button
         onClick={() => setSwitcherOpen(true)}
-        className="mb-3 flex h-8 items-center gap-2 rounded-md bg-surface-2 px-2.5 text-[13px] text-ink-3 transition hover:bg-fill-hover"
+        className="mb-3 flex h-8 items-center gap-2 rounded-md bg-surface-2 px-2.5 text-xs text-ink-3 transition hover:bg-fill-hover"
       >
         <Search size={14} />
         搜索 (Ctrl+K)
@@ -161,7 +161,7 @@ export default function NavRail() {
             <button
               key={key}
               onClick={() => setModule(key)}
-              className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] transition ${
+              className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                 isActive
                   ? 'bg-fill-active font-medium text-ink'
                   : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
@@ -176,13 +176,13 @@ export default function NavRail() {
               </span>
               {label}
               {soon && (
-                <span className="ml-auto rounded bg-fill-active px-1 text-[9px] text-ink-3">
+                <span className="ml-auto rounded bg-fill-active px-1 text-2xs text-ink-3">
                   待开发
                 </span>
               )}
               {key === 'messages' &&
                 (unreadTotal > 0 ? (
-                  <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-medium text-white">
+                  <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1.5 text-2xs font-medium text-white">
                     {unreadTotal > 99 ? '99+' : unreadTotal}
                   </span>
                 ) : hasAlert ? (
@@ -190,14 +190,14 @@ export default function NavRail() {
                 ) : null)}
               {/* 日历：今日日程数 */}
               {key === 'calendar' && todayEventCount > 0 && (
-                <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-[10px] font-medium text-ink-2">
+                <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
                   {todayEventCount}
                 </span>
               )}
               {/* 待办：有逾期就标红，否则灰色计数 */}
               {key === 'todos' && todoOpen > 0 && (
                 <span
-                  className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium ${
+                  className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-2xs font-medium ${
                     todoOverdue > 0 ? 'bg-danger text-white' : 'bg-fill-active text-ink-2'
                   }`}
                   title={todoOverdue > 0 ? `${todoOverdue} 条已逾期` : `${todoOpen} 条待办`}
@@ -214,7 +214,7 @@ export default function NavRail() {
       <div className="flex flex-col gap-0.5 border-t border-line pt-2">
         <button
           onClick={() => setModule('settings')}
-          className={`flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition ${
+          className={`flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs transition ${
             active === 'settings'
               ? 'bg-fill-active font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
@@ -225,7 +225,7 @@ export default function NavRail() {
         </button>
         <button
           onClick={() => setConfirmLogout(true)}
-          className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-ink-2 transition hover:bg-fill-hover hover:text-danger"
+          className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-danger"
         >
           <LogOut size={15} />
           退出登录

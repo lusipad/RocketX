@@ -160,21 +160,21 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
             <span className="w-14 shrink-0 text-xs text-ink-3">#{w.id}</span>
             <span className="min-w-0 flex-1 truncate text-sm text-ink">{w.title}</span>
 
-            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ${stateStyle(w.state)}`}>
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateStyle(w.state)}`}>
               {w.state}
             </span>
             {w.priority !== undefined && (
-              <span className={`w-6 shrink-0 text-[11px] ${priorityStyle(w.priority)}`}>
+              <span className={`w-6 shrink-0 text-2xs ${priorityStyle(w.priority)}`}>
                 P{w.priority}
               </span>
             )}
-            <span className="w-24 shrink-0 truncate text-[11px] text-ink-3" title={w.assignedTo}>
+            <span className="w-24 shrink-0 truncate text-2xs text-ink-3" title={w.assignedTo}>
               {w.assignedTo ?? '未分配'}
             </span>
-            <span className="w-20 shrink-0 truncate text-right text-[11px] text-ink-3">
+            <span className="w-20 shrink-0 truncate text-right text-2xs text-ink-3">
               {w.project}
             </span>
-            <span className="w-16 shrink-0 text-right text-[11px] text-ink-3">
+            <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
               {relTime(w.changedDate)}
             </span>
             <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
@@ -205,7 +205,7 @@ function PrRow({ pr }: { pr: PullRequest }) {
 
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm text-ink">{pr.title}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-ink-3">
+        <span className="mt-0.5 block truncate text-2xs text-ink-3">
           {pr.repo} · {pr.sourceBranch} → {pr.targetBranch} · {pr.creator}
         </span>
       </span>
@@ -215,17 +215,17 @@ function PrRow({ pr }: { pr: PullRequest }) {
         {pr.reviewers.slice(0, 3).map((r) => (
           <span
             key={r.unique || r.name}
-            className={`text-[11px] ${voteColor(r.vote)}`}
+            className={`text-2xs ${voteColor(r.vote)}`}
             title={`${r.name}：${VOTE_LABELS[r.vote] ?? '未知'}`}
           >
             {r.name.slice(0, 4)}
             {r.vote >= 5 ? ' ✓' : r.vote <= -5 ? ' ✕' : ' ·'}
           </span>
         ))}
-        {pr.reviewers.length === 0 && <span className="text-[11px] text-ink-3">无评审人</span>}
+        {pr.reviewers.length === 0 && <span className="text-2xs text-ink-3">无评审人</span>}
       </span>
 
-      <span className="w-16 shrink-0 text-right text-[11px] text-ink-3">
+      <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
         {relTime(pr.createdDate)}
       </span>
       <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
@@ -387,13 +387,13 @@ export function BuildList({ builds }: { builds: Build[] }) {
             <BuildStatusIcon build={b} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm text-ink">{b.definition}</span>
-              <span className="mt-0.5 block truncate text-[11px] text-ink-3">
+              <span className="mt-0.5 block truncate text-2xs text-ink-3">
                 {b.buildNumber} · {b.project}
                 {b.requestedFor ? ` · ${b.requestedFor} 触发` : ''}
               </span>
             </span>
             <span
-              className={`shrink-0 text-[11px] ${
+              className={`shrink-0 text-2xs ${
                 b.result === 'failed'
                   ? 'text-danger'
                   : b.result === 'succeeded'
@@ -405,7 +405,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
                 ? '进行中'
                 : (BUILD_RESULT_LABELS[b.result] ?? b.result)}
             </span>
-            <span className="w-16 shrink-0 text-right text-[11px] text-ink-3">
+            <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
               {relTime(b.finishTime || b.queueTime)}
             </span>
             <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />

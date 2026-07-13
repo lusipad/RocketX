@@ -1,4 +1,4 @@
-import { eventsForDate, type CalendarEvent } from '../stores/calendar';
+import { eventsForDate, isEventDone, type CalendarEvent } from '../stores/calendar';
 import { isOverdue, todayKey, type Todo } from '../stores/todos';
 import { isApproved, matchUser, type Build, type PullRequest, type WorkItem } from '../stores/workbench';
 
@@ -118,8 +118,9 @@ export function buildQueue(input: QueueInput): QueueItem[] {
     }
   }
 
-  // 今天的日程（含重复日程展开）
+  // 今天的日程（含重复日程展开）；标记完成的不再占队列
   for (const e of eventsForDate(input.events, today)) {
+    if (isEventDone(e, today)) continue;
     items.push({
       key: `event-${e.id}-${today}`,
       kind: 'event',

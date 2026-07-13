@@ -165,7 +165,7 @@ export default function ChatArea() {
                 className="flex items-center gap-1 truncate text-xs text-ink-3 hover:text-primary"
                 title="回到主会话"
               >
-                <span className="rounded bg-primary-light px-1 text-[10px] text-primary">讨论</span>
+                <span className="rounded bg-primary-light px-1 text-2xs text-primary">讨论</span>
                 来自 {parentRoom?.fname || parentRoom?.name || '主会话'}
               </button>
             ) : (

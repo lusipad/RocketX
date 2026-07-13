@@ -170,7 +170,7 @@ function ConversationItem({
           <Avatar name={shownName} username={conv.avatarUsername} size={avatarSize} />
           {conv.unread > 0 ? (
             <span
-              className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface-2 px-1 text-[10px] font-medium text-white ${
+              className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface-2 px-1 text-2xs font-medium text-white ${
                 conv.muted ? 'bg-ink-3' : 'bg-danger'
               }`}
             >
@@ -187,7 +187,7 @@ function ConversationItem({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1 truncate text-[13.5px] font-medium text-ink">
+          <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-ink">
             {conv.isTeam ? (
               <Users size={12} className="shrink-0 text-ink-3" />
             ) : conv.isMultiDM ? (
@@ -202,7 +202,7 @@ function ConversationItem({
             </span>
             {conv.userMentions > 0 && (
               <span
-                className="shrink-0 rounded bg-danger px-1 text-[10px] font-medium text-white"
+                className="shrink-0 rounded bg-danger px-1 text-2xs font-medium text-white"
                 title="有人 @ 了你"
               >
                 @
@@ -210,13 +210,13 @@ function ConversationItem({
             )}
             {conv.muted && <BellOff size={11} className="shrink-0 text-ink-3" />}
           </span>
-          <span className="flex shrink-0 items-center gap-1 text-[11px] text-ink-3">
+          <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-3">
             {conv.favorite && <Pin size={10} className="text-primary" />}
             {viewMode !== 'condensed' && fmtConvTime(conv.lastTs)}
             {/* 不显示头像时未读角标挪到右侧 */}
             {!showAvatar && conv.unread > 0 && (
               <span
-                className={`flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] text-white ${
+                className={`flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-2xs text-white ${
                   conv.muted ? 'bg-ink-3' : 'bg-danger'
                 }`}
               >
@@ -434,13 +434,13 @@ export default function ConversationList() {
               {showHeaders && (
                 <button
                   onClick={() => toggleCollapse(section.key)}
-                  className="flex w-full items-center gap-1 px-2 py-1.5 text-[11px] font-medium text-ink-3 transition hover:text-ink-2"
+                  className="flex w-full items-center gap-1 px-2 py-1.5 text-2xs font-medium text-ink-3 transition hover:text-ink-2"
                 >
                   {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                   {section.label}
                   <span className="text-ink-3">({section.items.length})</span>
                   {isCollapsed && sectionUnread > 0 && (
-                    <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
+                    <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-2xs text-white">
                       {sectionUnread}
                     </span>
                   )}

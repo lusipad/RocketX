@@ -166,14 +166,14 @@ export default function GroupFilter() {
   ];
 
   const btnCls = (active: boolean) =>
-    `flex h-8 items-center gap-2 rounded-md px-2 text-[13px] transition ${
+    `flex h-8 items-center gap-2 rounded-md px-2 text-xs transition ${
       active ? 'bg-fill-active font-medium text-ink' : 'text-ink-2 hover:bg-fill-hover'
     }`;
 
   return (
     <aside className="flex w-[150px] shrink-0 flex-col border-r border-line bg-surface-2 px-2 py-3">
       <div className="flex items-center justify-between px-2 pb-2">
-        <span className="text-[13px] font-medium text-ink">分组</span>
+        <span className="text-xs font-medium text-ink">分组</span>
         <button
           title="新建分组"
           onClick={() => setDialog({ mode: 'create' })}
@@ -201,7 +201,7 @@ export default function GroupFilter() {
               {label}
               {count > 0 && (
                 <span
-                  className={`ml-auto text-[11px] ${
+                  className={`ml-auto text-2xs ${
                     highlight ? 'font-medium text-danger' : 'text-ink-3'
                   }`}
                 >
@@ -214,7 +214,7 @@ export default function GroupFilter() {
 
         {/* 自定义分组：可拖拽会话进来 */}
         {folders.length > 0 && (
-          <div className="mt-2 px-2 pb-1 text-[11px] text-ink-3">我的分组</div>
+          <div className="mt-2 px-2 pb-1 text-2xs text-ink-3">我的分组</div>
         )}
         {folders.map((f) => {
           const active = activeFolder === f.id;
@@ -249,14 +249,14 @@ export default function GroupFilter() {
                 <Wand2 size={11} className="shrink-0 text-ink-3" />
               ) : null}
               {folderCounts[f.id] > 0 && (
-                <span className="ml-auto text-[11px] text-ink-3">{folderCounts[f.id]}</span>
+                <span className="ml-auto text-2xs text-ink-3">{folderCounts[f.id]}</span>
               )}
             </button>
           );
         })}
 
         {folders.length === 0 && (
-          <div className="mt-2 px-2 text-[11px] leading-relaxed text-ink-3">
+          <div className="mt-2 px-2 text-2xs leading-relaxed text-ink-3">
             点右上角 <FolderPlus size={11} className="inline" /> 新建分组。
             会话可以拖进来，也可以右键分组设「规则」自动归类（比如名称以 WI 开头）。
           </div>

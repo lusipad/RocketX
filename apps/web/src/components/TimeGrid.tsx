@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { dateKey, eventsForDate, DAY_NAMES, type CalendarEvent } from '../stores/calendar';
+import { Check } from 'lucide-react';
+import {
+  dateKey,
+  eventsForDate,
+  isEventDone,
+  useCalendar,
+  DAY_NAMES,
+  type CalendarEvent,
+} from '../stores/calendar';
 import { isOverdue, type Todo } from '../stores/todos';
 
 /**
@@ -96,6 +104,7 @@ function DayColumn({
   onCreate: (date: string, hour: number) => void;
 }) {
   const key = dateKey(date);
+  const toggleDone = useCalendar((s) => s.toggleDone);
   const dayEvents = useMemo(() => eventsForDate(events, key), [events, key]);
   const { timed, allDay } = useMemo(() => layout(dayEvents), [dayEvents]);
   const dayTodos = useMemo(() => todos.filter((t) => t.due === key && !t.done), [todos, key]);
@@ -106,20 +115,39 @@ function DayColumn({
       {/* 全天事件与待办：钉在顶部，不参与时间轴 */}
       {(allDay.length > 0 || dayTodos.length > 0) && (
         <div className="space-y-0.5 border-b border-line bg-fill-1 p-1">
-          {allDay.map((e) => (
-            <button
-              key={e.id}
-              onClick={() => onPick(e)}
-              className="block w-full truncate rounded px-1.5 py-0.5 text-left text-[11px] text-white"
-              style={{ background: e.color }}
-            >
-              {e.title}
-            </button>
-          ))}
+          {allDay.map((e) => {
+            const done = isEventDone(e, key);
+            return (
+              <button
+                key={e.id}
+                onClick={() => onPick(e)}
+                className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-2xs text-white transition ${
+                  done ? 'opacity-50' : ''
+                }`}
+                style={{ background: e.color }}
+              >
+                <span
+                  role="checkbox"
+                  aria-checked={done}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    toggleDone(e.id, key);
+                  }}
+                  className="flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
+                  title={done ? '标记为未完成' : '标记完成'}
+                >
+                  {done && <Check size={9} strokeWidth={3} />}
+                </span>
+                <span className={`min-w-0 flex-1 truncate ${done ? 'line-through' : ''}`}>
+                  {e.title}
+                </span>
+              </button>
+            );
+          })}
           {dayTodos.map((t) => (
             <div
               key={t.id}
-              className={`truncate rounded px-1.5 py-0.5 text-[11px] ${
+              className={`truncate rounded px-1.5 py-0.5 text-2xs ${
                 isOverdue(t) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
               }`}
               title="来自待办"
@@ -144,11 +172,13 @@ function DayColumn({
 
         {timed.map((p) => {
           const width = 100 / p.columns;
+          const done = isEventDone(p.event, key);
           return (
-            <button
+            <div
               key={p.event.id}
-              onClick={() => onPick(p.event)}
-              className="absolute overflow-hidden rounded px-1.5 py-0.5 text-left text-[11px] leading-tight text-white shadow-sm"
+              className={`absolute overflow-hidden rounded shadow-sm transition ${
+                done ? 'opacity-50' : ''
+              }`}
               style={{
                 top: p.top,
                 height: p.height,
@@ -158,14 +188,35 @@ function DayColumn({
               }}
               title={`${p.event.startTime}${p.event.endTime ? ` - ${p.event.endTime}` : ''} ${p.event.title}`}
             >
-              <div className="truncate font-medium">{p.event.title}</div>
-              {p.height > 30 && (
-                <div className="truncate opacity-85">
-                  {p.event.startTime}
-                  {p.event.endTime ? ` - ${p.event.endTime}` : ''}
-                </div>
-              )}
-            </button>
+              <button
+                onClick={() => onPick(p.event)}
+                className="flex h-full w-full items-start gap-1 px-1 py-0.5 text-left text-2xs leading-tight text-white"
+              >
+                <span
+                  role="checkbox"
+                  aria-checked={done}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleDone(p.event.id, key);
+                  }}
+                  className="mt-px flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
+                  title={done ? '标记为未完成' : '标记完成'}
+                >
+                  {done && <Check size={9} strokeWidth={3} />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={`block truncate font-medium ${done ? 'line-through' : ''}`}>
+                    {p.event.title}
+                  </span>
+                  {p.height > 30 && (
+                    <span className="block truncate opacity-85">
+                      {p.event.startTime}
+                      {p.event.endTime ? ` - ${p.event.endTime}` : ''}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </div>
           );
         })}
 
@@ -218,7 +269,7 @@ export default function TimeGrid({
           const isToday = dateKey(d) === today;
           return (
             <div key={dateKey(d)} className="flex-1 py-2 text-center">
-              <div className="text-[11px] text-ink-3">周{DAY_NAMES[d.getDay()]}</div>
+              <div className="text-2xs text-ink-3">周{DAY_NAMES[d.getDay()]}</div>
               <div
                 className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-sm ${
                   isToday ? 'bg-primary font-medium text-white' : 'text-ink'
@@ -239,7 +290,7 @@ export default function TimeGrid({
             {Array.from({ length: END_HOUR - START_HOUR }, (_, i) => (
               <div
                 key={i}
-                className="absolute right-1 -translate-y-1/2 text-[10px] text-ink-3"
+                className="absolute right-1 -translate-y-1/2 text-2xs text-ink-3"
                 style={{ top: i * HOUR_HEIGHT }}
               >
                 {i > 0 ? `${String(START_HOUR + i).padStart(2, '0')}:00` : ''}

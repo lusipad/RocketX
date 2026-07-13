@@ -69,7 +69,7 @@ export default function ContextMenu({
             onClick();
             onClose();
           }}
-          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] transition hover:bg-fill-hover ${
+          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition hover:bg-fill-hover ${
             danger ? 'text-danger' : 'text-ink'
           }`}
         >

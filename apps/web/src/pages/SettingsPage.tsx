@@ -191,7 +191,7 @@ function AppearanceSection() {
               <span className={`text-sm font-medium ${active ? 'text-primary' : 'text-ink'}`}>
                 {label}
               </span>
-              <span className="text-[11px] text-ink-3">{desc}</span>
+              <span className="text-2xs text-ink-3">{desc}</span>
             </button>
           );
         })}
@@ -677,7 +677,7 @@ function WorkbenchSection() {
                   <XCircle size={13} className="mt-0.5 shrink-0 text-ink-3" />
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-[11px] text-ink-2">{s.url}</div>
+                  <div className="truncate font-mono text-2xs text-ink-2">{s.url}</div>
                   <div className={`mt-0.5 break-words ${s.ok ? 'text-success' : 'text-ink-3'}`}>
                     {/* 这里以前把 none（不带凭据）也写成「Windows 集成认证」，
                         看日志的人会以为试过集成认证了，其实压根没试 */}

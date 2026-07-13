@@ -25,6 +25,12 @@ export interface CalendarEvent {
    * 与其半吊子地实现通知，不如老实承认这是个记事本。
    */
   source: 'manual';
+  /**
+   * 已完成。
+   * 重复日程的「完成」是按天记的 —— 每周一的例会，这周开了不代表下周也开了。
+   * 所以存的是「哪些天已完成」的日期列表，而不是一个布尔值。
+   */
+  doneDates?: string[];
   createdAt: number;
 }
 
@@ -237,6 +243,11 @@ function countWeekdaysBetween(from: Date, to: Date): number {
   return n;
 }
 
+/** 这个日程在这一天是否已完成（重复日程按天记） */
+export function isEventDone(e: CalendarEvent, dateStr: string): boolean {
+  return !!e.doneDates?.includes(dateStr);
+}
+
 /** 获取某天的所有事件（含重复事件展开） */
 export function eventsForDate(events: CalendarEvent[], dateStr: string): CalendarEvent[] {
   return events.filter((e) => {
@@ -292,6 +303,8 @@ interface CalendarState {
   next: () => void;
   today: () => void;
   add: (e: Omit<CalendarEvent, 'id' | 'createdAt'>) => string;
+  /** 标记某一天的这个日程完成 / 取消完成（重复日程按天记） */
+  toggleDone: (id: string, date: string) => void;
   update: (id: string, patch: Partial<Omit<CalendarEvent, 'id' | 'createdAt'>>) => void;
   remove: (id: string) => void;
 }
@@ -355,6 +368,19 @@ export const useCalendar = create<CalendarState>((set, get) => ({
     set({ events });
     persist(events);
   },
+  toggleDone: (id, date) => {
+    const events = get().events.map((e) => {
+      if (e.id !== id) return e;
+      const done = e.doneDates ?? [];
+      const next = done.includes(date)
+        ? done.filter((d) => d !== date)
+        : [...done, date];
+      return { ...e, doneDates: next };
+    });
+    set({ events });
+    persist(events);
+  },
+
   remove: (id) => {
     const events = get().events.filter((e) => e.id !== id);
     set({ events });

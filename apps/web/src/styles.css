@@ -21,6 +21,27 @@
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     'Helvetica Neue', Arial, sans-serif;
 
+  /**
+   * 字号阶梯。
+   *
+   * 原来全靠各处自己写死：9 / 10 / 11 / 12 / 13 / 13.5 / 14 / 15 / 16px 九档，
+   * 其中 61 处小于 12px —— 中文在 10-11px 下笔画会糊，「看得见但读着累」。
+   * 中文字形比拉丁字母复杂，同样字号下可读性更差，不能照搬英文界面的尺寸。
+   *
+   * 这里整体上调一档，并把档位收敛到 5 个。改 token 而不是改三百多处 className：
+   * 组件里的 text-xs / text-sm 全部自动跟着变大。
+   */
+  --text-2xs: 0.75rem;     /* 12px —— 角标、次要计数，最小不再低于此 */
+  --text-2xs--line-height: 1.125rem;
+  --text-xs: 0.8125rem;    /* 13px（原 12px）—— 元信息、时间、标签 */
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.9375rem;    /* 15px（原 14px）—— 正文主力：消息、列表项 */
+  --text-sm--line-height: 1.4375rem;
+  --text-base: 1rem;       /* 16px —— 小标题 */
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem;     /* 18px —— 页面标题 */
+  --text-lg--line-height: 1.75rem;
+
   /* 语义色（默认值由 :root 覆盖，这里声明让 Tailwind 生成工具类） */
   --color-surface-1: #f2f3f5;
   --color-surface-2: #f5f6f7;

@@ -279,7 +279,7 @@ export default function CalendarEventDialog({
 
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <label className="mb-1 block text-[11px] text-ink-3">结束日期（可选）</label>
+                    <label className="mb-1 block text-2xs text-ink-3">结束日期（可选）</label>
                     <input
                       type="date"
                       value={repeatEndDate}
@@ -288,7 +288,7 @@ export default function CalendarEventDialog({
                     />
                   </div>
                   <div className="flex-1">
-                    <label className="mb-1 block text-[11px] text-ink-3">重复次数（可选）</label>
+                    <label className="mb-1 block text-2xs text-ink-3">重复次数（可选）</label>
                     <input
                       type="number"
                       min={1}

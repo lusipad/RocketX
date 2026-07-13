@@ -126,7 +126,7 @@ export default function EmojiPicker({
 
       {!keyword && recent.length > 0 && (
         <>
-          <div className="px-1 pb-1 text-[10px] text-ink-3">最近使用</div>
+          <div className="px-1 pb-1 text-2xs text-ink-3">最近使用</div>
           <div className="mb-1.5 grid grid-cols-8 gap-0.5 border-b border-line pb-1.5">
             {recent.map((e) => (
               <button
@@ -164,7 +164,7 @@ export default function EmojiPicker({
         ) : (
           sections.map((section) => (
             <div key={section.label} data-emoji-section={section.label}>
-              <div className="sticky top-0 bg-surface-4 px-1 py-1 text-[10px] text-ink-3">
+              <div className="sticky top-0 bg-surface-4 px-1 py-1 text-2xs text-ink-3">
                 {section.label}
               </div>
               <div className="grid grid-cols-8 gap-0.5">

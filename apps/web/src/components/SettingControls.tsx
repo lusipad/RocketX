@@ -83,7 +83,7 @@ export function RadioGroup<T extends string>({
             <div className={`text-sm ${active ? 'font-medium text-primary' : 'text-ink'}`}>
               {label}
             </div>
-            {hint && <div className="mt-0.5 text-[11px] text-ink-3">{hint}</div>}
+            {hint && <div className="mt-0.5 text-2xs text-ink-3">{hint}</div>}
           </button>
         );
       })}

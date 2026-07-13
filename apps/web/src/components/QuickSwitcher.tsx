@@ -192,7 +192,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
             placeholder="搜索会话、消息、联系人（Tab 切换范围）"
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
-          <kbd className="rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-3">Esc</kbd>
+          <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
         </div>
 
         <div className="flex shrink-0 gap-1 border-b border-line px-3 py-1.5">
@@ -223,10 +223,10 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                 <Avatar name={displayName(aliases, c)} username={c.avatarUsername} size={28} />
                 <span className="truncate text-sm text-ink">{displayName(aliases, c)}</span>
                 {c.isDiscussion && (
-                  <span className="rounded bg-fill-1 px-1 text-[10px] text-ink-3">讨论</span>
+                  <span className="rounded bg-fill-1 px-1 text-2xs text-ink-3">讨论</span>
                 )}
                 {c.unread > 0 && (
-                  <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
+                  <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-2xs text-white">
                     {c.unread}
                   </span>
                 )}
@@ -258,11 +258,11 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
                       <span className="text-xs font-medium text-ink">{m.u.name || m.u.username}</span>
-                      <span className="flex items-center gap-0.5 text-[11px] text-ink-3">
+                      <span className="flex items-center gap-0.5 text-2xs text-ink-3">
                         <Hash size={10} />
                         {roomName(m.rid)}
                       </span>
-                      <span className="ml-auto shrink-0 text-[11px] text-ink-3">
+                      <span className="ml-auto shrink-0 text-2xs text-ink-3">
                         {fmtConvTime(tsMs(m.ts))}
                       </span>
                     </span>
@@ -280,7 +280,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                 <div className="py-8 text-center text-sm text-ink-3">输入用户名或频道名搜索</div>
               )}
               {contacts.users.length > 0 && (
-                <div className="px-4 pt-2 pb-1 text-[11px] text-ink-3">联系人</div>
+                <div className="px-4 pt-2 pb-1 text-2xs text-ink-3">联系人</div>
               )}
               {contacts.users.map((u, i) => (
                 <button
@@ -302,7 +302,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                 </button>
               ))}
               {contacts.rooms.length > 0 && (
-                <div className="px-4 pt-2 pb-1 text-[11px] text-ink-3">频道</div>
+                <div className="px-4 pt-2 pb-1 text-2xs text-ink-3">频道</div>
               )}
               {contacts.rooms.map((r, i) => {
                 const idx = contacts.users.length + i;
@@ -318,7 +318,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                   <Avatar name={r.fname || r.name || '频道'} size={28} />
                   <span className="truncate text-sm text-ink">{r.fname || r.name}</span>
                   {!subscriptions[r._id] && (
-                    <span className="ml-auto text-[11px] text-primary">点击加入</span>
+                    <span className="ml-auto text-2xs text-primary">点击加入</span>
                   )}
                 </button>
                 );

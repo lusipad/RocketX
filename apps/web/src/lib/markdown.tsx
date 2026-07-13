@@ -210,7 +210,7 @@ function renderBlocks(
       }
       push(
         <div key={key} className="my-1.5 overflow-x-auto">
-          <table className="min-w-full border-collapse text-left text-[13px]">
+          <table className="min-w-full border-collapse text-left text-xs">
             <thead>
               <tr>
                 {header.map((h, hi) => (

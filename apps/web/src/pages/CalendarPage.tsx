@@ -6,7 +6,7 @@ import {
   ListTodo,
   Plus,
   Repeat,
-  Wrench,
+
 } from 'lucide-react';
 import {
   useCalendar,
@@ -17,6 +17,7 @@ import {
   eventsForDate,
   DAY_NAMES,
   WEEK_HEADERS,
+  isEventDone,
   type CalendarEvent,
   type CalendarView,
 } from '../stores/calendar';
@@ -53,8 +54,14 @@ function unifyForDate(
       type: 'event',
       id: e.id,
       title: e.title,
-      time: e.allDay ? undefined : e.startTime,
+      // 会议什么时候结束和什么时候开始一样重要 —— 之前只显示开始时间
+      time: e.allDay
+        ? undefined
+        : e.endTime
+          ? `${e.startTime} - ${e.endTime}`
+          : e.startTime,
       color: e.color,
+      done: isEventDone(e, dateStr),
       repeat: !!e.repeat,
       source: e.source,
       raw: e,
@@ -101,6 +108,7 @@ function MonthCell({
   onSelect,
   onPick,
   onCreate,
+  onToggleDone,
 }: {
   date: Date;
   isCurrentMonth: boolean;
@@ -111,23 +119,35 @@ function MonthCell({
   onSelect: () => void;
   onPick: (e: CalendarEvent) => void;
   onCreate: () => void;
+  onToggleDone: (id: string, date: string) => void;
 }) {
   // 有时间的排前面（按时间），全天的垫后
   const sorted = [...events].sort((a, b) => {
     if (a.allDay !== b.allDay) return a.allDay ? 1 : -1;
     return (a.startTime ?? '').localeCompare(b.startTime ?? '');
   });
-  const items: { key: string; color: string; label: string; onClick: () => void }[] = [
+  const dayKey = dateKey(date);
+  const items: {
+    key: string;
+    color: string;
+    label: string;
+    done: boolean;
+    onClick: () => void;
+    onToggle?: () => void;
+  }[] = [
     ...sorted.map((e) => ({
       key: `e${e.id}`,
       color: e.color,
       label: e.allDay ? e.title : `${e.startTime ?? ''} ${e.title}`.trim(),
+      done: isEventDone(e, dayKey),
       onClick: () => onPick(e),
+      onToggle: () => onToggleDone(e.id, dayKey),
     })),
     ...todos.map((t) => ({
       key: `t${t.id}`,
       color: isOverdue(t) ? '#f54a45' : '#3370ff',
       label: `☑ ${t.note || t.excerpt}`,
+      done: t.done,
       onClick: onSelect,
     })),
   ];
@@ -175,38 +195,85 @@ function MonthCell({
               e.stopPropagation();
               it.onClick();
             }}
-            className="flex w-full items-center gap-1 rounded px-1 py-px text-left text-[11px] leading-tight transition hover:bg-fill-active"
+            className={`flex w-full items-center gap-1 rounded px-1 py-px text-left text-2xs leading-tight transition hover:bg-fill-active ${
+              it.done ? 'opacity-50' : ''
+            }`}
           >
+            {it.onToggle ? (
+              <span
+                role="checkbox"
+                aria-checked={it.done}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  it.onToggle!();
+                }}
+                className="flex h-2.5 w-2.5 shrink-0 cursor-pointer items-center justify-center rounded-full"
+                style={{
+                  background: it.done ? it.color : 'transparent',
+                  border: `1.5px solid ${it.color}`,
+                }}
+                title={it.done ? '标记为未完成' : '标记完成'}
+              />
+            ) : (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: it.color }}
+              />
+            )}
             <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ background: it.color }}
-            />
-            <span className="min-w-0 flex-1 truncate text-ink-2">{it.label}</span>
+              className={`min-w-0 flex-1 truncate text-ink-2 ${it.done ? 'line-through' : ''}`}
+            >
+              {it.label}
+            </span>
           </button>
         ))}
         {items.length > MAX && (
-          <div className="px-1 text-[10px] text-ink-3">还有 {items.length - MAX} 项</div>
+          <div className="px-1 text-2xs text-ink-3">还有 {items.length - MAX} 项</div>
         )}
       </div>
     </div>
   );
 }
 
-function EventItem({ item, onClick }: { item: UnifiedItem; onClick: () => void }) {
+function EventItem({
+  item,
+  onClick,
+  onToggle,
+}: {
+  item: UnifiedItem;
+  onClick: () => void;
+  onToggle?: () => void;
+}) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition hover:bg-fill-hover group"
+      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition hover:bg-fill-hover ${
+        item.done ? 'opacity-60' : ''
+      }`}
     >
       <span
-        className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{ background: item.color }}
+        role={onToggle ? 'checkbox' : undefined}
+        aria-checked={onToggle ? item.done : undefined}
+        onClick={
+          onToggle
+            ? (e) => {
+                e.stopPropagation();
+                onToggle();
+              }
+            : undefined
+        }
+        className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full ${onToggle ? 'cursor-pointer' : ''}`}
+        style={{
+          background: item.done ? item.color : 'transparent',
+          border: `2px solid ${item.color}`,
+        }}
+        title={onToggle ? (item.done ? '标记为未完成' : '标记完成') : undefined}
       />
       <div className="min-w-0 flex-1">
         <div className={`text-sm ${item.done ? 'text-ink-3 line-through' : 'text-ink'}`}>
           {item.title}
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-ink-3">
+        <div className="flex items-center gap-2 text-2xs text-ink-3">
           {item.time && (
             <span className="flex items-center gap-0.5">
               <Clock size={10} /> {item.time}
@@ -220,11 +287,6 @@ function EventItem({ item, onClick }: { item: UnifiedItem; onClick: () => void }
           {item.type === 'todo' && (
             <span className="flex items-center gap-0.5">
               <ListTodo size={10} /> 待办
-            </span>
-          )}
-          {item.source === 'ado' && (
-            <span className="flex items-center gap-0.5">
-              <Wrench size={10} /> ADO
             </span>
           )}
           {item.overdue && (
@@ -243,6 +305,7 @@ export default function CalendarPage() {
   const selectedDate = useCalendar((s) => s.selectedDate);
   const setView = useCalendar((s) => s.setView);
   const setCursor = useCalendar((s) => s.setCursor);
+  const toggleEventDone = useCalendar((s) => s.toggleDone);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
   const next = useCalendar((s) => s.next);
@@ -401,6 +464,7 @@ export default function CalendarPage() {
                     }}
                     onPick={(e) => setDialog({ mode: 'edit', event: e })}
                     onCreate={() => setDialog({ mode: 'create', defaultDate: key })}
+                    onToggleDone={toggleEventDone}
                   />
                 );
               })}
@@ -455,7 +519,18 @@ export default function CalendarPage() {
           {selectedDate && selectedItems.length > 0 ? (
             <div className="py-1">
               {selectedItems.map((item) => (
-                <EventItem key={item.id} item={item} onClick={() => handleItemClick(item)} />
+                <EventItem
+                  key={item.id}
+                  item={item}
+                  onClick={() => handleItemClick(item)}
+                  onToggle={
+                    item.type === 'event' && selectedDate
+                      ? () => toggleEventDone(item.id, selectedDate)
+                      : item.type === 'todo'
+                        ? () => toggleTodo(item.id)
+                        : undefined
+                  }
+                />
               ))}
             </div>
           ) : (
@@ -479,7 +554,16 @@ export default function CalendarPage() {
                 <span className="text-xs font-medium text-ink-3">今日日程</span>
               </div>
               {todayItems.map((item) => (
-                <EventItem key={`today-${item.id}`} item={item} onClick={() => handleItemClick(item)} />
+                <EventItem
+                  key={`today-${item.id}`}
+                  item={item}
+                  onClick={() => handleItemClick(item)}
+                  onToggle={
+                    item.type === 'event'
+                      ? () => toggleEventDone(item.id, today)
+                      : () => toggleTodo(item.id)
+                  }
+                />
               ))}
             </div>
           )}
@@ -511,7 +595,7 @@ export default function CalendarPage() {
                     <span className="min-w-0 flex-1 truncate text-xs text-ink">
                       {t.note || t.excerpt}
                     </span>
-                    <span className="shrink-0 text-[11px] text-ink-3">{t.due}</span>
+                    <span className="shrink-0 text-2xs text-ink-3">{t.due}</span>
                   </button>
                 ))}
               </div>

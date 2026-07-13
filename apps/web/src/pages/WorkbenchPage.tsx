@@ -53,7 +53,7 @@ function QueueRow({
         style={{ background: item.color }}
       />
       <span
-        className="w-20 shrink-0 truncate text-[11px]"
+        className="w-20 shrink-0 truncate text-2xs"
         style={{ color: item.color }}
         title={item.label}
       >
@@ -61,7 +61,7 @@ function QueueRow({
       </span>
       <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.title}</span>
       {item.meta && (
-        <span className="max-w-[40%] shrink-0 truncate text-[11px] text-ink-3">{item.meta}</span>
+        <span className="max-w-[40%] shrink-0 truncate text-2xs text-ink-3">{item.meta}</span>
       )}
       {item.href ? (
         <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
@@ -480,7 +480,7 @@ export default function WorkbenchPage() {
                 </div>
                 <button
                   onClick={() => setModule('calendar')}
-                  className="flex items-center gap-0.5 text-[11px] text-ink-3 transition hover:text-primary"
+                  className="flex items-center gap-0.5 text-2xs text-ink-3 transition hover:text-primary"
                 >
                   日历
                   <ChevronRight size={11} />
@@ -506,7 +506,7 @@ export default function WorkbenchPage() {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs text-ink">{e.title}</span>
-                        <span className="block text-[11px] text-ink-3">
+                        <span className="block text-2xs text-ink-3">
                           {e.allDay
                             ? '全天'
                             : `${e.startTime ?? ''}${e.endTime ? ` - ${e.endTime}` : ''}`}
@@ -556,7 +556,7 @@ export default function WorkbenchPage() {
                       >
                         {fav.icon || <ExternalLink size={14} style={{ color: fav.color }} />}
                       </div>
-                      <span className="w-full truncate text-center text-[11px] text-ink">
+                      <span className="w-full truncate text-center text-2xs text-ink">
                         {fav.title}
                       </span>
 
