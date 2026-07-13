@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Bell,
   BellOff,
@@ -262,6 +262,47 @@ function ConversationItem({
   );
 }
 
+/**
+ * 会话加载中。
+ *
+ * 超过 8 秒还没好，就不能再让用户对着「加载会话中…」干等 —— 服务器挂了、网络不通、
+ * 或者初始化出了别的岔子，都长这个样子，而用户既看不到原因也没有出路。
+ * 给个明确的说法和一个重试按钮。
+ */
+function LoadingConversations() {
+  const init = useChat((s) => s.init);
+  const [slow, setSlow] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), 8000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!slow) {
+    return <div className="p-4 text-center text-sm text-ink-3">加载会话中…</div>;
+  }
+
+  return (
+    <div className="p-4 text-center">
+      <div className="text-sm text-ink-2">会话列表加载不出来</div>
+      <div className="mt-1 text-xs leading-relaxed text-ink-3">
+        可能是服务器没响应或网络不通。
+      </div>
+      <button
+        onClick={() => {
+          setRetrying(true);
+          void init().finally(() => setRetrying(false));
+        }}
+        disabled={retrying}
+        className="mt-3 h-8 rounded-md bg-primary px-4 text-xs text-white transition hover:bg-primary-hover disabled:opacity-50"
+      >
+        {retrying ? '重试中…' : '重试'}
+      </button>
+    </div>
+  );
+}
+
 /** 每个分类下「新建」对应什么动作；没有对应动作的分类（未读、@我…）不显示入口 */
 const NEW_ACTIONS: Partial<
   Record<ConvFilter, { label: string; dialog: 'dm' | 'group' | 'team'; icon: typeof Plus }>
@@ -362,7 +403,7 @@ export default function ConversationList() {
           setBgMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {!ready && <div className="p-4 text-center text-sm text-ink-3">加载会话中…</div>}
+        {!ready && <LoadingConversations />}
         {ready && total === 0 && (
           <div className="p-4 text-center text-sm leading-relaxed text-ink-3">
             {folder ? (

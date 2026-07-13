@@ -22,6 +22,12 @@ export default defineConfig(({ mode }) => {
     server: {
       host: true,
       port: 5173,
+      // 禁掉模块的浏览器缓存。
+      // 不禁的话，页面里会同时存在同一个文件的两个版本（import 里带着不同的 ?t=），
+      // ESM 按 URL 区分模块 —— 于是 store 被实例化两份：init 往其中一份写数据，
+      // 界面读的是另一份，永远停在「加载会话中…」，还查不出任何错误。
+      // 这个假象骗了我一次，值得用一个响应头彻底堵掉。
+      headers: { 'Cache-Control': 'no-store' },
       proxy: {
         '/api': { target, changeOrigin: true },
         '/avatar': { target, changeOrigin: true },
