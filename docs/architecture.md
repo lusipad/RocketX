@@ -76,6 +76,22 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 置顶/星标后消息不刷新 | 服务端不推送这两类变更事件，需本地乐观更新 |
 | 频道未读数一直是 0 | RC 频道默认只有 @ 才累计 `unread`，普通新消息只置 `alert` 标志 |
 | Tauri plugin-http 上传 FormData 失败 | 该通道对 FormData 支持不可靠，手工构造 multipart 字节流 |
+| 打开任意会话，它就跳到列表最上面 | 会话排序**不能**把 `subscription._updatedAt` 当兜底时间：打开会话本身就会更新订阅（写 `ls`、清 `unread`/`alert`），`_updatedAt` 变成此刻。只取 `room.lm` / `room.lastMessage.ts` |
+| 多人直聊混进「单聊」 | RC 里多人直聊的 `t` 仍是 `'d'`，靠 `room.uids.length > 2` 区分（订阅上没有 `uids`）。它的 `fname` 是「张三, 李四」这样拼出来的，也不该拿某个人的头像当会话头像 |
+| 桌面端点「下载」没反应 | WebView2 / WKWebView 不认 blob URL 上的 `download` 属性。必须走 `tauri-plugin-dialog` 的「另存为」+ `tauri-plugin-fs` 写文件 |
+| `:cowboy:` 这类 emoji 打不出来 | RC 用的是 JoyPixels/emojione 的 shortcode 体系（`chat.react` 的 key 就是 `:code:`）。手写表必然漏，由 `pnpm gen:emoji` 从 emoji-toolkit 生成全量 6198 个（含别名） |
+
+### 本地数据（Rocket.Chat 没有对应模型）
+
+这几项 RC 服务端没有存储位置，只能存在本机 localStorage，换设备不同步——这是刻意的取舍，
+换成「存到服务端」就得改 RC，违背兼容性前提。
+
+| 功能 | key | 说明 |
+| --- | --- | --- |
+| 自定义分组 | `rcx-folders` | 含规则（前缀/包含/正则自动归组）。订阅变化时会 `prune` 掉已失效的 rid，否则计数虚高 |
+| 备注名 | `rcx-aliases` | `u:<username>` 跟人走，`r:<rid>` 跟会话走（多人直聊主要靠它） |
+| 待办 | `rcx-todos` | 锚定 `rid + mid`，可跳回原消息；存了消息快照，原消息删了也看得懂 |
+| 最近表情 | `rcx-recent-emojis` | |
 
 ### 中文环境必须的服务端设置
 
@@ -87,7 +103,22 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | `Message_AlwaysSearchRegExp` | `true` | Mongo 文本索引不切分中文，默认搜索搜不到子串（如搜「你」找不到「你好」）；改用正则子串匹配。大数据量下正则搜索无索引、较慢，重度使用可后续接 ElasticSearch 类搜索服务 |
 | `Accounts_TwoFactorAuthentication_By_Email_Enabled` | 按需 `false` | 新用户默认邮箱验证码拦截登录（无邮件服务的内网环境无法收码） |
 
-### 已知限制（M2 后）
+### 验证手段
+
+界面上手点测不出的东西，靠这几个跑：
+
+| 命令 | 覆盖 |
+| --- | --- |
+| `pnpm smoke` | 28 项，打真实 RC：登录、收发、引用展开、话题、讨论、中文文件名上传、带认证下载、收藏/免打扰、目录搜索、WebSocket 实时推送 |
+| `pnpm test:pure` | 17 项纯函数：拼音匹配与排序、日期分割线（跨天逻辑手点不出来） |
+| `pnpm test:classify` | 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序不受「打开」影响 |
+
+Vite HMR 会导致 store 模块分叉（`window.__chat` 与界面里的 store 可能不是同一个实例），
+所以状态断言一律走上面这些脚本，不在浏览器控制台里验。
+
+### 已知限制
 
 - 登录不支持双因素认证（2FA）账号；
-- 消息置顶/收藏/转发、全局搜索、群成员面板未实现（排入 M2.5）。
+- 会议 / 日历 / 云文档仍是占位页（导航栏已标「待开发」）；
+- 已读回执依赖企业版 API，社区版不可用；
+- 分组、备注名、待办只存本机（见上方「本地数据」）。
