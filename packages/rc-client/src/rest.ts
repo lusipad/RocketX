@@ -391,14 +391,21 @@ export class RcRestClient {
 
   /**
    * 改房间设置（话题 / 公告 / 描述 / 名称）。
-   * rooms.saveRoomSettings 一次只认它认识的字段，没权限时服务端返回 unauthorized，
-   * 调用方据此把编辑入口藏起来即可。
+   *
+   * 字段名必须是 `roomXxx` 前缀形式——服务端的 schema 是严格模式，
+   * 传 `announcement` 会直接 400「must NOT have additional properties」。
+   * 没权限时返回 unauthorized，调用方据此回退 UI。
    */
   async saveRoomSettings(
     rid: string,
-    settings: { topic?: string; announcement?: string; description?: string; roomName?: string },
+    settings: { topic?: string; announcement?: string; description?: string; name?: string },
   ): Promise<void> {
-    await this.request('POST', 'rooms.saveRoomSettings', { rid, ...settings });
+    const body: Record<string, string> = { rid };
+    if (settings.topic !== undefined) body.roomTopic = settings.topic;
+    if (settings.announcement !== undefined) body.roomAnnouncement = settings.announcement;
+    if (settings.description !== undefined) body.roomDescription = settings.description;
+    if (settings.name !== undefined) body.roomName = settings.name;
+    await this.request('POST', 'rooms.saveRoomSettings', body);
   }
 
   /** 退出房间（DM 不支持，用 hideRoom 代替） */

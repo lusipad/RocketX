@@ -140,7 +140,7 @@ interface ChatState {
   /** 改群设置（话题/公告/描述/名称）；无权限时会抛出 */
   saveRoomSettings: (
     rid: string,
-    settings: { topic?: string; announcement?: string; description?: string; roomName?: string },
+    settings: { topic?: string; announcement?: string; description?: string; name?: string },
   ) => Promise<void>;
   /** 退出群组（DM 只能隐藏） */
   leaveConv: (conv: Conversation) => Promise<void>;

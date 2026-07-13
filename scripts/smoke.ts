@@ -257,6 +257,31 @@ async function main() {
     return `收到「${msg.msg}」`;
   });
 
+  // ---- 群设置 ----
+  console.log('\n[群设置]');
+  await check('改群公告 / 话题 / 介绍并回读', async () => {
+    // 服务端 schema 是严格模式：字段必须叫 roomAnnouncement 而不是 announcement，
+    // 传错直接 400「must NOT have additional properties」——只有打真实服务器才暴露
+    const stamp = Date.now().toString(36);
+    await rest.saveRoomSettings(channelId, {
+      announcement: `公告-${stamp}`,
+      topic: `话题-${stamp}`,
+      description: `介绍-${stamp}`,
+    });
+    const room = await rest.getRoomInfo(channelId);
+    assert(room.announcement === `公告-${stamp}`, `公告没写进去：${room.announcement}`);
+    assert(room.topic === `话题-${stamp}`, `话题没写进去：${room.topic}`);
+    assert(room.description === `介绍-${stamp}`, `介绍没写进去：${room.description}`);
+    return '三项都已生效';
+  });
+
+  await check('rooms.info 能拿到成员数与创建者', async () => {
+    const room = await rest.getRoomInfo(channelId);
+    assert(!!room.u?.username, '缺少创建者');
+    assert((room.usersCount ?? 0) > 0, '成员数为 0');
+    return `${room.usersCount} 人，创建者 ${room.u?.username}`;
+  });
+
   // ---- 清理 ----
   console.log('\n[清理]');
   await check('删除消息', async () => {
