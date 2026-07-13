@@ -10,7 +10,14 @@ import {
   type RcUser,
   type RealtimeStatus,
 } from '@rcx/rc-client';
-import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
+import {
+  ensureSiteUrl,
+  getPublicSetting,
+  loadStoredAuth,
+  realtime,
+  rest,
+  siteUrlSync,
+} from '../lib/client';
 import { emojify } from '../lib/emoji';
 import { findCommand } from '../lib/slash';
 import { useAuth } from './auth';
@@ -232,7 +239,13 @@ const subscribedRooms = new Set<string>();
 let markReadTimer: ReturnType<typeof setTimeout> | null = null;
 let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
-/** 已读回执是 RC 企业版功能：社区版首次失败后不再请求（避免每次打开会话都报 400） */
+/**
+ * 已读回执是 RC 企业版功能。
+ *
+ * init 时读一次服务器的 Message_Read_Receipt_Enabled 就能知道支不支持，用不着先打过去
+ * 挨一个 400 再降级 —— 社区版每次刷新页面都会在控制台留一条红色错误，白打一个请求。
+ * 请求失败时的熔断（refreshReceipts 的 catch）作为兜底保留：万一设置读不到，行为不变。
+ */
 let receiptsSupported = true;
 
 function scheduleMarkRead(rid: string) {
@@ -358,6 +371,10 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!auth) return;
     // 预热 Site_Url 缓存（引用回复的链接前缀需要）
     void ensureSiteUrl();
+    // 已读回执是企业版功能，社区版直接别调，省掉每次刷新那个 400
+    void getPublicSetting('Message_Read_Receipt_Enabled').then((v) => {
+      if (v === false) receiptsSupported = false;
+    });
     // 命令表：拉不到就当没有命令，输入框退回纯文本，不该拖住整个初始化
     void rest
       .listCommands()

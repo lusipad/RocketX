@@ -71,6 +71,23 @@ try {
   /* SSR/隐私模式 */
 }
 
+/**
+ * 读一个公开设置（不需要登录）。
+ * 用来在调用前就知道服务器支不支持某个功能，而不是打过去挨一个 400 再降级。
+ */
+export async function getPublicSetting(id: string): Promise<unknown> {
+  try {
+    const res = await httpFetch(
+      `${getServerBase()}/api/v1/settings.public?_id=${encodeURIComponent(id)}`,
+    );
+    const data: any = await res.json();
+    const setting = Array.isArray(data?.settings) ? data.settings[0] : data?.settings;
+    return setting?.value;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function ensureSiteUrl(): Promise<string> {
   if (siteUrlCache) return siteUrlCache;
   try {

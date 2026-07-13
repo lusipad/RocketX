@@ -10,7 +10,6 @@ import {
   Star,
   Upload,
   Users,
-  Video,
 } from 'lucide-react';
 import { useChat, type RightPanel } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
@@ -177,7 +176,6 @@ export default function ChatArea() {
             )}
           </div>
           <div className="flex items-center gap-1">
-            <HeaderButton icon={Video} label="视频会议（规划中）" />
             <HeaderButton
               icon={Pin}
               label="置顶消息"

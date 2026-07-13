@@ -6,8 +6,6 @@ export type ModuleKey =
   | 'contacts'
   | 'calendar'
   | 'workbench'
-  | 'docs'
-  | 'meetings'
   | 'settings';
 
 /** 会话列表分组过滤（飞书「分组」栏） */

@@ -6,7 +6,6 @@ import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
 import ChatArea from '../components/ChatArea';
-import ModulePlaceholder from '../components/ModulePlaceholder';
 import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
 import Toaster from '../components/Toaster';
@@ -76,10 +75,8 @@ export default function MainPage() {
         <CalendarPage />
       ) : module === 'workbench' ? (
         <WorkbenchPage />
-      ) : module === 'settings' ? (
-        <SettingsPage />
       ) : (
-        <ModulePlaceholder module={module} />
+        <SettingsPage />
       )}
       {(connection === 'reconnecting' || connection === 'connecting') && (
         <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-1.5 text-xs text-white shadow-lg">
