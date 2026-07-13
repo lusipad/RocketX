@@ -33,7 +33,8 @@ export function saveAuth(auth: StoredAuth | null): void {
 // 桌面端（Tauri）没有代理，登录页配置后存这里，直连 Rocket.Chat。
 const SERVER_KEY = 'rcx-server';
 
-export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+import { httpFetch, isTauri } from './http';
+export { httpFetch, isTauri };
 
 export function getServerBase(): string {
   try {
@@ -98,17 +99,8 @@ function wsUrlFor(base: string): string {
   return `${wsProtocol}://${location.host}/websocket`;
 }
 
-// 桌面端：HTTP 走 Tauri 的 Rust 通道（plugin-http），绕开 webview CORS，
-// 连接任意 Rocket.Chat 服务器都无需服务端配置。WebSocket 不受 CORS 限制，仍走原生。
-const tauriFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  const { fetch: pluginFetch } = await import('@tauri-apps/plugin-http');
-  return pluginFetch(input, init);
-}) as typeof fetch;
-
-/** 平台无关的 HTTP：桌面端走 Rust 通道（无 CORS 限制），Web 端走浏览器 fetch */
-export const httpFetch: typeof fetch = isTauri
-  ? tauriFetch
-  : (((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)) as typeof fetch);
+// HTTP 通道见 lib/http.ts（桌面端走 Rust 通道绕开 CORS）。
+// WebSocket 不受 CORS 限制，仍走原生。
 
 /**
  * 打开外部链接。桌面端 webview 不支持 target="_blank"，
@@ -147,6 +139,6 @@ export function installLinkInterceptor(): void {
 export const rest = new RcRestClient({
   baseUrl: getServerBase(),
   authProvider: loadStoredAuth,
-  fetchImpl: isTauri ? tauriFetch : undefined,
+  fetchImpl: isTauri ? httpFetch : undefined,
 });
 export const realtime = new RcRealtimeClient(wsUrlFor(getServerBase()));

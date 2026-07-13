@@ -3,7 +3,7 @@
  * 桌面端走 Tauri Rust 通道没有 CORS 限制，可直接连内网 ADO；
  * Web 端仅当 ADO 服务器允许跨域时可用，否则请用桥接模式。
  */
-import { httpFetch } from './client';
+import { httpFetch } from './http';
 
 export interface DirectConfig {
   /** 集合地址，如 http://ado:8080/DefaultCollection 或 http://ado:8080/tfs/DefaultCollection */
@@ -60,7 +60,12 @@ async function adoRequest<T>(
     );
   }
   if (res.status === 401 || res.status === 203) {
-    throw new Error('认证失败：PAT 无效、已过期、或该服务器未启用 PAT（可试试自动探测）');
+    // 没填 PAT 和填了错 PAT 是两回事，提示得说清楚，否则用户会一直去改 PAT
+    throw new Error(
+      cfg.auth === 'none' || !cfg.pat?.trim()
+        ? '服务器要求认证：请填写 PAT（在 ADO 的 用户设置 → 个人访问令牌 里创建，勾选 Work Items / Code / Build 读取权限）'
+        : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items / Code / Build 读取）',
+    );
   }
   if (res.status === 404) {
     throw new Error(`地址不对：${url} 返回 404`);

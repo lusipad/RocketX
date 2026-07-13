@@ -1,43 +1,28 @@
 /**
  * 验证 ADO 地址推导：用户可能粘各种形态的地址，都要能推出集合根。
- * 用法：pnpm exec tsx scripts/test-ado-probe.ts
+ *   pnpm exec tsx scripts/test-ado-probe.ts
+ *
+ * 直接 import 真实实现——之前这里复制了一份 candidateBases，
+ * 改了 adoDirect.ts 这个测试也照样通过，等于没测。
  */
-
-// 与 apps/web/src/lib/adoDirect.ts 的 candidateBases 保持一致
-function candidateBases(input: string): string[] {
-  let raw = input.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return [];
-  }
-  const origin = url.origin;
-  const segments = url.pathname.split('/').filter(Boolean);
-  const funcIdx = segments.findIndex((s) => s.startsWith('_'));
-  const meaningful = funcIdx >= 0 ? segments.slice(0, funcIdx) : segments;
-
-  const bases: string[] = [];
-  for (let i = meaningful.length; i >= 0; i--) {
-    const path = meaningful.slice(0, i).join('/');
-    bases.push(path ? `${origin}/${path}` : origin);
-  }
-  if (!meaningful.includes('tfs')) {
-    const withTfs = meaningful.length
-      ? `${origin}/tfs/${meaningful.join('/')}`
-      : `${origin}/tfs/DefaultCollection`;
-    bases.push(withTfs);
-    if (meaningful.length > 1) bases.push(`${origin}/tfs/${meaningful[0]}`);
-    bases.push(`${origin}/tfs`);
-  }
-  if (meaningful.length === 0) {
-    bases.push(`${origin}/DefaultCollection`, `${origin}/tfs/DefaultCollection`);
-  }
-  return [...new Set(bases)];
-}
+import { candidateBases } from '../apps/web/src/lib/adoDirect';
 
 const CASES: { input: string; mustContain: string; desc: string }[] = [
+  {
+    desc: '本机 Server 2022：粘集合根（实测形态）',
+    input: 'http://localhost:8081/DefaultCollection',
+    mustContain: 'http://localhost:8081/DefaultCollection',
+  },
+  {
+    desc: '本机 Server 2022：粘项目页',
+    input: 'http://localhost:8081/DefaultCollection/test',
+    mustContain: 'http://localhost:8081/DefaultCollection',
+  },
+  {
+    desc: '本机 Server 2022：只给主机+端口',
+    input: 'localhost:8081',
+    mustContain: 'http://localhost:8081/DefaultCollection',
+  },
   {
     desc: '用户的场景：无 /tfs，粘的是工作项页地址',
     input: 'http://ado-server:8080/DefaultCollection/MyProject/_workitems/edit/128',
