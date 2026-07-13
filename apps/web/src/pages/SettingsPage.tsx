@@ -26,7 +26,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'about', label: '关于', icon: Info },
 ];
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.2.1';
 
 function Row({
   label,
