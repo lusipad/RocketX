@@ -17,7 +17,7 @@ import {
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
-import type { ProbeStep } from '../lib/adoDirect';
+import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { useWorkbench } from '../stores/workbench';
@@ -26,7 +26,9 @@ import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 
-const APP_VERSION = '0.2.3';
+// 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
+declare const __APP_VERSION__: string;
+const APP_VERSION = __APP_VERSION__;
 
 type Section =
   | 'account'
@@ -396,10 +398,10 @@ function NotificationSection() {
 }
 
 const AUTH_LABELS: Record<string, string> = {
-  ntlm: 'Windows 集成认证（当前登录用户，无需 PAT）',
+  ntlm: 'Windows 集成认证',
   pat: 'PAT',
   bearer: 'Bearer Token',
-  none: '匿名访问',
+  none: '不带凭据',
 };
 
 /** 工作台（Azure DevOps） */
@@ -472,7 +474,10 @@ function WorkbenchSection() {
             }
           }
           setConfig((c) => ({ ...c, adoBase, auth, account: account || c.account }));
-          const authLabel = AUTH_LABELS[auth];
+          const authLabel =
+            auth === 'ntlm'
+              ? 'Windows 集成认证（当前登录用户，无需 PAT）'
+              : AUTH_LABELS[auth];
           setResult({
             ok: true,
             msg:
@@ -482,9 +487,18 @@ function WorkbenchSection() {
               `已自动填入，点「保存」生效。`,
           });
         } else {
+          // 「都失败了」是句废话。把「试了哪些认证方式、为什么没试 NTLM」直接说出来 ——
+          // 探测全灭最常见的原因就是：既没有 Windows 集成认证，又没填 PAT。
+          const tried = [...new Set(found.map((s) => s.auth))];
+          const triedLabel = tried.map((a) => AUTH_LABELS[a] ?? a).join('、');
+          const hint = !canUseNtlm
+            ? '网页版不能用 Windows 集成认证（浏览器的跨域规则不允许携带系统凭据），所以必须填 PAT，或改用 ado-bridge 模式。'
+            : !config.pat?.trim()
+              ? 'Windows 集成认证被服务器拒绝了。要么当前登录用户在这台 Azure DevOps 上没有权限，要么服务器关掉了 NTLM/Negotiate —— 后一种情况请填一个 PAT。'
+              : 'PAT 也没通过，检查它是否过期、或缺少 Work Items / Code / Build 的读取权限。';
           setResult({
             ok: false,
-            msg: '所有候选地址与认证方式都失败了，请看下方探测记录判断原因。',
+            msg: `探测失败。试过的认证方式：${triedLabel || '（无）'}。${hint}`,
           });
         }
       } else {
@@ -665,12 +679,9 @@ function WorkbenchSection() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-[11px] text-ink-2">{s.url}</div>
                   <div className={`mt-0.5 break-words ${s.ok ? 'text-success' : 'text-ink-3'}`}>
-                    {s.auth === 'pat'
-                      ? 'PAT'
-                      : s.auth === 'bearer'
-                        ? 'Bearer'
-                        : 'Windows 集成认证'}
-                    ：{s.detail}
+                    {/* 这里以前把 none（不带凭据）也写成「Windows 集成认证」，
+                        看日志的人会以为试过集成认证了，其实压根没试 */}
+                    {AUTH_LABELS[s.auth] ?? s.auth}：{s.detail}
                   </div>
                 </div>
               </div>
