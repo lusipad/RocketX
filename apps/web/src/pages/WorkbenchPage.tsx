@@ -16,6 +16,7 @@ import {
 import { ADO_WEB_KEY, loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import { useUI } from '../stores/ui';
 import { fmtConvTime } from '../lib/format';
+import { SkeletonRows } from '../components/Skeleton';
 
 interface WorkItem {
   id: number;
@@ -270,8 +271,9 @@ export default function WorkbenchPage() {
         <div className="flex items-center gap-1">
           <button
             title="刷新"
+            disabled={loading}
             onClick={() => void refresh(config)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -285,16 +287,36 @@ export default function WorkbenchPage() {
         </div>
       </header>
 
+      {/* 加载失败：只显示错误 + 重试，不再同时显示「恭喜没有工作项」这种误导空态 */}
       {error && (
-        <div className="mx-5 mt-4 rounded-lg border border-danger/30 bg-[#feeceb] px-4 py-3 text-sm text-danger">
-          {error}
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8">
+          <XCircle size={36} className="text-danger" />
+          <div className="text-sm font-medium text-ink">无法加载工作台数据</div>
+          <div className="max-w-lg text-center text-xs leading-relaxed break-words text-ink-3">
+            {error}
+          </div>
+          <div className="mt-1 flex gap-2">
+            <button
+              onClick={() => void refresh(config)}
+              className="h-9 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover"
+            >
+              重试
+            </button>
+            <button
+              onClick={() => setModule('settings')}
+              className="h-9 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
+            >
+              检查配置
+            </button>
+          </div>
         </div>
       )}
 
+      {!error && (
       <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 p-5">
         <Panel icon={CircleDot} title="我的工作项" count={workItems.length}>
-          {loading && workItems.length === 0 ? (
-            <div className="py-10 text-center text-sm text-ink-3">加载中…</div>
+          {loading ? (
+            <SkeletonRows />
           ) : workItems.length === 0 ? (
             <div className="py-10 text-center text-sm text-ink-3">没有分配给你的未关闭工作项 🎉</div>
           ) : (
@@ -304,14 +326,18 @@ export default function WorkbenchPage() {
 
         <div className="grid min-h-0 grid-rows-2 gap-4">
           <Panel icon={UserCheck} title="待我评审" count={reviewPrs.length}>
-            {reviewPrs.length === 0 ? (
+            {loading ? (
+              <SkeletonRows rows={2} />
+            ) : reviewPrs.length === 0 ? (
               <div className="py-8 text-center text-sm text-ink-3">暂无待评审的 PR</div>
             ) : (
               reviewPrs.map((pr) => <PullRequestRow key={pr.id} pr={pr} account={config.account} />)
             )}
           </Panel>
           <Panel icon={GitPullRequest} title="我创建的 PR" count={myPrs.length}>
-            {myPrs.length === 0 ? (
+            {loading ? (
+              <SkeletonRows rows={2} />
+            ) : myPrs.length === 0 ? (
               <div className="py-8 text-center text-sm text-ink-3">暂无进行中的 PR</div>
             ) : (
               myPrs.map((pr) => <PullRequestRow key={pr.id} pr={pr} account={config.account} />)
@@ -320,7 +346,9 @@ export default function WorkbenchPage() {
         </div>
 
         <Panel icon={Wrench} title="最近构建" count={builds.length}>
-          {builds.length === 0 ? (
+          {loading ? (
+            <SkeletonRows rows={3} />
+          ) : builds.length === 0 ? (
             <div className="py-8 text-center text-sm text-ink-3">暂无构建记录</div>
           ) : (
             builds.map((b) => (
@@ -345,11 +373,14 @@ export default function WorkbenchPage() {
           )}
         </Panel>
       </div>
+      )}
 
-      <div className="px-5 pb-3 text-center text-xs text-ink-3">
-        <ExternalLink size={11} className="mr-1 inline" />
-        点击条目跳转 Azure DevOps · 消息里的 #工作项号 也会自动链接
-      </div>
+      {!error && (
+        <div className="px-5 pb-3 text-center text-xs text-ink-3">
+          <ExternalLink size={11} className="mr-1 inline" />
+          点击条目跳转 Azure DevOps · 消息里的 #工作项号 也会自动链接
+        </div>
+      )}
     </main>
   );
 }

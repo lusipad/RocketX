@@ -11,6 +11,7 @@ import {
 import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
+import { humanError, toast } from './toast';
 
 export interface Conversation {
   rid: string;
@@ -313,7 +314,22 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
     realtime.clearStreamHandlers();
-    realtime.onStatus = (s) => set({ connection: s });
+    // 断线/恢复给出可见提示（顶部横幅 + toast 各司其职：横幅表状态，toast 表变化）
+    let offlineToastId: string | null = null;
+    realtime.onStatus = (s) => {
+      const prev = get().connection;
+      set({ connection: s });
+      if (s === 'reconnecting' && prev === 'connected') {
+        offlineToastId = toast.show({
+          kind: 'error',
+          message: '与服务器断开连接，正在重连…',
+          duration: 0,
+        });
+      } else if (s === 'connected' && offlineToastId) {
+        toast.update(offlineToastId, { kind: 'success', message: '已重新连接' });
+        offlineToastId = null;
+      }
+    };
     await realtime.connect();
     await realtime.login(auth.authToken);
 
@@ -510,7 +526,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const list = (get().messages[rid] ?? []).filter((m) => m._id !== tempId);
       set({ messages: { ...get().messages, [rid]: upsertMessage(list, msg) } });
       scheduleReceiptRefresh(rid);
-    } catch {
+    } catch (err) {
       // 标记失败，可重试
       set({
         messages: {
@@ -519,6 +535,11 @@ export const useChat = create<ChatState>((set, get) => ({
             m._id === tempId ? { ...m, pending: false, failed: true } : m,
           ),
         },
+      });
+      toast.show({
+        kind: 'error',
+        message: humanError(err, '消息发送失败'),
+        action: { label: '重试', onClick: () => void get().resendMessage(tempId) },
       });
     }
   },
@@ -617,27 +638,46 @@ export const useChat = create<ChatState>((set, get) => ({
     const members = { ...get().members };
     delete members[rid];
     set({ members });
+    toast.success(
+      users.length === 1
+        ? `已添加 ${users[0].name || users[0].username}`
+        : `已添加 ${users.length} 位成员`,
+    );
   },
 
   editMessage: async (msgId, text) => {
     const rid = get().activeRid;
     if (!rid || !text.trim()) return;
-    const updated = await rest.updateMessage(rid, msgId, text.trim());
-    set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], updated) } });
+    try {
+      const updated = await rest.updateMessage(rid, msgId, text.trim());
+      set({
+        messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], updated) },
+      });
+    } catch (err) {
+      toast.error(err, '编辑失败');
+    }
   },
 
   deleteMessage: async (msgId) => {
     const rid = get().activeRid;
     if (!rid) return;
-    await rest.deleteMessage(rid, msgId);
-    const list = get().messages[rid] ?? [];
-    set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
-    const panel = get().rightPanel;
-    if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
+    try {
+      await rest.deleteMessage(rid, msgId);
+      const list = get().messages[rid] ?? [];
+      set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
+      const panel = get().rightPanel;
+      if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
+    } catch (err) {
+      toast.error(err, '删除失败');
+    }
   },
 
   toggleReaction: async (messageId, emoji) => {
-    await rest.react(messageId, emoji).catch(() => {});
+    try {
+      await rest.react(messageId, emoji);
+    } catch (err) {
+      toast.error(err, '表情回应失败');
+    }
   },
 
   togglePin: async (msg) => {
@@ -657,8 +697,10 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       if (msg.pinned) await rest.unpinMessage(msg._id);
       else await rest.pinMessage(msg._id);
-    } catch {
+      toast.success(msg.pinned ? '已取消置顶' : '已置顶');
+    } catch (err) {
       apply(!!msg.pinned); // 失败回滚
+      toast.error(err, msg.pinned ? '取消置顶失败' : '置顶失败');
     }
   },
 
@@ -691,52 +733,79 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       if (starred) await rest.unstarMessage(msg._id);
       else await rest.starMessage(msg._id);
-    } catch {
+      toast.success(starred ? '已取消标记' : '已标记');
+    } catch (err) {
       apply(!!starred);
+      toast.error(err, starred ? '取消标记失败' : '标记失败');
     }
   },
 
   toggleFavorite: async (conv) => {
-    await rest.favoriteRoom(conv.rid, !conv.favorite).catch(() => {});
+    try {
+      await rest.favoriteRoom(conv.rid, !conv.favorite);
+      toast.success(conv.favorite ? '已取消收藏' : '已收藏');
+    } catch (err) {
+      toast.error(err, '收藏操作失败');
+    }
   },
 
   toggleMute: async (conv) => {
-    await rest.muteRoom(conv.rid, !conv.muted).catch(() => {});
-    // rooms.saveNotification 不一定推送订阅变更，本地同步一份
-    const sub = get().subscriptions[conv.rid];
-    if (sub) {
-      set({
-        subscriptions: {
-          ...get().subscriptions,
-          [conv.rid]: { ...sub, disableNotifications: !conv.muted },
-        },
-      });
+    try {
+      await rest.muteRoom(conv.rid, !conv.muted);
+      // rooms.saveNotification 不一定推送订阅变更，本地同步一份
+      const sub = get().subscriptions[conv.rid];
+      if (sub) {
+        set({
+          subscriptions: {
+            ...get().subscriptions,
+            [conv.rid]: { ...sub, disableNotifications: !conv.muted },
+          },
+        });
+      }
+      toast.success(conv.muted ? '已取消免打扰' : '已开启免打扰');
+    } catch (err) {
+      toast.error(err, '免打扰设置失败');
     }
   },
 
   markConvRead: async (rid) => {
-    await rest.markRead(rid).catch(() => {});
+    try {
+      await rest.markRead(rid);
+    } catch (err) {
+      toast.error(err, '标为已读失败');
+    }
   },
 
   hideConv: async (conv) => {
-    await rest.hideRoom(conv.rid, conv.type).catch(() => {});
-    const sub = get().subscriptions[conv.rid];
-    if (sub) {
-      set({
-        subscriptions: { ...get().subscriptions, [conv.rid]: { ...sub, open: false } },
-      });
+    try {
+      await rest.hideRoom(conv.rid, conv.type);
+      const sub = get().subscriptions[conv.rid];
+      if (sub) {
+        set({
+          subscriptions: { ...get().subscriptions, [conv.rid]: { ...sub, open: false } },
+        });
+      }
+      if (get().activeRid === conv.rid) set({ activeRid: null, rightPanel: null });
+      toast.success(`已隐藏「${conv.name}」，收到新消息时会重新出现`);
+    } catch (err) {
+      toast.error(err, '隐藏会话失败');
     }
-    if (get().activeRid === conv.rid) set({ activeRid: null, rightPanel: null });
   },
 
   forwardMessage: async (msg, rids) => {
+    const names = rids.map(
+      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
+    );
     for (const rid of rids) {
       await rest.sendMessageRaw({
         rid,
-        msg: msg.msg || undefined,
-        attachments: msg.attachments,
+        msg: stripQuotePrefix(msg.msg || '') || undefined,
+        attachments: msg.attachments?.filter((a) => !a.message_link),
       });
     }
+    toast.success(
+      rids.length === 1 ? `已转发到「${names[0]}」` : `已转发到 ${rids.length} 个会话`,
+    );
   },
 
   setDraft: (rid, text) => {
@@ -763,6 +832,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const room = await rest.createGroup(name, members, priv);
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);
+    toast.success(`已创建群组「${name}」`);
     return room._id;
   },
 
@@ -770,14 +840,21 @@ export const useChat = create<ChatState>((set, get) => ({
     const team = await rest.createTeam(name, members, priv);
     await refreshSubsAndRooms(set);
     await get().openRoom(team.roomId);
+    toast.success(`已创建团队「${name}」`);
     return team.roomId;
   },
 
   createDiscussionFrom: async (msg) => {
-    const name = (msg.msg || '讨论').slice(0, 40);
-    const room = await rest.createDiscussion(msg.rid, name, msg._id);
-    await refreshSubsAndRooms(set);
-    await get().openRoom(room._id);
+    const id = toast.loading('正在创建讨论…');
+    try {
+      const name = (stripQuotePrefix(msg.msg) || '讨论').slice(0, 40);
+      const room = await rest.createDiscussion(msg.rid, name, msg._id);
+      await refreshSubsAndRooms(set);
+      await get().openRoom(room._id);
+      toast.update(id, { kind: 'success', message: `已创建讨论「${name}」` });
+    } catch (err) {
+      toast.update(id, { kind: 'error', message: humanError(err, '创建讨论失败') });
+    }
   },
 
   requestUpload: (files) => {
@@ -795,15 +872,21 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return;
+    const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
+    const id = toast.loading(`正在发送 ${label}…`);
     set({ uploading: get().uploading + files.length });
     try {
       for (const file of files) {
         await rest.uploadMedia(rid, file, { tmid });
         set({ uploading: get().uploading - 1 });
       }
+      toast.dismiss(id);
     } catch (err) {
       set({ uploading: 0 });
-      throw err;
+      toast.update(id, {
+        kind: 'error',
+        message: humanError(err, `发送 ${label} 失败`),
+      });
     }
   },
 }));

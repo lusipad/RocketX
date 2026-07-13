@@ -20,6 +20,7 @@ import { loadWorkbenchConfig, saveWorkbenchConfig, type WorkbenchConfig } from '
 import type { ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 
@@ -63,10 +64,16 @@ function AccountSection() {
   const [saved, setSaved] = useState(false);
 
   const applyStatus = async (next: string, text?: string) => {
+    const prev = status;
     setStatus(next);
-    await rest.setStatus(next, text ?? statusText).catch(() => {});
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await rest.setStatus(next, text ?? statusText);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setStatus(prev); // 失败回滚，不再假装成功
+      toast.error(err, '状态更新失败');
+    }
   };
 
   return (

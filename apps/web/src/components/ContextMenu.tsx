@@ -62,7 +62,10 @@ export default function ContextMenu({
       {items.map(({ label, icon: Icon, danger, onClick }) => (
         <button
           key={label}
-          onClick={() => {
+          onClick={(e) => {
+            // portal 渲染但 React 事件仍沿组件树冒泡：
+            // 不阻止的话点菜单项会触发宿主（会话项/消息）的 onClick
+            e.stopPropagation();
             onClick();
             onClose();
           }}

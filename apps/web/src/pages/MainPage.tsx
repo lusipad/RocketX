@@ -9,6 +9,7 @@ import ChatArea from '../components/ChatArea';
 import ModulePlaceholder from '../components/ModulePlaceholder';
 import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
+import Toaster from '../components/Toaster';
 import ContactsPage from './ContactsPage';
 import WorkbenchPage from './WorkbenchPage';
 import SettingsPage from './SettingsPage';
@@ -81,6 +82,7 @@ export default function MainPage() {
       )}
       {switcher && <QuickSwitcher onClose={() => setSwitcher(false)} />}
       <UploadConfirm />
+      <Toaster />
     </div>
   );
 }

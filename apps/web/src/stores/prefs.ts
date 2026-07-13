@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { RcPreferences } from '@rcx/rc-client';
 import { rest } from '../lib/client';
+import { toast } from './toast';
 
 /** RC 用户偏好：服务端持久化，跨设备同步 */
 interface PrefsState {
@@ -51,8 +52,9 @@ export const usePrefs = create<PrefsState>((set, get) => ({
     set({ prefs: { ...prev, ...patch } });
     try {
       await rest.setPreferences(patch);
-    } catch {
+    } catch (err) {
       set({ prefs: prev }); // 失败回滚
+      toast.error(err, '设置保存失败');
     }
   },
 }));

@@ -5,6 +5,7 @@ import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
+import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
 
@@ -53,6 +54,8 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     try {
       await startDM(username);
       setModule('messages');
+    } catch (err) {
+      toast.error(err, '发起会话失败');
     } finally {
       setBusy(null);
     }
