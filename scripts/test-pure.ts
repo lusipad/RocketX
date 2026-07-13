@@ -5,7 +5,14 @@
  *   pnpm test:pure
  */
 import { pinyinMatch, pinyinScore } from '../apps/web/src/lib/pinyin';
-import { filterCommands, findCommand, parseSlash, slashPrefix } from '../apps/web/src/lib/slash';
+import {
+  commandDesc,
+  commandParams,
+  filterCommands,
+  findCommand,
+  parseSlash,
+  slashPrefix,
+} from '../apps/web/src/lib/slash';
 import {
   canActOn,
   canManageRoom,
@@ -606,6 +613,31 @@ async function main(): Promise<void> {
       .join(','),
   );
   check('空前缀返回全部', filterCommands(CMDS, '').length === 4);
+
+  // RC 返回的 description 多半是 i18n 键名（27 个命令里 24 个是），
+  // 直接显示就是把 `Slash_Shrug_Description` 糊到用户脸上
+  check(
+    '已知命令用中文说明，不用服务器的 i18n 键',
+    commandDesc({ command: 'kick', description: 'Remove_someone_from_room' }) ===
+      '把某人移出本频道',
+  );
+  check(
+    '未知命令 + i18n 键名描述 → 宁可留空',
+    commandDesc({ command: 'some-app-cmd', description: 'Some_App_Description' }) === '',
+  );
+  check(
+    '未知命令 + 正常英文描述 → 原样透出',
+    commandDesc({ command: 'some-app-cmd', description: 'Send attachment as email' }) ===
+      'Send attachment as email',
+  );
+  check(
+    'params 也要挡 i18n 键（/status /topic 的 params 就是键）',
+    commandParams({ command: 'topic', params: 'Slash_Topic_Params' }) === '话题内容',
+  );
+  check(
+    '带空格的描述不会被当成 i18n 键',
+    commandDesc({ command: 'zzz', description: 'Hello_World and more' }) === 'Hello_World and more',
+  );
 
   console.log('\n[群管理 · 权限]');
   const owner = { _id: 'u1', username: 'owner' };

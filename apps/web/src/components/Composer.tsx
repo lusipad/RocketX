@@ -13,7 +13,13 @@ import { stripQuotePrefix, useChat } from '../stores/chat';
 import { useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
-import { filterCommands, parseSlash, slashPrefix } from '../lib/slash';
+import {
+  commandDesc,
+  commandParams,
+  filterCommands,
+  parseSlash,
+  slashPrefix,
+} from '../lib/slash';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 
@@ -282,25 +288,30 @@ export default function Composer() {
       {/* 斜杠命令补全弹层 */}
       {slashQuery !== null && slashCandidates.length > 0 && (
         <div className="absolute bottom-full left-4 z-30 mb-1 w-80 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
-          {slashCandidates.map((c, i) => (
-            <button
-              key={c.command}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                insertCommand(c.command);
-              }}
-              onMouseEnter={() => setSlashIndex(i)}
-              className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left ${
-                i === slashIndex ? 'bg-primary-light' : ''
-              }`}
-            >
-              <span className="font-medium text-ink">/{c.command}</span>
-              {c.params && <span className="shrink-0 text-2xs text-ink-3">{c.params}</span>}
-              {c.description && (
-                <span className="ml-auto truncate pl-2 text-2xs text-ink-3">{c.description}</span>
-              )}
-            </button>
-          ))}
+          {slashCandidates.map((c, i) => {
+            // 服务器给的是 i18n 键名（Slash_Shrug_Description），得翻成人话
+            const desc = commandDesc(c);
+            const params = commandParams(c);
+            return (
+              <button
+                key={c.command}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertCommand(c.command);
+                }}
+                onMouseEnter={() => setSlashIndex(i)}
+                className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left ${
+                  i === slashIndex ? 'bg-primary-light' : ''
+                }`}
+              >
+                <span className="flex items-baseline gap-1.5">
+                  <span className="font-medium text-ink">/{c.command}</span>
+                  {params && <span className="truncate text-2xs text-ink-3">{params}</span>}
+                </span>
+                {desc && <span className="truncate text-2xs text-ink-3">{desc}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
 
