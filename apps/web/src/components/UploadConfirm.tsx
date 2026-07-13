@@ -37,7 +37,10 @@ export default function UploadConfirm() {
       if (e.key === 'Enter') {
         e.preventDefault();
         setBusy(true);
-        void confirmUpload().finally(() => setBusy(false));
+        // 失败由 store 内的 toast 承接，这里只要不抛未捕获异常
+        void confirmUpload()
+          .catch(() => {})
+          .finally(() => setBusy(false));
       }
     };
     document.addEventListener('keydown', onKey);
@@ -92,7 +95,9 @@ export default function UploadConfirm() {
           <button
             onClick={() => {
               setBusy(true);
-              void confirmUpload().finally(() => setBusy(false));
+              void confirmUpload()
+                .catch(() => {})
+                .finally(() => setBusy(false));
             }}
             disabled={busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"

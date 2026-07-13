@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
   AlertCircle,
@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   File as FileIcon,
+  Image as ImageIcon,
   Loader2,
   MessageSquareText,
   MessagesSquare,
@@ -49,8 +50,9 @@ function fmtSize(bytes?: number): string {
 }
 
 /**
- * 图片附件：列表里显示缩略图（image_url），点击后灯箱加载原图（title_link）。
+ * 图片附件：列表显示缩略图（image_url），点击后灯箱加载原图（title_link）。
  * Rocket.Chat 会为大图生成独立 fileId 的缩略图，两者 URL 不同。
+ * autoImageLoad 关闭时先显示占位，点击才加载（省流量）。
  */
 function ImageAttachment({
   thumbPath,
@@ -61,14 +63,31 @@ function ImageAttachment({
   fullPath: string;
   name: string;
 }) {
+  const autoLoad = usePrefs((s) => s.prefs.autoImageLoad ?? true);
   const [lightbox, setLightbox] = useState(false);
+  const [manualLoad, setManualLoad] = useState(false);
+  const show = autoLoad || manualLoad;
+
+  if (!show) {
+    return (
+      <button
+        onClick={() => setManualLoad(true)}
+        className="mt-1.5 flex w-56 items-center gap-2 rounded-lg border border-line bg-surface-4 px-3 py-2.5 text-left transition hover:border-primary"
+      >
+        <ImageIcon size={16} className="shrink-0 text-ink-3" />
+        <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{name}</span>
+        <span className="shrink-0 text-xs text-primary">点击加载</span>
+      </button>
+    );
+  }
+
   return (
     <>
       <button onClick={() => setLightbox(true)} className="mt-1.5 block cursor-zoom-in">
         <AuthImage
           path={thumbPath}
           alt={name}
-          className="max-h-64 max-w-[320px] rounded-lg object-contain"
+          className="max-h-72 max-w-[360px] rounded-lg object-contain"
           fallback={<span className="text-xs text-ink-3">[图片加载失败：{name}]</span>}
         />
       </button>
@@ -118,13 +137,25 @@ function FileAttachment({
   );
 }
 
-/** 引用回复的原消息（飞书样式的引用条） */
+/** 引用回复的原消息：点击跳转并高亮原消息（飞书交互） */
 function QuoteCard({ att }: { att: RcMessageAttachment }) {
+  const jumpToMessage = useChat((s) => s.jumpToMessage);
+  // message_link 形如 .../channel/xx?msg=<id>
+  const mid = att.message_link?.match(/[?&]msg=([^&]+)/)?.[1];
+
   return (
-    <div className="mt-1 mb-0.5 max-w-md rounded-r-md border-l-2 border-primary/40 bg-fill-1 px-2.5 py-1.5">
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        if (mid) jumpToMessage(mid);
+      }}
+      disabled={!mid}
+      className="mt-1 mb-0.5 block max-w-md rounded-r-md border-l-2 border-primary/40 bg-fill-1 px-2.5 py-1.5 text-left transition enabled:hover:bg-fill-hover"
+      title={mid ? '点击跳转到原消息' : undefined}
+    >
       <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
       <div className="line-clamp-2 text-xs break-words text-ink-3">{att.text}</div>
-    </div>
+    </button>
   );
 }
 
@@ -343,9 +374,18 @@ export default function MessageItem({
   const receipt = useChat((s) => s.readReceipts[message.rid]);
   const roomType = useChat((s) => s.subscriptions[message.rid]?.t);
   const showAvatars = usePrefs((s) => s.prefs.displayAvatars ?? true);
+  const highlighted = useChat((s) => s.highlightMid === message._id);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // 被跳转定位时滚动到视野中央
+  useEffect(() => {
+    if (highlighted) {
+      rootRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [highlighted]);
 
   const [editing, setEditing] = useState(false);
-  const [picker, setPicker] = useState(false);
+  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [forwarding, setForwarding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -354,6 +394,13 @@ export default function MessageItem({
 
   const displayName = message.u.name || message.u.username;
   const time = fmtTime(tsMs(message.ts));
+  // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
+  const visibleText = stripQuotePrefix(message.msg ?? '');
+  const bareMedia =
+    !visibleText &&
+    !message.pinned &&
+    !!message.attachments?.length &&
+    message.attachments.every((a) => !!a.image_url || !!a.title_link_download);
 
   const copy = () => {
     void navigator.clipboard?.writeText(stripQuotePrefix(message.msg ?? ''));
@@ -417,10 +464,11 @@ export default function MessageItem({
 
   return (
     <div
+      ref={rootRef}
       onContextMenu={onContextMenu}
-      className={`group flex gap-2.5 px-1 ${grouped ? 'mt-0.5' : 'mt-3'} ${
-        mine ? 'flex-row-reverse' : ''
-      }`}
+      className={`group flex gap-2.5 rounded-lg px-1 transition-colors duration-500 ${
+        grouped ? 'mt-0.5' : 'mt-3'
+      } ${mine ? 'flex-row-reverse' : ''} ${highlighted ? 'bg-primary-light' : ''}`}
     >
       {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片 */}
       {showAvatars && (
@@ -442,10 +490,10 @@ export default function MessageItem({
         )}
 
         <div className={`relative flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
-          {/* 悬浮操作栏：快捷表情 + 回复/转发/更多（发送中/失败的消息不可操作） */}
+          {/* 悬浮操作栏：贴气泡上沿内侧，避免被滚动容器裁剪（第一条消息也够得着） */}
           {!editing && !message.pending && !message.failed && (
             <div
-              className={`absolute -top-8 z-10 hidden group-hover:flex ${
+              className={`absolute -top-4 z-10 hidden group-hover:flex ${
                 mine ? 'right-0' : 'left-0'
               }`}
             >
@@ -460,7 +508,14 @@ export default function MessageItem({
                     {e.char}
                   </button>
                 ))}
-                <button title="更多表情" className={hoverBtn} onClick={() => setPicker((v) => !v)}>
+                <button
+                  title="更多表情"
+                  className={hoverBtn}
+                  onClick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setPicker(picker ? null : { x: r.left, y: r.bottom + 4 });
+                  }}
+                >
                   <SmilePlus size={15} />
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
@@ -489,23 +544,16 @@ export default function MessageItem({
                 >
                   {copied ? <Check size={15} className="text-success" /> : <MoreHorizontal size={15} />}
                 </button>
-                {picker && (
-                  <EmojiPicker
-                    onPick={(e) => {
-                      setPicker(false);
-                      void toggleReaction(message._id, `:${e.code}:`);
-                    }}
-                    onClose={() => setPicker(false)}
-                    className={`absolute top-8 ${mine ? 'right-0' : 'left-0'}`}
-                  />
-                )}
               </div>
             </div>
           )}
 
+          {/* 纯图片消息不套气泡（飞书是裸图），有文字时才有气泡底 */}
           <div
-            className={`rounded-lg px-3 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap ${
-              mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'
+            className={`text-sm leading-relaxed break-words whitespace-pre-wrap ${
+              bareMedia
+                ? ''
+                : `rounded-lg px-3 py-2 ${mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'}`
             }`}
           >
             {editing ? (
@@ -598,6 +646,16 @@ export default function MessageItem({
       {/* 右侧留白，让长消息不顶满 */}
       <div className="w-10 shrink-0" />
 
+      {picker && (
+        <EmojiPicker
+          pos={picker}
+          onPick={(e) => {
+            setPicker(null);
+            void toggleReaction(message._id, `:${e.code}:`);
+          }}
+          onClose={() => setPicker(null)}
+        />
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
       {showCard && (

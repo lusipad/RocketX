@@ -118,19 +118,19 @@ function renderLines(text: string, me: string | undefined, keyBase: string): Rea
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];
   let quoteBuffer: string[] = [];
+  // 上一行是否为块级元素（引用/列表）：块级元素自带换行，后面不该再补 \n
+  let lastWasBlock = false;
 
   const flushQuote = (key: string) => {
     if (quoteBuffer.length === 0) return;
     const content = quoteBuffer.join('\n');
     quoteBuffer = [];
     nodes.push(
-      <blockquote
-        key={key}
-        className="my-1 border-l-[3px] border-line pl-2.5 text-ink-2"
-      >
+      <blockquote key={key} className="my-1 border-l-[3px] border-line pl-2.5 text-ink-2">
         {renderInline(content, me, `${key}-q`)}
       </blockquote>,
     );
+    lastWasBlock = true;
   };
 
   lines.forEach((line, li) => {
@@ -149,14 +149,21 @@ function renderLines(text: string, me: string | undefined, keyBase: string): Rea
           {renderInline(bullet[1], me, key)}
         </span>,
       );
+      lastWasBlock = true;
       return;
     }
+    // 前一行是引用/列表这类块级元素时不再补换行（否则会多出一个空行）
+    const prevWasBlock =
+      nodes.length > 0 &&
+      typeof nodes[nodes.length - 1] !== 'string' &&
+      lastWasBlock;
     nodes.push(
       <Fragment key={key}>
-        {li > 0 ? '\n' : null}
+        {li > 0 && !prevWasBlock ? '\n' : null}
         {renderInline(line, me, key)}
       </Fragment>,
     );
+    lastWasBlock = false;
   });
   flushQuote(`${keyBase}-fq-end`);
   return nodes;

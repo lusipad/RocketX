@@ -32,8 +32,6 @@ export default function Composer() {
 
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [picker, setPicker] = useState(false);
   const [members, setMembers] = useState<RcUser[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -45,7 +43,6 @@ export default function Composer() {
   // 切换会话时恢复该会话草稿并预取成员（供 @ 补全）
   useEffect(() => {
     setText(activeRid ? (useChat.getState().drafts[activeRid] ?? '') : '');
-    setError(null);
     setMentionQuery(null);
     setPicker(false);
     textareaRef.current?.focus();
@@ -86,12 +83,24 @@ export default function Composer() {
     setMentionIndex(0);
   };
 
+  /** 按实际内容高度自适应（数换行符算不出自动换行的长文本） */
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  };
+
   const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
     persistDraft(e.target.value);
     emitTyping();
     refreshMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+    requestAnimationFrame(autoResize);
   };
+
+  // 文本被外部改变（发送清空、切换会话恢复草稿）时同步高度
+  useEffect(autoResize, [text, activeRid]);
 
   // 粘贴图片/文件 → 发送确认弹窗（飞书交互）
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -131,23 +140,18 @@ export default function Composer() {
 
   const doSend = async () => {
     const value = text.trim();
-    if (!value || sending) return;
-    setSending(true);
-    setError(null);
-    try {
-      // 乐观发送：秒回显，失败在消息气泡上标红可重试
-      await send(value, replyTo ? { quote: replyTo } : undefined);
-      setText('');
-      setMentionQuery(null);
-      setReplyTo(null);
-      if (activeRid) {
-        if (draftTimer.current) clearTimeout(draftTimer.current);
-        setDraft(activeRid, '');
-      }
-    } finally {
-      setSending(false);
-      textareaRef.current?.focus();
+    if (!value) return;
+    // 乐观发送：立刻清空输入框，不阻塞下一条（连发不会被吞）
+    setText('');
+    setMentionQuery(null);
+    setReplyTo(null);
+    if (activeRid) {
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+      setDraft(activeRid, '');
     }
+    textareaRef.current?.focus();
+    // 失败由消息气泡的红色标记与 toast「重试」承接
+    await send(value, replyTo ? { quote: replyTo } : undefined);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -227,7 +231,7 @@ export default function Composer() {
         <EmojiPicker
           onPick={(e) => insertEmoji(e.char)}
           onClose={() => setPicker(false)}
-          className="absolute bottom-full left-4 mb-1"
+          className="absolute bottom-full left-4 mb-1 shadow-lg"
         />
       )}
 
@@ -288,24 +292,23 @@ export default function Composer() {
           onClick={(e) =>
             refreshMention(text, (e.target as HTMLTextAreaElement).selectionStart ?? 0)
           }
-          rows={Math.min(5, Math.max(1, text.split('\n').length))}
+          rows={1}
           placeholder={
             sendOnEnter === 'alternative'
               ? '输入消息，Ctrl + Enter 发送'
               : '输入消息，Enter 发送，Shift + Enter 换行'
           }
-          className="max-h-32 flex-1 resize-none rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
+          className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
         />
         <button
           onClick={() => void doSend()}
-          disabled={!text.trim() || sending}
+          disabled={!text.trim()}
           title="发送"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary text-white transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-40"
         >
           <SendHorizontal size={17} />
         </button>
       </div>
-      {error && <div className="pt-1 text-xs text-danger">{error}</div>}
     </div>
   );
 }

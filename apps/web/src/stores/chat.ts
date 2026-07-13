@@ -99,6 +99,8 @@ interface ChatState {
   pendingFiles: File[] | null;
   /** 正在引用回复的消息 */
   replyTo: RcMessage | null;
+  /** 被跳转定位的消息 id（短暂高亮） */
+  highlightMid: string | null;
   /** 正在输入的用户：rid -> username -> 过期时间戳 */
   typing: Record<string, Record<string, number>>;
   /** 已读回执：rid -> { mid: 最后一条自己消息, users: 已读的其他人 } */
@@ -116,6 +118,8 @@ interface ChatState {
   /** 丢弃失败的本地消息 */
   discardMessage: (tempId: string) => void;
   setReplyTo: (msg: RcMessage | null) => void;
+  /** 跳转到某条消息（必要时向上加载历史），并高亮 2 秒 */
+  jumpToMessage: (mid: string, rid?: string) => Promise<void>;
   /** 输入中广播（内部已节流） */
   emitTyping: () => void;
   refreshReceipts: (rid: string) => Promise<void>;
@@ -296,6 +300,7 @@ export const useChat = create<ChatState>((set, get) => ({
   unreadMarkTs: {},
   pendingFiles: null,
   replyTo: null,
+  highlightMid: null,
   typing: {},
   readReceipts: {},
 
@@ -595,6 +600,37 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setReplyTo: (msg) => set({ replyTo: msg }),
+
+  jumpToMessage: async (mid, rid) => {
+    const targetRid = rid ?? get().activeRid;
+    if (!targetRid) return;
+
+    // 目标不在当前会话 → 先切过去
+    if (targetRid !== get().activeRid) {
+      await get().openRoom(targetRid);
+    }
+
+    // 消息不在已加载的范围内 → 向上翻页找（最多 5 页，避免无限拉）
+    for (let i = 0; i < 5; i++) {
+      const list = get().messages[targetRid] ?? [];
+      if (list.some((m) => m._id === mid)) break;
+      if (get().hasMore[targetRid] === false) break;
+      const loaded = await get().loadOlder();
+      if (loaded === 0) break;
+    }
+
+    const found = (get().messages[targetRid] ?? []).some((m) => m._id === mid);
+    if (!found) {
+      toast.info('原消息太久远，未能定位');
+      return;
+    }
+
+    set({ highlightMid: mid });
+    // 滚动由 MessageItem 侧的 effect 执行（拿到 DOM 节点）
+    setTimeout(() => {
+      if (get().highlightMid === mid) set({ highlightMid: null });
+    }, 2600);
+  },
 
   emitTyping: () => {
     const rid = get().activeRid;
