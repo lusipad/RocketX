@@ -64,6 +64,19 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 - 登录/续期后同步种 `rc_uid`/`rc_token` cookie：`<img>` 头像和 `/file-upload`
   文件请求不走 fetch 头，靠 cookie 通过 RC 认证。
 
+### Rocket.Chat 兼容性坑（踩过并已绕过）
+
+| 现象 | 原因与对策 |
+| --- | --- |
+| 引用回复的 `message_link` 附件被服务端清空 | REST 层会清洗附件里的外站链接；相对路径又被 400 拒绝。**正确姿势**：消息文本以 `[ ](<Site_Url>/channel/xx?msg=<id>) ` 开头，由服务端自动展开为引用附件（官方客户端同样机制）。客户端渲染与会话预览需隐藏该前缀 |
+| 中文文件名上传后变成 `%E9%9C%80...` | multipart 的 `filename` 不能 `encodeURIComponent`，直接用 UTF-8 原文 |
+| 桌面端图片/头像/文件 403 | `<img>` 带不上认证头，桌面端 cookie 又不生效 → 改为带头 fetch 成 blob 再显示 |
+| 桌面端登录 Failed to fetch | webview 的 CORS。改走 tauri-plugin-http（Rust 通道），并注意权限模式要写 `http://**:*`（`http://**` 不匹配自定义端口） |
+| `chat.getMessageReadReceipts` 返回 400 | 已读回执是**企业版**功能，社区版拒绝。客户端首次失败后停止请求并隐藏该 UI |
+| 置顶/星标后消息不刷新 | 服务端不推送这两类变更事件，需本地乐观更新 |
+| 频道未读数一直是 0 | RC 频道默认只有 @ 才累计 `unread`，普通新消息只置 `alert` 标志 |
+| Tauri plugin-http 上传 FormData 失败 | 该通道对 FormData 支持不可靠，手工构造 multipart 字节流 |
+
 ### 中文环境必须的服务端设置
 
 连接已有 Rocket.Chat 服务器时，请在管理后台调整（本仓库 dev compose 已内置）：
