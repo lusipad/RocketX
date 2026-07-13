@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ChevronLeft,
+  CircleDot,
   ChevronRight,
   Clock,
   ListTodo,
@@ -22,6 +23,7 @@ import {
   type CalendarView,
 } from '../stores/calendar';
 import { useTodos, todayKey, isOverdue, type Todo } from '../stores/todos';
+import { adoDateToLocal, useWorkbench, type WorkItem } from '../stores/workbench';
 import CalendarEventDialog from '../components/CalendarEventDialog';
 import TimeGrid from '../components/TimeGrid';
 
@@ -29,7 +31,7 @@ const VIEW_LABELS: Record<CalendarView, string> = { month: '月', week: '周', d
 
 /** 日程+待办+工作台的统一条目 */
 interface UnifiedItem {
-  type: 'event' | 'todo';
+  type: 'event' | 'todo' | 'workitem';
   id: string;
   title: string;
   time?: string;
@@ -38,12 +40,13 @@ interface UnifiedItem {
   overdue?: boolean;
   repeat?: boolean;
   source: 'manual' | 'todo' | 'ado';
-  raw: CalendarEvent | Todo;
+  raw: CalendarEvent | Todo | WorkItem;
 }
 
 function unifyForDate(
   events: CalendarEvent[],
   todos: Todo[],
+  workItems: WorkItem[],
   dateStr: string,
 ): UnifiedItem[] {
   const items: UnifiedItem[] = [];
@@ -65,6 +68,20 @@ function unifyForDate(
       repeat: !!e.repeat,
       source: e.source,
       raw: e,
+    });
+  }
+
+  // ADO 里带截止日期的工作项也落到日历上 —— 「这周要交的东西」不该只在工作台里看得到
+  for (const w of workItems) {
+    if (adoDateToLocal(w.dueDate) !== dateStr) continue;
+    items.push({
+      type: 'workitem',
+      id: String(w.id),
+      title: `#${w.id} ${w.title}`,
+      color: dateStr < today ? '#f54a45' : w.priority === 1 ? '#f54a45' : '#7f3bf5',
+      overdue: dateStr < today,
+      source: 'ado',
+      raw: w,
     });
   }
 
@@ -105,6 +122,7 @@ function MonthCell({
   isSelected,
   events,
   todos,
+  workItems,
   onSelect,
   onPick,
   onCreate,
@@ -116,6 +134,7 @@ function MonthCell({
   isSelected: boolean;
   events: CalendarEvent[];
   todos: Todo[];
+  workItems: WorkItem[];
   onSelect: () => void;
   onPick: (e: CalendarEvent) => void;
   onCreate: () => void;
@@ -149,6 +168,13 @@ function MonthCell({
       label: `☑ ${t.note || t.excerpt}`,
       done: t.done,
       onClick: onSelect,
+    })),
+    ...workItems.map((w) => ({
+      key: `w${w.id}`,
+      color: dayKey < todayKey() ? '#f54a45' : '#7f3bf5',
+      label: `#${w.id} ${w.title}`,
+      done: false,
+      onClick: () => w.webUrl && window.open(w.webUrl, '_blank', 'noopener,noreferrer'),
     })),
   ];
 
@@ -289,6 +315,11 @@ function EventItem({
               <ListTodo size={10} /> 待办
             </span>
           )}
+          {item.type === 'workitem' && (
+            <span className="flex items-center gap-0.5">
+              <CircleDot size={10} /> ADO 工作项
+            </span>
+          )}
           {item.overdue && (
             <span className="font-medium text-danger">已逾期</span>
           )}
@@ -306,6 +337,21 @@ export default function CalendarPage() {
   const setView = useCalendar((s) => s.setView);
   const setCursor = useCalendar((s) => s.setCursor);
   const toggleEventDone = useCalendar((s) => s.toggleDone);
+  // ADO 里带截止日期的工作项也画到日历上。
+  // 工作台的数据是懒加载的 —— 不在这里也拉一次的话，用户得先去工作台转一圈，
+  // 日历上才会出现工作项。
+  const workItems = useWorkbench((s) => s.workItems);
+  const wbConfig = useWorkbench((s) => s.config);
+  const wbLastRefresh = useWorkbench((s) => s.lastRefresh);
+  const wbLoading = useWorkbench((s) => s.loading);
+  const wbRefresh = useWorkbench((s) => s.refresh);
+
+  useEffect(() => {
+    const connected = !!(
+      wbConfig && (wbConfig.mode === 'direct' ? wbConfig.adoBase : wbConfig.bridge)
+    );
+    if (connected && !wbLastRefresh && !wbLoading) void wbRefresh();
+  }, [wbConfig, wbLastRefresh, wbLoading, wbRefresh]);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
   const next = useCalendar((s) => s.next);
@@ -354,20 +400,23 @@ export default function CalendarPage() {
   const eventMap = useMemo(() => eventsInRange(events, gridDates), [events, gridDates]);
 
   const selectedItems = useMemo(
-    () => (selectedDate ? unifyForDate(events, todos, selectedDate) : []),
-    [events, todos, selectedDate],
+    () => (selectedDate ? unifyForDate(events, todos, workItems, selectedDate) : []),
+    [events, todos, workItems, selectedDate],
   );
 
   const todayItems = useMemo(
-    () => unifyForDate(events, todos, today),
-    [events, todos, today],
+    () => unifyForDate(events, todos, workItems, today),
+    [events, todos, workItems, today],
   );
 
   const handleItemClick = (item: UnifiedItem) => {
-    if (item.type === 'event' && item.source === 'manual') {
+    if (item.type === 'event') {
       setDialog({ mode: 'edit', event: item.raw as CalendarEvent });
     } else if (item.type === 'todo') {
       toggleTodo(item.id);
+    } else if (item.type === 'workitem') {
+      const w = item.raw as WorkItem;
+      if (w.webUrl) window.open(w.webUrl, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -449,6 +498,7 @@ export default function CalendarPage() {
                 const key = dateKey(d);
                 const dayEvents = eventMap.get(key) ?? [];
                 const dayTodos = todos.filter((t) => t.due === key && !t.done);
+                const dayWorkItems = workItems.filter((w) => adoDateToLocal(w.dueDate) === key);
                 return (
                   <MonthCell
                     key={key}
@@ -458,6 +508,7 @@ export default function CalendarPage() {
                     isSelected={key === selectedDate}
                     events={dayEvents}
                     todos={dayTodos}
+                    workItems={dayWorkItems}
                     onSelect={() => {
                       setSelectedDate(key);
                       if (d.getMonth() !== cursorDate.getMonth()) setCursor(key);

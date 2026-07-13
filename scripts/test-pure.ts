@@ -459,6 +459,57 @@ async function main(): Promise<void> {
   const noWd = hits(ev('2026-07-15', { type: 'custom', interval: 1, weekdays: [] }), '2026-07-15', 10);
   check('自定义重复但没选星期几 → 不重复', noWd.length === 0, noWd.join(','));
 
+  console.log('\n[ADO · 截止日期]');
+  const { adoDateToLocal } = await import('../apps/web/src/stores/workbench');
+
+  // ADO 的 DueDate 通常是「当天零点的 UTC」。中国是 UTC+8，直接 slice(0,10) 取 UTC 日期，
+  // 凌晨 0-8 点之间会退回前一天 —— 「今天到期」被误判成「已逾期」。
+  check(
+    'UTC 零点的截止日期 → 本地日期不跑偏',
+    adoDateToLocal('2026-07-14T00:00:00Z') === '2026-07-14',
+    adoDateToLocal('2026-07-14T00:00:00Z') ?? '(undefined)',
+  );
+  check(
+    '带时间的截止日期也按本地日期算',
+    adoDateToLocal('2026-07-14T09:30:00Z') === '2026-07-14',
+    adoDateToLocal('2026-07-14T09:30:00Z') ?? '(undefined)',
+  );
+  check('空值返回 undefined', adoDateToLocal(undefined) === undefined);
+  check('非法日期返回 undefined', adoDateToLocal('不是日期') === undefined);
+
+  // 逾期的工作项要排到最前，压过优先级
+  const wiOverdue = {
+    id: 9,
+    title: '早该交的活',
+    type: 'Bug',
+    state: 'Active',
+    priority: 3, // 低优先级
+    project: 'P',
+    dueDate: `${yesterday}T00:00:00`,
+    webUrl: 'http://ado/9',
+  } as any;
+  const wiP1NoDue = { ...wi(10, 1), title: 'P1 但没截止日' };
+  const q3 = buildQueue({
+    account: me,
+    today,
+    todos: [],
+    workItems: [wiP1NoDue, wiOverdue],
+    prs: [],
+    builds: [],
+    events: [],
+  });
+  check(
+    '逾期的 P3 排在没有截止日期的 P1 前面（截止日期压过优先级）',
+    q3[0]?.title === '早该交的活',
+    q3.map((i) => `${i.label}:${i.title}`).join(' | '),
+  );
+  check('逾期工作项标为「逾期」', q3[0]?.kind === 'overdue-workitem', q3[0]?.kind);
+  check(
+    '逾期工作项的补充信息里带上逾期天数',
+    q3[0]?.meta?.includes('逾期') === true,
+    q3[0]?.meta ?? '',
+  );
+
   console.log('\n[日历 · 标记完成]');
   const { isEventDone } = cal;
   const weekly = ev('2026-07-13', { type: 'weekly', interval: 1 }); // 每周一

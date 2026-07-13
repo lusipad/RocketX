@@ -273,6 +273,12 @@ const WI_FIELDS = [
   'System.AssignedTo',
   'System.ChangedDate',
   'Microsoft.VSTS.Common.Priority',
+  // 截止日期。Agile/Scrum/CMMI 各模板的叫法不一样，能拿到哪个算哪个：
+  // Scheduling.DueDate（Bug/Task 常用）、Scheduling.TargetDate（Feature/Epic）、
+  // Scheduling.FinishDate（CMMI）。实测本机 Server 2022 三个都存在于字段定义里。
+  'Microsoft.VSTS.Scheduling.DueDate',
+  'Microsoft.VSTS.Scheduling.TargetDate',
+  'Microsoft.VSTS.Scheduling.FinishDate',
 ].join(',');
 
 function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, any> }) {
@@ -285,6 +291,10 @@ function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, 
     project: w.fields['System.TeamProject'] ?? '',
     assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
     changedDate: w.fields['System.ChangedDate'],
+    dueDate:
+      w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
+      w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
+      w.fields['Microsoft.VSTS.Scheduling.FinishDate'],
     webUrl: `${base(cfg)}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
   };
 }

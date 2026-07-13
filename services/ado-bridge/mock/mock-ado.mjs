@@ -15,6 +15,10 @@ const WORK_ITEMS = [
       'System.AssignedTo': { displayName: 'lus', uniqueName: 'lus@example.com' },
       'System.ChangedDate': '2026-07-12T10:00:00Z',
       'Microsoft.VSTS.Common.Priority': 1,
+      // 逾期（昨天就该交）
+      'Microsoft.VSTS.Scheduling.DueDate': new Date(Date.now() - 86400000)
+        .toISOString()
+        .slice(0, 10) + 'T00:00:00Z',
     },
   },
   {
@@ -27,6 +31,8 @@ const WORK_ITEMS = [
       'System.AssignedTo': { displayName: 'lus', uniqueName: 'lus@example.com' },
       'System.ChangedDate': '2026-07-11T08:00:00Z',
       'Microsoft.VSTS.Common.Priority': 2,
+      // 今天到期
+      'Microsoft.VSTS.Scheduling.TargetDate': new Date().toISOString().slice(0, 10) + 'T00:00:00Z',
     },
   },
   {

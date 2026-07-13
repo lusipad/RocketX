@@ -25,6 +25,8 @@ export interface WorkItem {
   project: string;
   assignedTo?: string;
   changedDate?: string;
+  /** 截止日期（ISO 时间串）。ADO 各流程模板字段名不同，取到哪个算哪个 */
+  dueDate?: string;
   webUrl: string;
 }
 
@@ -60,6 +62,22 @@ export interface Build {
   queueTime: string;
   finishTime: string;
   webUrl: string;
+}
+
+/**
+ * ADO 的日期字段（ISO 时间串）→ 本地日历日期（YYYY-MM-DD）。
+ *
+ * **不能直接 slice(0, 10)**：那切出来的是 UTC 日期。中国是 UTC+8，凌晨 0-8 点之间
+ * UTC 还停在前一天 —— 一个「今天到期」的工作项会被判成「已逾期」，而用户明明还有一整天。
+ * 必须先转成本地时间再取日期。
+ */
+export function adoDateToLocal(iso?: string): string | undefined {
+  if (!iso) return undefined;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
 }
 
 /** ADO 的投票值 → 人话 */

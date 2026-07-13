@@ -1,6 +1,13 @@
 import { eventsForDate, isEventDone, type CalendarEvent } from '../stores/calendar';
-import { isOverdue, todayKey, type Todo } from '../stores/todos';
-import { isApproved, matchUser, type Build, type PullRequest, type WorkItem } from '../stores/workbench';
+import { dueLabel, isOverdue, todayKey, type Todo } from '../stores/todos';
+import {
+  adoDateToLocal,
+  isApproved,
+  matchUser,
+  type Build,
+  type PullRequest,
+  type WorkItem,
+} from '../stores/workbench';
 
 /**
  * 工作台首页的「待处理队列」。
@@ -20,6 +27,8 @@ export type QueueKind =
   | 'urgent-workitem'
   | 'approved-pr'
   | 'workitem'
+  /** 已过截止日期的工作项 */
+  | 'overdue-workitem'
   | 'todo'
   /** 今天的日程 */
   | 'event';
@@ -65,7 +74,8 @@ export interface QueueInput {
 
 /**
  * 紧急度分档（数字即排序权重）：
- *  0 逾期待办      —— 已经欠账了
+ *  0 逾期待办 / 逾期工作项 —— 已经欠账了。一个逾期的 P3 比一个没有截止日期的 P1
+ *                            更该现在处理，所以截止日期压过优先级
  *  1 构建失败      —— 主干红着，谁看见谁管
  *  2 今天的日程    —— 有具体时间点，错过就没了
  *  3 待我评审 PR   —— 别人被我卡着
@@ -182,15 +192,36 @@ export function buildQueue(input: QueueInput): QueueItem[] {
   }
 
   for (const w of input.workItems) {
+    const due = adoDateToLocal(w.dueDate);
+    const overdue = !!due && due < today;
+    const dueToday = due === today;
     const urgent = w.priority === 1;
+
+    // 有截止日期的工作项要按「还剩多久」排，而不是一律按优先级。
+    // 一个逾期的 P3 比一个没有截止日期的 P1 更该现在处理。
+    const urgency = overdue ? 0 : dueToday ? 4 : urgent ? 5 : 7;
+    const kind: QueueKind = overdue
+      ? 'overdue-workitem'
+      : urgent
+        ? 'urgent-workitem'
+        : 'workitem';
+
     items.push({
       key: `wi-${w.id}`,
-      kind: urgent ? 'urgent-workitem' : 'workitem',
-      urgency: urgent ? 5 : 7,
-      label: urgent ? `${w.type} P1` : w.type,
+      kind,
+      urgency,
+      label: overdue
+        ? '逾期'
+        : dueToday
+          ? '今天到期'
+          : urgent
+            ? `${w.type} P1`
+            : w.type,
       title: w.title,
-      meta: `#${w.id} · ${w.state}`,
-      color: urgent ? DANGER : PRIMARY,
+      meta: [`#${w.id}`, w.state, due ? dueLabel(due, today) : null]
+        .filter(Boolean)
+        .join(' · '),
+      color: overdue ? DANGER : dueToday ? WARNING : urgent ? DANGER : PRIMARY,
       href: w.webUrl,
     });
   }
@@ -202,7 +233,10 @@ export function buildQueue(input: QueueInput): QueueItem[] {
 /** 顶部那句话：「3 项待处理 · 1 项逾期」 */
 export function queueSummary(items: QueueItem[]): string {
   if (items.length === 0) return '今天没有待处理的事';
-  const overdue = items.filter((i) => i.kind === 'overdue-todo' || i.kind === 'failed-build').length;
+  const overdue = items.filter(
+    (i) =>
+      i.kind === 'overdue-todo' || i.kind === 'overdue-workitem' || i.kind === 'failed-build',
+  ).length;
   const base = `${items.length} 项待处理`;
   return overdue > 0 ? `${base} · ${overdue} 项需要立刻处理` : base;
 }
