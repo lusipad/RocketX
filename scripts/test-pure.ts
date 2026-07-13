@@ -272,6 +272,44 @@ async function main(): Promise<void> {
   );
   check('队列为空时给出人话', queueSummary([]) === '今天没有待处理的事');
 
+  console.log('\n[Markdown 渲染]');
+  // 用 react-dom/server 把渲染结果转成 HTML 来断言 —— 这比断言 React 元素树可读得多。
+  // tsx 在仓库根按 classic runtime 编译 .tsx（jsx: react-jsx 只在 apps/web 的
+  // tsconfig 里），所以 JSX 会展开成 React.createElement，得先把 React 挂上全局。
+  const React = (await import('react')).default;
+  (globalThis as Record<string, unknown>).React = React;
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { renderMarkdown } = await import('../apps/web/src/lib/markdown');
+  const html = (md: string) => renderToStaticMarkup(renderMarkdown(md) as any);
+
+  check('标题：# 标题 → <h1>', html('# 发布计划').includes('<h1'), html('# 发布计划').slice(0, 60));
+  check('标题：### → <h3>', html('### 三级').includes('<h3'));
+  check(
+    '#128 不是标题（# 后没空格）—— 工作项引用不能被误伤',
+    !html('#128 已修复').includes('<h1'),
+    html('#128 已修复').slice(0, 80),
+  );
+  check('#general 不是标题（频道引用）', !html('#general 讨论一下').includes('<h1'));
+  check('有序列表：1. → 渲染出序号', html('1. 第一步\n2. 第二步').includes('1.'));
+  check(
+    '任务列表：- [x] → 勾选的复选框',
+    html('- [x] 已完成\n- [ ] 未完成').includes('checked'),
+  );
+  check('表格：| 表头 | + 分隔行 → <table>', html('| A | B |\n| --- | --- |\n| 1 | 2 |').includes('<table'));
+  check(
+    '表格：单元格少于表头时按表头补齐，不塌',
+    (html('| A | B |\n| --- | --- |\n| 1 |').match(/<td/g) ?? []).length === 2,
+  );
+  check('分割线：--- → <hr>', html('上\n\n---\n\n下').includes('<hr'));
+  check('无序列表仍然工作', html('- 一\n- 二').includes('•'));
+  check('引用仍然工作', html('> 引用一句').includes('<blockquote'));
+  check('代码块仍然工作', html('```\ncode\n```').includes('<pre'));
+  check('粗体仍然工作', html('**重点**').includes('<strong'));
+  check(
+    '标题里的行内格式也要解析',
+    html('# **重点**发布').includes('<strong'),
+  );
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
 }

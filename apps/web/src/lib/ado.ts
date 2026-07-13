@@ -32,8 +32,15 @@ export function saveWorkbenchConfig(config: WorkbenchConfig): void {
   localStorage.setItem(WORKBENCH_CONFIG_KEY, JSON.stringify(config));
 }
 
+/** 消息里的 #123 要不要渲染成 ADO 工作项链接，取决于这个是否配过 */
 export function adoWebBase(): string | null {
-  return localStorage.getItem(ADO_WEB_KEY);
+  // 渲染函数会走到这里，而它也在 Node 侧的测试里跑 —— 别假设有浏览器全局
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    return localStorage.getItem(ADO_WEB_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export interface AdoWorkItemInfo {

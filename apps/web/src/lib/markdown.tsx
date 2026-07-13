@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import WorkItemLink from '../components/WorkItemLink';
+import { adoWebBase } from './ado';
 import Emoji from '../components/Emoji';
 
 /**
@@ -95,7 +96,7 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
       );
     } else if (m[9]) {
       // #纯数字 且配置过工作台 → ADO 工作项链接（悬停出详情卡，可快速评论）
-      const adoBase = /^#\d+$/.test(full) ? localStorage.getItem('rcx-ado-web') : null;
+      const adoBase = /^#\d+$/.test(full) ? adoWebBase() : null;
       if (adoBase) {
         nodes.push(<WorkItemLink key={key} id={Number(full.slice(1))} />);
       } else {
@@ -113,220 +114,271 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
   return nodes;
 }
 
-/** 行级结构：> 引用、- / * 列表，其余整行走行内解析 */
-function renderLines(text: string, me: string | undefined, keyBase: string): ReactNode[] {
-  const lines = text.split('\n');
-  const nodes: ReactNode[] = [];
-  let quoteBuffer: string[] = [];
-  // 上一行是否为块级元素（引用/列表）：块级元素自带换行，后面不该再补 \n
-  let lastWasBlock = false;
-
-  const flushQuote = (key: string) => {
-    if (quoteBuffer.length === 0) return;
-    const content = quoteBuffer.join('\n');
-    quoteBuffer = [];
-    nodes.push(
-      <blockquote key={key} className="my-1 border-l-[3px] border-line pl-2.5 text-ink-2">
-        {renderInline(content, me, `${key}-q`)}
-      </blockquote>,
-    );
-    lastWasBlock = true;
-  };
-
-  lines.forEach((line, li) => {
-    const key = `${keyBase}-l${li}`;
-    const quote = /^>\s?(.*)$/.exec(line);
-    if (quote) {
-      quoteBuffer.push(quote[1]);
-      return;
-    }
-    flushQuote(`${key}-fq`);
-    const bullet = /^[-*]\s+(.+)$/.exec(line);
-    if (bullet) {
-      nodes.push(
-        <span key={key} className="block pl-1.5">
-          <span className="mr-1.5 text-ink-3">•</span>
-          {renderInline(bullet[1], me, key)}
-        </span>,
-      );
-      lastWasBlock = true;
-      return;
-    }
-    // 前一行是引用/列表这类块级元素时不再补换行（否则会多出一个空行）
-    const prevWasBlock =
-      nodes.length > 0 &&
-      typeof nodes[nodes.length - 1] !== 'string' &&
-      lastWasBlock;
-    nodes.push(
-      <Fragment key={key}>
-        {li > 0 && !prevWasBlock ? '\n' : null}
-        {renderInline(line, me, key)}
-      </Fragment>,
-    );
-    lastWasBlock = false;
-  });
-  flushQuote(`${keyBase}-fq-end`);
-  return nodes;
-}
-
-export function renderMarkdown(text: string, me?: string): ReactNode {
-  // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
-  text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
-  // 先切代码块，再对普通段落做行级/行内解析
-  const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
-  return (
-    <>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <pre
-            key={i}
-            className="my-1 overflow-x-auto rounded-md bg-code-bg p-2.5 font-mono text-xs leading-relaxed text-code-ink"
-          >
-            {part.replace(/\n$/, '')}
-          </pre>
-        ) : part ? (
-          <Fragment key={i}>{renderLines(part, me, String(i))}</Fragment>
-        ) : null,
-      )}
-    </>
-  );
-}
-
 /**
- * 文档级 Markdown（用于 .md 文件预览）。
+ * 块级 Markdown。
  *
- * 和聊天里的 renderMarkdown 是两回事：聊天消息不能把「# 号」当标题
- * （谁发一句「#1 修好了」都会变成大字），而文档就该按标题、有序列表、
- * 任务列表、表格完整渲染。
+ * 聊天消息和文档预览共用同一套解析，只是排版尺度不同（variant）：
+ * 聊天里标题不该占满一屏，段落也不该像文档那样上下留白。
+ *
+ * 关于 `#`：标准 Markdown 要求 `#` 后必须跟空格才是标题。
+ * 所以 `#128`（工作项引用）、`#general`（频道）不会被误当成标题 —— 这正是
+ * 敢在聊天里支持标题的原因。
  */
-export function renderMarkdownDoc(text: string): ReactNode {
-  const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
-  return (
-    <>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <pre
-            key={i}
-            className="my-3 overflow-x-auto rounded-md bg-code-bg p-3 font-mono text-xs leading-relaxed text-code-ink"
-          >
-            {part.replace(/\n$/, '')}
-          </pre>
-        ) : part ? (
-          <Fragment key={i}>{renderDocBlocks(part, String(i))}</Fragment>
-        ) : null,
-      )}
-    </>
-  );
+type Variant = 'chat' | 'doc';
+
+const HEADING_CLS: Record<Variant, string[]> = {
+  chat: [
+    'mt-1 mb-0.5 text-[17px] font-semibold',
+    'mt-1 mb-0.5 text-[16px] font-semibold',
+    'mt-1 mb-0.5 text-[15px] font-semibold',
+    'mt-0.5 text-sm font-semibold',
+    'mt-0.5 text-sm font-semibold',
+    'mt-0.5 text-sm font-medium text-ink-2',
+  ],
+  doc: [
+    'mt-4 mb-2 text-2xl font-semibold',
+    'mt-4 mb-2 text-xl font-semibold',
+    'mt-3 mb-1.5 text-lg font-semibold',
+    'mt-3 mb-1.5 text-base font-semibold',
+    'mt-2 mb-1 text-sm font-semibold',
+    'mt-2 mb-1 text-sm font-medium text-ink-2',
+  ],
+};
+
+/** 表格的一行；不是表格就返回 null */
+function splitRow(line: string): string[] | null {
+  const t = line.trim();
+  if (!t.startsWith('|')) return null;
+  return t
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
 }
 
-const HEADING_CLS = [
-  'mt-4 mb-2 text-2xl font-semibold',
-  'mt-4 mb-2 text-xl font-semibold',
-  'mt-3 mb-1.5 text-lg font-semibold',
-  'mt-3 mb-1.5 text-base font-semibold',
-  'mt-2 mb-1 text-sm font-semibold',
-  'mt-2 mb-1 text-sm font-medium text-ink-2',
-];
+const isTableSeparator = (line: string): boolean =>
+  /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
 
-function renderDocBlocks(text: string, keyBase: string): ReactNode[] {
+function renderBlocks(
+  text: string,
+  me: string | undefined,
+  keyBase: string,
+  variant: Variant,
+): ReactNode[] {
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];
-  let para: string[] = [];
+  const chat = variant === 'chat';
 
-  const flushPara = (key: string) => {
-    if (!para.length) return;
-    const content = para.join('\n');
-    para = [];
-    nodes.push(
-      <p key={key} className="my-2 whitespace-pre-wrap">
-        {renderInline(content, undefined, `${key}-p`)}
-      </p>,
-    );
-  };
+  let i = 0;
+  const push = (n: ReactNode) => nodes.push(n);
 
-  lines.forEach((line, li) => {
-    const key = `${keyBase}-d${li}`;
+  while (i < lines.length) {
+    const line = lines[i];
+    const key = `${keyBase}-b${i}`;
 
+    // 标题（# 后必须有空格）
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
-      flushPara(`${key}-fp`);
       const level = heading[1].length;
       const Tag = `h${level}` as 'h1';
-      nodes.push(
-        <Tag key={key} className={HEADING_CLS[level - 1]}>
-          {renderInline(heading[2], undefined, key)}
+      push(
+        <Tag key={key} className={HEADING_CLS[variant][level - 1]}>
+          {renderInline(heading[2], me, key)}
         </Tag>,
       );
-      return;
+      i++;
+      continue;
+    }
+
+    // 分割线
+    if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(line)) {
+      push(<hr key={key} className={chat ? 'my-1.5 border-line' : 'my-4 border-line'} />);
+      i++;
+      continue;
+    }
+
+    // 表格：至少「表头 + 分隔行」两行
+    const header = splitRow(line);
+    if (header && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length) {
+        const cells = splitRow(lines[j]);
+        if (!cells) break;
+        rows.push(cells);
+        j++;
+      }
+      push(
+        <div key={key} className="my-1.5 overflow-x-auto">
+          <table className="min-w-full border-collapse text-left text-[13px]">
+            <thead>
+              <tr>
+                {header.map((h, hi) => (
+                  <th
+                    key={hi}
+                    className="border border-line bg-fill-1 px-2.5 py-1.5 font-medium text-ink"
+                  >
+                    {renderInline(h, me, `${key}-h${hi}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>
+                  {/* 单元格数可能与表头不一致，按表头补齐，别让表格塌掉 */}
+                  {header.map((_, ci) => (
+                    <td key={ci} className="border border-line px-2.5 py-1.5 text-ink-2">
+                      {renderInline(r[ci] ?? '', me, `${key}-r${ri}c${ci}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      i = j;
+      continue;
+    }
+
+    // 引用：连续多行合成一块
+    if (/^>\s?/.test(line)) {
+      const buf: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^>\s?/, ''));
+        i++;
+      }
+      push(
+        <blockquote
+          key={key}
+          className={`border-l-[3px] border-line pl-2.5 text-ink-2 ${chat ? 'my-1' : 'my-1.5'}`}
+        >
+          {renderBlocks(buf.join('\n'), me, `${key}-q`, variant)}
+        </blockquote>,
+      );
+      continue;
     }
 
     // 任务列表要先于普通列表判断，否则 [x] 会被当成正文
-    const task = /^\s*[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
+    const task = /^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
     if (task) {
-      flushPara(`${key}-fp`);
-      const done = task[1].toLowerCase() === 'x';
-      nodes.push(
-        <div key={key} className="flex items-start gap-2 py-0.5 pl-1">
+      const done = task[2].toLowerCase() === 'x';
+      push(
+        <div
+          key={key}
+          className="flex items-start gap-2 py-0.5"
+          style={{ paddingLeft: indentOf(task[1]) }}
+        >
           <input type="checkbox" checked={done} readOnly className="mt-1 accent-primary" />
           <span className={done ? 'text-ink-3 line-through' : ''}>
-            {renderInline(task[2], undefined, key)}
+            {renderInline(task[3], me, key)}
           </span>
         </div>,
       );
-      return;
+      i++;
+      continue;
     }
 
-    const ordered = /^\s*(\d+)\.\s+(.*)$/.exec(line);
+    const ordered = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
     if (ordered) {
-      flushPara(`${key}-fp`);
-      nodes.push(
-        <div key={key} className="flex gap-2 py-0.5 pl-1">
-          <span className="shrink-0 text-ink-3">{ordered[1]}.</span>
-          <span>{renderInline(ordered[2], undefined, key)}</span>
+      push(
+        <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(ordered[1]) }}>
+          <span className="shrink-0 text-ink-3">{ordered[2]}.</span>
+          <span className="min-w-0">{renderInline(ordered[3], me, key)}</span>
         </div>,
       );
-      return;
+      i++;
+      continue;
     }
 
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(line);
     if (bullet) {
-      flushPara(`${key}-fp`);
-      nodes.push(
-        <div key={key} className="flex gap-2 py-0.5 pl-1">
+      push(
+        <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(bullet[1]) }}>
           <span className="shrink-0 text-ink-3">•</span>
-          <span>{renderInline(bullet[1], undefined, key)}</span>
+          <span className="min-w-0">{renderInline(bullet[2], me, key)}</span>
         </div>,
       );
-      return;
+      i++;
+      continue;
     }
 
-    const quote = /^>\s?(.*)$/.exec(line);
-    if (quote) {
-      flushPara(`${key}-fp`);
-      nodes.push(
-        <blockquote key={key} className="my-1.5 border-l-[3px] border-line pl-3 text-ink-2">
-          {renderInline(quote[1], undefined, key)}
-        </blockquote>,
-      );
-      return;
-    }
-
-    if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
-      flushPara(`${key}-fp`);
-      nodes.push(<hr key={key} className="my-4 border-line" />);
-      return;
-    }
-
+    // 普通段落：连续的非空行并成一段，段内换行保留
     if (!line.trim()) {
-      flushPara(`${key}-fp`);
-      return;
+      i++;
+      continue;
     }
+    const para: string[] = [];
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
+      para.push(lines[i]);
+      i++;
+    }
+    push(
+      <p key={key} className={`whitespace-pre-wrap ${chat ? '' : 'my-2'}`}>
+        {renderInline(para.join('\n'), me, `${key}-p`)}
+      </p>,
+    );
+  }
 
-    para.push(line);
-  });
-
-  flushPara(`${keyBase}-fp-end`);
   return nodes;
+}
+
+/** 每层缩进 16px；不做真正的嵌套列表，视觉对齐就够聊天用了 */
+function indentOf(spaces: string): number {
+  return Math.min(Math.floor(spaces.replace(/\t/g, '  ').length / 2), 4) * 16;
+}
+
+/** 这一行是否会开启一个新的块（用来判断段落到哪儿结束） */
+function isBlockStart(line: string): boolean {
+  return (
+    /^#{1,6}\s+/.test(line) ||
+    /^>\s?/.test(line) ||
+    /^\s*[-*+]\s+/.test(line) ||
+    /^\s*\d+[.)]\s+/.test(line) ||
+    /^\s*(---+|\*\*\*+|___+)\s*$/.test(line) ||
+    /^\s*\|/.test(line)
+  );
+}
+
+/** 代码块切分 + 逐段块级渲染（聊天与文档共用） */
+function renderWithCodeFences(
+  text: string,
+  me: string | undefined,
+  variant: Variant,
+): ReactNode {
+  const chat = variant === 'chat';
+  const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <pre
+            key={i}
+            className={`overflow-x-auto rounded-md bg-code-bg font-mono leading-relaxed text-code-ink ${
+              chat ? 'my-1 p-2.5 text-xs' : 'my-3 p-3 text-xs'
+            }`}
+          >
+            {part.replace(/\n$/, '')}
+          </pre>
+        ) : part.trim() ? (
+          <Fragment key={i}>{renderBlocks(part, me, String(i), variant)}</Fragment>
+        ) : null,
+      )}
+    </>
+  );
+}
+
+/** 聊天消息 */
+export function renderMarkdown(text: string, me?: string): ReactNode {
+  // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
+  text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
+  return renderWithCodeFences(text, me, 'chat');
+}
+
+/** 文档预览（.md 文件）：同一套解析，排版更松 */
+export function renderMarkdownDoc(text: string): ReactNode {
+  return renderWithCodeFences(text, undefined, 'doc');
 }
 
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */

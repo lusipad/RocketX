@@ -85,16 +85,24 @@ export async function ensureSiteUrl(): Promise<string> {
   } catch {
     /* 拿不到时回退 */
   }
-  return siteUrlCache ?? getServerBase() ?? location.origin;
+  return siteUrlCache ?? getServerBase() ?? origin();
 }
 
 /** 同步取 Site_Url（init 时已预热缓存） */
 export function siteUrlSync(): string {
-  return siteUrlCache || getServerBase() || location.origin;
+  return siteUrlCache || getServerBase() || origin();
+}
+
+/** 当前页面地址；Node 里（测试脚本 import 到这个模块时）没有 location */
+function origin(): string {
+  return typeof location === 'undefined' ? '' : location.origin;
 }
 
 function wsUrlFor(base: string): string {
   if (base) return `${base.replace(/^http/, 'ws')}/websocket`;
+  // 这个模块在顶层就构造 realtime 客户端，一旦直接用 location，
+  // 任何 Node 侧脚本（测试）import 到它就崩。同源模式下 URL 由调用方在浏览器里补。
+  if (typeof location === 'undefined') return '';
   const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${wsProtocol}://${location.host}/websocket`;
 }

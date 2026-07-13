@@ -326,7 +326,18 @@ export const useChat = create<ChatState>((set, get) => ({
     // 预热 Site_Url 缓存（引用回复的链接前缀需要）
     void ensureSiteUrl();
 
-    const [subs, rooms] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
+    let subs: RcSubscription[];
+    let rooms: RcRoom[];
+    try {
+      [subs, rooms] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
+    } catch (err) {
+      // 这里挂掉的话界面会永远停在「加载会话中…」，连个错都看不到。
+      // 必须说出来，否则用户只能干瞪眼。
+      toast.error(err, '无法加载会话列表');
+      console.error('[rcx] 初始化失败', err);
+      return;
+    }
+
     const subMap: Record<string, RcSubscription> = {};
     for (const s of subs) subMap[s.rid] = s;
     const roomMap: Record<string, RcRoom> = {};
