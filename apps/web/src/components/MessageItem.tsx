@@ -255,7 +255,9 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
   }
   // 文件附件（上传的文件）
   if (att.title_link_download && att.title_link) {
-    return <FileAttachment att={att} name={message.file?.name} size={message.file?.size} />;
+    return (
+      <FileAttachment att={att} name={message.file?.name} size={message.file?.size} />
+    );
   }
   // 富文本卡片（ADO 事件等）
   return (

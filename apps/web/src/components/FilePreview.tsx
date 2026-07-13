@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Download, Loader2, X } from 'lucide-react';
 import { rest } from '../lib/client';
 import { renderMarkdownDoc } from '../lib/markdown';
+import PdfView from './PdfView';
 import { toast } from '../stores/toast';
 import { saveFile } from '../lib/download';
 
@@ -60,8 +61,15 @@ export function canPreview(name: string): boolean {
 }
 
 /**
- * 文件预览：文本/代码/Markdown 直接渲染，PDF 交给浏览器内置阅读器。
- * 站内文件都要带认证取，所以先 fetch 成 blob 再渲染，不能直接把 URL 丢给 <iframe>。
+ * 文件预览：文本 / 代码 / Markdown 渲染，PDF 用 pdf.js 画。
+ *
+ * 两个踩过的坑：
+ * 1. 不能把服务端 URL 直接交给 <iframe>：Rocket.Chat 给文件带的是
+ *    `Content-Disposition: attachment`，浏览器会当成下载，iframe 里只有白屏。
+ *    必须先取到字节。
+ * 2. 取字节只能靠 fetch，而 Rocket.Chat 只给 `/api/v1/*` 开了 CORS，
+ *    `/file-upload/*` 的预检不返回 200 —— 网页版一旦跨域连服务器，fetch 必被拦。
+ *    桌面端走 Rust 通道没有这个限制；网页版需要同源部署（反向代理）。
  */
 export default function FilePreview({
   path,
@@ -79,7 +87,7 @@ export default function FilePreview({
   const isMarkdown = ext === 'md' || ext === 'markdown';
 
   const [text, setText] = useState<string | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -96,7 +104,6 @@ export default function FilePreview({
 
   useEffect(() => {
     let alive = true;
-    let objectUrl: string | null = null;
 
     if (size !== undefined && size > MAX_TEXT_BYTES && !isPdf) {
       setError('文件太大，不适合在线预览，请下载后查看');
@@ -107,20 +114,22 @@ export default function FilePreview({
       .fetchFile(path)
       .then(async (blob) => {
         if (!alive) return;
-        if (isPdf) {
-          objectUrl = URL.createObjectURL(blob);
-          setPdfUrl(objectUrl);
-        } else {
-          setText(await blob.text());
-        }
+        // PDF 交给 pdf.js 自己画（见 PdfView），不依赖 webview 自带的阅读器
+        if (isPdf) setPdfData(await blob.arrayBuffer());
+        else setText(await blob.text());
       })
       .catch((err: unknown) => {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+        if (!alive) return;
+        const raw = err instanceof Error ? err.message : String(err);
+        setError(
+          /failed to fetch|networkerror|load failed/i.test(raw)
+            ? '浏览器拦截了跨域的文件请求 —— Rocket.Chat 只给 /api 开了跨域，文件路径没开。桌面客户端不受此限制；网页版需要把 RocketX 和 Rocket.Chat 部署在同一个域名下（反向代理）。文件本身可以正常下载。'
+            : raw,
+        );
       });
 
     return () => {
       alive = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [path, isPdf, size]);
 
@@ -135,7 +144,7 @@ export default function FilePreview({
     }
   };
 
-  const loading = !text && !pdfUrl && !error;
+  const loading = text === null && !pdfData && !error;
 
   return (
     <div
@@ -186,7 +195,7 @@ export default function FilePreview({
           </div>
         )}
 
-        {pdfUrl && <iframe src={pdfUrl} title={fileName} className="flex-1 border-0" />}
+        {pdfData && <PdfView data={pdfData} />}
 
         {text !== null &&
           (isMarkdown ? (
