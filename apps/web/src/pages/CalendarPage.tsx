@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import {
-  Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -17,11 +16,13 @@ import {
   eventsInRange,
   eventsForDate,
   DAY_NAMES,
+  WEEK_HEADERS,
   type CalendarEvent,
   type CalendarView,
 } from '../stores/calendar';
 import { useTodos, todayKey, isOverdue, type Todo } from '../stores/todos';
 import CalendarEventDialog from '../components/CalendarEventDialog';
+import TimeGrid from '../components/TimeGrid';
 
 const VIEW_LABELS: Record<CalendarView, string> = { month: '月', week: '周', day: '日' };
 
@@ -84,54 +85,110 @@ function unifyForDate(
   return items;
 }
 
-function DayCell({
+/**
+ * 月视图的一个格子。
+ *
+ * 之前叫 DayCell，格子里只画最多 3 个 1.5px 的圆点 —— 一个能放四行标题的格子，
+ * 只用来画三个点，用户想知道今天开什么会必须点进去看右栏。现在直接把标题铺出来。
+ */
+function MonthCell({
   date,
   isCurrentMonth,
   isToday,
   isSelected,
-  eventDots,
-  onClick,
+  events,
+  todos,
+  onSelect,
+  onPick,
+  onCreate,
 }: {
   date: Date;
   isCurrentMonth: boolean;
   isToday: boolean;
   isSelected: boolean;
-  eventDots: { color: string }[];
-  onClick: () => void;
+  events: CalendarEvent[];
+  todos: Todo[];
+  onSelect: () => void;
+  onPick: (e: CalendarEvent) => void;
+  onCreate: () => void;
 }) {
+  // 有时间的排前面（按时间），全天的垫后
+  const sorted = [...events].sort((a, b) => {
+    if (a.allDay !== b.allDay) return a.allDay ? 1 : -1;
+    return (a.startTime ?? '').localeCompare(b.startTime ?? '');
+  });
+  const items: { key: string; color: string; label: string; onClick: () => void }[] = [
+    ...sorted.map((e) => ({
+      key: `e${e.id}`,
+      color: e.color,
+      label: e.allDay ? e.title : `${e.startTime ?? ''} ${e.title}`.trim(),
+      onClick: () => onPick(e),
+    })),
+    ...todos.map((t) => ({
+      key: `t${t.id}`,
+      color: isOverdue(t) ? '#f54a45' : '#3370ff',
+      label: `☑ ${t.note || t.excerpt}`,
+      onClick: onSelect,
+    })),
+  ];
+
+  const MAX = 3;
+
   return (
-    <button
-      onClick={onClick}
-      className={`relative flex h-full min-h-[80px] flex-col items-center p-1 transition border-b border-r border-line ${
-        isCurrentMonth ? '' : 'opacity-40'
-      } ${isSelected ? 'bg-primary/5' : 'hover:bg-fill-hover'}`}
+    <div
+      onClick={onSelect}
+      onDoubleClick={onCreate}
+      className={`group flex min-h-0 cursor-pointer flex-col border-r border-b border-line p-1 transition last:border-r-0 ${
+        isSelected ? 'bg-primary-light/40' : 'hover:bg-fill-hover'
+      } ${isCurrentMonth ? '' : 'bg-fill-1/50'}`}
+      title="双击空白处新建日程"
     >
-      <span
-        className={`flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-          isToday
-            ? 'bg-primary font-bold text-white'
-            : isSelected
-              ? 'font-semibold text-primary'
-              : 'text-ink-2'
-        }`}
-      >
-        {date.getDate()}
-      </span>
-      {eventDots.length > 0 && (
-        <div className="mt-0.5 flex flex-wrap justify-center gap-0.5 px-0.5">
-          {eventDots.slice(0, 3).map((d, i) => (
+      <div className="flex shrink-0 items-center justify-between px-0.5">
+        <span
+          className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${
+            isToday
+              ? 'bg-primary font-medium text-white'
+              : isCurrentMonth
+                ? 'text-ink'
+                : 'text-ink-3'
+          }`}
+        >
+          {date.getDate()}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onCreate();
+          }}
+          className="text-ink-3 opacity-0 transition group-hover:opacity-100 hover:text-primary"
+          title="新建日程"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
+
+      <div className="mt-0.5 min-h-0 flex-1 space-y-0.5 overflow-hidden">
+        {items.slice(0, MAX).map((it) => (
+          <button
+            key={it.key}
+            onClick={(e) => {
+              e.stopPropagation();
+              it.onClick();
+            }}
+            className="flex w-full items-center gap-1 rounded px-1 py-px text-left text-[11px] leading-tight transition hover:bg-fill-active"
+          >
             <span
-              key={i}
-              className="h-1.5 w-1.5 rounded-full"
-              style={{ background: d.color }}
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: it.color }}
             />
-          ))}
-          {eventDots.length > 3 && (
-            <span className="text-[9px] leading-none text-ink-3">+{eventDots.length - 3}</span>
-          )}
-        </div>
-      )}
-    </button>
+            <span className="min-w-0 flex-1 truncate text-ink-2">{it.label}</span>
+          </button>
+        ))}
+        {items.length > MAX && (
+          <div className="px-1 text-[10px] text-ink-3">还有 {items.length - MAX} 项</div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -198,6 +255,8 @@ export default function CalendarPage() {
     mode: 'create' | 'edit';
     event?: CalendarEvent;
     defaultDate?: string;
+    /** 在时间轴上点了 14:00 的空白，新建弹窗就该带着 14:00 打开 */
+    defaultStart?: string;
   } | null>(null);
 
   const today = todayKey();
@@ -305,76 +364,63 @@ export default function CalendarPage() {
         </header>
 
         {/* 日历网格 */}
-        {view !== 'day' ? (
+        {view === 'month' ? (
           <div className="flex flex-1 flex-col overflow-hidden">
-            {/* 星期头 */}
+            {/* 星期头（按周起始日排，国内习惯周一） */}
             <div className="grid grid-cols-7 border-b border-line bg-surface-4">
-              {DAY_NAMES.map((name, i) => (
+              {WEEK_HEADERS.map((name, i) => (
                 <div key={i} className="py-2 text-center text-xs font-medium text-ink-3">
                   {name}
                 </div>
               ))}
             </div>
 
-            {/* 日期格子 */}
+            {/* 日期格子：直接显示日程标题。
+                之前一个 100px 高的格子里只画三个 1.5px 的圆点 —— 月视图的价值就是
+                「扫一眼这个月有什么」，只给点等于没给。 */}
             <div
-              className={`grid flex-1 grid-cols-7 overflow-y-auto ${
-                view === 'month' ? 'grid-rows-6' : 'grid-rows-1'
-              }`}
+              className="grid flex-1 grid-cols-7 overflow-y-auto"
+              style={{ gridTemplateRows: `repeat(${gridDates.length / 7}, minmax(0, 1fr))` }}
             >
               {gridDates.map((d) => {
                 const key = dateKey(d);
                 const dayEvents = eventMap.get(key) ?? [];
-                const dayTodos = todos.filter((t) => t.due === key);
-                const dots = [
-                  ...dayEvents.map((e) => ({ color: e.color })),
-                  ...dayTodos.map((t) => ({
-                    color: isOverdue(t) ? '#f54a45' : t.done ? '#8f959e' : '#3370ff',
-                  })),
-                ];
+                const dayTodos = todos.filter((t) => t.due === key && !t.done);
                 return (
-                  <DayCell
+                  <MonthCell
                     key={key}
                     date={d}
-                    isCurrentMonth={view === 'week' || d.getMonth() === cursorDate.getMonth()}
+                    isCurrentMonth={d.getMonth() === cursorDate.getMonth()}
                     isToday={key === today}
                     isSelected={key === selectedDate}
-                    eventDots={dots}
-                    onClick={() => {
+                    events={dayEvents}
+                    todos={dayTodos}
+                    onSelect={() => {
                       setSelectedDate(key);
-                      if (view === 'month' && d.getMonth() !== cursorDate.getMonth()) {
-                        setCursor(key);
-                      }
+                      if (d.getMonth() !== cursorDate.getMonth()) setCursor(key);
                     }}
+                    onPick={(e) => setDialog({ mode: 'edit', event: e })}
+                    onCreate={() => setDialog({ mode: 'create', defaultDate: key })}
                   />
                 );
               })}
             </div>
           </div>
         ) : (
-          /* 日视图 */
-          <div className="flex-1 overflow-y-auto p-5">
-            <div className="mx-auto max-w-lg">
-              {selectedItems.length === 0 ? (
-                <div className="flex flex-col items-center gap-3 py-20 text-center">
-                  <CalendarIcon size={36} className="text-ink-3" />
-                  <div className="text-sm text-ink-3">这一天没有日程</div>
-                  <button
-                    onClick={() => setDialog({ mode: 'create', defaultDate: cursor })}
-                    className="text-xs text-primary transition hover:underline"
-                  >
-                    添加日程
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {selectedItems.map((item) => (
-                    <EventItem key={item.id} item={item} onClick={() => handleItemClick(item)} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          /* 周 / 日视图：真正的时间轴 */
+          <TimeGrid
+            days={gridDates}
+            events={events}
+            todos={todos}
+            onPick={(e) => setDialog({ mode: 'edit', event: e })}
+            onCreate={(date, hour) =>
+              setDialog({
+                mode: 'create',
+                defaultDate: date,
+                defaultStart: `${String(hour).padStart(2, '0')}:00`,
+              })
+            }
+          />
         )}
       </main>
 
@@ -479,6 +525,7 @@ export default function CalendarPage() {
         <CalendarEventDialog
           existing={dialog.mode === 'edit' ? dialog.event : undefined}
           defaultDate={dialog.defaultDate}
+          defaultStart={dialog.defaultStart}
           onClose={() => setDialog(null)}
         />
       )}

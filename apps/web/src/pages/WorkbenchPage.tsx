@@ -40,9 +40,11 @@ type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
 function QueueRow({
   item,
   onOpenTodo,
+  onOpenCalendar,
 }: {
   item: QueueItem;
   onOpenTodo: (todo: Todo) => void;
+  onOpenCalendar: () => void;
 }) {
   const inner = (
     <>
@@ -77,7 +79,13 @@ function QueueRow({
       {inner}
     </a>
   ) : (
-    <button onClick={() => item.todo && onOpenTodo(item.todo)} className={cls}>
+    <button
+      onClick={() => {
+        if (item.todo) onOpenTodo(item.todo);
+        else if (item.event) onOpenCalendar();
+      }}
+      className={cls}
+    >
       {inner}
     </button>
   );
@@ -261,8 +269,8 @@ export default function WorkbenchPage() {
 
   /** 首页的核心：把待办、工作项、PR、构建合成一条按紧急度排序的队列 */
   const queue = useMemo(
-    () => buildQueue({ todos, workItems, prs, builds, account, today }),
-    [todos, workItems, prs, builds, account, today],
+    () => buildQueue({ todos, workItems, prs, builds, events: calendarEvents, account, today }),
+    [todos, workItems, prs, builds, calendarEvents, account, today],
   );
 
   /** 待办点击：回到它来自的那条消息，上下文才是最重要的 */
@@ -427,7 +435,12 @@ export default function WorkbenchPage() {
             ) : (
               <div className="overflow-hidden rounded-xl border border-line bg-surface-4">
                 {queue.map((item) => (
-                  <QueueRow key={item.key} item={item} onOpenTodo={openTodoSource} />
+                  <QueueRow
+                    key={item.key}
+                    item={item}
+                    onOpenTodo={openTodoSource}
+                    onOpenCalendar={() => setModule('calendar')}
+                  />
                 ))}
               </div>
             )}

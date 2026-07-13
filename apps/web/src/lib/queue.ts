@@ -1,3 +1,4 @@
+import { eventsForDate, type CalendarEvent } from '../stores/calendar';
 import { isOverdue, todayKey, type Todo } from '../stores/todos';
 import { isApproved, matchUser, type Build, type PullRequest, type WorkItem } from '../stores/workbench';
 
@@ -19,7 +20,9 @@ export type QueueKind =
   | 'urgent-workitem'
   | 'approved-pr'
   | 'workitem'
-  | 'todo';
+  | 'todo'
+  /** 今天的日程 */
+  | 'event';
 
 export interface QueueItem {
   key: string;
@@ -37,6 +40,8 @@ export interface QueueItem {
   href?: string;
   /** 待办：点了跳回原消息 */
   todo?: Todo;
+  /** 日程：点了跳到日历 */
+  event?: CalendarEvent;
 }
 
 const DANGER = '#f54a45';
@@ -51,6 +56,8 @@ export interface QueueInput {
   workItems: WorkItem[];
   prs: PullRequest[];
   builds: Build[];
+  /** 今天的日程也是「今天要处理的事」—— 之前它被单独扔在右栏，不进队列 */
+  events: CalendarEvent[];
   /** ADO 账号，用来区分「待我评审」和「我提的」 */
   account: string;
   today?: string;
@@ -60,12 +67,13 @@ export interface QueueInput {
  * 紧急度分档（数字即排序权重）：
  *  0 逾期待办      —— 已经欠账了
  *  1 构建失败      —— 主干红着，谁看见谁管
- *  2 待我评审 PR   —— 别人被我卡着
- *  3 今天到期待办
- *  4 高优工作项    —— P1 且在进行中
- *  5 我提的 PR 已通过评审 —— 可以合了，就差我点一下
- *  6 其他工作项
- *  7 其他待办
+ *  2 今天的日程    —— 有具体时间点，错过就没了
+ *  3 待我评审 PR   —— 别人被我卡着
+ *  4 今天到期待办
+ *  5 高优工作项    —— P1 且在进行中
+ *  6 我提的 PR 已通过评审 —— 可以合了，就差我点一下
+ *  7 其他工作项
+ *  8 其他待办
  */
 export function buildQueue(input: QueueInput): QueueItem[] {
   const today = input.today ?? todayKey();
@@ -89,7 +97,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       items.push({
         key: `todo-${t.id}`,
         kind: 'today-todo',
-        urgency: 3,
+        urgency: 4,
         label: '今天到期',
         title,
         meta: t.roomName,
@@ -100,7 +108,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       items.push({
         key: `todo-${t.id}`,
         kind: 'todo',
-        urgency: 7,
+        urgency: 8,
         label: '待办',
         title,
         meta: t.roomName,
@@ -108,6 +116,24 @@ export function buildQueue(input: QueueInput): QueueItem[] {
         todo: t,
       });
     }
+  }
+
+  // 今天的日程（含重复日程展开）
+  for (const e of eventsForDate(input.events, today)) {
+    items.push({
+      key: `event-${e.id}-${today}`,
+      kind: 'event',
+      urgency: 2,
+      label: e.allDay ? '今天' : (e.startTime ?? '今天'),
+      title: e.title,
+      meta: e.allDay
+        ? '全天'
+        : e.endTime
+          ? `${e.startTime} - ${e.endTime}`
+          : undefined,
+      color: e.color,
+      event: e,
+    });
   }
 
   for (const b of input.builds) {
@@ -132,7 +158,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       items.push({
         key: `pr-${pr.id}`,
         kind: 'review-pr',
-        urgency: 2,
+        urgency: 3,
         label: '待我评审',
         title: pr.title,
         meta: `!${pr.id} · ${pr.repo}`,
@@ -144,7 +170,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       items.push({
         key: `pr-${pr.id}`,
         kind: 'approved-pr',
-        urgency: 5,
+        urgency: 6,
         label: '已通过评审',
         title: pr.title,
         meta: `!${pr.id} · ${pr.repo}`,
@@ -159,7 +185,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
     items.push({
       key: `wi-${w.id}`,
       kind: urgent ? 'urgent-workitem' : 'workitem',
-      urgency: urgent ? 4 : 6,
+      urgency: urgent ? 5 : 7,
       label: urgent ? `${w.type} P1` : w.type,
       title: w.title,
       meta: `#${w.id} · ${w.state}`,

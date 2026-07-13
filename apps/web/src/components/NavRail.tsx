@@ -64,10 +64,18 @@ export default function NavRail() {
   }, [todos]);
 
   const calendarEvents = useCalendar((s) => s.events);
-  const todayEventCount = useMemo(
-    () => eventsForDate(calendarEvents, todayKey()).length,
-    [calendarEvents],
-  );
+  /**
+   * 日历角标 = 今天的日程 + 今天到期的待办。
+   * 之前只数日程，而日历页面里明明把「今天到期的待办」也一起展示了 ——
+   * 于是会出现「角标不显示，点进日历今天躺着 3 条待办」。同一件事三处口径不能不一样。
+   */
+  const todayEventCount = useMemo(() => {
+    const today = todayKey();
+    return (
+      eventsForDate(calendarEvents, today).length +
+      todos.filter((t) => !t.done && t.due === today).length
+    );
+  }, [calendarEvents, todos]);
 
   // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
   const { unreadTotal, hasAlert } = useMemo(() => {

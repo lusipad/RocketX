@@ -15,22 +15,23 @@ const COLORS = [
   '#14b8a6', '#f472b6', '#8b5cf6', '#06b6d4', '#84cc16',
 ];
 
-const REMINDER_OPTIONS = [
-  { value: 0, label: '事件开始时' },
-  { value: 5, label: '5 分钟前' },
-  { value: 15, label: '15 分钟前' },
-  { value: 30, label: '30 分钟前' },
-  { value: 60, label: '1 小时前' },
-  { value: 1440, label: '1 天前' },
-];
+
+/** '14:00' → '15:00' */
+function plusHour(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${String((h + 1) % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 
 export default function CalendarEventDialog({
   existing,
   defaultDate,
+  defaultStart,
   onClose,
 }: {
   existing?: CalendarEvent;
   defaultDate?: string;
+  /** 在时间轴上点某个小时新建时带进来（如 '14:00'） */
+  defaultStart?: string;
   onClose: () => void;
 }) {
   const add = useCalendar((s) => s.add);
@@ -40,11 +41,15 @@ export default function CalendarEventDialog({
   const [title, setTitle] = useState(existing?.title ?? '');
   const [desc, setDesc] = useState(existing?.description ?? '');
   const [date, setDate] = useState(existing?.date ?? defaultDate ?? '');
-  const [startTime, setStartTime] = useState(existing?.startTime ?? '');
-  const [endTime, setEndTime] = useState(existing?.endTime ?? '');
-  const [allDay, setAllDay] = useState(existing?.allDay ?? true);
+  const [startTime, setStartTime] = useState(existing?.startTime ?? defaultStart ?? '');
+  // 从时间轴点进来时默认排一小时，省得每次都填结束时间
+  const [endTime, setEndTime] = useState(
+    existing?.endTime ?? (defaultStart ? plusHour(defaultStart) : ''),
+  );
+  // 日历里绝大多数日程是有时间的（会议、1v1），全天事件（生日、假期）是少数。
+  // 默认全天等于逼每个人都多点一下。
+  const [allDay, setAllDay] = useState(existing?.allDay ?? false);
   const [color, setColor] = useState(existing?.color ?? randomColor());
-  const [reminder, setReminder] = useState<number | undefined>(existing?.reminder);
   const [repeatEnabled, setRepeatEnabled] = useState(!!existing?.repeat);
   const [repeatType, setRepeatType] = useState<RepeatRule['type']>(existing?.repeat?.type ?? 'weekly');
   const [repeatInterval, setRepeatInterval] = useState(existing?.repeat?.interval ?? 1);
@@ -54,7 +59,14 @@ export default function CalendarEventDialog({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const isEdit = !!existing;
-  const canSave = title.trim() && date;
+  /**
+   * 保存校验。
+   * 之前只查了「标题和日期非空」，于是：取消全天却不填时间照样存（排序时被当成全天事件），
+   * 选了「自定义重复」却一个星期几都不勾也照样存（保存成功、提示已创建、实际不重复）。
+   */
+  const timeInvalid = !allDay && (!startTime || (!!endTime && endTime <= startTime));
+  const repeatInvalid = repeatEnabled && repeatType === 'custom' && repeatWeekdays.length === 0;
+  const canSave = !!title.trim() && !!date && !timeInvalid && !repeatInvalid;
 
   const handleSave = () => {
     if (!canSave) return;
@@ -77,9 +89,7 @@ export default function CalendarEventDialog({
       allDay,
       color,
       repeat,
-      reminder,
-      source: existing?.source ?? 'manual' as const,
-      sourceId: existing?.sourceId,
+      source: 'manual' as const,
     };
 
     if (isEdit) {
@@ -201,21 +211,6 @@ export default function CalendarEventDialog({
               rows={2}
               className="w-full rounded-md border border-line bg-surface-3 px-3 py-2 text-sm text-ink outline-none transition focus:border-primary resize-none"
             />
-          </div>
-
-          {/* 提醒 */}
-          <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">提醒</label>
-            <select
-              value={reminder ?? ''}
-              onChange={(e) => setReminder(e.target.value ? Number(e.target.value) : undefined)}
-              className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none transition focus:border-primary"
-            >
-              <option value="">不提醒</option>
-              {REMINDER_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
           </div>
 
           {/* 重复 */}

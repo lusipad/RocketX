@@ -244,6 +244,18 @@ async function main(): Promise<void> {
     webUrl: `http://ado/build/${id}`,
   });
 
+  const calEvent = {
+    id: 'c1',
+    title: '产品评审会',
+    date: today,
+    startTime: '14:00',
+    endTime: '15:30',
+    allDay: false,
+    color: '#00b96b',
+    source: 'manual',
+    createdAt: 0,
+  } as any;
+
   const q = buildQueue({
     account: me,
     today,
@@ -251,15 +263,22 @@ async function main(): Promise<void> {
     workItems: [wi(1), wi(2, 1)],
     prs: [prs[0], prs[1], prs[4]], // 待我评审 / 我提的已通过 / 与我无关
     builds: [bld(1, 'succeeded'), bld(2, 'failed')],
+    events: [calEvent, { ...calEvent, id: 'c2', date: yesterday }], // 昨天那条不该出现
   });
   const kinds = q.map((i) => i.kind);
 
   check(
-    '排序：逾期 → 构建失败 → 待我评审 → 今天到期 → P1工作项 → 已通过PR → 工作项 → 待办',
+    '排序：逾期 → 构建失败 → 今天日程 → 待我评审 → 今天到期 → P1工作项 → 已通过PR → 工作项 → 待办',
     kinds.join(' ') ===
-      'overdue-todo failed-build review-pr today-todo urgent-workitem approved-pr workitem todo',
+      'overdue-todo failed-build event review-pr today-todo urgent-workitem approved-pr workitem todo',
     kinds.join(' '),
   );
+  check(
+    '今天的日程进队列，且带上时间',
+    q.find((i) => i.kind === 'event')?.label === '14:00',
+    q.find((i) => i.kind === 'event')?.label ?? '（没有日程）',
+  );
+  check('非今天的日程不进队列', q.filter((i) => i.kind === 'event').length === 1);
   check('已完成的待办不进队列', !q.some((i) => i.key === 'todo-done'));
   check('成功的构建不进队列', !q.some((i) => i.key === 'build-P-1'));
   check('与我无关的 PR 不进队列', !q.some((i) => i.key === 'pr-5'));
@@ -344,6 +363,113 @@ async function main(): Promise<void> {
     '收藏优先于一切分区',
     sectionOf(conv({ type: 'd', isMultiDM: true, favorite: true })) === 'favorites',
   );
+
+  console.log('\n[日历 · 重复日程]');
+  const cal = await import('../apps/web/src/stores/calendar');
+  const { eventsForDate, monthGrid, weekDays, dateKey } = cal;
+
+  const ev = (date: string, repeat?: any) =>
+    ({
+      id: 'e',
+      title: 't',
+      date,
+      allDay: true,
+      color: '#000',
+      repeat,
+      source: 'manual',
+      createdAt: 0,
+    }) as any;
+
+  /** 从 start 开始的 n 天里，事件命中了哪些日期 */
+  const hits = (event: any, start: string, n: number) => {
+    const out: string[] = [];
+    const d = new Date(`${start}T00:00:00`);
+    for (let i = 0; i < n; i++) {
+      const k = dateKey(d);
+      if (eventsForDate([event], k).length) out.push(k);
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  };
+
+  // 「工作日重复，共 3 次」—— 之前 endAfter 对 weekday 完全失效，会无限重复
+  const wd = hits(
+    ev('2026-07-13', { type: 'weekday', interval: 1, endAfter: 3 }), // 周一
+    '2026-07-13',
+    14,
+  );
+  check(
+    '工作日重复 + 共 3 次 → 只发生 3 次（之前无限重复）',
+    wd.join(',') === '2026-07-13,2026-07-14,2026-07-15',
+    wd.join(',') || '（一次都没有）',
+  );
+
+  // 工作日重复：周末不出现，且原始日期若是周末也不该冒出来
+  const wdSat = hits(ev('2026-07-18', { type: 'weekday', interval: 1 }), '2026-07-18', 5); // 周六
+  check(
+    '周六创建的工作日重复：那个周六不该显示',
+    !wdSat.includes('2026-07-18'),
+    wdSat.join(','),
+  );
+
+  // 每月 31 号：之前 2/4/6/9/11 月整月消失
+  const m31 = hits(ev('2026-01-31', { type: 'monthly', interval: 1 }), '2026-02-01', 90);
+  check(
+    '每月 31 号：2 月回退到 2/28，不再整月消失',
+    m31.includes('2026-02-28'),
+    m31.slice(0, 4).join(','),
+  );
+  check('每月 31 号：4 月回退到 4/30', m31.includes('2026-04-30'), m31.join(','));
+
+  // 「每月 31 号，共 3 次」—— 之前次数按月份差算，用户要 3 次只拿到 2 次
+  const m31n = hits(
+    ev('2026-01-31', { type: 'monthly', interval: 1, endAfter: 3 }),
+    '2026-01-31',
+    120,
+  );
+  check(
+    '每月 31 号 + 共 3 次 → 真的发生 3 次',
+    m31n.length === 3,
+    `${m31n.length} 次：${m31n.join(',')}`,
+  );
+
+  // 闰日：2/29 每年重复，平年回退到 2/28
+  const leap = hits(ev('2024-02-29', { type: 'yearly', interval: 1 }), '2025-02-20', 10);
+  check('2/29 每年重复：平年回退到 2/28（之前要等 4 年）', leap.includes('2025-02-28'), leap.join(','));
+
+  // 自定义：每 2 周的周一和周五，从周三创建
+  // 之前用 floor(diffDays/7) 锚定原始日期，会把「周五」和「下周一」算成同一期
+  const custom = hits(
+    ev('2026-07-15', { type: 'custom', interval: 2, weekdays: [1, 5] }), // 周三
+    '2026-07-15',
+    21,
+  );
+  check(
+    '每 2 周的周一/周五：同一期的周一周五在同一个自然周里',
+    custom.includes('2026-07-17') && !custom.includes('2026-07-20'),
+    custom.join(','),
+  );
+  check(
+    '每 2 周：跳过的那一周不出现，隔周才回来',
+    !custom.includes('2026-07-24') && custom.includes('2026-07-27'),
+    custom.join(','),
+  );
+
+  // 自定义但一个星期几都没选 → 不重复（保存时会拦，这里兜底）
+  const noWd = hits(ev('2026-07-15', { type: 'custom', interval: 1, weekdays: [] }), '2026-07-15', 10);
+  check('自定义重复但没选星期几 → 不重复', noWd.length === 0, noWd.join(','));
+
+  console.log('\n[日历 · 网格]');
+  const grid = monthGrid(2026, 6); // 2026 年 7 月
+  check('周一起始：月视图第一格是周一', grid[0].getDay() === 1, `getDay=${grid[0].getDay()}`);
+  check(
+    '月视图行数按需（不再恒定 6 行 42 格）',
+    grid.length % 7 === 0 && grid.length <= 42,
+    `${grid.length} 格 = ${grid.length / 7} 行`,
+  );
+  check('月视图包含当月每一天', grid.some((d) => dateKey(d) === '2026-07-31'));
+  const wk = weekDays(new Date(2026, 6, 15)); // 周三
+  check('周视图从周一开始', wk[0].getDay() === 1 && dateKey(wk[0]) === '2026-07-13', dateKey(wk[0]));
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
