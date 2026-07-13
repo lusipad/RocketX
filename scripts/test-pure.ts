@@ -613,6 +613,10 @@ async function main(): Promise<void> {
       .join(','),
   );
   check('空前缀返回全部', filterCommands(CMDS, '').length === 4);
+  // 之前砍到前 8 条：打一个 / 只能看见 27 个命令里的 8 个，剩下的既翻不到也不知道存在
+  const many = Array.from({ length: 27 }, (_, i) => ({ command: `cmd${i}` }));
+  check('27 个命令一个都不能少（不再截断到 8 条）', filterCommands(many, '').length === 27);
+  check('按名字排序，方便扫', filterCommands(CMDS, '')[0].command === 'kick');
 
   // RC 返回的 description 多半是 i18n 键名（27 个命令里 24 个是），
   // 直接显示就是把 `Slash_Shrug_Description` 糊到用户脸上

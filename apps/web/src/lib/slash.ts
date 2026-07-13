@@ -109,20 +109,20 @@ export function slashPrefix(textBeforeCursor: string): string | null {
   return m ? m[1] : null;
 }
 
-/** 按前缀筛命令，前缀完全匹配开头的排在前面 */
-export function filterCommands(
-  commands: RcSlashCommand[],
-  prefix: string,
-  limit = 8,
-): RcSlashCommand[] {
+/**
+ * 按前缀筛命令，前缀完全匹配开头的排在前面。
+ *
+ * 不截断：以前砍到前 8 条，打一个 `/` 只能看到 27 个命令里的 8 个，剩下的既翻不到
+ * 也不知道存在。要显示不下是面板该滚动的事，不是这里该把数据丢掉。
+ */
+export function filterCommands(commands: RcSlashCommand[], prefix: string): RcSlashCommand[] {
   const q = prefix.toLowerCase();
-  if (!q) return commands.slice(0, limit);
+  if (!q) return [...commands].sort((a, b) => a.command.localeCompare(b.command));
   return commands
     .filter((c) => c.command.toLowerCase().includes(q))
     .sort((a, b) => {
       const as = a.command.toLowerCase().startsWith(q) ? 0 : 1;
       const bs = b.command.toLowerCase().startsWith(q) ? 0 : 1;
       return as - bs || a.command.localeCompare(b.command);
-    })
-    .slice(0, limit);
+    });
 }

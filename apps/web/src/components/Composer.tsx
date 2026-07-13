@@ -51,6 +51,7 @@ export default function Composer() {
   /** 光标停在命令名上时的前缀（'' 表示刚打了个 /）；null 表示不在命令补全状态 */
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  const slashListRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,6 +99,15 @@ export default function Composer() {
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
     [slashQuery, slashCommands],
   );
+
+  // 面板会滚动，选中项必须跟着滚进可视区，否则按方向键翻到第 9 条以后就看不见高亮了
+  useEffect(() => {
+    const list = slashListRef.current;
+    if (!list) return;
+    list
+      .querySelector(`[data-slash-index="${slashIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [slashIndex, slashQuery]);
 
   const refreshMention = (value: string, cursor: number) => {
     const before = value.slice(0, cursor);
@@ -285,9 +295,12 @@ export default function Composer() {
 
   return (
     <div className="relative shrink-0 border-t border-line px-4 pt-2 pb-3">
-      {/* 斜杠命令补全弹层 */}
+      {/* 斜杠命令补全弹层：命令有 27 个，装不下就滚，别把数据砍掉 */}
       {slashQuery !== null && slashCandidates.length > 0 && (
-        <div className="absolute bottom-full left-4 z-30 mb-1 w-80 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+        <div
+          ref={slashListRef}
+          className="absolute bottom-full left-4 z-30 mb-1 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]"
+        >
           {slashCandidates.map((c, i) => {
             // 服务器给的是 i18n 键名（Slash_Shrug_Description），得翻成人话
             const desc = commandDesc(c);
@@ -295,6 +308,7 @@ export default function Composer() {
             return (
               <button
                 key={c.command}
+                data-slash-index={i}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   insertCommand(c.command);
