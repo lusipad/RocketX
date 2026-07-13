@@ -902,6 +902,16 @@ function AboutSection() {
 export default function SettingsPage() {
   const [section, setSection] = useState<Section>('account');
   const loaded = usePrefs((s) => s.loaded);
+  const prefsError = usePrefs((s) => s.error);
+  const loadPrefs = usePrefs((s) => s.load);
+
+  // 自己负责把偏好拉起来，不指望 MainPage 挂载时那一次。
+  // load() 内部有「已加载就直接返回」和「同一时刻只发一个请求」的保护，重复调用不会多打请求。
+  useEffect(() => {
+    void loadPrefs();
+  }, [loadPrefs]);
+
+  const needsPrefs = ['sidebar', 'message', 'notification'].includes(section);
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -925,13 +935,28 @@ export default function SettingsPage() {
           <h1 className="mb-1 text-lg font-semibold text-ink">
             {SECTIONS.find((s) => s.key === section)?.label}
           </h1>
-          {['sidebar', 'message', 'notification'].includes(section) && (
+          {needsPrefs && (
             <div className="mb-3 text-xs text-ink-3">
               这些设置保存在 Rocket.Chat 服务器，登录任意设备都会生效
             </div>
           )}
-          {!loaded && ['sidebar', 'message', 'notification'].includes(section) ? (
-            <div className="py-10 text-center text-sm text-ink-3">加载设置中…</div>
+          {needsPrefs && prefsError ? (
+            // 拉失败要说人话并给重试，不能挂着「加载中…」装死
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <XCircle size={22} className="text-danger" />
+              <div className="max-w-sm text-sm break-words text-ink-2">{prefsError}</div>
+              <button
+                onClick={() => void loadPrefs()}
+                className="h-8 rounded-md border border-line px-4 text-sm text-ink transition hover:bg-fill-hover"
+              >
+                重试
+              </button>
+            </div>
+          ) : needsPrefs && !loaded ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-3">
+              <Loader2 size={14} className="animate-spin" />
+              加载设置中…
+            </div>
           ) : (
             <>
               {section === 'account' && <AccountSection />}

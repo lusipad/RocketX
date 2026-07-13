@@ -1,12 +1,23 @@
 import { create } from 'zustand';
 import type { RcPreferences } from '@rcx/rc-client';
 import { rest } from '../lib/client';
-import { toast } from './toast';
+import { humanError, toast } from './toast';
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('请求超时，服务器没有响应')), ms),
+    ),
+  ]);
+}
 
 /** RC 用户偏好：服务端持久化，跨设备同步 */
 interface PrefsState {
   prefs: ResolvedPrefs;
   loaded: boolean;
+  /** 拉取失败的原因。有值时设置页显示「重试」而不是永远转圈 */
+  error: string | null;
   load: () => Promise<void>;
   /** 乐观更新 + 同步到服务端 */
   update: (patch: Partial<RcPreferences>) => Promise<void>;
@@ -50,9 +61,13 @@ const DEFAULTS = {
   idleTimeLimit: 300,
 } satisfies Partial<RcPreferences>;
 
+/** 正在飞的那次请求。并发调用共用它，不会打出多份 users.info */
+let inflight: Promise<void> | null = null;
+
 export const usePrefs = create<PrefsState>((set, get) => ({
   prefs: DEFAULTS,
   loaded: false,
+  error: null,
 
   /**
    * 只有「用户真的改过」的偏好才覆盖我们的默认值。
@@ -63,14 +78,29 @@ export const usePrefs = create<PrefsState>((set, get) => ({
    * 我们改成 false 完全不起作用。
    *
    * `users.info` 里的 settings.preferences 才是用户显式保存过的那些键。
+   *
+   * 这个函数必须能被反复调用：设置页在 `loaded` 为 false 时会自己触发它，
+   * 而不是干等 MainPage 那一次挂载。之前就是「只在挂载时调一次」，
+   * 一旦那次没落到界面读的这个 store 实例上，设置页就永远停在「加载设置中…」，
+   * 既不报错也不重试。
    */
   load: async () => {
-    try {
-      const explicit = await rest.getExplicitPreferences();
-      set({ prefs: { ...DEFAULTS, ...explicit }, loaded: true });
-    } catch {
-      set({ loaded: true });
-    }
+    if (get().loaded && !get().error) return;
+    if (inflight) return inflight;
+
+    inflight = (async () => {
+      set({ error: null });
+      try {
+        // 服务器不响应时不能无限转圈——超时后给出可见的错误和重试入口
+        const explicit = await withTimeout(rest.getExplicitPreferences(), 8000);
+        set({ prefs: { ...DEFAULTS, ...explicit }, loaded: true, error: null });
+      } catch (err) {
+        set({ error: humanError(err, '无法加载偏好设置') });
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
   },
 
   update: async (patch) => {
