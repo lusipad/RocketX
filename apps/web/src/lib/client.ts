@@ -110,6 +110,39 @@ export const httpFetch: typeof fetch = isTauri
   ? tauriFetch
   : (((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)) as typeof fetch);
 
+/**
+ * 打开外部链接。桌面端 webview 不支持 target="_blank"，
+ * 必须经 opener 插件交给系统默认浏览器。
+ */
+export async function openExternal(url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (isTauri) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+/**
+ * 全局拦截 <a> 点击：桌面端一律走系统浏览器。
+ * 挂一次即可覆盖所有链接（消息正文、卡片、预览…）。
+ */
+export function installLinkInterceptor(): void {
+  if (!isTauri) return;
+  document.addEventListener(
+    'click',
+    (e) => {
+      const anchor = (e.target as HTMLElement | null)?.closest?.('a');
+      const href = anchor?.getAttribute('href');
+      if (!href || !/^https?:\/\//i.test(href)) return;
+      e.preventDefault();
+      void openExternal(href);
+    },
+    true,
+  );
+}
+
 // 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
 export const rest = new RcRestClient({
   baseUrl: getServerBase(),

@@ -47,20 +47,33 @@ function fmtSize(bytes?: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 图片附件：认证加载 + 点击灯箱放大 */
-function ImageAttachment({ path, name }: { path: string; name: string }) {
+/**
+ * 图片附件：列表里显示缩略图（image_url），点击后灯箱加载原图（title_link）。
+ * Rocket.Chat 会为大图生成独立 fileId 的缩略图，两者 URL 不同。
+ */
+function ImageAttachment({
+  thumbPath,
+  fullPath,
+  name,
+}: {
+  thumbPath: string;
+  fullPath: string;
+  name: string;
+}) {
   const [lightbox, setLightbox] = useState(false);
   return (
     <>
       <button onClick={() => setLightbox(true)} className="mt-1.5 block cursor-zoom-in">
         <AuthImage
-          path={path}
+          path={thumbPath}
           alt={name}
           className="max-h-64 max-w-[320px] rounded-lg object-contain"
           fallback={<span className="text-xs text-ink-3">[图片加载失败：{name}]</span>}
         />
       </button>
-      {lightbox && <ImageLightbox path={path} fileName={name} onClose={() => setLightbox(false)} />}
+      {lightbox && (
+        <ImageLightbox path={fullPath} fileName={name} onClose={() => setLightbox(false)} />
+      )}
     </>
   );
 }
@@ -68,13 +81,16 @@ function ImageAttachment({ path, name }: { path: string; name: string }) {
 /** 文件附件卡片：图标 + 文件名 + 大小 + 下载（带认证） */
 function FileAttachment({
   att,
+  name: fileName,
   size,
 }: {
   att: RcMessageAttachment;
+  name?: string;
   size?: number;
 }) {
   const [busy, setBusy] = useState(false);
-  const name = att.title ?? '文件';
+  // 优先用 file.name（原始文件名），attachment.title 在旧数据里可能是编码过的
+  const name = fileName ?? att.title ?? '文件';
   const path = att.title_link ?? '';
   return (
     <button
@@ -146,13 +162,20 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
   if (att.message_link) {
     return <QuoteCard att={att} />;
   }
-  // 图片附件（上传的图片）
+  // 图片附件（上传的图片）：缩略图给列表，原图给灯箱
   if (att.image_url) {
-    return <ImageAttachment path={att.image_url} name={att.title ?? message.file?.name ?? '图片'} />;
+    const name = message.file?.name ?? att.title ?? '图片';
+    return (
+      <ImageAttachment
+        thumbPath={att.image_url}
+        fullPath={att.title_link ?? att.image_url}
+        name={name}
+      />
+    );
   }
   // 文件附件（上传的文件）
   if (att.title_link_download && att.title_link) {
-    return <FileAttachment att={att} size={message.file?.size} />;
+    return <FileAttachment att={att} name={message.file?.name} size={message.file?.size} />;
   }
   // 富文本卡片（ADO 事件等）
   return (

@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import {
   BookUser,
   Calendar,
-  Download,
   FileText,
   LayoutGrid,
   LogOut,
@@ -10,6 +9,7 @@ import {
   MessageCirclePlus,
   Plus,
   Search,
+  Settings,
   UsersRound,
   Video,
 } from 'lucide-react';
@@ -145,11 +145,15 @@ export default function NavRail() {
       {/* 底部 */}
       <div className="flex flex-col gap-0.5 border-t border-dark-line pt-2">
         <button
-          className="flex h-8 cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-dark-ink-3"
-          title="桌面客户端（M4 规划中）"
+          onClick={() => setModule('settings')}
+          className={`flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition ${
+            active === 'settings'
+              ? 'bg-dark-active font-medium text-white'
+              : 'text-dark-ink-2 hover:bg-dark-hover hover:text-dark-ink'
+          }`}
         >
-          <Download size={15} />
-          下载桌面客户端
+          <Settings size={15} />
+          设置
         </button>
         <button
           onClick={() => void logout()}

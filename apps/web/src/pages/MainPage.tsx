@@ -10,6 +10,7 @@ import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
 import ContactsPage from './ContactsPage';
 import WorkbenchPage from './WorkbenchPage';
+import SettingsPage from './SettingsPage';
 
 export default function MainPage() {
   const init = useChat((s) => s.init);
@@ -64,6 +65,8 @@ export default function MainPage() {
         <ContactsPage />
       ) : module === 'workbench' ? (
         <WorkbenchPage />
+      ) : module === 'settings' ? (
+        <SettingsPage />
       ) : (
         <ModulePlaceholder module={module} />
       )}

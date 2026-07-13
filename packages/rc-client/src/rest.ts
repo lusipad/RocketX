@@ -192,6 +192,54 @@ export class RcRestClient {
     return { result: res.result ?? [], total: res.total ?? 0 };
   }
 
+  /** 用户列表（需要 view-outside-room 权限，作为 directory 的回退） */
+  async listUsers(count = 100): Promise<{ users: RcUser[]; total: number }> {
+    const res = await this.request<{ users: RcUser[]; total: number }>(
+      'GET',
+      'users.list',
+      undefined,
+      { count },
+    );
+    return { users: res.users ?? [], total: res.total ?? 0 };
+  }
+
+  /**
+   * 成员目录：directory → users.list → spotlight 三级回退。
+   * 不同服务器/权限配置下总能拿到可用的成员列表。
+   */
+  async searchUsers(text = '', count = 100): Promise<{ users: RcUser[]; total: number; via: string }> {
+    const errors: string[] = [];
+    try {
+      const { result, total } = await this.directory('users', text, count);
+      if (result.length > 0) return { users: result as RcUser[], total, via: 'directory' };
+      errors.push('directory 返回空');
+    } catch (err) {
+      errors.push(`directory: ${err instanceof Error ? err.message : err}`);
+    }
+    try {
+      const { users, total } = await this.listUsers(count);
+      const filtered = text
+        ? users.filter(
+            (u) =>
+              u.username?.toLowerCase().includes(text.toLowerCase()) ||
+              (u.name ?? '').toLowerCase().includes(text.toLowerCase()),
+          )
+        : users;
+      if (filtered.length > 0) return { users: filtered, total: total || filtered.length, via: 'users.list' };
+      errors.push('users.list 返回空');
+    } catch (err) {
+      errors.push(`users.list: ${err instanceof Error ? err.message : err}`);
+    }
+    try {
+      const { users } = await this.spotlight(text);
+      if (users.length > 0) return { users, total: users.length, via: 'spotlight' };
+      errors.push('spotlight 返回空');
+    } catch (err) {
+      errors.push(`spotlight: ${err instanceof Error ? err.message : err}`);
+    }
+    throw new Error(errors.join('；'));
+  }
+
   // ---- 消息 ----
 
   async getHistory(rid: string, type: RoomType, count = 50, latest?: string): Promise<RcMessage[]> {

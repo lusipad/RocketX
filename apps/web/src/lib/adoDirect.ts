@@ -15,6 +15,14 @@ function base(cfg: DirectConfig): string {
   return cfg.adoBase.replace(/\/+$/, '');
 }
 
+/** PAT 里可能有非 ASCII 字符，btoa 只吃 latin1 —— 先按 UTF-8 编码 */
+function basicAuth(pat: string): string {
+  const bytes = new TextEncoder().encode(`:${pat}`);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return `Basic ${btoa(binary)}`;
+}
+
 async function adoRequest<T>(
   cfg: DirectConfig,
   method: 'GET' | 'POST' | 'PATCH',
@@ -22,19 +30,60 @@ async function adoRequest<T>(
   body?: unknown,
   contentType = 'application/json',
 ): Promise<T> {
-  const res = await httpFetch(`${base(cfg)}${path}`, {
-    method,
-    headers: {
-      'Content-Type': contentType,
-      Authorization: `Basic ${btoa(`:${cfg.pat}`)}`,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const url = `${base(cfg)}${path}`;
+  let res: Response;
+  try {
+    res = await httpFetch(url, {
+      method,
+      headers: {
+        'Content-Type': contentType,
+        Accept: 'application/json',
+        Authorization: basicAuth(cfg.pat),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      /fetch|network|load failed/i.test(raw)
+        ? `无法连接 ${base(cfg)}（网页端受浏览器跨域限制，请用桌面客户端或改用 ado-bridge 模式）`
+        : raw,
+    );
+  }
+  if (res.status === 401 || res.status === 203) {
+    // ADO 认证失败常返回 203 + 登录页 HTML
+    throw new Error('认证失败：请检查 PAT 是否正确、是否过期、是否有读取权限');
+  }
+  if (res.status === 404) {
+    throw new Error(`地址不对：${url} 返回 404（集合地址通常形如 http://host:8080/tfs/DefaultCollection）`);
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`ADO ${res.status}: ${text.slice(0, 160) || path}`);
+    throw new Error(`ADO 返回 ${res.status}：${text.slice(0, 160) || path}`);
   }
-  return (await res.json()) as T;
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // 认证失败时 ADO 会返回 HTML 登录页而非 JSON
+    throw new Error(
+      text.trimStart().startsWith('<')
+        ? '返回了 HTML 而非 JSON：多半是 PAT 无效或地址指向了网页入口而非 API'
+        : '响应解析失败',
+    );
+  }
+}
+
+/** 连接测试：返回可用的项目数量 */
+export async function directTestConnection(cfg: DirectConfig): Promise<string> {
+  const res = await adoRequest<{ count?: number; value: { name: string }[] }>(
+    cfg,
+    'GET',
+    '/_apis/projects?api-version=7.0&$top=5',
+  );
+  const names = (res.value ?? []).map((p) => p.name);
+  if (names.length === 0) throw new Error('连接成功但没有可见的项目（检查 PAT 权限范围）');
+  return `连接成功，可见 ${res.count ?? names.length} 个项目：${names.slice(0, 3).join('、')}`;
 }
 
 const WI_FIELDS = [

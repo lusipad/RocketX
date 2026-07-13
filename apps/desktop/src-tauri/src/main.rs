@@ -6,6 +6,8 @@ fn main() {
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
         .plugin(tauri_plugin_http::init())
+        // 外部链接用系统默认浏览器打开（webview 里 target="_blank" 无效）
+        .plugin(tauri_plugin_opener::init())
         .run(tauri::generate_context!())
         .expect("error while running RocketX");
 }

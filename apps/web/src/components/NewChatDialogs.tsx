@@ -6,7 +6,11 @@ import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
 
-/** 用户搜索（spotlight，300ms 防抖），排除自己 */
+/**
+ * 用户搜索（300ms 防抖），排除自己。
+ * 走 searchUsers 三级回退：spotlight 在部分服务器上对空关键词返回空，
+ * 而发起会话时需要「不输入也能看到人」。
+ */
 export function useUserSearch(keyword: string): RcUser[] {
   const [users, setUsers] = useState<RcUser[]>([]);
   const me = useAuth((s) => s.user?.username);
@@ -16,8 +20,8 @@ export function useUserSearch(keyword: string): RcUser[] {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       rest
-        .spotlight(keyword)
-        .then((r) => setUsers((r.users ?? []).filter((u) => u.username !== me)))
+        .searchUsers(keyword, 30)
+        .then((r) => setUsers(r.users.filter((u) => u.username !== me)))
         .catch(() => setUsers([]));
     }, 300);
     return () => {

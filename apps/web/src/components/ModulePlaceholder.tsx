@@ -1,10 +1,13 @@
-import { Calendar, FileText, LayoutGrid, Video } from 'lucide-react';
+import { Calendar, FileText, Video } from 'lucide-react';
 import type { ModuleKey } from '../stores/ui';
 
-const META: Record<
-  Exclude<ModuleKey, 'messages' | 'contacts'>,
-  { icon: typeof Calendar; title: string; desc: string }
-> = {
+/** 仅用于尚未实现的模块（messages/contacts/workbench/settings 有各自页面） */
+export type PlaceholderModule = Exclude<
+  ModuleKey,
+  'messages' | 'contacts' | 'workbench' | 'settings'
+>;
+
+const META: Record<PlaceholderModule, { icon: typeof Calendar; title: string; desc: string }> = {
   calendar: {
     icon: Calendar,
     title: '日历',
@@ -20,18 +23,9 @@ const META: Record<
     title: '视频会议',
     desc: '将基于 Rocket.Chat 会议能力（Jitsi/Pexip）集成。',
   },
-  workbench: {
-    icon: LayoutGrid,
-    title: '工作台',
-    desc: 'Azure DevOps Server 工作项、流水线与 PR 面板将在这里呈现。事件推送已可通过 ado-bridge 服务接入聊天。',
-  },
 };
 
-export default function ModulePlaceholder({
-  module,
-}: {
-  module: Exclude<ModuleKey, 'messages' | 'contacts'>;
-}) {
+export default function ModulePlaceholder({ module }: { module: PlaceholderModule }) {
   const { icon: Icon, title, desc } = META[module];
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-white">

@@ -13,12 +13,8 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import {
-  ADO_WEB_KEY,
-  loadWorkbenchConfig,
-  saveWorkbenchConfig,
-  type WorkbenchConfig,
-} from '../lib/ado';
+import { ADO_WEB_KEY, loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
+import { useUI } from '../stores/ui';
 import { fmtConvTime } from '../lib/format';
 
 interface WorkItem {
@@ -69,112 +65,24 @@ function matchUser(account: string, unique: string, name: string): boolean {
   return unique.toLowerCase() === q || name.toLowerCase() === q;
 }
 
-function ConfigCard({
-  initial,
-  onSaved,
-}: {
-  initial: WorkbenchConfig | null;
-  onSaved: (c: WorkbenchConfig) => void;
-}) {
-  const [mode, setMode] = useState<'direct' | 'bridge'>(initial?.mode ?? 'direct');
-  const [bridge, setBridge] = useState(initial?.bridge ?? 'http://localhost:8377');
-  const [adoBase, setAdoBase] = useState(initial?.adoBase ?? '');
-  const [pat, setPat] = useState(initial?.pat ?? '');
-  const [account, setAccount] = useState(initial?.account ?? '');
-
-  const inputCls =
-    'mb-4 h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary';
-  const valid =
-    account.trim() &&
-    (mode === 'direct' ? adoBase.trim() && pat.trim() : bridge.trim());
-
+/** 未配置时的引导卡：把配置统一收敛到设置页 */
+function SetupCard() {
+  const setModule = useUI((s) => s.setModule);
   return (
-    <div className="mx-auto mt-12 w-[460px] rounded-xl border border-line bg-white p-6">
-      <div className="mb-1 flex items-center gap-2 text-[15px] font-semibold text-ink">
-        <LayoutGrid size={18} className="text-primary" />
-        连接 Azure DevOps Server
+    <div className="mx-auto mt-20 w-[460px] rounded-xl border border-line bg-white p-8 text-center">
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-light">
+        <LayoutGrid size={26} className="text-primary" />
       </div>
-      <div className="mb-4 flex gap-1 rounded-lg bg-fill-1 p-1">
-        {(
-          [
-            { key: 'direct', label: '直连（桌面端推荐）' },
-            { key: 'bridge', label: '经 ado-bridge 服务' },
-          ] as const
-        ).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setMode(key)}
-            className={`h-8 flex-1 rounded-md text-xs transition ${
-              mode === key ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-2'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="text-[15px] font-semibold text-ink">连接 Azure DevOps Server</div>
+      <div className="mt-2 text-xs leading-relaxed text-ink-3">
+        连接后可以在这里查看「我的工作项」「待我评审的 PR」「最近构建」，
+        聊天里的 #工作项号 也会自动链接并支持悬停预览与快速评论。
       </div>
-
-      {mode === 'direct' ? (
-        <>
-          <div className="mb-4 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
-            直接连接 ADO，PAT 仅保存在本机。桌面客户端开箱即用；
-            网页端需要 ADO 服务器允许跨域，否则请使用桥接模式。
-          </div>
-          <label className="mb-1.5 block text-sm text-ink-2">ADO 集合地址</label>
-          <input
-            value={adoBase}
-            onChange={(e) => setAdoBase(e.target.value)}
-            placeholder="http://ado-server:8080/tfs/DefaultCollection"
-            className={inputCls}
-          />
-          <label className="mb-1.5 block text-sm text-ink-2">
-            个人访问令牌 PAT（只读：Work Items + Code + Build）
-          </label>
-          <input
-            type="password"
-            value={pat}
-            onChange={(e) => setPat(e.target.value)}
-            placeholder="Personal Access Token"
-            className={inputCls}
-          />
-        </>
-      ) : (
-        <>
-          <div className="mb-4 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
-            通过 ado-bridge 服务查询，PAT 保存在服务端，适合团队共用与网页端。
-          </div>
-          <label className="mb-1.5 block text-sm text-ink-2">桥接服务地址</label>
-          <input
-            value={bridge}
-            onChange={(e) => setBridge(e.target.value)}
-            placeholder="http://localhost:8377"
-            className={inputCls}
-          />
-        </>
-      )}
-
-      <label className="mb-1.5 block text-sm text-ink-2">我的 ADO 账号（邮箱或域账号）</label>
-      <input
-        value={account}
-        onChange={(e) => setAccount(e.target.value)}
-        placeholder="user@example.com 或 DOMAIN\\user"
-        className="mb-5 h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
-      />
       <button
-        disabled={!valid}
-        onClick={() => {
-          const config: WorkbenchConfig = {
-            mode,
-            bridge: bridge.trim().replace(/\/+$/, '') || undefined,
-            adoBase: adoBase.trim().replace(/\/+$/, '') || undefined,
-            pat: pat.trim() || undefined,
-            account: account.trim(),
-          };
-          saveWorkbenchConfig(config);
-          onSaved(config);
-        }}
-        className="h-10 w-full rounded-md bg-primary text-sm font-medium text-white transition hover:bg-primary-hover disabled:opacity-40"
+        onClick={() => setModule('settings')}
+        className="mt-5 h-9 w-full rounded-md bg-primary text-sm font-medium text-white transition hover:bg-primary-hover"
       >
-        保存并连接
+        前往设置
       </button>
     </div>
   );
@@ -273,8 +181,8 @@ function BuildStatus({ build }: { build: Build }) {
 
 /** 工作台：Azure DevOps Server 2022 面板 */
 export default function WorkbenchPage() {
-  const [config, setConfig] = useState<WorkbenchConfig | null>(loadWorkbenchConfig);
-  const [editing, setEditing] = useState(false);
+  const setModule = useUI((s) => s.setModule);
+  const [config] = useState<WorkbenchConfig | null>(loadWorkbenchConfig);
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [builds, setBuilds] = useState<Build[]>([]);
@@ -337,16 +245,10 @@ export default function WorkbenchPage() {
     if (config) void refresh(config);
   }, [config, refresh]);
 
-  if (!config || editing) {
+  if (!config || !config.account) {
     return (
       <main className="flex-1 overflow-y-auto bg-fill-2">
-        <ConfigCard
-          initial={config}
-          onSaved={(c) => {
-            setConfig(c);
-            setEditing(false);
-          }}
-        />
+        <SetupCard />
       </main>
     );
   }
@@ -375,7 +277,7 @@ export default function WorkbenchPage() {
           </button>
           <button
             title="设置"
-            onClick={() => setEditing(true)}
+            onClick={() => setModule('settings')}
             className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
           >
             <Settings size={15} />

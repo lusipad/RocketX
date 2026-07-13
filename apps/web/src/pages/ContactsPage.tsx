@@ -19,6 +19,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const [users, setUsers] = useState<RcUser[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -26,13 +27,19 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     if (timer.current) clearTimeout(timer.current);
     setLoading(true);
     timer.current = setTimeout(() => {
+      // directory → users.list → spotlight 三级回退，失败时把原因显示出来
       rest
-        .directory('users', keyword, 100)
-        .then(({ result, total }) => {
-          setUsers(result as RcUser[]);
+        .searchUsers(keyword, 100)
+        .then(({ users, total }) => {
+          setUsers(users);
           setTotal(total);
+          setError(null);
         })
-        .catch(() => setUsers([]))
+        .catch((err: unknown) => {
+          setUsers([]);
+          setTotal(0);
+          setError(err instanceof Error ? err.message : String(err));
+        })
         .finally(() => setLoading(false));
     }, 300);
     return () => {
@@ -67,7 +74,20 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
       </div>
       <div className="flex-1 overflow-y-auto rounded-lg border border-line">
         {loading && <div className="py-10 text-center text-sm text-ink-3">加载中…</div>}
+        {!loading && error && (
+          <div className="px-6 py-10 text-center">
+            <div className="text-sm text-danger">无法获取成员列表</div>
+            <div className="mx-auto mt-2 max-w-lg text-xs leading-relaxed break-words text-ink-3">
+              {error}
+            </div>
+            <div className="mt-3 text-xs text-ink-3">
+              可能是账号缺少查看用户目录的权限，请联系 Rocket.Chat 管理员，
+              或在管理后台开启「用户目录」相关设置。
+            </div>
+          </div>
+        )}
         {!loading &&
+          !error &&
           users.map((u) => (
             <div
               key={u._id}
@@ -96,7 +116,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
               )}
             </div>
           ))}
-        {!loading && users.length === 0 && (
+        {!loading && !error && users.length === 0 && (
           <div className="py-10 text-center text-sm text-ink-3">未找到匹配的成员</div>
         )}
       </div>
