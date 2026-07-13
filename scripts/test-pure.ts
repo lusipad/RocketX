@@ -5,6 +5,14 @@
  *   pnpm test:pure
  */
 import { pinyinMatch, pinyinScore } from '../apps/web/src/lib/pinyin';
+import { filterCommands, findCommand, parseSlash, slashPrefix } from '../apps/web/src/lib/slash';
+import {
+  canActOn,
+  canManageRoom,
+  canTransferOwnership,
+  isMuted,
+  sortMembers,
+} from '../apps/web/src/lib/roomAdmin';
 import { preloadPinyin } from '../apps/web/src/lib/pinyin';
 
 let passed = 0;
@@ -557,6 +565,81 @@ async function main(): Promise<void> {
   check('月视图包含当月每一天', grid.some((d) => dateKey(d) === '2026-07-31'));
   const wk = weekDays(new Date(2026, 6, 15)); // 周三
   check('周视图从周一开始', wk[0].getDay() === 1 && dateKey(wk[0]) === '2026-07-13', dateKey(wk[0]));
+
+  console.log('\n[斜杠命令]');
+  const CMDS = [
+    { command: 'kick', params: '@username', description: '把人移出频道' },
+    { command: 'mute', params: '@username', description: '禁言' },
+    { command: 'me', params: 'your action', description: '' },
+    { command: 'msg', params: '@username message', description: '' },
+  ];
+
+  check('识别无参命令', parseSlash('/me')?.command === 'me');
+  check(
+    '识别带参命令并切出参数',
+    parseSlash('/kick @zhangsan')?.command === 'kick' &&
+      parseSlash('/kick @zhangsan')?.params === '@zhangsan',
+  );
+  check('命令名大小写不敏感', parseSlash('/KICK @a')?.command === 'kick');
+  check('多余空格不影响参数', parseSlash('/kick    @a  ')?.params === '@a');
+
+  // 下面几条是这块最危险的地方：把正常消息误判成命令，等于把用户的话吞掉
+  check('路径不是命令：/usr/bin/env', parseSlash('/usr/bin/env') === null);
+  check('中文不是命令：/或者这样', parseSlash('/或者这样') === null);
+  check('斜杠在句中不是命令', parseSlash('看 a/b 这个文件') === null);
+  check('光秃秃一个斜杠不是命令', parseSlash('/') === null);
+
+  check('找得到已知命令（忽略大小写）', findCommand(CMDS, 'KICK')?.command === 'kick');
+  check('打错一个字母就找不到 → 不会被当命令执行', findCommand(CMDS, 'kik') === undefined);
+
+  check('光标在命令名上 → 弹补全', slashPrefix('/ki') === 'ki');
+  check('刚打了个斜杠 → 弹全部命令', slashPrefix('/') === '');
+  check('进了参数区 → 收起补全', slashPrefix('/kick @') === null);
+  check('不在开头的斜杠 → 不弹', slashPrefix('hi /kick') === null);
+
+  check('前缀筛选：m → me / msg / mute', filterCommands(CMDS, 'm').length === 3);
+  check(
+    '开头匹配的排在包含匹配前面',
+    filterCommands(CMDS, 'me')[0].command === 'me',
+    filterCommands(CMDS, 'me')
+      .map((c) => c.command)
+      .join(','),
+  );
+  check('空前缀返回全部', filterCommands(CMDS, '').length === 4);
+
+  console.log('\n[群管理 · 权限]');
+  const owner = { _id: 'u1', username: 'owner' };
+  const mod = { _id: 'u2', username: 'mod' };
+  const plain = { _id: 'u3', username: 'plain' };
+  const sysadmin = { _id: 'u4', username: 'root', roles: ['admin'] };
+  const ROLES = [
+    { _id: 'r1', rid: 'R', u: owner, roles: ['owner'] as const },
+    { _id: 'r2', rid: 'R', u: mod, roles: ['moderator'] as const },
+  ] as any;
+
+  check('群主能管理', canManageRoom(owner, ROLES));
+  check('管理员能管理', canManageRoom(mod, ROLES));
+  check('普通成员不能管理', !canManageRoom(plain, ROLES));
+  check('系统管理员在任何群都能管理', canManageRoom(sysadmin, ROLES));
+  check('未登录不能管理', !canManageRoom(null, ROLES));
+
+  check('只有群主能转让群主', canTransferOwnership(owner, ROLES));
+  check('管理员不能转让群主', !canTransferOwnership(mod, ROLES));
+  check('系统管理员能转让群主', canTransferOwnership(sysadmin, ROLES));
+
+  // 这两条是「谁能对谁动手」的红线，写错了就是越权
+  check('管理员踢不了群主', !canActOn(mod, owner as any, ROLES));
+  check('管理员能踢普通成员', canActOn(mod, plain as any, ROLES));
+  check('群主能踢管理员', canActOn(owner, mod as any, ROLES));
+  check('谁都不能对自己动手（要走「退出群组」）', !canActOn(owner, owner as any, ROLES));
+  check('普通成员谁也动不了', !canActOn(plain, mod as any, ROLES));
+  check('系统管理员能踢群主', canActOn(sysadmin, owner as any, ROLES));
+
+  check('禁言名单按 username 匹配', isMuted(['lisi'], 'lisi') && !isMuted(['lisi'], 'zhangsan'));
+  check('没有禁言名单时不误判', !isMuted(undefined, 'lisi'));
+
+  const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
+  check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);

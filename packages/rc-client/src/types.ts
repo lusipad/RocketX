@@ -16,6 +16,8 @@ export interface RcUser {
   status?: string;
   emails?: { address: string; verified?: boolean }[];
   avatarETag?: string;
+  /** 全局角色（admin / user / bot…）。admin 在所有房间里通吃 */
+  roles?: string[];
 }
 
 export interface RcMessageAttachmentField {
@@ -91,6 +93,10 @@ export interface RcRoom {
   description?: string;
   /** 只读频道（只有拥有者能发言） */
   ro?: boolean;
+  /** 已归档（只读，且不再收新消息） */
+  archived?: boolean;
+  /** 被禁言的人（存的是 username，不是 _id） */
+  muted?: string[];
   /** 创建者 */
   u?: { _id: string; username: string; name?: string };
   ts?: RcDate;
@@ -155,6 +161,37 @@ export interface RcPreferences {
   enableAutoAway?: boolean;
   idleTimeLimit?: number;
   themeAppearence?: 'auto' | 'light' | 'dark';
+}
+
+/** 服务器提供的斜杠命令 */
+export interface RcSlashCommand {
+  command: string;
+  params?: string;
+  description?: string;
+  clientOnly?: boolean;
+  providesPreview?: boolean;
+}
+
+/** 房间里某人的角色。只有「有角色的人」才会出现在 channels.roles 结果里 */
+export interface RcRoomRole {
+  _id: string;
+  rid: string;
+  u: { _id: string; username: string; name?: string };
+  roles: RoomRole[];
+}
+
+export type RoomRole = 'owner' | 'moderator' | 'leader';
+
+/** channels.files / groups.files / im.files 返回的文件 */
+export interface RcRoomFile {
+  _id: string;
+  name: string;
+  type?: string;
+  size?: number;
+  uploadedAt?: RcDate;
+  url?: string;
+  path?: string;
+  user?: { _id: string; username: string; name?: string };
 }
 
 export interface RcTeam {

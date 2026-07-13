@@ -4,12 +4,15 @@ import {
   type RcMessage,
   type RcMessageAttachment,
   type RcRoom,
+  type RcRoomRole,
+  type RcSlashCommand,
   type RcSubscription,
   type RcUser,
   type RealtimeStatus,
 } from '@rcx/rc-client';
 import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
 import { emojify } from '../lib/emoji';
+import { findCommand } from '../lib/slash';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { humanError, toast } from './toast';
@@ -63,7 +66,7 @@ export const SECTION_LABELS: Record<SectionKey, string> = {
   direct: '私聊',
 };
 
-/** 右侧面板：话题 / Pin 列表 / 标记 / 群成员 / 消息搜索，同一时刻只开一个 */
+/** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
   | { kind: 'thread'; mid: string }
   | { kind: 'pins' }
@@ -71,6 +74,8 @@ export type RightPanel =
   | { kind: 'members' }
   | { kind: 'search' }
   | { kind: 'info' }
+  | { kind: 'files' }
+  | { kind: 'mentions' }
   | null;
 
 const HISTORY_PAGE = 50;
@@ -112,6 +117,10 @@ interface ChatState {
   typing: Record<string, Record<string, number>>;
   /** 已读回执：rid -> { mid: 最后一条自己消息, users: 已读的其他人 } */
   readReceipts: Record<string, { mid: string; users: { username: string; name?: string }[] }>;
+  /** 服务器提供的斜杠命令（登录后拉一次，全局共用） */
+  slashCommands: RcSlashCommand[];
+  /** 房间里有角色的人：rid -> [{ u, roles: ['owner'] }]。普通成员不在里面 */
+  roomRoles: Record<string, RcRoomRole[]>;
 
   init: () => Promise<void>;
   openRoom: (rid: string) => Promise<void>;
@@ -120,6 +129,23 @@ interface ChatState {
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
   send: (text: string, opts?: { tmid?: string; quote?: RcMessage }) => Promise<void>;
+  /** 执行斜杠命令。返回 true 表示已作为命令处理（调用方不要再当文本发） */
+  runSlash: (command: string, params: string) => Promise<boolean>;
+
+  /** 拉房间详情并并回 store（rooms.get 的字段不全，公告/禁言名单/归档只有 rooms.info 有） */
+  refreshRoomInfo: (rid: string) => Promise<RcRoom | null>;
+  loadRoomRoles: (rid: string) => Promise<RcRoomRole[]>;
+  kickMember: (rid: string, user: RcUser) => Promise<void>;
+  setMemberRole: (
+    rid: string,
+    user: RcUser,
+    role: 'owner' | 'moderator' | 'leader',
+    grant: boolean,
+  ) => Promise<void>;
+  toggleMemberMute: (rid: string, user: RcUser) => Promise<void>;
+  setRoomReadOnly: (rid: string, readOnly: boolean) => Promise<void>;
+  archiveConv: (rid: string, archive: boolean) => Promise<void>;
+  deleteConv: (rid: string) => Promise<void>;
   /** 重发失败的消息 */
   resendMessage: (tempId: string) => Promise<void>;
   /** 丢弃失败的本地消息 */
@@ -322,12 +348,19 @@ export const useChat = create<ChatState>((set, get) => ({
   highlightMid: null,
   typing: {},
   readReceipts: {},
+  slashCommands: [],
+  roomRoles: {},
 
   init: async () => {
     const auth = loadStoredAuth();
     if (!auth) return;
     // 预热 Site_Url 缓存（引用回复的链接前缀需要）
     void ensureSiteUrl();
+    // 命令表：拉不到就当没有命令，输入框退回纯文本，不该拖住整个初始化
+    void rest
+      .listCommands()
+      .then((slashCommands) => set({ slashCommands }))
+      .catch(() => {});
 
     let subs: RcSubscription[];
     let rooms: RcRoom[];
@@ -577,6 +610,24 @@ export const useChat = create<ChatState>((set, get) => ({
         action: { label: '重试', onClick: () => void get().resendMessage(tempId) },
       });
     }
+  },
+
+  runSlash: async (command, params) => {
+    const rid = get().activeRid;
+    if (!rid) return false;
+    // 认不出来的命令**不发**。以前会把 `/kick @张三` 原样广播给全群——
+    // 打错一个字母就变成公开处刑，宁可让用户看见「没有这个命令」。
+    if (!findCommand(get().slashCommands, command)) {
+      toast.show({ kind: 'error', message: `没有 /${command} 这个命令` });
+      return true;
+    }
+    try {
+      await rest.runCommand(command, rid, params);
+      // 命令的结果由服务端产生（发消息 / 改房间 / 踢人），走实时流回来，这里不用管
+    } catch (err) {
+      toast.error(err, `/${command} 执行失败`);
+    }
+    return true;
   },
 
   resendMessage: async (tempId) => {
@@ -886,6 +937,134 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err) {
       toast.error(err, '保存失败，可能是你没有该群的管理权限');
       throw err;
+    }
+  },
+
+  // ---- 群管理 ----
+
+  refreshRoomInfo: async (rid) => {
+    try {
+      const info = await rest.getRoomInfo(rid);
+      const prev = get().rooms[rid];
+      // 合并而不是替换：rooms.get 带的 lastMessage / lm 在 rooms.info 里没有，
+      // 直接盖掉会把会话列表的「最后一条消息」抹空
+      set({ rooms: { ...get().rooms, [rid]: { ...prev, ...info } } });
+      return info;
+    } catch {
+      return get().rooms[rid] ?? null;
+    }
+  },
+
+  loadRoomRoles: async (rid) => {
+    const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
+    // 单聊没有角色一说
+    if (type === 'd') return [];
+    try {
+      const roles = await rest.getRoomRoles(rid, type);
+      set({ roomRoles: { ...get().roomRoles, [rid]: roles } });
+      return roles;
+    } catch {
+      // 拿不到角色就当自己没权限，界面退回只读——不该因此报错打断用户
+      return [];
+    }
+  },
+
+  kickMember: async (rid, user) => {
+    const type = get().subscriptions[rid]?.t ?? 'c';
+    try {
+      await rest.kickFromRoom(rid, type, user._id);
+      set({
+        members: {
+          ...get().members,
+          [rid]: (get().members[rid] ?? []).filter((m) => m._id !== user._id),
+        },
+      });
+      toast.success(`已把 ${user.name || user.username} 移出群聊`);
+    } catch (err) {
+      toast.error(err, '移出失败，可能是你没有该群的管理权限');
+    }
+  },
+
+  setMemberRole: async (rid, user, role, grant) => {
+    const type = get().subscriptions[rid]?.t ?? 'c';
+    const label = role === 'owner' ? '群主' : role === 'moderator' ? '管理员' : '负责人';
+    try {
+      await rest.setRoomRole(rid, type, user._id, role, grant);
+      await get().loadRoomRoles(rid);
+      toast.success(`${grant ? '已设为' : '已取消'}${label}：${user.name || user.username}`);
+    } catch (err) {
+      toast.error(err, `${grant ? '设置' : '取消'}${label}失败`);
+    }
+  },
+
+  toggleMemberMute: async (rid, user) => {
+    const room = get().rooms[rid];
+    const muted = room?.muted ?? [];
+    const willMute = !muted.includes(user.username);
+    try {
+      await rest.muteUser(rid, user.username, willMute);
+      // 禁言走的是斜杠命令，服务端不会推房间更新，本地自己维护 muted 列表
+      if (room) {
+        set({
+          rooms: {
+            ...get().rooms,
+            [rid]: {
+              ...room,
+              muted: willMute
+                ? [...muted, user.username]
+                : muted.filter((u) => u !== user.username),
+            },
+          },
+        });
+      }
+      toast.success(`${willMute ? '已禁言' : '已解除禁言'}：${user.name || user.username}`);
+    } catch (err) {
+      toast.error(err, `${willMute ? '禁言' : '解除禁言'}失败`);
+    }
+  },
+
+  setRoomReadOnly: async (rid, readOnly) => {
+    const type = get().subscriptions[rid]?.t ?? 'c';
+    const room = get().rooms[rid];
+    try {
+      await rest.setReadOnly(rid, type, readOnly);
+      if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, ro: readOnly } } });
+      toast.success(readOnly ? '已设为只读，只有群主和管理员能发言' : '已取消只读');
+    } catch (err) {
+      toast.error(err, '设置失败，可能是你没有该群的管理权限');
+    }
+  },
+
+  archiveConv: async (rid, archive) => {
+    const type = get().subscriptions[rid]?.t ?? 'c';
+    const room = get().rooms[rid];
+    try {
+      await rest.archiveRoom(rid, type, archive);
+      if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, archived: archive } } });
+      toast.success(archive ? '已归档，该群不再接收新消息' : '已取消归档');
+    } catch (err) {
+      toast.error(err, `${archive ? '归档' : '取消归档'}失败`);
+    }
+  },
+
+  deleteConv: async (rid) => {
+    const type = get().subscriptions[rid]?.t ?? 'c';
+    const name = get().subscriptions[rid]?.fname ?? get().subscriptions[rid]?.name ?? '该群';
+    try {
+      await rest.deleteRoom(rid, type);
+      // 服务端会推 subscriptions-changed，但先本地摘掉，别让用户盯着一个已经没了的群
+      const subs = { ...get().subscriptions };
+      const rooms = { ...get().rooms };
+      delete subs[rid];
+      delete rooms[rid];
+      set({
+        subscriptions: subs,
+        rooms,
+        ...(get().activeRid === rid ? { activeRid: null, rightPanel: null } : {}),
+      });
+      toast.success(`已解散并删除「${name}」`);
+    } catch (err) {
+      toast.error(err, '删除失败，只有群主或系统管理员能解散群');
     }
   },
 

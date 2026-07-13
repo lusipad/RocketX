@@ -1,5 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import {
+  AtSign,
+  Files,
   Info,
   MessageCircle,
   MoreHorizontal,
@@ -20,6 +22,8 @@ import ThreadPanel from './ThreadPanel';
 import PinPanel from './PinPanel';
 import StarredPanel from './StarredPanel';
 import MembersPanel from './MembersPanel';
+import MentionsPanel from './MentionsPanel';
+import FilesPanel from './FilesPanel';
 import SearchPanel from './SearchPanel';
 import ContextMenu from './ContextMenu';
 
@@ -219,6 +223,16 @@ export default function ChatArea() {
                 icon: Star,
                 onClick: () => togglePanel({ kind: 'starred' }),
               },
+              {
+                label: '文件',
+                icon: Files,
+                onClick: () => togglePanel({ kind: 'files' }),
+              },
+              {
+                label: '提及我的',
+                icon: AtSign,
+                onClick: () => togglePanel({ kind: 'mentions' }),
+              },
             ]}
             onClose={() => setMoreMenu(null)}
           />
@@ -240,6 +254,8 @@ export default function ChatArea() {
       {rightPanel?.kind === 'members' && <MembersPanel />}
       {rightPanel?.kind === 'search' && <SearchPanel />}
       {rightPanel?.kind === 'info' && <RoomInfoPanel />}
+      {rightPanel?.kind === 'files' && <FilesPanel />}
+      {rightPanel?.kind === 'mentions' && <MentionsPanel />}
     </>
   );
 }

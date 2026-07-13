@@ -6,16 +6,27 @@ interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
   user: RcUser | null;
   error: string | null;
+  /**
+   * 头像版本号，换头像后 +1。
+   *
+   * Rocket.Chat 的头像地址是 /avatar/:username —— 换了图 URL 还是同一个，
+   * 浏览器照旧拿缓存，界面上看不出任何变化。靠这个数字挂到查询串上把缓存打掉。
+   */
+  avatarVersion: number;
   /** 启动时尝试用本地 token 恢复登录 */
   resume: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** 改完资料后重新拉一遍自己（昵称、头像 ETag） */
+  refreshUser: () => Promise<void>;
+  bumpAvatar: () => void;
 }
 
-export const useAuth = create<AuthState>((set) => ({
+export const useAuth = create<AuthState>((set, get) => ({
   status: 'boot',
   user: null,
   error: null,
+  avatarVersion: 0,
 
   resume: async () => {
     const stored = loadStoredAuth();
@@ -66,4 +77,14 @@ export const useAuth = create<AuthState>((set) => ({
     set({ status: 'guest', user: null });
     location.reload();
   },
+
+  refreshUser: async () => {
+    try {
+      set({ user: await rest.me() });
+    } catch {
+      /* 拉不到就先用旧的，不至于把界面上的自己弄没 */
+    }
+  },
+
+  bumpAvatar: () => set({ avatarVersion: get().avatarVersion + 1 }),
 }));

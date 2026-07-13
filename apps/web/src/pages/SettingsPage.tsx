@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bell,
+  Camera,
   CheckCircle2,
   Info,
   LayoutGrid,
@@ -63,10 +64,27 @@ const STATUSES = [
 function AccountSection() {
   const user = useAuth((s) => s.user);
   const logout = useAuth((s) => s.logout);
+  const refreshUser = useAuth((s) => s.refreshUser);
+  const bumpAvatar = useAuth((s) => s.bumpAvatar);
+
   const [status, setStatus] = useState(user?.status ?? 'online');
   const [statusText, setStatusText] = useState('');
   const [saved, setSaved] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
+
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+
+  const [name, setName] = useState(user?.name ?? '');
+  const [nameBusy, setNameBusy] = useState(false);
+
+  const [curPw, setCurPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [newPw2, setNewPw2] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
+
+  useEffect(() => setName(user?.name ?? ''), [user?.name]);
 
   const applyStatus = async (next: string, text?: string) => {
     const prev = status;
@@ -81,15 +99,164 @@ function AccountSection() {
     }
   };
 
+  const uploadAvatar = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast.error(new Error('请选择图片文件'), '请选择图片文件');
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      await rest.setAvatar(file, file.name);
+      bumpAvatar();
+      await refreshUser();
+      toast.success('头像已更新');
+    } catch (err) {
+      toast.error(err, '头像上传失败');
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const saveName = async () => {
+    const next = name.trim();
+    if (!next || next === user?.name) return;
+    setNameBusy(true);
+    try {
+      await rest.updateOwnBasicInfo({ name: next });
+      await refreshUser();
+      toast.success('昵称已更新');
+    } catch (err) {
+      setName(user?.name ?? '');
+      toast.error(err, '昵称修改失败');
+    } finally {
+      setNameBusy(false);
+    }
+  };
+
+  const changePassword = async () => {
+    setPwError(null);
+    if (newPw !== newPw2) {
+      setPwError('两次输入的新密码不一致');
+      return;
+    }
+    setPwBusy(true);
+    try {
+      // 一次请求带齐所有字段：这个接口限流很紧（每分钟一次），拆成多次调用会被 429 挡掉
+      await rest.updateOwnBasicInfo({ newPassword: newPw, currentPassword: curPw });
+      setCurPw('');
+      setNewPw('');
+      setNewPw2('');
+      toast.success('密码已修改');
+    } catch (err) {
+      // 服务器的密码强度策略是可配置的，猜不出来 —— 原样透出它的说法
+      const raw = err instanceof Error ? err.message : String(err ?? '');
+      setPwError(
+        /totp/i.test(raw)
+          ? '当前密码不正确'
+          : /too many requests|rate/i.test(raw)
+            ? '操作太频繁，请一分钟后再试'
+            : raw || '密码修改失败',
+      );
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
   return (
     <>
-      <Row label="当前账号">
+      <Row label="当前账号" hint="点击头像可以更换">
         <div className="flex items-center gap-3">
-          <Avatar name={user?.name || user?.username || '?'} username={user?.username} size={44} />
+          <button
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={avatarBusy}
+            title="更换头像"
+            className="group relative shrink-0 overflow-hidden rounded-[10px]"
+          >
+            <Avatar
+              name={user?.name || user?.username || '?'}
+              username={user?.username}
+              size={44}
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition group-hover:opacity-100">
+              {avatarBusy ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Camera size={16} />
+              )}
+            </span>
+          </button>
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void uploadAvatar(f);
+            }}
+          />
           <div>
             <div className="text-sm font-medium text-ink">{user?.name || user?.username}</div>
             <div className="text-xs text-ink-3">@{user?.username}</div>
           </div>
+        </div>
+      </Row>
+
+      <Row label="昵称" hint={`其他成员看到的名字；用户名 @${user?.username ?? ''} 不会跟着变`}>
+        <div className="flex items-center gap-2">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void saveName()}
+            placeholder={user?.username}
+            maxLength={80}
+            className={inputCls}
+          />
+          <button
+            onClick={() => void saveName()}
+            disabled={nameBusy || !name.trim() || name.trim() === user?.name}
+            className="h-9 shrink-0 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {nameBusy ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </Row>
+
+      <Row label="修改密码" hint="改完后当前设备保持登录，其他设备需要重新登录">
+        <div className="flex max-w-md flex-col gap-2">
+          <input
+            type="password"
+            value={curPw}
+            onChange={(e) => setCurPw(e.target.value)}
+            placeholder="当前密码"
+            autoComplete="current-password"
+            className={inputCls}
+          />
+          <input
+            type="password"
+            value={newPw}
+            onChange={(e) => setNewPw(e.target.value)}
+            placeholder="新密码"
+            autoComplete="new-password"
+            className={inputCls}
+          />
+          <input
+            type="password"
+            value={newPw2}
+            onChange={(e) => setNewPw2(e.target.value)}
+            placeholder="再输一遍新密码"
+            autoComplete="new-password"
+            className={inputCls}
+          />
+          {pwError && <div className="text-xs text-danger">{pwError}</div>}
+          <button
+            onClick={() => void changePassword()}
+            disabled={pwBusy || !curPw || !newPw || !newPw2}
+            className="h-9 w-28 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {pwBusy ? '修改中…' : '修改密码'}
+          </button>
         </div>
       </Row>
 

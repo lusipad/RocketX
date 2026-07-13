@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Check,
   Copy,
+  Link2,
   Download,
   File as FileIcon,
   Image as ImageIcon,
@@ -33,10 +34,10 @@ import { saveFile } from '../lib/download';
 import { toast } from '../stores/toast';
 import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
-import { fmtTime } from '../lib/format';
+import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
-import { assetUrl } from '../lib/client';
+import { assetUrl, rest } from '../lib/client';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
@@ -55,13 +56,6 @@ const QUICK_EMOJIS: EmojiEntry[] = [
   { code: 'white_check_mark', char: '✅' },
   { code: 'tada', char: '🎉' },
 ];
-
-function fmtSize(bytes?: number): string {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /**
  * 图片附件：列表显示缩略图（image_url），点击后灯箱加载原图（title_link）。
@@ -462,6 +456,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     setTimeout(() => setCopied(false), 1200);
   };
 
+  const copyLink = () => {
+    const room = useChat.getState().rooms[message.rid];
+    if (!room) return;
+    void navigator.clipboard?.writeText(rest.permalink(room, message._id));
+    toast.success('消息链接已复制');
+  };
+
   // 2 分钟内显示「撤回」，之后是「删除」（行为一致：消息被移除）
   const deleteLabel = Date.now() - tsMs(message.ts) < 2 * 60 * 1000 ? '撤回' : '删除';
 
@@ -487,6 +488,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         ]
       : []),
     ...(message.msg ? [{ label: copied ? '已复制' : '复制', icon: Copy, onClick: copy }] : []),
+    { label: '复制消息链接', icon: Link2, onClick: copyLink },
     {
       label: inTodo ? '已在待办中' : '标记为待办',
       icon: ListTodo,

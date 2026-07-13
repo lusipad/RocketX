@@ -1,3 +1,4 @@
+import { useAuth } from '../stores/auth';
 import AuthImage from './AuthImage';
 
 const PALETTE = ['#3370ff', '#7f3bf5', '#00b96b', '#ff8800', '#f54a45', '#04a5a5', '#c71fbf'];
@@ -23,10 +24,14 @@ export default function Avatar({
   roomId?: string;
   size?: number;
 }) {
+  // 换过头像就带上版本号，否则 URL 没变、浏览器直接给缓存，新头像永远不显示
+  const version = useAuth((s) => s.avatarVersion);
+  const bust = version > 0 ? `&v=${version}` : '';
+
   const path = username
-    ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}`
+    ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}${bust}`
     : roomId
-      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`
+      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}${bust}`
       : null;
 
   const style = {

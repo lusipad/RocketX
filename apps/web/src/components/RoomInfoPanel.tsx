@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { RcRoom } from '@rcx/rc-client';
 import {
+  Archive,
+  ArchiveRestore,
   Bell,
   BellOff,
+  Files,
   Hash,
   Lock,
   LogOut,
   Megaphone,
+  MessageSquareOff,
   Pencil,
   Pin,
   PinOff,
   Tag,
+  Trash2,
+  Type,
   Users,
   UsersRound,
   X,
 } from 'lucide-react';
-import { rest } from '../lib/client';
+import { useAuth } from '../stores/auth';
 import { buildConversations, useChat } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
+import { canManageRoom, canTransferOwnership } from '../lib/roomAdmin';
 import { fmtDayDivider } from '../lib/format';
 import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
@@ -161,40 +167,46 @@ export default function RoomInfoPanel() {
   const rooms = useChat((s) => s.rooms);
   const setPanel = useChat((s) => s.setPanel);
   const loadMembers = useChat((s) => s.loadMembers);
+  const loadRoomRoles = useChat((s) => s.loadRoomRoles);
+  const refreshRoomInfo = useChat((s) => s.refreshRoomInfo);
   const saveRoomSettings = useChat((s) => s.saveRoomSettings);
   const toggleFavorite = useChat((s) => s.toggleFavorite);
   const toggleMute = useChat((s) => s.toggleMute);
   const leaveConv = useChat((s) => s.leaveConv);
+  const setRoomReadOnly = useChat((s) => s.setRoomReadOnly);
+  const archiveConv = useChat((s) => s.archiveConv);
+  const deleteConv = useChat((s) => s.deleteConv);
+  const roomRoles = useChat((s) => (s.activeRid ? (s.roomRoles[s.activeRid] ?? []) : []));
+  const me = useAuth((s) => s.user);
 
   const aliases = useAliases((s) => s.aliases);
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const setRoomAlias = useAliases((s) => s.setRoomAlias);
 
-  const [info, setInfo] = useState<RcRoom | null>(null);
   const [memberCount, setMemberCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [aliasOpen, setAliasOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const conv = useMemo(
     () => buildConversations(subscriptions, rooms).find((c) => c.rid === rid),
     [subscriptions, rooms, rid],
   );
+  // 房间详情直接读 store（rooms.info 的结果由 refreshRoomInfo 并回去），
+  // 这样成员面板改了禁言名单、这里的归档/只读状态都能立刻跟着变
+  const info = rid ? rooms[rid] : undefined;
 
   useEffect(() => {
     if (!rid) return;
     setLoading(true);
-    setInfo(null);
-    // rooms.info 拿到的字段比订阅全（公告、描述、创建者、创建时间）。
+    // rooms.info 的字段比订阅全（公告、描述、创建者、只读、归档、禁言名单）。
     // 只在切换会话时拉一次——依赖里放 rooms 的话，每来一条新消息 rooms 引用就变，
-    // 会话越活跃请求越多。兜底读 store 快照，不进依赖。
-    void rest
-      .getRoomInfo(rid)
-      .then(setInfo)
-      .catch(() => setInfo(useChat.getState().rooms[rid] ?? null))
-      .finally(() => setLoading(false));
+    // 会话越活跃请求越多。
+    void refreshRoomInfo(rid).finally(() => setLoading(false));
+    void loadRoomRoles(rid);
     void loadMembers(rid).then((m) => setMemberCount(m.length));
-  }, [rid, loadMembers]);
+  }, [rid, loadMembers, loadRoomRoles, refreshRoomInfo]);
 
   if (!rid || !conv) return null;
 
@@ -206,6 +218,9 @@ export default function RoomInfoPanel() {
 
   const isDM = conv.type === 'd';
   const count = info?.usersCount ?? memberCount ?? undefined;
+  // 多人聊天在 RC 里仍是 DM（t='d'），没有频道那套管理能力：改不了名、踢不了人、归不了档
+  const canManage = !isDM && canManageRoom(me, roomRoles);
+  const canDelete = !isDM && canTransferOwnership(me, roomRoles);
   const TypeIcon = conv.isTeam
     ? Users
     : conv.isMultiDM
@@ -246,6 +261,15 @@ export default function RoomInfoPanel() {
             {/* 群资料：单聊没有这些字段 */}
             {!isDM && (
               <>
+                {canManage && (
+                  <EditableField
+                    label="群名称"
+                    icon={Type}
+                    value={info?.fname ?? info?.name}
+                    placeholder="未命名"
+                    onSave={(v) => saveRoomSettings(rid, { name: v })}
+                  />
+                )}
                 <EditableField
                   label="群公告"
                   icon={Megaphone}
@@ -270,6 +294,24 @@ export default function RoomInfoPanel() {
                   onSave={(v) => saveRoomSettings(rid, { description: v })}
                 />
               </>
+            )}
+
+            {/* 当前状态：只读 / 已归档，是「这个群怎么不能发消息了」的答案 */}
+            {(info?.ro || info?.archived) && (
+              <div className="flex flex-wrap gap-1.5 border-b border-line px-4 py-2.5">
+                {info?.ro && (
+                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
+                    <MessageSquareOff size={10} />
+                    只读群：仅群主和管理员可发言
+                  </span>
+                )}
+                {info?.archived && (
+                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
+                    <Archive size={10} />
+                    已归档
+                  </span>
+                )}
+              </div>
             )}
 
             {info?.u && (
@@ -303,6 +345,39 @@ export default function RoomInfoPanel() {
               />
             )}
             <ActionRow
+              icon={Files}
+              label="查看文件"
+              onClick={() => setPanel({ kind: 'files' })}
+            />
+
+            {/* 管理操作：只有群主 / 管理员 / 系统管理员看得见 */}
+            {canManage && (
+              <>
+                <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-2xs text-ink-3">
+                  群管理
+                </div>
+                <ActionRow
+                  icon={MessageSquareOff}
+                  label={info?.ro ? '取消只读' : '设为只读群'}
+                  onClick={() => void setRoomReadOnly(rid, !info?.ro)}
+                />
+                <ActionRow
+                  icon={info?.archived ? ArchiveRestore : Archive}
+                  label={info?.archived ? '取消归档' : '归档群组'}
+                  onClick={() => void archiveConv(rid, !info?.archived)}
+                />
+                {canDelete && (
+                  <ActionRow
+                    icon={Trash2}
+                    label="解散并删除群"
+                    danger
+                    onClick={() => setConfirmDelete(true)}
+                  />
+                )}
+              </>
+            )}
+
+            <ActionRow
               icon={isDM ? X : LogOut}
               label={isDM ? '隐藏会话' : '退出群组'}
               danger
@@ -321,6 +396,15 @@ export default function RoomInfoPanel() {
             aliasIsUser ? setUserAlias(conv.avatarUsername!, alias) : setRoomAlias(rid, alias)
           }
           onClose={() => setAliasOpen(false)}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          title="解散并删除群"
+          message={`「${shownName}」和它的全部聊天记录会被永久删除，所有成员都会失去这个群。这个操作无法撤销。`}
+          confirmLabel="永久删除"
+          onConfirm={() => void deleteConv(rid)}
+          onClose={() => setConfirmDelete(false)}
         />
       )}
       {confirmLeave && (

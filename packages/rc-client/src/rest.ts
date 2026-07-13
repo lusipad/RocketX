@@ -3,6 +3,9 @@ import type {
   RcDate,
   RcLoginData,
   RcPreferences,
+  RcRoomFile,
+  RcRoomRole,
+  RcSlashCommand,
   RcTeam,
   RcMessage,
   RcMessageAttachment,
@@ -11,6 +14,12 @@ import type {
   RcUser,
   RoomType,
 } from './types';
+
+/** SHA-256 十六进制。改密码时服务端要的是哈希，不是明文 */
+async function sha256Hex(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 export class RcApiError extends Error {
   constructor(
@@ -343,6 +352,33 @@ export class RcRestClient {
     return res.message;
   }
 
+  // ---- 斜杠命令 ----
+
+  /**
+   * 服务器提供的斜杠命令列表（/me、/invite、/kick、/mute、/topic、/archive…）。
+   * 命令由服务端执行，客户端只负责识别并转发 —— 直接把 "/kick @张三" 当文本发出去
+   * 的话，它只会变成一条字面量消息。
+   */
+  async listCommands(): Promise<RcSlashCommand[]> {
+    const res = await this.request<{ commands: RcSlashCommand[] }>(
+      'GET',
+      'commands.list',
+      undefined,
+      { count: 100 },
+    );
+    return res.commands ?? [];
+  }
+
+  /** 执行斜杠命令。command 不含前导斜杠，params 是命令后面的全部内容 */
+  async runCommand(command: string, rid: string, params = '', tmid?: string): Promise<void> {
+    await this.request('POST', 'commands.run', {
+      command,
+      roomId: rid,
+      params,
+      ...(tmid ? { tmid } : {}),
+    });
+  }
+
   /** 发送完整消息对象（可带附件），转发消息时用 */
   async sendMessageRaw(message: {
     rid: string;
@@ -500,6 +536,196 @@ export class RcRestClient {
       msg: opts.msg ?? '',
       ...(opts.tmid ? { tmid: opts.tmid } : {}),
     });
+  }
+
+  /**
+   * 消息的永久链接。
+   *
+   * 没有走 `chat.getPermalink`——RC 8.6.1 压根没有这个 REST 端点（实测 404），
+   * 只能照着它前端的路由规则自己拼。
+   */
+  permalink(room: { t: RoomType; name?: string; fname?: string }, msgId: string): string {
+    const seg = room.t === 'c' ? 'channel' : room.t === 'p' ? 'group' : 'direct';
+    const name = room.name ?? room.fname ?? '';
+    const origin =
+      this.baseUrl || (typeof location !== 'undefined' ? location.origin : '');
+    return `${origin}/${seg}/${encodeURIComponent(name)}?msg=${msgId}`;
+  }
+
+  // ---- 群管理 ----
+
+  /**
+   * 房间成员的角色（owner / moderator / leader）。
+   * 只返回「有角色的人」，普通成员不在列表里。
+   */
+  async getRoomRoles(rid: string, type: RoomType): Promise<RcRoomRole[]> {
+    const endpoint = type === 'c' ? 'channels.roles' : 'groups.roles';
+    const res = await this.request<{ roles: RcRoomRole[] }>('GET', endpoint, undefined, {
+      roomId: rid,
+    });
+    return res.roles ?? [];
+  }
+
+  /** 把人移出房间 */
+  kickFromRoom(rid: string, type: RoomType, userId: string): Promise<unknown> {
+    const endpoint = type === 'c' ? 'channels.kick' : 'groups.kick';
+    return this.request('POST', endpoint, { roomId: rid, userId });
+  }
+
+  /** 授予/收回房间角色。role 为 owner / moderator / leader */
+  setRoomRole(
+    rid: string,
+    type: RoomType,
+    userId: string,
+    role: 'owner' | 'moderator' | 'leader',
+    grant: boolean,
+  ): Promise<unknown> {
+    const verb = grant ? 'add' : 'remove';
+    const suffix = role === 'owner' ? 'Owner' : role === 'moderator' ? 'Moderator' : 'Leader';
+    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.${verb}${suffix}`;
+    return this.request('POST', endpoint, { roomId: rid, userId });
+  }
+
+  /**
+   * 禁言 / 解除禁言。
+   *
+   * **只能走斜杠命令**：RC 8.6.1 的 `channels.muteUser` 和 `groups.muteUser` 都返回 404
+   * ——这两个 REST 端点根本不存在（实测过）。服务端只在 `/mute` 命令里实现了这个能力。
+   */
+  muteUser(rid: string, username: string, mute: boolean): Promise<unknown> {
+    return this.runCommand(mute ? 'mute' : 'unmute', rid, `@${username}`);
+  }
+
+  /** 归档 / 取消归档 */
+  archiveRoom(rid: string, type: RoomType, archive: boolean): Promise<unknown> {
+    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.${archive ? 'archive' : 'unarchive'}`;
+    return this.request('POST', endpoint, { roomId: rid });
+  }
+
+  /** 设为只读（只有房主/管理员能发言）/ 取消只读 */
+  setReadOnly(rid: string, type: RoomType, readOnly: boolean): Promise<unknown> {
+    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.setReadOnly`;
+    return this.request('POST', endpoint, { roomId: rid, readOnly });
+  }
+
+  // ---- 面板数据 ----
+
+  /** 房间里传过的文件（「文件」面板） */
+  async getRoomFiles(rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {
+    const endpoint =
+      type === 'c' ? 'channels.files' : type === 'p' ? 'groups.files' : 'im.files';
+    const res = await this.request<{ files: RcRoomFile[] }>('GET', endpoint, undefined, {
+      roomId: rid,
+      count,
+      sort: JSON.stringify({ uploadedAt: -1 }),
+    });
+    return res.files ?? [];
+  }
+
+  /** 本房间里 @ 到我的消息（「提及我的」面板） */
+  async getMentionedMessages(rid: string, count = 50): Promise<RcMessage[]> {
+    const res = await this.request<{ messages: RcMessage[] }>(
+      'GET',
+      'chat.getMentionedMessages',
+      undefined,
+      { roomId: rid, count },
+    );
+    return res.messages ?? [];
+  }
+
+  // ---- 个人资料 ----
+
+  /**
+   * 改昵称 / 邮箱 / 密码。
+   * 改密码时服务端要求同时提供 currentPassword（除非管理员改别人的）。
+   */
+  async updateOwnBasicInfo(data: {
+    name?: string;
+    email?: string;
+    username?: string;
+    newPassword?: string;
+    currentPassword?: string;
+  }): Promise<RcUser> {
+    const { currentPassword, ...rest } = data;
+    const res = await this.request<{ user: RcUser }>('POST', 'users.updateOwnBasicInfo', {
+      data: {
+        ...rest,
+        // 服务端要的是 SHA-256 十六进制，不是明文
+        ...(currentPassword ? { currentPassword: await sha256Hex(currentPassword) } : {}),
+      },
+    });
+    return res.user;
+  }
+
+  /** 上传头像。RC 的 users.setAvatar 用 multipart，字段名固定是 image */
+  async setAvatar(file: Blob, fileName = 'avatar.png'): Promise<void> {
+    await this.postMultipart('users.setAvatar', 'image', file, fileName);
+  }
+
+  /**
+   * 移除头像，回到 RC 生成的默认首字母图。
+   * userId 必须显式给 —— 传空对象服务端会拒（"required userId or username param was not provided"），
+   * 它不会默认成「当前用户」。
+   */
+  async resetAvatar(userId?: string): Promise<void> {
+    const target = userId ?? this.currentUserId();
+    if (!target) throw new RcApiError('未登录', 401);
+    await this.request('POST', 'users.resetAvatar', { userId: target });
+  }
+
+  /** 查某个用户的资料（按用户名或 id） */
+  async getUserInfo(usernameOrId: string): Promise<RcUser> {
+    const key = /^[a-zA-Z0-9]{17}$/.test(usernameOrId) ? 'userId' : 'username';
+    const res = await this.request<{ user: RcUser }>('GET', 'users.info', undefined, {
+      [key]: usernameOrId,
+    });
+    return res.user;
+  }
+
+  /**
+   * 手工构造 multipart 体发到某个端点。
+   * 不用 FormData：Tauri 的 plugin-http 通道对它支持不可靠（uploadMedia 也是同样的理由）。
+   */
+  private async postMultipart(
+    path: string,
+    fieldName: string,
+    file: Blob,
+    fileName: string,
+  ): Promise<any> {
+    const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+    const encoder = new TextEncoder();
+    const safeName = fileName.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
+    const head = encoder.encode(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${fieldName}"; filename="${safeName}"\r\n` +
+        `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
+    );
+    const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    const body = new Uint8Array(head.length + fileBytes.length + tail.length);
+    body.set(head, 0);
+    body.set(fileBytes, head.length);
+    body.set(tail, head.length + fileBytes.length);
+
+    const auth =
+      this.authProvider?.() ??
+      (this.authToken && this.userId
+        ? { authToken: this.authToken, userId: this.userId }
+        : null);
+    const doFetch = this.fetchImpl ?? fetch;
+    const res = await doFetch(`${this.baseUrl}/api/v1/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
+      },
+      body,
+    });
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new RcApiError(data?.error ?? `HTTP ${res.status}`, res.status, data?.errorType);
+    }
+    return data;
   }
 
   /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */

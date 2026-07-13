@@ -102,4 +102,12 @@ export function systemMessageText(t: string, username: string, msg: string): str
   return fn ? fn(username, msg) : `${username} ${t} ${msg}`.trim();
 }
 
+/** 字节数 → 人话（消息里的文件卡片和文件面板共用） */
+export function fmtSize(bytes?: number): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export { emojiFromShortcode } from './emoji';

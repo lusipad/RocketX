@@ -1,11 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { RcUser } from '@rcx/rc-client';
-import { AlertCircle, Check, Search, UserPlus } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  Crown,
+  MicOff,
+  MoreHorizontal,
+  Search,
+  Shield,
+  UserMinus,
+  UserPlus,
+} from 'lucide-react';
+import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { humanError } from '../stores/toast';
+import {
+  ROLE_LABELS,
+  canActOn,
+  canTransferOwnership,
+  isMuted,
+  rolesOf,
+  sortMembers,
+} from '../lib/roomAdmin';
 import Avatar from './Avatar';
 import PanelShell from './PanelShell';
-import Dialog from './Dialog';
+import Dialog, { ConfirmDialog } from './Dialog';
 import UserCard, { type UserCardTarget } from './UserCard';
 import { useUserSearch } from './NewChatDialogs';
 import { SkeletonList } from './Skeleton';
@@ -116,21 +135,101 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** 群成员面板：搜索 + 成员列表 + 添加成员 */
+/** 成员的管理菜单：设/撤管理员、禁言、移出。只有能管这个群的人看得见 */
+function MemberMenu({ rid, member, onClose }: { rid: string; member: RcUser; onClose: () => void }) {
+  const roomRoles = useChat((s) => s.roomRoles[rid] ?? []);
+  const muted = useChat((s) => s.rooms[rid]?.muted);
+  const me = useAuth((s) => s.user);
+  const setMemberRole = useChat((s) => s.setMemberRole);
+  const toggleMemberMute = useChat((s) => s.toggleMemberMute);
+  const kickMember = useChat((s) => s.kickMember);
+  const [confirmKick, setConfirmKick] = useState(false);
+
+  const memberRoles = rolesOf(roomRoles, member._id);
+  const isOwner = memberRoles.includes('owner');
+  const isMod = memberRoles.includes('moderator');
+  const nowMuted = isMuted(muted, member.username);
+  const canOwner = canTransferOwnership(me, roomRoles);
+
+  const item =
+    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-ink transition hover:bg-fill-hover';
+
+  const run = (fn: () => Promise<void>) => {
+    onClose();
+    void fn();
+  };
+
+  return (
+    <>
+      {/* 点外面收起来 */}
+      <div className="fixed inset-0 z-30" onClick={onClose} />
+      <div className="absolute top-full right-0 z-40 mt-0.5 w-44 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+        {canOwner && (
+          <button
+            className={item}
+            onClick={() => run(() => setMemberRole(rid, member, 'owner', !isOwner))}
+          >
+            <Crown size={14} className="text-ink-2" />
+            {isOwner ? '取消群主' : '设为群主'}
+          </button>
+        )}
+        <button
+          className={item}
+          onClick={() => run(() => setMemberRole(rid, member, 'moderator', !isMod))}
+        >
+          <Shield size={14} className="text-ink-2" />
+          {isMod ? '取消管理员' : '设为管理员'}
+        </button>
+        <button className={item} onClick={() => run(() => toggleMemberMute(rid, member))}>
+          <MicOff size={14} className="text-ink-2" />
+          {nowMuted ? '解除禁言' : '禁言'}
+        </button>
+        <button
+          className={`${item} text-danger`}
+          onClick={() => setConfirmKick(true)}
+        >
+          <UserMinus size={14} />
+          移出群聊
+        </button>
+      </div>
+      {confirmKick && (
+        <ConfirmDialog
+          title="移出群聊"
+          message={`确定把「${member.name || member.username}」移出群聊吗？他将不再收到该群消息，需要重新邀请才能回来。`}
+          confirmLabel="移出"
+          onConfirm={() => {
+            onClose();
+            void kickMember(rid, member);
+          }}
+          onClose={() => setConfirmKick(false)}
+        />
+      )}
+    </>
+  );
+}
+
+/** 群成员面板：搜索 + 成员列表（带角色）+ 添加成员 + 管理操作 */
 export default function MembersPanel() {
   const rid = useChat((s) => s.activeRid);
   const loadMembers = useChat((s) => s.loadMembers);
+  const loadRoomRoles = useChat((s) => s.loadRoomRoles);
   const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
+  const roomRoles = useChat((s) => (s.activeRid ? (s.roomRoles[s.activeRid] ?? []) : []));
+  const muted = useChat((s) => (s.activeRid ? s.rooms[s.activeRid]?.muted : undefined));
+  const me = useAuth((s) => s.user);
+
   const [members, setMembers] = useState<RcUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
   const [card, setCard] = useState<UserCardTarget | null>(null);
   const [adding, setAdding] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
 
   // 单一入口拉取（之前两个 effect 都会调用 → 每次打开发两次请求）
   useEffect(() => {
     if (!rid) return;
+    void loadRoomRoles(rid);
     if (cachedMembers) {
       setMembers(cachedMembers);
       setLoading(false);
@@ -146,16 +245,18 @@ export default function MembersPanel() {
       })
       .catch((err: unknown) => setError(humanError(err, '无法获取成员列表')))
       .finally(() => setLoading(false));
-  }, [rid, cachedMembers, loadMembers]);
+  }, [rid, cachedMembers, loadMembers, loadRoomRoles]);
 
   const filtered = useMemo(() => {
     const q = keyword.toLowerCase();
-    return q
+    const list = q
       ? members.filter(
           (m) => m.username.toLowerCase().includes(q) || (m.name ?? '').toLowerCase().includes(q),
         )
       : members;
-  }, [members, keyword]);
+    // 群主排最前：一屏看不完的大群里，谁说了算得一眼看到
+    return sortMembers(list, roomRoles);
+  }, [members, keyword, roomRoles]);
 
   return (
     <PanelShell title={`群成员${members.length ? `（${members.length}）` : ''}`}>
@@ -189,33 +290,71 @@ export default function MembersPanel() {
         )}
         {!loading &&
           !error &&
-          filtered.map((m) => (
-            <div
-              key={m._id}
-              onClick={() => setCard(m)}
-              className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-fill-hover"
-            >
-              <Avatar name={m.name || m.username} username={m.username} size={32} />
-              <div className="min-w-0">
-                <div className="truncate text-sm text-ink">{m.name || m.username}</div>
-                <div className="truncate text-xs text-ink-3">@{m.username}</div>
+          filtered.map((m) => {
+            const roles = rolesOf(roomRoles, m._id);
+            const manageable = !!rid && canActOn(me, m, roomRoles);
+            return (
+              <div
+                key={m._id}
+                onClick={() => setCard(m)}
+                className="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-fill-hover"
+              >
+                <Avatar name={m.name || m.username} username={m.username} size={32} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm text-ink">{m.name || m.username}</span>
+                    {roles[0] && (
+                      <span className="shrink-0 rounded bg-primary-light px-1 py-px text-2xs text-primary">
+                        {ROLE_LABELS[roles[0]]}
+                      </span>
+                    )}
+                    {isMuted(muted, m.username) && (
+                      <span className="flex shrink-0 items-center gap-0.5 rounded bg-fill-1 px-1 py-px text-2xs text-ink-3">
+                        <MicOff size={9} />
+                        已禁言
+                      </span>
+                    )}
+                  </div>
+                  <div className="truncate text-xs text-ink-3">@{m.username}</div>
+                </div>
+                {m.status && (
+                  <span
+                    title={m.status}
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      m.status === 'online'
+                        ? 'bg-success'
+                        : m.status === 'away'
+                          ? 'bg-warning'
+                          : m.status === 'busy'
+                            ? 'bg-danger'
+                            : 'bg-line'
+                    }`}
+                  />
+                )}
+                {manageable && (
+                  <div className="relative shrink-0">
+                    <button
+                      title="管理成员"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuFor(menuFor === m._id ? null : m._id);
+                      }}
+                      className={`flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-2 hover:text-ink ${
+                        menuFor === m._id ? '' : 'opacity-0 group-hover:opacity-100'
+                      }`}
+                    >
+                      <MoreHorizontal size={15} />
+                    </button>
+                    {menuFor === m._id && (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <MemberMenu rid={rid} member={m} onClose={() => setMenuFor(null)} />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              {m.status && (
-                <span
-                  title={m.status}
-                  className={`ml-auto h-2 w-2 shrink-0 rounded-full ${
-                    m.status === 'online'
-                      ? 'bg-success'
-                      : m.status === 'away'
-                        ? 'bg-warning'
-                        : m.status === 'busy'
-                          ? 'bg-danger'
-                          : 'bg-line'
-                  }`}
-                />
-              )}
-            </div>
-          ))}
+            );
+          })}
         {!loading && !error && filtered.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
             {keyword ? '未找到匹配的成员' : '暂无成员'}

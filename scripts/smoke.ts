@@ -49,8 +49,11 @@ async function main() {
     const resumed = await rest.loginWithToken(me.authToken);
     assert(resumed.userId === me.userId, 'userId 不一致');
   });
+  // 踢人 / 设角色 都要用第二用户的 id
+  let user2Id = '';
   await check('第二用户登录', async () => {
     const d = await rest2.login(USER2, PASS2);
+    user2Id = d.userId;
     return d.me.username;
   });
 
@@ -316,6 +319,157 @@ async function main() {
     assert(!!room.u?.username, '缺少创建者');
     assert((room.usersCount ?? 0) > 0, '成员数为 0');
     return `${room.usersCount} 人，创建者 ${room.u?.username}`;
+  });
+
+  await check('改群名并回读', async () => {
+    const next = `冒烟改名-${Date.now().toString(36)}`;
+    await rest.saveRoomSettings(channelId, { name: next });
+    const room = await rest.getRoomInfo(channelId);
+    assert(room.name === next || room.fname === next, `群名没改成：${room.fname ?? room.name}`);
+    return next;
+  });
+
+  // ---- 斜杠命令 ----
+  console.log('\n[斜杠命令]');
+  await check('拉到服务器命令表', async () => {
+    const cmds = await rest.listCommands();
+    assert(cmds.length > 0, '一个命令都没拿到');
+    assert(
+      cmds.some((c) => c.command === 'me'),
+      '命令表里没有 /me',
+    );
+    return `${cmds.length} 个命令`;
+  });
+
+  await check('commands.run 真的执行了（不是当文本发出去）', async () => {
+    // 这正是之前的 bug：/me 会被原样存成一条消息文本。
+    // 走 commands.run 的话，服务端产生的是一条 t='message_snippeted' 风格的动作消息，
+    // 消息正文不会是 "/me ..." 这个字面量
+    const marker = `冒烟-${Date.now().toString(36)}`;
+    await rest.runCommand('me', channelId, marker);
+    const history = await rest.getHistory(channelId, 'c', 10);
+    assert(
+      !history.some((m) => m.msg === `/me ${marker}`),
+      '命令被当成普通文本发出去了',
+    );
+    assert(
+      history.some((m) => m.msg.includes(marker)),
+      '命令没有产生任何消息',
+    );
+    return '服务端执行，未泄漏成字面量';
+  });
+
+  // ---- 群管理 ----
+  console.log('\n[群管理]');
+  await check('房间角色：创建者是 owner', async () => {
+    const roles = await rest.getRoomRoles(channelId, 'c');
+    const mine = roles.find((r) => r.u.username === USER);
+    assert(!!mine, `角色表里没有 ${USER}`);
+    assert(mine!.roles.includes('owner'), `${USER} 不是 owner：${mine!.roles.join(',')}`);
+    return `${roles.length} 人有角色`;
+  });
+
+  await check('设为管理员 / 取消管理员', async () => {
+    // 建频道时就把 USER2 拉进来了，这里只是保险 —— 已经在群里会报错，忽略即可
+    await rest.inviteToRoom(channelId, 'c', user2Id).catch(() => {});
+    await rest.setRoomRole(channelId, 'c', user2Id, 'moderator', true);
+    let roles = await rest.getRoomRoles(channelId, 'c');
+    assert(
+      roles.find((r) => r.u._id === user2Id)?.roles.includes('moderator'),
+      '没设上管理员',
+    );
+    await rest.setRoomRole(channelId, 'c', user2Id, 'moderator', false);
+    roles = await rest.getRoomRoles(channelId, 'c');
+    assert(
+      !roles.find((r) => r.u._id === user2Id)?.roles.includes('moderator'),
+      '管理员没取消掉',
+    );
+  });
+
+  await check('禁言 / 解除禁言（只能走斜杠命令，REST 没这个端点）', async () => {
+    // channels.muteUser 和 groups.muteUser 在 RC 8.6.1 都是 404 —— 实测过。
+    // 服务端只在 /mute 命令里实现了禁言，所以 muteUser() 内部走的是 commands.run
+    await rest.muteUser(channelId, USER2, true);
+    let room = await rest.getRoomInfo(channelId);
+    assert((room.muted ?? []).includes(USER2), `没禁上言：muted=${JSON.stringify(room.muted)}`);
+    await rest.muteUser(channelId, USER2, false);
+    room = await rest.getRoomInfo(channelId);
+    assert(!(room.muted ?? []).includes(USER2), '禁言没解除');
+    return `${USER2} 禁言→解除，均生效`;
+  });
+
+  await check('移出成员（kick）', async () => {
+    const before = await rest.getMembers(channelId, 'c');
+    assert(before.some((m) => m._id === user2Id), `${USER2} 不在群里，没法测踢人`);
+    await rest.kickFromRoom(channelId, 'c', user2Id);
+    const after = await rest.getMembers(channelId, 'c');
+    assert(!after.some((m) => m._id === user2Id), '人没被踢出去');
+    return `${before.length} → ${after.length} 人`;
+  });
+
+  await check('设为只读 / 取消只读', async () => {
+    await rest.setReadOnly(channelId, 'c', true);
+    let room = await rest.getRoomInfo(channelId);
+    assert(room.ro === true, '没设成只读');
+    await rest.setReadOnly(channelId, 'c', false);
+    room = await rest.getRoomInfo(channelId);
+    assert(!room.ro, '只读没取消');
+  });
+
+  await check('归档 / 取消归档', async () => {
+    await rest.archiveRoom(channelId, 'c', true);
+    let room = await rest.getRoomInfo(channelId);
+    assert(room.archived === true, '没归档');
+    await rest.archiveRoom(channelId, 'c', false);
+    room = await rest.getRoomInfo(channelId);
+    assert(!room.archived, '归档没取消');
+  });
+
+  // ---- 面板数据 ----
+  console.log('\n[面板]');
+  await check('频道文件列表', async () => {
+    const files = await rest.getRoomFiles(channelId, 'c');
+    // 前面上传过两个文件（中文名文档 + 图片）
+    assert(files.length >= 2, `只拿到 ${files.length} 个文件，至少该有 2 个`);
+    assert(!!files[0].name, '文件缺少文件名');
+    return `${files.length} 个文件，最新：${files[0].name}`;
+  });
+
+  await check('提及我的消息', async () => {
+    const mentioned = await rest.getMentionedMessages(channelId);
+    // 只验证接口通、返回结构对；有没有内容取决于前面发没发 @
+    assert(Array.isArray(mentioned), '返回的不是数组');
+    return `${mentioned.length} 条`;
+  });
+
+  // ---- 个人资料 ----
+  console.log('\n[个人资料]');
+  await check('改昵称并回读', async () => {
+    const me = await rest.me();
+    const original = me.name;
+    const next = `冒烟-${Date.now().toString(36)}`;
+    await rest.updateOwnBasicInfo({ name: next });
+    const after = await rest.me();
+    assert(after.name === next, `昵称没改成：${after.name}`);
+    // 改回去，别把用户的账号名字留成测试串
+    await rest.updateOwnBasicInfo({ name: original });
+    return `${original} → ${next} → 已还原`;
+  });
+
+  await check('上传头像后还原', async () => {
+    // 1x1 透明 PNG
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    await rest.setAvatar(new Blob([png], { type: 'image/png' }), 'smoke.png');
+    const after = await rest.getUserInfo(USER);
+    assert(!!after.avatarETag, '头像没上传上去（avatarETag 为空）');
+    // 必须还原：这是用户的真实账号，不能给人家留一张 1x1 透明图当头像
+    await rest.resetAvatar();
+    return '已上传并还原为默认头像';
   });
 
   // ---- 清理 ----
