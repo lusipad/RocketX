@@ -12,6 +12,7 @@ import UploadConfirm from '../components/UploadConfirm';
 import Toaster from '../components/Toaster';
 import ContactsPage from './ContactsPage';
 import TodosPage from './TodosPage';
+import CalendarPage from './CalendarPage';
 import WorkbenchPage from './WorkbenchPage';
 import SettingsPage from './SettingsPage';
 
@@ -71,6 +72,8 @@ export default function MainPage() {
         <TodosPage />
       ) : module === 'contacts' ? (
         <ContactsPage />
+      ) : module === 'calendar' ? (
+        <CalendarPage />
       ) : module === 'workbench' ? (
         <WorkbenchPage />
       ) : module === 'settings' ? (
