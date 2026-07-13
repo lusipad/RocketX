@@ -41,10 +41,16 @@ export const useAuth = create<AuthState>((set) => ({
       saveAuth({ authToken: data.authToken, userId: data.userId });
       set({ status: 'authed', user: data.me, error: null });
     } catch (err) {
-      const raw = err instanceof Error ? err.message : '';
-      const friendly = /fetch|network|Load failed|error sending request/i.test(raw)
-        ? '无法连接服务器：请检查服务器地址是否正确、网络是否可达'
-        : raw || '登录失败，请检查用户名和密码';
+      // Tauri 插件可能抛字符串而非 Error，都要兜住
+      const raw = err instanceof Error ? err.message : String(err ?? '');
+      let friendly: string;
+      if (/unauthorized/i.test(raw)) {
+        friendly = '用户名或密码错误';
+      } else if (/fetch|network|load failed|error sending request|not allowed|scope/i.test(raw)) {
+        friendly = '无法连接服务器：请检查服务器地址是否正确、网络是否可达';
+      } else {
+        friendly = raw || '登录失败，请重试';
+      }
       set({ status: 'guest', error: friendly });
     }
   },
