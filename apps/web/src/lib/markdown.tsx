@@ -60,11 +60,28 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
         </span>,
       );
     } else if (m[7]) {
-      nodes.push(
-        <span key={key} className="font-medium text-primary">
-          {full}
-        </span>,
-      );
+      // #纯数字 且配置过工作台 → 链接到 ADO 工作项
+      const adoBase = /^#\d+$/.test(full) ? localStorage.getItem('rcx-ado-web') : null;
+      if (adoBase) {
+        nodes.push(
+          <a
+            key={key}
+            href={`${adoBase}/_workitems/edit/${full.slice(1)}`}
+            target="_blank"
+            rel="noreferrer"
+            title={`Azure DevOps 工作项 ${full}`}
+            className="font-medium text-primary underline-offset-2 hover:underline"
+          >
+            {full}
+          </a>,
+        );
+      } else {
+        nodes.push(
+          <span key={key} className="font-medium text-primary">
+            {full}
+          </span>,
+        );
+      }
     }
     last = idx + full.length;
   }

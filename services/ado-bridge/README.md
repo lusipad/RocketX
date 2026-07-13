@@ -1,8 +1,23 @@
-# ado-bridge — Azure DevOps Server 2022 → Rocket.Chat 消息桥
+# ado-bridge — Azure DevOps Server 2022 集成服务
 
-接收 Azure DevOps Server 的 Service Hooks 事件（工作项、PR、推送、构建、发布），
-转成飞书风格消息卡片发进 Rocket.Chat 频道。客户端（apps/web）会把这些卡片渲染成
-带彩色侧边条、可点击标题的富文本卡片。
+两个职责：
+
+1. **事件桥**：接收 ADO Service Hooks（工作项、PR、推送、构建、发布），
+   转成飞书风格消息卡片发进 Rocket.Chat 频道；
+2. **工作台查询代理**：为客户端「工作台」模块提供只读查询
+   （我的工作项 WIQL、活跃 PR），PAT 保存在服务端，客户端不接触凭据。
+
+## 工作台代理配置
+
+`.env` 里配置 `ADO_BASE_URL`（集合地址，如 `http://ado:8080/tfs/DefaultCollection`）
+和 `ADO_PAT`（只读：Work Items Read + Code Read）。接口：
+
+- `GET /api/ado/config` → `{ webBase }`（客户端用于 #工作项号 链接）
+- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项
+- `GET /api/ado/pullrequests` → 活跃 PR（客户端按创建人/评审人过滤）
+
+本地联调可用 mock：`node mock/mock-ado.mjs`（端口 8378），
+然后 `ADO_BASE_URL=http://localhost:8378/DefaultCollection ADO_PAT=mock` 启动本服务。
 
 ## 准备机器人账号
 

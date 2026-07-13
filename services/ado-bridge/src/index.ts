@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { RcRestClient } from '@rcx/rc-client';
 import { transformAdoEvent, type AdoEvent } from './transform';
+import { AdoClient } from './ado';
 
 const {
   RC_BASE_URL = 'http://localhost:3000',
@@ -12,6 +14,9 @@ const {
   // 消息显示的发送者别名。需要账号具备 message-impersonate 权限（bot 角色默认有），
   // 普通/管理员账号请留空
   RC_ALIAS = '',
+  // 工作台查询代理：ADO 集合地址 + 只读 PAT（不配置则工作台接口返回 503）
+  ADO_BASE_URL = '',
+  ADO_PAT = '',
 } = process.env;
 
 if (!RC_AUTH_TOKEN || !RC_USER_ID) {
@@ -25,9 +30,43 @@ if (!RC_AUTH_TOKEN || !RC_USER_ID) {
 const rest = new RcRestClient({ baseUrl: RC_BASE_URL });
 rest.setAuth(RC_AUTH_TOKEN, RC_USER_ID);
 
+const ado = ADO_BASE_URL && ADO_PAT ? new AdoClient({ baseUrl: ADO_BASE_URL, pat: ADO_PAT }) : null;
+
 const app = Fastify({ logger: true });
+// 工作台前端（Web/桌面端）跨域调用
+await app.register(cors, { origin: true });
 
 app.get('/healthz', async () => ({ ok: true }));
+
+// ---- 工作台查询代理 ----
+
+/** 客户端需要的 ADO 基本信息（web 链接前缀等） */
+app.get('/api/ado/config', async (_req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  return { webBase: ado.webBase };
+});
+
+app.get<{ Querystring: { assignedTo?: string } }>('/api/ado/workitems', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  const assignedTo = req.query.assignedTo;
+  if (!assignedTo) return reply.code(400).send({ error: '缺少 assignedTo 参数' });
+  try {
+    return { items: await ado.getWorkItems(assignedTo) };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
+  }
+});
+
+app.get('/api/ado/pullrequests', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  try {
+    return { items: await ado.getActivePullRequests() };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
+  }
+});
 
 /**
  * Azure DevOps Server 2022 Service Hooks 入口。

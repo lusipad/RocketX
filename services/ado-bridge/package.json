@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/cors": "^10.0.0",
     "@rcx/rc-client": "workspace:*",
     "fastify": "^5.0.0"
   },
