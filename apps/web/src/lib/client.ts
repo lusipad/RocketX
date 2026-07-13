@@ -61,6 +61,17 @@ function wsUrlFor(base: string): string {
   return `${wsProtocol}://${location.host}/websocket`;
 }
 
+// 桌面端：HTTP 走 Tauri 的 Rust 通道（plugin-http），绕开 webview CORS，
+// 连接任意 Rocket.Chat 服务器都无需服务端配置。WebSocket 不受 CORS 限制，仍走原生。
+const tauriFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const { fetch: pluginFetch } = await import('@tauri-apps/plugin-http');
+  return pluginFetch(input, init);
+}) as typeof fetch;
+
 // 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
-export const rest = new RcRestClient({ baseUrl: getServerBase(), authProvider: loadStoredAuth });
+export const rest = new RcRestClient({
+  baseUrl: getServerBase(),
+  authProvider: loadStoredAuth,
+  fetchImpl: isTauri ? tauriFetch : undefined,
+});
 export const realtime = new RcRealtimeClient(wsUrlFor(getServerBase()));

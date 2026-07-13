@@ -28,6 +28,11 @@ export interface RcRestOptions {
    * 优先于 setAuth 注入的内存状态，可避免模块多实例/时序问题。
    */
   authProvider?: () => { authToken: string; userId: string } | null;
+  /**
+   * 自定义 fetch 实现。桌面端（Tauri）注入 plugin-http 的 fetch
+   * 走 Rust 通道绕开 webview CORS；缺省用全局 fetch。
+   */
+  fetchImpl?: typeof fetch;
 }
 
 /**
@@ -39,10 +44,12 @@ export class RcRestClient {
   authToken: string | null = null;
   userId: string | null = null;
   private authProvider?: RcRestOptions['authProvider'];
+  private fetchImpl?: typeof fetch;
 
   constructor(options: RcRestOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
     this.authProvider = options.authProvider;
+    this.fetchImpl = options.fetchImpl;
   }
 
   setAuth(authToken: string | null, userId: string | null): void {
@@ -77,7 +84,8 @@ export class RcRestClient {
       headers['X-Auth-Token'] = auth.authToken;
       headers['X-User-Id'] = auth.userId;
     }
-    const res = await fetch(url, {
+    const doFetch = this.fetchImpl ?? fetch;
+    const res = await doFetch(url, {
       method,
       headers,
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
