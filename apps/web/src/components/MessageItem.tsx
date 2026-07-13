@@ -27,6 +27,7 @@ import { renderMarkdown, LinkifiedText } from '../lib/markdown';
 import { assetUrl } from '../lib/client';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
+import { usePrefs } from '../stores/prefs';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -341,6 +342,7 @@ export default function MessageItem({
   const discardMessage = useChat((s) => s.discardMessage);
   const receipt = useChat((s) => s.readReceipts[message.rid]);
   const roomType = useChat((s) => s.subscriptions[message.rid]?.t);
+  const showAvatars = usePrefs((s) => s.prefs.displayAvatars ?? true);
 
   const [editing, setEditing] = useState(false);
   const [picker, setPicker] = useState(false);
@@ -421,13 +423,15 @@ export default function MessageItem({
       }`}
     >
       {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片 */}
-      <div className="w-9 shrink-0">
-        {!grouped && (
-          <button onClick={() => setShowCard(true)} className="block cursor-pointer">
-            <Avatar name={displayName} username={message.u.username} size={36} />
-          </button>
-        )}
-      </div>
+      {showAvatars && (
+        <div className="w-9 shrink-0">
+          {!grouped && (
+            <button onClick={() => setShowCard(true)} className="block cursor-pointer">
+              <Avatar name={displayName} username={message.u.username} size={36} />
+            </button>
+          )}
+        </div>
+      )}
 
       <div className={`flex max-w-[68%] min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
         {!grouped && (

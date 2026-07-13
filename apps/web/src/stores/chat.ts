@@ -10,6 +10,7 @@ import {
 } from '@rcx/rc-client';
 import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
 import { useAuth } from './auth';
+import { usePrefs } from './prefs';
 
 export interface Conversation {
   rid: string;
@@ -17,6 +18,8 @@ export interface Conversation {
   type: RcSubscription['t'];
   unread: number;
   alert: boolean;
+  /** 被 @ 我的次数 */
+  userMentions: number;
   /** 置顶会话 */
   favorite: boolean;
   /** 免打扰 */
@@ -25,11 +28,33 @@ export interface Conversation {
   isDiscussion: boolean;
   /** 讨论所属的父会话名 */
   parentName?: string;
+  /** Team 主频道 */
+  isTeam: boolean;
+  /** 属于某个 Team 的子频道 */
+  teamId?: string;
   lastTs: number;
   lastPreview: string;
   /** DM 用对方用户名取头像 */
   avatarUsername?: string;
 }
+
+/** 侧栏分区（对齐 Rocket.Chat 官方的 sidebarSectionsOrder） */
+export type SectionKey =
+  | 'unread'
+  | 'favorites'
+  | 'teams'
+  | 'discussions'
+  | 'channels'
+  | 'direct';
+
+export const SECTION_LABELS: Record<SectionKey, string> = {
+  unread: '未读',
+  favorites: '收藏',
+  teams: '团队',
+  discussions: '讨论',
+  channels: '频道与群组',
+  direct: '私聊',
+};
 
 /** 右侧面板：话题 / Pin 列表 / 标记 / 群成员 / 消息搜索，同一时刻只开一个 */
 export type RightPanel =
@@ -109,6 +134,8 @@ interface ChatState {
   startDM: (username: string) => Promise<string>;
   /** 创建群组并跳转，返回房间 id */
   createGroup: (name: string, members: string[], priv: boolean) => Promise<string>;
+  /** 创建团队（Team = 主频道 + 子频道）并跳转 */
+  createTeam: (name: string, members: string[], priv: boolean) => Promise<string>;
   /** 从消息创建讨论（RC Discussion）并跳转 */
   createDiscussionFrom: (msg: RcMessage) => Promise<void>;
   requestUpload: (files: File[]) => void;
@@ -226,8 +253,20 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   if (!auth || msg.u._id === auth.userId || msg.t) return;
   // 免打扰会话不弹通知
   if (state.subscriptions[rid]?.disableNotifications) return;
-  const inactive = state.activeRid !== rid || document.hidden;
-  if (!inactive) return;
+
+  const prefs = usePrefs.getState().prefs;
+  if (prefs.desktopNotifications === 'nothing') return;
+  // 「仅 @我」：消息里没提到我就不弹
+  if (prefs.desktopNotifications === 'mentions') {
+    const me = useAuth.getState().user?.username;
+    const mentioned =
+      !!me && new RegExp(`@(${me}|all|here)\\b`).test(msg.msg ?? '');
+    if (!mentioned) return;
+  }
+
+  const focused = state.activeRid === rid && !document.hidden;
+  // 关闭「当前会话不打扰」时，正在看的会话也会弹通知
+  if (focused && (prefs.muteFocusedConversations ?? true)) return;
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
@@ -727,6 +766,13 @@ export const useChat = create<ChatState>((set, get) => ({
     return room._id;
   },
 
+  createTeam: async (name, members, priv) => {
+    const team = await rest.createTeam(name, members, priv);
+    await refreshSubsAndRooms(set);
+    await get().openRoom(team.roomId);
+    return team.roomId;
+  },
+
   createDiscussionFrom: async (msg) => {
     const name = (msg.msg || '讨论').slice(0, 40);
     const room = await rest.createDiscussion(msg.rid, name, msg._id);
@@ -782,10 +828,14 @@ export function buildConversations(
       type: sub.t,
       unread: sub.unread,
       alert: sub.alert,
+      userMentions: sub.userMentions ?? 0,
       favorite: !!sub.f,
       muted: !!sub.disableNotifications,
       isDiscussion: !!prid,
       parentName: parent ? parent.fname || parent.name : undefined,
+      // Team 标记在 room 对象上（订阅里没有）
+      isTeam: !!(room?.teamMain ?? sub.teamMain),
+      teamId: room?.teamId ?? sub.teamId,
       lastTs,
       lastPreview: messagePreview(room?.lastMessage),
       avatarUsername: sub.t === 'd' ? sub.name : undefined,
@@ -794,4 +844,75 @@ export function buildConversations(
   // 置顶会话在前，其余按最新消息时间
   items.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.lastTs - a.lastTs);
   return items;
+}
+
+/** 会话归入哪个分区（顺序即优先级，与 RC 官方一致） */
+export function sectionOf(conv: Conversation): SectionKey {
+  if (conv.favorite) return 'favorites';
+  if (conv.isTeam) return 'teams';
+  if (conv.isDiscussion) return 'discussions';
+  if (conv.type === 'd') return 'direct';
+  return 'channels';
+}
+
+/**
+ * 把会话切分成分区。
+ * showUnread: 未读单独置顶成一个分区
+ * showFavorites: 收藏独立成区（否则收藏会话仍留在原类型分区里，只是排前面）
+ * groupByType: 关闭时不分区，全部混在一起
+ */
+export function buildSections(
+  convs: Conversation[],
+  opts: {
+    groupByType: boolean;
+    showUnread: boolean;
+    showFavorites: boolean;
+    sortBy: 'activity' | 'alphabetical';
+  },
+): { key: SectionKey | 'all'; label: string; items: Conversation[] }[] {
+  const sortFn = (a: Conversation, b: Conversation) =>
+    opts.sortBy === 'alphabetical'
+      ? a.name.localeCompare(b.name, 'zh-CN')
+      : b.lastTs - a.lastTs;
+
+  const rest = [...convs];
+  const sections: { key: SectionKey | 'all'; label: string; items: Conversation[] }[] = [];
+
+  if (opts.showUnread) {
+    const unread = rest.filter((c) => c.unread > 0 || c.alert);
+    if (unread.length > 0) {
+      sections.push({ key: 'unread', label: SECTION_LABELS.unread, items: unread.sort(sortFn) });
+      for (const c of unread) rest.splice(rest.indexOf(c), 1);
+    }
+  }
+
+  if (!opts.groupByType) {
+    const favorites = opts.showFavorites ? rest.filter((c) => c.favorite) : [];
+    if (favorites.length > 0) {
+      sections.push({
+        key: 'favorites',
+        label: SECTION_LABELS.favorites,
+        items: favorites.sort(sortFn),
+      });
+      for (const c of favorites) rest.splice(rest.indexOf(c), 1);
+    }
+    sections.push({ key: 'all', label: '会话', items: rest.sort(sortFn) });
+    return sections;
+  }
+
+  const order: SectionKey[] = ['favorites', 'teams', 'discussions', 'channels', 'direct'];
+  const buckets = new Map<SectionKey, Conversation[]>();
+  for (const c of rest) {
+    const key = opts.showFavorites ? sectionOf(c) : sectionOf({ ...c, favorite: false });
+    const list = buckets.get(key) ?? [];
+    list.push(c);
+    buckets.set(key, list);
+  }
+  for (const key of order) {
+    const items = buckets.get(key);
+    if (items?.length) {
+      sections.push({ key, label: SECTION_LABELS[key], items: items.sort(sortFn) });
+    }
+  }
+  return sections;
 }

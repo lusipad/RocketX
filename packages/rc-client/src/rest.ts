@@ -2,6 +2,8 @@ import { tsMs } from './types';
 import type {
   RcDate,
   RcLoginData,
+  RcPreferences,
+  RcTeam,
   RcMessage,
   RcMessageAttachment,
   RcRoom,
@@ -132,6 +134,58 @@ export class RcRestClient {
 
   me(): Promise<RcUser> {
     return this.request<RcUser>('GET', 'me');
+  }
+
+  // ---- 用户偏好（服务端持久化，跨设备同步）----
+
+  async getPreferences(): Promise<RcPreferences> {
+    const res = await this.request<{ settings?: { preferences?: RcPreferences } }>('GET', 'me');
+    return res.settings?.preferences ?? {};
+  }
+
+  /** 当前登录用户 id（authProvider 模式下 this.userId 为空，需实时取） */
+  private currentUserId(): string | null {
+    return this.authProvider?.()?.userId ?? this.userId;
+  }
+
+  async setPreferences(data: Partial<RcPreferences>): Promise<void> {
+    const userId = this.currentUserId();
+    if (!userId) throw new Error('未登录');
+    await this.request('POST', 'users.setPreferences', { userId, data });
+  }
+
+  /** 设置在线状态（online / away / busy / offline） */
+  setStatus(status: string, message?: string): Promise<unknown> {
+    return this.request('POST', 'users.setStatus', {
+      status,
+      ...(message !== undefined ? { message } : {}),
+    });
+  }
+
+  // ---- Teams ----
+
+  async listTeams(count = 50): Promise<RcTeam[]> {
+    const res = await this.request<{ teams: RcTeam[] }>('GET', 'teams.list', undefined, { count });
+    return res.teams ?? [];
+  }
+
+  /** 创建 Team（type: 0 公开 / 1 私有） */
+  async createTeam(name: string, members: string[], priv = true): Promise<RcTeam> {
+    const res = await this.request<{ team: RcTeam }>('POST', 'teams.create', {
+      name,
+      type: priv ? 1 : 0,
+      members,
+    });
+    return res.team;
+  }
+
+  /** Team 下的频道列表 */
+  async listTeamRooms(teamId: string, count = 50): Promise<RcRoom[]> {
+    const res = await this.request<{ rooms: RcRoom[] }>('GET', 'teams.listRooms', undefined, {
+      teamId,
+      count,
+    });
+    return res.rooms ?? [];
   }
 
   // ---- 会话 / 房间 ----

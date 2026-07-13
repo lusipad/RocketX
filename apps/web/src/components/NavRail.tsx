@@ -10,6 +10,7 @@ import {
   Plus,
   Search,
   Settings,
+  Users,
   UsersRound,
   Video,
 } from 'lucide-react';
@@ -38,7 +39,7 @@ export default function NavRail() {
   const setModule = useUI((s) => s.setModule);
   const setSwitcherOpen = useUI((s) => s.setSwitcherOpen);
   const [plusMenu, setPlusMenu] = useState(false);
-  const [dialog, setDialog] = useState<'dm' | 'group' | null>(null);
+  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
 
   // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
@@ -91,6 +92,16 @@ export default function NavRail() {
                 >
                   <UsersRound size={15} className="text-ink-2" />
                   创建群组
+                </button>
+                <button
+                  onClick={() => {
+                    setPlusMenu(false);
+                    setDialog('team');
+                  }}
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
+                >
+                  <Users size={15} className="text-ink-2" />
+                  创建团队
                 </button>
               </div>
             </>
@@ -165,7 +176,9 @@ export default function NavRail() {
       </div>
 
       {dialog === 'dm' && <StartDMDialog onClose={() => setDialog(null)} />}
-      {dialog === 'group' && <CreateGroupDialog onClose={() => setDialog(null)} />}
+      {(dialog === 'group' || dialog === 'team') && (
+        <CreateGroupDialog kind={dialog} onClose={() => setDialog(null)} />
+      )}
       {selfCard && user && (
         <UserCard
           user={{ username: user.username, name: user.name, status: user.status }}

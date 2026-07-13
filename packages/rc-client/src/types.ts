@@ -82,6 +82,10 @@ export interface RcRoom {
   fname?: string;
   /** 父房间 id：有值说明这是一个「讨论」（Discussion） */
   prid?: string;
+  /** true 表示这是某个 Team 的主频道（Team 信息在 room 上，不在订阅上） */
+  teamMain?: boolean;
+  /** 所属 Team 的 id */
+  teamId?: string;
   topic?: string;
   announcement?: string;
   usersCount?: number;
@@ -101,15 +105,60 @@ export interface RcSubscription {
   unread: number;
   alert: boolean;
   open: boolean;
+  /** 被 @ 我的次数（区别于 groupMentions 的 @all/@here） */
+  userMentions?: number;
+  /** 被 @all / @here 的次数 */
+  groupMentions?: number;
   /** 置顶会话（favorite） */
   f?: boolean;
   /** 父房间 id：有值说明这是一个「讨论」 */
   prid?: string;
+  /** true 表示这是某个 Team 的主频道 */
+  teamMain?: boolean;
+  /** 所属 Team 的 id（Team 下的子频道） */
+  teamId?: string;
   /** 免打扰 */
   disableNotifications?: boolean;
   ls?: RcDate;
   _updatedAt: RcDate;
   u: { _id: string; username: string };
+}
+
+/** Rocket.Chat 用户偏好（服务端持久化，跨设备同步） */
+export interface RcPreferences {
+  // 侧栏
+  sidebarGroupByType?: boolean;
+  sidebarShowFavorites?: boolean;
+  sidebarShowUnread?: boolean;
+  sidebarSortby?: 'activity' | 'alphabetical';
+  sidebarViewMode?: 'extended' | 'medium' | 'condensed';
+  sidebarDisplayAvatar?: boolean;
+  // 消息
+  sendOnEnter?: 'normal' | 'alternative' | 'desktop';
+  autoImageLoad?: boolean;
+  useEmojis?: boolean;
+  convertAsciiEmoji?: boolean;
+  hideUsernames?: boolean;
+  showThreadsInMainChannel?: boolean;
+  displayAvatars?: boolean;
+  // 通知
+  desktopNotifications?: 'all' | 'mentions' | 'nothing';
+  unreadAlert?: boolean;
+  muteFocusedConversations?: boolean;
+  notificationsSoundVolume?: number;
+  enableAutoAway?: boolean;
+  idleTimeLimit?: number;
+  themeAppearence?: 'auto' | 'light' | 'dark';
+}
+
+export interface RcTeam {
+  _id: string;
+  name: string;
+  type: number;
+  roomId: string;
+  createdAt: RcDate;
+  createdBy: { _id: string; username: string };
+  rooms?: number;
 }
 
 export interface RcLoginData {

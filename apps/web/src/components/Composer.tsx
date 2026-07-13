@@ -10,6 +10,7 @@ import {
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
+import { usePrefs } from '../stores/prefs';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 
@@ -26,6 +27,8 @@ export default function Composer() {
   const replyTo = useChat((s) => s.replyTo);
   const setReplyTo = useChat((s) => s.setReplyTo);
   const emitTyping = useChat((s) => s.emitTyping);
+  // 'alternative' = Ctrl+Enter 发送、Enter 换行
+  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter ?? 'normal');
 
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -169,7 +172,12 @@ export default function Composer() {
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    const shouldSend =
+      sendOnEnter === 'alternative'
+        ? e.ctrlKey || e.metaKey // Ctrl/Cmd + Enter 发送
+        : !e.shiftKey && !e.ctrlKey && !e.metaKey; // Enter 发送
+    if (shouldSend) {
       e.preventDefault();
       void doSend();
     }
@@ -281,7 +289,11 @@ export default function Composer() {
             refreshMention(text, (e.target as HTMLTextAreaElement).selectionStart ?? 0)
           }
           rows={Math.min(5, Math.max(1, text.split('\n').length))}
-          placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+          placeholder={
+            sendOnEnter === 'alternative'
+              ? '输入消息，Ctrl + Enter 发送'
+              : '输入消息，Enter 发送，Shift + Enter 换行'
+          }
           className="max-h-32 flex-1 resize-none rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
         />
         <button

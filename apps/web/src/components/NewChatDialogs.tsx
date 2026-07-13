@@ -126,9 +126,19 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** 创建群组：群名 + 选成员 + 公开/私有 */
-export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
+/**
+ * 创建群组 / 团队。
+ * 群组 = 单个频道；团队 = 主频道 + 可挂多个子频道（Rocket.Chat Team）。
+ */
+export function CreateGroupDialog({
+  kind = 'group',
+  onClose,
+}: {
+  kind?: 'group' | 'team';
+  onClose: () => void;
+}) {
   const createGroup = useChat((s) => s.createGroup);
+  const createTeam = useChat((s) => s.createTeam);
   const [name, setName] = useState('');
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
@@ -136,6 +146,7 @@ export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const users = useUserSearch(keyword);
+  const isTeam = kind === 'team';
 
   const toggle = (u: RcUser) => {
     const next = new Map(selected);
@@ -150,7 +161,8 @@ export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await createGroup(groupName, [...selected.keys()], priv);
+      if (isTeam) await createTeam(groupName, [...selected.keys()], priv);
+      else await createGroup(groupName, [...selected.keys()], priv);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建失败');
@@ -159,13 +171,18 @@ export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <DialogShell title="创建群组" onClose={onClose}>
+    <DialogShell title={isTeam ? '创建团队' : '创建群组'} onClose={onClose}>
+      {isTeam && (
+        <div className="mx-5 mb-2 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
+          团队是一组频道的集合：创建后可以在团队下继续新建频道，成员共享。
+        </div>
+      )}
       <div className="space-y-2.5 px-5 pb-2">
         <input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="群组名称（必填）"
+          placeholder={isTeam ? '团队名称（必填）' : '群组名称（必填）'}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
         />
         {selected.size > 0 && (
@@ -226,7 +243,7 @@ export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
             className="accent-primary"
           />
           <Lock size={12} />
-          私有群组（仅受邀成员可见）
+          {isTeam ? '私有团队（仅受邀成员可见）' : '私有群组（仅受邀成员可见）'}
         </label>
         <button
           onClick={() => void doCreate()}
