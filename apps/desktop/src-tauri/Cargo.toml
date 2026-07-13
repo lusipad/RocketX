@@ -18,6 +18,15 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Windows 集成认证（NTLM/Negotiate）：域内的 Azure DevOps Server 默认就是这个，
+# 不该逼用户去建 PAT。webview 和 reqwest 都做不了「用当前登录用户的凭据」，
+# 只有 WinHTTP 能——它会自己完成 401 挑战-应答握手。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinHttp",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

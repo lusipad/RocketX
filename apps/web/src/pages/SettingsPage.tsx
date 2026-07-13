@@ -395,6 +395,13 @@ function NotificationSection() {
   );
 }
 
+const AUTH_LABELS: Record<string, string> = {
+  ntlm: 'Windows 集成认证（当前登录用户，无需 PAT）',
+  pat: 'PAT',
+  bearer: 'Bearer Token',
+  none: '匿名访问',
+};
+
 /** 工作台（Azure DevOps） */
 function WorkbenchSection() {
   const [config, setConfig] = useState<WorkbenchConfig>(
@@ -456,12 +463,7 @@ function WorkbenchSection() {
             adoBase: res.found!.adoBase,
             auth: res.found!.auth,
           }));
-          const authLabel =
-            res.found.auth === 'pat'
-              ? 'PAT'
-              : res.found.auth === 'bearer'
-                ? 'Bearer Token'
-                : 'Windows 集成认证';
+          const authLabel = AUTH_LABELS[res.found.auth];
           setResult({
             ok: true,
             msg: `连接成功！集合地址：${res.found.adoBase}（${authLabel}），可见 ${res.found.projects.length} 个项目：${res.found.projects.slice(0, 3).join('、')}。已自动填入，点「保存」生效。`,
@@ -512,7 +514,11 @@ function WorkbenchSection() {
         <>
           <Row
             label="ADO 地址"
-            hint="直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，不必自己拼。"
+            hint={
+              isTauri
+                ? '直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，并优先尝试 Windows 集成认证 —— 域内环境通常填完地址就能连上。'
+                : '直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，不必自己拼。'
+            }
           >
             <input
               value={config.adoBase ?? ''}
@@ -523,7 +529,11 @@ function WorkbenchSection() {
           </Row>
           <Row
             label="个人访问令牌（PAT）"
-            hint="在 ADO 的「用户设置 → 个人访问令牌」创建，只读即可：Work Items / Code / Build。仅保存在本机。若服务器只支持 Windows 集成认证，可留空——探测会尝试免凭据访问。"
+            hint={
+              isTauri
+                ? '通常留空即可 —— 桌面端默认用 Windows 集成认证，直接拿你当前登录的域账号连，不需要 PAT。只有服务器禁用了集成认证时才需要填（在 ADO 的「用户设置 → 个人访问令牌」创建，勾选 Work Items / Code / Build 只读）。'
+                : '网页端必须填 PAT：浏览器的跨域规则不允许携带 Windows 凭据，做不了集成认证。在 ADO 的「用户设置 → 个人访问令牌」创建，勾选 Work Items / Code / Build 只读。仅保存在本机。'
+            }
           >
             <input
               type="password"

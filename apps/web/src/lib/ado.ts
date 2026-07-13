@@ -10,8 +10,8 @@ export interface WorkbenchConfig {
   bridge?: string;
   adoBase?: string;
   pat?: string;
-  /** 直连的认证方式（自动探测得出） */
-  auth?: 'pat' | 'bearer' | 'none';
+  /** 直连的认证方式（自动探测得出）。ntlm = Windows 集成认证，桌面端默认 */
+  auth?: import('./adoDirect').AdoAuth;
   account: string;
 }
 

@@ -3,15 +3,26 @@
  * 桌面端走 Tauri Rust 通道没有 CORS 限制，可直接连内网 ADO；
  * Web 端仅当 ADO 服务器允许跨域时可用，否则请用桥接模式。
  */
-import { httpFetch } from './http';
+import { httpFetch, isTauri } from './http';
+
+/** 认证方式。企业内网的 ADO Server 默认是 Windows 集成认证，所以 ntlm 排在最前。 */
+export type AdoAuth = 'ntlm' | 'pat' | 'bearer' | 'none';
 
 export interface DirectConfig {
   /** 集合地址，如 http://ado:8080/DefaultCollection 或 http://ado:8080/tfs/DefaultCollection */
   adoBase: string;
   pat: string;
-  /** 认证方式：pat=Basic(:PAT)，bearer=Bearer PAT，none=不带凭据（Windows 集成认证由系统协商） */
-  auth?: 'pat' | 'bearer' | 'none';
+  /**
+   * ntlm   = Windows 集成认证，用当前登录用户的凭据，不需要 PAT（仅桌面端；见下方说明）
+   * pat    = Basic(:PAT)
+   * bearer = Bearer PAT
+   * none   = 不带任何凭据
+   */
+  auth?: AdoAuth;
 }
+
+/** ntlm 只能在桌面端用：浏览器跨域带凭据要求服务端回显具体 Origin，而 ADO 回的是 `*` */
+export const canUseNtlm = isTauri;
 
 function base(cfg: DirectConfig): string {
   return cfg.adoBase.replace(/\/+$/, '');
@@ -32,6 +43,29 @@ function authHeaders(cfg: DirectConfig): Record<string, string> {
   return { Authorization: basicAuth(cfg.pat) };
 }
 
+/**
+ * Windows 集成认证走 Rust 侧的 WinHTTP。
+ *
+ * 为什么不能在前端做：带 NTLM 凭据的跨源请求需要 `credentials: 'include'`，
+ * 而 CORS 规定这时服务端不能回 `Access-Control-Allow-Origin: *` —— ADO 回的正是 `*`。
+ * 所以只能绕开 webview，由 WinHTTP 用当前登录用户的凭据完成挑战-应答。
+ */
+async function ntlmRequest(
+  url: string,
+  method: string,
+  body: string | undefined,
+  contentType: string,
+): Promise<{ status: number; text: string }> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const res = await invoke<{ status: number; body: string }>('win_auth_request', {
+    url,
+    method,
+    body,
+    contentType,
+  });
+  return { status: res.status, text: res.body };
+}
+
 async function adoRequest<T>(
   cfg: DirectConfig,
   method: 'GET' | 'POST' | 'PATCH',
@@ -40,41 +74,57 @@ async function adoRequest<T>(
   contentType = 'application/json',
 ): Promise<T> {
   const url = `${base(cfg)}${path}`;
-  let res: Response;
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  let status: number;
+  let text: string;
+
   try {
-    res = await httpFetch(url, {
-      method,
-      headers: {
-        'Content-Type': contentType,
-        Accept: 'application/json',
-        ...authHeaders(cfg),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    if (cfg.auth === 'ntlm') {
+      if (!canUseNtlm) {
+        throw new Error(
+          'Windows 集成认证只能在桌面客户端使用（浏览器的跨域规则不允许携带系统凭据）。网页端请填 PAT 或改用桥接模式。',
+        );
+      }
+      ({ status, text } = await ntlmRequest(url, method, payload, contentType));
+    } else {
+      const res = await httpFetch(url, {
+        method,
+        headers: {
+          'Content-Type': contentType,
+          Accept: 'application/json',
+          ...authHeaders(cfg),
+        },
+        body: payload,
+      });
+      status = res.status;
+      text = await res.text();
+    }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
+    if (/只能在桌面客户端/.test(raw)) throw err;
     throw new Error(
       /fetch|network|load failed/i.test(raw)
         ? `无法连接 ${base(cfg)}（网页端受浏览器跨域限制，请用桌面客户端或改用 ado-bridge 模式）`
         : raw,
     );
   }
-  if (res.status === 401 || res.status === 203) {
-    // 没填 PAT 和填了错 PAT 是两回事，提示得说清楚，否则用户会一直去改 PAT
+
+  if (status === 401 || status === 203) {
+    // 三种情况的处理方向完全不同，提示必须分开说，否则用户会一直去改 PAT
     throw new Error(
-      cfg.auth === 'none' || !cfg.pat?.trim()
-        ? '服务器要求认证：请填写 PAT（在 ADO 的 用户设置 → 个人访问令牌 里创建，勾选 Work Items / Code / Build 读取权限）'
-        : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items / Code / Build 读取）',
+      cfg.auth === 'ntlm'
+        ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
+        : cfg.auth === 'none' || !cfg.pat?.trim()
+          ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
+          : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items / Code / Build 读取）',
     );
   }
-  if (res.status === 404) {
+  if (status === 404) {
     throw new Error(`地址不对：${url} 返回 404`);
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`ADO 返回 ${res.status}：${text.slice(0, 160) || path}`);
+  if (status < 200 || status >= 300) {
+    throw new Error(`ADO 返回 ${status}：${text.slice(0, 160) || path}`);
   }
-  const text = await res.text();
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -102,7 +152,7 @@ export async function directTestConnection(cfg: DirectConfig): Promise<string> {
 
 export type ProbeStep = {
   url: string;
-  auth: 'pat' | 'bearer' | 'none';
+  auth: AdoAuth;
   ok: boolean;
   detail: string;
 };
@@ -110,7 +160,7 @@ export type ProbeStep = {
 export interface ProbeResult {
   steps: ProbeStep[];
   /** 探测成功时的可用配置 */
-  found?: { adoBase: string; auth: 'pat' | 'bearer' | 'none'; projects: string[] };
+  found?: { adoBase: string; auth: AdoAuth; projects: string[] };
 }
 
 /**
@@ -170,9 +220,16 @@ export async function probeAdo(
   onStep?: (step: ProbeStep) => void,
 ): Promise<ProbeResult> {
   const bases = candidateBases(input);
-  const authModes: ('pat' | 'bearer' | 'none')[] = pat.trim()
-    ? ['pat', 'bearer', 'none']
-    : ['none'];
+  /**
+   * 顺序即优先级。桌面端把 Windows 集成认证放最前：企业内网的 ADO Server 默认就是它，
+   * 用户什么都不填就该能连上——不该逼人先去建 PAT。
+   * 网页端做不了 NTLM（跨域带凭据的限制），直接跳过。
+   */
+  const authModes: AdoAuth[] = [
+    ...(canUseNtlm ? (['ntlm'] as const) : []),
+    ...(pat.trim() ? (['pat', 'bearer'] as const) : []),
+    'none',
+  ];
   const steps: ProbeStep[] = [];
 
   for (const adoBase of bases) {
