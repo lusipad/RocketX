@@ -18,6 +18,7 @@ import {
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
+import { useCalendar, eventsForDate } from '../stores/calendar';
 import { useUI, type ModuleKey } from '../stores/ui';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -33,10 +34,10 @@ const MODULES: {
 }[] = [
   { key: 'messages', label: '消息', icon: MessageCircle },
   { key: 'todos', label: '待办', icon: ListTodo },
+  { key: 'calendar', label: '日历', icon: Calendar },
   { key: 'contacts', label: '通讯录', icon: BookUser },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
   { key: 'meetings', label: '会议', icon: Video, soon: true },
-  { key: 'calendar', label: '日历', icon: Calendar, soon: true },
   { key: 'docs', label: '云文档', icon: FileText, soon: true },
 ];
 
@@ -61,6 +62,12 @@ export default function NavRail() {
       todoOverdue: todos.filter((t) => isOverdue(t, today)).length,
     };
   }, [todos]);
+
+  const calendarEvents = useCalendar((s) => s.events);
+  const todayEventCount = useMemo(
+    () => eventsForDate(calendarEvents, todayKey()).length,
+    [calendarEvents],
+  );
 
   // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
   const { unreadTotal, hasAlert } = useMemo(() => {
@@ -173,6 +180,12 @@ export default function NavRail() {
                 ) : hasAlert ? (
                   <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                 ) : null)}
+              {/* 日历：今日日程数 */}
+              {key === 'calendar' && todayEventCount > 0 && (
+                <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-[10px] font-medium text-ink-2">
+                  {todayEventCount}
+                </span>
+              )}
               {/* 待办：有逾期就标红，否则灰色计数 */}
               {key === 'todos' && todoOpen > 0 && (
                 <span

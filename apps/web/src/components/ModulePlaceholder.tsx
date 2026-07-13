@@ -1,18 +1,13 @@
-import { Calendar, FileText, Video } from 'lucide-react';
+import { FileText, Video } from 'lucide-react';
 import type { ModuleKey } from '../stores/ui';
 
-/** 仅用于尚未实现的模块（messages/contacts/workbench/settings 有各自页面） */
+/** 仅用于尚未实现的模块 */
 export type PlaceholderModule = Exclude<
   ModuleKey,
-  'messages' | 'todos' | 'contacts' | 'workbench' | 'settings'
+  'messages' | 'todos' | 'contacts' | 'calendar' | 'workbench' | 'settings'
 >;
 
-const META: Record<PlaceholderModule, { icon: typeof Calendar; title: string; desc: string }> = {
-  calendar: {
-    icon: Calendar,
-    title: '日历',
-    desc: '日程管理与会议邀约，规划于后续里程碑。',
-  },
+const META: Record<PlaceholderModule, { icon: typeof FileText; title: string; desc: string }> = {
   docs: {
     icon: FileText,
     title: '云文档',
