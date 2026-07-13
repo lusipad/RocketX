@@ -6,6 +6,8 @@ import {
   ChevronDown,
   ChevronRight,
   EyeOff,
+  Folder as FolderIcon,
+  FolderMinus,
   Hash,
   Lock,
   Pin,
@@ -13,6 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import { buildConversations, buildSections, useChat, type Conversation } from '../stores/chat';
+import { useFolders } from '../stores/folders';
 import { usePrefs } from '../stores/prefs';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { fmtConvTime } from '../lib/format';
@@ -74,6 +77,12 @@ function ConversationItem({
   const showDraft = !!draft && !active;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
+  const folders = useFolders((s) => s.folders);
+  const addRoom = useFolders((s) => s.addRoom);
+  const removeRoom = useFolders((s) => s.removeRoom);
+  const inFolders = folders.filter((f) => f.rids.includes(conv.rid));
+  const notInFolders = folders.filter((f) => !f.rids.includes(conv.rid));
+
   const menuItems: MenuItem[] = [
     {
       label: conv.favorite ? '取消收藏' : '收藏会话',
@@ -88,6 +97,17 @@ function ConversationItem({
     ...(conv.unread > 0 || conv.alert
       ? [{ label: '标为已读', icon: Check, onClick: () => void markConvRead(conv.rid) }]
       : []),
+    // 移入 / 移出自定义分组
+    ...notInFolders.map((f) => ({
+      label: `移入「${f.name}」`,
+      icon: FolderIcon,
+      onClick: () => addRoom(f.id, conv.rid),
+    })),
+    ...inFolders.map((f) => ({
+      label: `移出「${f.name}」`,
+      icon: FolderMinus,
+      onClick: () => removeRoom(f.id, conv.rid),
+    })),
     { label: '隐藏会话', icon: EyeOff, danger: true, onClick: () => void hideConv(conv) },
   ];
 
@@ -97,12 +117,17 @@ function ConversationItem({
 
   return (
     <button
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/rcx-rid', conv.rid);
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
       onClick={() => void openRoom(conv.rid)}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 ${padY} text-left transition ${
+      className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 ${padY} text-left transition ${
         active ? 'bg-fill-active' : 'hover:bg-fill-hover'
       }`}
     >
@@ -192,18 +217,33 @@ export default function ConversationList() {
   const activeRid = useChat((s) => s.activeRid);
   const ready = useChat((s) => s.ready);
   const filter = useUI((s) => s.convFilter);
+  const activeFolder = useUI((s) => s.activeFolder);
   const prefs = usePrefs((s) => s.prefs);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const folders = useFolders((s) => s.folders);
+  const collapsedKeys = useFolders((s) => s.collapsed);
+  const toggleCollapse = useFolders((s) => s.toggleCollapse);
+
+  const folder = folders.find((f) => f.id === activeFolder);
 
   const sections = useMemo(() => {
-    const filtered = applyFilter(buildConversations(subscriptions, rooms), filter);
+    const all = buildConversations(subscriptions, rooms);
+    const sortFn = (a: Conversation, b: Conversation) =>
+      prefs.sidebarSortby === 'alphabetical'
+        ? a.name.localeCompare(b.name, 'zh-CN')
+        : b.lastTs - a.lastTs;
+
+    // 自定义分组视图：只显示该分组里的会话（按加入顺序）
+    if (folder) {
+      const items = folder.rids
+        .map((rid) => all.find((c) => c.rid === rid))
+        .filter((c): c is Conversation => !!c);
+      return [{ key: 'all' as const, label: folder.name, items }];
+    }
+
+    const filtered = applyFilter(all, filter);
     // 只有「全部」视图分区，其他过滤器是扁平列表
     if (filter !== 'all') {
-      const sorted =
-        prefs.sidebarSortby === 'alphabetical'
-          ? [...filtered].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
-          : filtered;
-      return [{ key: 'all' as const, label: FILTER_TITLE[filter], items: sorted }];
+      return [{ key: 'all' as const, label: FILTER_TITLE[filter], items: [...filtered].sort(sortFn) }];
     }
     return buildSections(filtered, {
       groupByType: prefs.sidebarGroupByType ?? true,
@@ -211,38 +251,41 @@ export default function ConversationList() {
       showFavorites: prefs.sidebarShowFavorites ?? true,
       sortBy: prefs.sidebarSortby ?? 'activity',
     });
-  }, [subscriptions, rooms, filter, prefs]);
+  }, [subscriptions, rooms, filter, prefs, folder]);
 
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   const viewMode = prefs.sidebarViewMode ?? 'medium';
   const showAvatar = prefs.sidebarDisplayAvatar ?? true;
-  const showHeaders = filter === 'all' && (prefs.sidebarGroupByType ?? true);
-
-  const toggleSection = (key: string) => {
-    const next = new Set(collapsed);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setCollapsed(next);
-  };
+  const showHeaders = !folder && filter === 'all' && (prefs.sidebarGroupByType ?? true);
+  const title = folder ? folder.name : FILTER_TITLE[filter];
 
   return (
     <aside className="flex w-[280px] shrink-0 flex-col border-r border-line bg-surface-2">
-      <div className="px-4 pt-4 pb-2 text-[15px] font-semibold text-ink">{FILTER_TITLE[filter]}</div>
+      <div className="px-4 pt-4 pb-2 text-[15px] font-semibold text-ink">{title}</div>
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {!ready && <div className="p-4 text-center text-sm text-ink-3">加载会话中…</div>}
         {ready && total === 0 && (
-          <div className="p-4 text-center text-sm text-ink-3">
-            {filter === 'all' ? '暂无会话' : '该分组下暂无会话'}
+          <div className="p-4 text-center text-sm leading-relaxed text-ink-3">
+            {folder ? (
+              <>
+                这个分组还是空的
+                <div className="mt-1 text-xs">把会话拖到左侧分组名上，或右键会话「移入分组」</div>
+              </>
+            ) : filter === 'all' ? (
+              '暂无会话'
+            ) : (
+              '该分组下暂无会话'
+            )}
           </div>
         )}
         {sections.map((section) => {
-          const isCollapsed = collapsed.has(section.key);
+          const isCollapsed = collapsedKeys.includes(section.key);
           const sectionUnread = section.items.reduce((n, c) => n + c.unread, 0);
           return (
             <div key={section.key} className="mb-1">
               {showHeaders && (
                 <button
-                  onClick={() => toggleSection(section.key)}
+                  onClick={() => toggleCollapse(section.key)}
                   className="flex w-full items-center gap-1 px-2 py-1.5 text-[11px] font-medium text-ink-3 transition hover:text-ink-2"
                 >
                   {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
@@ -255,7 +298,7 @@ export default function ConversationList() {
                   )}
                 </button>
               )}
-              {!isCollapsed &&
+              {(!showHeaders || !isCollapsed) &&
                 section.items.map((c) => (
                   <ConversationItem
                     key={c.rid}

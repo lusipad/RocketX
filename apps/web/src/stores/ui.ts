@@ -23,17 +23,22 @@ export type ConvFilter =
 interface UIState {
   module: ModuleKey;
   convFilter: ConvFilter;
+  /** 选中的自定义分组 id（非空时覆盖 convFilter） */
+  activeFolder: string | null;
   switcherOpen: boolean;
   setModule: (m: ModuleKey) => void;
   setConvFilter: (f: ConvFilter) => void;
+  setActiveFolder: (id: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
 }
 
 export const useUI = create<UIState>((set) => ({
   module: 'messages',
   convFilter: 'all',
+  activeFolder: null,
   switcherOpen: false,
   setModule: (m) => set({ module: m }),
-  setConvFilter: (f) => set({ convFilter: f }),
+  setConvFilter: (f) => set({ convFilter: f, activeFolder: null }),
+  setActiveFolder: (id) => set({ activeFolder: id }),
   setSwitcherOpen: (open) => set({ switcherOpen: open }),
 }));
