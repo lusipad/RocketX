@@ -314,17 +314,17 @@ export default function ConversationList() {
       return [{ key: 'all' as const, label: FILTER_TITLE[filter], items: [...filtered].sort(sortFn) }];
     }
     return buildSections(filtered, {
-      groupByType: prefs.sidebarGroupByType ?? true,
-      showUnread: prefs.sidebarShowUnread ?? false,
-      showFavorites: prefs.sidebarShowFavorites ?? true,
-      sortBy: prefs.sidebarSortby ?? 'activity',
+      groupByType: prefs.sidebarGroupByType,
+      showUnread: prefs.sidebarShowUnread,
+      showFavorites: prefs.sidebarShowFavorites,
+      sortBy: prefs.sidebarSortby,
     });
   }, [subscriptions, rooms, filter, prefs, folder]);
 
   const total = sections.reduce((n, s) => n + s.items.length, 0);
-  const viewMode = prefs.sidebarViewMode ?? 'medium';
-  const showAvatar = prefs.sidebarDisplayAvatar ?? true;
-  const showHeaders = !folder && filter === 'all' && (prefs.sidebarGroupByType ?? true);
+  const viewMode = prefs.sidebarViewMode;
+  const showAvatar = prefs.sidebarDisplayAvatar;
+  const showHeaders = !folder && filter === 'all' && (prefs.sidebarGroupByType);
   const title = folder ? folder.name : FILTER_TITLE[filter];
 
   /**

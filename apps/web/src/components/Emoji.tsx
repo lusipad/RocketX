@@ -9,7 +9,7 @@ import { usePrefs } from '../stores/prefs';
  * 失败回退为 :name: 文本。关闭「显示表情」偏好时一律显示 :name: 文本。
  */
 export default function Emoji({ code, size = 18 }: { code: string; size?: number }) {
-  const useEmojis = usePrefs((s) => s.prefs.useEmojis ?? true);
+  const useEmojis = usePrefs((s) => s.prefs.useEmojis);
   const name = code.replace(/:/g, '');
   const [imgFailed, setImgFailed] = useState(false);
   const unicode = EMOJI_MAP[name];

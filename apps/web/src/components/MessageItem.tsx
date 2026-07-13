@@ -77,7 +77,7 @@ function ImageAttachment({
   fullPath: string;
   name: string;
 }) {
-  const autoLoad = usePrefs((s) => s.prefs.autoImageLoad ?? true);
+  const autoLoad = usePrefs((s) => s.prefs.autoImageLoad);
   const [lightbox, setLightbox] = useState(false);
   const [manualLoad, setManualLoad] = useState(false);
   const show = autoLoad || manualLoad;
@@ -420,7 +420,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const discardMessage = useChat((s) => s.discardMessage);
   const receipt = useChat((s) => s.readReceipts[message.rid]);
   const roomType = useChat((s) => s.subscriptions[message.rid]?.t);
-  const showAvatars = usePrefs((s) => s.prefs.displayAvatars ?? true);
+  const showAvatars = usePrefs((s) => s.prefs.displayAvatars);
   const highlighted = useChat((s) => s.highlightMid === message._id);
   const rootRef = useRef<HTMLDivElement>(null);
 

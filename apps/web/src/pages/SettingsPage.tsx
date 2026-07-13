@@ -209,7 +209,7 @@ function SidebarSection() {
     <>
       <Row label="显示密度" hint="会话列表每一项的高度与信息量">
         <RadioGroup
-          value={prefs.sidebarViewMode ?? 'medium'}
+          value={prefs.sidebarViewMode}
           onChange={(v) => void update({ sidebarViewMode: v })}
           options={[
             { key: 'extended', label: '宽松', hint: '显示消息预览' },
@@ -221,7 +221,7 @@ function SidebarSection() {
 
       <Row label="排序方式">
         <RadioGroup
-          value={prefs.sidebarSortby ?? 'activity'}
+          value={prefs.sidebarSortby}
           onChange={(v) => void update({ sidebarSortby: v })}
           options={[
             { key: 'activity', label: '按活跃时间' },
@@ -232,28 +232,28 @@ function SidebarSection() {
 
       <Row label="按类型分区" hint="把会话分成 收藏 / 团队 / 讨论 / 频道 / 私聊 几个可折叠的分区" inline>
         <Toggle
-          checked={prefs.sidebarGroupByType ?? true}
+          checked={prefs.sidebarGroupByType}
           onChange={(v) => void update({ sidebarGroupByType: v })}
         />
       </Row>
 
       <Row label="收藏单独成区" hint="收藏的会话集中显示在顶部" inline>
         <Toggle
-          checked={prefs.sidebarShowFavorites ?? true}
+          checked={prefs.sidebarShowFavorites}
           onChange={(v) => void update({ sidebarShowFavorites: v })}
         />
       </Row>
 
       <Row label="未读单独置顶" hint="有未读的会话集中显示在最上方" inline>
         <Toggle
-          checked={prefs.sidebarShowUnread ?? false}
+          checked={prefs.sidebarShowUnread}
           onChange={(v) => void update({ sidebarShowUnread: v })}
         />
       </Row>
 
       <Row label="显示头像" hint="关闭后会话列表更紧凑" inline>
         <Toggle
-          checked={prefs.sidebarDisplayAvatar ?? true}
+          checked={prefs.sidebarDisplayAvatar}
           onChange={(v) => void update({ sidebarDisplayAvatar: v })}
         />
       </Row>
@@ -270,7 +270,7 @@ function MessageSection() {
     <>
       <Row label="发送方式" hint="决定 Enter 键是发送还是换行">
         <RadioGroup
-          value={prefs.sendOnEnter ?? 'normal'}
+          value={prefs.sendOnEnter}
           onChange={(v) => void update({ sendOnEnter: v })}
           options={[
             { key: 'normal', label: 'Enter 发送', hint: 'Shift+Enter 换行' },
@@ -281,25 +281,25 @@ function MessageSection() {
 
       <Row label="自动加载图片" hint="关闭后图片需要点击才加载（省流量）" inline>
         <Toggle
-          checked={prefs.autoImageLoad ?? true}
+          checked={prefs.autoImageLoad}
           onChange={(v) => void update({ autoImageLoad: v })}
         />
       </Row>
 
       <Row label="在消息中显示头像" inline>
         <Toggle
-          checked={prefs.displayAvatars ?? true}
+          checked={prefs.displayAvatars}
           onChange={(v) => void update({ displayAvatars: v })}
         />
       </Row>
 
       <Row label="显示表情" hint="关闭后 :emoji: 以文本显示" inline>
-        <Toggle checked={prefs.useEmojis ?? true} onChange={(v) => void update({ useEmojis: v })} />
+        <Toggle checked={prefs.useEmojis} onChange={(v) => void update({ useEmojis: v })} />
       </Row>
 
       <Row label="话题回复也显示在主会话" hint="开启后线程里的回复会同时出现在消息流中" inline>
         <Toggle
-          checked={prefs.showThreadsInMainChannel ?? false}
+          checked={prefs.showThreadsInMainChannel}
           onChange={(v) => void update({ showThreadsInMainChannel: v })}
         />
       </Row>
@@ -343,7 +343,7 @@ function NotificationSection() {
 
       <Row label="桌面通知" hint="哪些消息会弹出系统通知">
         <RadioGroup
-          value={prefs.desktopNotifications ?? 'all'}
+          value={prefs.desktopNotifications}
           onChange={(v) => void update({ desktopNotifications: v })}
           options={[
             { key: 'all', label: '全部消息' },
@@ -363,26 +363,26 @@ function NotificationSection() {
 
       <Row label="当前会话不打扰" hint="正在看的会话收到消息时不弹通知" inline>
         <Toggle
-          checked={prefs.muteFocusedConversations ?? true}
+          checked={prefs.muteFocusedConversations}
           onChange={(v) => void update({ muteFocusedConversations: v })}
         />
       </Row>
 
       <Row label="未读提醒" hint="有未读时在标题栏与图标上提示" inline>
         <Toggle
-          checked={prefs.unreadAlert ?? true}
+          checked={prefs.unreadAlert}
           onChange={(v) => void update({ unreadAlert: v })}
         />
       </Row>
 
       <Row label="自动离开" hint="长时间无操作后自动把状态改为「离开」" inline>
         <Toggle
-          checked={prefs.enableAutoAway ?? true}
+          checked={prefs.enableAutoAway}
           onChange={(v) => void update({ enableAutoAway: v })}
         />
       </Row>
 
-      {(prefs.enableAutoAway ?? true) && (
+      {(prefs.enableAutoAway) && (
         <Row label="无操作多久后离开">
           <Slider
             value={Math.round((prefs.idleTimeLimit ?? 300) / 60)}

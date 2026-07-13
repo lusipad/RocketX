@@ -138,9 +138,28 @@ export class RcRestClient {
 
   // ---- 用户偏好（服务端持久化，跨设备同步）----
 
+  /**
+   * `/me` 的偏好：Rocket.Chat 会把**服务端默认值**一并填满（38 个键），
+   * 分不清哪些是用户真改过的。想让客户端有自己的默认值，用 getExplicitPreferences。
+   */
   async getPreferences(): Promise<RcPreferences> {
     const res = await this.request<{ settings?: { preferences?: RcPreferences } }>('GET', 'me');
     return res.settings?.preferences ?? {};
+  }
+
+  /**
+   * 只返回用户**显式保存过**的偏好。
+   *
+   * users.info 里的 settings.preferences 只有用户自己设过的键，
+   * 没设过的不会出现 —— 客户端的默认值才能生效。
+   */
+  async getExplicitPreferences(): Promise<RcPreferences> {
+    const userId = this.currentUserId();
+    if (!userId) return {};
+    const res = await this.request<{
+      user?: { settings?: { preferences?: RcPreferences } };
+    }>('GET', 'users.info', undefined, { userId });
+    return res.user?.settings?.preferences ?? {};
   }
 
   /** 当前登录用户 id（authProvider 模式下 this.userId 为空，需实时取） */

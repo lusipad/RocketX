@@ -20,7 +20,7 @@ export default function MessageList({ rid }: { rid: string }) {
   const loadOlder = useChat((s) => s.loadOlder);
   const scrollNonce = useChat((s) => s.scrollNonce);
   const unreadMark = useChat((s) => s.unreadMarkTs[rid]);
-  const showThreadsInMain = usePrefs((s) => s.prefs.showThreadsInMainChannel ?? false);
+  const showThreadsInMain = usePrefs((s) => s.prefs.showThreadsInMainChannel);
   const myId = useAuth((s) => s.user?._id);
 
   const scrollRef = useRef<HTMLDivElement>(null);

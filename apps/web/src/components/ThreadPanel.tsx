@@ -16,7 +16,7 @@ export default function ThreadPanel() {
   const send = useChat((s) => s.send);
   const emitTyping = useChat((s) => s.emitTyping);
   const myId = useAuth((s) => s.user?._id);
-  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter ?? 'normal');
+  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
 
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);

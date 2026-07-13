@@ -30,7 +30,7 @@ export default function Composer() {
   const setReplyTo = useChat((s) => s.setReplyTo);
   const emitTyping = useChat((s) => s.emitTyping);
   // 'alternative' = Ctrl+Enter 发送、Enter 换行
-  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter ?? 'normal');
+  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
 
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
