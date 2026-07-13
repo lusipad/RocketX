@@ -28,6 +28,9 @@ export interface RcMessageAttachment {
   color?: string;
   text?: string;
   title?: string;
+  /** 引用回复的原消息链接（有值即按引用样式渲染） */
+  message_link?: string;
+  ts?: RcDate;
   title_link?: string;
   /** 文件附件标记（RC 文件消息为 true，可下载） */
   title_link_download?: boolean;
@@ -54,12 +57,22 @@ export interface RcMessage {
   tcount?: number;
   /** 文件消息的文件信息 */
   file?: { _id: string; name: string; type?: string; size?: number };
+  /** 消息里 URL 的服务端解析结果（链接卡片预览） */
+  urls?: {
+    url: string;
+    meta?: Record<string, string>;
+  }[];
   attachments?: RcMessageAttachment[];
   reactions?: Record<string, { usernames: string[] }>;
   pinned?: boolean;
   /** 标记（星标）了这条消息的用户 */
   starred?: { _id: string }[];
   groupable?: boolean;
+  /** ---- 以下为客户端本地字段（不来自服务器）---- */
+  /** 发送中（乐观上屏，等待服务器确认） */
+  pending?: boolean;
+  /** 发送失败（可重试） */
+  failed?: boolean;
 }
 
 export interface RcRoom {

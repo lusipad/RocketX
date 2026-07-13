@@ -55,6 +55,37 @@ export function assetUrl(path: string): string {
   return `${getServerBase()}${path}`;
 }
 
+// Site_Url：引用回复的消息链接必须以它为前缀，服务端才会展开成引用附件
+const SITE_URL_KEY = 'rcx-site-url';
+let siteUrlCache: string | null = null;
+try {
+  siteUrlCache = localStorage.getItem(SITE_URL_KEY);
+} catch {
+  /* SSR/隐私模式 */
+}
+
+export async function ensureSiteUrl(): Promise<string> {
+  if (siteUrlCache) return siteUrlCache;
+  try {
+    const res = await httpFetch(`${getServerBase()}/api/v1/settings.public?_id=Site_Url`);
+    const data: any = await res.json();
+    const setting = Array.isArray(data?.settings) ? data.settings[0] : data?.settings;
+    const value = typeof setting?.value === 'string' ? setting.value.replace(/\/+$/, '') : '';
+    if (value) {
+      siteUrlCache = value;
+      localStorage.setItem(SITE_URL_KEY, value);
+    }
+  } catch {
+    /* 拿不到时回退 */
+  }
+  return siteUrlCache ?? getServerBase() ?? location.origin;
+}
+
+/** 同步取 Site_Url（init 时已预热缓存） */
+export function siteUrlSync(): string {
+  return siteUrlCache || getServerBase() || location.origin;
+}
+
 function wsUrlFor(base: string): string {
   if (base) return `${base.replace(/^http/, 'ws')}/websocket`;
   const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';

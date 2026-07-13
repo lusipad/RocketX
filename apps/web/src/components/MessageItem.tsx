@@ -1,15 +1,18 @@
 import { useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
+  AlertCircle,
   Check,
   Copy,
   Download,
   File as FileIcon,
+  Loader2,
   MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
   Pencil,
   Pin,
+  Reply,
   Share2,
   SmilePlus,
   Star,
@@ -98,8 +101,51 @@ function FileAttachment({
   );
 }
 
+/** 引用回复的原消息（飞书样式的引用条） */
+function QuoteCard({ att }: { att: RcMessageAttachment }) {
+  return (
+    <div className="mt-1 mb-0.5 max-w-md rounded-r-md border-l-2 border-line bg-black/4 px-2.5 py-1.5">
+      <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
+      <div className="line-clamp-2 text-xs break-words text-ink-3">{att.text}</div>
+    </div>
+  );
+}
+
+/** 链接卡片预览（服务端 OEmbed 解析结果） */
+function UrlPreviewCard({ url, meta }: { url: string; meta: Record<string, string> }) {
+  const title = meta.ogTitle ?? meta.pageTitle ?? meta.oembedTitle;
+  const desc = meta.ogDescription ?? meta.description ?? meta.oembedProviderName;
+  const image = meta.ogImage ?? meta.oembedThumbnailUrl;
+  if (!title) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="mt-1.5 flex max-w-md gap-3 rounded-lg border border-line bg-white p-3 transition hover:border-primary"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-1 text-sm font-medium text-primary">{title}</span>
+        {desc && <span className="mt-0.5 line-clamp-2 text-xs text-ink-3">{desc}</span>}
+      </span>
+      {image && (
+        <img
+          src={image}
+          alt=""
+          className="h-14 w-14 shrink-0 rounded-md object-cover"
+          onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+        />
+      )}
+    </a>
+  );
+}
+
 /** 附件卡片：ADO 集成等富文本消息载体 */
 function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: RcMessage }) {
+  // 引用回复
+  if (att.message_link) {
+    return <QuoteCard att={att} />;
+  }
   // 图片附件（上传的图片）
   if (att.image_url) {
     return <ImageAttachment path={att.image_url} name={att.title ?? message.file?.name ?? '图片'} />;
@@ -261,6 +307,11 @@ export default function MessageItem({
   const toggleStar = useChat((s) => s.toggleStar);
   const deleteMessage = useChat((s) => s.deleteMessage);
   const createDiscussionFrom = useChat((s) => s.createDiscussionFrom);
+  const setReplyTo = useChat((s) => s.setReplyTo);
+  const resendMessage = useChat((s) => s.resendMessage);
+  const discardMessage = useChat((s) => s.discardMessage);
+  const receipt = useChat((s) => s.readReceipts[message.rid]);
+  const roomType = useChat((s) => s.subscriptions[message.rid]?.t);
 
   const [editing, setEditing] = useState(false);
   const [picker, setPicker] = useState(false);
@@ -279,7 +330,11 @@ export default function MessageItem({
     setTimeout(() => setCopied(false), 1200);
   };
 
+  // 2 分钟内显示「撤回」，之后是「删除」（行为一致：消息被移除）
+  const deleteLabel = Date.now() - tsMs(message.ts) < 2 * 60 * 1000 ? '撤回' : '删除';
+
   const menuItems: MenuItem[] = [
+    { label: '回复', icon: Reply, onClick: () => setReplyTo(message) },
     ...(!inThread
       ? [
           {
@@ -314,7 +369,7 @@ export default function MessageItem({
       ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
       : []),
     ...(mine
-      ? [{ label: '删除', icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
+      ? [{ label: deleteLabel, icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
       : []),
   ];
 
@@ -375,6 +430,9 @@ export default function MessageItem({
                   <SmilePlus size={15} />
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
+                <button title="回复" className={hoverBtn} onClick={() => setReplyTo(message)}>
+                  <Reply size={15} />
+                </button>
                 {!inThread && (
                   <button
                     title="在话题中回复"
@@ -437,6 +495,10 @@ export default function MessageItem({
                 {message.attachments?.map((att, i) => (
                   <AttachmentCard key={i} att={att} message={message} />
                 ))}
+                {message.urls
+                  ?.filter((u) => u.meta && Object.keys(u.meta).length > 0)
+                  .slice(0, 2)
+                  .map((u, i) => <UrlPreviewCard key={i} url={u.url} meta={u.meta!} />)}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
               </>
             )}
@@ -446,7 +508,45 @@ export default function MessageItem({
               {time}
             </span>
           )}
+          {/* 发送状态：发送中 / 失败可重试 */}
+          {message.pending && (
+            <Loader2 size={13} className="mb-1 shrink-0 animate-spin text-ink-3" />
+          )}
+          {message.failed && (
+            <span className="mb-0.5 flex shrink-0 items-center gap-1">
+              <button
+                title="发送失败，点击重试"
+                onClick={() => void resendMessage(message._id)}
+                className="text-danger"
+              >
+                <AlertCircle size={14} />
+              </button>
+              <button
+                title="放弃发送"
+                onClick={() => discardMessage(message._id)}
+                className="text-ink-3 hover:text-danger"
+              >
+                <Trash2 size={12} />
+              </button>
+            </span>
+          )}
         </div>
+
+        {/* 已读回执：只在自己最后一条消息下显示（飞书交互） */}
+        {mine && !message.pending && !message.failed && receipt?.mid === message._id && (
+          <span
+            className="mt-0.5 text-[11px] text-ink-3"
+            title={receipt.users.map((u) => u.name || u.username).join('、')}
+          >
+            {roomType === 'd'
+              ? receipt.users.length > 0
+                ? '已读'
+                : '未读'
+              : receipt.users.length > 0
+                ? `${receipt.users.length} 人已读`
+                : '暂无人已读'}
+          </span>
+        )}
 
         {!inThread && message.tcount ? (
           <button

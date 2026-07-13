@@ -1,5 +1,6 @@
 import { tsMs } from './types';
 import type {
+  RcDate,
   RcLoginData,
   RcMessage,
   RcMessageAttachment,
@@ -432,5 +433,24 @@ export class RcRestClient {
   /** 加入公开频道（搜索结果里点开未加入的频道时用） */
   joinChannel(rid: string): Promise<unknown> {
     return this.request('POST', 'channels.join', { roomId: rid });
+  }
+
+  /** 邀请成员进群 */
+  inviteToRoom(rid: string, type: RoomType, userId: string): Promise<unknown> {
+    const endpoint = type === 'c' ? 'channels.invite' : 'groups.invite';
+    return this.request('POST', endpoint, { roomId: rid, userId });
+  }
+
+  /** 消息的已读回执（需要服务端开启 Message_Read_Receipt_Enabled） */
+  async getReadReceipts(
+    messageId: string,
+  ): Promise<{ user: RcUser; ts: RcDate }[]> {
+    const res = await this.request<{ receipts: { user: RcUser; ts: RcDate }[] }>(
+      'GET',
+      'chat.getMessageReadReceipts',
+      undefined,
+      { messageId },
+    );
+    return res.receipts ?? [];
   }
 }

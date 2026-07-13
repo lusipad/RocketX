@@ -7,7 +7,7 @@ import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
 
 /** 用户搜索（spotlight，300ms 防抖），排除自己 */
-function useUserSearch(keyword: string): RcUser[] {
+export function useUserSearch(keyword: string): RcUser[] {
   const [users, setUsers] = useState<RcUser[]>([]);
   const me = useAuth((s) => s.user?.username);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

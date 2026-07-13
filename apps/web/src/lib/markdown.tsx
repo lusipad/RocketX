@@ -163,6 +163,8 @@ function renderLines(text: string, me: string | undefined, keyBase: string): Rea
 }
 
 export function renderMarkdown(text: string, me?: string): ReactNode {
+  // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
+  text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
   // 先切代码块，再对普通段落做行级/行内解析
   const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
   return (

@@ -60,6 +60,12 @@ export default function ChatArea() {
     const p = s.subscriptions[s.activeRid]?.prid ?? s.rooms[s.activeRid]?.prid;
     return p ? s.rooms[p] : undefined;
   });
+  const typingMap = useChat((s) => (s.activeRid ? s.typing[s.activeRid] : undefined));
+  const typers = typingMap
+    ? Object.entries(typingMap)
+        .filter(([, expire]) => expire > Date.now())
+        .map(([name]) => name)
+    : [];
   const [dragging, setDragging] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -125,7 +131,11 @@ export default function ChatArea() {
                 </button>
               ) : null}
             </div>
-            {prid ? (
+            {typers.length > 0 ? (
+              <div className="truncate text-xs text-primary">
+                {typers.slice(0, 3).join('、')} 正在输入…
+              </div>
+            ) : prid ? (
               <button
                 onClick={() => void openRoom(prid)}
                 className="flex items-center gap-1 truncate text-xs text-ink-3 hover:text-primary"

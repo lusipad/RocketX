@@ -23,6 +23,9 @@ services:
       OVERWRITE_SETTING_Message_AlwaysSearchRegExp: 'true'
       # 允许跨会话全局搜索消息
       'OVERWRITE_SETTING_Search.defaultProvider.GlobalSearchEnabled': 'true'
+      # 已读回执（注意：RC 企业版功能，社区版接口会拒绝，客户端自动降级不显示）
+      OVERWRITE_SETTING_Message_Read_Receipt_Enabled: 'true'
+      OVERWRITE_SETTING_Message_Read_Receipt_Store_Users: 'true'
       # 桌面客户端（Tauri）直连 REST API 需要 CORS
       OVERWRITE_SETTING_API_Enable_CORS: 'true'
       OVERWRITE_SETTING_API_CORS_Origin: '*'

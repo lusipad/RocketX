@@ -2,12 +2,14 @@ import { create } from 'zustand';
 import {
   tsMs,
   type RcMessage,
+  type RcMessageAttachment,
   type RcRoom,
   type RcSubscription,
   type RcUser,
   type RealtimeStatus,
 } from '@rcx/rc-client';
-import { loadStoredAuth, realtime, rest } from '../lib/client';
+import { ensureSiteUrl, loadStoredAuth, realtime, rest, siteUrlSync } from '../lib/client';
+import { useAuth } from './auth';
 
 export interface Conversation {
   rid: string;
@@ -69,6 +71,12 @@ interface ChatState {
   unreadMarkTs: Record<string, number>;
   /** 待确认发送的文件（粘贴/拖拽后进入预览确认） */
   pendingFiles: File[] | null;
+  /** 正在引用回复的消息 */
+  replyTo: RcMessage | null;
+  /** 正在输入的用户：rid -> username -> 过期时间戳 */
+  typing: Record<string, Record<string, number>>;
+  /** 已读回执：rid -> { mid: 最后一条自己消息, users: 已读的其他人 } */
+  readReceipts: Record<string, { mid: string; users: { username: string; name?: string }[] }>;
 
   init: () => Promise<void>;
   openRoom: (rid: string) => Promise<void>;
@@ -76,7 +84,16 @@ interface ChatState {
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
-  send: (text: string, tmid?: string) => Promise<void>;
+  send: (text: string, opts?: { tmid?: string; quote?: RcMessage }) => Promise<void>;
+  /** 重发失败的消息 */
+  resendMessage: (tempId: string) => Promise<void>;
+  /** 丢弃失败的本地消息 */
+  discardMessage: (tempId: string) => void;
+  setReplyTo: (msg: RcMessage | null) => void;
+  /** 输入中广播（内部已节流） */
+  emitTyping: () => void;
+  refreshReceipts: (rid: string) => Promise<void>;
+  inviteMembers: (rid: string, users: RcUser[]) => Promise<void>;
   editMessage: (msgId: string, text: string) => Promise<void>;
   deleteMessage: (msgId: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
@@ -114,7 +131,8 @@ function messagePreview(msg: RcMessage | undefined): string {
   if (!msg) return '';
   const who = msg.u?.name || msg.u?.username || '';
   if (msg.t) return '[系统消息]';
-  if (msg.msg) return who ? `${who}: ${msg.msg}` : msg.msg;
+  const text = (msg.msg ?? '').replace(QUOTE_LINK_RE, '');
+  if (text) return who ? `${who}: ${text}` : text;
   if (msg.attachments?.length) return who ? `${who}: [卡片消息]` : '[卡片消息]';
   return '';
 }
@@ -133,6 +151,8 @@ async function refreshSubsAndRooms(
 
 const subscribedRooms = new Set<string>();
 let markReadTimer: ReturnType<typeof setTimeout> | null = null;
+let receiptTimer: ReturnType<typeof setTimeout> | null = null;
+let lastTypingEmit = 0;
 
 function scheduleMarkRead(rid: string) {
   if (markReadTimer) clearTimeout(markReadTimer);
@@ -141,11 +161,56 @@ function scheduleMarkRead(rid: string) {
   }, 600);
 }
 
+function scheduleReceiptRefresh(rid: string) {
+  if (receiptTimer) clearTimeout(receiptTimer);
+  receiptTimer = setTimeout(() => {
+    void useChat.getState().refreshReceipts(rid);
+  }, 1200);
+}
+
 function subscribeRoomStreams(rid: string) {
   if (subscribedRooms.has(rid)) return;
   subscribedRooms.add(rid);
   realtime.subscribe('stream-room-messages', rid);
   realtime.subscribe('stream-notify-room', `${rid}/deleteMessage`);
+  realtime.subscribe('stream-notify-room', `${rid}/user-activity`);
+}
+
+function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
+  const sub = subs[rid];
+  return sub?.t === 'c'
+    ? `channel/${sub.name}`
+    : sub?.t === 'p'
+      ? `group/${sub.name}`
+      : `direct/${rid}`;
+}
+
+/**
+ * 引用回复走 RC 官方机制：消息文本以 `[ ](Site_Url 消息链接) ` 开头，
+ * 服务端自动展开为引用附件（REST 直接发 message_link 附件会被服务端清洗）。
+ */
+function quoteLinkPrefix(quoted: RcMessage, subs: Record<string, RcSubscription>): string {
+  return `[ ](${siteUrlSync()}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}) `;
+}
+
+/** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
+function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
+  return {
+    message_link: `local-quote`,
+    author_name: quoted.u.name || quoted.u.username,
+    text: quoted.msg || quoted.attachments?.[0]?.title || '[卡片消息]',
+    ts: quoted.ts,
+  };
+}
+
+/** 消息文本开头的引用链接（渲染与预览时隐藏） */
+export const QUOTE_LINK_RE = /^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/;
+
+// 开发调试：控制台可通过 window.__chat 检查 store 状态
+declare global {
+  interface Window {
+    __chat?: typeof useChat;
+  }
 }
 
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
@@ -182,10 +247,15 @@ export const useChat = create<ChatState>((set, get) => ({
   drafts: loadDrafts(),
   unreadMarkTs: {},
   pendingFiles: null,
+  replyTo: null,
+  typing: {},
+  readReceipts: {},
 
   init: async () => {
     const auth = loadStoredAuth();
     if (!auth) return;
+    // 预热 Site_Url 缓存（引用回复的链接前缀需要）
+    void ensureSiteUrl();
 
     const [subs, rooms] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
     const subMap: Record<string, RcSubscription> = {};
@@ -194,6 +264,8 @@ export const useChat = create<ChatState>((set, get) => ({
     for (const r of rooms) roomMap[r._id] = r;
     set({ subscriptions: subMap, rooms: roomMap, ready: true });
 
+    // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
+    realtime.clearStreamHandlers();
     realtime.onStatus = (s) => set({ connection: s });
     await realtime.connect();
     await realtime.login(auth.authToken);
@@ -208,17 +280,49 @@ export const useChat = create<ChatState>((set, get) => ({
         set({ rooms: { ...get().rooms, [rid]: { ...room, lastMessage: msg, lm: msg.ts } } });
       }
       notifyIfNeeded(msg, rid, state);
-      if (get().activeRid === rid) scheduleMarkRead(rid);
+      if (get().activeRid === rid) {
+        scheduleMarkRead(rid);
+        scheduleReceiptRefresh(rid);
+      }
+      // 对方发出消息即视为停止输入
+      const typingOfRoom = get().typing[rid];
+      if (typingOfRoom?.[msg.u.username]) {
+        const next = { ...typingOfRoom };
+        delete next[msg.u.username];
+        set({ typing: { ...get().typing, [rid]: next } });
+      }
     });
 
+    // 房间级通知：消息删除 / 正在输入
     realtime.onStream('stream-notify-room', (eventName, args) => {
-      if (!eventName.endsWith('/deleteMessage')) return;
-      const rid = eventName.split('/')[0];
-      const deleted = args[0] as { _id: string } | undefined;
-      if (!deleted?._id) return;
-      const list = get().messages[rid];
-      if (!list) return;
-      set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== deleted._id) } });
+      const [rid, kind] = eventName.split('/');
+      if (kind === 'deleteMessage') {
+        const deleted = args[0] as { _id: string } | undefined;
+        if (!deleted?._id) return;
+        const list = get().messages[rid];
+        if (!list) return;
+        set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== deleted._id) } });
+      } else if (kind === 'user-activity') {
+        const [username, activities] = args as [string, string[]];
+        const me = useAuth.getState().user?.username;
+        if (!username || username === me) return;
+        const room = { ...(get().typing[rid] ?? {}) };
+        if (Array.isArray(activities) && activities.includes('user-typing')) {
+          room[username] = Date.now() + 8000;
+          // 到期自动清理（顺带触发一次重渲染）
+          setTimeout(() => {
+            const cur = get().typing[rid];
+            if (cur?.[username] && cur[username] <= Date.now()) {
+              const next = { ...cur };
+              delete next[username];
+              set({ typing: { ...get().typing, [rid]: next } });
+            }
+          }, 8200);
+        } else {
+          delete room[username];
+        }
+        set({ typing: { ...get().typing, [rid]: room } });
+      }
     });
 
     realtime.onStream('stream-notify-user', (eventName, args) => {
@@ -245,7 +349,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const marks = { ...get().unreadMarkTs };
     if (sub && (sub.unread > 0 || sub.alert) && sub.ls) marks[rid] = tsMs(sub.ls);
     else delete marks[rid];
-    set({ activeRid: rid, rightPanel: null, unreadMarkTs: marks, pendingFiles: null });
+    set({ activeRid: rid, rightPanel: null, unreadMarkTs: marks, pendingFiles: null, replyTo: null });
 
     const { historyLoaded, subscriptions, rooms } = get();
     subscribeRoomStreams(rid);
@@ -264,6 +368,7 @@ export const useChat = create<ChatState>((set, get) => ({
       });
     }
     scheduleMarkRead(rid);
+    scheduleReceiptRefresh(rid);
   },
 
   openThread: async (mid) => {
@@ -319,15 +424,145 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  send: async (text, tmid) => {
+  send: async (text, opts) => {
     const rid = get().activeRid;
     const trimmed = text.trim();
-    if (!rid || !trimmed) return;
-    const msg = await rest.sendMessage(rid, trimmed, tmid);
+    const me = useAuth.getState().user;
+    if (!rid || !trimmed || !me) return;
+
+    // 引用回复：文本前缀消息链接，服务端展开为引用附件
+    const fullText = opts?.quote
+      ? quoteLinkPrefix(opts.quote, get().subscriptions) + trimmed
+      : trimmed;
+
+    // 乐观上屏：秒回显，pending 状态等服务器确认
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const temp: RcMessage = {
+      _id: tempId,
+      rid,
+      msg: fullText,
+      ts: new Date().toISOString(),
+      u: { _id: me._id, username: me.username, name: me.name },
+      ...(opts?.tmid ? { tmid: opts.tmid } : {}),
+      ...(opts?.quote ? { attachments: [localQuoteAttachment(opts.quote)] } : {}),
+      pending: true,
+    };
     set({
-      messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) },
-      ...(tmid ? {} : { scrollNonce: get().scrollNonce + 1 }),
+      messages: { ...get().messages, [rid]: [...(get().messages[rid] ?? []), temp] },
+      ...(opts?.tmid ? {} : { scrollNonce: get().scrollNonce + 1 }),
     });
+    // 发送即视为停止输入
+    void realtime.call('stream-notify-room', `${rid}/user-activity`, me.username, []).catch(() => {});
+
+    try {
+      const msg = await rest.sendMessageRaw({
+        rid,
+        msg: fullText,
+        ...(opts?.tmid ? { tmid: opts.tmid } : {}),
+      });
+      const list = (get().messages[rid] ?? []).filter((m) => m._id !== tempId);
+      set({ messages: { ...get().messages, [rid]: upsertMessage(list, msg) } });
+      scheduleReceiptRefresh(rid);
+    } catch {
+      // 标记失败，可重试
+      set({
+        messages: {
+          ...get().messages,
+          [rid]: (get().messages[rid] ?? []).map((m) =>
+            m._id === tempId ? { ...m, pending: false, failed: true } : m,
+          ),
+        },
+      });
+    }
+  },
+
+  resendMessage: async (tempId) => {
+    const rid = get().activeRid;
+    if (!rid) return;
+    const failed = (get().messages[rid] ?? []).find((m) => m._id === tempId);
+    if (!failed) return;
+    set({
+      messages: {
+        ...get().messages,
+        [rid]: (get().messages[rid] ?? []).map((m) =>
+          m._id === tempId ? { ...m, pending: true, failed: false } : m,
+        ),
+      },
+    });
+    try {
+      // 附件是本地展示用的，不随重发提交（引用信息已在消息文本前缀里）
+      const msg = await rest.sendMessageRaw({
+        rid,
+        msg: failed.msg,
+        ...(failed.tmid ? { tmid: failed.tmid } : {}),
+      });
+      const list = (get().messages[rid] ?? []).filter((m) => m._id !== tempId);
+      set({ messages: { ...get().messages, [rid]: upsertMessage(list, msg) } });
+    } catch {
+      set({
+        messages: {
+          ...get().messages,
+          [rid]: (get().messages[rid] ?? []).map((m) =>
+            m._id === tempId ? { ...m, pending: false, failed: true } : m,
+          ),
+        },
+      });
+    }
+  },
+
+  discardMessage: (tempId) => {
+    const rid = get().activeRid;
+    if (!rid) return;
+    set({
+      messages: {
+        ...get().messages,
+        [rid]: (get().messages[rid] ?? []).filter((m) => m._id !== tempId),
+      },
+    });
+  },
+
+  setReplyTo: (msg) => set({ replyTo: msg }),
+
+  emitTyping: () => {
+    const rid = get().activeRid;
+    const me = useAuth.getState().user;
+    if (!rid || !me) return;
+    const now = Date.now();
+    if (now - lastTypingEmit < 3000) return; // 节流
+    lastTypingEmit = now;
+    void realtime
+      .call('stream-notify-room', `${rid}/user-activity`, me.username, ['user-typing'])
+      .catch(() => {});
+  },
+
+  refreshReceipts: async (rid) => {
+    const me = useAuth.getState().user;
+    if (!me) return;
+    const list = (get().messages[rid] ?? []).filter(
+      (m) => !m.tmid && !m.t && !m.pending && !m.failed,
+    );
+    const lastOwn = [...list].reverse().find((m) => m.u._id === me._id);
+    if (!lastOwn) return;
+    try {
+      const receipts = await rest.getReadReceipts(lastOwn._id);
+      const users = receipts
+        .filter((r) => r.user?._id !== me._id)
+        .map((r) => ({ username: r.user?.username ?? '', name: r.user?.name }));
+      set({ readReceipts: { ...get().readReceipts, [rid]: { mid: lastOwn._id, users } } });
+    } catch {
+      /* 服务端未开启已读回执时静默 */
+    }
+  },
+
+  inviteMembers: async (rid, users) => {
+    const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
+    for (const u of users) {
+      await rest.inviteToRoom(rid, type, u._id);
+    }
+    // 邀请后清缓存，成员面板重新拉取
+    const members = { ...get().members };
+    delete members[rid];
+    set({ members });
   },
 
   editMessage: async (msgId, text) => {
@@ -511,6 +746,8 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 }));
+
+if (typeof window !== 'undefined') window.__chat = useChat;
 
 /** 派生会话列表：订阅 + 房间信息合并，按最新消息时间排序（配合 useMemo 使用） */
 export function buildConversations(

@@ -30,7 +30,7 @@ export default function ThreadPanel() {
     const value = text.trim();
     if (!value) return;
     setText('');
-    await send(value, rootId);
+    await send(value, { tmid: rootId });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
