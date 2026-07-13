@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BellOff, Check, EyeOff, Hash, Lock, Pin, PinOff, Bell } from 'lucide-react';
 import { buildConversations, useChat, type Conversation } from '../stores/chat';
-import { useUI, type ConvFilter } from '../stores/ui';
+import { useUI, type ConvFilter, type ConvSort } from '../stores/ui';
 import { fmtConvTime } from '../lib/format';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -27,6 +27,16 @@ function applyFilter(convs: Conversation[], filter: ConvFilter): Conversation[] 
     default:
       return convs;
   }
+}
+
+function applySort(convs: Conversation[], sort: ConvSort): Conversation[] {
+  if (sort !== 'unread') return convs; // buildConversations 已按 置顶+时间 排好
+  return [...convs].sort(
+    (a, b) =>
+      Number(b.favorite) - Number(a.favorite) ||
+      Number(b.unread > 0 || b.alert) - Number(a.unread > 0 || a.alert) ||
+      b.lastTs - a.lastTs,
+  );
 }
 
 function ConversationItem({ conv, active }: { conv: Conversation; active: boolean }) {
@@ -93,6 +103,14 @@ function ConversationItem({ conv, active }: { conv: Conversation; active: boolea
             {conv.type === 'p' && <Lock size={12} className="shrink-0 text-dark-ink-3" />}
             {conv.type === 'c' && <Hash size={12} className="shrink-0 text-dark-ink-3" />}
             <span className="truncate">{conv.name}</span>
+            {conv.isDiscussion && (
+              <span
+                className="shrink-0 rounded bg-white/10 px-1 text-[10px] text-dark-ink-2"
+                title={conv.parentName ? `来自 ${conv.parentName}` : '讨论'}
+              >
+                讨论
+              </span>
+            )}
             {conv.muted && <BellOff size={11} className="shrink-0 text-dark-ink-3" />}
           </span>
           <span className="flex shrink-0 items-center gap-1 text-[11px] text-dark-ink-3">
@@ -126,9 +144,10 @@ export default function ConversationList() {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const filter = useUI((s) => s.convFilter);
+  const sort = useUI((s) => s.convSort);
   const conversations = useMemo(
-    () => applyFilter(buildConversations(subscriptions, rooms), filter),
-    [subscriptions, rooms, filter],
+    () => applySort(applyFilter(buildConversations(subscriptions, rooms), filter), sort),
+    [subscriptions, rooms, filter, sort],
   );
   const activeRid = useChat((s) => s.activeRid);
   const ready = useChat((s) => s.ready);

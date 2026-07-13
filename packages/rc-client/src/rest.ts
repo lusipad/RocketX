@@ -280,25 +280,76 @@ export class RcRestClient {
 
   /**
    * 上传文件到房间（rooms.media 两段式：上传 → 确认发送）。
-   * 浏览器 File / Node Blob 均可。
+   * multipart 体手工构造成字节流——浏览器 fetch 与 Tauri plugin-http
+   * 通道都稳定支持（后者对 FormData 支持不可靠）。
    */
   async uploadMedia(
     rid: string,
     file: Blob,
     opts: { msg?: string; tmid?: string; fileName?: string } = {},
   ): Promise<void> {
-    const form = new FormData();
     const name = opts.fileName ?? (file instanceof File ? file.name : 'file');
-    form.append('file', file, name);
-    const uploaded = await this.request<{ file: { _id: string } }>(
-      'POST',
-      `rooms.media/${rid}`,
-      form,
+    const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+    const encoder = new TextEncoder();
+    const head = encoder.encode(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="${encodeURIComponent(name)}"\r\n` +
+        `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
     );
-    await this.request('POST', `rooms.mediaConfirm/${rid}/${uploaded.file._id}`, {
+    const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    const body = new Uint8Array(head.length + fileBytes.length + tail.length);
+    body.set(head, 0);
+    body.set(fileBytes, head.length);
+    body.set(tail, head.length + fileBytes.length);
+
+    const auth =
+      this.authProvider?.() ??
+      (this.authToken && this.userId
+        ? { authToken: this.authToken, userId: this.userId }
+        : null);
+    const doFetch = this.fetchImpl ?? fetch;
+    const res = await doFetch(`${this.baseUrl}/api/v1/rooms.media/${rid}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
+      },
+      body,
+    });
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new RcApiError(data?.error ?? `HTTP ${res.status}`, res.status, data?.errorType);
+    }
+    await this.request('POST', `rooms.mediaConfirm/${rid}/${data.file._id}`, {
       msg: opts.msg ?? '',
       ...(opts.tmid ? { tmid: opts.tmid } : {}),
     });
+  }
+
+  /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */
+  async fetchFile(path: string): Promise<Blob> {
+    const auth =
+      this.authProvider?.() ??
+      (this.authToken && this.userId
+        ? { authToken: this.authToken, userId: this.userId }
+        : null);
+    const doFetch = this.fetchImpl ?? fetch;
+    const res = await doFetch(`${this.baseUrl}${path}`, {
+      headers: auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {},
+    });
+    if (!res.ok) throw new RcApiError(`HTTP ${res.status}`, res.status);
+    return await res.blob();
+  }
+
+  /** 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话） */
+  async createDiscussion(prid: string, name: string, pmid?: string): Promise<RcRoom> {
+    const res = await this.request<{ discussion: RcRoom }>('POST', 'rooms.createDiscussion', {
+      prid,
+      t_name: name,
+      ...(pmid ? { pmid } : {}),
+    });
+    return res.discussion;
   }
 
   // ---- 会话管理 ----

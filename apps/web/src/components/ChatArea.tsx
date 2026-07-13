@@ -54,6 +54,12 @@ export default function ChatArea() {
   const requestUpload = useChat((s) => s.requestUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
+  const openRoom = useChat((s) => s.openRoom);
+  const parentRoom = useChat((s) => {
+    if (!s.activeRid) return undefined;
+    const p = s.subscriptions[s.activeRid]?.prid ?? s.rooms[s.activeRid]?.prid;
+    return p ? s.rooms[p] : undefined;
+  });
   const [dragging, setDragging] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -74,6 +80,7 @@ export default function ChatArea() {
 
   const name = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
   const memberCount = sub?.t !== 'd' ? room?.usersCount : undefined;
+  const prid = sub?.prid ?? room?.prid;
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
     setPanel(rightPanel?.kind === panel.kind ? null : panel);
@@ -118,7 +125,18 @@ export default function ChatArea() {
                 </button>
               ) : null}
             </div>
-            {room?.topic && <div className="truncate text-xs text-ink-3">{room.topic}</div>}
+            {prid ? (
+              <button
+                onClick={() => void openRoom(prid)}
+                className="flex items-center gap-1 truncate text-xs text-ink-3 hover:text-primary"
+                title="回到主会话"
+              >
+                <span className="rounded bg-primary-light px-1 text-[10px] text-primary">讨论</span>
+                来自 {parentRoom?.fname || parentRoom?.name || '主会话'}
+              </button>
+            ) : (
+              room?.topic && <div className="truncate text-xs text-ink-3">{room.topic}</div>
+            )}
           </div>
           <div className="flex items-center gap-1">
             <HeaderButton icon={Video} label="视频会议（规划中）" />

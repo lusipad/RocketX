@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AtSign,
+  Check,
   Hash,
   MessageSquareText,
   RefreshCw,
@@ -8,7 +9,7 @@ import {
   User,
 } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
-import { useUI, type ConvFilter } from '../stores/ui';
+import { useUI, type ConvFilter, type ConvSort } from '../stores/ui';
 
 const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'all', label: '消息', icon: MessageSquareText },
@@ -24,6 +25,9 @@ export default function GroupFilter() {
   const rooms = useChat((s) => s.rooms);
   const filter = useUI((s) => s.convFilter);
   const setFilter = useUI((s) => s.setConvFilter);
+  const sort = useUI((s) => s.convSort);
+  const setSort = useUI((s) => s.setConvSort);
+  const [sortMenu, setSortMenu] = useState(false);
 
   const counts = useMemo(() => {
     const convs = buildConversations(subscriptions, rooms);
@@ -42,12 +46,43 @@ export default function GroupFilter() {
     <aside className="flex w-[150px] shrink-0 flex-col bg-dark-2 px-2 py-3">
       <div className="flex items-center justify-between px-2 pb-2">
         <span className="text-[13px] font-medium text-dark-ink">分组</span>
-        <button
-          title="分组设置（规划中）"
-          className="flex h-6 w-6 cursor-not-allowed items-center justify-center rounded text-dark-ink-3"
-        >
-          <Settings size={13} />
-        </button>
+        <div className="relative">
+          <button
+            title="会话排序"
+            onClick={() => setSortMenu((v) => !v)}
+            className="flex h-6 w-6 items-center justify-center rounded text-dark-ink-3 transition hover:bg-dark-hover hover:text-dark-ink"
+          >
+            <Settings size={13} />
+          </button>
+          {sortMenu && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setSortMenu(false)} />
+              <div className="absolute left-0 z-30 mt-1 w-32 rounded-lg border border-line bg-white py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+                <div className="px-3 py-1 text-[11px] text-ink-3">会话排序</div>
+                {(
+                  [
+                    { key: 'time', label: '按时间' },
+                    { key: 'unread', label: '未读优先' },
+                  ] as { key: ConvSort; label: string }[]
+                ).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setSort(key);
+                      setSortMenu(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
+                  >
+                    <span className="w-3.5">
+                      {sort === key && <Check size={13} className="text-primary" />}
+                    </span>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
       <div className="flex flex-col gap-0.5">
         {FILTERS.map(({ key, label, icon: Icon }) => {

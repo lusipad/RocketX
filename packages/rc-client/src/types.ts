@@ -29,6 +29,9 @@ export interface RcMessageAttachment {
   text?: string;
   title?: string;
   title_link?: string;
+  /** 文件附件标记（RC 文件消息为 true，可下载） */
+  title_link_download?: boolean;
+  description?: string;
   image_url?: string;
   author_name?: string;
   author_icon?: string;
@@ -49,6 +52,8 @@ export interface RcMessage {
   t?: string;
   tmid?: string;
   tcount?: number;
+  /** 文件消息的文件信息 */
+  file?: { _id: string; name: string; type?: string; size?: number };
   attachments?: RcMessageAttachment[];
   reactions?: Record<string, { usernames: string[] }>;
   pinned?: boolean;
@@ -62,6 +67,8 @@ export interface RcRoom {
   t: RoomType;
   name?: string;
   fname?: string;
+  /** 父房间 id：有值说明这是一个「讨论」（Discussion） */
+  prid?: string;
   topic?: string;
   announcement?: string;
   usersCount?: number;
@@ -83,6 +90,8 @@ export interface RcSubscription {
   open: boolean;
   /** 置顶会话（favorite） */
   f?: boolean;
+  /** 父房间 id：有值说明这是一个「讨论」 */
+  prid?: string;
   /** 免打扰 */
   disableNotifications?: boolean;
   ls?: RcDate;

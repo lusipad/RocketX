@@ -19,6 +19,10 @@ export interface Conversation {
   favorite: boolean;
   /** 免打扰 */
   muted: boolean;
+  /** 讨论（Discussion，父房间的子会话） */
+  isDiscussion: boolean;
+  /** 讨论所属的父会话名 */
+  parentName?: string;
   lastTs: number;
   lastPreview: string;
   /** DM 用对方用户名取头像 */
@@ -88,6 +92,8 @@ interface ChatState {
   startDM: (username: string) => Promise<string>;
   /** 创建群组并跳转，返回房间 id */
   createGroup: (name: string, members: string[], priv: boolean) => Promise<string>;
+  /** 从消息创建讨论（RC Discussion）并跳转 */
+  createDiscussionFrom: (msg: RcMessage) => Promise<void>;
   requestUpload: (files: File[]) => void;
   confirmUpload: () => Promise<void>;
   cancelUpload: () => void;
@@ -471,6 +477,13 @@ export const useChat = create<ChatState>((set, get) => ({
     return room._id;
   },
 
+  createDiscussionFrom: async (msg) => {
+    const name = (msg.msg || '讨论').slice(0, 40);
+    const room = await rest.createDiscussion(msg.rid, name, msg._id);
+    await refreshSubsAndRooms(set);
+    await get().openRoom(room._id);
+  },
+
   requestUpload: (files) => {
     if (files.length > 0) set({ pendingFiles: files });
   },
@@ -509,6 +522,8 @@ export function buildConversations(
     if (sub.open === false) continue;
     const room = rooms[sub.rid];
     const lastTs = Math.max(tsMs(room?.lm), tsMs(room?.lastMessage?.ts), tsMs(sub._updatedAt));
+    const prid = sub.prid ?? room?.prid;
+    const parent = prid ? rooms[prid] : undefined;
     items.push({
       rid: sub.rid,
       name: sub.fname || sub.name,
@@ -517,6 +532,8 @@ export function buildConversations(
       alert: sub.alert,
       favorite: !!sub.f,
       muted: !!sub.disableNotifications,
+      isDiscussion: !!prid,
+      parentName: parent ? parent.fname || parent.name : undefined,
       lastTs,
       lastPreview: messagePreview(room?.lastMessage),
       avatarUsername: sub.t === 'd' ? sub.name : undefined,

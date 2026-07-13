@@ -3,7 +3,10 @@ import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
   Check,
   Copy,
+  Download,
+  File as FileIcon,
   MessageSquareText,
+  MessagesSquare,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -12,8 +15,11 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
+import AuthImage, { downloadAuthedFile } from './AuthImage';
+import ImageLightbox from './ImageLightbox';
+import Emoji from './Emoji';
 import { fmtTime } from '../lib/format';
-import { emojiFromShortcode, type EmojiEntry } from '../lib/emoji';
+import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
 import { assetUrl } from '../lib/client';
 import { useChat } from '../stores/chat';
@@ -31,14 +37,78 @@ const QUICK_EMOJIS: EmojiEntry[] = [
   { code: 'tada', char: '🎉' },
 ];
 
-/** 站内相对路径（/file-upload 等）转为服务器绝对地址，桌面端直连需要 */
-function resolveUrl(url: string | undefined): string | undefined {
-  if (!url) return url;
-  return url.startsWith('/') ? assetUrl(url) : url;
+function fmtSize(bytes?: number): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 附件卡片：文件/图片上传与 ADO 集成消息的富文本载体 */
-function AttachmentCard({ att }: { att: RcMessageAttachment }) {
+/** 图片附件：认证加载 + 点击灯箱放大 */
+function ImageAttachment({ path, name }: { path: string; name: string }) {
+  const [lightbox, setLightbox] = useState(false);
+  return (
+    <>
+      <button onClick={() => setLightbox(true)} className="mt-1.5 block cursor-zoom-in">
+        <AuthImage
+          path={path}
+          alt={name}
+          className="max-h-64 max-w-[320px] rounded-lg object-contain"
+          fallback={<span className="text-xs text-ink-3">[图片加载失败：{name}]</span>}
+        />
+      </button>
+      {lightbox && <ImageLightbox path={path} fileName={name} onClose={() => setLightbox(false)} />}
+    </>
+  );
+}
+
+/** 文件附件卡片：图标 + 文件名 + 大小 + 下载（带认证） */
+function FileAttachment({
+  att,
+  size,
+}: {
+  att: RcMessageAttachment;
+  size?: number;
+}) {
+  const [busy, setBusy] = useState(false);
+  const name = att.title ?? '文件';
+  const path = att.title_link ?? '';
+  return (
+    <button
+      onClick={() => {
+        if (!path || busy) return;
+        setBusy(true);
+        void downloadAuthedFile(path, name)
+          .catch(() => {})
+          .finally(() => setBusy(false));
+      }}
+      className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-white p-3 text-left transition hover:border-primary"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
+        <FileIcon size={18} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-ink">{name}</span>
+        <span className="block text-xs text-ink-3">
+          {busy ? '下载中…' : fmtSize(size) || '点击下载'}
+        </span>
+      </span>
+      <Download size={15} className="shrink-0 text-ink-3" />
+    </button>
+  );
+}
+
+/** 附件卡片：ADO 集成等富文本消息载体 */
+function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: RcMessage }) {
+  // 图片附件（上传的图片）
+  if (att.image_url) {
+    return <ImageAttachment path={att.image_url} name={att.title ?? message.file?.name ?? '图片'} />;
+  }
+  // 文件附件（上传的文件）
+  if (att.title_link_download && att.title_link) {
+    return <FileAttachment att={att} size={message.file?.size} />;
+  }
+  // 富文本卡片（ADO 事件等）
   return (
     <div
       className="mt-1.5 max-w-md rounded-lg border border-line bg-white p-3"
@@ -48,7 +118,7 @@ function AttachmentCard({ att }: { att: RcMessageAttachment }) {
       {att.title &&
         (att.title_link ? (
           <a
-            href={resolveUrl(att.title_link)}
+            href={att.title_link.startsWith('/') ? assetUrl(att.title_link) : att.title_link}
             target="_blank"
             rel="noreferrer"
             className="block text-sm font-medium text-primary hover:underline"
@@ -72,15 +142,6 @@ function AttachmentCard({ att }: { att: RcMessageAttachment }) {
             </div>
           ))}
         </div>
-      )}
-      {att.image_url && (
-        <a href={resolveUrl(att.image_url)} target="_blank" rel="noreferrer">
-          <img
-            src={resolveUrl(att.image_url)}
-            alt={att.title ?? ''}
-            className="mt-2 max-h-64 max-w-full rounded-md"
-          />
-        </a>
       )}
     </div>
   );
@@ -107,7 +168,7 @@ function Reactions({ message }: { message: RcMessage }) {
                 : 'border-line bg-white text-ink-2 hover:border-primary'
             }`}
           >
-            <span>{emojiFromShortcode(code)}</span>
+            <Emoji code={code} size={14} />
             <span>{usernames.length}</span>
           </button>
         );
@@ -199,6 +260,7 @@ export default function MessageItem({
   const togglePin = useChat((s) => s.togglePin);
   const toggleStar = useChat((s) => s.toggleStar);
   const deleteMessage = useChat((s) => s.deleteMessage);
+  const createDiscussionFrom = useChat((s) => s.createDiscussionFrom);
 
   const [editing, setEditing] = useState(false);
   const [picker, setPicker] = useState(false);
@@ -228,6 +290,15 @@ export default function MessageItem({
         ]
       : []),
     { label: '转发', icon: Share2, onClick: () => setForwarding(true) },
+    ...(!inThread
+      ? [
+          {
+            label: '创建讨论',
+            icon: MessagesSquare,
+            onClick: () => void createDiscussionFrom(message),
+          },
+        ]
+      : []),
     ...(message.msg ? [{ label: copied ? '已复制' : '复制', icon: Copy, onClick: copy }] : []),
     {
       label: message.pinned ? '取消置顶' : '置顶',
@@ -363,7 +434,9 @@ export default function MessageItem({
                 {!message.msg && !message.attachments?.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
-                {message.attachments?.map((att, i) => <AttachmentCard key={i} att={att} />)}
+                {message.attachments?.map((att, i) => (
+                  <AttachmentCard key={i} att={att} message={message} />
+                ))}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
               </>
             )}

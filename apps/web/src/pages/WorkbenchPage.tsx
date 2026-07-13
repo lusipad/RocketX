@@ -76,26 +76,82 @@ function ConfigCard({
   initial: WorkbenchConfig | null;
   onSaved: (c: WorkbenchConfig) => void;
 }) {
+  const [mode, setMode] = useState<'direct' | 'bridge'>(initial?.mode ?? 'direct');
   const [bridge, setBridge] = useState(initial?.bridge ?? 'http://localhost:8377');
+  const [adoBase, setAdoBase] = useState(initial?.adoBase ?? '');
+  const [pat, setPat] = useState(initial?.pat ?? '');
   const [account, setAccount] = useState(initial?.account ?? '');
 
+  const inputCls =
+    'mb-4 h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary';
+  const valid =
+    account.trim() &&
+    (mode === 'direct' ? adoBase.trim() && pat.trim() : bridge.trim());
+
   return (
-    <div className="mx-auto mt-16 w-[440px] rounded-xl border border-line bg-white p-6">
+    <div className="mx-auto mt-12 w-[460px] rounded-xl border border-line bg-white p-6">
       <div className="mb-1 flex items-center gap-2 text-[15px] font-semibold text-ink">
         <LayoutGrid size={18} className="text-primary" />
-        连接 Azure DevOps
+        连接 Azure DevOps Server
       </div>
-      <div className="mb-5 text-xs leading-relaxed text-ink-3">
-        工作台通过 ado-bridge 服务查询 Azure DevOps Server 2022
-        （PAT 保存在桥接服务端，客户端不接触凭据）。
+      <div className="mb-4 flex gap-1 rounded-lg bg-fill-1 p-1">
+        {(
+          [
+            { key: 'direct', label: '直连（桌面端推荐）' },
+            { key: 'bridge', label: '经 ado-bridge 服务' },
+          ] as const
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setMode(key)}
+            className={`h-8 flex-1 rounded-md text-xs transition ${
+              mode === key ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-2'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-      <label className="mb-1.5 block text-sm text-ink-2">桥接服务地址</label>
-      <input
-        value={bridge}
-        onChange={(e) => setBridge(e.target.value)}
-        placeholder="http://localhost:8377"
-        className="mb-4 h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
-      />
+
+      {mode === 'direct' ? (
+        <>
+          <div className="mb-4 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
+            直接连接 ADO，PAT 仅保存在本机。桌面客户端开箱即用；
+            网页端需要 ADO 服务器允许跨域，否则请使用桥接模式。
+          </div>
+          <label className="mb-1.5 block text-sm text-ink-2">ADO 集合地址</label>
+          <input
+            value={adoBase}
+            onChange={(e) => setAdoBase(e.target.value)}
+            placeholder="http://ado-server:8080/tfs/DefaultCollection"
+            className={inputCls}
+          />
+          <label className="mb-1.5 block text-sm text-ink-2">
+            个人访问令牌 PAT（只读：Work Items + Code + Build）
+          </label>
+          <input
+            type="password"
+            value={pat}
+            onChange={(e) => setPat(e.target.value)}
+            placeholder="Personal Access Token"
+            className={inputCls}
+          />
+        </>
+      ) : (
+        <>
+          <div className="mb-4 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
+            通过 ado-bridge 服务查询，PAT 保存在服务端，适合团队共用与网页端。
+          </div>
+          <label className="mb-1.5 block text-sm text-ink-2">桥接服务地址</label>
+          <input
+            value={bridge}
+            onChange={(e) => setBridge(e.target.value)}
+            placeholder="http://localhost:8377"
+            className={inputCls}
+          />
+        </>
+      )}
+
       <label className="mb-1.5 block text-sm text-ink-2">我的 ADO 账号（邮箱或域账号）</label>
       <input
         value={account}
@@ -104,9 +160,15 @@ function ConfigCard({
         className="mb-5 h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
       />
       <button
-        disabled={!bridge.trim() || !account.trim()}
+        disabled={!valid}
         onClick={() => {
-          const config = { bridge: bridge.trim().replace(/\/+$/, ''), account: account.trim() };
+          const config: WorkbenchConfig = {
+            mode,
+            bridge: bridge.trim().replace(/\/+$/, '') || undefined,
+            adoBase: adoBase.trim().replace(/\/+$/, '') || undefined,
+            pat: pat.trim() || undefined,
+            account: account.trim(),
+          };
           saveWorkbenchConfig(config);
           onSaved(config);
         }}
@@ -223,28 +285,48 @@ export default function WorkbenchPage() {
     setLoading(true);
     setError(null);
     try {
-      const [cfgRes, wiRes, prRes, buildRes] = await Promise.all([
-        fetch(`${c.bridge}/api/ado/config`),
-        fetch(`${c.bridge}/api/ado/workitems?assignedTo=${encodeURIComponent(c.account)}`),
-        fetch(`${c.bridge}/api/ado/pullrequests`),
-        fetch(`${c.bridge}/api/ado/builds`),
-      ]);
-      if (!cfgRes.ok || !wiRes.ok || !prRes.ok) {
-        const bad = [cfgRes, wiRes, prRes].find((r) => !r.ok)!;
-        const body = await bad.json().catch(() => ({}) as { error?: string });
-        throw new Error(body.error ?? `桥接服务返回 ${bad.status}`);
+      if (c.mode === 'direct' && c.adoBase && c.pat) {
+        // 直连模式：客户端直接调 ADO REST（桌面端走 Rust 通道无 CORS 限制）
+        const { directGetWorkItems, directGetPullRequests, directGetBuilds } = await import(
+          '../lib/adoDirect'
+        );
+        const cfg = { adoBase: c.adoBase, pat: c.pat };
+        localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
+        const [wi, prList, buildList] = await Promise.all([
+          directGetWorkItems(cfg, c.account),
+          directGetPullRequests(cfg),
+          directGetBuilds(cfg).catch(() => []),
+        ]);
+        setWorkItems(wi as WorkItem[]);
+        setPrs(prList as PullRequest[]);
+        setBuilds(buildList as Build[]);
+      } else {
+        const [cfgRes, wiRes, prRes, buildRes] = await Promise.all([
+          fetch(`${c.bridge}/api/ado/config`),
+          fetch(`${c.bridge}/api/ado/workitems?assignedTo=${encodeURIComponent(c.account)}`),
+          fetch(`${c.bridge}/api/ado/pullrequests`),
+          fetch(`${c.bridge}/api/ado/builds`),
+        ]);
+        if (!cfgRes.ok || !wiRes.ok || !prRes.ok) {
+          const bad = [cfgRes, wiRes, prRes].find((r) => !r.ok)!;
+          const body = await bad.json().catch(() => ({}) as { error?: string });
+          throw new Error(body.error ?? `桥接服务返回 ${bad.status}`);
+        }
+        const cfg = (await cfgRes.json()) as { webBase: string };
+        localStorage.setItem(ADO_WEB_KEY, cfg.webBase);
+        setWorkItems(((await wiRes.json()) as { items: WorkItem[] }).items);
+        setPrs(((await prRes.json()) as { items: PullRequest[] }).items);
+        // 构建面板容错：接口失败不阻塞其他面板
+        setBuilds(buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : []);
       }
-      const cfg = (await cfgRes.json()) as { webBase: string };
-      localStorage.setItem(ADO_WEB_KEY, cfg.webBase);
-      setWorkItems(((await wiRes.json()) as { items: WorkItem[] }).items);
-      setPrs(((await prRes.json()) as { items: PullRequest[] }).items);
-      // 构建面板容错：接口失败不阻塞其他面板
-      setBuilds(buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : []);
     } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err ?? '');
       setError(
-        err instanceof Error && err.message !== 'Failed to fetch'
-          ? err.message
-          : '无法连接桥接服务，请确认 ado-bridge 已启动且地址正确',
+        raw && raw !== 'Failed to fetch'
+          ? raw
+          : c.mode === 'direct'
+            ? '无法连接 Azure DevOps：请检查集合地址与 PAT（网页端还需服务器允许跨域）'
+            : '无法连接桥接服务，请确认 ado-bridge 已启动且地址正确',
       );
     } finally {
       setLoading(false);

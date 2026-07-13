@@ -68,6 +68,11 @@ const tauriFetch: typeof fetch = (async (input: RequestInfo | URL, init?: Reques
   return pluginFetch(input, init);
 }) as typeof fetch;
 
+/** 平台无关的 HTTP：桌面端走 Rust 通道（无 CORS 限制），Web 端走浏览器 fetch */
+export const httpFetch: typeof fetch = isTauri
+  ? tauriFetch
+  : (((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)) as typeof fetch);
+
 // 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
 export const rest = new RcRestClient({
   baseUrl: getServerBase(),

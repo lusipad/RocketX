@@ -104,6 +104,15 @@ const BUILDS = [
 
 createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  // CORS：让网页端也能直连本 mock（真实 ADO Server 通常不发跨域头，网页端需用桥接）
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   const send = (data) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));

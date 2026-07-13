@@ -5,14 +5,22 @@ export const WORKBENCH_CONFIG_KEY = 'rcx-workbench';
 export const ADO_WEB_KEY = 'rcx-ado-web';
 
 export interface WorkbenchConfig {
-  bridge: string;
+  /** direct = 客户端直连 ADO（桌面端推荐）；bridge = 经 ado-bridge 服务 */
+  mode: 'bridge' | 'direct';
+  bridge?: string;
+  adoBase?: string;
+  pat?: string;
   account: string;
 }
 
 export function loadWorkbenchConfig(): WorkbenchConfig | null {
   try {
     const raw = localStorage.getItem(WORKBENCH_CONFIG_KEY);
-    return raw ? (JSON.parse(raw) as WorkbenchConfig) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkbenchConfig;
+    // 旧版配置没有 mode 字段，视为桥接模式
+    if (!parsed.mode) parsed.mode = 'bridge';
+    return parsed;
   } catch {
     return null;
   }
@@ -52,11 +60,19 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   const existing = inflight.get(id);
   if (existing) return existing;
 
-  const promise = fetch(`${config.bridge}/api/ado/workitem/${id}`)
-    .then(async (res) => {
-      const item = res.ok ? ((await res.json()) as { item: AdoWorkItemInfo }).item : null;
-      itemCache.set(id, { item, ts: Date.now() });
-      return item;
+  const load =
+    config.mode === 'direct' && config.adoBase && config.pat
+      ? import('./adoDirect').then((m) =>
+          m.directGetWorkItem({ adoBase: config.adoBase!, pat: config.pat! }, id),
+        )
+      : fetch(`${config.bridge}/api/ado/workitem/${id}`).then(async (res) =>
+          res.ok ? ((await res.json()) as { item: AdoWorkItemInfo }).item : null,
+        );
+
+  const promise = load
+    .then((item) => {
+      itemCache.set(id, { item: item ?? null, ts: Date.now() });
+      return item ?? null;
     })
     .catch(() => {
       itemCache.set(id, { item: null, ts: Date.now() });
@@ -70,6 +86,11 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
 export async function commentWorkItem(id: number, text: string): Promise<void> {
   const config = loadWorkbenchConfig();
   if (!config) throw new Error('请先在工作台完成连接配置');
+  if (config.mode === 'direct' && config.adoBase && config.pat) {
+    const { directComment } = await import('./adoDirect');
+    await directComment({ adoBase: config.adoBase, pat: config.pat }, id, text, config.account);
+    return;
+  }
   const res = await fetch(`${config.bridge}/api/ado/workitem/${id}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

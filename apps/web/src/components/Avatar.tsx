@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { assetUrl } from '../lib/client';
+import AuthImage from './AuthImage';
 
 const PALETTE = ['#3370ff', '#7f3bf5', '#00b96b', '#ff8800', '#f54a45', '#04a5a5', '#c71fbf'];
 
@@ -24,11 +23,10 @@ export default function Avatar({
   roomId?: string;
   size?: number;
 }) {
-  const [failed, setFailed] = useState(false);
-  const src = username
-    ? assetUrl(`/avatar/${encodeURIComponent(username)}?size=${size * 2}`)
+  const path = username
+    ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}`
     : roomId
-      ? assetUrl(`/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`)
+      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`
       : null;
 
   const style = {
@@ -37,23 +35,23 @@ export default function Avatar({
     borderRadius: Math.max(6, size * 0.22),
   };
 
-  if (!src || failed) {
-    return (
-      <div
-        className="flex shrink-0 select-none items-center justify-center font-medium text-white"
-        style={{ ...style, background: colorFor(name), fontSize: size * 0.42 }}
-      >
-        {[...name][0]?.toUpperCase() ?? '?'}
-      </div>
-    );
-  }
+  const letterTile = (
+    <div
+      className="flex shrink-0 items-center justify-center font-medium text-white select-none"
+      style={{ ...style, background: colorFor(name), fontSize: size * 0.42 }}
+    >
+      {[...name][0]?.toUpperCase() ?? '?'}
+    </div>
+  );
+
+  if (!path) return letterTile;
   return (
-    <img
-      src={src}
+    <AuthImage
+      path={path}
       alt={name}
       className="shrink-0 object-cover"
       style={style}
-      onError={() => setFailed(true)}
+      fallback={letterTile}
     />
   );
 }
