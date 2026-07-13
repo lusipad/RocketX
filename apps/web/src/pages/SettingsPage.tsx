@@ -17,6 +17,7 @@ import {
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { loadWorkbenchConfig, saveWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
+import type { ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import Avatar from '../components/Avatar';
@@ -388,28 +389,56 @@ function WorkbenchSection() {
   );
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [steps, setSteps] = useState<ProbeStep[]>([]);
   const [saved, setSaved] = useState(false);
 
   const update = (patch: Partial<WorkbenchConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
     setResult(null);
+    setSteps([]);
     setSaved(false);
   };
 
+  /**
+   * 直连模式：自动探测。用户填的地址可以是项目页地址、带或不带 /tfs，
+   * 程序逐级向上找集合根，并依次试 PAT / Bearer / Windows 集成认证。
+   */
   const test = async () => {
     setTesting(true);
     setResult(null);
+    setSteps([]);
     try {
       if (config.mode === 'direct') {
-        if (!config.adoBase?.trim() || !config.pat?.trim()) {
-          throw new Error('请填写 ADO 集合地址与 PAT');
-        }
-        const { directTestConnection } = await import('../lib/adoDirect');
-        const msg = await directTestConnection({
-          adoBase: config.adoBase.trim(),
-          pat: config.pat.trim(),
+        if (!config.adoBase?.trim()) throw new Error('请填写 ADO 地址');
+        const { probeAdo } = await import('../lib/adoDirect');
+        const found: ProbeStep[] = [];
+        const res = await probeAdo(config.adoBase.trim(), config.pat?.trim() ?? '', (s) => {
+          found.push(s);
+          setSteps([...found]);
         });
-        setResult({ ok: true, msg });
+        if (res.found) {
+          // 自动把探测出的正确地址与认证方式写回配置
+          setConfig((c) => ({
+            ...c,
+            adoBase: res.found!.adoBase,
+            auth: res.found!.auth,
+          }));
+          const authLabel =
+            res.found.auth === 'pat'
+              ? 'PAT'
+              : res.found.auth === 'bearer'
+                ? 'Bearer Token'
+                : 'Windows 集成认证';
+          setResult({
+            ok: true,
+            msg: `连接成功！集合地址：${res.found.adoBase}（${authLabel}），可见 ${res.found.projects.length} 个项目：${res.found.projects.slice(0, 3).join('、')}。已自动填入，点「保存」生效。`,
+          });
+        } else {
+          setResult({
+            ok: false,
+            msg: '所有候选地址与认证方式都失败了，请看下方探测记录判断原因。',
+          });
+        }
       } else {
         const res = await fetch(`${config.bridge}/api/ado/config`);
         if (!res.ok) {
@@ -448,26 +477,40 @@ function WorkbenchSection() {
 
       {config.mode === 'direct' ? (
         <>
-          <Row label="ADO 集合地址" hint="通常形如 http://ado-server:8080/tfs/DefaultCollection">
+          <Row
+            label="ADO 地址"
+            hint="直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，不必自己拼。"
+          >
             <input
               value={config.adoBase ?? ''}
               onChange={(e) => update({ adoBase: e.target.value })}
-              placeholder="http://ado-server:8080/tfs/DefaultCollection"
+              placeholder="http://ado-server:8080/DefaultCollection/项目名"
               className={inputCls}
             />
           </Row>
           <Row
             label="个人访问令牌（PAT）"
-            hint="在 ADO 的「用户设置 → 个人访问令牌」创建，只读即可：Work Items / Code / Build。PAT 仅保存在本机。"
+            hint="在 ADO 的「用户设置 → 个人访问令牌」创建，只读即可：Work Items / Code / Build。仅保存在本机。若服务器只支持 Windows 集成认证，可留空——探测会尝试免凭据访问。"
           >
             <input
               type="password"
               value={config.pat ?? ''}
               onChange={(e) => update({ pat: e.target.value })}
-              placeholder="粘贴 PAT"
+              placeholder="粘贴 PAT（没有可留空）"
               className={inputCls}
             />
           </Row>
+          {config.auth && (
+            <Row label="认证方式" hint="探测得出，通常无需手动改">
+              <div className="text-sm text-ink-2">
+                {config.auth === 'pat'
+                  ? 'PAT（Basic）'
+                  : config.auth === 'bearer'
+                    ? 'Bearer Token'
+                    : 'Windows 集成认证（免凭据）'}
+              </div>
+            </Row>
+          )}
         </>
       ) : (
         <Row label="桥接服务地址" hint="ado-bridge 服务的地址，PAT 保存在服务端">
@@ -496,7 +539,7 @@ function WorkbenchSection() {
           className="flex h-9 items-center gap-2 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
         >
           {testing && <Loader2 size={14} className="animate-spin" />}
-          测试连接
+          {config.mode === 'direct' ? '自动探测' : '测试连接'}
         </button>
         <button
           onClick={() => {
@@ -505,6 +548,7 @@ function WorkbenchSection() {
               bridge: config.bridge?.trim().replace(/\/+$/, '') || undefined,
               adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
               pat: config.pat?.trim() || undefined,
+              auth: config.auth,
               account: config.account.trim(),
             });
             setSaved(true);
@@ -529,6 +573,40 @@ function WorkbenchSection() {
             <XCircle size={16} className="mt-0.5 shrink-0" />
           )}
           <span className="leading-relaxed break-words">{result.msg}</span>
+        </div>
+      )}
+
+      {/* 探测过程：每一步试了什么地址、什么认证、结果如何 */}
+      {steps.length > 0 && (
+        <div className="mt-3 max-w-2xl overflow-hidden rounded-lg border border-line">
+          <div className="border-b border-line bg-fill-2 px-3 py-2 text-xs font-medium text-ink-2">
+            探测记录（{steps.length} 次尝试）
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {steps.map((s, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2 border-b border-line px-3 py-2 text-xs last:border-b-0"
+              >
+                {s.ok ? (
+                  <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-success" />
+                ) : (
+                  <XCircle size={13} className="mt-0.5 shrink-0 text-ink-3" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-[11px] text-ink-2">{s.url}</div>
+                  <div className={`mt-0.5 break-words ${s.ok ? 'text-success' : 'text-ink-3'}`}>
+                    {s.auth === 'pat'
+                      ? 'PAT'
+                      : s.auth === 'bearer'
+                        ? 'Bearer'
+                        : 'Windows 集成认证'}
+                    ：{s.detail}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </>

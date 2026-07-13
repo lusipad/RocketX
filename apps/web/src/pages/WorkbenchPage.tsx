@@ -193,12 +193,12 @@ export default function WorkbenchPage() {
     setLoading(true);
     setError(null);
     try {
-      if (c.mode === 'direct' && c.adoBase && c.pat) {
+      if (c.mode === 'direct' && c.adoBase) {
         // 直连模式：客户端直接调 ADO REST（桌面端走 Rust 通道无 CORS 限制）
         const { directGetWorkItems, directGetPullRequests, directGetBuilds } = await import(
           '../lib/adoDirect'
         );
-        const cfg = { adoBase: c.adoBase, pat: c.pat };
+        const cfg = { adoBase: c.adoBase, pat: c.pat ?? '', auth: c.auth };
         localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
         const [wi, prList, buildList] = await Promise.all([
           directGetWorkItems(cfg, c.account),

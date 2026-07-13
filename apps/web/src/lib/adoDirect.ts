@@ -6,9 +6,11 @@
 import { httpFetch } from './client';
 
 export interface DirectConfig {
-  /** 集合地址，如 http://ado:8080/tfs/DefaultCollection */
+  /** 集合地址，如 http://ado:8080/DefaultCollection 或 http://ado:8080/tfs/DefaultCollection */
   adoBase: string;
   pat: string;
+  /** 认证方式：pat=Basic(:PAT)，bearer=Bearer PAT，none=不带凭据（Windows 集成认证由系统协商） */
+  auth?: 'pat' | 'bearer' | 'none';
 }
 
 function base(cfg: DirectConfig): string {
@@ -21,6 +23,13 @@ function basicAuth(pat: string): string {
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
   return `Basic ${btoa(binary)}`;
+}
+
+function authHeaders(cfg: DirectConfig): Record<string, string> {
+  const mode = cfg.auth ?? 'pat';
+  if (mode === 'none' || !cfg.pat) return {};
+  if (mode === 'bearer') return { Authorization: `Bearer ${cfg.pat}` };
+  return { Authorization: basicAuth(cfg.pat) };
 }
 
 async function adoRequest<T>(
@@ -38,7 +47,7 @@ async function adoRequest<T>(
       headers: {
         'Content-Type': contentType,
         Accept: 'application/json',
-        Authorization: basicAuth(cfg.pat),
+        ...authHeaders(cfg),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -51,11 +60,10 @@ async function adoRequest<T>(
     );
   }
   if (res.status === 401 || res.status === 203) {
-    // ADO 认证失败常返回 203 + 登录页 HTML
-    throw new Error('认证失败：请检查 PAT 是否正确、是否过期、是否有读取权限');
+    throw new Error('认证失败：PAT 无效、已过期、或该服务器未启用 PAT（可试试自动探测）');
   }
   if (res.status === 404) {
-    throw new Error(`地址不对：${url} 返回 404（集合地址通常形如 http://host:8080/tfs/DefaultCollection）`);
+    throw new Error(`地址不对：${url} 返回 404`);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -65,10 +73,9 @@ async function adoRequest<T>(
   try {
     return JSON.parse(text) as T;
   } catch {
-    // 认证失败时 ADO 会返回 HTML 登录页而非 JSON
     throw new Error(
       text.trimStart().startsWith('<')
-        ? '返回了 HTML 而非 JSON：多半是 PAT 无效或地址指向了网页入口而非 API'
+        ? '返回了 HTML 而非 JSON：认证被重定向到登录页，或地址不是 API 根'
         : '响应解析失败',
     );
   }
@@ -83,7 +90,117 @@ export async function directTestConnection(cfg: DirectConfig): Promise<string> {
   );
   const names = (res.value ?? []).map((p) => p.name);
   if (names.length === 0) throw new Error('连接成功但没有可见的项目（检查 PAT 权限范围）');
-  return `连接成功，可见 ${res.count ?? names.length} 个项目：${names.slice(0, 3).join('、')}`;
+  return `可见 ${res.count ?? names.length} 个项目：${names.slice(0, 3).join('、')}`;
+}
+
+// ---- 自动探测 ----
+
+export type ProbeStep = {
+  url: string;
+  auth: 'pat' | 'bearer' | 'none';
+  ok: boolean;
+  detail: string;
+};
+
+export interface ProbeResult {
+  steps: ProbeStep[];
+  /** 探测成功时的可用配置 */
+  found?: { adoBase: string; auth: 'pat' | 'bearer' | 'none'; projects: string[] };
+}
+
+/**
+ * 从用户输入的任意 ADO 地址推导候选集合根。
+ * 例：http://ado:8080/DefaultCollection/MyProject/_workitems/edit/128
+ *  → http://ado:8080/DefaultCollection/MyProject
+ *  → http://ado:8080/DefaultCollection   ← 集合根（通常是这个）
+ *  → http://ado:8080
+ * 顺带补上常见的 /tfs 变体。
+ */
+export function candidateBases(input: string): string[] {
+  let raw = input.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return [];
+  }
+
+  const origin = url.origin;
+  // 去掉 ADO 的功能段（_workitems / _git / _apis / _build …）之后的所有内容
+  const segments = url.pathname.split('/').filter(Boolean);
+  const funcIdx = segments.findIndex((s) => s.startsWith('_'));
+  const meaningful = funcIdx >= 0 ? segments.slice(0, funcIdx) : segments;
+
+  const bases: string[] = [];
+  // 从最深逐级向上：.../Collection/Project → .../Collection → origin
+  for (let i = meaningful.length; i >= 0; i--) {
+    const path = meaningful.slice(0, i).join('/');
+    bases.push(path ? `${origin}/${path}` : origin);
+  }
+  // 用户可能漏了虚拟目录，补上 /tfs 变体
+  if (!meaningful.includes('tfs')) {
+    const withTfs = meaningful.length
+      ? `${origin}/tfs/${meaningful.join('/')}`
+      : `${origin}/tfs/DefaultCollection`;
+    bases.push(withTfs);
+    if (meaningful.length > 1) bases.push(`${origin}/tfs/${meaningful[0]}`);
+    bases.push(`${origin}/tfs`);
+  }
+  // 完全没写路径时，试常见默认集合
+  if (meaningful.length === 0) {
+    bases.push(`${origin}/DefaultCollection`, `${origin}/tfs/DefaultCollection`);
+  }
+  return [...new Set(bases)];
+}
+
+/**
+ * 自动探测：对每个候选集合根 × 每种认证方式尝试 /_apis/projects，
+ * 返回全过程（成功即停）。
+ */
+export async function probeAdo(
+  input: string,
+  pat: string,
+  onStep?: (step: ProbeStep) => void,
+): Promise<ProbeResult> {
+  const bases = candidateBases(input);
+  const authModes: ('pat' | 'bearer' | 'none')[] = pat.trim()
+    ? ['pat', 'bearer', 'none']
+    : ['none'];
+  const steps: ProbeStep[] = [];
+
+  for (const adoBase of bases) {
+    for (const auth of authModes) {
+      const url = `${adoBase}/_apis/projects?api-version=7.0&$top=5`;
+      let step: ProbeStep;
+      try {
+        const res = await adoRequest<{ count?: number; value: { name: string }[] }>(
+          { adoBase, pat, auth },
+          'GET',
+          '/_apis/projects?api-version=7.0&$top=5',
+        );
+        const projects = (res.value ?? []).map((p) => p.name);
+        step = {
+          url,
+          auth,
+          ok: true,
+          detail: `成功，${res.count ?? projects.length} 个项目`,
+        };
+        steps.push(step);
+        onStep?.(step);
+        return { steps, found: { adoBase, auth, projects } };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        step = { url, auth, ok: false, detail: msg };
+        steps.push(step);
+        onStep?.(step);
+        // 连不上主机（网络/跨域）就没必要换认证方式重试
+        if (/无法连接/.test(msg)) break;
+      }
+    }
+  }
+  return { steps };
 }
 
 const WI_FIELDS = [

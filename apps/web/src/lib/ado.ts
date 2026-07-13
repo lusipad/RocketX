@@ -10,6 +10,8 @@ export interface WorkbenchConfig {
   bridge?: string;
   adoBase?: string;
   pat?: string;
+  /** 直连的认证方式（自动探测得出） */
+  auth?: 'pat' | 'bearer' | 'none';
   account: string;
 }
 
@@ -61,9 +63,12 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   if (existing) return existing;
 
   const load =
-    config.mode === 'direct' && config.adoBase && config.pat
+    config.mode === 'direct' && config.adoBase
       ? import('./adoDirect').then((m) =>
-          m.directGetWorkItem({ adoBase: config.adoBase!, pat: config.pat! }, id),
+          m.directGetWorkItem(
+            { adoBase: config.adoBase!, pat: config.pat!, auth: config.auth },
+            id,
+          ),
         )
       : fetch(`${config.bridge}/api/ado/workitem/${id}`).then(async (res) =>
           res.ok ? ((await res.json()) as { item: AdoWorkItemInfo }).item : null,
@@ -86,9 +91,14 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
 export async function commentWorkItem(id: number, text: string): Promise<void> {
   const config = loadWorkbenchConfig();
   if (!config) throw new Error('请先在工作台完成连接配置');
-  if (config.mode === 'direct' && config.adoBase && config.pat) {
+  if (config.mode === 'direct' && config.adoBase) {
     const { directComment } = await import('./adoDirect');
-    await directComment({ adoBase: config.adoBase, pat: config.pat }, id, text, config.account);
+    await directComment(
+      { adoBase: config.adoBase, pat: config.pat ?? '', auth: config.auth },
+      id,
+      text,
+      config.account,
+    );
     return;
   }
   const res = await fetch(`${config.bridge}/api/ado/workitem/${id}/comment`, {

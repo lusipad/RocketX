@@ -4,8 +4,14 @@
  */
 
 export interface AdoConfig {
-  /** 形如 http://ado-server:8080/tfs/DefaultCollection */
+  /**
+   * ADO 集合地址。不同部署形态都支持：
+   *   http://ado:8080/DefaultCollection        （无虚拟目录）
+   *   http://ado:8080/tfs/DefaultCollection    （有 tfs 虚拟目录）
+   *   http://ado:8080/tfs/MyCollection         （自定义集合名）
+   */
   baseUrl: string;
+  /** 留空则不带凭据（内网 Windows 集成认证场景） */
   pat: string;
 }
 
@@ -55,13 +61,22 @@ export class AdoClient {
     return this.config.baseUrl.replace(/\/+$/, '');
   }
 
+  /** PAT 为空时不带 Authorization（走 Windows 集成认证） */
+  private authHeaders(): Record<string, string> {
+    if (!this.config.pat) return {};
+    return {
+      Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
+    };
+  }
+
   private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const url = `${this.webBase}${path}`;
     const res = await fetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
+        Accept: 'application/json',
+        ...this.authHeaders(),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -69,7 +84,16 @@ export class AdoClient {
       const text = await res.text().catch(() => '');
       throw new Error(`ADO ${method} ${path} -> ${res.status} ${text.slice(0, 200)}`);
     }
-    return (await res.json()) as T;
+    const text = await res.text();
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(
+        text.trimStart().startsWith('<')
+          ? `ADO 返回 HTML 而非 JSON（认证被重定向到登录页，或 ADO_BASE_URL 不是集合根）：${url}`
+          : `ADO 响应解析失败：${url}`,
+      );
+    }
   }
 
   /** 分配给某人的未关闭工作项（按最近变更排序） */
@@ -158,7 +182,7 @@ export class AdoClient {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json-patch+json',
-        Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
+        ...this.authHeaders(),
       },
       body: JSON.stringify([{ op: 'add', path: '/fields/System.History', value }]),
     });

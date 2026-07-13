@@ -30,7 +30,8 @@ if (!RC_AUTH_TOKEN || !RC_USER_ID) {
 const rest = new RcRestClient({ baseUrl: RC_BASE_URL });
 rest.setAuth(RC_AUTH_TOKEN, RC_USER_ID);
 
-const ado = ADO_BASE_URL && ADO_PAT ? new AdoClient({ baseUrl: ADO_BASE_URL, pat: ADO_PAT }) : null;
+// PAT 可留空：内网 Windows 集成认证场景（由运行服务的账号协商）
+const ado = ADO_BASE_URL ? new AdoClient({ baseUrl: ADO_BASE_URL, pat: ADO_PAT }) : null;
 
 const app = Fastify({ logger: true });
 // 工作台前端（Web/桌面端）跨域调用
