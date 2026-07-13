@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Bookmark,
@@ -11,8 +11,6 @@ import {
   GitPullRequest,
   LayoutGrid,
   ListTodo,
-  Loader2,
-  MinusCircle,
   Pencil,
   Plus,
   RefreshCw,
@@ -23,7 +21,14 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { ADO_WEB_KEY, loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
+import { isApproved, myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
+import {
+  BuildList,
+  BuildStatusIcon,
+  PullRequestList,
+  TYPE_COLORS,
+  WorkItemList,
+} from '../components/AdoLists';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
@@ -34,54 +39,8 @@ import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 
-// ---------- ADO types ----------
-interface WorkItem {
-  id: number;
-  title: string;
-  type: string;
-  state: string;
-  priority?: number;
-  project: string;
-  webUrl: string;
-}
-
-interface PullRequest {
-  id: number;
-  title: string;
-  repo: string;
-  creator: string;
-  creatorUnique: string;
-  reviewers: { name: string; unique: string; vote: number }[];
-  sourceBranch: string;
-  targetBranch: string;
-  webUrl: string;
-}
-
-interface Build {
-  id: number;
-  buildNumber: string;
-  definition: string;
-  project: string;
-  status: string;
-  result: string;
-  requestedFor: string;
-  queueTime: string;
-  finishTime: string;
-  webUrl: string;
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  Bug: '#f54a45',
-  Task: '#3370ff',
-  'User Story': '#00b96b',
-  Feature: '#7f3bf5',
-  Epic: '#ff8800',
-};
-
-function matchUser(account: string, unique: string, name: string): boolean {
-  const q = account.toLowerCase();
-  return unique.toLowerCase() === q || name.toLowerCase() === q;
-}
+/** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
+type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
 
 // ---------- Sub-components ----------
 
@@ -147,13 +106,42 @@ function SectionHeader({
   );
 }
 
-function BuildStatus({ build }: { build: Build }) {
-  if (build.status === 'inProgress' || build.status === 'notStarted') {
-    return <Loader2 size={14} className="animate-spin text-primary" />;
-  }
-  if (build.result === 'succeeded') return <CheckCircle2 size={14} className="text-success" />;
-  if (build.result === 'failed') return <XCircle size={14} className="text-danger" />;
-  return <MinusCircle size={14} className="text-ink-3" />;
+/** 概览里每个 ADO 小块的标题：名字 + 计数 + 「查看全部」入口 */
+function AdoBlockHeader({
+  icon: Icon,
+  color,
+  title,
+  count,
+  danger,
+  onMore,
+  className = '',
+}: {
+  icon: typeof ListTodo;
+  color: string;
+  title: string;
+  count?: number;
+  danger?: boolean;
+  onMore: () => void;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-center gap-1.5 pb-2 ${className}`}>
+      <Icon size={13} className={color} />
+      <span className="text-xs font-medium text-ink-2">{title}</span>
+      {count !== undefined && count > 0 && (
+        <span className={`text-xs ${danger ? 'font-medium text-danger' : 'text-ink-3'}`}>
+          {count}
+        </span>
+      )}
+      <button
+        onClick={onMore}
+        className="ml-auto flex items-center gap-0.5 text-[11px] text-ink-3 transition hover:text-primary"
+      >
+        全部
+        <ChevronRight size={11} />
+      </button>
+    </div>
+  );
 }
 
 // ---------- Favorites Dialog ----------
@@ -285,12 +273,18 @@ export default function WorkbenchPage() {
   const favorites = useFavorites((s) => s.items);
   const removeFav = useFavorites((s) => s.remove);
 
-  const [config] = useState<WorkbenchConfig | null>(loadWorkbenchConfig);
-  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
-  const [prs, setPrs] = useState<PullRequest[]>([]);
-  const [builds, setBuilds] = useState<Build[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [adoError, setAdoError] = useState<string | null>(null);
+  // config 与 ADO 数据都来自 store：设置页一保存这里立刻跟着变，
+  // 各个 tab 也共用同一份数据，不会各拉各的
+  const config = useWorkbench((s) => s.config);
+  const workItems = useWorkbench((s) => s.workItems);
+  const prs = useWorkbench((s) => s.prs);
+  const builds = useWorkbench((s) => s.builds);
+  const loading = useWorkbench((s) => s.loading);
+  const adoError = useWorkbench((s) => s.error);
+  const lastRefresh = useWorkbench((s) => s.lastRefresh);
+  const refresh = useWorkbench((s) => s.refresh);
+
+  const [tab, setTab] = useState<AdoTab>('overview');
   const [favDialog, setFavDialog] = useState<{ existing?: Favorite } | null>(null);
   const [editingFav, setEditingFav] = useState<string | null>(null);
 
@@ -312,67 +306,15 @@ export default function WorkbenchPage() {
   const todoOverdue = useMemo(() => todos.filter((t) => isOverdue(t, today)).length, [todos, today]);
   const todayEvents = useMemo(() => eventsForDate(calendarEvents, today), [calendarEvents, today]);
 
-  // ADO
-  const refresh = useCallback(async (c: WorkbenchConfig) => {
-    setLoading(true);
-    setAdoError(null);
-    try {
-      if (c.mode === 'direct' && c.adoBase) {
-        const { directGetWorkItems, directGetPullRequests, directGetBuilds } = await import(
-          '../lib/adoDirect'
-        );
-        const cfg = { adoBase: c.adoBase, pat: c.pat ?? '', auth: c.auth };
-        localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
-        const [wi, prList, buildList] = await Promise.all([
-          directGetWorkItems(cfg, c.account),
-          directGetPullRequests(cfg),
-          directGetBuilds(cfg).catch(() => []),
-        ]);
-        setWorkItems(wi as WorkItem[]);
-        setPrs(prList as PullRequest[]);
-        setBuilds(buildList as Build[]);
-      } else if (c.bridge) {
-        const [cfgRes, wiRes, prRes, buildRes] = await Promise.all([
-          fetch(`${c.bridge}/api/ado/config`),
-          fetch(`${c.bridge}/api/ado/workitems?assignedTo=${encodeURIComponent(c.account)}`),
-          fetch(`${c.bridge}/api/ado/pullrequests`),
-          fetch(`${c.bridge}/api/ado/builds`),
-        ]);
-        if (!cfgRes.ok || !wiRes.ok || !prRes.ok) {
-          const bad = [cfgRes, wiRes, prRes].find((r) => !r.ok)!;
-          const body = await bad.json().catch(() => ({}) as { error?: string });
-          throw new Error(body.error ?? `桥接服务返回 ${bad.status}`);
-        }
-        const cfg = (await cfgRes.json()) as { webBase: string };
-        localStorage.setItem(ADO_WEB_KEY, cfg.webBase);
-        setWorkItems(((await wiRes.json()) as { items: WorkItem[] }).items);
-        setPrs(((await prRes.json()) as { items: PullRequest[] }).items);
-        setBuilds(buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : []);
-      }
-    } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err ?? '');
-      setAdoError(
-        raw && raw !== 'Failed to fetch'
-          ? raw
-          : c.mode === 'direct'
-            ? '无法连接 Azure DevOps'
-            : '无法连接桥接服务',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // 进入工作台时拉一次；已有数据就不重复拉（切 tab 不该每次都打服务器）
   useEffect(() => {
-    if (config?.account) void refresh(config);
-  }, [config, refresh]);
+    if (config?.account && !lastRefresh && !loading) void refresh();
+  }, [config, lastRefresh, loading, refresh]);
 
-  const reviewPrs = prs.filter(
-    (pr) =>
-      config &&
-      pr.reviewers.some((r) => matchUser(config.account, r.unique, r.name)) &&
-      !matchUser(config.account, pr.creatorUnique, pr.creator),
-  );
+  const account = config?.account ?? '';
+  const reviewPrs = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
+  const myPrs = useMemo(() => myPrsOf(prs, account), [prs, account]);
+  const failedBuilds = useMemo(() => builds.filter((b) => b.result === 'failed').length, [builds]);
 
   const upcomingTodos = useMemo(
     () =>
@@ -388,42 +330,127 @@ export default function WorkbenchPage() {
     [todos],
   );
 
-  return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-fill-2">
-      {/* 顶部问候 + 日期 */}
-      <header className="shrink-0 border-b border-line bg-surface-4 px-8 py-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-ink">
-              {greeting}，{user?.name || user?.username || ''}
-            </h1>
-            <p className="mt-1 text-sm text-ink-3">
-              {now.getFullYear()} 年 {now.getMonth() + 1} 月 {now.getDate()} 日 · 周{DAY_NAMES[now.getDay()]}
-              {todayEvents.length > 0 && ` · 今天有 ${todayEvents.length} 项日程`}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {config?.account && (
-              <button
-                onClick={() => void (config && refresh(config))}
-                disabled={loading}
-                className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
-              >
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-                刷新
-              </button>
-            )}
-            <button
-              onClick={() => setModule('settings')}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
-            >
-              <Settings size={15} />
-            </button>
-          </div>
-        </div>
-      </header>
+  // ADO 未配置时不显示工作项/PR/构建这些 tab——点进去只有空页，没意义
+  const tabs: { key: AdoTab; label: string; icon: typeof LayoutGrid; badge?: number; danger?: boolean }[] =
+    [
+      { key: 'overview', label: '概览', icon: LayoutGrid },
+      ...(config?.account
+        ? [
+            { key: 'workitems' as const, label: '我的工作项', icon: CircleDot, badge: workItems.length },
+            { key: 'prs' as const, label: '拉取请求', icon: GitPullRequest, badge: reviewPrs.length },
+            {
+              key: 'builds' as const,
+              label: '构建',
+              icon: Wrench,
+              badge: failedBuilds || undefined,
+              danger: failedBuilds > 0,
+            },
+          ]
+        : []),
+    ];
 
-      <div className="flex-1 p-6 space-y-6">
+  const refreshBar = config?.account && (
+    <div className="flex items-center gap-2">
+      {lastRefresh && !loading && (
+        <span className="text-xs text-ink-3">{fmtConvTime(lastRefresh)} 更新</span>
+      )}
+      <button
+        onClick={() => void refresh()}
+        disabled={loading}
+        className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+      >
+        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+        刷新
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="flex min-w-0 flex-1">
+      <aside className="flex w-[180px] shrink-0 flex-col border-r border-line bg-fill-2 p-3">
+        <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">工作台</div>
+        {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+              tab === key ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
+            }`}
+          >
+            <Icon size={16} />
+            <span className="min-w-0 truncate">{label}</span>
+            {badge ? (
+              <span
+                className={`ml-auto text-xs ${danger ? 'font-medium text-danger' : 'text-ink-3'}`}
+              >
+                {badge}
+              </span>
+            ) : null}
+          </button>
+        ))}
+
+        <button
+          onClick={() => setModule('settings')}
+          className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
+        >
+          <Settings size={14} />
+          {config?.account ? '工作台设置' : '连接 Azure DevOps'}
+        </button>
+      </aside>
+
+      {tab !== 'overview' ? (
+        <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
+          <div className="flex items-center justify-between pb-3">
+            <span className="text-[15px] font-semibold text-ink">
+              {tabs.find((t) => t.key === tab)?.label}
+              <span className="ml-2 text-xs font-normal text-ink-3">
+                Azure DevOps · {config?.account}
+              </span>
+            </span>
+            {refreshBar}
+          </div>
+
+          {adoError ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2">
+              <XCircle size={28} className="text-danger" />
+              <div className="text-sm text-danger">{adoError}</div>
+              <button
+                onClick={() => void refresh()}
+                className="mt-1 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
+              >
+                重试
+              </button>
+            </div>
+          ) : loading && !lastRefresh ? (
+            <SkeletonRows rows={8} />
+          ) : tab === 'workitems' ? (
+            <WorkItemList items={workItems} />
+          ) : tab === 'prs' ? (
+            <PullRequestList prs={prs} account={account} />
+          ) : (
+            <BuildList builds={builds} />
+          )}
+        </main>
+      ) : (
+        <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-fill-2">
+          {/* 顶部问候 + 日期 */}
+          <header className="shrink-0 border-b border-line bg-surface-4 px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-xl font-bold text-ink">
+                  {greeting}，{user?.name || user?.username || ''}
+                </h1>
+                <p className="mt-1 text-sm text-ink-3">
+                  {now.getFullYear()} 年 {now.getMonth() + 1} 月 {now.getDate()} 日 · 周
+                  {DAY_NAMES[now.getDay()]}
+                  {todayEvents.length > 0 && ` · 今天有 ${todayEvents.length} 项日程`}
+                </p>
+              </div>
+              {refreshBar}
+            </div>
+          </header>
+
+          <div className="flex-1 space-y-6 p-6">
         {/* 统计卡片 */}
         <div className="flex gap-4">
           <StatCard
@@ -541,36 +568,34 @@ export default function WorkbenchPage() {
               )}
             </section>
 
-            {/* ADO 工作台 */}
+            {/* ADO 摘要：每块都能点进完整列表 */}
             {config?.account && (
               <section className="rounded-xl border border-line bg-surface-4 p-4">
-                <SectionHeader
-                  icon={Wrench}
-                  title={`Azure DevOps · ${config.account}`}
-                />
+                <SectionHeader icon={Wrench} title={`Azure DevOps · ${config.account}`} />
                 {adoError ? (
                   <div className="flex items-center gap-2 py-4 text-xs text-danger">
                     <XCircle size={14} />
                     {adoError}
                     <button
-                      onClick={() => void refresh(config)}
+                      onClick={() => void refresh()}
                       className="ml-2 text-primary hover:underline"
                     >
                       重试
                     </button>
                   </div>
-                ) : loading ? (
+                ) : loading && !lastRefresh ? (
                   <SkeletonRows rows={3} />
                 ) : (
-                  <div className="grid grid-cols-2 gap-4 pt-1">
-                    {/* 工作项 */}
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 pt-1">
+                    {/* 我的工作项 */}
                     <div>
-                      <div className="flex items-center gap-1.5 pb-2">
-                        <CircleDot size={13} className="text-primary" />
-                        <span className="text-xs font-medium text-ink-2">
-                          我的工作项 ({workItems.length})
-                        </span>
-                      </div>
+                      <AdoBlockHeader
+                        icon={CircleDot}
+                        color="text-primary"
+                        title="我的工作项"
+                        count={workItems.length}
+                        onMore={() => setTab('workitems')}
+                      />
                       {workItems.slice(0, 5).map((w) => (
                         <a
                           key={w.id}
@@ -582,29 +607,31 @@ export default function WorkbenchPage() {
                           <span
                             className="h-2 w-2 shrink-0 rounded-full"
                             style={{ background: TYPE_COLORS[w.type] ?? '#8f959e' }}
+                            title={w.type}
                           />
                           <span className="shrink-0 text-[11px] text-ink-3">#{w.id}</span>
                           <span className="min-w-0 flex-1 truncate text-xs text-ink">{w.title}</span>
+                          {/* 状态和优先级是「这条现在该不该做」的判断依据，不能省 */}
+                          {w.priority === 1 && (
+                            <span className="shrink-0 text-[10px] font-medium text-danger">P1</span>
+                          )}
+                          <span className="shrink-0 text-[10px] text-ink-3">{w.state}</span>
                         </a>
                       ))}
-                      {workItems.length > 5 && (
-                        <div className="pt-1 text-center text-[11px] text-ink-3">
-                          还有 {workItems.length - 5} 项
-                        </div>
-                      )}
                       {workItems.length === 0 && (
-                        <div className="py-4 text-center text-xs text-ink-3">无工作项</div>
+                        <div className="py-4 text-center text-xs text-ink-3">没有未关闭的工作项</div>
                       )}
                     </div>
 
                     {/* PR + 构建 */}
                     <div>
-                      <div className="flex items-center gap-1.5 pb-2">
-                        <GitPullRequest size={13} className="text-[#7f3bf5]" />
-                        <span className="text-xs font-medium text-ink-2">
-                          待评审 PR ({reviewPrs.length})
-                        </span>
-                      </div>
+                      <AdoBlockHeader
+                        icon={GitPullRequest}
+                        color="text-[#7f3bf5]"
+                        title="待我评审"
+                        count={reviewPrs.length}
+                        onMore={() => setTab('prs')}
+                      />
                       {reviewPrs.slice(0, 3).map((pr) => (
                         <a
                           key={pr.id}
@@ -614,21 +641,61 @@ export default function WorkbenchPage() {
                           className="flex items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-fill-hover"
                         >
                           <span className="shrink-0 text-[11px] text-ink-3">!{pr.id}</span>
-                          <span className="min-w-0 flex-1 truncate text-xs text-ink">
-                            {pr.title}
-                          </span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-ink">{pr.title}</span>
+                          <span className="shrink-0 text-[10px] text-ink-3">{pr.repo}</span>
                         </a>
                       ))}
                       {reviewPrs.length === 0 && (
-                        <div className="py-3 text-center text-xs text-ink-3">暂无待评审</div>
+                        <div className="py-3 text-center text-xs text-ink-3">没有等你评审的 PR</div>
+                      )}
+
+                      {/* 我提的 PR：数据一直拉着，之前从没在界面上出现过 */}
+                      {myPrs.length > 0 && (
+                        <>
+                          <AdoBlockHeader
+                            icon={GitPullRequest}
+                            color="text-ink-2"
+                            title="我提的 PR"
+                            count={myPrs.length}
+                            onMore={() => setTab('prs')}
+                            className="mt-3"
+                          />
+                          {myPrs.slice(0, 2).map((pr) => (
+                            <a
+                              key={pr.id}
+                              href={pr.webUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-fill-hover"
+                            >
+                              <span className="shrink-0 text-[11px] text-ink-3">!{pr.id}</span>
+                              <span className="min-w-0 flex-1 truncate text-xs text-ink">
+                                {pr.title}
+                              </span>
+                              {isApproved(pr) ? (
+                                <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-success">
+                                  <CheckCircle2 size={10} />
+                                  已通过
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-[10px] text-ink-3">评审中</span>
+                              )}
+                            </a>
+                          ))}
+                        </>
                       )}
 
                       {builds.length > 0 && (
                         <>
-                          <div className="mt-3 flex items-center gap-1.5 pb-2">
-                            <Wrench size={13} className="text-ink-2" />
-                            <span className="text-xs font-medium text-ink-2">最近构建</span>
-                          </div>
+                          <AdoBlockHeader
+                            icon={Wrench}
+                            color="text-ink-2"
+                            title="最近构建"
+                            count={failedBuilds || undefined}
+                            danger={failedBuilds > 0}
+                            onMore={() => setTab('builds')}
+                            className="mt-3"
+                          />
                           {builds.slice(0, 3).map((b) => (
                             <a
                               key={`${b.project}-${b.id}`}
@@ -637,12 +704,15 @@ export default function WorkbenchPage() {
                               rel="noreferrer"
                               className="flex items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-fill-hover"
                             >
-                              <BuildStatus build={b} />
+                              <BuildStatusIcon build={b} size={13} />
                               <span className="min-w-0 flex-1 truncate text-xs text-ink">
                                 {b.definition}
                               </span>
+                              <span className="shrink-0 text-[10px] text-ink-3">{b.buildNumber}</span>
                               <span className="shrink-0 text-[10px] text-ink-3">
-                                {b.finishTime ? fmtConvTime(new Date(b.finishTime).getTime()) : '进行中'}
+                                {b.finishTime
+                                  ? fmtConvTime(new Date(b.finishTime).getTime())
+                                  : '进行中'}
                               </span>
                             </a>
                           ))}
@@ -784,11 +854,13 @@ export default function WorkbenchPage() {
             </section>
           </div>
         </div>
-      </div>
+          </div>
+        </main>
+      )}
 
       {favDialog && (
         <FavoriteDialog existing={favDialog.existing} onClose={() => setFavDialog(null)} />
       )}
-    </main>
+    </div>
   );
 }

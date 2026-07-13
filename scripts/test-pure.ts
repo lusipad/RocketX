@@ -156,6 +156,58 @@ async function main(): Promise<void> {
     emojify('a :nope_nope: b') === 'a :nope_nope: b',
   );
 
+  console.log('\n[工作台 · PR 分流]');
+  const { reviewPrsOf, myPrsOf, isApproved, matchUser } = await import(
+    '../apps/web/src/stores/workbench'
+  );
+  const mkPr = (
+    id: number,
+    creator: string,
+    reviewers: { unique: string; vote: number }[],
+  ) => ({
+    id,
+    title: `PR ${id}`,
+    repo: 'r',
+    creator,
+    creatorUnique: creator,
+    reviewers: reviewers.map((r) => ({ name: r.unique, unique: r.unique, vote: r.vote })),
+    sourceBranch: 'f',
+    targetBranch: 'main',
+    webUrl: '',
+  });
+
+  const me = 'lus@example.com';
+  const other = 'zhangsan@example.com';
+  const prs = [
+    mkPr(1, other, [{ unique: me, vote: 0 }]), // 待我评审
+    mkPr(2, me, [{ unique: other, vote: 10 }]), // 我提的，已通过
+    mkPr(3, me, [{ unique: other, vote: 0 }]), // 我提的，评审中
+    mkPr(4, me, [{ unique: me, vote: 10 }]), // 我提的，我自己也是评审人
+    mkPr(5, other, [{ unique: other, vote: 0 }]), // 与我无关
+  ];
+
+  check('待我评审：只含别人提的、我是评审人的',
+    reviewPrsOf(prs, me).map((p) => p.id).join(',') === '1',
+    reviewPrsOf(prs, me).map((p) => p.id).join(',') || '空');
+  check(
+    '自己提的 PR 不进「待我评审」（哪怕我也是评审人）',
+    !reviewPrsOf(prs, me).some((p) => p.id === 4),
+  );
+  check(
+    '我提的：按创建人匹配',
+    myPrsOf(prs, me).map((p) => p.id).join(',') === '2,3,4',
+    myPrsOf(prs, me).map((p) => p.id).join(','),
+  );
+  check('已批准：所有投过票的都 >= 5', isApproved(prs[1]));
+  check('评审中：还有人没投票，不算已批准', !isApproved(prs[2]));
+  check(
+    '一人拒绝就不算已批准',
+    !isApproved(mkPr(9, me, [{ unique: other, vote: 10 }, { unique: 'x', vote: -10 }])),
+  );
+  check('没有评审人不算已批准', !isApproved(mkPr(10, me, [])));
+  check('账号匹配不区分大小写', matchUser('LUS@example.com', me, 'lus'));
+  check('空账号不匹配任何人', !matchUser('', me, 'lus'));
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
 }

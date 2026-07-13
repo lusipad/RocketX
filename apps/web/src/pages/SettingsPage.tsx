@@ -16,10 +16,11 @@ import {
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
-import { loadWorkbenchConfig, saveWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
+import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import type { ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { useWorkbench } from '../stores/workbench';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
@@ -406,6 +407,7 @@ function WorkbenchSection() {
         account: '',
       },
   );
+  const setWorkbenchConfig = useWorkbench((s) => s.setConfig);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [steps, setSteps] = useState<ProbeStep[]>([]);
@@ -574,7 +576,8 @@ function WorkbenchSection() {
         </button>
         <button
           onClick={() => {
-            saveWorkbenchConfig({
+            // 走 store 而不是直接写 localStorage：工作台在监听它，保存后立刻重新拉数据
+            setWorkbenchConfig({
               mode: config.mode,
               bridge: config.bridge?.trim().replace(/\/+$/, '') || undefined,
               adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
