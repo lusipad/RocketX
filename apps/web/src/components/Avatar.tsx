@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { assetUrl } from '../lib/client';
 
 const PALETTE = ['#3370ff', '#7f3bf5', '#00b96b', '#ff8800', '#f54a45', '#04a5a5', '#c71fbf'];
 
@@ -25,9 +26,9 @@ export default function Avatar({
 }) {
   const [failed, setFailed] = useState(false);
   const src = username
-    ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}`
+    ? assetUrl(`/avatar/${encodeURIComponent(username)}?size=${size * 2}`)
     : roomId
-      ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`
+      ? assetUrl(`/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`)
       : null;
 
   const style = {

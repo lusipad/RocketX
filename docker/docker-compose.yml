@@ -21,6 +21,9 @@ services:
       OVERWRITE_SETTING_UTF8_Channel_Names_Validation: '[0-9a-zA-Z-_.一-龥぀-ヿ]+'
       # 消息搜索用正则（子串匹配）替代 Mongo 文本索引，中文搜索必需
       OVERWRITE_SETTING_Message_AlwaysSearchRegExp: 'true'
+      # 桌面客户端（Tauri）直连 REST API 需要 CORS
+      OVERWRITE_SETTING_API_Enable_CORS: 'true'
+      OVERWRITE_SETTING_API_CORS_Origin: '*'
     depends_on:
       mongodb:
         condition: service_healthy

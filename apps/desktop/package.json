@@ -1,0 +1,14 @@
+{
+  "name": "@rcx/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "bundle": "tauri build",
+    "tauri": "tauri",
+    "typecheck": "node -e \"process.exit(0)\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

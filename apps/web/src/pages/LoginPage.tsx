@@ -1,16 +1,33 @@
 import { useState, type FormEvent } from 'react';
 import { Rocket } from 'lucide-react';
 import { useAuth } from '../stores/auth';
+import { getServerBase, isTauri, setServerBase } from '../lib/client';
 
 export default function LoginPage() {
   const { status, error, login } = useAuth();
+  const [server, setServer] = useState(
+    () => getServerBase() || (isTauri ? 'http://localhost:3300' : ''),
+  );
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [serverError, setServerError] = useState<string | null>(null);
   const busy = status === 'authing';
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!busy) void login(username, password);
+    if (busy) return;
+    const trimmed = server.trim();
+    if (isTauri && !trimmed) {
+      setServerError('桌面端必须填写服务器地址');
+      return;
+    }
+    if (trimmed && !/^https?:\/\//.test(trimmed)) {
+      setServerError('服务器地址需以 http:// 或 https:// 开头');
+      return;
+    }
+    setServerError(null);
+    setServerBase(trimmed);
+    void login(username, password);
   };
 
   return (
@@ -30,6 +47,17 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
+          <div>
+            <label className="mb-1.5 block text-sm text-ink-2">服务器地址</label>
+            <input
+              value={server}
+              onChange={(e) => setServer(e.target.value)}
+              autoComplete="url"
+              className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary-light"
+              placeholder={isTauri ? 'https://chat.example.com' : '留空使用当前站点'}
+            />
+            {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
+          </div>
           <div>
             <label className="mb-1.5 block text-sm text-ink-2">用户名 / 邮箱</label>
             <input

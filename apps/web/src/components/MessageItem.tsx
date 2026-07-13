@@ -15,6 +15,7 @@ import {
 import { fmtTime } from '../lib/format';
 import { emojiFromShortcode, type EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
+import { assetUrl } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
@@ -30,6 +31,12 @@ const QUICK_EMOJIS: EmojiEntry[] = [
   { code: 'tada', char: '🎉' },
 ];
 
+/** 站内相对路径（/file-upload 等）转为服务器绝对地址，桌面端直连需要 */
+function resolveUrl(url: string | undefined): string | undefined {
+  if (!url) return url;
+  return url.startsWith('/') ? assetUrl(url) : url;
+}
+
 /** 附件卡片：文件/图片上传与 ADO 集成消息的富文本载体 */
 function AttachmentCard({ att }: { att: RcMessageAttachment }) {
   return (
@@ -41,7 +48,7 @@ function AttachmentCard({ att }: { att: RcMessageAttachment }) {
       {att.title &&
         (att.title_link ? (
           <a
-            href={att.title_link}
+            href={resolveUrl(att.title_link)}
             target="_blank"
             rel="noreferrer"
             className="block text-sm font-medium text-primary hover:underline"
@@ -67,9 +74,9 @@ function AttachmentCard({ att }: { att: RcMessageAttachment }) {
         </div>
       )}
       {att.image_url && (
-        <a href={att.image_url} target="_blank" rel="noreferrer">
+        <a href={resolveUrl(att.image_url)} target="_blank" rel="noreferrer">
           <img
-            src={att.image_url}
+            src={resolveUrl(att.image_url)}
             alt={att.title ?? ''}
             className="mt-2 max-h-64 max-w-full rounded-md"
           />

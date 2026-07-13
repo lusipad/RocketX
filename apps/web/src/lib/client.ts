@@ -29,10 +29,38 @@ export function saveAuth(auth: StoredAuth | null): void {
   }
 }
 
-// 开发环境经 Vite 代理走同源；生产部署时由反向代理把
-// /api /websocket /avatar 转发到 Rocket.Chat。
-// 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
-export const rest = new RcRestClient({ baseUrl: '', authProvider: loadStoredAuth });
+// 服务器地址：空 = 同源（Web 部署经反向代理 / 开发经 Vite 代理）；
+// 桌面端（Tauri）没有代理，登录页配置后存这里，直连 Rocket.Chat。
+const SERVER_KEY = 'rcx-server';
 
-const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
-export const realtime = new RcRealtimeClient(`${wsProtocol}://${location.host}/websocket`);
+export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+export function getServerBase(): string {
+  try {
+    return (localStorage.getItem(SERVER_KEY) ?? '').replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+export function setServerBase(url: string): void {
+  const normalized = url.trim().replace(/\/+$/, '');
+  localStorage.setItem(SERVER_KEY, normalized);
+  rest.baseUrl = normalized;
+  realtime.setUrl(wsUrlFor(normalized));
+}
+
+/** 头像 / 上传文件等静态资源的绝对地址 */
+export function assetUrl(path: string): string {
+  return `${getServerBase()}${path}`;
+}
+
+function wsUrlFor(base: string): string {
+  if (base) return `${base.replace(/^http/, 'ws')}/websocket`;
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${wsProtocol}://${location.host}/websocket`;
+}
+
+// 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
+export const rest = new RcRestClient({ baseUrl: getServerBase(), authProvider: loadStoredAuth });
+export const realtime = new RcRealtimeClient(wsUrlFor(getServerBase()));
