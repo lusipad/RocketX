@@ -5,10 +5,15 @@ import {
   Info,
   LayoutGrid,
   Loader2,
+  Monitor,
+  Moon,
+  Palette,
   Server,
+  Sun,
   XCircle,
 } from 'lucide-react';
 import { getServerBase, isTauri } from '../lib/client';
+import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import {
   loadWorkbenchConfig,
   saveWorkbenchConfig,
@@ -17,14 +22,58 @@ import {
 import { useAuth } from '../stores/auth';
 import Avatar from '../components/Avatar';
 
-type Section = 'account' | 'workbench' | 'notification' | 'about';
+type Section = 'account' | 'appearance' | 'workbench' | 'notification' | 'about';
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与服务器', icon: Server },
+  { key: 'appearance', label: '外观', icon: Palette },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
   { key: 'notification', label: '通知', icon: Bell },
   { key: 'about', label: '关于', icon: Info },
 ];
+
+const THEMES: { key: ThemeMode; label: string; icon: typeof Sun; desc: string }[] = [
+  { key: 'light', label: '浅色', icon: Sun, desc: '明亮清爽' },
+  { key: 'dark', label: '深色', icon: Moon, desc: '夜间护眼' },
+  { key: 'system', label: '跟随系统', icon: Monitor, desc: '自动切换' },
+];
+
+/** 外观：主题切换 */
+function AppearanceSection() {
+  const [theme, setTheme] = useState<ThemeMode>(loadTheme);
+
+  const pick = (mode: ThemeMode) => {
+    setTheme(mode);
+    saveTheme(mode);
+  };
+
+  return (
+    <Row label="主题" hint="整体配色会立即切换，选择跟随系统时会随系统的浅色/深色模式自动变化">
+      <div className="flex gap-3">
+        {THEMES.map(({ key, label, icon: Icon, desc }) => {
+          const active = theme === key;
+          return (
+            <button
+              key={key}
+              onClick={() => pick(key)}
+              className={`flex w-32 flex-col items-center gap-2 rounded-xl border-2 p-4 transition ${
+                active
+                  ? 'border-primary bg-primary-light'
+                  : 'border-line hover:border-ink-3 hover:bg-fill-hover'
+              }`}
+            >
+              <Icon size={22} className={active ? 'text-primary' : 'text-ink-2'} />
+              <span className={`text-sm font-medium ${active ? 'text-primary' : 'text-ink'}`}>
+                {label}
+              </span>
+              <span className="text-[11px] text-ink-3">{desc}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Row>
+  );
+}
 
 const APP_VERSION = '0.2.1';
 
@@ -168,7 +217,7 @@ function WorkbenchSection() {
               key={key}
               onClick={() => update({ mode: key })}
               className={`h-8 flex-1 rounded-md text-xs transition ${
-                config.mode === key ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-2'
+                config.mode === key ? 'bg-surface-4 font-medium text-primary shadow-sm' : 'text-ink-2'
               }`}
             >
               {label}
@@ -372,12 +421,13 @@ export default function SettingsPage() {
           </button>
         ))}
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto bg-white">
+      <main className="min-w-0 flex-1 overflow-y-auto bg-surface-3">
         <div className="mx-auto max-w-3xl px-8 py-6">
           <h1 className="mb-2 text-lg font-semibold text-ink">
             {SECTIONS.find((s) => s.key === section)?.label}
           </h1>
           {section === 'account' && <AccountSection />}
+          {section === 'appearance' && <AppearanceSection />}
           {section === 'workbench' && <WorkbenchSection />}
           {section === 'notification' && <NotificationSection />}
           {section === 'about' && <AboutSection />}

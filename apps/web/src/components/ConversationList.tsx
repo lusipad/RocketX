@@ -75,7 +75,7 @@ function ConversationItem({ conv, active }: { conv: Conversation; active: boolea
         setMenu({ x: e.clientX, y: e.clientY });
       }}
       className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition ${
-        active ? 'bg-dark-active' : 'hover:bg-dark-hover'
+        active ? 'bg-fill-active' : 'hover:bg-fill-hover'
       }`}
     >
       <div className="relative shrink-0">
@@ -83,44 +83,44 @@ function ConversationItem({ conv, active }: { conv: Conversation; active: boolea
         {/* 飞书习惯：被 @ 或私聊显示数字角标，频道普通新消息显示红点，免打扰灰色 */}
         {conv.unread > 0 ? (
           <span
-            className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-dark-3 px-1 text-[10px] font-medium text-white ${
-              conv.muted ? 'bg-dark-ink-3' : 'bg-danger'
+            className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface-2 px-1 text-[10px] font-medium text-white ${
+              conv.muted ? 'bg-ink-3' : 'bg-danger'
             }`}
           >
             {conv.unread > 99 ? '99+' : conv.unread}
           </span>
         ) : conv.alert && !active ? (
           <span
-            className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-dark-3 ${
-              conv.muted ? 'bg-dark-ink-3' : 'bg-danger'
+            className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface-2 ${
+              conv.muted ? 'bg-ink-3' : 'bg-danger'
             }`}
           />
         ) : null}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1 truncate text-[13.5px] font-medium text-dark-ink">
-            {conv.type === 'p' && <Lock size={12} className="shrink-0 text-dark-ink-3" />}
-            {conv.type === 'c' && <Hash size={12} className="shrink-0 text-dark-ink-3" />}
+          <span className="flex min-w-0 items-center gap-1 truncate text-[13.5px] font-medium text-ink">
+            {conv.type === 'p' && <Lock size={12} className="shrink-0 text-ink-3" />}
+            {conv.type === 'c' && <Hash size={12} className="shrink-0 text-ink-3" />}
             <span className="truncate">{conv.name}</span>
             {conv.isDiscussion && (
               <span
-                className="shrink-0 rounded bg-white/10 px-1 text-[10px] text-dark-ink-2"
+                className="shrink-0 rounded bg-white/10 px-1 text-[10px] text-ink-2"
                 title={conv.parentName ? `来自 ${conv.parentName}` : '讨论'}
               >
                 讨论
               </span>
             )}
-            {conv.muted && <BellOff size={11} className="shrink-0 text-dark-ink-3" />}
+            {conv.muted && <BellOff size={11} className="shrink-0 text-ink-3" />}
           </span>
-          <span className="flex shrink-0 items-center gap-1 text-[11px] text-dark-ink-3">
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-ink-3">
             {conv.favorite && <Pin size={10} className="text-primary-hover" />}
             {fmtConvTime(conv.lastTs)}
           </span>
         </div>
         <div
           className={`mt-0.5 truncate text-xs ${
-            conv.unread > 0 || conv.alert ? 'text-dark-ink-2' : 'text-dark-ink-3'
+            conv.unread > 0 || conv.alert ? 'text-ink-2' : 'text-ink-3'
           }`}
         >
           {showDraft ? (
@@ -153,14 +153,14 @@ export default function ConversationList() {
   const ready = useChat((s) => s.ready);
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col bg-dark-3">
-      <div className="px-4 pt-4 pb-2 text-[15px] font-semibold text-dark-ink">
+    <aside className="flex w-[280px] shrink-0 flex-col border-r border-line bg-surface-2">
+      <div className="px-4 pt-4 pb-2 text-[15px] font-semibold text-ink">
         {FILTER_TITLE[filter]}
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {!ready && <div className="p-4 text-center text-sm text-dark-ink-3">加载会话中…</div>}
+        {!ready && <div className="p-4 text-center text-sm text-ink-3">加载会话中…</div>}
         {ready && conversations.length === 0 && (
-          <div className="p-4 text-center text-sm text-dark-ink-3">
+          <div className="p-4 text-center text-sm text-ink-3">
             {filter === 'all' ? '暂无会话' : '该分组下暂无会话'}
           </div>
         )}

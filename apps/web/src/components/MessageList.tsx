@@ -142,7 +142,7 @@ export default function MessageList({ rid }: { rid: string }) {
         <button
           onClick={jumpToBottom}
           title="回到底部"
-          className="absolute right-6 bottom-4 flex h-9 w-9 items-center justify-center rounded-full border border-line bg-white text-ink-2 shadow-[0_2px_10px_rgba(31,35,41,0.15)] transition hover:text-primary"
+          className="absolute right-6 bottom-4 flex h-9 w-9 items-center justify-center rounded-full border border-line bg-surface-4 text-ink-2 shadow-[0_2px_10px_rgba(31,35,41,0.15)] transition hover:text-primary"
         >
           <ArrowDown size={17} />
         </button>

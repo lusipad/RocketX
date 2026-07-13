@@ -69,7 +69,7 @@ function matchUser(account: string, unique: string, name: string): boolean {
 function SetupCard() {
   const setModule = useUI((s) => s.setModule);
   return (
-    <div className="mx-auto mt-20 w-[460px] rounded-xl border border-line bg-white p-8 text-center">
+    <div className="mx-auto mt-20 w-[460px] rounded-xl border border-line bg-surface-4 p-8 text-center">
       <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-light">
         <LayoutGrid size={26} className="text-primary" />
       </div>
@@ -158,7 +158,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex min-h-0 flex-col rounded-xl border border-line bg-white">
+    <section className="flex min-h-0 flex-col rounded-xl border border-line bg-surface-4">
       <header className="flex items-center gap-2 border-b border-line px-4 py-3">
         <Icon size={16} className="text-primary" />
         <span className="text-sm font-semibold text-ink">{title}</span>
@@ -262,7 +262,7 @@ export default function WorkbenchPage() {
 
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-fill-2">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-white px-5">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface-4 px-5">
         <div className="flex items-center gap-2">
           <span className="text-[15px] font-semibold text-ink">工作台</span>
           <span className="text-xs text-ink-3">Azure DevOps · {config.account}</span>

@@ -35,7 +35,7 @@ export default function LoginPage() {
       className="flex h-full items-center justify-center"
       style={{ background: 'linear-gradient(160deg,#e8f3ff 0%,#f5f8ff 45%,#ffffff 100%)' }}
     >
-      <div className="w-[400px] rounded-2xl bg-white p-10 shadow-[0_8px_36px_rgba(31,35,41,0.1)]">
+      <div className="w-[400px] rounded-2xl bg-surface-4 p-10 shadow-[0_8px_36px_rgba(31,35,41,0.1)]">
         <div className="mb-8 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-white">
             <Rocket size={24} />

@@ -38,7 +38,7 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
     const key = `${keyBase}-m${i++}`;
     if (m[1]) {
       nodes.push(
-        <code key={key} className="rounded bg-black/8 px-1 py-0.5 font-mono text-[0.9em]">
+        <code key={key} className="rounded bg-fill-active px-1 py-0.5 font-mono text-[0.9em]">
           {full.slice(1, -1)}
         </code>,
       );
@@ -173,7 +173,7 @@ export function renderMarkdown(text: string, me?: string): ReactNode {
         i % 2 === 1 ? (
           <pre
             key={i}
-            className="my-1 overflow-x-auto rounded-md bg-[#1f2329] p-2.5 font-mono text-xs leading-relaxed text-[#f2f3f5]"
+            className="my-1 overflow-x-auto rounded-md bg-code-bg p-2.5 font-mono text-xs leading-relaxed text-code-ink"
           >
             {part.replace(/\n$/, '')}
           </pre>

@@ -50,7 +50,7 @@ export default function UploadConfirm() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-[420px] rounded-xl bg-white shadow-2xl">
+      <div className="w-[420px] rounded-xl bg-surface-4 shadow-2xl">
         <header className="flex items-center justify-between px-5 pt-4 pb-2">
           <span className="text-[15px] font-semibold text-ink">发送给 {name}</span>
           <button

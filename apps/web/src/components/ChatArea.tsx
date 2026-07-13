@@ -71,7 +71,7 @@ export default function ChatArea() {
 
   if (!activeRid) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-white">
+      <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-surface-3">
         <div className="flex h-24 w-24 items-center justify-center rounded-full bg-fill-1">
           <MessageCircle size={40} className="text-ink-3" />
         </div>
@@ -102,7 +102,7 @@ export default function ChatArea() {
   return (
     <>
       <main
-        className="relative flex min-w-0 flex-1 flex-col bg-white"
+        className="relative flex min-w-0 flex-1 flex-col bg-surface-3"
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault();

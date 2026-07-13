@@ -55,7 +55,7 @@ export default function ContextMenu({
     <div
       ref={ref}
       style={{ left: pos.left, top: pos.top }}
-      className="fixed z-50 min-w-36 rounded-lg border border-line bg-white py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]"
+      className="fixed z-50 min-w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]"
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >

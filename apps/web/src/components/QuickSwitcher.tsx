@@ -125,7 +125,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+      <div className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl">
         <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-4">
           <Search size={16} className="text-ink-3" />
           <input

@@ -31,7 +31,7 @@ export default function EmojiPicker({
   return (
     <div
       ref={ref}
-      className={`z-30 grid w-[264px] grid-cols-8 gap-0.5 rounded-lg border border-line bg-white p-2 shadow-[0_4px_16px_rgba(31,35,41,0.12)] ${className}`}
+      className={`z-30 grid w-[264px] grid-cols-8 gap-0.5 rounded-lg border border-line bg-surface-4 p-2 shadow-[0_4px_16px_rgba(31,35,41,0.12)] ${className}`}
     >
       {EMOJI_LIST.map((e) => (
         <button

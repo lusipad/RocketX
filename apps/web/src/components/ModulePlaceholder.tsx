@@ -28,7 +28,7 @@ const META: Record<PlaceholderModule, { icon: typeof Calendar; title: string; de
 export default function ModulePlaceholder({ module }: { module: PlaceholderModule }) {
   const { icon: Icon, title, desc } = META[module];
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-white">
+    <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-surface-3">
       <div className="flex h-24 w-24 items-center justify-center rounded-2xl bg-fill-1">
         <Icon size={40} className="text-ink-3" />
       </div>

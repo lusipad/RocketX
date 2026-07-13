@@ -54,7 +54,7 @@ export default function NavRail() {
   }, [subscriptions]);
 
   return (
-    <nav className="flex w-[210px] shrink-0 flex-col bg-dark-1 px-3 py-3 text-dark-ink">
+    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line bg-surface-1 px-3 py-3 text-ink">
       {/* 头像 + 发起会话 */}
       <div className="flex items-center justify-between px-1 pb-3">
         <button onClick={() => setSelfCard(true)} title="个人信息">
@@ -64,14 +64,14 @@ export default function NavRail() {
           <button
             onClick={() => setPlusMenu((v) => !v)}
             title="发起会话"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-dark-ink-2 transition hover:bg-dark-hover hover:text-dark-ink"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <Plus size={19} />
           </button>
           {plusMenu && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setPlusMenu(false)} />
-              <div className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-white py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+              <div className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
                 <button
                   onClick={() => {
                     setPlusMenu(false);
@@ -101,7 +101,7 @@ export default function NavRail() {
       {/* 全局搜索（打开 Ctrl+K 快速切换） */}
       <button
         onClick={() => setSwitcherOpen(true)}
-        className="mb-3 flex h-8 items-center gap-2 rounded-md bg-dark-3 px-2.5 text-[13px] text-dark-ink-3 transition hover:bg-dark-hover"
+        className="mb-3 flex h-8 items-center gap-2 rounded-md bg-surface-2 px-2.5 text-[13px] text-ink-3 transition hover:bg-fill-hover"
       >
         <Search size={14} />
         搜索 (Ctrl+K)
@@ -117,8 +117,8 @@ export default function NavRail() {
               onClick={() => setModule(key)}
               className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] transition ${
                 isActive
-                  ? 'bg-dark-active font-medium text-white'
-                  : 'text-dark-ink-2 hover:bg-dark-hover hover:text-dark-ink'
+                  ? 'bg-fill-active font-medium text-ink'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
               }`}
             >
               <span
@@ -143,13 +143,13 @@ export default function NavRail() {
       </div>
 
       {/* 底部 */}
-      <div className="flex flex-col gap-0.5 border-t border-dark-line pt-2">
+      <div className="flex flex-col gap-0.5 border-t border-line pt-2">
         <button
           onClick={() => setModule('settings')}
           className={`flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition ${
             active === 'settings'
-              ? 'bg-dark-active font-medium text-white'
-              : 'text-dark-ink-2 hover:bg-dark-hover hover:text-dark-ink'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
         >
           <Settings size={15} />
@@ -157,7 +157,7 @@ export default function NavRail() {
         </button>
         <button
           onClick={() => void logout()}
-          className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-dark-ink-2 transition hover:bg-dark-hover hover:text-danger"
+          className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-ink-2 transition hover:bg-fill-hover hover:text-danger"
         >
           <LogOut size={15} />
           退出登录

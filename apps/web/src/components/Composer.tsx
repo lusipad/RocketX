@@ -188,7 +188,7 @@ export default function Composer() {
     <div className="relative shrink-0 border-t border-line px-4 pt-2 pb-3">
       {/* @ 成员补全弹层 */}
       {mentionQuery !== null && candidates.length > 0 && (
-        <div className="absolute bottom-full left-4 z-30 mb-1 w-64 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+        <div className="absolute bottom-full left-4 z-30 mb-1 w-64 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
           {candidates.map((u, i) => (
             <button
               key={u.username}

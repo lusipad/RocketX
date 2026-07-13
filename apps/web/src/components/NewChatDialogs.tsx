@@ -48,7 +48,7 @@ function DialogShell({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex max-h-[70vh] w-[420px] flex-col rounded-xl bg-white shadow-2xl">
+      <div className="flex max-h-[70vh] w-[420px] flex-col rounded-xl bg-surface-4 shadow-2xl">
         <header className="flex items-center justify-between px-5 pt-4 pb-2">
           <span className="text-[15px] font-semibold text-ink">{title}</span>
           <button
@@ -204,7 +204,7 @@ export function CreateGroupDialog({ onClose }: { onClose: () => void }) {
             >
               <span
                 className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition ${
-                  checked ? 'border-primary bg-primary text-white' : 'border-line bg-white'
+                  checked ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
                 }`}
               >
                 {checked && <Check size={12} strokeWidth={3} />}

@@ -101,7 +101,7 @@ function FileAttachment({
           .catch(() => {})
           .finally(() => setBusy(false));
       }}
-      className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-white p-3 text-left transition hover:border-primary"
+      className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-surface-4 p-3 text-left transition hover:border-primary"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
         <FileIcon size={18} />
@@ -120,7 +120,7 @@ function FileAttachment({
 /** 引用回复的原消息（飞书样式的引用条） */
 function QuoteCard({ att }: { att: RcMessageAttachment }) {
   return (
-    <div className="mt-1 mb-0.5 max-w-md rounded-r-md border-l-2 border-line bg-black/4 px-2.5 py-1.5">
+    <div className="mt-1 mb-0.5 max-w-md rounded-r-md border-l-2 border-primary/40 bg-fill-1 px-2.5 py-1.5">
       <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
       <div className="line-clamp-2 text-xs break-words text-ink-3">{att.text}</div>
     </div>
@@ -138,7 +138,7 @@ function UrlPreviewCard({ url, meta }: { url: string; meta: Record<string, strin
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="mt-1.5 flex max-w-md gap-3 rounded-lg border border-line bg-white p-3 transition hover:border-primary"
+      className="mt-1.5 flex max-w-md gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary"
     >
       <span className="min-w-0 flex-1">
         <span className="line-clamp-1 text-sm font-medium text-primary">{title}</span>
@@ -180,7 +180,7 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
   // 富文本卡片（ADO 事件等）
   return (
     <div
-      className="mt-1.5 max-w-md rounded-lg border border-line bg-white p-3"
+      className="mt-1.5 max-w-md rounded-lg border border-line bg-surface-4 p-3"
       style={{ borderLeft: `3px solid ${att.color ?? '#3370ff'}` }}
     >
       {att.author_name && <div className="mb-1 text-xs text-ink-3">{att.author_name}</div>}
@@ -234,7 +234,7 @@ function Reactions({ message }: { message: RcMessage }) {
             className={`flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition ${
               reacted
                 ? 'border-primary bg-primary-light text-primary'
-                : 'border-line bg-white text-ink-2 hover:border-primary'
+                : 'border-line bg-surface-4 text-ink-2 hover:border-primary'
             }`}
           >
             <Emoji code={code} size={14} />
@@ -260,7 +260,7 @@ function ConfirmDeleteDialog({
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      <div className="w-80 rounded-xl bg-white p-5 shadow-2xl">
+      <div className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl">
         <div className="text-[15px] font-semibold text-ink">删除消息</div>
         <div className="mt-2 text-sm text-ink-2">确定删除这条消息吗？删除后不可恢复。</div>
         <div className="mt-4 flex justify-end gap-2">
@@ -310,7 +310,7 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
         rows={Math.min(6, Math.max(2, value.split('\n').length))}
-        className="w-full resize-none rounded-md border border-primary bg-white px-2.5 py-1.5 text-sm outline-none"
+        className="w-full resize-none rounded-md border border-primary bg-surface-4 px-2.5 py-1.5 text-sm outline-none"
       />
       <div className="mt-0.5 text-[11px] text-ink-3">Enter 保存 · Esc 取消</div>
     </div>
@@ -445,7 +445,7 @@ export default function MessageItem({
                 mine ? 'right-0' : 'left-0'
               }`}
             >
-              <div className="relative flex items-center gap-0.5 rounded-lg border border-line bg-white p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
+              <div className="relative flex items-center gap-0.5 rounded-lg border border-line bg-surface-4 p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
                 {QUICK_EMOJIS.map((e) => (
                   <button
                     key={e.code}
@@ -501,7 +501,7 @@ export default function MessageItem({
 
           <div
             className={`rounded-lg px-3 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap ${
-              mine ? 'bg-primary-light text-ink' : 'bg-fill-1 text-ink'
+              mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'
             }`}
           >
             {editing ? (

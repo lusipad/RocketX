@@ -1,33 +1,103 @@
 @import 'tailwindcss';
 
-/* 飞书视觉体系配色 */
+/**
+ * 主题系统：语义化色板，浅色/深色两套完整主题。
+ * 命名按「用途」而非「颜色」，组件只用语义变量，不写死颜色。
+ *
+ * surface-1  最底层背景（导航栏 / 侧栏，视觉最"沉"）
+ * surface-2  次级背景（分组栏 / 会话列表）
+ * surface-3  内容区背景（聊天区 / 页面主体）
+ * surface-4  内容区上的卡片、气泡、输入框
+ */
 @theme {
   --color-primary: #3370ff;
   --color-primary-hover: #4e83fd;
   --color-primary-active: #245bdb;
-  --color-primary-light: #e1eaff;
+  --color-danger: #f54a45;
+  --color-success: #34c724;
+  --color-warning: #ff8800;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    'Helvetica Neue', Arial, sans-serif;
+
+  /* 语义色（默认值由 :root 覆盖，这里声明让 Tailwind 生成工具类） */
+  --color-surface-1: #f2f3f5;
+  --color-surface-2: #f5f6f7;
+  --color-surface-3: #ffffff;
+  --color-surface-4: #ffffff;
+  --color-fill-1: #f2f3f5;
+  --color-fill-2: #f5f6f7;
+  --color-fill-hover: #eff0f1;
+  --color-fill-active: #e1e3e6;
   --color-ink: #1f2329;
   --color-ink-2: #646a73;
   --color-ink-3: #8f959e;
   --color-line: #dee0e3;
+  --color-primary-light: #e1eaff;
+  --color-bubble-mine: #e1eaff;
+  --color-bubble-other: #f2f3f5;
+  --color-code-bg: #1f2329;
+  --color-code-ink: #f2f3f5;
+}
+
+/* ---- 浅色主题（默认） ---- */
+:root,
+:root[data-theme='light'] {
+  --color-surface-1: #eceef1;
+  --color-surface-2: #f7f8fa;
+  --color-surface-3: #ffffff;
+  --color-surface-4: #ffffff;
+
   --color-fill-1: #f2f3f5;
-  --color-fill-2: #f5f6f7;
-  --color-fill-hover: #eff0f1;
-  --color-danger: #f54a45;
-  --color-success: #34c724;
-  /* 深色左侧框架（导航/分组/会话列表），取自飞书网页版 */
-  --color-dark-1: #16171c;
-  --color-dark-2: #1e2025;
-  --color-dark-3: #24262c;
-  --color-dark-hover: #2f3138;
-  --color-dark-active: #35373f;
-  --color-dark-ink: #f0f1f2;
-  --color-dark-ink-2: #a3a6ad;
-  --color-dark-ink-3: #757a82;
-  --color-dark-line: #33353c;
-  --font-sans:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
-    'Helvetica Neue', Arial, sans-serif;
+  --color-fill-2: #f7f8fa;
+  --color-fill-hover: #e3e5e9;
+  --color-fill-active: #d5d8dd;
+
+  --color-ink: #1f2329;
+  --color-ink-2: #646a73;
+  --color-ink-3: #8f959e;
+  --color-line: #dee0e3;
+
+  --color-primary-light: #e1eaff;
+  --color-bubble-mine: #d6e4ff;
+  --color-bubble-other: #f2f3f5;
+
+  --color-code-bg: #1f2329;
+  --color-code-ink: #f2f3f5;
+
+  color-scheme: light;
+}
+
+/* ---- 深色主题 ---- */
+:root[data-theme='dark'] {
+  --color-surface-1: #16171c;
+  --color-surface-2: #1c1e23;
+  --color-surface-3: #212429;
+  --color-surface-4: #292c33;
+
+  --color-fill-1: #2b2f37;
+  --color-fill-2: #24272d;
+  --color-fill-hover: #33373f;
+  --color-fill-active: #3d424b;
+
+  --color-ink: #e8eaed;
+  --color-ink-2: #a3a8b0;
+  --color-ink-3: #757b85;
+  --color-line: #33363d;
+
+  --color-primary: #4e83fd;
+  --color-primary-hover: #6b98fe;
+  --color-primary-active: #3370ff;
+  --color-primary-light: #24304d;
+
+  --color-bubble-mine: #2b3f6b;
+  --color-bubble-other: #2b2f37;
+
+  --color-code-bg: #14161a;
+  --color-code-ink: #e8eaed;
+
+  color-scheme: dark;
 }
 
 html,
@@ -39,22 +109,35 @@ body,
 body {
   font-family: var(--font-sans);
   color: var(--color-ink);
+  background: var(--color-surface-3);
   -webkit-font-smoothing: antialiased;
 }
 
-/* 细滚动条，接近飞书质感 */
+/* 细滚动条，跟随主题 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #c9cdd4 transparent;
+  scrollbar-color: var(--color-ink-3) transparent;
 }
 *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #c9cdd4;
+  background: var(--color-line);
   border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-3);
 }
 *::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 主题切换过渡（避免闪烁，只过渡颜色） */
+.theme-transition,
+.theme-transition * {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }

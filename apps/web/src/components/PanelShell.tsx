@@ -12,7 +12,7 @@ export default function PanelShell({
 }) {
   const setPanel = useChat((s) => s.setPanel);
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-white">
+    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface-3">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
         <span className="text-[15px] font-semibold text-ink">{title}</span>
         <button

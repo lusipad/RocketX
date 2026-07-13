@@ -43,21 +43,21 @@ export default function GroupFilter() {
   }, [subscriptions, rooms]);
 
   return (
-    <aside className="flex w-[150px] shrink-0 flex-col bg-dark-2 px-2 py-3">
+    <aside className="flex w-[150px] shrink-0 flex-col border-r border-line bg-surface-2 px-2 py-3">
       <div className="flex items-center justify-between px-2 pb-2">
-        <span className="text-[13px] font-medium text-dark-ink">分组</span>
+        <span className="text-[13px] font-medium text-ink">分组</span>
         <div className="relative">
           <button
             title="会话排序"
             onClick={() => setSortMenu((v) => !v)}
-            className="flex h-6 w-6 items-center justify-center rounded text-dark-ink-3 transition hover:bg-dark-hover hover:text-dark-ink"
+            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-ink"
           >
             <Settings size={13} />
           </button>
           {sortMenu && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setSortMenu(false)} />
-              <div className="absolute left-0 z-30 mt-1 w-32 rounded-lg border border-line bg-white py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+              <div className="absolute left-0 z-30 mt-1 w-32 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
                 <div className="px-3 py-1 text-[11px] text-ink-3">会话排序</div>
                 {(
                   [
@@ -94,14 +94,14 @@ export default function GroupFilter() {
               onClick={() => setFilter(key)}
               className={`flex h-8 items-center gap-2 rounded-md px-2 text-[13px] transition ${
                 isActive
-                  ? 'bg-dark-active font-medium text-white'
-                  : 'text-dark-ink-2 hover:bg-dark-hover'
+                  ? 'bg-fill-active font-medium text-ink'
+                  : 'text-ink-2 hover:bg-fill-hover'
               }`}
             >
               <Icon size={14} className={isActive ? 'text-primary-hover' : ''} />
               {label}
               {count > 0 && (
-                <span className="ml-auto text-[11px] text-dark-ink-3">
+                <span className="ml-auto text-[11px] text-ink-3">
                   {count > 99 ? '99+' : count}
                 </span>
               )}

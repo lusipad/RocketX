@@ -53,7 +53,7 @@ export default function UserCard({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-80 overflow-hidden rounded-xl bg-white shadow-2xl">
+      <div className="w-80 overflow-hidden rounded-xl bg-surface-4 shadow-2xl">
         <div className="relative h-20 bg-gradient-to-r from-[#3370ff] to-[#4e83fd]">
           <button
             onClick={onClose}

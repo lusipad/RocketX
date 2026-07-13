@@ -223,7 +223,7 @@ export default function ContactsPage() {
           </button>
         ))}
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col bg-white p-5">
+      <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
         {tab === 'members' ? <MembersTab onOpenCard={setCard} /> : <GroupsTab />}
       </main>
       {card && <UserCard user={card} onClose={() => setCard(null)} />}
