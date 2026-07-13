@@ -23,7 +23,7 @@ import { usePrefs } from '../stores/prefs';
 import Avatar from '../components/Avatar';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 
-const APP_VERSION = '0.2.2';
+const APP_VERSION = '0.2.3';
 
 type Section =
   | 'account'
