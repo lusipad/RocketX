@@ -204,8 +204,17 @@ export class RcRestClient {
     return this.request('POST', 'subscriptions.read', { rid });
   }
 
-  async createDirectMessage(username: string): Promise<RcRoom> {
-    const res = await this.request<{ room: RcRoom }>('POST', 'im.create', { username });
+  /**
+   * 开启直聊。传多个用户名即为多人直聊（飞书那种「选完人就能聊、不用起群名」的群聊）。
+   *
+   * 单人用 `username`、多人用 `usernames`（逗号分隔）—— 服务端认的是两个不同的字段，
+   * 多人时传 `username` 会被当成一个不存在的用户名而失败。
+   */
+  async createDirectMessage(usernames: string | string[]): Promise<RcRoom> {
+    const list = Array.isArray(usernames) ? usernames : [usernames];
+    const body =
+      list.length > 1 ? { usernames: list.join(',') } : { username: list[0] };
+    const res = await this.request<{ room: RcRoom }>('POST', 'im.create', body);
     return res.room;
   }
 

@@ -65,30 +65,93 @@ export function useUserSearch(keyword: string): RcUser[] {
 /** 统一弹窗外壳（含 Esc 关闭） */
 const DialogShell = Dialog;
 
-/** 发起私聊：搜索用户 → 点击直达会话 */
+/**
+ * 发起聊天。
+ *
+ * 选一个人 = 私聊；选多个人 = 多人直聊 —— 飞书那种「不用起群名、选完人就能聊」的群聊。
+ * Rocket.Chat 的 im.create 本来就支持多人，只是它把这种会话的 t 仍标成 'd'。
+ * 真正需要长期存在、有名字有公告的，才去「创建群组」。
+ */
 export function StartDMDialog({ onClose }: { onClose: () => void }) {
   const startDM = useChat((s) => s.startDM);
   const [keyword, setKeyword] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const users = useUserSearch(keyword);
 
-  const pick = async (username: string) => {
-    if (busy) return;
-    setBusy(username);
+  // 函数式更新：读闭包里的 selected 的话，同一渲染周期内连点两个人只会剩一个
+  const toggle = (u: RcUser) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(u.username)) next.delete(u.username);
+      else next.set(u.username, u);
+      return next;
+    });
+    setError(null);
+  };
+
+  const open = async (usernames: string[]) => {
+    if (busy || usernames.length === 0) return;
+    setBusy(true);
     setError(null);
     try {
-      await startDM(username);
+      await startDM(usernames);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : '发起会话失败');
-      setBusy(null);
+      setBusy(false);
     }
   };
 
+  const count = selected.size;
+
   return (
-    <DialogShell title="发起私聊" onClose={onClose}>
-      <div className="px-5 pb-2">
+    <DialogShell
+      title="发起聊天"
+      hint="选一个人就是私聊；选多个人直接开群聊，不用起名字。"
+      onClose={onClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-ink-3">
+            {count === 0
+              ? '点头像选人，或直接点某一行开始私聊'
+              : count === 1
+                ? '已选 1 人 · 将开始私聊'
+                : `已选 ${count} 人 · 将开始多人群聊`}
+          </span>
+          <button
+            onClick={onClose}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => void open([...selected.keys()])}
+            disabled={count === 0 || busy}
+            className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? '打开中…' : count > 1 ? `开始群聊（${count}）` : '开始聊天'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-2.5 px-5 pb-2">
+        {count > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {[...selected.values()].map((u) => (
+              <span
+                key={u.username}
+                className="flex items-center gap-1 rounded-full bg-primary-light px-2 py-0.5 text-xs text-primary"
+              >
+                {u.name || u.username}
+                <button onClick={() => toggle(u)} className="hover:text-danger">
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
           <Search size={14} className="text-ink-3" />
           <input
@@ -100,23 +163,43 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
       </div>
+
       {error && <div className="px-5 pb-1 text-xs text-danger">{error}</div>}
+
       <div className="min-h-40 flex-1 overflow-y-auto px-2 pb-3">
-        {users.map((u) => (
-          <button
-            key={u._id}
-            onClick={() => void pick(u.username)}
-            disabled={!!busy}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-fill-hover disabled:opacity-60"
-          >
-            <Avatar name={u.name || u.username} username={u.username} size={32} />
-            <div className="min-w-0">
-              <div className="truncate text-sm text-ink">{u.name || u.username}</div>
-              <div className="truncate text-xs text-ink-3">@{u.username}</div>
+        {users.map((u) => {
+          const checked = selected.has(u.username);
+          return (
+            <div
+              key={u._id}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 transition hover:bg-fill-hover ${
+                busy ? 'pointer-events-none opacity-60' : ''
+              }`}
+            >
+              {/* 勾选 = 加入多人群聊；点整行 = 直接和这个人私聊（最常用的路径不该多一步） */}
+              <button
+                onClick={() => toggle(u)}
+                className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition ${
+                  checked ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
+                }`}
+                title={checked ? '取消选择' : '选中，可多选开群聊'}
+              >
+                {checked && <Check size={12} strokeWidth={3} />}
+              </button>
+              <button
+                onClick={() => (count > 0 ? toggle(u) : void open([u.username]))}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                title={count > 0 ? '加入/移出本次群聊' : '直接私聊'}
+              >
+                <Avatar name={u.name || u.username} username={u.username} size={32} />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-ink">{u.name || u.username}</span>
+                  <span className="block truncate text-xs text-ink-3">@{u.username}</span>
+                </span>
+              </button>
             </div>
-            {busy === u.username && <span className="ml-auto text-xs text-ink-3">打开中…</span>}
-          </button>
-        ))}
+          );
+        })}
         {users.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
             {keyword ? '未找到匹配的用户' : '输入用户名或姓名搜索'}
@@ -150,10 +233,12 @@ export function CreateGroupDialog({
   const isTeam = kind === 'team';
 
   const toggle = (u: RcUser) => {
-    const next = new Map(selected);
-    if (next.has(u.username)) next.delete(u.username);
-    else next.set(u.username, u);
-    setSelected(next);
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(u.username)) next.delete(u.username);
+      else next.set(u.username, u);
+      return next;
+    });
   };
 
   const doCreate = async () => {

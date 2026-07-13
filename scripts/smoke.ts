@@ -257,6 +257,36 @@ async function main() {
     return `收到「${msg.msg}」`;
   });
 
+  // ---- 多人聊天 ----
+  console.log('\n[多人聊天]');
+  await check('多人直聊：一次拉多个人', async () => {
+    // 单人传 username、多人传 usernames，服务端认的是两个不同的字段，传错就失败
+    const room = await rest.createDirectMessage([USER2, 'rocket.cat']);
+    await rest.openDirectMessage(room._id);
+    const info = await rest.getRoomInfo(room._id);
+    const n = info.uids?.length ?? info.usersCount ?? 0;
+    assert(n === 3, `期望 3 人（含自己），实际 ${n}`);
+    assert(info.t === 'd', `RC 里多人直聊的 t 仍应是 'd'，实际 ${info.t}`);
+    return `${n} 人，t=${info.t}`;
+  });
+
+  await check('多人直聊无法直接加人（这是 RC 的限制，不是我们的 bug）', async () => {
+    const room = await rest.createDirectMessage([USER2, 'rocket.cat']);
+    const others = await rest.searchUsers('', 20);
+    const outsider = others.users.find(
+      (u) => ![USER, USER2, 'rocket.cat'].includes(u.username),
+    );
+    if (!outsider) return '（服务器上没有第 4 个用户，跳过）';
+    let rejected = false;
+    try {
+      await rest.inviteToRoom(room._id, 'd', outsider._id);
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, 'RC 居然允许了？那客户端就该改用直接加人而不是新建会话');
+    return `已确认拒绝，客户端改为新建包含所有人的会话`;
+  });
+
   // ---- 群设置 ----
   console.log('\n[群设置]');
   await check('改群公告 / 话题 / 介绍并回读', async () => {

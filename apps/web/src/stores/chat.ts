@@ -146,8 +146,11 @@ interface ChatState {
   leaveConv: (conv: Conversation) => Promise<void>;
   forwardMessage: (msg: RcMessage, rids: string[]) => Promise<void>;
   setDraft: (rid: string, text: string) => void;
-  /** 发起私聊：创建/打开 DM 并跳转，返回房间 id */
-  startDM: (username: string) => Promise<string>;
+  /**
+   * 开启直聊并跳转，返回房间 id。
+   * 传多个用户名即多人直聊 —— 不用起群名、选完人就能聊的那种群聊。
+   */
+  startDM: (usernames: string | string[]) => Promise<string>;
   /** 创建群组并跳转，返回房间 id */
   createGroup: (name: string, members: string[], priv: boolean) => Promise<string>;
   /** 创建团队（Team = 主频道 + 子频道）并跳转 */
@@ -680,6 +683,24 @@ export const useChat = create<ChatState>((set, get) => ({
 
   inviteMembers: async (rid, users) => {
     const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
+
+    /**
+     * 直聊没法「加人」—— Rocket.Chat 根本没有这个 API
+     * （channels.invite / groups.invite / im.invite 对 DM 房间全部报错）。
+     * 官方客户端和 Slack 的多人私聊一样：拉新人 = 新建一个包含所有人的会话。
+     * 原会话保留，历史消息留在那边。
+     */
+    if (type === 'd') {
+      const existing = await get().loadMembers(rid);
+      const me = useAuth.getState().user?.username;
+      const usernames = [
+        ...new Set([...existing.map((u) => u.username), ...users.map((u) => u.username)]),
+      ].filter((u) => u && u !== me);
+      await get().startDM(usernames);
+      toast.info('多人聊天不支持直接加人（Rocket.Chat 的限制），已新建一个包含所有人的会话');
+      return;
+    }
+
     for (const u of users) {
       await rest.inviteToRoom(rid, type, u._id);
     }
@@ -897,8 +918,9 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  startDM: async (username) => {
-    const room = await rest.createDirectMessage(username);
+  startDM: async (usernames) => {
+    const room = await rest.createDirectMessage(usernames);
+    // 新建的直聊订阅可能是关闭状态，不显式 open 就不会出现在会话列表里
     await rest.openDirectMessage(room._id).catch(() => {});
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);

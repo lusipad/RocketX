@@ -91,7 +91,7 @@ export default function NavRail() {
         <div className="relative">
           <button
             onClick={() => setPlusMenu((v) => !v)}
-            title="发起会话"
+            title="发起聊天 / 创建群组"
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <Plus size={19} />
@@ -108,7 +108,7 @@ export default function NavRail() {
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-fill-hover"
                 >
                   <MessageCirclePlus size={15} className="text-ink-2" />
-                  发起私聊
+                  发起聊天
                 </button>
                 <button
                   onClick={() => {

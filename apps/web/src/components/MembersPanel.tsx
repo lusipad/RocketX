@@ -14,17 +14,24 @@ import { SkeletonList } from './Skeleton';
 function AddMembersDialog({ onClose }: { onClose: () => void }) {
   const rid = useChat((s) => s.activeRid);
   const inviteMembers = useChat((s) => s.inviteMembers);
+  // 多人聊天（RC 里 t 仍是 'd'）没法直接加人，会新建一个包含所有人的会话 ——
+  // 这跟「往群里加人」是两种结果，得先讲清楚，不能让用户点完才发现换了个会话
+  const isDirect = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t === 'd' : false));
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const users = useUserSearch(keyword);
 
+  // 必须用函数式更新：直接读闭包里的 selected，同一渲染周期内的连续两次勾选
+  // 会基于同一份旧 Map 计算，后一次把前一次覆盖掉，只剩一个人被选中
   const toggle = (u: RcUser) => {
-    const next = new Map(selected);
-    if (next.has(u._id)) next.delete(u._id);
-    else next.set(u._id, u);
-    setSelected(next);
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(u._id)) next.delete(u._id);
+      else next.set(u._id, u);
+      return next;
+    });
   };
 
   const doInvite = async () => {
@@ -42,7 +49,12 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog
-      title="添加成员"
+      title={isDirect ? '拉人进来聊' : '添加成员'}
+      hint={
+        isDirect
+          ? 'Rocket.Chat 不支持往已有的多人聊天里加人，会新建一个包含所有人的会话；原会话和它的历史消息都还在。'
+          : undefined
+      }
       width={400}
       onClose={onClose}
       footer={
@@ -51,7 +63,11 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
           disabled={selected.size === 0 || busy}
           className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? '邀请中…' : `添加${selected.size > 0 ? `（${selected.size}）` : ''}`}
+          {busy
+            ? isDirect
+              ? '新建会话中…'
+              : '邀请中…'
+            : `${isDirect ? '新建会话' : '添加'}${selected.size > 0 ? `（${selected.size}）` : ''}`}
         </button>
       }
     >
