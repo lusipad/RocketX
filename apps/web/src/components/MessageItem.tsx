@@ -25,7 +25,7 @@ import { fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
 import { assetUrl } from '../lib/client';
-import { useChat } from '../stores/chat';
+import { stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
@@ -261,12 +261,18 @@ function ConfirmDeleteDialog({
 
 function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }) {
   const editMessage = useChat((s) => s.editMessage);
-  const [value, setValue] = useState(message.msg);
+  // 只编辑可见文本；引用链接前缀保存时原样带回
+  const prefix = (message.msg ?? '').slice(
+    0,
+    (message.msg ?? '').length - stripQuotePrefix(message.msg ?? '').length,
+  );
+  const [value, setValue] = useState(stripQuotePrefix(message.msg ?? ''));
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      if (value.trim() && value !== message.msg) void editMessage(message._id, value);
+      const next = prefix + value;
+      if (value.trim() && next !== message.msg) void editMessage(message._id, next);
       onDone();
     } else if (e.key === 'Escape') {
       onDone();
@@ -325,7 +331,7 @@ export default function MessageItem({
   const time = fmtTime(tsMs(message.ts));
 
   const copy = () => {
-    void navigator.clipboard?.writeText(message.msg ?? '');
+    void navigator.clipboard?.writeText(stripQuotePrefix(message.msg ?? ''));
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
@@ -374,8 +380,9 @@ export default function MessageItem({
   ];
 
   const onContextMenu = (e: ReactMouseEvent) => {
-    // 附件卡片里的链接保持浏览器默认右键
+    // 附件卡片里的链接保持浏览器默认右键；发送中/失败的消息无菜单
     if ((e.target as HTMLElement).closest('a')) return;
+    if (message.pending || message.failed) return;
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY });
   };
@@ -408,8 +415,8 @@ export default function MessageItem({
         )}
 
         <div className={`relative flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
-          {/* 悬浮操作栏：快捷表情 + 回复/转发/更多 */}
-          {!editing && (
+          {/* 悬浮操作栏：快捷表情 + 回复/转发/更多（发送中/失败的消息不可操作） */}
+          {!editing && !message.pending && !message.failed && (
             <div
               className={`absolute -top-8 z-10 hidden group-hover:flex ${
                 mine ? 'right-0' : 'left-0'

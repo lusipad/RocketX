@@ -292,9 +292,11 @@ export class RcRestClient {
     const name = opts.fileName ?? (file instanceof File ? file.name : 'file');
     const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const encoder = new TextEncoder();
+    // 文件名用原生 UTF-8（现代 multipart 解析器直接支持），只转义引号和换行
+    const safeName = name.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
     const head = encoder.encode(
       `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${encodeURIComponent(name)}"\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n` +
         `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
     );
     const tail = encoder.encode(`\r\n--${boundary}--\r\n`);

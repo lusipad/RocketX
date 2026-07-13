@@ -41,12 +41,12 @@ export default function NavRail() {
   const [dialog, setDialog] = useState<'dm' | 'group' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
 
-  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点
+  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
   const { unreadTotal, hasAlert } = useMemo(() => {
     let unreadTotal = 0;
     let hasAlert = false;
     for (const s of Object.values(subscriptions)) {
-      if (s.open === false) continue;
+      if (s.open === false || s.disableNotifications) continue;
       unreadTotal += s.unread || 0;
       if (s.alert) hasAlert = true;
     }

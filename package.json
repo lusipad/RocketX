@@ -7,6 +7,10 @@
     "dev": "pnpm --filter @rcx/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "bridge": "pnpm --filter @rcx/ado-bridge dev"
+    "bridge": "pnpm --filter @rcx/ado-bridge dev",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
   }
 }

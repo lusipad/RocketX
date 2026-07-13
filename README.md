@@ -47,6 +47,18 @@ pnpm dev
 
 接入 Azure DevOps Server 2022 通知见 [`services/ado-bridge/README.md`](services/ado-bridge/README.md)。
 
+## 冒烟测试
+
+对着真实 Rocket.Chat 跑一遍 IM 全链路（认证 / 会话 / 消息 / 引用 / 线程 / 讨论 /
+文件上传下载 / 中文搜索 / 置顶免打扰 / 通讯录 / 实时推送 / 删除，共 28 项）：
+
+```bash
+pnpm smoke           # 默认打 http://localhost:3300，admin/rcxdev123
+RC_BASE_URL=http://chat.example.com pnpm smoke
+```
+
+改动 rc-client 或服务端设置后建议跑一次。
+
 ## 桌面客户端
 
 GitHub Actions 自动构建 Windows（msi/nsis）、macOS（dmg，universal）、Linux（deb/rpm/AppImage）安装包：

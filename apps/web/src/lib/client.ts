@@ -45,9 +45,15 @@ export function getServerBase(): string {
 
 export function setServerBase(url: string): void {
   const normalized = url.trim().replace(/\/+$/, '');
+  const changed = normalized !== getServerBase();
   localStorage.setItem(SERVER_KEY, normalized);
   rest.baseUrl = normalized;
   realtime.setUrl(wsUrlFor(normalized));
+  if (changed) {
+    // 换服务器后清理与旧服务器绑定的缓存
+    localStorage.removeItem('rcx-site-url');
+    siteUrlCache = null;
+  }
 }
 
 /** 头像 / 上传文件等静态资源的绝对地址 */

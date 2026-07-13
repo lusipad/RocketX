@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { Hash, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
+import { useUI } from '../stores/ui';
 import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
 import Avatar from './Avatar';
@@ -40,6 +41,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
   const rooms = useChat((s) => s.rooms);
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
+  const setModule = useUI((s) => s.setModule);
   const [tab, setTab] = useState<Tab>('convs');
   const [keyword, setKeyword] = useState('');
   const [index, setIndex] = useState(0);
@@ -101,6 +103,7 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
 
   const pickConv = (rid: string) => {
     void openRoom(rid);
+    setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
   };
 
@@ -243,7 +246,10 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                 <button
                   key={u._id}
                   onClick={() => {
-                    void startDM(u.username).then(() => onClose());
+                    void startDM(u.username).then(() => {
+                      setModule('messages');
+                      onClose();
+                    });
                   }}
                   className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-fill-hover"
                 >

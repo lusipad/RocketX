@@ -153,6 +153,8 @@ const subscribedRooms = new Set<string>();
 let markReadTimer: ReturnType<typeof setTimeout> | null = null;
 let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
+/** 已读回执是 RC 企业版功能：社区版首次失败后不再请求（避免每次打开会话都报 400） */
+let receiptsSupported = true;
 
 function scheduleMarkRead(rid: string) {
   if (markReadTimer) clearTimeout(markReadTimer);
@@ -162,6 +164,7 @@ function scheduleMarkRead(rid: string) {
 }
 
 function scheduleReceiptRefresh(rid: string) {
+  if (!receiptsSupported) return;
   if (receiptTimer) clearTimeout(receiptTimer);
   receiptTimer = setTimeout(() => {
     void useChat.getState().refreshReceipts(rid);
@@ -198,13 +201,18 @@ function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
   return {
     message_link: `local-quote`,
     author_name: quoted.u.name || quoted.u.username,
-    text: quoted.msg || quoted.attachments?.[0]?.title || '[卡片消息]',
+    text: stripQuotePrefix(quoted.msg) || quoted.attachments?.[0]?.title || '[卡片消息]',
     ts: quoted.ts,
   };
 }
 
 /** 消息文本开头的引用链接（渲染与预览时隐藏） */
 export const QUOTE_LINK_RE = /^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/;
+
+/** 去掉消息文本开头的引用链接前缀（编辑/复制/引用展示都用可见文本） */
+export function stripQuotePrefix(text: string): string {
+  return text.replace(QUOTE_LINK_RE, '');
+}
 
 // 开发调试：控制台可通过 window.__chat 检查 store 状态
 declare global {
@@ -477,7 +485,10 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   resendMessage: async (tempId) => {
-    const rid = get().activeRid;
+    // 用消息自身的 rid：用户可能已切换到别的会话
+    const rid = Object.keys(get().messages).find((r) =>
+      (get().messages[r] ?? []).some((m) => m._id === tempId),
+    );
     if (!rid) return;
     const failed = (get().messages[rid] ?? []).find((m) => m._id === tempId);
     if (!failed) return;
@@ -511,7 +522,9 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   discardMessage: (tempId) => {
-    const rid = get().activeRid;
+    const rid = Object.keys(get().messages).find((r) =>
+      (get().messages[r] ?? []).some((m) => m._id === tempId),
+    );
     if (!rid) return;
     set({
       messages: {
@@ -537,7 +550,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   refreshReceipts: async (rid) => {
     const me = useAuth.getState().user;
-    if (!me) return;
+    if (!me || !receiptsSupported) return;
     const list = (get().messages[rid] ?? []).filter(
       (m) => !m.tmid && !m.t && !m.pending && !m.failed,
     );
@@ -549,8 +562,10 @@ export const useChat = create<ChatState>((set, get) => ({
         .filter((r) => r.user?._id !== me._id)
         .map((r) => ({ username: r.user?.username ?? '', name: r.user?.name }));
       set({ readReceipts: { ...get().readReceipts, [rid]: { mid: lastOwn._id, users } } });
-    } catch {
-      /* 服务端未开启已读回执时静默 */
+    } catch (err) {
+      // 社区版 / 未开启回执：停止后续请求，功能静默降级
+      const raw = err instanceof Error ? err.message : '';
+      if (/enterprise|not-allowed|not allowed|disabled/i.test(raw)) receiptsSupported = false;
     }
   },
 

@@ -20,8 +20,8 @@ const INLINE_RE = new RegExp(
     String.raw`(\b_[^_\n]+_\b|(?<=^|\s)_[^_\n]+_(?=$|\s))`, // 5 斜体
     String.raw`(https?:\/\/${URL_CHARS}+)`, // 6 URL
     String.raw`(:[a-zA-Z0-9_+\-]+:)`, // 7 emoji 短代码
-    String.raw`((?<=^|\s)@[\w.\-]+)`, // 8 提及
-    String.raw`((?<=^|\s)#[\w.\-]+)`, // 9 频道/工作项
+    String.raw`((?<=^|[\s一-鿿，。！？；：、])@[\w.\-]+)`, // 8 提及（中文后可紧跟）
+    String.raw`((?<=^|[\s一-鿿，。！？；：、])#[\w.\-]+)`, // 9 频道/工作项
   ].join('|'),
   'g',
 );

@@ -27,9 +27,12 @@ export default function MainPage() {
     }
   }, [init]);
 
-  // 标题栏未读数
+  // 标题栏未读数（免打扰会话不计入）
   useEffect(() => {
-    const total = Object.values(subscriptions).reduce((n, s) => n + (s.unread || 0), 0);
+    const total = Object.values(subscriptions).reduce(
+      (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
+      0,
+    );
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
   }, [subscriptions]);
 

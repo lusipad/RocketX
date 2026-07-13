@@ -9,11 +9,12 @@ import {
 } from 'react';
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Smile, X } from 'lucide-react';
-import { useChat } from '../stores/chat';
+import { stripQuotePrefix, useChat } from '../stores/chat';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 
-const MENTION_RE = /(?:^|\s)@([\w.\-]*)$/;
+// @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
+const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
 
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
@@ -227,7 +228,8 @@ export default function Composer() {
         <div className="mb-1.5 flex items-center gap-2 rounded-md bg-fill-1 px-2.5 py-1.5">
           <Reply size={13} className="shrink-0 text-ink-3" />
           <span className="min-w-0 flex-1 truncate text-xs text-ink-2">
-            回复 {replyTo.u.name || replyTo.u.username}：{replyTo.msg || '[卡片消息]'}
+            回复 {replyTo.u.name || replyTo.u.username}：
+            {stripQuotePrefix(replyTo.msg) || '[卡片消息]'}
           </span>
           <button
             onClick={() => setReplyTo(null)}
