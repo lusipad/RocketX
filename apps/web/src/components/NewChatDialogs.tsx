@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RcUser } from '@rcx/rc-client';
 import { Check, Lock, Search, X } from 'lucide-react';
 import { rest } from '../lib/client';
+import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import Avatar from './Avatar';
@@ -11,26 +12,54 @@ import Dialog from './Dialog';
  * 用户搜索（300ms 防抖），排除自己。
  * 走 searchUsers 三级回退：spotlight 在部分服务器上对空关键词返回空，
  * 而发起会话时需要「不输入也能看到人」。
+ *
+ * 服务端不认拼音，所以先取一页花名册在本地做拼音匹配，再与服务端结果合并——
+ * 这样 zs / zhangsan 能找到「张三」，同时首屏之外的人也不会漏。
  */
 export function useUserSearch(keyword: string): RcUser[] {
-  const [users, setUsers] = useState<RcUser[]>([]);
+  const [roster, setRoster] = useState<RcUser[]>([]);
+  const [remote, setRemote] = useState<RcUser[]>([]);
   const me = useAuth((s) => s.user?.username);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    rest
+      .searchUsers('', 100)
+      .then((r) => setRoster(r.users.filter((u) => u.username !== me)))
+      .catch(() => setRoster([]));
+  }, [me]);
+
+  useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
+    if (!keyword.trim()) {
+      setRemote([]);
+      return;
+    }
     timer.current = setTimeout(() => {
       rest
         .searchUsers(keyword, 30)
-        .then((r) => setUsers(r.users.filter((u) => u.username !== me)))
-        .catch(() => setUsers([]));
+        .then((r) => setRemote(r.users.filter((u) => u.username !== me)))
+        .catch(() => setRemote([]));
     }, 300);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword, me]);
 
-  return users;
+  const pinyinReady = usePinyinReady();
+  return useMemo(() => {
+    if (!keyword.trim()) return roster;
+    const merged = new Map<string, RcUser>();
+    for (const u of roster) {
+      if (pinyinMatch(keyword, u.name, u.username)) merged.set(u._id, u);
+    }
+    for (const u of remote) merged.set(u._id, u);
+    return [...merged.values()].sort(
+      (a, b) =>
+        pinyinScore(keyword, a.name || a.username) -
+        pinyinScore(keyword, b.name || b.username),
+    );
+  }, [roster, remote, keyword, pinyinReady]);
 }
 
 /** 统一弹窗外壳（含 Esc 关闭） */
@@ -66,7 +95,7 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
             autoFocus
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索用户"
+            placeholder="搜索用户，支持拼音（如 zhangsan / zs）"
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>

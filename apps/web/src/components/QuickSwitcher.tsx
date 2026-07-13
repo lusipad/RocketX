@@ -5,6 +5,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
 import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
+import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from './Avatar';
 
 type Tab = 'convs' | 'messages' | 'contacts';
@@ -58,13 +59,17 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
     () => buildConversations(subscriptions, rooms),
     [subscriptions, rooms],
   );
+  // 会话名多为中文，支持拼音全拼与首字母（「核心项目」← hxxm / hexinxiangmu）
+  const pinyinReady = usePinyinReady();
   const filteredConvs = useMemo(
     () =>
       (keyword
-        ? conversations.filter((c) => c.name.toLowerCase().includes(keyword.toLowerCase()))
+        ? conversations
+            .filter((c) => pinyinMatch(keyword, c.name))
+            .sort((a, b) => pinyinScore(keyword, a.name) - pinyinScore(keyword, b.name))
         : conversations
       ).slice(0, 8),
-    [conversations, keyword],
+    [conversations, keyword, pinyinReady],
   );
 
   useEffect(() => inputRef.current?.focus(), [tab]);

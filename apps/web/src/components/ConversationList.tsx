@@ -76,6 +76,7 @@ function ConversationItem({
   const draft = useChat((s) => s.drafts[conv.rid]);
   const showDraft = !!draft && !active;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   const folders = useFolders((s) => s.folders);
   const addRoom = useFolders((s) => s.addRoom);
@@ -121,15 +122,18 @@ function ConversationItem({
       onDragStart={(e) => {
         e.dataTransfer.setData('text/rcx-rid', conv.rid);
         e.dataTransfer.effectAllowed = 'copy';
+        setDragging(true);
       }}
+      onDragEnd={() => setDragging(false)}
       onClick={() => void openRoom(conv.rid)}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
+      title="拖到左侧分组可归类；右键更多操作"
       className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 ${padY} text-left transition ${
         active ? 'bg-fill-active' : 'hover:bg-fill-hover'
-      }`}
+      } ${dragging ? 'opacity-40 ring-1 ring-primary ring-inset' : ''}`}
     >
       {showAvatar && (
         <div className="relative shrink-0">

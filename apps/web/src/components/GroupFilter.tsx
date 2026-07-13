@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AtSign,
   ChevronDown,
@@ -109,6 +109,13 @@ export default function GroupFilter() {
   const remove = useFolders((s) => s.remove);
   const move = useFolders((s) => s.move);
   const addRoom = useFolders((s) => s.addRoom);
+  const prune = useFolders((s) => s.prune);
+
+  // 订阅变化后清理分组里已经不存在的会话，否则计数虚高、点进去是空的
+  useEffect(() => {
+    const rids = Object.keys(subscriptions);
+    if (rids.length > 0) prune(new Set(rids));
+  }, [subscriptions, prune]);
 
   const [dialog, setDialog] = useState<{ mode: 'create' | 'rename'; id?: string } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);

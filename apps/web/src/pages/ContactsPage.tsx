@@ -6,6 +6,7 @@ import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
 import { toast } from '../stores/toast';
+import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
 import { SkeletonList } from '../components/Skeleton';
@@ -18,36 +19,64 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const setModule = useUI((s) => s.setModule);
   const me = useAuth((s) => s.user?.username);
   const [keyword, setKeyword] = useState('');
-  const [users, setUsers] = useState<RcUser[]>([]);
+  const [roster, setRoster] = useState<RcUser[]>([]);
+  const [remote, setRemote] = useState<RcUser[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 首屏花名册：拼音检索只能在本地做（服务端不认 zhangsan/zs），所以先取一页兜底
+  useEffect(() => {
+    // directory → users.list → spotlight 三级回退，失败时把原因显示出来
+    rest
+      .searchUsers('', 100)
+      .then(({ users, total }) => {
+        setRoster(users);
+        setTotal(total);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setRoster([]);
+        setTotal(0);
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  // 关键词走服务端（能翻出首屏之外的人），与本地拼音结果合并
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
-    setLoading(true);
+    if (!keyword.trim()) {
+      setRemote([]);
+      return;
+    }
     timer.current = setTimeout(() => {
-      // directory → users.list → spotlight 三级回退，失败时把原因显示出来
       rest
-        .searchUsers(keyword, 100)
-        .then(({ users, total }) => {
-          setUsers(users);
-          setTotal(total);
-          setError(null);
-        })
-        .catch((err: unknown) => {
-          setUsers([]);
-          setTotal(0);
-          setError(err instanceof Error ? err.message : String(err));
-        })
-        .finally(() => setLoading(false));
+        .searchUsers(keyword, 50)
+        .then(({ users }) => setRemote(users))
+        .catch(() => setRemote([]));
     }, 300);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword]);
+
+  const pinyinReady = usePinyinReady();
+  const users = useMemo(() => {
+    if (!keyword.trim()) return roster;
+    const merged = new Map<string, RcUser>();
+    for (const u of roster) {
+      if (pinyinMatch(keyword, u.name, u.username)) merged.set(u._id, u);
+    }
+    for (const u of remote) merged.set(u._id, u);
+    return [...merged.values()].sort(
+      (a, b) =>
+        pinyinScore(keyword, a.name || a.username) -
+        pinyinScore(keyword, b.name || b.username),
+    );
+  }, [roster, remote, keyword, pinyinReady]);
 
   const doDM = async (username: string) => {
     if (busy) return;
@@ -70,14 +99,22 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索成员"
+            placeholder="搜索成员，支持拼音（如 zhangsan / zs）"
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
         <span className="text-xs text-ink-3">
-          共 {total} 人
-          {total > users.length && !keyword && (
-            <span className="ml-1 text-warning">（显示前 {users.length} 人，搜索可找到更多）</span>
+          {keyword ? (
+            `找到 ${users.length} 人`
+          ) : (
+            <>
+              共 {total} 人
+              {total > users.length && (
+                <span className="ml-1 text-warning">
+                  （显示前 {users.length} 人，搜索可找到更多）
+                </span>
+              )}
+            </>
           )}
         </span>
       </div>
@@ -141,6 +178,7 @@ function GroupsTab() {
   const setModule = useUI((s) => s.setModule);
   const [keyword, setKeyword] = useState('');
 
+  const pinyinReady = usePinyinReady();
   const groups = useMemo(() => {
     const list = Object.values(subscriptions)
       .filter((s) => s.t === 'c' || s.t === 'p')
@@ -149,11 +187,13 @@ function GroupsTab() {
         room: rooms[s.rid] as RcRoom | undefined,
         name: s.fname || s.name,
       }));
-    const filtered = keyword
-      ? list.filter((g) => g.name.toLowerCase().includes(keyword.toLowerCase()))
-      : list;
-    return filtered.sort((a, b) => tsMs(b.room?.lm) - tsMs(a.room?.lm));
-  }, [subscriptions, rooms, keyword]);
+    const filtered = keyword ? list.filter((g) => pinyinMatch(keyword, g.name)) : list;
+    return filtered.sort((a, b) =>
+      keyword
+        ? pinyinScore(keyword, a.name) - pinyinScore(keyword, b.name)
+        : tsMs(b.room?.lm) - tsMs(a.room?.lm),
+    );
+  }, [subscriptions, rooms, keyword, pinyinReady]);
 
   const open = (rid: string) => {
     void openRoom(rid);
@@ -168,7 +208,7 @@ function GroupsTab() {
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索群组"
+            placeholder="搜索群组，支持拼音"
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>

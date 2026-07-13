@@ -11,6 +11,7 @@ import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
+import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 
@@ -59,22 +60,25 @@ export default function Composer() {
     draftTimer.current = setTimeout(() => setDraft(rid, value.trim() ? value : ''), 300);
   };
 
+  const pinyinReady = usePinyinReady();
   const candidates = useMemo(() => {
     if (mentionQuery === null) return [];
-    const q = mentionQuery.toLowerCase();
+    const q = mentionQuery.trim();
     const base: { username: string; name?: string }[] = [
       { username: 'all', name: '通知所有人' },
       { username: 'here', name: '通知在线成员' },
       ...members,
     ];
+    // 支持拼音：打 zhangsan 或 zs 都能补出「张三」
     return base
-      .filter(
-        (u) =>
-          u.username.toLowerCase().startsWith(q) ||
-          (u.name ?? '').toLowerCase().includes(q),
+      .filter((u) => pinyinMatch(q, u.name, u.username))
+      .sort(
+        (a, b) =>
+          pinyinScore(q, a.name || a.username) - pinyinScore(q, b.name || b.username),
       )
       .slice(0, 6);
-  }, [mentionQuery, members]);
+    // pinyinReady：字典异步加载完成后要重算一次候选
+  }, [mentionQuery, members, pinyinReady]);
 
   const refreshMention = (value: string, cursor: number) => {
     const before = value.slice(0, cursor);

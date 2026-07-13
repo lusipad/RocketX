@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
   AlertCircle,
@@ -349,17 +356,14 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
   );
 }
 
-export default function MessageItem({
-  message,
-  mine,
-  grouped,
-  inThread = false,
-}: {
+type MessageItemProps = {
   message: RcMessage;
   mine: boolean;
   grouped: boolean;
   inThread?: boolean;
-}) {
+};
+
+function MessageItem({ message, mine, grouped, inThread = false }: MessageItemProps) {
   const myUsername = useAuth((s) => s.user?.username);
   const myId = useAuth((s) => s.user?._id);
   const openThread = useChat((s) => s.openThread);
@@ -676,3 +680,10 @@ export default function MessageItem({
     </div>
   );
 }
+
+/**
+ * 每条消息都订阅 store，但列表里的"正在输入"、滚动等状态变化会重渲染父组件。
+ * 消息对象在 store 里是不可变替换的（改一条只换那一条的引用），
+ * 所以按引用比较即可挡掉整列表的无谓重渲染。
+ */
+export default memo(MessageItem);

@@ -22,6 +22,7 @@ import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
+import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 
 const APP_VERSION = '0.2.3';
@@ -62,6 +63,7 @@ function AccountSection() {
   const [status, setStatus] = useState(user?.status ?? 'online');
   const [statusText, setStatusText] = useState('');
   const [saved, setSaved] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const applyStatus = async (next: string, text?: string) => {
     const prev = status;
@@ -134,12 +136,22 @@ function AccountSection() {
 
       <Row label="退出登录" hint="退出后返回登录页，可切换服务器或账号">
         <button
-          onClick={() => void logout()}
+          onClick={() => setConfirmLogout(true)}
           className="h-9 rounded-md border border-danger px-4 text-sm text-danger transition hover:bg-danger/10"
         >
           退出登录
         </button>
       </Row>
+
+      {confirmLogout && (
+        <ConfirmDialog
+          title="退出登录"
+          message="退出后需要重新输入账号密码。未发送的草稿会保留在本机。"
+          confirmLabel="退出"
+          onConfirm={() => void logout()}
+          onClose={() => setConfirmLogout(false)}
+        />
+      )}
     </>
   );
 }
@@ -398,13 +410,25 @@ function WorkbenchSection() {
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [steps, setSteps] = useState<ProbeStep[]>([]);
   const [saved, setSaved] = useState(false);
+  // 其他设置项都是改完即存，只有这里是「填完再保存」（半截的地址存下去没意义），
+  // 所以必须显式告诉用户「还没保存」，否则切走就白填了。
+  const [dirty, setDirty] = useState(false);
 
   const update = (patch: Partial<WorkbenchConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
     setResult(null);
     setSteps([]);
     setSaved(false);
+    setDirty(true);
   };
+
+  // 有未保存改动时，关标签页/刷新前拦一下
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   /**
    * 直连模式：自动探测。用户填的地址可以是项目页地址、带或不带 /tfs，
@@ -559,13 +583,18 @@ function WorkbenchSection() {
               account: config.account.trim(),
             });
             setSaved(true);
+            setDirty(false);
+            toast.success('工作台配置已保存');
             setTimeout(() => setSaved(false), 2500);
           }}
           disabled={!config.account.trim()}
-          className="h-9 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"
+          className={`h-9 rounded-md px-4 text-sm text-white transition disabled:opacity-40 ${
+            dirty ? 'bg-primary hover:bg-primary-hover' : 'bg-primary/70 hover:bg-primary'
+          }`}
         >
           {saved ? '已保存' : '保存'}
         </button>
+        {dirty && <span className="text-xs text-warning">有未保存的改动</span>}
       </div>
 
       {result && (

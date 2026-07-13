@@ -19,6 +19,7 @@ import { useChat } from '../stores/chat';
 import { useUI, type ModuleKey } from '../stores/ui';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
+import { ConfirmDialog } from './Dialog';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
 const MODULES: {
@@ -47,6 +48,7 @@ export default function NavRail() {
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
   const { unreadTotal, hasAlert } = useMemo(() => {
@@ -178,13 +180,23 @@ export default function NavRail() {
           设置
         </button>
         <button
-          onClick={() => void logout()}
+          onClick={() => setConfirmLogout(true)}
           className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-ink-2 transition hover:bg-fill-hover hover:text-danger"
         >
           <LogOut size={15} />
           退出登录
         </button>
       </div>
+
+      {confirmLogout && (
+        <ConfirmDialog
+          title="退出登录"
+          message="退出后需要重新输入账号密码。未发送的草稿会保留在本机。"
+          confirmLabel="退出"
+          onConfirm={() => void logout()}
+          onClose={() => setConfirmLogout(false)}
+        />
+      )}
 
       {dialog === 'dm' && <StartDMDialog onClose={() => setDialog(null)} />}
       {(dialog === 'group' || dialog === 'team') && (
