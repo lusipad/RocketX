@@ -185,14 +185,16 @@ export default function RoomInfoPanel() {
     if (!rid) return;
     setLoading(true);
     setInfo(null);
-    // rooms.info 拿到的字段比订阅全（公告、描述、创建者、创建时间）
+    // rooms.info 拿到的字段比订阅全（公告、描述、创建者、创建时间）。
+    // 只在切换会话时拉一次——依赖里放 rooms 的话，每来一条新消息 rooms 引用就变，
+    // 会话越活跃请求越多。兜底读 store 快照，不进依赖。
     void rest
       .getRoomInfo(rid)
       .then(setInfo)
-      .catch(() => setInfo(rooms[rid] ?? null))
+      .catch(() => setInfo(useChat.getState().rooms[rid] ?? null))
       .finally(() => setLoading(false));
     void loadMembers(rid).then((m) => setMemberCount(m.length));
-  }, [rid, loadMembers, rooms]);
+  }, [rid, loadMembers]);
 
   if (!rid || !conv) return null;
 
