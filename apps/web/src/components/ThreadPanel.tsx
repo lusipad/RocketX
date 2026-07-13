@@ -154,7 +154,9 @@ export default function ThreadPanel() {
             onKeyDown={onKeyDown}
             rows={1}
             placeholder={
-              sendOnEnter === 'alternative' ? '回复话题，Ctrl + Enter 发送' : '回复话题…'
+              sendOnEnter === 'alternative'
+                ? '回复话题，Ctrl + Enter 发送，Enter 换行'
+                : '回复话题，Enter 发送，Shift + Enter 换行'
             }
             className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
           />

@@ -306,7 +306,8 @@ export default function Composer() {
           rows={1}
           placeholder={
             sendOnEnter === 'alternative'
-              ? '输入消息，Ctrl + Enter 发送'
+              // 「怎么发送」和「怎么换行」得同时讲 —— 只说一半，想发多行的人就卡住了
+              ? '输入消息，Ctrl + Enter 发送，Enter 换行'
               : '输入消息，Enter 发送，Shift + Enter 换行'
           }
           className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
