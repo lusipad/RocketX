@@ -31,6 +31,7 @@ const FILTER_TITLE: Record<ConvFilter, string> = {
   unread: '未读',
   mentions: '@我',
   dm: '单聊',
+  multi: '多人聊天',
   groups: '群组',
   teams: '团队',
   discussions: '讨论',
@@ -44,12 +45,16 @@ function applyFilter(convs: Conversation[], filter: ConvFilter): Conversation[] 
       return convs.filter((c) => c.unread > 0 || c.alert);
     case 'mentions':
       return convs.filter((c) => c.userMentions > 0);
-    // 单聊只算 1 对 1；多人直聊虽然 RC 里也是 t='d'，但用户认知里那是群聊
+    // 单聊只算 1 对 1
     case 'dm':
       return convs.filter((c) => c.type === 'd' && !c.isMultiDM);
+    // 多人聊天：没名字、由参与者拼出来的临时群聊，独立成一类 ——
+    // 和「general-test」这种有名有姓的频道混在一起，用户根本分不清哪个是哪个
+    case 'multi':
+      return convs.filter((c) => c.isMultiDM);
     case 'groups':
       return convs.filter(
-        (c) => (c.isMultiDM || c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
+        (c) => (c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
       );
     case 'teams':
       return convs.filter((c) => c.isTeam || !!c.teamId);

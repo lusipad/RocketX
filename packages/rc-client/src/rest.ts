@@ -424,6 +424,15 @@ export class RcRestClient {
   }
 
   /**
+   * 彻底删除房间（连同历史消息），需要管理员或房主权限。
+   * 与 hideRoom 完全不同：hide 只是从自己的会话列表里隐掉，房间还在服务器上。
+   */
+  async deleteRoom(rid: string, type: RoomType): Promise<void> {
+    const endpoint = type === 'c' ? 'channels.delete' : 'groups.delete';
+    await this.request('POST', endpoint, { roomId: rid });
+  }
+
+  /**
    * 上传文件到房间（rooms.media 两段式：上传 → 确认发送）。
    * multipart 体手工构造成字节流——浏览器 fetch 与 Tauri plugin-http
    * 通道都稳定支持（后者对 FormData 支持不可靠）。

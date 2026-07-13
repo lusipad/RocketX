@@ -17,6 +17,8 @@ export type ConvFilter =
   | 'mentions'
   | 'favorites'
   | 'dm'
+  /** 多人聊天：没有名字、由参与者拼出来的直聊（RC 里 t 仍是 'd'） */
+  | 'multi'
   | 'groups'
   | 'teams'
   | 'discussions';

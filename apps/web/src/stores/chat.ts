@@ -49,6 +49,8 @@ export type SectionKey =
   | 'teams'
   | 'discussions'
   | 'channels'
+  /** 多人聊天：临时拉起来的、没有名字的群聊 */
+  | 'multi'
   | 'direct';
 
 export const SECTION_LABELS: Record<SectionKey, string> = {
@@ -57,6 +59,7 @@ export const SECTION_LABELS: Record<SectionKey, string> = {
   teams: '团队',
   discussions: '讨论',
   channels: '频道与群组',
+  multi: '多人聊天',
   direct: '私聊',
 };
 
@@ -1060,8 +1063,10 @@ export function sectionOf(conv: Conversation): SectionKey {
   if (conv.favorite) return 'favorites';
   if (conv.isTeam) return 'teams';
   if (conv.isDiscussion) return 'discussions';
-  // 多人直聊归到频道/群组区，「私聊」区只放 1 对 1
-  if (conv.type === 'd' && !conv.isMultiDM) return 'direct';
+  // 多人聊天独立成区：它没有名字、没有主题，和「general-test」这种有名有姓的
+  // 频道是两码事，混在一起用户根本分不清哪个是哪个
+  if (conv.isMultiDM) return 'multi';
+  if (conv.type === 'd') return 'direct';
   return 'channels';
 }
 
@@ -1110,7 +1115,14 @@ export function buildSections(
     return sections;
   }
 
-  const order: SectionKey[] = ['favorites', 'teams', 'discussions', 'channels', 'direct'];
+  const order: SectionKey[] = [
+    'favorites',
+    'teams',
+    'discussions',
+    'channels',
+    'multi',
+    'direct',
+  ];
   const buckets = new Map<SectionKey, Conversation[]>();
   for (const c of rest) {
     const key = opts.showFavorites ? sectionOf(c) : sectionOf({ ...c, favorite: false });

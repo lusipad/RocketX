@@ -14,6 +14,7 @@ import {
   Trash2,
   User,
   Users,
+  UsersRound,
   Wand2,
 } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
@@ -30,6 +31,7 @@ const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'mentions', label: '@我', icon: AtSign },
   { key: 'favorites', label: '收藏', icon: Pin },
   { key: 'dm', label: '单聊', icon: User },
+  { key: 'multi', label: '多人聊天', icon: UsersRound },
   { key: 'groups', label: '群组', icon: Hash },
   { key: 'teams', label: '团队', icon: Users },
   { key: 'discussions', label: '讨论', icon: MessagesSquare },
@@ -133,8 +135,9 @@ export default function GroupFilter() {
       mentions: convs.reduce((n, c) => n + c.userMentions, 0),
       favorites: convs.filter((c) => c.favorite).length,
       dm: convs.filter((c) => c.type === 'd' && !c.isMultiDM).length,
+      multi: convs.filter((c) => c.isMultiDM).length,
       groups: convs.filter(
-        (c) => (c.isMultiDM || c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
+        (c) => (c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
       ).length,
       teams: convs.filter((c) => c.isTeam || !!c.teamId).length,
       discussions: convs.filter((c) => c.isDiscussion).length,

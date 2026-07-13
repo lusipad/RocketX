@@ -310,6 +310,41 @@ async function main(): Promise<void> {
     html('# **重点**发布').includes('<strong'),
   );
 
+  console.log('\n[会话分区]');
+  const { sectionOf } = await import('../apps/web/src/stores/chat');
+  const conv = (over: Record<string, unknown>) =>
+    ({
+      rid: 'r',
+      name: 'n',
+      type: 'c',
+      unread: 0,
+      alert: false,
+      userMentions: 0,
+      favorite: false,
+      muted: false,
+      isDiscussion: false,
+      isMultiDM: false,
+      isTeam: false,
+      lastTs: 0,
+      lastPreview: '',
+      ...over,
+    }) as any;
+
+  check('1对1 私聊 → 私聊区', sectionOf(conv({ type: 'd' })) === 'direct');
+  check(
+    '多人聊天 → 独立的「多人聊天」区，不混进频道',
+    sectionOf(conv({ type: 'd', isMultiDM: true })) === 'multi',
+    sectionOf(conv({ type: 'd', isMultiDM: true })),
+  );
+  check('有名字的频道 → 频道区', sectionOf(conv({ type: 'c' })) === 'channels');
+  check('私有群组 → 频道区', sectionOf(conv({ type: 'p' })) === 'channels');
+  check('团队 → 团队区', sectionOf(conv({ type: 'c', isTeam: true })) === 'teams');
+  check('讨论 → 讨论区', sectionOf(conv({ type: 'c', isDiscussion: true })) === 'discussions');
+  check(
+    '收藏优先于一切分区',
+    sectionOf(conv({ type: 'd', isMultiDM: true, favorite: true })) === 'favorites',
+  );
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
 }

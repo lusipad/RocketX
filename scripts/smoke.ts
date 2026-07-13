@@ -59,9 +59,13 @@ async function main() {
   const stamp = Date.now().toString(36);
   let channelId = '';
   let dmId = '';
+  // 测试建出来的房间要记下来，跑完删掉 —— 每跑一次留一个「冒烟测试-xxx」频道，
+  // 跑几十次就把真实用户的会话列表淹了
+  const createdRooms: { rid: string; type: 'c' | 'p' }[] = [];
 
   await check('创建频道（中文名）', async () => {
     const room = await rest.createGroup(`冒烟测试-${stamp}`, [USER2], false);
+    createdRooms.push({ rid: room._id, type: 'c' });
     channelId = room._id;
     assert(channelId, '未返回房间 id');
     return room.name;
@@ -161,6 +165,8 @@ async function main() {
   await check('创建讨论', async () => {
     const d = await rest.createDiscussion(channelId, `讨论-${stamp}`, firstId);
     assert(d._id && d.prid === channelId, '讨论未正确关联父房间');
+    // 讨论是独立房间，删父频道不会连带删掉它
+    createdRooms.push({ rid: d._id, type: d.t === 'p' ? 'p' : 'c' });
   });
 
   // ---- 文件 ----
@@ -323,6 +329,20 @@ async function main() {
   });
   await check('隐藏会话', async () => {
     await rest.hideRoom(dmId, 'd');
+  });
+  await check('删除测试期间建的房间', async () => {
+    // hideRoom 只是从自己列表里隐掉，房间还在服务器上 —— 必须真删
+    let removed = 0;
+    for (const r of createdRooms.reverse()) {
+      try {
+        await rest.deleteRoom(r.rid, r.type);
+        removed++;
+      } catch (err) {
+        console.log(`    ! 删除 ${r.rid} 失败：${err instanceof Error ? err.message : err}`);
+      }
+    }
+    assert(removed === createdRooms.length, `${createdRooms.length} 个房间只删掉了 ${removed} 个`);
+    return `已清理 ${removed} 个房间`;
   });
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
