@@ -3,6 +3,21 @@
 
 mod winauth;
 
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
+
+/// 显示并聚焦主窗口（从托盘点回来）
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         // Windows 集成认证（NTLM/Negotiate）：域内 ADO Server 的默认认证方式，
@@ -17,6 +32,45 @@ fn main() {
         // 必须用原生「另存为」对话框 + 文件写入
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 系统通知：WebView2 里 Web Notification 常年被判 denied（issue #4）
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // 系统托盘：显示 / 退出（issue #3）
+            let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("RocketX")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // 左键单击托盘图标 → 显示主窗口
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 点关闭按钮 = 隐藏到托盘，不退出进程（issue #3）。
+            // 真正退出走托盘菜单的「退出」。
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running RocketX");
 }

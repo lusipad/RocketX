@@ -16,6 +16,21 @@ const TYPE_COLORS: Record<string, string> = {
   Epic: '#ff8800',
 };
 
+/** 工作项状态配色：和 AdoLists 的 stateStyle 语义一致，已解决/已关闭一眼能区分 */
+function stateStyle(state: string): string {
+  const s = state.toLowerCase();
+  if (['active', 'in progress', 'doing', 'committed'].includes(s))
+    return 'bg-primary-light text-primary';
+  if (['resolved', 'in review'].includes(s)) return 'bg-warning/15 text-warning';
+  if (['closed', 'done', 'completed'].includes(s)) return 'bg-success/15 text-success';
+  return 'bg-fill-2 text-ink-2';
+}
+
+/** 已解决 / 已关闭的工作项算「已完成」，标题划掉更直观 */
+function isDoneState(state: string): boolean {
+  return ['resolved', 'closed', 'done', 'completed'].includes(state.toLowerCase());
+}
+
 function HoverCard({
   id,
   pos,
@@ -100,11 +115,15 @@ function HoverCard({
               <ExternalLink size={13} />
             </a>
           </div>
-          <div className="mt-1.5 text-sm leading-snug font-medium break-words text-ink">
+          <div
+            className={`mt-1.5 text-sm leading-snug font-medium break-words ${
+              isDoneState(item.state) ? 'text-ink-3 line-through' : 'text-ink'
+            }`}
+          >
             {item.title}
           </div>
           <div className="mt-2 flex items-center gap-2 text-xs">
-            <span className="rounded bg-primary-light px-1.5 py-0.5 text-primary">{item.state}</span>
+            <span className={`rounded px-1.5 py-0.5 ${stateStyle(item.state)}`}>{item.state}</span>
             {item.priority != null && (
               <span className="rounded bg-fill-1 px-1.5 py-0.5 text-ink-2">P{item.priority}</span>
             )}

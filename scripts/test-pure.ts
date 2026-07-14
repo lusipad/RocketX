@@ -222,6 +222,11 @@ async function main(): Promise<void> {
   check('没有评审人不算已批准', !isApproved(mkPr(10, me, [])));
   check('账号匹配不区分大小写', matchUser('LUS@example.com', me, 'lus'));
   check('空账号不匹配任何人', !matchUser('', me, 'lus'));
+  // issue #12：account 与 PR 身份格式不一致时（DOMAIN\ / 邮箱 / 裸名）也要能匹配
+  check('归一化：DOMAIN\\lus 能匹配裸账号 lus', matchUser('CORP\\lus', 'lus', '张三'));
+  check('归一化：裸账号 lus 能匹配 lus@corp.com', matchUser('lus', 'lus@corp.com', '张三'));
+  check('归一化：DOMAIN\\lus 能匹配 lus@corp.com', matchUser('CORP\\lus', 'lus@corp.com', '张三'));
+  check('归一化：不同的人仍然不匹配', !matchUser('CORP\\lus', 'wang@corp.com', '王五'));
 
   console.log('\n[工作台 · 待处理队列]');
   const { buildQueue, queueSummary } = await import('../apps/web/src/lib/queue');
@@ -342,6 +347,21 @@ async function main(): Promise<void> {
   check(
     '标题里的行内格式也要解析',
     html('# **重点**发布').includes('<strong'),
+  );
+  // 死循环回归：`|` 开头但不构成表格的行曾让 renderBlocks 无限空转、整页冻死。
+  // 若修复失效，下面几行会直接挂死进程（CI 超时），能返回就说明护栏生效。
+  check('表格死循环：单个 | 不冻死', html('|').includes('|'));
+  check(
+    '表格死循环：缺分隔行的伪表格当普通文本渲染',
+    html('| 姓名 | 年龄 |\n| 张三 | 18 |').includes('姓名'),
+  );
+  check('表格死循环：引用里的 | 不冻死', html('> | a').includes('<blockquote'));
+  // issue #14 的原文:多行 | 开头、分隔行是 ~~~~ 而非 ---- —— 构不成表格，曾无限空转
+  check(
+    '表格死循环：issue #14 报错输出不冻死',
+    html('344 | throw "$xx xxwith exit code $xx"\n| ~~~~~~~~~~~~~~~~\n|  xxx  xxexit code 1').includes(
+      'exit code',
+    ),
   );
 
   console.log('\n[会话分区]');

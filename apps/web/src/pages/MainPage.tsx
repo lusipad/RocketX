@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useUI } from '../stores/ui';
+import { requestNotifyPermission } from '../lib/notify';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -28,10 +29,8 @@ export default function MainPage() {
   useEffect(() => {
     void init();
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
-    // 申请桌面通知权限（用于非活跃会话的新消息提醒）
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      void Notification.requestPermission().catch(() => {});
-    }
+    // 申请桌面通知权限（桌面端走系统通知插件，浏览器走 Web Notification）
+    void requestNotifyPermission().catch(() => {});
   }, [init, loadPrefs]);
 
   // 标题栏未读数（免打扰会话不计入）

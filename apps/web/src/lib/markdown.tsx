@@ -66,17 +66,26 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
     } else if (m[5]) {
       nodes.push(<em key={key}>{full.slice(1, -1)}</em>);
     } else if (m[6]) {
-      nodes.push(
-        <a
-          key={key}
-          href={full}
-          target="_blank"
-          rel="noreferrer"
-          className="break-all text-primary underline-offset-2 hover:underline"
-        >
-          {full}
-        </a>,
-      );
+      // 粘贴的 ADO 工作项 URL（.../_workitems/edit/123）自动 unfurl 成悬停详情卡，
+      // 复用 #工作项号 那套 WorkItemLink（issue #13）。必须属于当前配置的 ADO 集合
+      // 才转卡片：href 是用 adoWebBase 重建的，也避免把别家 ADO 链接认成本服务器的。
+      const adoBase = adoWebBase();
+      const wi = /\/_workitems\/edit\/(\d+)\b/i.exec(full);
+      if (wi && adoBase && full.toLowerCase().startsWith(adoBase.toLowerCase())) {
+        nodes.push(<WorkItemLink key={key} id={Number(wi[1])} />);
+      } else {
+        nodes.push(
+          <a
+            key={key}
+            href={full}
+            target="_blank"
+            rel="noreferrer"
+            className="break-all text-primary underline-offset-2 hover:underline"
+          >
+            {full}
+          </a>,
+        );
+      }
     } else if (m[7]) {
       nodes.push(<Emoji key={key} code={full} size={18} />);
     } else if (m[8]) {
@@ -309,7 +318,12 @@ function renderBlocks(
       i++;
       continue;
     }
-    const para: string[] = [];
+    // 先无条件吃掉当前行，再往后聚合。这一步是死循环的护栏：段落分支是所有块分支的
+    // 兜底，任何被 isBlockStart 判为块起始、却没有对应分支消费的行（例如没有分隔行、
+    // 不构成表格的 `|` 开头行）都会落到这里；若不先吃掉当前行，聚合 while 会因
+    // isBlockStart 恒真而一次不执行、i 不推进，外层 while 就死循环了。
+    const para: string[] = [line];
+    i++;
     while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
       para.push(lines[i]);
       i++;

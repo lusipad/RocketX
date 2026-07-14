@@ -237,6 +237,8 @@ export default function MembersPanel() {
   const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
   const roomRoles = useChat((s) => (s.activeRid ? s.roomRoles[s.activeRid] : undefined)) ?? NO_ROLES;
   const muted = useChat((s) => (s.activeRid ? s.rooms[s.activeRid]?.muted : undefined));
+  const seedUserStatus = useChat((s) => s.seedUserStatus);
+  const userStatus = useChat((s) => s.userStatus);
   const me = useAuth((s) => s.user);
   // 多人聊天在 RC 里也是 t='d'，它没有频道那套管理能力（踢人/角色/禁言全是 400）
   const type = useChat((s) =>
@@ -264,6 +266,7 @@ export default function MembersPanel() {
       setMembers(cachedMembers);
       setLoading(false);
       setError(null);
+      seedUserStatus(cachedMembers);
       return;
     }
     setLoading(true);
@@ -271,6 +274,7 @@ export default function MembersPanel() {
     void loadMembers(rid)
       .then((list) => {
         setMembers(list);
+        seedUserStatus(list);
         if (list.length === 0) setError(null);
       })
       .catch((err: unknown) => setError(humanError(err, '无法获取成员列表')))
@@ -329,7 +333,12 @@ export default function MembersPanel() {
                 onClick={() => setCard(m)}
                 className="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-fill-hover"
               >
-                <Avatar name={m.name || m.username} username={m.username} size={32} />
+                <Avatar
+                  name={m.name || m.username}
+                  username={m.username}
+                  size={32}
+                  status={userStatus[m._id] ?? m.status}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-sm text-ink">{m.name || m.username}</span>

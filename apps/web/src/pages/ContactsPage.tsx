@@ -19,6 +19,8 @@ type Tab = 'members' | 'groups';
 function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void }) {
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
+  const seedUserStatus = useChat((s) => s.seedUserStatus);
+  const userStatus = useChat((s) => s.userStatus);
   const me = useAuth((s) => s.user?.username);
   const [keyword, setKeyword] = useState('');
   const [roster, setRoster] = useState<RcUser[]>([]);
@@ -40,6 +42,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
         setRoster(users);
         setTotal(total);
         setError(null);
+        seedUserStatus(users); // 用列表快照播种在线状态,之后靠实时流更新
       })
       .catch((err: unknown) => {
         setRoster([]);
@@ -59,7 +62,10 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     timer.current = setTimeout(() => {
       rest
         .searchUsers(keyword, 50)
-        .then(({ users }) => setRemote(users))
+        .then(({ users }) => {
+          setRemote(users);
+          seedUserStatus(users);
+        })
         .catch(() => setRemote([]));
     }, 300);
     return () => {
@@ -151,7 +157,12 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                 onClick={() => onOpenCard(u)}
                 className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
               >
-                <Avatar name={alias || real} username={u.username} size={36} />
+                <Avatar
+                  name={alias || real}
+                  username={u.username}
+                  size={36}
+                  status={userStatus[u._id] ?? u.status}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink">
                     {alias || real}

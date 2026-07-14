@@ -552,10 +552,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         )}
 
         <div className={`relative flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
-          {/* 悬浮操作栏：贴气泡上沿内侧，避免被滚动容器裁剪（第一条消息也够得着） */}
+          {/* 悬浮操作栏：整体浮在气泡上方（bottom-full = 底边贴气泡顶边），不再盖住本条
+              第一行文字。之前用 -top-4 会压进气泡覆盖正文（issue #6）。 */}
           {!editing && !message.pending && !message.failed && (
             <div
-              className={`absolute -top-4 z-10 hidden group-hover:flex ${
+              className={`absolute bottom-full z-10 mb-0.5 hidden group-hover:flex ${
                 mine ? 'right-0' : 'left-0'
               }`}
             >

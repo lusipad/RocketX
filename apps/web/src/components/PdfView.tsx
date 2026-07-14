@@ -26,9 +26,15 @@ export default function PdfView({ data }: { data: ArrayBuffer }) {
     void (async () => {
       try {
         const pdfjs = await import('pdfjs-dist');
-        // worker 必须显式指定，否则 pdf.js 会去猜路径，打包后必然 404
-        const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        // worker 用「内联实例」而非「让宿主提供文件」：`?url` 会产出一个 .mjs 资源，
+        // 由 pdf.js `new Worker(src, {type:'module'})` 去取——桌面端(Tauri)的 asset
+        // 协议对 .mjs 返回的 MIME/scheme 不被 webview 接受，module worker 与 fake
+        // worker 双双失败，表现为「PDF解析失败」(issue #10)。改用 Vite 的
+        // `?worker&inline` 拿到 Worker 构造器，自己 new 出实例交给 workerPort，
+        // pdf.js 直接用现成 worker，跳过取文件+MIME 校验，与宿主如何返回 .mjs 无关。
+        const PdfWorker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?worker&inline'))
+          .default;
+        pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
 
         // pdf.js 会接管（并清空）传入的 buffer，给它一份拷贝，
         // 否则重新渲染时拿到的是已被分离的 buffer

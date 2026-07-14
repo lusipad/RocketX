@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
-import { loadStoredAuth, realtime, rest, saveAuth } from '../lib/client';
+import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -23,9 +23,36 @@ interface AuthState {
   /** 改完资料后重新拉一遍自己（昵称、头像 ETag） */
   refreshUser: () => Promise<void>;
   bumpAvatar: () => void;
+  /** 会话失效（token 被吊销/过期，REST 401 或实时 login 失败）：登出回登录页 */
+  handleAuthLost: () => void;
 }
 
 const AVATAR_VERSION_KEY = 'rcx-avatar-version';
+
+/** 会话失效 / 多标签同步的处理器只挂一次 */
+let sessionHandlersWired = false;
+function wireSessionHandlers(onLost: () => void): void {
+  if (sessionHandlersWired) return;
+  sessionHandlersWired = true;
+  // REST 401 与实时 login 失败都汇到同一处理
+  setAuthLostHandler(onLost);
+  realtime.onAuthFailure = onLost;
+  // 多标签同步：其他标签登出/换账号时本标签跟着走，
+  // 否则内存里还是「已登录」、请求却全 401（P1-9）
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (e) => {
+      if (e.key !== 'rcx-auth') return;
+      const cur = loadStoredAuth();
+      const me = useAuth.getState();
+      if (!cur) {
+        if (me.status === 'authed' || me.status === 'authing') onLost();
+      } else if (me.user && cur.userId !== me.user._id) {
+        // 换了账号：内存状态还是旧账号，直接重载去加载新账号
+        location.reload();
+      }
+    });
+  }
+}
 
 /** Node 下跑纯函数单测时没有 localStorage，读写都得兜住 */
 function readAvatarVersion(): number {
@@ -43,6 +70,8 @@ export const useAuth = create<AuthState>((set, get) => ({
   avatarVersion: readAvatarVersion(),
 
   resume: async () => {
+    // 会话失效 / 多标签处理器在启动时挂一次
+    wireSessionHandlers(() => get().handleAuthLost());
     const stored = loadStoredAuth();
     if (!stored) {
       set({ status: 'guest' });
@@ -108,5 +137,14 @@ export const useAuth = create<AuthState>((set, get) => ({
       /* 无痕模式 / 非浏览器环境：内存里记着就行 */
     }
     set({ avatarVersion: next });
+  },
+
+  handleAuthLost: () => {
+    // 幂等：只在真的处于登录态时处理，避免重复触发（401 会一批一起来）
+    const st = get();
+    if (st.status !== 'authed' && st.status !== 'authing') return;
+    realtime.close();
+    saveAuth(null);
+    set({ status: 'guest', user: null, error: '登录已失效，请重新登录' });
   },
 }));

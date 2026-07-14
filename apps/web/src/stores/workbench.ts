@@ -95,11 +95,29 @@ export function voteColor(vote: number): string {
   return 'text-danger';
 }
 
-/** ADO 账号与人名的宽松匹配（没有账号映射表，只能这样对） */
+/**
+ * ADO 账号与人名的宽松匹配（没有账号映射表，只能这样对）。
+ *
+ * account 可能是 `DOMAIN\lus`、`lus@corp.com`、显示名或裸账号名，而 PR 的
+ * uniqueName/displayName 常是另一种形态，三者互不相同。之前用全等匹配，只要格式
+ * 不一致「我提的 PR」就全空（issue #12）。这里去掉 DOMAIN\ 前缀和 @domain 后缀，
+ * 用裸账号名再比一次。
+ */
+function bareName(s: string): string {
+  let t = s.trim().toLowerCase();
+  const bs = t.lastIndexOf('\\');
+  if (bs >= 0) t = t.slice(bs + 1);
+  const at = t.indexOf('@');
+  if (at >= 0) t = t.slice(0, at);
+  return t;
+}
+
 export function matchUser(account: string, unique: string, name: string): boolean {
   const q = account.trim().toLowerCase();
   if (!q) return false;
-  return unique.toLowerCase() === q || name.toLowerCase() === q;
+  if (unique.toLowerCase() === q || name.toLowerCase() === q) return true;
+  const qb = bareName(account);
+  return !!qb && (bareName(unique) === qb || bareName(name) === qb);
 }
 
 interface WorkbenchState {

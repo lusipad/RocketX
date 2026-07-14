@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   CircleDot,
@@ -343,15 +343,24 @@ export default function CalendarPage() {
   const workItems = useWorkbench((s) => s.workItems);
   const wbConfig = useWorkbench((s) => s.config);
   const wbLastRefresh = useWorkbench((s) => s.lastRefresh);
-  const wbLoading = useWorkbench((s) => s.loading);
   const wbRefresh = useWorkbench((s) => s.refresh);
 
+  // 死循环护栏：同 WorkbenchPage —— ADO 连不上时 refresh 只置 error，若 loading 进
+  // 依赖会无限重发。用 ref 记住本次连接已尝试过，失败不再自动重试。
+  const wbTriedRef = useRef(false);
   useEffect(() => {
     const connected = !!(
       wbConfig && (wbConfig.mode === 'direct' ? wbConfig.adoBase : wbConfig.bridge)
     );
-    if (connected && !wbLastRefresh && !wbLoading) void wbRefresh();
-  }, [wbConfig, wbLastRefresh, wbLoading, wbRefresh]);
+    if (!connected) {
+      wbTriedRef.current = false;
+      return;
+    }
+    if (!wbLastRefresh && !wbTriedRef.current) {
+      wbTriedRef.current = true;
+      void wbRefresh();
+    }
+  }, [wbConfig, wbLastRefresh, wbRefresh]);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
   const next = useCalendar((s) => s.next);

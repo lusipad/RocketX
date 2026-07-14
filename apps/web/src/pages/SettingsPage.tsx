@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
+import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
@@ -478,9 +479,12 @@ function MessageSection() {
 function NotificationSection() {
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
-  const [permission, setPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied',
-  );
+  // granted / default(未开启,可申请)。桌面端无法区分 denied,统一按可申请处理
+  const [permission, setPermission] = useState<'granted' | 'default'>('default');
+
+  useEffect(() => {
+    void notifyPermissionGranted().then((ok) => setPermission(ok ? 'granted' : 'default'));
+  }, []);
 
   return (
     <>
@@ -488,18 +492,18 @@ function NotificationSection() {
         <div className="flex items-center gap-2">
           <span
             className={`rounded px-2 py-1 text-xs ${
-              permission === 'granted'
-                ? 'bg-success/15 text-success'
-                : permission === 'denied'
-                  ? 'bg-danger/15 text-danger'
-                  : 'bg-fill-1 text-ink-2'
+              permission === 'granted' ? 'bg-success/15 text-success' : 'bg-fill-1 text-ink-2'
             }`}
           >
-            {permission === 'granted' ? '已开启' : permission === 'denied' ? '已拒绝' : '未开启'}
+            {permission === 'granted' ? '已开启' : '未开启'}
           </span>
           {permission === 'default' && (
             <button
-              onClick={() => void Notification.requestPermission().then(setPermission)}
+              onClick={() =>
+                void requestNotifyPermission().then((ok) =>
+                  setPermission(ok ? 'granted' : 'default'),
+                )
+              }
               className="h-8 rounded-md bg-primary px-3 text-xs text-white hover:bg-primary-hover"
             >
               开启

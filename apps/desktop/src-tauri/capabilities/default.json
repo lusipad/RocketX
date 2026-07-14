@@ -11,6 +11,7 @@
       "allow": [{ "url": "http://**:*" }, { "url": "https://**:*" }]
     },
     "dialog:allow-save",
+    "notification:default",
     "fs:allow-write-file",
     {
       "identifier": "fs:scope",

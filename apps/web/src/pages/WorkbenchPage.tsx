@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark,
   Calendar,
@@ -211,6 +211,8 @@ function FavoriteDialog({
 
 export default function WorkbenchPage() {
   const setModule = useUI((s) => s.setModule);
+  const tab = useUI((s) => s.workbenchTab);
+  const setTab = useUI((s) => s.setWorkbenchTab);
   const user = useAuth((s) => s.user);
   const subscriptions = useChat((s) => s.subscriptions);
   const openRoom = useChat((s) => s.openRoom);
@@ -233,7 +235,6 @@ export default function WorkbenchPage() {
   const lastRefresh = useWorkbench((s) => s.lastRefresh);
   const refresh = useWorkbench((s) => s.refresh);
 
-  const [tab, setTab] = useState<AdoTab>('overview');
   const [favDialog, setFavDialog] = useState<{ existing?: Favorite } | null>(null);
 
   const today = todayKey();
@@ -258,10 +259,22 @@ export default function WorkbenchPage() {
   // 标题上显示身份：没识别到账号就别硬凑一个空字符串出来
   const adoTitle = account ? `Azure DevOps · ${account}` : 'Azure DevOps';
 
-  // 进入工作台时拉一次；已有数据就不重复拉（切 tab 不该每次都打服务器）
+  // 进入工作台时拉一次；已有数据就不重复拉（切 tab 不该每次都打服务器）。
+  // triedRef 是死循环护栏：refresh 失败时只置 error 不置 lastRefresh，若把 loading
+  // 放进依赖，loading:true→false 会让条件再次成立，ADO 连不上时每秒重发几十次。
+  // 用 ref 记住「本次连接已尝试过」，失败也不再自动重试；断线重连（connected 归 false
+  // 再变 true）时重置，允许再试一次。
+  const triedRef = useRef(false);
   useEffect(() => {
-    if (connected && !lastRefresh && !loading) void refresh();
-  }, [connected, lastRefresh, loading, refresh]);
+    if (!connected) {
+      triedRef.current = false;
+      return;
+    }
+    if (!lastRefresh && !triedRef.current) {
+      triedRef.current = true;
+      void refresh();
+    }
+  }, [connected, lastRefresh, refresh]);
 
   const reviewPrs = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
   const myPrs = useMemo(() => myPrsOf(prs, account), [prs, account]);

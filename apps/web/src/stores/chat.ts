@@ -20,6 +20,7 @@ import {
 } from '../lib/client';
 import { emojify } from '../lib/emoji';
 import { findCommand } from '../lib/slash';
+import { desktopNotify } from '../lib/notify';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { humanError, toast } from './toast';
@@ -128,8 +129,13 @@ interface ChatState {
   slashCommands: RcSlashCommand[];
   /** 房间里有角色的人：rid -> [{ u, roles: ['owner'] }]。普通成员不在里面 */
   roomRoles: Record<string, RcRoomRole[]>;
+  /** 其他人的在线状态：userId -> 'online' | 'away' | 'busy' | 'offline'。
+      初值由通讯录/成员列表播种，之后靠 stream-notify-logged/user-status 实时更新 */
+  userStatus: Record<string, string>;
 
   init: () => Promise<void>;
+  /** 批量播种在线状态（通讯录/成员列表拿到 status 时调用，不覆盖已有的实时值） */
+  seedUserStatus: (users: { _id: string; status?: string }[]) => void;
   openRoom: (rid: string) => Promise<void>;
   openThread: (mid: string) => Promise<void>;
   setPanel: (panel: RightPanel) => void;
@@ -285,6 +291,14 @@ function roomTypeOf(
   return state.subscriptions[rid]?.t ?? state.rooms[rid]?.t ?? 'c';
 }
 
+/** RC 用户状态的数字编码 → 语义字符串 */
+const STATUS_BY_NUM: Record<number, string> = {
+  0: 'offline',
+  1: 'online',
+  2: 'away',
+  3: 'busy',
+};
+
 function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
   const sub = subs[rid];
   return sub?.t === 'c'
@@ -297,9 +311,17 @@ function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
 /**
  * 引用回复走 RC 官方机制：消息文本以 `[ ](Site_Url 消息链接) ` 开头，
  * 服务端自动展开为引用附件（REST 直接发 message_link 附件会被服务端清洗）。
+ *
+ * site 必须精确等于服务端配置的 Site_Url，否则服务端不展开（实测:前缀差一点就
+ * 完全不展开）。调用方要传 ensureSiteUrl() 拿到的值，别用可能回退到 getServerBase()
+ * 的 siteUrlSync()——桌面端填 IP / 经代理访问时两者不一致，就会「有动画没引用」(#9)。
  */
-function quoteLinkPrefix(quoted: RcMessage, subs: Record<string, RcSubscription>): string {
-  return `[ ](${siteUrlSync()}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}) `;
+function quoteLinkPrefix(
+  quoted: RcMessage,
+  subs: Record<string, RcSubscription>,
+  site: string,
+): string {
+  return `[ ](${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}) `;
 }
 
 /**
@@ -358,15 +380,18 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const focused = state.activeRid === rid && !document.hidden;
   // 关闭「当前会话不打扰」时，正在看的会话也会弹通知
   if (focused && (prefs.muteFocusedConversations ?? true)) return;
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
-  const n = new Notification(title, { body: body.slice(0, 120), tag: msg._id });
-  n.onclick = () => {
-    window.focus();
-    void useChat.getState().openRoom(rid);
-    n.close();
-  };
+  // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
+  void desktopNotify({
+    title,
+    body: body.slice(0, 120),
+    tag: msg._id,
+    onClick: () => {
+      window.focus();
+      void useChat.getState().openRoom(rid);
+    },
+  });
 }
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -391,6 +416,21 @@ export const useChat = create<ChatState>((set, get) => ({
   readReceipts: {},
   slashCommands: [],
   roomRoles: {},
+  userStatus: {},
+
+  seedUserStatus: (users) => {
+    const cur = get().userStatus;
+    const next = { ...cur };
+    let changed = false;
+    for (const u of users) {
+      // 只播种、不覆盖已有值：实时流的值比列表快照新
+      if (u._id && u.status && !(u._id in cur)) {
+        next[u._id] = u.status;
+        changed = true;
+      }
+    }
+    if (changed) set({ userStatus: next });
+  },
 
   init: async () => {
     const auth = loadStoredAuth();
@@ -427,6 +467,31 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
     realtime.clearStreamHandlers();
+    // 重连成功后补数据：DDP 的 stream 是纯 live 推送、服务端不回放，只重订阅收不到
+    // 断线期间产生的消息（P0-2）。这里刷新会话列表/未读，并补拉当前房间的新消息。
+    const backfillAfterReconnect = async () => {
+      try {
+        const [subs2, rooms2] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
+        const subMap2: Record<string, RcSubscription> = {};
+        for (const s of subs2) subMap2[s.rid] = s;
+        const roomMap2: Record<string, RcRoom> = {};
+        for (const r of rooms2) roomMap2[r._id] = r;
+        set({ subscriptions: subMap2, rooms: roomMap2 });
+
+        const rid = get().activeRid;
+        if (rid && get().historyLoaded[rid]) {
+          const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
+          const latest = await rest.getHistory(rid, type, HISTORY_PAGE);
+          let merged = [...(get().messages[rid] ?? [])];
+          for (const m of latest) merged = upsertMessage(merged, m);
+          merged.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+          set({ messages: { ...get().messages, [rid]: merged } });
+        }
+      } catch {
+        /* 补拉失败：下次重连或用户手动切房间时再补 */
+      }
+    };
+
     // 断线/恢复给出可见提示（顶部横幅 + toast 各司其职：横幅表状态，toast 表变化）
     let offlineToastId: string | null = null;
     realtime.onStatus = (s) => {
@@ -441,6 +506,10 @@ export const useChat = create<ChatState>((set, get) => ({
       } else if (s === 'connected' && offlineToastId) {
         toast.update(offlineToastId, { kind: 'success', message: '已重新连接' });
         offlineToastId = null;
+      }
+      // 从重连态恢复 → 补断线期间漏掉的数据
+      if (s === 'connected' && prev === 'reconnecting') {
+        void backfillAfterReconnect();
       }
     };
     await realtime.connect();
@@ -516,6 +585,28 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     realtime.subscribe('stream-notify-user', `${auth.userId}/rooms-changed`);
     realtime.subscribe('stream-notify-user', `${auth.userId}/subscriptions-changed`);
+
+    // 其他人的在线状态：RC 在有人状态变化时广播 [userId, username, statusNum, statusText]
+    // statusNum：0=离线 1=在线 2=离开 3=忙。只推变化，初值由通讯录/成员列表播种。
+    realtime.onStream('stream-notify-logged', (eventName, args) => {
+      if (eventName !== 'user-status') return;
+      // args 可能是单个元组，也可能是一批元组，统一成数组处理
+      const tuples = (Array.isArray(args[0]) ? args : [args]) as unknown[][];
+      const cur = get().userStatus;
+      const next = { ...cur };
+      let changed = false;
+      for (const t of tuples) {
+        const uid = t[0] as string;
+        const num = t[2] as number;
+        const status = STATUS_BY_NUM[num] ?? 'offline';
+        if (uid && next[uid] !== status) {
+          next[uid] = status;
+          changed = true;
+        }
+      }
+      if (changed) set({ userStatus: next });
+    });
+    realtime.subscribe('stream-notify-logged', 'user-status');
   },
 
   openRoom: async (rid) => {
@@ -606,9 +697,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const me = useAuth.getState().user;
     if (!rid || !trimmed || !me) return;
 
-    // 引用回复：文本前缀消息链接，服务端展开为引用附件
+    // 引用回复：文本前缀消息链接，服务端展开为引用附件。
+    // 必须 await 到服务端真正的 Site_Url——缓存没热时 siteUrlSync 会回退到
+    // getServerBase()，与服务端 Site_Url 不一致就不展开（issue #9）。
     const fullText = opts?.quote
-      ? quoteLinkPrefix(opts.quote, get().subscriptions) + trimmed
+      ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + trimmed
       : trimmed;
 
     // 乐观上屏：秒回显，pending 状态等服务器确认

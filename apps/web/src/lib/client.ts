@@ -182,10 +182,18 @@ export function installContextMenuGuard(): void {
   });
 }
 
+// 会话失效（token 被吊销 / 过期）时的处理器。由 auth store 注册，避免 client ←→ auth
+// 的循环 import。REST 401 与实时 login 失败都汇到这里，统一登出回登录页。
+let authLostHandler: (() => void) | null = null;
+export function setAuthLostHandler(fn: () => void): void {
+  authLostHandler = fn;
+}
+
 // 认证从 localStorage 实时读取（authProvider），不依赖登录时序。
 export const rest = new RcRestClient({
   baseUrl: getServerBase(),
   authProvider: loadStoredAuth,
   fetchImpl: isTauri ? httpFetch : undefined,
+  onAuthError: () => authLostHandler?.(),
 });
 export const realtime = new RcRealtimeClient(wsUrlFor(getServerBase()));

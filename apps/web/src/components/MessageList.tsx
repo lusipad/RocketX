@@ -123,6 +123,10 @@ export default function MessageList({ rid }: { rid: string }) {
   /**
    * 图片/附件是异步加载的，撑开高度发生在渲染之后。
    * 监听容器尺寸变化，在贴底状态下补偿滚动，否则会「停在半空」。
+   *
+   * 依赖必须带 historyLoaded：首次打开会话时渲染的是骨架屏（scrollRef 为 null），
+   * 此时 effect 早退；等 historyLoaded 翻 true、真容器才挂出来。只依赖 [rid] 的话
+   * rid 没变、effect 不重跑，观察器永远挂不上，带图会话就停在半空不到底（issue #8）。
    */
   useEffect(() => {
     const el = scrollRef.current;
@@ -134,7 +138,7 @@ export default function MessageList({ rid }: { rid: string }) {
     const content = el.firstElementChild;
     if (content) ro.observe(content);
     return () => ro.disconnect();
-  }, [rid]);
+  }, [rid, historyLoaded]);
 
   // 首次加载：骨架屏，避免闪一下「暂无消息」
   if (!historyLoaded && list.length === 0) {

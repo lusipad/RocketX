@@ -57,6 +57,11 @@ export interface RcRestOptions {
    * 走 Rust 通道绕开 webview CORS；缺省用全局 fetch。
    */
   fetchImpl?: typeof fetch;
+  /**
+   * 收到 401（未认证）时的回调。token 被吊销 / 过期后，界面本会停在已登录态、
+   * 所有操作静默 401，用户以为是网络问题反复重试。上层据此登出回登录页。
+   */
+  onAuthError?: () => void;
 }
 
 /**
@@ -69,11 +74,13 @@ export class RcRestClient {
   userId: string | null = null;
   private authProvider?: RcRestOptions['authProvider'];
   private fetchImpl?: typeof fetch;
+  private onAuthError?: () => void;
 
   constructor(options: RcRestOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
     this.authProvider = options.authProvider;
     this.fetchImpl = options.fetchImpl;
+    this.onAuthError = options.onAuthError;
   }
 
   setAuth(authToken: string | null, userId: string | null): void {
@@ -121,6 +128,11 @@ export class RcRestClient {
       /* 空响应体 */
     }
     if (!res.ok) {
+      // 已带 token 的请求收到 401 = token 失效（排除 login 本身：密码错也是 401）。
+      // 通知上层登出，避免「能收消息但一操作就静默 401」的僵尸态。
+      if (res.status === 401 && auth && path !== 'login') {
+        this.onAuthError?.();
+      }
       throw new RcApiError(
         data?.error ?? data?.message ?? `HTTP ${res.status}`,
         res.status,

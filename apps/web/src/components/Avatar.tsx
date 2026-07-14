@@ -13,16 +13,26 @@ function colorFor(name: string): string {
  * 头像：优先加载 Rocket.Chat 头像（用户 /avatar/:username，房间 /avatar/room/:rid），
  * 失败时回退为飞书风格的彩色首字圆角块。
  */
+/** 在线状态点的颜色（online 绿 / away 黄 / busy 红 / offline 不显示） */
+const STATUS_COLOR: Record<string, string> = {
+  online: '#00b96b',
+  away: '#ff8800',
+  busy: '#f54a45',
+};
+
 export default function Avatar({
   name,
   username,
   roomId,
   size = 40,
+  status,
 }: {
   name: string;
   username?: string;
   roomId?: string;
   size?: number;
+  /** 在线状态：传了且非 offline 时右下角显示彩色圆点 */
+  status?: string;
 }) {
   /**
    * 换过头像就带上版本号，否则 URL 没变、浏览器直接给缓存，新头像永远不显示。
@@ -56,8 +66,19 @@ export default function Avatar({
     </div>
   );
 
-  if (!path) return letterTile;
-  return (
+  const dotColor = status ? STATUS_COLOR[status] : undefined;
+  const dotSize = Math.max(8, Math.round(size * 0.28));
+  const dot = dotColor ? (
+    <span
+      className="absolute right-0 bottom-0 rounded-full border-2 border-surface-4"
+      style={{ width: dotSize, height: dotSize, background: dotColor }}
+      title={status === 'away' ? '离开' : status === 'busy' ? '忙碌' : '在线'}
+    />
+  ) : null;
+
+  const inner = !path ? (
+    letterTile
+  ) : (
     <AuthImage
       path={path}
       alt={name}
@@ -65,5 +86,14 @@ export default function Avatar({
       style={style}
       fallback={letterTile}
     />
+  );
+
+  // 没有状态点时不套额外容器，保持原有布局不变
+  if (!dot) return inner;
+  return (
+    <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+      {inner}
+      {dot}
+    </span>
   );
 }
