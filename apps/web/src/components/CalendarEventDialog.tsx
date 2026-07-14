@@ -293,7 +293,12 @@ export default function CalendarEventDialog({
                       type="number"
                       min={1}
                       value={repeatEndAfter ?? ''}
-                      onChange={(e) => setRepeatEndAfter(e.target.value ? Number(e.target.value) : undefined)}
+                      onChange={(e) => {
+                        // 小于 1(含 0、空)一律当「不限」——之前填 0 会存成 endAfter:0，
+                        // 匹配逻辑里每一天都不成立，日程创建后凭空消失（P1-12）
+                        const n = Number(e.target.value);
+                        setRepeatEndAfter(Number.isFinite(n) && n >= 1 ? n : undefined);
+                      }}
                       placeholder="不限"
                       className="h-8 w-full rounded-md border border-line bg-surface-3 px-2 text-sm text-ink outline-none"
                     />

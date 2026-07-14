@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
+import { personName, useAliases } from '../stores/aliases';
 import { humanError } from '../stores/toast';
 import {
   ROLE_LABELS,
@@ -239,6 +240,8 @@ export default function MembersPanel() {
   const muted = useChat((s) => (s.activeRid ? s.rooms[s.activeRid]?.muted : undefined));
   const seedUserStatus = useChat((s) => s.seedUserStatus);
   const userStatus = useChat((s) => s.userStatus);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const me = useAuth((s) => s.user);
   // 多人聊天在 RC 里也是 t='d'，它没有频道那套管理能力（踢人/角色/禁言全是 400）
   const type = useChat((s) =>
@@ -275,22 +278,29 @@ export default function MembersPanel() {
       .then((list) => {
         setMembers(list);
         seedUserStatus(list);
-        if (list.length === 0) setError(null);
+        // loadMembers 内部吞了异常返回 []，靠 store 的 memberErrors 区分「失败」与「真没人」
+        if (list.length === 0) {
+          const err = useChat.getState().memberErrors[rid];
+          setError(err ?? null);
+        }
       })
-      .catch((err: unknown) => setError(humanError(err, '无法获取成员列表')))
       .finally(() => setLoading(false));
-  }, [rid, cachedMembers, loadMembers]);
+  }, [rid, cachedMembers, loadMembers, seedUserStatus]);
 
   const filtered = useMemo(() => {
     const q = keyword.toLowerCase();
     const list = q
       ? members.filter(
-          (m) => m.username.toLowerCase().includes(q) || (m.name ?? '').toLowerCase().includes(q),
+          (m) =>
+            m.username.toLowerCase().includes(q) ||
+            (m.name ?? '').toLowerCase().includes(q) ||
+            // 起了备注就按备注也能搜到（否则搜自己起的名字反而搜不到）
+            (aliases[`u:${m.username}`] ?? '').toLowerCase().includes(q),
         )
       : members;
     // 群主排最前：一屏看不完的大群里，谁说了算得一眼看到
     return sortMembers(list, roomRoles);
-  }, [members, keyword, roomRoles]);
+  }, [members, keyword, roomRoles, aliases]);
 
   return (
     <PanelShell title={`群成员${members.length ? `（${members.length}）` : ''}`}>
@@ -327,6 +337,7 @@ export default function MembersPanel() {
           filtered.map((m) => {
             const roles = rolesOf(roomRoles, m._id);
             const manageable = !!rid && canActOn(me, m, roomRoles, type);
+            const mName = personName(aliases, m.username, m.name || m.username, nameFormat);
             return (
               <div
                 key={m._id}
@@ -334,14 +345,14 @@ export default function MembersPanel() {
                 className="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-fill-hover"
               >
                 <Avatar
-                  name={m.name || m.username}
+                  name={mName}
                   username={m.username}
                   size={32}
-                  status={userStatus[m._id] ?? m.status}
+                  status={userStatus[m.username] ?? m.status}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="truncate text-sm text-ink">{m.name || m.username}</span>
+                    <span className="truncate text-sm text-ink">{mName}</span>
                     {roles[0] && (
                       <span className="shrink-0 rounded bg-primary-light px-1 py-px text-2xs text-primary">
                         {ROLE_LABELS[roles[0]]}

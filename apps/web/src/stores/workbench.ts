@@ -233,3 +233,8 @@ export function isApproved(pr: PullRequest): boolean {
   const voted = pr.reviewers.filter((r) => r.vote !== 0);
   return voted.length > 0 && voted.every((r) => r.vote >= 5);
 }
+
+/** 工作项是否已完成（已解决/已关闭/已移除）——已完成的不算逾期，也不进待处理队列 */
+export function isWorkItemDone(state: string): boolean {
+  return ['resolved', 'closed', 'done', 'completed', 'removed'].includes(state.toLowerCase());
+}

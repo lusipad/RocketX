@@ -32,11 +32,14 @@ interface UIState {
   switcherOpen: boolean;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
+  /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
+  workItemStateFilter: string;
   setModule: (m: ModuleKey) => void;
   setConvFilter: (f: ConvFilter) => void;
   setActiveFolder: (id: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
+  setWorkItemStateFilter: (s: string) => void;
 }
 
 export const useUI = create<UIState>((set) => ({
@@ -45,9 +48,11 @@ export const useUI = create<UIState>((set) => ({
   activeFolder: null,
   switcherOpen: false,
   workbenchTab: 'overview',
+  workItemStateFilter: '全部',
   setModule: (m) => set({ module: m }),
   setConvFilter: (f) => set({ convFilter: f, activeFolder: null }),
   setActiveFolder: (id) => set({ activeFolder: id }),
   setSwitcherOpen: (open) => set({ switcherOpen: open }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
+  setWorkItemStateFilter: (s) => set({ workItemStateFilter: s }),
 }));

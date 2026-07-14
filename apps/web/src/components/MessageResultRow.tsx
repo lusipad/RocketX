@@ -1,6 +1,7 @@
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { useChat, stripQuotePrefix } from '../stores/chat';
 import { fmtConvTime } from '../lib/format';
+import { highlightText } from '../lib/highlight';
 import Avatar from './Avatar';
 
 /**
@@ -20,20 +21,6 @@ export default function MessageResultRow({
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const text = stripQuotePrefix(message.msg ?? '') || message.attachments?.[0]?.title || '[卡片消息]';
 
-  const renderText = () => {
-    const q = highlight?.trim();
-    if (!q) return text;
-    const idx = text.toLowerCase().indexOf(q.toLowerCase());
-    if (idx < 0) return text;
-    return (
-      <>
-        {text.slice(0, idx)}
-        <mark className="rounded bg-warning/30 px-0.5 text-ink">{text.slice(idx, idx + q.length)}</mark>
-        {text.slice(idx + q.length)}
-      </>
-    );
-  };
-
   return (
     <div className="group relative mb-2 rounded-lg border border-line transition hover:border-primary">
       <button
@@ -48,7 +35,9 @@ export default function MessageResultRow({
           </span>
           <span className="text-xs text-ink-3">{fmtConvTime(tsMs(message.ts))}</span>
         </div>
-        <div className="mt-1.5 line-clamp-3 text-sm break-words text-ink-2">{renderText()}</div>
+        <div className="mt-1.5 line-clamp-3 text-sm break-words text-ink-2">
+          {highlightText(text, highlight)}
+        </div>
       </button>
       {action && (
         <div className="absolute top-2.5 right-2.5 hidden group-hover:block">{action}</div>

@@ -33,6 +33,20 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * 含中日韩字符、且用户没手动包 /.../ 的查询，自动包成正则，绕开服务端未开
+ * Message_AlwaysSearchRegExp 时中文子串搜不到的问题。纯 ASCII 查询保持原样，
+ * 不改变英文搜索行为。
+ */
+function wrapCjkAsRegex(text: string): string {
+  const t = text.trim();
+  if (!t) return text;
+  const hasCjk = /[一-鿿぀-ヿ가-힯]/.test(t);
+  const alreadyRegex = /^\/.*\/$/.test(t);
+  if (!hasCjk || alreadyRegex) return text;
+  return `/${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`;
+}
+
 export class RcApiError extends Error {
   constructor(
     message: string,
@@ -322,14 +336,22 @@ export class RcRestClient {
    * 成员目录：directory → users.list → spotlight 三级回退。
    * 不同服务器/权限配置下总能拿到可用的成员列表。
    */
-  async searchUsers(text = '', count = 100): Promise<{ users: RcUser[]; total: number; via: string }> {
+  async searchUsers(
+    text = '',
+    count = 100,
+    offset = 0,
+  ): Promise<{ users: RcUser[]; total: number; via: string }> {
     const errors: string[] = [];
     try {
-      const { result, total } = await this.directory('users', text, count);
+      const { result, total } = await this.directory('users', text, count, offset);
       if (result.length > 0) return { users: result as RcUser[], total, via: 'directory' };
+      // directory 返回空且是翻页请求（offset>0）→ 说明已经到底，别再落到不支持翻页的
+      // listUsers/spotlight，否则它们会把第 0 页原样再返回，调用方翻页永远停不下来
+      if (offset > 0) return { users: [], total: 0, via: 'directory' };
       errors.push('directory 返回空');
     } catch (err) {
       errors.push(`directory: ${err instanceof Error ? err.message : err}`);
+      if (offset > 0) return { users: [], total: 0, via: 'directory' };
     }
     try {
       const { users, total } = await this.listUsers(count);
@@ -403,8 +425,15 @@ export class RcRestClient {
     });
   }
 
-  /** 发送完整消息对象（可带附件），转发消息时用 */
+  /**
+   * 发送完整消息对象（可带附件），转发消息时用。
+   *
+   * `_id` 可由客户端生成（RC 官方客户端就是这么做的，实测 8.6.1 接受且同 id
+   * 重发不会落库第二条）——乐观消息、WS 回声、REST 响应三者同 id 才能天然合并，
+   * 否则回声先到时同一条消息会显示两遍，超时重试还会真的发出第二条。
+   */
   async sendMessageRaw(message: {
+    _id?: string;
     rid: string;
     msg?: string;
     attachments?: RcMessageAttachment[];
@@ -834,7 +863,9 @@ export class RcRestClient {
   async searchMessages(rid: string, searchText: string, count = 30): Promise<RcMessage[]> {
     const res = await this.request<{ messages: RcMessage[] }>('GET', 'chat.search', undefined, {
       roomId: rid,
-      searchText,
+      // 中文子串：服务端 Message_AlwaysSearchRegExp=false 时 Mongo 文本索引不切分中文，
+      // 直接搜「工作项」搜不到；手动包成 /工作项/ 走正则才命中。用户已经手包 /.../ 的不动。
+      searchText: wrapCjkAsRegex(searchText),
       count,
     });
     return res.messages ?? [];

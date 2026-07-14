@@ -203,7 +203,8 @@ export class AdoClient {
         try {
           const res = await this.request<{ value: any[] }>(
             'GET',
-            `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&api-version=7.0`,
+            // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
+            `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
           );
           return res.value ?? [];
         } catch {
@@ -232,12 +233,19 @@ export class AdoClient {
   }
 
   /** 集合内全部活跃 PR（客户端按创建人/评审人过滤） */
-  async getActivePullRequests(top = 100): Promise<AdoPullRequest[]> {
-    const res = await this.request<{ value: any[] }>(
-      'GET',
-      `/_apis/git/pullrequests?searchCriteria.status=active&$top=${top}&api-version=7.0`,
-    );
-    return (res.value ?? []).map((pr) => {
+  async getActivePullRequests(pageSize = 100): Promise<AdoPullRequest[]> {
+    // 单页最多 100 条，$skip 翻页拉全，否则超过 100 个活跃 PR 时会漏（issue #17.2）
+    const all: any[] = [];
+    for (let skip = 0; skip < 2000; skip += pageSize) {
+      const res = await this.request<{ value: any[] }>(
+        'GET',
+        `/_apis/git/pullrequests?searchCriteria.status=active&$top=${pageSize}&$skip=${skip}&api-version=7.0`,
+      );
+      const page = res.value ?? [];
+      all.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return all.map((pr) => {
       const project = pr.repository?.project?.name ?? '';
       const repo = pr.repository?.name ?? '';
       return {

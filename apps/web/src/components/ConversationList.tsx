@@ -92,10 +92,16 @@ function ConversationItem({
   const [dragging, setDragging] = useState(false);
   const [aliasOpen, setAliasOpen] = useState(false);
 
+  // 单聊显示对方在线状态：DM 的对方用户名就是 avatarUsername，按用户名查状态
+  const peerStatus = useChat((s) =>
+    conv.avatarUsername ? s.userStatus[conv.avatarUsername] : undefined,
+  );
+
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const setRoomAlias = useAliases((s) => s.setRoomAlias);
-  const shownName = displayName(aliases, conv);
+  const shownName = displayName(aliases, conv, nameFormat);
   // 单聊的备注跟着「人」走（在通讯录改了这里也变）；其余会话的备注跟着会话走
   const aliasIsUser = !!conv.avatarUsername;
   const currentAlias = aliasIsUser
@@ -147,6 +153,7 @@ function ConversationItem({
   const padY = viewMode === 'condensed' ? 'py-1' : 'py-2';
 
   return (
+    <>
     <button
       draggable
       onDragStart={(e) => {
@@ -167,7 +174,12 @@ function ConversationItem({
     >
       {showAvatar && (
         <div className="relative shrink-0">
-          <Avatar name={shownName} username={conv.avatarUsername} size={avatarSize} />
+          <Avatar
+            name={shownName}
+            username={conv.avatarUsername}
+            size={avatarSize}
+            status={peerStatus}
+          />
           {conv.unread > 0 ? (
             <span
               className={`absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-surface-2 px-1 text-2xs font-medium text-white ${
@@ -242,6 +254,9 @@ function ConversationItem({
           </div>
         )}
       </div>
+    </button>
+      {/* 弹窗移到 button 外：React 事件沿组件树冒泡，放里面点弹窗任意处都会触发
+          外层会话按钮的 onClick（切会话+标已读），还有 button 套 button 的非法嵌套（P1-15） */}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
@@ -258,7 +273,7 @@ function ConversationItem({
           onClose={() => setAliasOpen(false)}
         />
       )}
-    </button>
+    </>
   );
 }
 

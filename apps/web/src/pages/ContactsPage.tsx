@@ -33,23 +33,43 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 首屏花名册：拼音检索只能在本地做（服务端不认 zhangsan/zs），所以先取一页兜底
+  // 首屏花名册：拼音检索只能在本地做（服务端不认 zhangsan/zs），所以要把人全拉下来。
+  // 之前只拉前 100 个，人多了后面的既搜不到也看不到（issue #18.7）——改成翻页拉全。
   useEffect(() => {
-    // directory → users.list → spotlight 三级回退，失败时把原因显示出来
-    rest
-      .searchUsers('', 100)
-      .then(({ users, total }) => {
-        setRoster(users);
-        setTotal(total);
+    let cancelled = false;
+    const PAGE = 100;
+    const MAX = 5000; // 安全上限，避免超大目录把内存拉爆
+    (async () => {
+      try {
+        const first = await rest.searchUsers('', PAGE, 0);
+        if (cancelled) return;
+        setTotal(first.total);
         setError(null);
-        seedUserStatus(users); // 用列表快照播种在线状态,之后靠实时流更新
-      })
-      .catch((err: unknown) => {
+        const acc = [...first.users];
+        setRoster(acc);
+        seedUserStatus(first.users);
+        setLoading(false);
+        // directory 才支持翻页；命中它且还有更多就继续拉
+        if (first.via === 'directory') {
+          for (let offset = PAGE; offset < Math.min(first.total, MAX); offset += PAGE) {
+            const page = await rest.searchUsers('', PAGE, offset);
+            if (cancelled || page.users.length === 0) break;
+            acc.push(...page.users);
+            setRoster([...acc]);
+            seedUserStatus(page.users);
+          }
+        }
+      } catch (err: unknown) {
+        if (cancelled) return;
         setRoster([]);
         setTotal(0);
         setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => setLoading(false));
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 关键词走服务端（能翻出首屏之外的人），与本地拼音结果合并
@@ -161,7 +181,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                   name={alias || real}
                   username={u.username}
                   size={36}
-                  status={userStatus[u._id] ?? u.status}
+                  status={userStatus[u.username] ?? u.status}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink">

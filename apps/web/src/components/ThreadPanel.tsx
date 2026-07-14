@@ -19,6 +19,7 @@ export default function ThreadPanel() {
   const emitTyping = useChat((s) => s.emitTyping);
   const myId = useAuth((s) => s.user?._id);
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
+  const prefsLoaded = usePrefs((s) => s.loaded);
 
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);
@@ -76,8 +77,10 @@ export default function ThreadPanel() {
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    // 偏好未加载完先按保守规则（Ctrl+Enter 才发），避免默认 Enter 发送把半句发出去（P1-6）
+    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
     const shouldSend =
-      sendOnEnter === 'alternative'
+      effectiveMode === 'alternative'
         ? e.ctrlKey || e.metaKey
         : !e.shiftKey && !e.ctrlKey && !e.metaKey;
     if (shouldSend) {

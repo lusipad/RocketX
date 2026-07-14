@@ -90,74 +90,91 @@ function layout(events: CalendarEvent[]): { timed: Positioned[]; allDay: Calenda
   return { timed, allDay };
 }
 
-function DayColumn({
+/** 全天行里的一天格子：该天的全天事件 + 当天到期的待办。跨列独立一行，各列宽度对齐 */
+function AllDayCell({
   date,
   events,
   todos,
+  onPick,
+}: {
+  date: Date;
+  events: CalendarEvent[];
+  todos: Todo[];
+  onPick: (e: CalendarEvent) => void;
+}) {
+  const key = dateKey(date);
+  const toggleDone = useCalendar((s) => s.toggleDone);
+  const dayEvents = useMemo(() => eventsForDate(events, key), [events, key]);
+  const { allDay } = useMemo(() => layout(dayEvents), [dayEvents]);
+  const dayTodos = useMemo(() => todos.filter((t) => t.due === key && !t.done), [todos, key]);
+
+  return (
+    <div className="min-w-0 flex-1 space-y-0.5 border-r border-line p-1 last:border-r-0">
+      {allDay.map((e) => {
+        const done = isEventDone(e, key);
+        return (
+          <button
+            key={e.id}
+            onClick={() => onPick(e)}
+            className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-2xs text-white transition ${
+              done ? 'opacity-50' : ''
+            }`}
+            style={{ background: e.color }}
+          >
+            <span
+              role="checkbox"
+              aria-checked={done}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                toggleDone(e.id, key);
+              }}
+              className="flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
+              title={done ? '标记为未完成' : '标记完成'}
+            >
+              {done && <Check size={9} strokeWidth={3} />}
+            </span>
+            <span className={`min-w-0 flex-1 truncate ${done ? 'line-through' : ''}`}>
+              {e.title}
+            </span>
+          </button>
+        );
+      })}
+      {dayTodos.map((t) => (
+        <div
+          key={t.id}
+          className={`truncate rounded px-1.5 py-0.5 text-2xs ${
+            isOverdue(t) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
+          }`}
+          title="来自待办"
+        >
+          ☑ {t.note || t.excerpt}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DayColumn({
+  date,
+  events,
   onPick,
   onCreate,
 }: {
   date: Date;
   events: CalendarEvent[];
-  todos: Todo[];
   onPick: (e: CalendarEvent) => void;
   onCreate: (date: string, hour: number) => void;
 }) {
   const key = dateKey(date);
   const toggleDone = useCalendar((s) => s.toggleDone);
   const dayEvents = useMemo(() => eventsForDate(events, key), [events, key]);
-  const { timed, allDay } = useMemo(() => layout(dayEvents), [dayEvents]);
-  const dayTodos = useMemo(() => todos.filter((t) => t.due === key && !t.done), [todos, key]);
+  // 全天事件已移到跨列的独立一行（AllDayRow），这里只画有时间点的日程，
+  // 各列时间轴才能从同一 Y 起，不再被各自的全天区顶得高低不齐（P1-13）
+  const { timed } = useMemo(() => layout(dayEvents), [dayEvents]);
   const today = dateKey(new Date());
 
   return (
     <div className="relative flex-1 border-r border-line last:border-r-0">
-      {/* 全天事件与待办：钉在顶部，不参与时间轴 */}
-      {(allDay.length > 0 || dayTodos.length > 0) && (
-        <div className="space-y-0.5 border-b border-line bg-fill-1 p-1">
-          {allDay.map((e) => {
-            const done = isEventDone(e, key);
-            return (
-              <button
-                key={e.id}
-                onClick={() => onPick(e)}
-                className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-2xs text-white transition ${
-                  done ? 'opacity-50' : ''
-                }`}
-                style={{ background: e.color }}
-              >
-                <span
-                  role="checkbox"
-                  aria-checked={done}
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    toggleDone(e.id, key);
-                  }}
-                  className="flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
-                  title={done ? '标记为未完成' : '标记完成'}
-                >
-                  {done && <Check size={9} strokeWidth={3} />}
-                </span>
-                <span className={`min-w-0 flex-1 truncate ${done ? 'line-through' : ''}`}>
-                  {e.title}
-                </span>
-              </button>
-            );
-          })}
-          {dayTodos.map((t) => (
-            <div
-              key={t.id}
-              className={`truncate rounded px-1.5 py-0.5 text-2xs ${
-                isOverdue(t) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
-              }`}
-              title="来自待办"
-            >
-              ☑ {t.note || t.excerpt}
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* 时间轴：每小时一格，点空白直接建日程 */}
       <div className="relative" style={{ height: (END_HOUR - START_HOUR) * HOUR_HEIGHT }}>
         {Array.from({ length: END_HOUR - START_HOUR }, (_, i) => (
@@ -255,6 +272,19 @@ export default function TimeGrid({
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = dateKey(new Date());
 
+  // 有没有全天事件/当天待办 —— 有才显示全天行，没有就不占地方
+  const hasAllDay = useMemo(
+    () =>
+      days.some((d) => {
+        const k = dateKey(d);
+        return (
+          eventsForDate(events, k).some((e) => e.allDay) ||
+          todos.some((t) => t.due === k && !t.done)
+        );
+      }),
+    [days, events, todos],
+  );
+
   // 打开时滚到早上 8 点：默认停在 0 点的话，一屏全是凌晨
   useEffect(() => {
     const el = scrollRef.current;
@@ -282,10 +312,31 @@ export default function TimeGrid({
         })}
       </div>
 
+      {/* 全天行：跨所有列独立一行（P1-13）。之前全天区在每列内部、高度不定，把各列时间轴
+          顶得高低不齐、也对不上左侧刻度。抽成一行后所有列时间轴从同一 Y 起、与刻度对齐。 */}
+      {hasAllDay && (
+        <div className="flex shrink-0 border-b border-line bg-fill-1">
+          <div className="flex w-12 shrink-0 items-center justify-end pr-1 text-2xs text-ink-3">
+            全天
+          </div>
+          <div className="flex flex-1">
+            {days.map((d) => (
+              <AllDayCell
+                key={dateKey(d)}
+                date={d}
+                events={events}
+                todos={todos}
+                onPick={onPick}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div ref={scrollRef} className="flex min-h-0 flex-1 overflow-y-auto">
         {/* 小时刻度 */}
         <div className="w-12 shrink-0">
-          {/* 与列内的全天区对齐：全天区高度不定，这里用 sticky 的相对定位躲开 */}
+          {/* 全天区已抽成滚动区之上的独立一行，刻度栏和各列时间轴都从这里的顶部起，天然对齐 */}
           <div style={{ height: (END_HOUR - START_HOUR) * HOUR_HEIGHT }} className="relative">
             {Array.from({ length: END_HOUR - START_HOUR }, (_, i) => (
               <div
@@ -305,7 +356,6 @@ export default function TimeGrid({
               key={dateKey(d)}
               date={d}
               events={events}
-              todos={todos}
               onPick={onPick}
               onCreate={onCreate}
             />

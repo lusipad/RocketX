@@ -22,6 +22,7 @@ import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { useAliases } from '../stores/aliases';
 import { useWorkbench } from '../stores/workbench';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
@@ -91,7 +92,10 @@ function AccountSection() {
     const prev = status;
     setStatus(next);
     try {
-      await rest.setStatus(next, text ?? statusText);
+      // 只传显式给的 text：切在线状态（按钮）时 text 为 undefined，rest 不发 message 字段，
+      // 服务器保留原有状态消息；之前用 `text ?? statusText` 会把空输入框的 '' 发出去，
+      // 无声清掉用户写的「开会中」（P1-14）。只有点文案保存按钮才带上 message。
+      await rest.setStatus(next, text);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -372,6 +376,8 @@ function AppearanceSection() {
 function SidebarSection() {
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
+  const nameFormat = useAliases((s) => s.nameFormat);
+  const setNameFormat = useAliases((s) => s.setNameFormat);
 
   return (
     <>
@@ -394,6 +400,17 @@ function SidebarSection() {
           options={[
             { key: 'activity', label: '按活跃时间' },
             { key: 'alphabetical', label: '按名称' },
+          ]}
+        />
+      </Row>
+
+      <Row label="备注名显示" hint="给联系人起了备注后，名字怎么显示（本机设置，不跨设备）">
+        <RadioGroup
+          value={nameFormat}
+          onChange={(v) => setNameFormat(v)}
+          options={[
+            { key: 'alias', label: '只显示备注名' },
+            { key: 'aliasWithReal', label: '备注名（原名）' },
           ]}
         />
       </Row>

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
 import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
+import { ensureAccountScope } from '../lib/accountScope';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -81,6 +82,11 @@ export const useAuth = create<AuthState>((set, get) => ({
       const data = await rest.loginWithToken(stored.authToken);
       // 重新写一遍认证信息，确保 rc_uid/rc_token cookie 就位（头像、文件下载要用）
       saveAuth({ authToken: data.authToken, userId: data.userId });
+      // 本地数据换主人了（换账号/首次升级）→ 搬移后重载，让各 store 重新加载
+      if (ensureAccountScope(data.userId) === 'switched') {
+        location.reload();
+        return;
+      }
       set({ status: 'authed', user: data.me, error: null });
     } catch {
       saveAuth(null);
@@ -93,6 +99,11 @@ export const useAuth = create<AuthState>((set, get) => ({
     try {
       const data = await rest.login(username, password);
       saveAuth({ authToken: data.authToken, userId: data.userId });
+      // 同一台机器换账号登录：先把上一个人的本地数据搬走、还原自己的,再重载
+      if (ensureAccountScope(data.userId) === 'switched') {
+        location.reload();
+        return;
+      }
       set({ status: 'authed', user: data.me, error: null });
     } catch (err) {
       // Tauri 插件可能抛字符串而非 Error，都要兜住

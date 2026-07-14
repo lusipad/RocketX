@@ -6,6 +6,7 @@ import { displayName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
 import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
+import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from './Avatar';
 
@@ -266,7 +267,9 @@ export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
                         {fmtConvTime(tsMs(m.ts))}
                       </span>
                     </span>
-                    <span className="line-clamp-2 text-sm break-words text-ink-2">{m.msg}</span>
+                    <span className="line-clamp-2 text-sm break-words text-ink-2">
+                      {highlightText(m.msg ?? '', keyword)}
+                    </span>
                   </span>
                 </button>
               ))}

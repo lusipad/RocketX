@@ -7,6 +7,7 @@ import { useAuth } from '../stores/auth';
 import { fmtDayDivider, sameDay, systemMessageText, useDayTick } from '../lib/format';
 import MessageItem from './MessageItem';
 import DiscussionCard from './DiscussionCard';
+import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
@@ -23,6 +24,11 @@ export default function MessageList({ rid }: { rid: string }) {
   const unreadMark = useChat((s) => s.unreadMarkTs[rid]);
   const showThreadsInMain = usePrefs((s) => s.prefs.showThreadsInMainChannel);
   const myId = useAuth((s) => s.user?._id);
+  // 多选合并转发（issue #16）
+  const selectMode = useChat((s) => s.selectMode);
+  const selectedMids = useChat((s) => s.selectedMids);
+  const exitSelectMode = useChat((s) => s.exitSelectMode);
+  const [forwardOpen, setForwardOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
@@ -149,9 +155,32 @@ export default function MessageList({ rid }: { rid: string }) {
     );
   }
 
+  const selectedMessages = list.filter((m) => selectedMids.has(m._id));
+
   return (
-    <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto px-6 py-4">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* 多选操作栏（issue #16 合并转发） */}
+      {selectMode && (
+        <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1 px-4 py-2">
+          <span className="text-sm text-ink-2">已选 {selectedMids.size} 条</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setForwardOpen(true)}
+              disabled={selectedMids.size === 0}
+              className="h-7 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
+            >
+              合并转发
+            </button>
+            <button
+              onClick={exitSelectMode}
+              className="h-7 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div>
           {hasMore && (
             <div className="py-2 text-center text-xs text-ink-3">
@@ -242,6 +271,16 @@ export default function MessageList({ rid }: { rid: string }) {
             <span className="text-xs font-medium">{newCount} 条新消息</span>
           )}
         </button>
+      )}
+
+      {forwardOpen && (
+        <ForwardDialog
+          messages={selectedMessages}
+          onClose={() => {
+            setForwardOpen(false);
+            exitSelectMode();
+          }}
+        />
       )}
     </div>
   );

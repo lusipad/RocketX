@@ -329,6 +329,23 @@ async function main(): Promise<void> {
     html('#128 已修复').slice(0, 80),
   );
   check('#general 不是标题（频道引用）', !html('#general 讨论一下').includes('<h1'));
+  // P2-b：结尾英文句号不该吞进 #工作项 token（否则认不出是工作项）
+  check(
+    '#123. 结尾句号不吞进工作项号',
+    html('修复了 #123. 完成').includes('#123'),
+    html('修复了 #123. 完成').slice(0, 100),
+  );
+  // P2-d：时间戳里的 :30: 不该被当成 emoji 短代码去发 /emoji-custom 请求
+  check(
+    '时间戳 10:30:00 不被当 emoji',
+    !html('会议 10:30:00 开始').toLowerCase().includes('emoji-custom'),
+    html('会议 10:30:00 开始').slice(0, 100),
+  );
+  check(
+    '正常 emoji 短代码仍被识别（:smile: 被转成表情，不再是字面文本）',
+    !html('收到 :smile: 谢谢').includes(':smile:'),
+    html('收到 :smile: 谢谢').slice(0, 120),
+  );
   check('有序列表：1. → 渲染出序号', html('1. 第一步\n2. 第二步').includes('1.'));
   check(
     '任务列表：- [x] → 勾选的复选框',
@@ -544,6 +561,18 @@ async function main(): Promise<void> {
     q3[0]?.meta?.includes('逾期') === true,
     q3[0]?.meta ?? '',
   );
+  // issue #17.4：已解决的工作项即便过了截止日，也不该进队列、更不该标逾期
+  const wiResolvedOverdue = { ...wiOverdue, id: 11, state: 'Resolved', title: '早解决了' };
+  const q4 = buildQueue({
+    account: me,
+    today,
+    todos: [],
+    workItems: [wiResolvedOverdue],
+    prs: [],
+    builds: [],
+    events: [],
+  });
+  check('已解决工作项不进待处理队列（不被标逾期）', q4.length === 0, `${q4.length} 项`);
 
   console.log('\n[日历 · 标记完成]');
   const { isEventDone } = cal;

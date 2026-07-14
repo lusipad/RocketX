@@ -3,6 +3,7 @@ import { MessageCircle, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
+import { personName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
 
 const STATUS_TEXT: Record<string, string> = {
@@ -29,9 +30,13 @@ export default function UserCard({
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
   const me = useAuth((s) => s.user?.username);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isSelf = user.username === me;
+  // 备注名在个人卡片也要生效（issue #18.5）
+  const shownName = personName(aliases, user.username, user.name || user.username, nameFormat);
 
   const doDM = async () => {
     setBusy(true);
@@ -64,10 +69,10 @@ export default function UserCard({
         </div>
         <div className="-mt-8 px-5 pb-5">
           <div className="rounded-xl border-4 border-white" style={{ width: 'fit-content' }}>
-            <Avatar name={user.name || user.username} username={user.username} size={64} />
+            <Avatar name={shownName} username={user.username} size={64} status={user.status} />
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <span className="text-lg font-semibold text-ink">{user.name || user.username}</span>
+            <span className="text-lg font-semibold text-ink">{shownName}</span>
             {user.status && (
               <span className="flex items-center gap-1 text-xs text-ink-3">
                 <span

@@ -382,13 +382,21 @@ export async function directComment(
   );
 }
 
-export async function directGetPullRequests(cfg: DirectConfig, top = 100) {
-  const res = await adoRequest<{ value: any[] }>(
-    cfg,
-    'GET',
-    `/_apis/git/pullrequests?searchCriteria.status=active&$top=${top}&api-version=7.0`,
-  );
-  return (res.value ?? []).map((pr) => {
+export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
+  // 集合级端点单页最多 100 条、不自动返回全部。活跃 PR 超过 100 时用 $skip 翻页拉全，
+  // 否则排在 100 名之后的（含我相关的）会整个消失（issue #17.2）。
+  const all: any[] = [];
+  for (let skip = 0; skip < 2000; skip += pageSize) {
+    const res = await adoRequest<{ value: any[] }>(
+      cfg,
+      'GET',
+      `/_apis/git/pullrequests?searchCriteria.status=active&$top=${pageSize}&$skip=${skip}&api-version=7.0`,
+    );
+    const page = res.value ?? [];
+    all.push(...page);
+    if (page.length < pageSize) break; // 最后一页
+  }
+  return all.map((pr) => {
     const project = pr.repository?.project?.name ?? '';
     const repo = pr.repository?.name ?? '';
     return {
@@ -423,7 +431,9 @@ export async function directGetBuilds(cfg: DirectConfig, top = 15) {
         const res = await adoRequest<{ value: any[] }>(
           cfg,
           'GET',
-          `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&api-version=7.0`,
+          // queryOrder 按触发时间倒序，拿的才是「我最近触发的」；不加的话 ADO 默认
+          // 返回最旧的 N 条，$top=10 拿回的全是老古董（issue #17.3）
+          `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
         );
         return res.value ?? [];
       } catch {

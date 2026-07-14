@@ -15,6 +15,7 @@ import {
   Download,
   File as FileIcon,
   Image as ImageIcon,
+  ListChecks,
   ListTodo,
   Loader2,
   MessageSquareText,
@@ -230,6 +231,18 @@ function UrlPreviewCard({ url, meta }: { url: string; meta: Record<string, strin
   );
 }
 
+/**
+ * 附件的 title_link 转成安全的 href。相对路径走本站资源;绝对地址只放行 http/https,
+ * 其余(javascript:/data:/vbscript:…)一律不当链接 —— 这个字段来自服务端消息,
+ * 机器人/集成/被入侵的 App 都能通过 chat.postMessage 构造,是整个渲染层唯一
+ * 「外部数据直接进 href」的口子(markdown 渲染器已硬编码只认 https?://)。
+ */
+function safeTitleHref(link: string): string | null {
+  const t = link.trim();
+  if (t.startsWith('/')) return assetUrl(t);
+  return /^https?:\/\//i.test(t) ? t : null;
+}
+
 /** 附件卡片：ADO 集成等富文本消息载体 */
 function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: RcMessage }) {
   // 引用回复
@@ -261,18 +274,21 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
     >
       {att.author_name && <div className="mb-1 text-xs text-ink-3">{att.author_name}</div>}
       {att.title &&
-        (att.title_link ? (
-          <a
-            href={att.title_link.startsWith('/') ? assetUrl(att.title_link) : att.title_link}
-            target="_blank"
-            rel="noreferrer"
-            className="block text-sm font-medium text-primary hover:underline"
-          >
-            {att.title}
-          </a>
-        ) : (
-          <div className="text-sm font-medium text-ink">{att.title}</div>
-        ))}
+        (() => {
+          const href = att.title_link ? safeTitleHref(att.title_link) : null;
+          return href ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-sm font-medium text-primary hover:underline"
+            >
+              {att.title}
+            </a>
+          ) : (
+            <div className="text-sm font-medium text-ink">{att.title}</div>
+          );
+        })()}
       {att.text && (
         <div className="mt-1 text-sm whitespace-pre-wrap text-ink-2">
           <LinkifiedText text={att.text} />
@@ -393,6 +409,9 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
   );
 }
 
+/** 悬浮操作栏出现前的停留时长（ms）。调这个数字即可改「停多久才弹按钮」 */
+const HOVER_DELAY_MS = 500;
+
 type MessageItemProps = {
   message: RcMessage;
   mine: boolean;
@@ -414,6 +433,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const discardMessage = useChat((s) => s.discardMessage);
   const receipt = useChat((s) => s.readReceipts[message.rid]);
   const roomType = useChat((s) => s.subscriptions[message.rid]?.t);
+  const senderStatus = useChat((s) => s.userStatus[message.u.username]);
+  // 多选合并转发（issue #16）
+  const selectMode = useChat((s) => s.selectMode);
+  const selected = useChat((s) => s.selectedMids.has(message._id));
+  const enterSelectMode = useChat((s) => s.enterSelectMode);
+  const toggleSelectMid = useChat((s) => s.toggleSelectMid);
   const showAvatars = usePrefs((s) => s.prefs.displayAvatars);
   const highlighted = useChat((s) => s.highlightMid === message._id);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -433,6 +458,22 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
+
+  // 悬浮操作栏延迟出现：鼠标停留 HOVER_DELAY_MS 才显示，避免划过消息就闪一排按钮
+  // （issue #18.4）。离开立即收起。菜单/表情面板/编辑态打开时保持显示。
+  const [hoverActions, setHoverActions] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBarEnter = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHoverActions(true), HOVER_DELAY_MS);
+  };
+  const onBarLeave = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setHoverActions(false);
+  };
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
 
   const inTodo = useTodos((s) => s.todos.some((t) => t.mid === message._id && !t.done));
   const setModule = useUI((s) => s.setModule);
@@ -476,6 +517,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         ]
       : []),
     { label: '转发', icon: Share2, onClick: () => setForwarding(true) },
+    { label: '多选', icon: ListChecks, onClick: () => enterSelectMode(message._id) },
     ...(!inThread
       ? [
           {
@@ -528,22 +570,47 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     <div
       ref={rootRef}
       onContextMenu={onContextMenu}
+      onMouseEnter={onBarEnter}
+      onMouseLeave={onBarLeave}
+      onClick={selectMode && !message.pending && !message.failed ? () => toggleSelectMid(message._id) : undefined}
       className={`group flex gap-2.5 rounded-lg px-1 transition-colors duration-500 ${
         grouped ? 'mt-0.5' : 'mt-3'
-      } ${mine ? 'flex-row-reverse' : ''} ${highlighted ? 'bg-primary-light' : ''}`}
+      } ${mine ? 'flex-row-reverse' : ''} ${
+        selected ? 'bg-primary-light' : highlighted ? 'bg-primary-light' : ''
+      } ${selectMode ? 'cursor-pointer' : ''}`}
     >
-      {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片 */}
+      {/* 多选合并转发：勾选框（issue #16） */}
+      {selectMode && (
+        <span
+          className={`mt-1 flex h-4.5 w-4.5 shrink-0 items-center justify-center self-center rounded-full border transition ${
+            selected ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
+          }`}
+        >
+          {selected && <Check size={12} strokeWidth={3} />}
+        </span>
+      )}
+      {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片。多选态下整条只响应「选中」 */}
       {showAvatars && (
-        <div className="w-9 shrink-0">
+        <div className={`w-9 shrink-0 ${selectMode ? 'pointer-events-none' : ''}`}>
           {!grouped && (
             <button onClick={() => setShowCard(true)} className="block cursor-pointer">
-              <Avatar name={displayName} username={message.u.username} size={36} />
+              {/* 自己的消息不点在线状态点（意义不大且总是在线） */}
+              <Avatar
+                name={displayName}
+                username={message.u.username}
+                size={36}
+                status={mine ? undefined : senderStatus}
+              />
             </button>
           )}
         </div>
       )}
 
-      <div className={`flex max-w-[68%] min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+      <div
+        className={`flex max-w-[68%] min-w-0 flex-col ${mine ? 'items-end' : 'items-start'} ${
+          selectMode ? 'pointer-events-none' : ''
+        }`}
+      >
         {!grouped && (
           <div className={`mb-1 flex items-baseline gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
             <span className="text-xs text-ink-2">{mine ? '' : displayName}</span>
@@ -553,10 +620,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
 
         <div className={`relative flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
           {/* 悬浮操作栏：整体浮在气泡上方（bottom-full = 底边贴气泡顶边），不再盖住本条
-              第一行文字。之前用 -top-4 会压进气泡覆盖正文（issue #6）。 */}
-          {!editing && !message.pending && !message.failed && (
+              第一行文字（issue #6）。停留 HOVER_DELAY_MS 才出现（issue #18.4）；
+              表情面板/菜单打开时保持显示，免得选到一半栏没了。 */}
+          {!editing && !message.pending && !message.failed && (hoverActions || !!picker || !!menu) && (
             <div
-              className={`absolute bottom-full z-10 mb-0.5 hidden group-hover:flex ${
+              className={`absolute bottom-full z-10 mb-0.5 flex ${
                 mine ? 'right-0' : 'left-0'
               }`}
             >

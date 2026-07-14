@@ -20,6 +20,7 @@ import {
   type WorkItem,
 } from '../stores/workbench';
 import { fmtConvTime } from '../lib/format';
+import { useUI } from '../stores/ui';
 
 export const TYPE_COLORS: Record<string, string> = {
   Bug: '#f54a45',
@@ -98,21 +99,26 @@ function ListHeader({
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
   const [keyword, setKeyword] = useState('');
-  const [state, setState] = useState('全部');
+  // 状态筛选提到全局 store：切到别的页面/模块再回来，筛选不重置（issue #17.1）
+  const state = useUI((s) => s.workItemStateFilter);
+  const setState = useUI((s) => s.setWorkItemStateFilter);
 
   const states = useMemo(
     () => ['全部', ...Array.from(new Set(items.map((w) => w.state))).sort()],
     [items],
   );
 
+  // 存的筛选值在当前工作项里可能已不存在（换了项目/都关闭了），回退到「全部」免得列表空掉
+  const effectiveState = states.includes(state) ? state : '全部';
+
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     return items.filter(
       (w) =>
-        (state === '全部' || w.state === state) &&
+        (effectiveState === '全部' || w.state === effectiveState) &&
         (!q || w.title.toLowerCase().includes(q) || String(w.id).includes(q)),
     );
-  }, [items, keyword, state]);
+  }, [items, keyword, effectiveState]);
 
   return (
     <>
@@ -125,7 +131,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         right={
           <div className="relative">
             <select
-              value={state}
+              value={effectiveState}
               onChange={(e) => setState(e.target.value)}
               className="h-8 appearance-none rounded-md border border-line bg-surface-4 pr-7 pl-2.5 text-xs text-ink outline-none focus:border-primary"
             >

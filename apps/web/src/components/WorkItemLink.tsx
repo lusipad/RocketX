@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ExternalLink, SendHorizontal } from 'lucide-react';
 import {
@@ -154,12 +154,29 @@ function HoverCard({
   );
 }
 
-/** 消息里的 #工作项号：链接 + 悬停详情卡（含快速评论） */
+/**
+ * 消息里的 #工作项号：内联紧凑卡片（issue #18.2）。
+ * 直接把 类型点 + #号 + 标题 + 状态 显示在文字里，不用悬停就看得到；
+ * 仍保留 hover 出完整详情卡（含快速评论），点击打开 ADO。
+ * 拉不到详情（没配 ADO / 网络失败）时降级成朴素的 #号 链接。
+ */
 export default function WorkItemLink({ id }: { id: number }) {
   const [card, setCard] = useState<{ x: number; y: number } | null>(null);
+  const [info, setInfo] = useState<AdoWorkItemInfo | null | 'loading'>('loading');
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webBase = adoWebBase();
+
+  // 挂载即拉详情，让标题/状态直接内联显示（fetchWorkItem 带缓存+并发去重，多处 #123 只打一次）
+  useEffect(() => {
+    let alive = true;
+    fetchWorkItem(id)
+      .then((it) => alive && setInfo(it))
+      .catch(() => alive && setInfo(null));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
 
   const cancelTimers = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
@@ -177,6 +194,9 @@ export default function WorkItemLink({ id }: { id: number }) {
     closeTimer.current = setTimeout(() => setCard(null), 250);
   };
 
+  // 拉不到详情：退回朴素 #号链接（不占地方，也不误导）
+  const fallback = info === null;
+
   return (
     <>
       <a
@@ -185,9 +205,32 @@ export default function WorkItemLink({ id }: { id: number }) {
         rel="noreferrer"
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
-        className="font-medium text-primary underline-offset-2 hover:underline"
+        className={
+          fallback
+            ? 'font-medium text-primary underline-offset-2 hover:underline'
+            : 'mx-0.5 inline-flex max-w-[20rem] items-center gap-1.5 rounded-md border border-line bg-fill-1 px-1.5 py-0.5 align-middle text-xs no-underline transition hover:border-primary'
+        }
       >
-        #{id}
+        {fallback ? (
+          `#${id}`
+        ) : info === 'loading' ? (
+          <span className="text-primary">#{id} …</span>
+        ) : (
+          <>
+            <span
+              className="h-2 w-2 shrink-0 rounded-full"
+              style={{ background: TYPE_COLORS[info.type] ?? '#8f959e' }}
+              title={info.type}
+            />
+            <span className="shrink-0 text-ink-3">#{id}</span>
+            <span
+              className={`min-w-0 truncate ${isDoneState(info.state) ? 'text-ink-3 line-through' : 'text-ink'}`}
+            >
+              {info.title}
+            </span>
+            <span className={`shrink-0 rounded px-1 ${stateStyle(info.state)}`}>{info.state}</span>
+          </>
+        )}
       </a>
       {card && (
         <HoverCard

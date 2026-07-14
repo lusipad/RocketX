@@ -106,6 +106,8 @@ interface ChatState {
   historyLoaded: Record<string, boolean>;
   hasMore: Record<string, boolean>;
   members: Record<string, RcUser[]>;
+  /** 成员拉取失败的原因:rid -> 错误文案。用来把「拉取失败」和「群里真没人」区分开 */
+  memberErrors: Record<string, string>;
   activeRid: string | null;
   rightPanel: RightPanel;
   /** 自己发送消息后递增，MessageList 据此强制滚到底部 */
@@ -129,13 +131,14 @@ interface ChatState {
   slashCommands: RcSlashCommand[];
   /** 房间里有角色的人：rid -> [{ u, roles: ['owner'] }]。普通成员不在里面 */
   roomRoles: Record<string, RcRoomRole[]>;
-  /** 其他人的在线状态：userId -> 'online' | 'away' | 'busy' | 'offline'。
+  /** 其他人的在线状态：username -> 'online' | 'away' | 'busy' | 'offline'。
+      按用户名键（各处都拿得到用户名；DM 房间 id 推不出对端 userId）。
       初值由通讯录/成员列表播种，之后靠 stream-notify-logged/user-status 实时更新 */
   userStatus: Record<string, string>;
 
   init: () => Promise<void>;
   /** 批量播种在线状态（通讯录/成员列表拿到 status 时调用，不覆盖已有的实时值） */
-  seedUserStatus: (users: { _id: string; status?: string }[]) => void;
+  seedUserStatus: (users: { username: string; status?: string }[]) => void;
   openRoom: (rid: string) => Promise<void>;
   openThread: (mid: string) => Promise<void>;
   setPanel: (panel: RightPanel) => void;
@@ -189,6 +192,14 @@ interface ChatState {
   /** 退出群组（DM 只能隐藏） */
   leaveConv: (conv: Conversation) => Promise<void>;
   forwardMessage: (msg: RcMessage, rids: string[]) => Promise<void>;
+  /** 多条消息转发到多个会话。merge=true 合并成一条「聊天记录」卡片，否则逐条 */
+  forwardMessages: (msgs: RcMessage[], rids: string[], merge: boolean) => Promise<void>;
+  /** 消息多选（合并转发用）：是否在多选态、选中的消息 id */
+  selectMode: boolean;
+  selectedMids: Set<string>;
+  enterSelectMode: (mid: string) => void;
+  toggleSelectMid: (mid: string) => void;
+  exitSelectMode: () => void;
   setDraft: (rid: string, text: string) => void;
   /**
    * 开启直聊并跳转，返回房间 id。
@@ -289,6 +300,18 @@ function roomTypeOf(
   rid: string,
 ): RcSubscription['t'] {
   return state.subscriptions[rid]?.t ?? state.rooms[rid]?.t ?? 'c';
+}
+
+/**
+ * 客户端生成消息 _id（Meteor Random.id() 同款：17 位、去掉易混字符的字母表）。
+ * 乐观消息与提交给服务端的是同一个 id —— WS 回声、REST 响应都带它，
+ * upsertMessage 按 _id 天然合并，杜绝「同一条消息显示两遍」和「重试发出第二条」。
+ */
+const ID_CHARS = '23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz';
+function randomMessageId(): string {
+  let s = '';
+  for (let i = 0; i < 17; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
+  return s;
 }
 
 /** RC 用户状态的数字编码 → 语义字符串 */
@@ -403,6 +426,7 @@ export const useChat = create<ChatState>((set, get) => ({
   historyLoaded: {},
   hasMore: {},
   members: {},
+  memberErrors: {},
   activeRid: null,
   rightPanel: null,
   scrollNonce: 0,
@@ -417,6 +441,8 @@ export const useChat = create<ChatState>((set, get) => ({
   slashCommands: [],
   roomRoles: {},
   userStatus: {},
+  selectMode: false,
+  selectedMids: new Set(),
 
   seedUserStatus: (users) => {
     const cur = get().userStatus;
@@ -424,8 +450,8 @@ export const useChat = create<ChatState>((set, get) => ({
     let changed = false;
     for (const u of users) {
       // 只播种、不覆盖已有值：实时流的值比列表快照新
-      if (u._id && u.status && !(u._id in cur)) {
-        next[u._id] = u.status;
+      if (u.username && u.status && !(u.username in cur)) {
+        next[u.username] = u.status;
         changed = true;
       }
     }
@@ -588,6 +614,8 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // 其他人的在线状态：RC 在有人状态变化时广播 [userId, username, statusNum, statusText]
     // statusNum：0=离线 1=在线 2=离开 3=忙。只推变化，初值由通讯录/成员列表播种。
+    // 按 username 存：消息(u.username)、会话列表(avatarUsername)、成员都拿得到用户名，
+    // 而 DM 的房间 id 在 RC 8.6.1 是普通房间 id、推不出对端 userId。
     realtime.onStream('stream-notify-logged', (eventName, args) => {
       if (eventName !== 'user-status') return;
       // args 可能是单个元组，也可能是一批元组，统一成数组处理
@@ -596,11 +624,11 @@ export const useChat = create<ChatState>((set, get) => ({
       const next = { ...cur };
       let changed = false;
       for (const t of tuples) {
-        const uid = t[0] as string;
+        const username = t[1] as string;
         const num = t[2] as number;
         const status = STATUS_BY_NUM[num] ?? 'offline';
-        if (uid && next[uid] !== status) {
-          next[uid] = status;
+        if (username && next[username] !== status) {
+          next[username] = status;
           changed = true;
         }
       }
@@ -616,10 +644,26 @@ export const useChat = create<ChatState>((set, get) => ({
     const marks = { ...get().unreadMarkTs };
     if (sub && (sub.unread > 0 || sub.alert) && sub.ls) marks[rid] = tsMs(sub.ls);
     else delete marks[rid];
-    set({ activeRid: rid, rightPanel: null, unreadMarkTs: marks, pendingFiles: null, replyTo: null });
+    set({
+      activeRid: rid,
+      rightPanel: null,
+      unreadMarkTs: marks,
+      pendingFiles: null,
+      replyTo: null,
+      // 切会话退出多选态
+      selectMode: false,
+      selectedMids: new Set(),
+    });
 
     const { historyLoaded, subscriptions, rooms } = get();
     subscribeRoomStreams(rid);
+
+    // 顺手播种本房间成员的在线状态，让消息/会话头像的状态点有初值（issue #18.1）。
+    // loadMembers 带缓存，重复打开不会多打请求；失败也不影响打开会话。
+    void get()
+      .loadMembers(rid)
+      .then((ms) => get().seedUserStatus(ms))
+      .catch(() => {});
 
     if (!historyLoaded[rid]) {
       const type = subscriptions[rid]?.t ?? rooms[rid]?.t ?? 'c';
@@ -684,9 +728,16 @@ export const useChat = create<ChatState>((set, get) => ({
     const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
     try {
       const members = await rest.getMembers(rid, type);
-      set({ members: { ...get().members, [rid]: members } });
+      const errs = { ...get().memberErrors };
+      delete errs[rid];
+      set({ members: { ...get().members, [rid]: members }, memberErrors: errs });
       return members;
-    } catch {
+    } catch (err) {
+      // 仍返回 [] 保持其它调用方(Composer/RoomInfoPanel/inviteMembers)不受影响，
+      // 但把失败原因记下来，让成员面板能区分「拉取失败」和「群里真没人」(P1-11)
+      set({
+        memberErrors: { ...get().memberErrors, [rid]: humanError(err, '无法获取成员列表') },
+      });
       return [];
     }
   },
@@ -704,10 +755,12 @@ export const useChat = create<ChatState>((set, get) => ({
       ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + trimmed
       : trimmed;
 
-    // 乐观上屏：秒回显，pending 状态等服务器确认
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    // 乐观上屏：秒回显，pending 状态等服务器确认。
+    // _id 由客户端生成并随请求提交 —— WS 回声先到时同 id 被 upsert 合并，
+    // 不会「同一条显示两遍」；504 但服务端已落库时重试同 id 也不会发出第二条。
+    const clientId = randomMessageId();
     const temp: RcMessage = {
-      _id: tempId,
+      _id: clientId,
       rid,
       msg: fullText,
       ts: new Date().toISOString(),
@@ -725,27 +778,31 @@ export const useChat = create<ChatState>((set, get) => ({
 
     try {
       const msg = await rest.sendMessageRaw({
+        _id: clientId,
         rid,
         msg: fullText,
         ...(opts?.tmid ? { tmid: opts.tmid } : {}),
       });
-      const list = (get().messages[rid] ?? []).filter((m) => m._id !== tempId);
-      set({ messages: { ...get().messages, [rid]: upsertMessage(list, msg) } });
+      set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
       scheduleReceiptRefresh(rid);
     } catch (err) {
-      // 标记失败，可重试
+      // 只对**仍是 pending** 的那条标失败：WS 回声可能已抢先把 temp 替换成真实消息
+      //（同 _id、无 pending 字段），此时其实发送成功了，不能给它扣一顶失败的帽子。
+      const cur = get().messages[rid] ?? [];
+      const stillPending = cur.some((m) => m._id === clientId && m.pending);
+      if (!stillPending) return;
       set({
         messages: {
           ...get().messages,
-          [rid]: (get().messages[rid] ?? []).map((m) =>
-            m._id === tempId ? { ...m, pending: false, failed: true } : m,
+          [rid]: cur.map((m) =>
+            m._id === clientId && m.pending ? { ...m, pending: false, failed: true } : m,
           ),
         },
       });
       toast.show({
         kind: 'error',
         message: humanError(err, '消息发送失败'),
-        action: { label: '重试', onClick: () => void get().resendMessage(tempId) },
+        action: { label: '重试', onClick: () => void get().resendMessage(clientId) },
       });
     }
   },
@@ -774,7 +831,8 @@ export const useChat = create<ChatState>((set, get) => ({
     );
     if (!rid) return;
     const failed = (get().messages[rid] ?? []).find((m) => m._id === tempId);
-    if (!failed) return;
+    // 只重发仍是失败态的：WS 回声若已把它替换成真实消息，说明其实发出去了
+    if (!failed || !failed.failed) return;
     set({
       messages: {
         ...get().messages,
@@ -784,20 +842,24 @@ export const useChat = create<ChatState>((set, get) => ({
       },
     });
     try {
-      // 附件是本地展示用的，不随重发提交（引用信息已在消息文本前缀里）
+      // 附件是本地展示用的，不随重发提交（引用信息已在消息文本前缀里）。
+      // 沿用同一个 _id：上次其实已落库时（504 但服务端收到了），同 id 不会发出第二条。
       const msg = await rest.sendMessageRaw({
+        _id: tempId,
         rid,
         msg: failed.msg,
         ...(failed.tmid ? { tmid: failed.tmid } : {}),
       });
-      const list = (get().messages[rid] ?? []).filter((m) => m._id !== tempId);
-      set({ messages: { ...get().messages, [rid]: upsertMessage(list, msg) } });
+      set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
     } catch {
+      // 同 send()：回声已替换成真实消息（无 pending 字段）就不再标失败
+      const cur = get().messages[rid] ?? [];
+      if (!cur.some((m) => m._id === tempId && m.pending)) return;
       set({
         messages: {
           ...get().messages,
-          [rid]: (get().messages[rid] ?? []).map((m) =>
-            m._id === tempId ? { ...m, pending: false, failed: true } : m,
+          [rid]: cur.map((m) =>
+            m._id === tempId && m.pending ? { ...m, pending: false, failed: true } : m,
           ),
         },
       });
@@ -1268,6 +1330,54 @@ export const useChat = create<ChatState>((set, get) => ({
       rids.length === 1 ? `已转发到「${names[0]}」` : `已转发到 ${rids.length} 个会话`,
     );
   },
+
+  forwardMessages: async (msgs, rids, merge) => {
+    // 按时间正序转发，保证目标会话里顺序和原会话一致
+    const ordered = [...msgs].sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+    const names = rids.map(
+      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
+    );
+    for (const rid of rids) {
+      if (merge) {
+        // 合并成一条「聊天记录」卡片：每条消息一个 attachment，AttachmentCard 的
+        // 富文本分支会把 author_name + text 堆叠渲染成一块转发记录（无需服务端支持）
+        await rest.sendMessageRaw({
+          _id: randomMessageId(),
+          rid,
+          msg: `[聊天记录] 共 ${ordered.length} 条`,
+          attachments: ordered.map((m) => ({
+            author_name: m.u.name || m.u.username,
+            text:
+              stripQuotePrefix(m.msg || '') || m.attachments?.[0]?.title || '[图片/文件]',
+            ts: m.ts,
+          })),
+        });
+      } else {
+        for (const m of ordered) {
+          await rest.sendMessageRaw({
+            _id: randomMessageId(),
+            rid,
+            msg: stripQuotePrefix(m.msg || '') || undefined,
+            attachments: m.attachments?.filter((a) => !a.message_link),
+          });
+        }
+      }
+    }
+    toast.success(
+      rids.length === 1
+        ? `已转发 ${ordered.length} 条到「${names[0]}」`
+        : `已转发 ${ordered.length} 条到 ${rids.length} 个会话`,
+    );
+  },
+
+  enterSelectMode: (mid) => set({ selectMode: true, selectedMids: new Set([mid]) }),
+  toggleSelectMid: (mid) => {
+    const next = new Set(get().selectedMids);
+    if (next.has(mid)) next.delete(mid);
+    else next.add(mid);
+    set({ selectedMids: next });
+  },
+  exitSelectMode: () => set({ selectMode: false, selectedMids: new Set() }),
 
   setDraft: (rid, text) => {
     const drafts = { ...get().drafts };

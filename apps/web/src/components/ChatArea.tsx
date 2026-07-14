@@ -68,6 +68,7 @@ export default function ChatArea() {
     return p ? s.rooms[p] : undefined;
   });
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const typingMap = useChat((s) => (s.activeRid ? s.typing[s.activeRid] : undefined));
   const typers = typingMap
     ? Object.entries(typingMap)
@@ -97,7 +98,7 @@ export default function ChatArea() {
   const dmSize = room?.uids?.length ?? room?.usersCount;
   const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
   const avatarUsername = sub?.t === 'd' && !isMultiDM ? sub.name : undefined;
-  const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername });
+  const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername }, nameFormat);
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
 

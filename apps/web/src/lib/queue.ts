@@ -3,6 +3,7 @@ import { dueLabel, isOverdue, todayKey, type Todo } from '../stores/todos';
 import {
   adoDateToLocal,
   isApproved,
+  isWorkItemDone,
   matchUser,
   type Build,
   type PullRequest,
@@ -192,6 +193,8 @@ export function buildQueue(input: QueueInput): QueueItem[] {
   }
 
   for (const w of input.workItems) {
+    // 已解决/已关闭的不进「待处理」队列，更不该被标成逾期（issue #17.4）
+    if (isWorkItemDone(w.state)) continue;
     const due = adoDateToLocal(w.dueDate);
     const overdue = !!due && due < today;
     const dueToday = due === today;

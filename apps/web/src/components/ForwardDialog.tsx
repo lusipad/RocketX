@@ -6,21 +6,28 @@ import { humanError } from '../stores/toast';
 import Avatar from './Avatar';
 import Dialog from './Dialog';
 
-/** 转发弹窗：搜索 + 多选会话 + 发送 */
+/** 转发弹窗：搜索 + 多选会话 + 发送。单条传 message，多条传 messages（可合并/逐条） */
 export default function ForwardDialog({
   message,
+  messages,
   onClose,
 }: {
-  message: RcMessage;
+  message?: RcMessage;
+  messages?: RcMessage[];
   onClose: () => void;
 }) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const forwardMessage = useChat((s) => s.forwardMessage);
+  const forwardMessages = useChat((s) => s.forwardMessages);
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 归一：多条模式用 msgs，单条模式包成一条的数组
+  const msgs = messages ?? (message ? [message] : []);
+  const multi = msgs.length > 1;
 
   const conversations = useMemo(
     () => buildConversations(subscriptions, rooms),
@@ -41,12 +48,13 @@ export default function ForwardDialog({
     setSelected(next);
   };
 
-  const doForward = async () => {
-    if (selected.size === 0 || sending) return;
+  const doForward = async (merge: boolean) => {
+    if (selected.size === 0 || sending || msgs.length === 0) return;
     setSending(true);
     setError(null);
     try {
-      await forwardMessage(message, [...selected]);
+      if (multi) await forwardMessages(msgs, [...selected], merge);
+      else await forwardMessage(msgs[0], [...selected]);
       onClose();
     } catch (err) {
       setError(humanError(err, '转发失败'));
@@ -54,7 +62,9 @@ export default function ForwardDialog({
     }
   };
 
-  const preview = stripQuotePrefix(message.msg ?? '') || '[卡片消息]';
+  const preview = multi
+    ? `[聊天记录] 共 ${msgs.length} 条消息`
+    : stripQuotePrefix(msgs[0]?.msg ?? '') || '[卡片消息]';
 
   return (
     <Dialog
@@ -69,12 +79,25 @@ export default function ForwardDialog({
           >
             取消
           </button>
+          {multi && (
+            <button
+              onClick={() => void doForward(false)}
+              disabled={selected.size === 0 || sending}
+              className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              逐条转发
+            </button>
+          )}
           <button
-            onClick={() => void doForward()}
+            onClick={() => void doForward(true)}
             disabled={selected.size === 0 || sending}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {sending ? '发送中…' : `发送${selected.size > 0 ? `（${selected.size}）` : ''}`}
+            {sending
+              ? '发送中…'
+              : multi
+                ? `合并转发${selected.size > 0 ? `（${selected.size}）` : ''}`
+                : `发送${selected.size > 0 ? `（${selected.size}）` : ''}`}
           </button>
         </>
       }

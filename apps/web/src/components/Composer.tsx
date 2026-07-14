@@ -26,6 +26,12 @@ import Avatar from './Avatar';
 // @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
 const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
 
+// 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
+// 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
+// 逐字合成时会让输入框肉眼可见地抖一下（issue #15）。不支持时才回退 JS。
+const SUPPORTS_FIELD_SIZING =
+  typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
+
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
   const send = useChat((s) => s.send);
@@ -38,6 +44,7 @@ export default function Composer() {
   const emitTyping = useChat((s) => s.emitTyping);
   // 'alternative' = Ctrl+Enter 发送、Enter 换行
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
+  const prefsLoaded = usePrefs((s) => s.loaded);
 
   const runSlash = useChat((s) => s.runSlash);
   const slashCommands = useChat((s) => s.slashCommands);
@@ -131,6 +138,7 @@ export default function Composer() {
     const head = `/${command} `;
     const next = head + text.slice(cursor);
     setText(next);
+    persistDraft(next); // 补全插入的内容也要进草稿，否则切会话就丢（P2-g）
     setSlashQuery(null);
     requestAnimationFrame(() => {
       el?.focus();
@@ -141,6 +149,8 @@ export default function Composer() {
 
   /** 按实际内容高度自适应（数换行符算不出自动换行的长文本） */
   const autoResize = () => {
+    // 浏览器原生 field-sizing 已处理，JS 不再插手（避免每键回流抖动）
+    if (SUPPORTS_FIELD_SIZING) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
@@ -152,7 +162,7 @@ export default function Composer() {
     persistDraft(e.target.value);
     emitTyping();
     refreshMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
-    requestAnimationFrame(autoResize);
+    // 高度自适应交给 useEffect([text]) 统一做，这里不再重复调（原本每键跑两遍回流）
   };
 
   // 文本被外部改变（发送清空、切换会话恢复草稿）时同步高度
@@ -175,6 +185,7 @@ export default function Composer() {
     );
     const next = before + text.slice(cursor);
     setText(next);
+    persistDraft(next); // 同上（P2-g）
     setMentionQuery(null);
     requestAnimationFrame(() => {
       el?.focus();
@@ -187,6 +198,7 @@ export default function Composer() {
     const cursor = el?.selectionStart ?? text.length;
     const next = text.slice(0, cursor) + char + text.slice(cursor);
     setText(next);
+    persistDraft(next); // 同上（P2-g）
     setPicker(false);
     requestAnimationFrame(() => {
       el?.focus();
@@ -230,7 +242,9 @@ export default function Composer() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashQuery !== null && slashCandidates.length > 0) {
+    // 输入法合成中，方向键/回车/Esc 都归 IME 选字用，补全面板一律不拦（P2-f）
+    const composing = e.nativeEvent.isComposing;
+    if (!composing && slashQuery !== null && slashCandidates.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSlashIndex((i) => (i + 1) % slashCandidates.length);
@@ -262,7 +276,7 @@ export default function Composer() {
         return;
       }
     }
-    if (mentionQuery !== null && candidates.length > 0) {
+    if (!composing && mentionQuery !== null && candidates.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setMentionIndex((i) => (i + 1) % candidates.length);
@@ -284,8 +298,11 @@ export default function Composer() {
       }
     }
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    // 偏好还没加载完就先按「Ctrl+Enter 才发送」这条保守规则：否则默认值是 Enter 发送，
+    // 而用户真实设置可能是「Enter 换行」，一按回车就把半句话发出去（P1-6）。
+    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
     const shouldSend =
-      sendOnEnter === 'alternative'
+      effectiveMode === 'alternative'
         ? e.ctrlKey || e.metaKey // Ctrl/Cmd + Enter 发送
         : !e.shiftKey && !e.ctrlKey && !e.metaKey; // Enter 发送
     if (shouldSend) {
@@ -411,7 +428,9 @@ export default function Composer() {
             const prefix = text.slice(0, cursor);
             const needsSpace = prefix && !/\s$/.test(prefix);
             const inserted = `${needsSpace ? ' ' : ''}@`;
-            setText(prefix + inserted + text.slice(cursor));
+            const next = prefix + inserted + text.slice(cursor);
+            setText(next);
+            persistDraft(next);
             setMentionQuery('');
             requestAnimationFrame(() => el?.focus());
           }}
@@ -429,6 +448,7 @@ export default function Composer() {
                 return;
               }
               setText('/');
+              persistDraft('/');
               setSlashQuery('');
               setSlashIndex(0);
               requestAnimationFrame(() => {
@@ -469,7 +489,7 @@ export default function Composer() {
               ? '输入消息，Ctrl + Enter 发送，Enter 换行'
               : '输入消息，Enter 发送，Shift + Enter 换行'
           }
-          className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
+          className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
         />
         <button
           onClick={() => void doSend()}

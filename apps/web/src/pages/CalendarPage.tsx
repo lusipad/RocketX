@@ -23,7 +23,8 @@ import {
   type CalendarView,
 } from '../stores/calendar';
 import { useTodos, todayKey, isOverdue, type Todo } from '../stores/todos';
-import { adoDateToLocal, useWorkbench, type WorkItem } from '../stores/workbench';
+import { adoDateToLocal, isWorkItemDone, useWorkbench, type WorkItem } from '../stores/workbench';
+import { openExternal } from '../lib/client';
 import CalendarEventDialog from '../components/CalendarEventDialog';
 import TimeGrid from '../components/TimeGrid';
 
@@ -74,12 +75,14 @@ function unifyForDate(
   // ADO 里带截止日期的工作项也落到日历上 —— 「这周要交的东西」不该只在工作台里看得到
   for (const w of workItems) {
     if (adoDateToLocal(w.dueDate) !== dateStr) continue;
+    // 已解决/已关闭的工作项即便过了截止日也不算逾期，别标红（issue #17.4，和工作台一致）
+    const wOverdue = dateStr < today && !isWorkItemDone(w.state);
     items.push({
       type: 'workitem',
       id: String(w.id),
       title: `#${w.id} ${w.title}`,
-      color: dateStr < today ? '#f54a45' : w.priority === 1 ? '#f54a45' : '#7f3bf5',
-      overdue: dateStr < today,
+      color: wOverdue ? '#f54a45' : w.priority === 1 ? '#f54a45' : '#7f3bf5',
+      overdue: wOverdue,
       source: 'ado',
       raw: w,
     });
@@ -174,7 +177,7 @@ function MonthCell({
       color: dayKey < todayKey() ? '#f54a45' : '#7f3bf5',
       label: `#${w.id} ${w.title}`,
       done: false,
-      onClick: () => w.webUrl && window.open(w.webUrl, '_blank', 'noopener,noreferrer'),
+      onClick: () => w.webUrl && void openExternal(w.webUrl),
     })),
   ];
 
@@ -424,8 +427,9 @@ export default function CalendarPage() {
     } else if (item.type === 'todo') {
       toggleTodo(item.id);
     } else if (item.type === 'workitem') {
+      // 走 openExternal：桌面端 webview 的 window.open 打不开系统浏览器，点了没反应
       const w = item.raw as WorkItem;
-      if (w.webUrl) window.open(w.webUrl, '_blank', 'noopener,noreferrer');
+      if (w.webUrl) void openExternal(w.webUrl);
     }
   };
 
@@ -621,7 +625,9 @@ export default function CalendarPage() {
                   onToggle={
                     item.type === 'event'
                       ? () => toggleEventDone(item.id, today)
-                      : () => toggleTodo(item.id)
+                      : item.type === 'todo'
+                        ? () => toggleTodo(item.id)
+                        : undefined // 工作项没有「完成」勾选，之前给它塞了个点了没反应的复选框
                   }
                 />
               ))}
