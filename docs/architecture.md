@@ -87,6 +87,7 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 对 DM 调 `groups.kick` / `groups.roles` 报 400 | 单聊和多人聊天都是 `t='d'`，**没有**频道那套管理能力（`/mute` 直接报 `d is not a valid room type`）。权限判断必须把房间类型算进去，否则全局 admin 会在多人聊天里看到一堆点了就报错的管理操作 |
 | 改密码报 `TOTP Invalid` | `users.updateOwnBasicInfo` 的 `currentPassword` 要传 **SHA-256 十六进制**，传明文会被当成 2FA 校验失败。这个接口限流是**每分钟一次**，所以一次请求必须带齐所有字段 |
 | 建了讨论，父频道里没有卡片 | RC 会发一条 `t='discussion-created'` 的消息，`msg` 是讨论名、**`drid`** 指向讨论房间。不认 `drid` 的话它会掉进系统消息的兜底分支，变成一行点不动的灰字 |
+| 加入公开讨论报 `error-room-not-found` | 讨论不是普通频道，统一调用 `channels.join` 会失败。优先用 `rooms.join`；仅当旧版服务端返回 404 时回退 DDP `joinRoom`。公开讨论未加入时仍可查看和发言，但只有已加入订阅才参与通知与已读同步 |
 | 私聊的永久链接是死链 | DM 的**房间文档没有 `name`/`fname`**（名字只在订阅上），照着 `room.name` 拼会得到 `/direct/?msg=xxx`。DM 要用 rid。另：RC 8.6.1 没有 `chat.getPermalink` 这个 REST（实测 404） |
 | `:cowboy:` 这类 emoji 打不出来 | RC 用的是 JoyPixels/emojione 的 shortcode 体系（`chat.react` 的 key 就是 `:code:`）。手写表必然漏，由 `pnpm gen:emoji` 从 emoji-toolkit 生成全量 6198 个（含别名） |
 
@@ -130,7 +131,7 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | --- | --- |
 | `pnpm smoke` | 50 项，打真实 RC：登录、收发、引用展开、话题、讨论卡片、中文文件名上传、带认证下载、收藏/免打扰、目录搜索、WebSocket 实时推送、斜杠命令、群管理（踢人/角色/禁言/归档/只读）、文件与提及面板、改昵称与头像。**写操作跑完全部还原**（改名改回去、头像 resetAvatar、建的房间删掉） |
 | `pnpm test:pure` | 219 项纯函数：拼音匹配与排序、日期分割线、分组规则、待办、备注名、emoji、PR 分流、markdown、日历重复与网格、ADO、斜杠命令、群管理权限与安全边界 |
-| `pnpm test:regression` | 46 项回归测试：快捷搜索并发、范围选择与过期响应，用户目录和成员分页，成员请求合并、跨房间发送与结果隔离，ADO 配置/自定义查询/链接边界，任务栏角标竞态 |
+| `pnpm test:regression` | 78 项回归测试：快捷搜索并发、目录与成员分页、跨房间发送与结果隔离，ADO 配置/查询/链接卡片，讨论访问与订阅边界、初始滚动，任务栏与托盘未读状态 |
 | `pnpm test:classify` | 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序不受「打开」影响 |
 
 **这四个跑绿了不等于界面是好的。** 它们只打 API 和纯函数，测不到渲染 —— 有次

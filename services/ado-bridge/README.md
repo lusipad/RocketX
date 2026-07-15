@@ -17,6 +17,8 @@
 - `GET /api/ado/pullrequests` → 与当前用户相关的 PR
 - `GET /api/ado/builds` → 当前用户最近发起的构建
 - `GET /api/ado/workitem/:id` → 工作项详情
+- `GET /api/ado/pullrequest/:id` → 拉取请求详情（ID 在集合内全局查询）
+- `GET /api/ado/build/:id?project=<项目>` → 指定项目的构建详情
 - `POST /api/ado/workitem/:id/comment` → 添加工作项评论
 
 本地联调可用 mock：`node mock/mock-ado.mjs`（端口 8378），
