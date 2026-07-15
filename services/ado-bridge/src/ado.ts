@@ -97,13 +97,14 @@ export class AdoClient {
   }
 
   /** 分配给某人的未关闭工作项（按最近变更排序） */
-  async getWorkItems(assignedTo: string, top = 50): Promise<AdoWorkItem[]> {
+  async getWorkItems(assignedTo = '', top = 50): Promise<AdoWorkItem[]> {
     // WIQL 里单引号转义为两个单引号
     const who = assignedTo.replace(/'/g, "''");
+    const assignee = who ? `'${who}'` : '@Me';
     const wiql = {
       query:
         `SELECT [System.Id] FROM WorkItems ` +
-        `WHERE [System.AssignedTo] = '${who}' ` +
+        `WHERE [System.AssignedTo] = ${assignee} ` +
         // 中文流程模板的状态是中文名，只排英文会把已完成的全拉回来
         `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复') ` +
         `ORDER BY [System.ChangedDate] DESC`,

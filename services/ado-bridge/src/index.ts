@@ -49,10 +49,8 @@ app.get('/api/ado/config', async (_req, reply) => {
 
 app.get<{ Querystring: { assignedTo?: string } }>('/api/ado/workitems', async (req, reply) => {
   if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
-  const assignedTo = req.query.assignedTo;
-  if (!assignedTo) return reply.code(400).send({ error: '缺少 assignedTo 参数' });
   try {
-    return { items: await ado.getWorkItems(assignedTo) };
+    return { items: await ado.getWorkItems(req.query.assignedTo) };
   } catch (err) {
     req.log.error(err);
     return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
