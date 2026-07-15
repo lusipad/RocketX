@@ -124,6 +124,8 @@ export function matchUser(account: string, unique: string, name: string): boolea
 
 interface WorkbenchState {
   config: WorkbenchConfig | null;
+  /** 用户保存配置时递增；供依赖配置的异步缓存隔离，不包含 PAT 原文。 */
+  configRevision: number;
   workItems: WorkItem[];
   prs: PullRequest[];
   builds: Build[];
@@ -141,12 +143,13 @@ let refreshRevision = 0;
 function connectionKey(config: WorkbenchConfig | null): string {
   if (!config) return '';
   return config.mode === 'direct'
-    ? `direct\0${config.adoBase ?? ''}\0${config.auth ?? ''}\0${config.pat ?? ''}`
+    ? `direct\0${config.adoBase ?? ''}\0${config.auth ?? ''}`
     : `bridge\0${config.bridge ?? ''}`;
 }
 
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
   config: loadWorkbenchConfig(),
+  configRevision: 0,
   workItems: [],
   prs: [],
   builds: [],
@@ -155,11 +158,15 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   lastRefresh: null,
 
   setConfig: (config) => {
+    const connectionChanged = connectionKey(get().config) !== connectionKey(config);
+    const configRevision = get().configRevision + 1;
     saveWorkbenchConfig(config);
     refreshRevision++;
+    if (connectionChanged) localStorage.removeItem(ADO_WEB_KEY);
     // 配置变了，旧数据就作废——别让用户对着上一个服务器的工作项发呆
     set({
       config,
+      configRevision,
       workItems: [],
       prs: [],
       builds: [],

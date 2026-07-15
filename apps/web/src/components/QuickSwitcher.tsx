@@ -9,12 +9,17 @@ import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
-import { searchMessagesGlobal } from '../lib/quickSearch';
+import {
+  chooseAvailableSearchTab,
+  searchMessagesGlobal,
+  searchesSettledFor,
+  type QuickSearchTab,
+} from '../lib/quickSearch';
 import { mergeUserSearchResults } from '../lib/userSearch';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
-type Tab = 'convs' | 'messages' | 'contacts';
+type Tab = QuickSearchTab;
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'convs', label: '会话' },
@@ -43,6 +48,8 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
   const [contactSearching, setContactSearching] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
   const [contactError, setContactError] = useState<string | null>(null);
+  const [messageSettledKeyword, setMessageSettledKeyword] = useState('');
+  const [contactSettledKeyword, setContactSettledKeyword] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabRef = useRef(tab);
@@ -88,9 +95,7 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
     [conversations],
   );
   const conversationRidsRef = useRef<string[]>([]);
-  const filteredConvsRef = useRef(filteredConvs);
   conversationRidsRef.current = conversations.map((conversation) => conversation.rid);
-  filteredConvsRef.current = filteredConvs;
 
   useEffect(() => inputRef.current?.focus(), [tab]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
@@ -112,15 +117,29 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
 
   useEffect(() => {
     if (
-      keyword.trim() &&
-      !messageSearching &&
-      filteredConvs.length === 0 &&
-      contactUsers.length + contacts.rooms.length > 0 &&
-      tabRef.current !== 'messages'
+      messageSearching ||
+      contactSearching ||
+      !searchesSettledFor(keyword, messageSettledKeyword, contactSettledKeyword)
     ) {
-      setTab('contacts');
+      return;
     }
-  }, [keyword, messageSearching, filteredConvs.length, contactUsers.length, contacts.rooms.length]);
+    const next = chooseAvailableSearchTab(tabRef.current, {
+      convs: filteredConvs.length,
+      messages: messages.length,
+      contacts: contactUsers.length + contacts.rooms.length,
+    });
+    if (next !== tabRef.current) setTab(next);
+  }, [
+    keyword,
+    messageSearching,
+    contactSearching,
+    filteredConvs.length,
+    messages.length,
+    contactUsers.length,
+    contacts.rooms.length,
+    messageSettledKeyword,
+    contactSettledKeyword,
+  ]);
 
   // 三个范围一起搜索；停稳后当前范围为空时，自动切到第一个有结果的范围（issue #24）。
   useEffect(() => {
@@ -133,6 +152,8 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
       setContactSearching(false);
       setMessageError(null);
       setContactError(null);
+      setMessageSettledKeyword('');
+      setContactSettledKeyword('');
       return;
     }
     let cancelled = false;
@@ -159,14 +180,13 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
             .slice(0, 20);
           setMessages(nextMessages);
           setMessageSearching(false);
-          if (filteredConvsRef.current.length === 0 && nextMessages.length > 0) {
-            setTab('messages');
-          }
+          setMessageSettledKeyword(q);
         })
         .catch(() => {
           if (cancelled) return;
           setMessageSearching(false);
           setMessageError('消息搜索暂时不可用，请稍后重试');
+          setMessageSettledKeyword(q);
         });
 
       void rest
@@ -179,11 +199,13 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
           };
           setContacts(nextContacts);
           setContactSearching(false);
+          setContactSettledKeyword(q);
         })
         .catch(() => {
           if (cancelled) return;
           setContactSearching(false);
           setContactError('联系人和频道搜索暂时不可用，请稍后重试');
+          setContactSettledKeyword(q);
         });
     }, 300);
     return () => {

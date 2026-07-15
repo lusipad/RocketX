@@ -19,7 +19,10 @@ import Dialog from './Dialog';
  */
 export function useUserSearch(keyword: string): RcUser[] {
   const [roster, setRoster] = useState<RcUser[]>([]);
-  const [remote, setRemote] = useState<RcUser[]>([]);
+  const [remoteResult, setRemoteResult] = useState<{ query: string; users: RcUser[] }>({
+    query: '',
+    users: [],
+  });
   const me = useAuth((s) => s.user?.username);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -43,15 +46,19 @@ export function useUserSearch(keyword: string): RcUser[] {
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
     if (!q) {
-      setRemote([]);
+      setRemoteResult({ query: '', users: [] });
       return;
     }
     timer.current = setTimeout(() => {
       void settleScopedResult(
         () => rest.searchUsers(q, 30),
         {
-          success: (result) => setRemote(result.users.filter((u) => u.username !== me)),
-          error: () => setRemote([]),
+          success: (result) =>
+            setRemoteResult({
+              query: q,
+              users: result.users.filter((u) => u.username !== me),
+            }),
+          error: () => setRemoteResult({ query: q, users: [] }),
         },
         () => current,
       );
@@ -63,6 +70,7 @@ export function useUserSearch(keyword: string): RcUser[] {
   }, [keyword, me]);
 
   const pinyinReady = usePinyinReady();
+  const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
   return useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();

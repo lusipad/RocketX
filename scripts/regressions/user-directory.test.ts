@@ -40,6 +40,17 @@ test('重复满页会在第一次无进展时停止', async () => {
   assert.match(result.warning ?? '', /没有新增用户/);
 });
 
+test('后续页部分重复导致唯一用户不足时不能静默当作完整目录', async () => {
+  const result = await collectUserDirectory(
+    { users: [user('1'), user('2')], total: 4, via: 'directory' },
+    async () => ({ users: [user('2'), user('3')], total: 4, via: 'directory' }),
+    { pageSize: 2 },
+  );
+
+  assert.deepEqual(result.users.map((item) => item._id), ['1', '2', '3']);
+  assert.match(result.warning ?? '', /去重后只返回了 3 人/);
+});
+
 test('达到用户上限后停止并保留截断警告', async () => {
   let calls = 0;
   const result = await collectUserDirectory(

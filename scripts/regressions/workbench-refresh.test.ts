@@ -98,7 +98,9 @@ test('旧 ADO 配置刷新晚到时不能覆盖新配置和数据', async () => 
   const oldRefresh = useWorkbench.getState().refresh();
   await waitFor(() => oldResponses.length === 4);
 
+  localStorage.setItem(ADO_WEB_KEY, 'http://web-old');
   useWorkbench.getState().setConfig({ mode: 'bridge', bridge: 'http://new', account: '' });
+  assert.equal(localStorage.getItem(ADO_WEB_KEY), null);
   await waitFor(() => useWorkbench.getState().workItems[0]?.id === 2);
 
   for (const pending of oldResponses) pending.resolve(responseFor(pending.url, 1));
@@ -158,8 +160,10 @@ test('切换到无有效端点时也会立即淘汰旧刷新', async () => {
   const oldRefresh = useWorkbench.getState().refresh();
   await waitFor(() => oldResponses.length === 4);
 
+  localStorage.setItem(ADO_WEB_KEY, 'http://web-old');
   useWorkbench.getState().setConfig({ mode: 'bridge', account: '' });
   assert.equal(useWorkbench.getState().loading, false);
+  assert.equal(localStorage.getItem(ADO_WEB_KEY), null);
   for (const pending of oldResponses) pending.resolve(responseFor(pending.url, 1));
   await oldRefresh;
 

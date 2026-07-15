@@ -28,6 +28,7 @@ import { useCalendar, eventsForDate } from '../stores/calendar';
 import { useFavorites, SIZE_SPAN, SIZE_LABELS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
 import {
   beginCustomQueryLoad,
+  customQueryConnectionScope,
   createCustomQueryLoadState,
   finishCustomQueryLoad,
   isCurrentCustomQueryLoad,
@@ -36,22 +37,18 @@ import {
   resolveCustomQueryLoad,
   useCustomQueries,
   parseQueryUrl,
+  queriesForScope,
   shouldFetchCustomQuery,
+  type ParsedCustomQuery,
 } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { useDialogBehavior } from '../components/Dialog';
 import { settleScopedResult } from '../lib/scopedResult';
-import type { WorkbenchConfig } from '../lib/ado';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
 type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
-
-function savedQueryScope(config: WorkbenchConfig | null): string {
-  if (!config || config.mode !== 'direct') return '';
-  return `${config.adoBase ?? ''}\0${config.auth ?? ''}\0${config.pat ?? ''}`;
-}
 
 /**
  * 待处理队列的一行。
@@ -114,15 +111,17 @@ function QueueRow({
 
 // ---------- Custom Query Dialog ----------
 function QueryDialog({
+  adoBase,
   onClose,
   onSave,
 }: {
+  adoBase: string;
   onClose: () => void;
-  onSave: (name: string, url: string) => void;
+  onSave: (name: string, query: ParsedCustomQuery) => void;
 }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
-  const parsed = url.trim() ? parseQueryUrl(url.trim()) : null;
+  const parsed = url.trim() ? parseQueryUrl(url.trim(), adoBase) : null;
   const dialogRef = useDialogBehavior(onClose);
 
   return (
@@ -186,7 +185,7 @@ function QueryDialog({
           </button>
           <button
             onClick={() => {
-              if (name.trim() && parsed) onSave(name.trim(), url.trim());
+              if (name.trim() && parsed) onSave(name.trim(), parsed);
             }}
             disabled={!name.trim() || !parsed}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
@@ -348,6 +347,7 @@ export default function WorkbenchPage() {
   // config 与 ADO 数据都来自 store：设置页一保存这里立刻跟着变，
   // 各个 tab 也共用同一份数据，不会各拉各的
   const config = useWorkbench((s) => s.config);
+  const configRevision = useWorkbench((s) => s.configRevision);
   const workItems = useWorkbench((s) => s.workItems);
   const prs = useWorkbench((s) => s.prs);
   const builds = useWorkbench((s) => s.builds);
@@ -356,15 +356,23 @@ export default function WorkbenchPage() {
   const lastRefresh = useWorkbench((s) => s.lastRefresh);
   const refresh = useWorkbench((s) => s.refresh);
 
-  const customQueries = useCustomQueries((s) => s.queries);
+  const allCustomQueries = useCustomQueries((s) => s.queries);
   const addQuery = useCustomQueries((s) => s.add);
   const removeQuery = useCustomQueries((s) => s.remove);
+  const claimLegacyQueries = useCustomQueries((s) => s.claimLegacy);
   const [queryDialog, setQueryDialog] = useState(false);
+
+  const queryConnectionScope = customQueryConnectionScope(config);
+  const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
+  const customQueries = useMemo(
+    () => queriesForScope(allCustomQueries, queryConnectionScope, queryAdoBase),
+    [allCustomQueries, queryAdoBase, queryConnectionScope],
+  );
 
   const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
   const activeQuery = customQueries.find((q) => q.id === activeQueryId);
   const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
-  const queryScope = savedQueryScope(config);
+  const queryScope = `${queryConnectionScope}\0${configRevision}`;
   const [queryState, setQueryState] = useState(() =>
     createCustomQueryLoadState<WorkItem[]>(queryScope),
   );
@@ -387,6 +395,12 @@ export default function WorkbenchPage() {
   );
 
   useEffect(() => {
+    if (queryConnectionScope && queryAdoBase) {
+      claimLegacyQueries(queryConnectionScope, queryAdoBase);
+    }
+  }, [claimLegacyQueries, queryAdoBase, queryConnectionScope]);
+
+  useEffect(() => {
     if (queryStateRef.current.scope === queryScope) return;
     const next = createCustomQueryLoadState<WorkItem[]>(queryScope);
     queryStateRef.current = next;
@@ -394,13 +408,13 @@ export default function WorkbenchPage() {
   }, [queryScope]);
 
   useEffect(() => {
-    if (!canUseCustomQueries && activeQueryId) setTab('overview');
-  }, [activeQueryId, canUseCustomQueries, setTab]);
+    if (activeQueryId && (!canUseCustomQueries || !activeQuery)) setTab('overview');
+  }, [activeQuery, activeQueryId, canUseCustomQueries, setTab]);
 
   const fetchQuery = useCallback(
     async (q: typeof customQueries[0], force = false) => {
       if (!config || config.mode !== 'direct' || !config.adoBase) return;
-      const scope = savedQueryScope(config);
+      const scope = `${customQueryConnectionScope(config)}\0${configRevision}`;
       const started = beginCustomQueryLoad(queryStateRef.current, scope, q.id, force);
       if (!started) return;
       queryStateRef.current = started.state;
@@ -440,10 +454,12 @@ export default function WorkbenchPage() {
         },
         () =>
           isCurrentCustomQueryLoad(queryStateRef.current, scope, q.id, revision) &&
-          savedQueryScope(useWorkbench.getState().config) === scope,
+          `${customQueryConnectionScope(useWorkbench.getState().config)}\0${
+            useWorkbench.getState().configRevision
+          }` === scope,
       );
     },
-    [config, updateQueryState],
+    [config, configRevision, updateQueryState],
   );
 
   useEffect(() => {
@@ -922,11 +938,16 @@ export default function WorkbenchPage() {
       )}
       {queryDialog && (
         <QueryDialog
+          adoBase={queryAdoBase}
           onClose={() => setQueryDialog(false)}
-          onSave={(name, url) => {
-            const parsed = parseQueryUrl(url);
-            if (!parsed) return;
-            const id = addQuery(name, url, parsed.queryId, parsed.project);
+          onSave={(name, parsed) => {
+            const id = addQuery(
+              queryConnectionScope,
+              name,
+              parsed.url,
+              parsed.queryId,
+              parsed.project,
+            );
             setQueryDialog(false);
             setTab(`query:${id}`);
             toast.success('查询已添加');

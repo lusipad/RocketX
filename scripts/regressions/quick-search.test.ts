@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { RcMessage } from '../../packages/rc-client/src/index';
-import { searchMessagesGlobal } from '../../apps/web/src/lib/quickSearch';
+import {
+  chooseAvailableSearchTab,
+  searchMessagesGlobal,
+  searchesSettledFor,
+} from '../../apps/web/src/lib/quickSearch';
 
 const message = (id: string) => ({ _id: id } as RcMessage);
 
@@ -72,4 +76,18 @@ test('过期查询不会在全局搜索失败后继续发起回退请求', async
 
   assert.deepEqual(result, []);
   assert.equal(roomCalls, 0);
+});
+
+test('自动切换保留用户当前有结果的范围，只在当前范围为空时兜底', () => {
+  assert.equal(searchesSettledFor('new', 'old', 'old'), false);
+  assert.equal(searchesSettledFor('new', 'new', 'old'), false);
+  assert.equal(searchesSettledFor('new', 'new', 'new'), true);
+  assert.equal(
+    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 2 }),
+    'contacts',
+  );
+  assert.equal(
+    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 0 }),
+    'messages',
+  );
 });

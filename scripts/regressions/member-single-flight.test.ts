@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { RcUser } from '../../packages/rc-client/src/index';
+import type { RcMessage, RcUser } from '../../packages/rc-client/src/index';
 import { rest } from '../../apps/web/src/lib/client';
+import { useAuth } from '../../apps/web/src/stores/auth';
 import { useChat } from '../../apps/web/src/stores/chat';
 
 const room = { _id: 'single-flight-room', t: 'c' as const };
 const member = (id: string): RcUser => ({ _id: id, username: `user-${id}` });
 const originalGetMembers = rest.getMembers;
 const originalInviteToRoom = rest.inviteToRoom;
+const originalSendMessageRaw = rest.sendMessageRaw;
 
 function reset(memberErrors: Record<string, string> = {}, members: Record<string, RcUser[]> = {}) {
   useChat.setState({ rooms: { [room._id]: room }, subscriptions: {}, memberErrors, members });
@@ -16,7 +18,34 @@ function reset(memberErrors: Record<string, string> = {}, members: Record<string
 test.afterEach(() => {
   rest.getMembers = originalGetMembers;
   rest.inviteToRoom = originalInviteToRoom;
+  rest.sendMessageRaw = originalSendMessageRaw;
+  useAuth.setState({ status: 'guest', user: null, error: null });
   reset();
+});
+
+test('显式目标房间不受发送期间当前会话切换影响', async () => {
+  const targetRid = 'room-before-switch';
+  useAuth.setState({
+    status: 'authed',
+    user: { _id: 'me', username: 'me', name: 'Me' },
+    error: null,
+  });
+  useChat.setState({ activeRid: 'room-after-switch', messages: {} });
+  let sentRid = '';
+  rest.sendMessageRaw = (async (payload) => {
+    sentRid = payload.rid;
+    return {
+      ...payload,
+      ts: new Date().toISOString(),
+      u: { _id: 'me', username: 'me', name: 'Me' },
+    } as RcMessage;
+  }) as typeof rest.sendMessageRaw;
+
+  await useChat.getState().send('不能发错房间', { rid: targetRid });
+
+  assert.equal(sentRid, targetRid);
+  assert.equal(useChat.getState().messages[targetRid]?.length, 1);
+  assert.equal(useChat.getState().messages['room-after-switch'], undefined);
 });
 
 test('同房间同版本的并发成员加载只请求一次', async () => {

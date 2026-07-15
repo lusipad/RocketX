@@ -26,7 +26,10 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const me = useAuth((s) => s.user?.username);
   const [keyword, setKeyword] = useState('');
   const [roster, setRoster] = useState<RcUser[]>([]);
-  const [remote, setRemote] = useState<RcUser[]>([]);
+  const [remoteResult, setRemoteResult] = useState<{ query: string; users: RcUser[] }>({
+    query: '',
+    users: [],
+  });
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +84,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
     if (!q) {
-      setRemote([]);
+      setRemoteResult({ query: '', users: [] });
       return;
     }
     timer.current = setTimeout(() => {
@@ -89,10 +92,10 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
         () => rest.searchUsers(q, 50),
         {
           success: ({ users }) => {
-            setRemote(users);
+            setRemoteResult({ query: q, users });
             seedUserStatus(users);
           },
-          error: () => setRemote([]),
+          error: () => setRemoteResult({ query: q, users: [] }),
         },
         () => current,
       );
@@ -106,6 +109,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
+  const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
   const users = useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();

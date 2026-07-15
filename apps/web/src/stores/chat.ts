@@ -150,7 +150,7 @@ interface ChatState {
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
-  send: (text: string, opts?: { tmid?: string; quote?: RcMessage }) => Promise<void>;
+  send: (text: string, opts?: { rid?: string; tmid?: string; quote?: RcMessage }) => Promise<void>;
   /** 执行斜杠命令。tmid 有值时在话题里执行 */
   runSlash: (command: string, params: string, tmid?: string) => Promise<void>;
 
@@ -890,7 +890,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   send: async (text, opts) => {
-    const rid = get().activeRid;
+    const rid = opts?.rid ?? get().activeRid;
     const trimmed = text.trim();
     const me = useAuth.getState().user;
     if (!rid || !trimmed || !me) return;

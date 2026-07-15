@@ -8,6 +8,25 @@ export interface MessageSearchBackend {
 const FALLBACK_ROOMS = 8;
 const FALLBACK_CONCURRENCY = 2;
 
+export type QuickSearchTab = 'convs' | 'messages' | 'contacts';
+
+export function chooseAvailableSearchTab(
+  current: QuickSearchTab,
+  counts: Record<QuickSearchTab, number>,
+): QuickSearchTab {
+  if (counts[current] > 0) return current;
+  return (['convs', 'messages', 'contacts'] as const).find((tab) => counts[tab] > 0) ?? current;
+}
+
+export function searchesSettledFor(
+  keyword: string,
+  messageKeyword: string,
+  contactKeyword: string,
+): boolean {
+  const current = keyword.trim();
+  return !!current && messageKeyword === current && contactKeyword === current;
+}
+
 /**
  * 跨会话消息搜索：服务端全局搜索可用时以它为准；只有接口不可用或响应非法才回退。
  *

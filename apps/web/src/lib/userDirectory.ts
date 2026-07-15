@@ -94,6 +94,8 @@ export async function collectUserDirectory(
 
   if (!warning && users.size >= maxUsers && total > users.size) {
     warning = `目录报告共 ${total} 人，最多加载 ${maxUsers} 人；可尝试按准确姓名或用户名搜索更多`;
+  } else if (!warning && offset >= total && users.size < Math.min(total, maxUsers)) {
+    warning = `服务端报告共 ${total} 人，但分页去重后只返回了 ${users.size} 人`;
   } else if (!warning && pages >= maxPages && offset < total) {
     warning = `目录报告共 ${total} 人，达到 ${maxPages} 页请求上限后只加载了 ${users.size} 人`;
   }

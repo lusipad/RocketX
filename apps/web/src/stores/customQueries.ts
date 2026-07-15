@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { WorkbenchConfig } from '../lib/ado';
 
 export interface CustomQuery {
   id: string;
@@ -6,6 +7,14 @@ export interface CustomQuery {
   url: string;
   queryId: string;
   project?: string;
+  /** 查询只属于创建时的 ADO 连接；旧数据首次加载时由当前连接认领。 */
+  scope?: string;
+}
+
+export interface ParsedCustomQuery {
+  project?: string;
+  queryId: string;
+  url: string;
 }
 
 const STORAGE_KEY = 'rcx-custom-queries';
@@ -24,15 +33,16 @@ function save(queries: CustomQuery[]) {
 
 interface CustomQueriesState {
   queries: CustomQuery[];
-  add: (name: string, url: string, queryId: string, project?: string) => string;
+  add: (scope: string, name: string, url: string, queryId: string, project?: string) => string;
   remove: (id: string) => void;
+  claimLegacy: (scope: string, adoBase: string) => void;
 }
 
 export const useCustomQueries = create<CustomQueriesState>((set, get) => ({
   queries: load(),
-  add: (name, url, queryId, project) => {
+  add: (scope, name, url, queryId, project) => {
     const id = crypto.randomUUID();
-    const next = [...get().queries, { id, name, url, queryId, project }];
+    const next = [...get().queries, { id, name, url, queryId, project, scope }];
     save(next);
     set({ queries: next });
     return id;
@@ -42,27 +52,134 @@ export const useCustomQueries = create<CustomQueriesState>((set, get) => ({
     save(next);
     set({ queries: next });
   },
+  claimLegacy: (scope, adoBase) => {
+    if (!scope || !adoBase) return;
+    let changed = false;
+    const next: CustomQuery[] = [];
+    for (const query of get().queries) {
+      if (query.scope && query.scope !== scope) {
+        next.push(query);
+        continue;
+      }
+      const parsed = parseQueryUrl(query.url || query.queryId, adoBase);
+      if (!parsed || parsed.queryId.toLowerCase() !== query.queryId.toLowerCase()) {
+        // 可能是另一台 ADO 连接留下的合法旧查询。当前连接不能认领时只隔离保留，
+        // 等用户切回匹配的连接再迁移；queriesForScope 会确保它此时不可见、不可执行。
+        next.push(query);
+        continue;
+      }
+      const migrated = {
+        ...query,
+        scope,
+        url: parsed.url,
+        project: query.project ?? parsed.project,
+      };
+      if (
+        query.scope !== migrated.scope ||
+        query.url !== migrated.url ||
+        query.project !== migrated.project
+      ) {
+        changed = true;
+      }
+      next.push(migrated);
+    }
+    if (!changed) return;
+    save(next);
+    set({ queries: next });
+  },
 }));
 
-export function parseQueryUrl(url: string): { project?: string; queryId: string } | null {
-  // /_queries/query/{guid} or /_queries/query-edit/{guid}
-  const m1 = url.match(/\/([^/]+)\/_queries\/(?:query|query-edit)\/([0-9a-f-]{36})/i);
-  if (m1) return { project: decodeURIComponent(m1[1]), queryId: m1[2] };
-  // /_queries?id={guid}
+const GUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const GUID_ONLY = new RegExp(`^${GUID_SOURCE}$`, 'i');
+
+function httpUrl(value: string): URL | null {
   try {
-    const u = new URL(url);
-    const id = u.searchParams.get('id');
-    if (id && /^[0-9a-f-]{36}$/i.test(id)) {
-      const segments = u.pathname.split('/').filter(Boolean);
-      const qi = segments.indexOf('_queries');
-      return { project: qi > 0 ? decodeURIComponent(segments[qi - 1]) : undefined, queryId: id };
-    }
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+    return url;
   } catch {
-    /* not a URL */
+    return null;
   }
-  // bare GUID
-  const m2 = url.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-  if (m2) return { queryId: m2[1] };
+}
+
+function withinAdoBase(url: URL, adoBase: string): boolean {
+  const base = httpUrl(adoBase);
+  if (!base || url.origin.toLowerCase() !== base.origin.toLowerCase()) return false;
+  const basePath = base.pathname.replace(/\/+$/, '').toLowerCase();
+  const path = url.pathname.toLowerCase();
+  return !basePath || path === basePath || path.startsWith(`${basePath}/`);
+}
+
+export function customQueryConnectionScope(config: WorkbenchConfig | null): string {
+  if (!config || config.mode !== 'direct' || !config.adoBase) return '';
+  const base = httpUrl(config.adoBase);
+  if (!base) return '';
+  base.hash = '';
+  base.search = '';
+  base.pathname = base.pathname.replace(/\/+$/, '');
+  // account 在 NTLM 模式下可能由身份探测异步回填，不能参与持久化作用域，
+  // 否则查询会在回填前被认领、回填后立即从当前连接消失。
+  return `direct\0${base.toString()}\0${config.auth ?? ''}`;
+}
+
+export function queriesForScope(
+  queries: CustomQuery[],
+  scope: string,
+  adoBase: string,
+): CustomQuery[] {
+  if (!scope || !adoBase) return [];
+  return queries.flatMap((query) => {
+    if (query.scope && query.scope !== scope) return [];
+    const parsed = parseQueryUrl(query.url || query.queryId, adoBase);
+    if (!parsed || parsed.queryId.toLowerCase() !== query.queryId.toLowerCase()) return [];
+    return [{ ...query, url: parsed.url, project: query.project ?? parsed.project }];
+  });
+}
+
+export function parseQueryUrl(input: string, adoBase?: string): ParsedCustomQuery | null {
+  const value = input.trim();
+  if (GUID_ONLY.test(value)) {
+    const base = adoBase ? httpUrl(adoBase) : null;
+    if (adoBase && !base) return null;
+    if (!base) return { queryId: value, url: '' };
+    base.pathname = `${base.pathname.replace(/\/+$/, '')}/_queries`;
+    base.search = '';
+    base.searchParams.set('id', value);
+    base.hash = '';
+    return { queryId: value, url: base.toString() };
+  }
+
+  const url = httpUrl(value);
+  if (!url || (adoBase && !withinAdoBase(url, adoBase))) return null;
+  const pathMatch = url.pathname.match(
+    new RegExp(`/([^/]+)/_queries/(?:query|query-edit)/(${GUID_SOURCE})(?:/|$)`, 'i'),
+  );
+  if (pathMatch) {
+    try {
+      return {
+        project: decodeURIComponent(pathMatch[1]),
+        queryId: pathMatch[2],
+        url: url.toString(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const id = url.searchParams.get('id');
+  if (id && GUID_ONLY.test(id)) {
+    const segments = url.pathname.split('/').filter(Boolean);
+    const qi = segments.findIndex((segment) => segment.toLowerCase() === '_queries');
+    try {
+      return {
+        project: qi > 0 ? decodeURIComponent(segments[qi - 1]) : undefined,
+        queryId: id,
+        url: url.toString(),
+      };
+    } catch {
+      return null;
+    }
+  }
   return null;
 }
 
