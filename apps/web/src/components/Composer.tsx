@@ -15,7 +15,7 @@ import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
-import { applyScopedResult } from '../lib/scopedResult';
+import { applyScopedResult, settleScopedResult } from '../lib/scopedResult';
 import {
   commandDesc,
   commandParams,
@@ -115,6 +115,8 @@ export default function Composer() {
 
   // @ 群外的人：输入 @关键词 时防抖搜全局目录，把不在群里的人也拉进候选
   useEffect(() => {
+    let current = true;
+    const rid = activeRid;
     const q = mentionQuery?.trim();
     if (!q) {
       setRemoteUsers([]);
@@ -122,15 +124,20 @@ export default function Composer() {
     }
     if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     mentionSearchTimer.current = setTimeout(() => {
-      void rest
-        .searchUsers(q, 20)
-        .then(({ users }) => setRemoteUsers(users))
-        .catch(() => setRemoteUsers([]));
+      void settleScopedResult(
+        () => rest.searchUsers(q, 20),
+        {
+          success: ({ users }) => setRemoteUsers(users),
+          error: () => setRemoteUsers([]),
+        },
+        () => current && useChat.getState().activeRid === rid,
+      );
     }, 250);
     return () => {
+      current = false;
       if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     };
-  }, [mentionQuery]);
+  }, [activeRid, mentionQuery]);
 
   const candidates = useMemo(() => {
     if (mentionQuery === null) return [];

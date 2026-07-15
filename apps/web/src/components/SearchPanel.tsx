@@ -4,6 +4,7 @@ import { AlertCircle, Search } from 'lucide-react';
 import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { humanError } from '../stores/toast';
+import { settleScopedResult } from '../lib/scopedResult';
 import PanelShell from './PanelShell';
 import MessageResultRow from './MessageResultRow';
 import { SkeletonRows } from './Skeleton';
@@ -19,31 +20,43 @@ export default function SearchPanel() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!rid) return;
+    let current = true;
+    if (!rid) {
+      setSearching(false);
+      return;
+    }
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
     if (!q) {
       setResults([]);
       setTouched(false);
       setError(null);
+      setSearching(false);
       return;
     }
+    setResults([]);
+    setTouched(false);
+    setError(null);
+    setSearching(true);
     timer.current = setTimeout(() => {
-      setSearching(true);
-      setError(null);
-      rest
-        .searchMessages(rid, q)
-        .then((msgs) => {
-          setResults(msgs.sort((a, b) => tsMs(b.ts) - tsMs(a.ts)));
-          setTouched(true);
-        })
-        .catch((err: unknown) => {
-          setResults([]);
-          setError(humanError(err, '搜索失败'));
-        })
-        .finally(() => setSearching(false));
+      void settleScopedResult(
+        () => rest.searchMessages(rid, q),
+        {
+          success: (msgs) => {
+            setResults(msgs.sort((a, b) => tsMs(b.ts) - tsMs(a.ts)));
+            setTouched(true);
+          },
+          error: (err) => {
+            setResults([]);
+            setError(humanError(err, '搜索失败'));
+          },
+          complete: () => setSearching(false),
+        },
+        () => current && useChat.getState().activeRid === rid,
+      );
     }, 300);
     return () => {
+      current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword, rid]);

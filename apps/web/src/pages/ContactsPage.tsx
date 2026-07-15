@@ -9,6 +9,7 @@ import { useAuth } from '../stores/auth';
 import { toast } from '../stores/toast';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import { collectUserDirectory } from '../lib/userDirectory';
+import { settleScopedResult } from '../lib/scopedResult';
 import AliasDialog from '../components/AliasDialog';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
@@ -76,21 +77,28 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
 
   // 关键词走服务端（能翻出首屏之外的人），与本地拼音结果合并
   useEffect(() => {
+    let current = true;
     if (timer.current) clearTimeout(timer.current);
-    if (!keyword.trim()) {
+    const q = keyword.trim();
+    if (!q) {
       setRemote([]);
       return;
     }
     timer.current = setTimeout(() => {
-      rest
-        .searchUsers(keyword, 50)
-        .then(({ users }) => {
-          setRemote(users);
-          seedUserStatus(users);
-        })
-        .catch(() => setRemote([]));
+      void settleScopedResult(
+        () => rest.searchUsers(q, 50),
+        {
+          success: ({ users }) => {
+            setRemote(users);
+            seedUserStatus(users);
+          },
+          error: () => setRemote([]),
+        },
+        () => current,
+      );
     }, 300);
     return () => {
+      current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword]);
