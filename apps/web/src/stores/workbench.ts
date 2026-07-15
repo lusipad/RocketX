@@ -136,6 +136,15 @@ interface WorkbenchState {
   refresh: () => Promise<void>;
 }
 
+let refreshRevision = 0;
+
+function connectionKey(config: WorkbenchConfig | null): string {
+  if (!config) return '';
+  return config.mode === 'direct'
+    ? `direct\0${config.adoBase ?? ''}\0${config.auth ?? ''}\0${config.pat ?? ''}`
+    : `bridge\0${config.bridge ?? ''}`;
+}
+
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
   config: loadWorkbenchConfig(),
   workItems: [],
@@ -147,40 +156,59 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
   setConfig: (config) => {
     saveWorkbenchConfig(config);
+    refreshRevision++;
     // 配置变了，旧数据就作废——别让用户对着上一个服务器的工作项发呆
-    set({ config, workItems: [], prs: [], builds: [], lastRefresh: null, error: null });
+    set({
+      config,
+      workItems: [],
+      prs: [],
+      builds: [],
+      loading: false,
+      lastRefresh: null,
+      error: null,
+    });
     void get().refresh();
   },
 
   refresh: async () => {
+    const revision = ++refreshRevision;
     const c = get().config;
+    const key = connectionKey(c);
+    const isCurrent = () =>
+      refreshRevision === revision && connectionKey(get().config) === key;
     // 账号不是必需的：Windows 集成认证下工作项查询用 @Me 宏，服务器自己知道是谁。
     // 真正的前提是「连到哪儿」。
-    if (!c) return;
-    if (c.mode === 'direct' ? !c.adoBase : !c.bridge) return;
+    if (!c || (c.mode === 'direct' ? !c.adoBase : !c.bridge)) {
+      if (isCurrent()) set({ loading: false });
+      return;
+    }
     set({ loading: true, error: null });
     try {
       if (c.mode === 'direct' && c.adoBase) {
         const { directGetWorkItems, directGetPullRequests, directGetBuilds, directGetIdentity } =
           await import('../lib/adoDirect');
+        if (!isCurrent()) return;
         const cfg = { adoBase: c.adoBase, pat: c.pat ?? '', auth: c.auth };
-        // markdown 渲染器靠它把消息里的 #123 变成工作项链接
-        localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
         // 账号为空(NTLM 集成认证的常态：什么都不用填)时自动探测回填——
         // 工作项走 @Me 不受影响，但 PR 是前端按账号过滤的，账号空着
         // 「待我评审/我提的」就永远是空的（issue #12）
         if (!c.account) {
           try {
             const who = await directGetIdentity(cfg);
+            if (!isCurrent()) return;
             if (who.account) {
-              const next = { ...c, account: who.account };
-              saveWorkbenchConfig(next);
-              set({ config: next });
+              const current = get().config;
+              if (current && !current.account) {
+                const next = { ...current, account: who.account };
+                saveWorkbenchConfig(next);
+                set({ config: next });
+              }
             }
           } catch {
             /* 探测失败不拦刷新，PR 过滤退化为空，其余照常 */
           }
         }
+        if (!isCurrent()) return;
         const [workItems, prs, builds] = await Promise.all([
           // 恒用 @Me（传空）：显式账号字符串和 ADO identity 格式对不上会漏工作项。
           // account 只用于 PR 的前端过滤，不进 WIQL
@@ -189,6 +217,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           // 构建要遍历项目，慢且容易超时，挂了不该拖垮整个面板
           directGetBuilds(cfg).catch(() => []),
         ]);
+        if (!isCurrent()) return;
+        // markdown 渲染器靠它把消息里的 #123 变成工作项链接
+        localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
         set({
           workItems: workItems as WorkItem[],
           prs: prs as PullRequest[],
@@ -204,26 +235,35 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           fetch(`${c.bridge}/api/ado/pullrequests`),
           fetch(`${c.bridge}/api/ado/builds`),
         ]);
+        if (!isCurrent()) return;
         if (!cfgRes.ok || !wiRes.ok || !prRes.ok) {
           const bad = [cfgRes, wiRes, prRes].find((r) => !r.ok)!;
           const body = await bad.json().catch(() => ({}) as { error?: string });
           throw new Error(body.error ?? `桥接服务返回 ${bad.status}`);
         }
         const webCfg = (await cfgRes.json()) as { webBase: string; account?: string };
+        const workItems = ((await wiRes.json()) as { items: WorkItem[] }).items;
+        const prs = ((await prRes.json()) as { items: PullRequest[] }).items;
+        const builds = buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : [];
+        if (!isCurrent()) return;
         localStorage.setItem(ADO_WEB_KEY, webCfg.webBase);
         if (!c.account && webCfg.account) {
-          const next = { ...c, account: webCfg.account };
-          saveWorkbenchConfig(next);
-          set({ config: next });
+          const current = get().config;
+          if (current && !current.account) {
+            const next = { ...current, account: webCfg.account };
+            saveWorkbenchConfig(next);
+            set({ config: next });
+          }
         }
         set({
-          workItems: ((await wiRes.json()) as { items: WorkItem[] }).items,
-          prs: ((await prRes.json()) as { items: PullRequest[] }).items,
-          builds: buildRes.ok ? ((await buildRes.json()) as { items: Build[] }).items : [],
+          workItems,
+          prs,
+          builds,
           lastRefresh: Date.now(),
         });
       }
     } catch (err) {
+      if (!isCurrent()) return;
       const raw = err instanceof Error ? err.message : String(err ?? '');
       set({
         error:
@@ -234,7 +274,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
               : '无法连接桥接服务',
       });
     } finally {
-      set({ loading: false });
+      if (isCurrent()) set({ loading: false });
     }
   },
 }));
