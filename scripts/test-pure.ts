@@ -360,8 +360,19 @@ async function main(): Promise<void> {
   const React = (await import('react')).default;
   (globalThis as Record<string, unknown>).React = React;
   const { renderToStaticMarkup } = await import('react-dom/server');
-  const { renderMarkdown } = await import('../apps/web/src/lib/markdown');
+  const { renderMarkdown, isPureWorkItemText } = await import('../apps/web/src/lib/markdown');
   const html = (md: string) => renderToStaticMarkup(renderMarkdown(md) as any);
+
+  // 工作项引用的形态判定：整条消息只有 #号/ADO 链接 → 大卡片，夹在文字里 → chip + 悬浮卡
+  check('纯 #号 → 卡片', isPureWorkItemText('#123'));
+  check('多个 #号 → 卡片', isPureWorkItemText(' #123  #456 '));
+  check('文字夹 #号 → 悬浮 chip', !isPureWorkItemText('修复了 #123，请验证'));
+  check('纯 ADO 工作项链接 → 卡片', isPureWorkItemText('http://ado/c/p/_workitems/edit/12'));
+  check(
+    '文字夹 ADO 链接 → 悬浮 chip',
+    !isPureWorkItemText('看下 http://ado/c/p/_workitems/edit/12 这个'),
+  );
+  check('#号加频道名不算工作项', !isPureWorkItemText('#general'));
 
   check('标题：# 标题 → <h1>', html('# 发布计划').includes('<h1'), html('# 发布计划').slice(0, 60));
   check('标题：### → <h3>', html('### 三级').includes('<h3'));

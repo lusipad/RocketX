@@ -30,7 +30,26 @@ const INLINE_RE = new RegExp(
   'g',
 );
 
-function renderInline(text: string, me: string | undefined, keyBase: string): ReactNode[] {
+/**
+ * 工作项引用的呈现形态：整条消息就只有 #号（或 ADO 工作项链接）→ 富内联卡片；
+ * 夹在文字里 → 紧凑 chip + 悬浮详情卡，不打断行文（issue：文字中的 #号 要悬浮卡片）。
+ */
+type WiVariant = 'card' | 'chip';
+
+export function isPureWorkItemText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/^#\d+(\s+#\d+)*$/.test(t)) return true;
+  // 单独粘贴一条 ADO 工作项链接也算「纯卡片」
+  return /^https?:\/\/\S+\/_workitems\/edit\/\d+\S*$/i.test(t);
+}
+
+function renderInline(
+  text: string,
+  me: string | undefined,
+  keyBase: string,
+  wi: WiVariant,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let i = 0;
@@ -73,9 +92,9 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
       // 复用 #工作项号 那套 WorkItemLink（issue #13）。必须属于当前配置的 ADO 集合
       // 才转卡片：href 是用 adoWebBase 重建的，也避免把别家 ADO 链接认成本服务器的。
       const adoBase = adoWebBase();
-      const wi = /\/_workitems\/edit\/(\d+)\b/i.exec(full);
-      if (wi && adoBase && full.toLowerCase().startsWith(adoBase.toLowerCase())) {
-        nodes.push(<WorkItemLink key={key} id={Number(wi[1])} />);
+      const wiUrl = /\/_workitems\/edit\/(\d+)\b/i.exec(full);
+      if (wiUrl && adoBase && full.toLowerCase().startsWith(adoBase.toLowerCase())) {
+        nodes.push(<WorkItemLink key={key} id={Number(wiUrl[1])} variant={wi} />);
       } else {
         nodes.push(
           <a
@@ -110,7 +129,7 @@ function renderInline(text: string, me: string | undefined, keyBase: string): Re
       // #纯数字 且配置过工作台 → ADO 工作项链接（悬停出详情卡，可快速评论）
       const adoBase = /^#\d+$/.test(full) ? adoWebBase() : null;
       if (adoBase) {
-        nodes.push(<WorkItemLink key={key} id={Number(full.slice(1))} />);
+        nodes.push(<WorkItemLink key={key} id={Number(full.slice(1))} variant={wi} />);
       } else {
         nodes.push(
           <span key={key} className="font-medium text-primary">
@@ -176,6 +195,7 @@ function renderBlocks(
   me: string | undefined,
   keyBase: string,
   variant: Variant,
+  wi: WiVariant,
 ): ReactNode[] {
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];
@@ -195,7 +215,7 @@ function renderBlocks(
       const Tag = `h${level}` as 'h1';
       push(
         <Tag key={key} className={HEADING_CLS[variant][level - 1]}>
-          {renderInline(heading[2], me, key)}
+          {renderInline(heading[2], me, key, wi)}
         </Tag>,
       );
       i++;
@@ -230,7 +250,7 @@ function renderBlocks(
                     key={hi}
                     className="border border-line bg-fill-1 px-2.5 py-1.5 font-medium text-ink"
                   >
-                    {renderInline(h, me, `${key}-h${hi}`)}
+                    {renderInline(h, me, `${key}-h${hi}`, wi)}
                   </th>
                 ))}
               </tr>
@@ -241,7 +261,7 @@ function renderBlocks(
                   {/* 单元格数可能与表头不一致，按表头补齐，别让表格塌掉 */}
                   {header.map((_, ci) => (
                     <td key={ci} className="border border-line px-2.5 py-1.5 text-ink-2">
-                      {renderInline(r[ci] ?? '', me, `${key}-r${ri}c${ci}`)}
+                      {renderInline(r[ci] ?? '', me, `${key}-r${ri}c${ci}`, wi)}
                     </td>
                   ))}
                 </tr>
@@ -266,7 +286,7 @@ function renderBlocks(
           key={key}
           className={`border-l-[3px] border-line pl-2.5 text-ink-2 ${chat ? 'my-1' : 'my-1.5'}`}
         >
-          {renderBlocks(buf.join('\n'), me, `${key}-q`, variant)}
+          {renderBlocks(buf.join('\n'), me, `${key}-q`, variant, wi)}
         </blockquote>,
       );
       continue;
@@ -284,7 +304,7 @@ function renderBlocks(
         >
           <input type="checkbox" checked={done} readOnly className="mt-1 accent-primary" />
           <span className={done ? 'text-ink-3 line-through' : ''}>
-            {renderInline(task[3], me, key)}
+            {renderInline(task[3], me, key, wi)}
           </span>
         </div>,
       );
@@ -297,7 +317,7 @@ function renderBlocks(
       push(
         <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(ordered[1]) }}>
           <span className="shrink-0 text-ink-3">{ordered[2]}.</span>
-          <span className="min-w-0">{renderInline(ordered[3], me, key)}</span>
+          <span className="min-w-0">{renderInline(ordered[3], me, key, wi)}</span>
         </div>,
       );
       i++;
@@ -309,7 +329,7 @@ function renderBlocks(
       push(
         <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(bullet[1]) }}>
           <span className="shrink-0 text-ink-3">•</span>
-          <span className="min-w-0">{renderInline(bullet[2], me, key)}</span>
+          <span className="min-w-0">{renderInline(bullet[2], me, key, wi)}</span>
         </div>,
       );
       i++;
@@ -333,7 +353,7 @@ function renderBlocks(
     }
     push(
       <p key={key} className={`whitespace-pre-wrap ${chat ? '' : 'my-2'}`}>
-        {renderInline(para.join('\n'), me, `${key}-p`)}
+        {renderInline(para.join('\n'), me, `${key}-p`, wi)}
       </p>,
     );
   }
@@ -363,6 +383,7 @@ function renderWithCodeFences(
   text: string,
   me: string | undefined,
   variant: Variant,
+  wi: WiVariant,
 ): ReactNode {
   const chat = variant === 'chat';
   const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
@@ -379,7 +400,7 @@ function renderWithCodeFences(
             {part.replace(/\n$/, '')}
           </pre>
         ) : part.trim() ? (
-          <Fragment key={i}>{renderBlocks(part, me, String(i), variant)}</Fragment>
+          <Fragment key={i}>{renderBlocks(part, me, String(i), variant, wi)}</Fragment>
         ) : null,
       )}
     </>
@@ -390,12 +411,13 @@ function renderWithCodeFences(
 export function renderMarkdown(text: string, me?: string): ReactNode {
   // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
   text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
-  return renderWithCodeFences(text, me, 'chat');
+  // 整条消息只有工作项引用 → 大卡片；夹在文字里 → 紧凑 chip + 悬浮卡
+  return renderWithCodeFences(text, me, 'chat', isPureWorkItemText(text) ? 'card' : 'chip');
 }
 
 /** 文档预览（.md 文件）：同一套解析，排版更松 */
 export function renderMarkdownDoc(text: string): ReactNode {
-  return renderWithCodeFences(text, undefined, 'doc');
+  return renderWithCodeFences(text, undefined, 'doc', 'chip');
 }
 
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */
