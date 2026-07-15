@@ -24,6 +24,7 @@ export interface AdoWorkItem {
   project: string;
   assignedTo?: string;
   changedDate?: string;
+  dueDate?: string;
   webUrl: string;
 }
 
@@ -155,6 +156,9 @@ export class AdoClient {
       'System.AssignedTo',
       'System.ChangedDate',
       'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.DueDate',
+      'Microsoft.VSTS.Scheduling.TargetDate',
+      'Microsoft.VSTS.Common.DueDate',
     ].join(',');
     const detail = await this.request<{
       value: { id: number; fields: Record<string, any> }[];
@@ -169,6 +173,10 @@ export class AdoClient {
       project: w.fields['System.TeamProject'] ?? '',
       assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
       changedDate: w.fields['System.ChangedDate'],
+      dueDate:
+        w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
+        w.fields['Microsoft.VSTS.Common.DueDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     }));
   }
@@ -183,6 +191,9 @@ export class AdoClient {
       'System.AssignedTo',
       'System.ChangedDate',
       'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.DueDate',
+      'Microsoft.VSTS.Scheduling.TargetDate',
+      'Microsoft.VSTS.Common.DueDate',
     ].join(',');
     const detail = await this.request<{ value: { id: number; fields: Record<string, any> }[] }>(
       'GET',
@@ -199,6 +210,10 @@ export class AdoClient {
       project: w.fields['System.TeamProject'] ?? '',
       assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
       changedDate: w.fields['System.ChangedDate'],
+      dueDate:
+        w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
+        w.fields['Microsoft.VSTS.Common.DueDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     };
   }
