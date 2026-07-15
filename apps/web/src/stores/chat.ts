@@ -404,8 +404,6 @@ const notifiedMids = new Set<string>();
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
   if (!auth || msg.u._id === auth.userId || msg.t) return;
-  // 免打扰会话不弹通知
-  if (state.subscriptions[rid]?.disableNotifications) return;
   if (notifiedMids.has(msg._id)) return;
   notifiedMids.add(msg._id);
   if (notifiedMids.size > 800) {
@@ -415,23 +413,33 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     }
   }
 
-  // 有未读新消息就闪任务栏（issue #19-1）。放在「桌面通知」偏好判断之前：
-  // 闪烁提醒的是未读，不该被通知开关连带关掉；窗口已聚焦时内部自行跳过。
-  void flashTaskbar();
+  const me = useAuth.getState().user?.username;
+  const mentioned =
+    !!me &&
+    new RegExp(`@(${me.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}|all|here)\\b`).test(msg.msg ?? '');
+
+  // 提醒模型对标飞书/微信：
+  // - 未免打扰的会话：群聊/私聊一视同仁，弹通知 + 闪任务栏（一级提醒）；
+  // - 免打扰的会话：这里直接静默，只留未读数与任务栏角标（次级提示，MainPage 维护）；
+  //   但 @我/@all/@here 穿透免打扰（飞书行为）——人在群里被点名不该错过。
+  if (state.subscriptions[rid]?.disableNotifications && !mentioned) return;
 
   const prefs = usePrefs.getState().prefs;
   if (prefs.desktopNotifications === 'nothing') return;
-  // 「仅 @我」：消息里没提到我就不弹
+  // 「私聊和 @我」：群聊（含多人直聊，t 也是 'd' 但多于 2 人）普通消息不弹
   if (prefs.desktopNotifications === 'mentions') {
-    const me = useAuth.getState().user?.username;
-    const mentioned =
-      !!me && new RegExp(`@(${me}|all|here)\\b`).test(msg.msg ?? '');
-    if (!mentioned) return;
+    const roomType = state.subscriptions[rid]?.t ?? state.rooms[rid]?.t;
+    const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
+    const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
+    if (isGroupish && !mentioned) return;
   }
 
   const focused = state.activeRid === rid && !document.hidden;
   // 关闭「当前会话不打扰」时，正在看的会话也会弹通知
   if (focused && (prefs.muteFocusedConversations ?? true)) return;
+  // 会弹通知的消息才闪任务栏（微信同款：什么消息闪，取决于它值不值得提醒）；
+  // 窗口已聚焦时内部自行跳过（issue #19-1）
+  void flashTaskbar();
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）

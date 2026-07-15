@@ -3,7 +3,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { type ModuleKey, useUI } from '../stores/ui';
 import { requestNotifyPermission } from '../lib/notify';
-import { clearTaskbarFlash } from '../lib/taskbar';
+import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -42,13 +42,15 @@ export default function MainPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // 标题栏未读数（免打扰会话不计入）
+  // 标题栏未读数 + 任务栏角标（免打扰会话不计入）。
+  // 角标是群聊消息的次级提示主体：不弹窗，但任务栏图标上有数字（读完自动清）
   useEffect(() => {
     const total = Object.values(subscriptions).reduce(
       (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
       0,
     );
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
+    void setTaskbarBadge(total);
   }, [subscriptions]);
 
   // 全局快捷键
