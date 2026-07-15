@@ -14,6 +14,34 @@ import { SkeletonList } from './Skeleton';
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
 
+export function shouldShowUnreadDivider({
+  unreadMark,
+  messageTs,
+  previousMessageTs,
+  hasMore,
+}: {
+  unreadMark: number | undefined;
+  messageTs: number;
+  previousMessageTs: number | undefined;
+  hasMore: boolean;
+}): boolean {
+  if (!unreadMark || messageTs <= unreadMark) return false;
+  // 还有更早分页时，当前页首条之前的消息未知，不能把它冒充成精确未读边界。
+  return previousMessageTs !== undefined ? previousMessageTs <= unreadMark : !hasMore;
+}
+
+export function initialMessageScrollTop({
+  historyLoaded,
+  didInitialScroll,
+  scrollHeight,
+}: {
+  historyLoaded: boolean;
+  didInitialScroll: boolean;
+  scrollHeight: number;
+}): number | undefined {
+  return historyLoaded && !didInitialScroll ? scrollHeight : undefined;
+}
+
 export default function MessageList({ rid }: { rid: string }) {
   // 跨过零点后「今天/昨天」分割线要跟着变
   useDayTick();
@@ -34,7 +62,6 @@ export default function MessageList({ rid }: { rid: string }) {
   const [forwardOpen, setForwardOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const unreadRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
   const anchor = useRef<{
@@ -44,8 +71,8 @@ export default function MessageList({ rid }: { rid: string }) {
     settled: boolean;
   } | null>(null);
   const [anchorTick, setAnchorTick] = useState(0);
-  /** 已经为本会话定位过未读分割线（只做一次，之后正常跟随） */
-  const didLocateUnread = useRef(false);
+  /** 已经为本会话执行过首次贴底（只做一次，之后正常跟随） */
+  const didInitialScroll = useRef(false);
 
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showJump, setShowJump] = useState(false);
@@ -107,7 +134,7 @@ export default function MessageList({ rid }: { rid: string }) {
   // 切换会话：重置状态
   useLayoutEffect(() => {
     stickToBottom.current = true;
-    didLocateUnread.current = false;
+    didInitialScroll.current = false;
     setShowJump(false);
     setNewCount(0);
     anchor.current = null;
@@ -138,16 +165,19 @@ export default function MessageList({ rid }: { rid: string }) {
       return;
     }
 
-    // 2) 首次加载且有未读：停在「以下为新消息」处（飞书行为），而不是冲到底
-    if (!didLocateUnread.current && historyLoaded) {
-      didLocateUnread.current = true;
-      const marker = unreadRef.current;
-      if (marker) {
-        marker.scrollIntoView({ block: 'center' });
-        stickToBottom.current = false;
-        setShowJump(true);
-        return;
-      }
+    // 2) 首次打开会话默认贴底；未读分割线只作视觉提示，不改变初始位置（issue #26）。
+    const initialScrollTop = initialMessageScrollTop({
+      historyLoaded,
+      didInitialScroll: didInitialScroll.current,
+      scrollHeight: el.scrollHeight,
+    });
+    if (initialScrollTop !== undefined) {
+      didInitialScroll.current = true;
+      el.scrollTop = initialScrollTop;
+      stickToBottom.current = true;
+      setShowJump(false);
+      setNewCount(0);
+      return;
     }
 
     // 3) 常规：在底部附近则跟随
@@ -161,7 +191,7 @@ export default function MessageList({ rid }: { rid: string }) {
   useEffect(() => {
     const added = list.length - prevLen.current;
     prevLen.current = list.length;
-    if (added > 0 && !stickToBottom.current && didLocateUnread.current) {
+    if (added > 0 && !stickToBottom.current && didInitialScroll.current) {
       setNewCount((n) => n + added);
     }
   }, [list.length]);
@@ -274,11 +304,15 @@ export default function MessageList({ rid }: { rid: string }) {
             const newDay = !prev || !sameDay(tsMs(prev.ts), ms);
 
             // 「以下为新消息」：上次已读之后的第一条消息前
-            const isUnreadStart =
-              !!unreadMark && ms > unreadMark && (!prev || tsMs(prev.ts) <= unreadMark);
+            const isUnreadStart = shouldShowUnreadDivider({
+              unreadMark,
+              messageTs: ms,
+              previousMessageTs: prev ? tsMs(prev.ts) : undefined,
+              hasMore,
+            });
 
             const unreadDivider = isUnreadStart ? (
-              <div ref={unreadRef} className="my-3 flex items-center gap-3">
+              <div className="my-3 flex items-center gap-3">
                 <div className="h-px flex-1 bg-danger/30" />
                 <span className="text-xs text-danger">以下为新消息</span>
                 <div className="h-px flex-1 bg-danger/30" />

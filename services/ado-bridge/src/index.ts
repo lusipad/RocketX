@@ -77,6 +77,22 @@ app.get('/api/ado/pullrequests', async (req, reply) => {
   }
 });
 
+app.get<{
+  Params: { id: string };
+}>('/api/ado/pullrequest/:id', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return reply.code(400).send({ error: '无效的 PR 链接参数' });
+  }
+  try {
+    return { item: await ado.getPullRequest(id) };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO PR 查询失败' });
+  }
+});
+
 /** 单工作项详情（聊天 #号 悬停卡片） */
 app.get<{ Params: { id: string } }>('/api/ado/workitem/:id', async (req, reply) => {
   if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
@@ -119,6 +135,24 @@ app.get('/api/ado/builds', async (req, reply) => {
   } catch (err) {
     req.log.error(err);
     return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 查询失败' });
+  }
+});
+
+app.get<{
+  Params: { id: string };
+  Querystring: { project?: string };
+}>('/api/ado/build/:id', async (req, reply) => {
+  if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
+  const id = Number(req.params.id);
+  const project = req.query.project?.trim();
+  if (!Number.isInteger(id) || id <= 0 || !project) {
+    return reply.code(400).send({ error: '无效的构建链接参数' });
+  }
+  try {
+    return { item: await ado.getBuild(project, id) };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 构建查询失败' });
   }
 });
 

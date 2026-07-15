@@ -206,7 +206,7 @@ async function main() {
   await check('他人从讨论卡片加入公开讨论', async () => {
     const info = await rest2.getRoomInfo(discussionId);
     assert(info.prid === channelId, '非成员无法读取公开讨论信息');
-    await rest2.joinChannel(discussionId);
+    await rest2.joinRoom(discussionId);
     const subs = await rest2.getSubscriptions();
     assert(subs.some((s) => s.rid === discussionId), '加入后订阅列表里没有讨论');
   });

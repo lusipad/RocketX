@@ -11,7 +11,7 @@ import {
   Upload,
   Users,
 } from 'lucide-react';
-import { useChat, type RightPanel } from '../stores/chat';
+import { roomMembershipPolicy, useChat, type RightPanel } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
 import RoomInfoPanel from './RoomInfoPanel';
@@ -102,7 +102,7 @@ export default function ChatArea() {
   const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername }, nameFormat);
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
-  const requiresJoin = !sub && !!room && (room.t === 'c' || !!room.prid);
+  const { requiresJoin, canCompose } = roomMembershipPolicy(!!sub, room);
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
     setPanel(rightPanel?.kind === panel.kind ? null : panel);
@@ -111,7 +111,7 @@ export default function ChatArea() {
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (requiresJoin) return;
+    if (!canCompose) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) requestUpload(files);
   };
@@ -121,7 +121,7 @@ export default function ChatArea() {
       <main
         className="relative flex min-w-0 flex-1 flex-col bg-surface-3"
         onDragOver={(e) => {
-          if (!requiresJoin && e.dataTransfer.types.includes('Files')) {
+          if (canCompose && e.dataTransfer.types.includes('Files')) {
             e.preventDefault();
             setDragging(true);
           }
@@ -255,7 +255,7 @@ export default function ChatArea() {
             </button>
           </div>
         )}
-        {!requiresJoin && <Composer />}
+        {canCompose && <Composer />}
 
         {dragging && (
           <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary-light/60">

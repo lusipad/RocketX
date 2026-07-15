@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import WorkItemLink from '../components/WorkItemLink';
-import { adoWebBase } from './ado';
+import AdoEntityLink from '../components/AdoEntityLink';
+import { adoWebBase, parseAdoUrl } from './ado';
 import Emoji from '../components/Emoji';
 
 /**
@@ -42,6 +43,15 @@ export function isPureWorkItemText(text: string): boolean {
   if (/^#\d+(\s+#\d+)*$/.test(t)) return true;
   // 单独粘贴一条 ADO 工作项链接也算「纯卡片」
   return /^https?:\/\/\S+\/_workitems\/edit\/\d+\S*$/i.test(t);
+}
+
+export function isPureAdoEntityText(text: string): boolean {
+  const value = text.trim();
+  return (
+    isPureWorkItemText(value) ||
+    /^https?:\/\/\S+\/_git\/[^/\s]+\/pullrequest\/\d+\S*$/i.test(value) ||
+    /^https?:\/\/\S+\/_build(?:\/results)?\?\S*\bbuildId=\d+\S*$/i.test(value)
+  );
 }
 
 function renderInline(
@@ -91,10 +101,11 @@ function renderInline(
       // 粘贴的 ADO 工作项 URL（.../_workitems/edit/123）自动 unfurl 成悬停详情卡，
       // 复用 #工作项号 那套 WorkItemLink（issue #13）。必须属于当前配置的 ADO 集合
       // 才转卡片：href 是用 adoWebBase 重建的，也避免把别家 ADO 链接认成本服务器的。
-      const adoBase = adoWebBase();
-      const wiUrl = /\/_workitems\/edit\/(\d+)\b/i.exec(full);
-      if (wiUrl && adoBase && full.toLowerCase().startsWith(adoBase.toLowerCase())) {
-        nodes.push(<WorkItemLink key={key} id={Number(wiUrl[1])} variant={wi} />);
+      const entity = parseAdoUrl(full, adoWebBase());
+      if (entity?.kind === 'workitem') {
+        nodes.push(<WorkItemLink key={key} id={entity.id} variant={wi} />);
+      } else if (entity) {
+        nodes.push(<AdoEntityLink key={key} entity={entity} variant={wi} />);
       } else {
         nodes.push(
           <a
@@ -412,7 +423,7 @@ export function renderMarkdown(text: string, me?: string): ReactNode {
   // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
   text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
   // 整条消息只有工作项引用 → 大卡片；夹在文字里 → 紧凑 chip + 悬浮卡
-  return renderWithCodeFences(text, me, 'chat', isPureWorkItemText(text) ? 'card' : 'chip');
+  return renderWithCodeFences(text, me, 'chat', isPureAdoEntityText(text) ? 'card' : 'chip');
 }
 
 /** 文档预览（.md 文件）：同一套解析，排版更松 */

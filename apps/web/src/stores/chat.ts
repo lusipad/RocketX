@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  RcApiError,
   tsMs,
   type RcMessage,
   type RcMessageAttachment,
@@ -91,6 +92,18 @@ export type RightPanel =
 const HISTORY_PAGE = 50;
 const DRAFTS_KEY = 'rcx-drafts';
 
+export function roomMembershipPolicy(
+  hasSubscription: boolean,
+  room: Pick<RcRoom, 't' | 'prid'> | undefined,
+): { requiresJoin: boolean; canCompose: boolean } {
+  const requiresJoin = !hasSubscription && !!room && (room.t === 'c' || !!room.prid);
+  return {
+    requiresJoin,
+    // Rocket.Chat 允许父房间成员在未订阅讨论时查看和发送消息；加入只负责订阅通知。
+    canCompose: !requiresJoin || !!room?.prid,
+  };
+}
+
 function loadDrafts(): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? '{}');
@@ -158,7 +171,7 @@ interface ChatState {
   refreshRoomInfo: (rid: string) => Promise<RcRoom | null>;
   /** 从父频道的「讨论」卡片跳进讨论 */
   openDiscussion: (drid: string) => Promise<void>;
-  /** 加入公开频道/讨论（channels.join），成功后刷新订阅让它进会话列表 */
+  /** 加入公开频道/讨论，成功后刷新订阅让它进会话列表 */
   joinRoom: (rid: string) => Promise<void>;
   loadRoomRoles: (rid: string) => Promise<RcRoomRole[]>;
   kickMember: (rid: string, user: RcUser) => Promise<void>;
@@ -477,9 +490,43 @@ declare global {
 // 不去重的话桌面通知会弹两遍（浏览器端有 tag 去重，Tauri 通知插件没有）
 const notifiedMids = new Set<string>();
 
+export function notificationAttentionPolicy(input: {
+  subscribed: boolean;
+  muted: boolean;
+  mentioned: boolean;
+  focused: boolean;
+  isGroupish: boolean;
+  desktopNotifications: 'all' | 'mentions' | 'nothing';
+  muteFocusedConversations: boolean;
+}): { flashTaskbar: boolean; showDesktopNotification: boolean } {
+  if (!input.subscribed) {
+    return { flashTaskbar: false, showDesktopNotification: false };
+  }
+  const muted = input.muted && !input.mentioned;
+  return {
+    // 任务栏是未读注意力信号，不受桌面通知内容偏好控制。
+    flashTaskbar: !muted && !input.focused,
+    showDesktopNotification:
+      !muted &&
+      input.desktopNotifications !== 'nothing' &&
+      (input.desktopNotifications !== 'mentions' || !input.isGroupish || input.mentioned) &&
+      (!input.focused || !input.muteFocusedConversations),
+  };
+}
+
+export function conversationHasFocus(
+  activeRid: string | null,
+  rid: string,
+  documentHasFocus: boolean,
+): boolean {
+  return activeRid === rid && documentHasFocus;
+}
+
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
   if (!auth || msg.u._id === auth.userId || msg.t) return;
+  const subscription = state.subscriptions[rid];
+  if (!subscription) return;
   if (notifiedMids.has(msg._id)) return;
   notifiedMids.add(msg._id);
   if (notifiedMids.size > 800) {
@@ -494,28 +541,23 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     !!me &&
     new RegExp(`@(${me.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}|all|here)\\b`).test(msg.msg ?? '');
 
-  // 提醒模型对标飞书/微信：
-  // - 未免打扰的会话：群聊/私聊一视同仁，弹通知 + 闪任务栏（一级提醒）；
-  // - 免打扰的会话：这里直接静默，只留未读数与任务栏角标（次级提示，MainPage 维护）；
-  //   但 @我/@all/@here 穿透免打扰（飞书行为）——人在群里被点名不该错过。
-  if (state.subscriptions[rid]?.disableNotifications && !mentioned) return;
-
   const prefs = usePrefs.getState().prefs;
-  if (prefs.desktopNotifications === 'nothing') return;
-  // 「私聊和 @我」：群聊（含多人直聊，t 也是 'd' 但多于 2 人）普通消息不弹
-  if (prefs.desktopNotifications === 'mentions') {
-    const roomType = state.subscriptions[rid]?.t ?? state.rooms[rid]?.t;
-    const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
-    const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
-    if (isGroupish && !mentioned) return;
-  }
+  const roomType = subscription.t ?? state.rooms[rid]?.t;
+  const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
+  const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
+  const focused = conversationHasFocus(state.activeRid, rid, document.hasFocus());
+  const policy = notificationAttentionPolicy({
+    subscribed: true,
+    muted: !!subscription.disableNotifications,
+    mentioned,
+    focused,
+    isGroupish,
+    desktopNotifications: prefs.desktopNotifications,
+    muteFocusedConversations: prefs.muteFocusedConversations ?? true,
+  });
+  if (policy.flashTaskbar) void flashTaskbar();
+  if (!policy.showDesktopNotification) return;
 
-  const focused = state.activeRid === rid && !document.hidden;
-  // 关闭「当前会话不打扰」时，正在看的会话也会弹通知
-  if (focused && (prefs.muteFocusedConversations ?? true)) return;
-  // 会弹通知的消息才闪任务栏（微信同款：什么消息闪，取决于它值不值得提醒）；
-  // 窗口已聚焦时内部自行跳过（issue #19-1）
-  void flashTaskbar();
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
@@ -682,7 +724,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       notifyIfNeeded(msg, rid, state);
       if (get().activeRid === rid) {
-        scheduleMarkRead(rid);
+        if (get().subscriptions[rid]) scheduleMarkRead(rid);
         scheduleReceiptRefresh(rid);
       }
       // 对方发出消息即视为停止输入
@@ -821,7 +863,7 @@ export const useChat = create<ChatState>((set, get) => ({
         hasMore: { ...get().hasMore, [rid]: history.length >= HISTORY_PAGE },
       });
     }
-    scheduleMarkRead(rid);
+    if (get().subscriptions[rid]) scheduleMarkRead(rid);
     scheduleReceiptRefresh(rid);
   },
 
@@ -1362,34 +1404,42 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   openDiscussion: async (drid) => {
-    // 非成员先只展示房间与「加入」入口；直接 openRoom 会先请求 history 并报 403，
-    // 加入按钮即使随后成功也会因 historyLoaded=false 一直停在骨架屏。
+    const previousRid = get().activeRid;
+    // 本地快照可能落后于服务端：先尽力刷新，避免把已加入的讨论误判成未订阅。
     if (!get().subscriptions[drid]) {
-      const info = get().rooms[drid] ?? (await get().refreshRoomInfo(drid));
+      try {
+        await refreshSubsAndRooms(set);
+      } catch {
+        // 刷新失败不阻塞打开；后续仍可按未订阅讨论读取历史。
+      }
+    }
+    // 讨论在未订阅时仍允许父房间成员读历史、发消息；先补齐类型，再统一走 openRoom，
+    // 这样历史加载和实时订阅不会被旁路。
+    if (!get().subscriptions[drid] && !get().rooms[drid]) {
+      const info = await get().refreshRoomInfo(drid);
       if (!info) {
         toast.show({ kind: 'error', message: '打不开这个讨论，可能你不在讨论成员里' });
         return;
       }
-      set({
-        activeRid: drid,
-        rightPanel: null,
-        pendingFiles: null,
-        replyTo: null,
-        selectMode: false,
-        selectedMids: new Set(),
-      });
-      return;
     }
     try {
       await get().openRoom(drid);
     } catch (err) {
+      // 只回滚这次打开留下的状态，不能覆盖用户随后发起的其他导航。
+      if (get().activeRid === drid) set({ activeRid: previousRid });
       toast.error(err, '打不开这个讨论，可能你不在讨论成员里');
     }
   },
 
   joinRoom: async (rid) => {
     try {
-      await rest.joinChannel(rid);
+      try {
+        await rest.joinRoom(rid);
+      } catch (err) {
+        // Rocket.Chat 旧版本没有 rooms.join；讨论加入由 DDP joinRoom 提供兼容路径。
+        if (!(err instanceof RcApiError) || err.status !== 404) throw err;
+        await realtime.call('joinRoom', rid);
+      }
       // 加入不一定推订阅变更，主动刷新并重新打开讨论。
       await refreshSubsAndRooms(set);
       await get().openRoom(rid);
