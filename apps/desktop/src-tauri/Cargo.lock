@@ -3157,6 +3157,7 @@ dependencies = [
 name = "rocketx"
 version = "0.13.0"
 dependencies = [
+ "notify-rust",
  "serde",
  "serde_json",
  "tauri",

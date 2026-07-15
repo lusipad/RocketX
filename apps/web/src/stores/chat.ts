@@ -28,6 +28,7 @@ import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { useOnboarding } from './onboarding';
 import { humanError, toast } from './toast';
+import { useUI } from './ui';
 
 export interface Conversation {
   rid: string;
@@ -566,11 +567,13 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     title,
     body: body.slice(0, 120),
     tag: msg._id,
+    rid,
     onClick: () => {
       window.focus();
+      useUI.getState().setModule('messages');
       void useChat.getState().openRoom(rid);
     },
-  });
+  }).catch(() => {});
 }
 
 export const useChat = create<ChatState>((set, get) => ({

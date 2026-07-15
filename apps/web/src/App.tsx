@@ -7,6 +7,7 @@ import { useOnboarding } from './stores/onboarding';
 import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
+import NotificationNavigationBridge from './components/NotificationNavigationBridge';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -52,6 +53,7 @@ export default function App() {
   return (
     <>
       <GlobalShortcutBridge />
+      <NotificationNavigationBridge />
       {content}
     </>
   );

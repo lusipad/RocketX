@@ -239,3 +239,34 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — Windows 通知点击跳转（4.3）
+
+## Shipped vs planned
+
+Windows 消息通知现在保留原生通知句柄；用户点击通知正文后，RocketX 会显示并聚焦主窗口、切回消息模块并打开对应会话。Web 继续使用浏览器 `Notification.onclick`，其他桌面平台保持原有通知行为。
+
+## Decisions
+
+- 官方 Tauri notification 的 Actions API 仅支持移动端；Windows 改为直接复用插件已依赖的 `notify-rust` 后端，不伪用无效的 `onAction()`。
+- 通知只携带当前账号内的房间 ID，不携带服务器地址、令牌、消息正文以外的认证数据。
+- 页面端在已登录且聊天初始化完成后才接受导航事件，并再次校验房间 ID。
+- 点击关闭或通知自然过期不触发跳转，只有点击通知正文才执行。
+
+## Deviations
+
+- Windows 的通知发送从官方插件的无句柄封装下沉到同一底层 `notify-rust`，因为官方桌面封装会丢弃响应句柄，无法观察正文点击。
+
+## Surprises
+
+- `@tauri-apps/plugin-notification` 暴露了 `onAction()` 类型，但官方平台说明和 Rust 实现都表明桌面端没有注册该监听器；仅按 TypeScript API 推断会得到一个永远不触发的实现。
+
+## Verification limits
+
+- 当前官方 Windows 界面控制入口返回空的非错误结果，无法自动点击系统通知；已验证响应分支、事件载荷、导航校验、Rust/TypeScript 编译与完整桌面链接，但最终通知中心点击仍需安装版手工验收。
+
+## Questions for review
+
+- 无。

@@ -3,6 +3,8 @@
 
 mod winauth;
 
+#[cfg(windows)]
+use tauri::Emitter;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -24,6 +26,86 @@ fn show_main(app: &tauri::AppHandle) {
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
     show_main(&app);
+}
+
+#[cfg(windows)]
+#[derive(Clone, serde::Serialize)]
+struct NotificationRoomPayload {
+    rid: String,
+}
+
+#[cfg(windows)]
+fn notification_opens_room(response: &notify_rust::NotificationResponse) -> bool {
+    response.is_default_action()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn show_message_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    rid: String,
+) -> Result<(), String> {
+    let rid = rid.trim().to_string();
+    if rid.is_empty() || rid.len() > 256 || rid.chars().any(char::is_control) {
+        return Err("invalid notification room id".to_string());
+    }
+
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(&title).body(&body);
+
+    // 未安装的 target/debug、target/release 没有注册 AppUserModelId，沿用 PowerShell 标识；
+    // 安装包运行时才使用应用 identifier，与官方通知插件行为一致。
+    let target_build = tauri::utils::platform::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .is_some_and(|dir| {
+            dir.ends_with(std::path::Path::new("target").join("debug"))
+                || dir.ends_with(std::path::Path::new("target").join("release"))
+        });
+    if !target_build {
+        notification.app_id(&app.config().identifier);
+    }
+
+    let handle = notification.show().map_err(|err| err.to_string())?;
+    std::thread::spawn(move || {
+        let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
+            if notification_opens_room(response) {
+                show_main(&app);
+                let _ = app.emit("notification-open-room", NotificationRoomPayload { rid });
+            }
+        });
+    });
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::notification_opens_room;
+    use notify_rust::{CloseReason, NotificationResponse};
+
+    #[test]
+    fn only_notification_body_click_opens_room() {
+        assert!(notification_opens_room(&NotificationResponse::Default));
+        assert!(!notification_opens_room(&NotificationResponse::Action(
+            "reply".to_string()
+        )));
+        assert!(!notification_opens_room(&NotificationResponse::Closed(
+            CloseReason::Dismissed
+        )));
+    }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn show_message_notification(
+    _app: tauri::AppHandle,
+    _title: String,
+    _body: String,
+    _rid: String,
+) -> Result<(), String> {
+    Err("clickable notifications are only available on Windows".to_string())
 }
 
 #[tauri::command]
@@ -53,7 +135,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             winauth::win_auth_request,
             set_tray_icon_normal,
-            show_main_window
+            show_main_window,
+            show_message_notification
         ])
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
