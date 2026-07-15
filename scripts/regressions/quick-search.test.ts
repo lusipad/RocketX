@@ -6,6 +6,10 @@ import {
   searchMessagesGlobal,
   searchesSettledFor,
 } from '../../apps/web/src/lib/quickSearch';
+import { searchWork } from '../../apps/web/src/lib/workSearch';
+import type { Todo } from '../../apps/web/src/stores/todos';
+import type { CalendarEvent } from '../../apps/web/src/stores/calendar';
+import type { WorkItem } from '../../apps/web/src/stores/workbench';
 
 const message = (id: string) => ({ _id: id } as RcMessage);
 
@@ -83,11 +87,33 @@ test('自动切换保留用户当前有结果的范围，只在当前范围为�
   assert.equal(searchesSettledFor('new', 'new', 'old'), false);
   assert.equal(searchesSettledFor('new', 'new', 'new'), true);
   assert.equal(
-    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 2 }),
+    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 2, work: 1 }),
     'contacts',
   );
   assert.equal(
-    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 0 }),
+    chooseAvailableSearchTab('contacts', { convs: 0, messages: 3, contacts: 0, work: 1 }),
     'messages',
   );
+});
+
+test('工作搜索聚合待办、日程和 ADO 工作项，并优先标题命中', () => {
+  const todo = {
+    id: 't1', rid: 'r1', mid: 'm1', roomName: '项目群', excerpt: '讨论发布窗口',
+    author: '张三', note: '确认清单', done: false, createdAt: 1,
+  } as Todo;
+  const event = {
+    id: 'e1', title: '发布评审', description: '确认上线范围', date: '2026-07-18',
+    allDay: true, color: '#3370ff', source: 'manual', createdAt: 2,
+  } as CalendarEvent;
+  const workItem = {
+    id: 42, title: '修复发布阻塞', type: 'Bug', state: '活动', project: 'RocketX',
+    webUrl: 'https://ado.example/workitems/42',
+  } as WorkItem;
+
+  assert.deepEqual(
+    searchWork('发布', [todo], [event], [workItem]).map((result) => result.kind),
+    ['event', 'workitem', 'todo'],
+  );
+  assert.deepEqual(searchWork('42', [todo], [event], [workItem]).map((result) => result.kind), ['workitem']);
+  assert.deepEqual(searchWork('  ', [todo], [event], [workItem]), []);
 });

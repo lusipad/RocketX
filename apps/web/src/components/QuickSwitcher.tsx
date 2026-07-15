@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
-import { Hash, Search } from 'lucide-react';
+import { BriefcaseBusiness, CalendarDays, Hash, ListTodo, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
-import { realtime, rest } from '../lib/client';
+import { openExternal, realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
@@ -17,6 +17,10 @@ import {
 } from '../lib/quickSearch';
 import { mergeUserSearchResults } from '../lib/userSearch';
 import { commandCenterConversations } from '../lib/conversationView';
+import { searchWork, type WorkSearchResult } from '../lib/workSearch';
+import { useTodos } from '../stores/todos';
+import { useCalendar } from '../stores/calendar';
+import { useWorkbench } from '../stores/workbench';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -26,9 +30,10 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'convs', label: '会话' },
   { key: 'messages', label: '消息' },
   { key: 'contacts', label: '联系人/频道' },
+  { key: 'work', label: '工作' },
 ];
 
-/** 全局搜索（Ctrl/Cmd+K）：会话跳转 + 跨会话消息 + 联系人/频道 */
+/** 全局搜索（Ctrl/Cmd+K）：会话、消息、联系人/频道与本机已有的工作数据。 */
 export default function QuickSwitcher({
   onClose,
   initialTab,
@@ -46,6 +51,9 @@ export default function QuickSwitcher({
   const setConvFilter = useUI((s) => s.setConvFilter);
   const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
+  const todos = useTodos((s) => s.todos);
+  const events = useCalendar((s) => s.events);
+  const workItems = useWorkbench((s) => s.workItems);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'convs');
   const [keyword, setKeyword] = useState('');
   const [index, setIndex] = useState(0);
@@ -103,6 +111,10 @@ export default function QuickSwitcher({
         : [],
     [keyword, contactRoster, contacts.users, aliases, nameFormat, pinyinReady],
   );
+  const workResults = useMemo(
+    () => searchWork(keyword, todos, events, workItems),
+    [keyword, todos, events, workItems],
+  );
   const conversationScope = useMemo(
     () => [...new Set(conversations.map((conversation) => conversation.rid))].sort().join('\0'),
     [conversations],
@@ -140,6 +152,7 @@ export default function QuickSwitcher({
       convs: filteredConvs.length,
       messages: messages.length,
       contacts: contactUsers.length + contacts.rooms.length,
+      work: workResults.length,
     });
     if (next !== tabRef.current) setTab(next);
   }, [
@@ -150,11 +163,12 @@ export default function QuickSwitcher({
     messages.length,
     contactUsers.length,
     contacts.rooms.length,
+    workResults.length,
     messageSettledKeyword,
     contactSettledKeyword,
   ]);
 
-  // 三个范围一起搜索；停稳后当前范围为空时，自动切到第一个有结果的范围（issue #24）。
+  // 所有范围一起搜索；远端搜索停稳后，当前范围为空时自动切到第一个有结果的范围（issue #24）。
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
@@ -247,21 +261,42 @@ export default function QuickSwitcher({
     onClose();
   };
 
-  /** 统一的键盘导航：三个 tab 都能用方向键 + Enter */
+  const pickWork = (result: WorkSearchResult) => {
+    if (result.kind === 'todo') {
+      setModule('messages');
+      void openRoom(result.item.rid).then(() => jumpToMessage(result.item.mid, result.item.rid));
+    } else if (result.kind === 'event') {
+      const calendar = useCalendar.getState();
+      calendar.setCursor(result.item.date);
+      calendar.setSelectedDate(result.item.date);
+      calendar.setView('day');
+      setModule('calendar');
+    } else {
+      const ui = useUI.getState();
+      ui.setWorkbenchTab('workitems');
+      ui.setModule('workbench');
+      void openExternal(result.item.webUrl);
+    }
+    onClose();
+  };
+
+  /** 统一的键盘导航：所有 tab 都能用方向键 + Enter */
   const currentItems: (() => void)[] =
     tab === 'convs'
       ? filteredConvs.map((c) => () => pickConv(c.rid))
       : tab === 'messages'
         ? messages.map((m) => () => pickMessage(m))
-        : [
-            ...contactUsers.map((u) => () => {
-              void startDM(u.username).then(() => {
-                setModule('messages');
-                onClose();
-              });
-            }),
-            ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
-          ];
+        : tab === 'contacts'
+          ? [
+              ...contactUsers.map((u) => () => {
+                void startDM(u.username).then(() => {
+                  setModule('messages');
+                  onClose();
+                });
+              }),
+              ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
+            ]
+          : workResults.map((result) => () => pickWork(result));
 
   const roomName = (rid: string) =>
     subscriptions[rid]?.fname || subscriptions[rid]?.name || rooms[rid]?.fname || rooms[rid]?.name || '会话';
@@ -311,7 +346,7 @@ export default function QuickSwitcher({
                 onClose();
               } else if (e.key === 'Tab') {
                 e.preventDefault();
-                const order: Tab[] = ['convs', 'messages', 'contacts'];
+                const order: Tab[] = ['convs', 'messages', 'contacts', 'work'];
                 const dir = e.shiftKey ? -1 : 1;
                 setTab(order[(order.indexOf(tab) + dir + order.length) % order.length]);
               }
@@ -319,7 +354,7 @@ export default function QuickSwitcher({
             placeholder={
               commandCenter
                 ? '直接回车打开下一条未读，或输入内容搜索'
-                : '搜索会话、消息、联系人（Tab 切换范围）'
+                : '搜索会话、消息、联系人和工作（Tab 切换范围）'
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
@@ -487,6 +522,50 @@ export default function QuickSwitcher({
                 contacts.rooms.length === 0 && (
                   <div className="py-8 text-center text-sm text-ink-3">未找到匹配结果</div>
                 )}
+            </>
+          )}
+
+          {tab === 'work' && (
+            <>
+              {!keyword.trim() && (
+                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索待办、日程和工作项</div>
+              )}
+              {keyword.trim() && workResults.length === 0 && (
+                <div className="py-8 text-center text-sm text-ink-3">未找到匹配的工作内容</div>
+              )}
+              {workResults.map((result, i) => {
+                const icon = result.kind === 'todo'
+                  ? <ListTodo size={16} />
+                  : result.kind === 'event'
+                    ? <CalendarDays size={16} />
+                    : <BriefcaseBusiness size={16} />;
+                const title = result.kind === 'todo'
+                  ? result.item.note || result.item.excerpt
+                  : result.kind === 'event'
+                    ? result.item.title
+                    : `#${result.item.id} ${result.item.title}`;
+                const detail = result.kind === 'todo'
+                  ? `待办 · ${result.item.roomName}`
+                  : result.kind === 'event'
+                    ? `日程 · ${result.item.date}`
+                    : `工作项 · ${result.item.project} · ${result.item.state}`;
+                return (
+                  <button
+                    key={`${result.kind}:${result.item.id}`}
+                    onClick={() => pickWork(result)}
+                    onMouseEnter={() => setIndex(i)}
+                    className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
+                      i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                    }`}
+                  >
+                    <span className="text-ink-3">{icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm text-ink">{highlightText(title, keyword)}</span>
+                      <span className="block truncate text-2xs text-ink-3">{detail}</span>
+                    </span>
+                  </button>
+                );
+              })}
             </>
           )}
         </div>

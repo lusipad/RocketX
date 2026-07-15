@@ -80,3 +80,26 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — 统一搜索（3.1）
+
+## Shipped vs planned
+
+已在现有全局指令中心增加“工作”范围，统一搜索本机待办、日历事件和当前 ADO 连接已加载的工作项。待办可跳回来源消息，日程定位到对应日期的日视图，工作项进入工作台并打开 ADO 原项。
+
+## Decisions
+
+- 工作数据搜索只读取现有 store，不在用户输入时新增网络请求。
+- 标题前缀、标题包含、详情包含依次降权，最多显示 20 条结果。
+- 继续复用 `Ctrl/Cmd+K` 和 Windows 全局快捷键入口，不新增第二套搜索页面。
+
+## Deferred
+
+- Rocket.Chat 目前仅封装单房间 `channels.files` / `groups.files` / `im.files`。全局文件搜索若逐房间扇出，会随会话数放大请求，因此留到后续设计服务端索引或有界缓存方案。
+- 高级筛选、结果分组总览和语义搜索不在本切片内。
+
+## Questions for review
+
+- 无。
