@@ -15,6 +15,7 @@ import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import { applyScopedResult } from '../lib/scopedResult';
 import {
   commandDesc,
   commandParams,
@@ -75,13 +76,19 @@ export default function Composer() {
 
   // 切换会话时恢复该会话草稿并预取成员（供 @ 补全）
   useEffect(() => {
-    setText(activeRid ? (useChat.getState().drafts[activeRid] ?? '') : '');
+    const rid = activeRid;
+    setText(rid ? (useChat.getState().drafts[rid] ?? '') : '');
     setMentionQuery(null);
     setPicker(false);
     setPendingInvites([]); // 待邀请名单跟着会话走，切走就清
+    setMembers(rid ? (useChat.getState().members[rid] ?? []) : []);
     textareaRef.current?.focus();
-    if (activeRid) {
-      void loadMembers(activeRid).then(setMembers);
+    if (rid) {
+      void applyScopedResult(
+        () => loadMembers(rid),
+        setMembers,
+        () => useChat.getState().activeRid === rid,
+      );
     }
   }, [activeRid, loadMembers]);
 
@@ -305,7 +312,11 @@ export default function Composer() {
       try {
         // inviteMembers 会邀请 + 清成员缓存 + toast「已添加」；之后 TA 是成员，@ 提醒才发得到
         await inviteMembers(rid, toInvite);
-        void loadMembers(rid).then(setMembers); // 缓存已清，重拉刷新本地 @ 补全用的成员表
+        void applyScopedResult(
+          () => loadMembers(rid),
+          setMembers,
+          () => useChat.getState().activeRid === rid,
+        ); // 缓存已清，重拉刷新本地 @ 补全用的成员表
       } catch (err) {
         // 邀请失败：消息照常发，但对方可能收不到提醒，得说一声
         toast.error(err, '把群外成员拉进群失败，对方可能收不到 @ 提醒');
