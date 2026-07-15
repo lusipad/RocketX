@@ -106,6 +106,17 @@ const BUILDS = [
     queueTime: '2026-07-12T20:00:00Z',
     finishTime: '2026-07-12T20:12:00Z',
   },
+  {
+    id: 503,
+    buildNumber: '20260714.1',
+    definition: { name: 'late-project-ci' },
+    project: { name: 'LateProject' },
+    status: 'completed',
+    result: 'succeeded',
+    requestedFor: { displayName: 'lus' },
+    queueTime: '2026-07-14T02:00:00Z',
+    finishTime: '2026-07-14T02:05:00Z',
+  },
 ];
 
 createServer((req, res) => {
@@ -146,7 +157,17 @@ createServer((req, res) => {
       send({ id: Number(url.pathname.split('/').pop()), fields: {} });
     });
   } else if (url.pathname.endsWith('/_apis/projects')) {
-    send({ value: [{ name: 'RocketX' }, { name: 'Platform' }] });
+    send({
+      value: [
+        { name: 'RocketX' },
+        { name: 'Platform' },
+        { name: 'Project3' },
+        { name: 'Project4' },
+        { name: 'Project5' },
+        { name: 'Project6' },
+        { name: 'LateProject' },
+      ],
+    });
   } else if (url.pathname.endsWith('/_apis/build/builds')) {
     const project = decodeURIComponent(url.pathname.split('/_apis/')[0].split('/').pop() ?? '');
     send({ value: BUILDS.filter((b) => b.project.name === project) });

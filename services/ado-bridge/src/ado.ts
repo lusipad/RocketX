@@ -243,10 +243,10 @@ export class AdoClient {
   async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
     const projects = await this.request<{ value: { name: string }[] }>(
       'GET',
-      '/_apis/projects?api-version=7.0&$top=10',
+      '/_apis/projects?api-version=7.0&$top=100',
     );
     const lists = await Promise.all(
-      (projects.value ?? []).slice(0, 5).map(async (p) => {
+      (projects.value ?? []).map(async (p) => {
         try {
           const res = await this.request<{ value: any[] }>(
             'GET',
