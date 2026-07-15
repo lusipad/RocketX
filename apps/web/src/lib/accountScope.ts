@@ -30,6 +30,7 @@ const SCOPED_KEYS = [
   // ADO 配置含账号(直连模式还可能有凭据缓存),同样不能跨账号共享
   'rcx-workbench',
   'rcx-ado-web',
+  'rcx-custom-queries',
 ];
 
 /**

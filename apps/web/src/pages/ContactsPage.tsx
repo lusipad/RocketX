@@ -8,6 +8,8 @@ import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
 import { toast } from '../stores/toast';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import { collectUserDirectory } from '../lib/userDirectory';
+import { settleScopedResult } from '../lib/scopedResult';
 import AliasDialog from '../components/AliasDialog';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
@@ -24,7 +26,10 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const me = useAuth((s) => s.user?.username);
   const [keyword, setKeyword] = useState('');
   const [roster, setRoster] = useState<RcUser[]>([]);
-  const [remote, setRemote] = useState<RcUser[]>([]);
+  const [remoteResult, setRemoteResult] = useState<{ query: string; users: RcUser[] }>({
+    query: '',
+    users: [],
+  });
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +39,8 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 首屏花名册：拼音检索只能在本地做（服务端不认 zhangsan/zs），所以要把人全拉下来。
-  // 之前只拉前 100 个，人多了后面的既搜不到也看不到（issue #18.7）——改成翻页拉全。
+  // 拼音检索只能在本地做（服务端不认 zhangsan/zs），所以在安全上限内分页加载花名册。
+  // 超出上限的人仍可尝试按准确姓名或用户名走服务端搜索。
   useEffect(() => {
     let cancelled = false;
     const PAGE = 100;
@@ -43,39 +48,23 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
       try {
         const first = await rest.searchUsers('', PAGE, 0);
         if (cancelled) return;
-        setTotal(first.total);
+        setTotal(Math.max(first.users.length, Number.isFinite(first.total) ? first.total : 0));
         setError(null);
         setWarning(null);
         const acc = new Map(first.users.map((user) => [user._id, user]));
         setRoster([...acc.values()]);
         seedUserStatus(first.users);
         setLoading(false);
-        // directory 与 users.list 都支持 offset；按服务端 total 拉完整个花名册。
-        if (first.via === 'directory' || first.via === 'users.list') {
-          let offset = first.users.length;
-          try {
-            while (offset < first.total) {
-              const page = await rest.searchUsers('', PAGE, offset);
-              if (cancelled) return;
-              if (page.users.length === 0) {
-                setWarning(`服务端报告共 ${first.total} 人，但只返回了 ${acc.size} 人`);
-                break;
-              }
-              for (const user of page.users) acc.set(user._id, user);
-              offset += page.users.length;
-            }
-          } catch (err: unknown) {
-            if (cancelled) return;
-            setWarning(
-              `已加载 ${acc.size} 人，后续分页失败：${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          if (!cancelled) {
-            const all = [...acc.values()];
-            setRoster(all);
-            seedUserStatus(all.slice(first.users.length));
-          }
-        }
+        const result = await collectUserDirectory(
+          first,
+          (offset) => rest.searchUsers('', PAGE, offset),
+          { pageSize: PAGE, isCurrent: () => !cancelled },
+        );
+        if (cancelled) return;
+        setTotal(result.total);
+        setWarning(result.warning ?? null);
+        setRoster(result.users);
+        seedUserStatus(result.users);
       } catch (err: unknown) {
         if (cancelled) return;
         setRoster([]);
@@ -91,21 +80,28 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
 
   // 关键词走服务端（能翻出首屏之外的人），与本地拼音结果合并
   useEffect(() => {
+    let current = true;
     if (timer.current) clearTimeout(timer.current);
-    if (!keyword.trim()) {
-      setRemote([]);
+    const q = keyword.trim();
+    if (!q) {
+      setRemoteResult({ query: '', users: [] });
       return;
     }
     timer.current = setTimeout(() => {
-      rest
-        .searchUsers(keyword, 50)
-        .then(({ users }) => {
-          setRemote(users);
-          seedUserStatus(users);
-        })
-        .catch(() => setRemote([]));
+      void settleScopedResult(
+        () => rest.searchUsers(q, 50),
+        {
+          success: ({ users }) => {
+            setRemoteResult({ query: q, users });
+            seedUserStatus(users);
+          },
+          error: () => setRemoteResult({ query: q, users: [] }),
+        },
+        () => current,
+      );
     }, 300);
     return () => {
+      current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword]);
@@ -113,6 +109,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
+  const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
   const users = useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();
@@ -163,7 +160,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
               共 {total} 人
               {total > users.length && (
                 <span className="ml-1 text-warning">
-                  （显示前 {users.length} 人，搜索可找到更多）
+                  （显示前 {users.length} 人，可按准确姓名或用户名继续搜索）
                 </span>
               )}
             </>

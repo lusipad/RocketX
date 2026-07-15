@@ -150,7 +150,7 @@ interface ChatState {
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
-  send: (text: string, opts?: { tmid?: string; quote?: RcMessage }) => Promise<void>;
+  send: (text: string, opts?: { rid?: string; tmid?: string; quote?: RcMessage }) => Promise<void>;
   /** 执行斜杠命令。tmid 有值时在话题里执行 */
   runSlash: (command: string, params: string, tmid?: string) => Promise<void>;
 
@@ -274,6 +274,8 @@ let lastTypingEmit = 0;
 const rolesInflight = new Map<string, Promise<RcRoomRole[]>>();
 /** 成员列表请求版本；邀请/移除后让更早的请求结果失效，避免旧名单回滚新状态。 */
 const memberVersions = new Map<string, number>();
+/** 同一房间、同一版本的成员请求共享一个 Promise，避免多个面板重复全量分页。 */
+const memberInflight = new Map<string, { version: number; promise: Promise<RcUser[]> }>();
 /** 服务端成员快照确认前，跨并发请求保留本地已成功的增删变更。 */
 const pendingMemberAdds = new Map<string, Map<string, RcUser>>();
 const pendingMemberRemovals = new Map<string, Set<string>>();
@@ -286,6 +288,26 @@ function invalidateMemberRequests(rid: string): number {
   const next = memberVersion(rid) + 1;
   memberVersions.set(rid, next);
   return next;
+}
+
+function requestMemberSnapshot(rid: string, type: RcRoom['t'], version: number): Promise<RcUser[]> {
+  const current = memberInflight.get(rid);
+  if (current?.version === version) return current.promise;
+
+  const promise = rest.getMembers(rid, type);
+  memberInflight.set(rid, { version, promise });
+  const clear = () => {
+    if (memberInflight.get(rid)?.promise === promise) memberInflight.delete(rid);
+  };
+  void promise.then(clear, clear);
+  return promise;
+}
+
+function resetMemberRequestState() {
+  for (const rid of memberInflight.keys()) invalidateMemberRequests(rid);
+  memberInflight.clear();
+  pendingMemberAdds.clear();
+  pendingMemberRemovals.clear();
 }
 
 function stageMemberAdds(rid: string, users: RcUser[]) {
@@ -555,6 +577,8 @@ export const useChat = create<ChatState>((set, get) => ({
   init: async () => {
     const auth = loadStoredAuth();
     if (!auth) return;
+    // 重新登录/切换服务器后不能复用上一个会话尚未完成的成员请求。
+    resetMemberRequestState();
     // 预热 Site_Url 缓存（引用回复的链接前缀需要）
     void ensureSiteUrl();
     // 已读回执是企业版功能，社区版直接别调，省掉每次刷新那个 400
@@ -847,7 +871,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
     const version = memberVersion(rid);
     try {
-      const snapshot = await rest.getMembers(rid, type);
+      const snapshot = await requestMemberSnapshot(rid, type, version);
       if (memberVersion(rid) !== version) return get().members[rid] ?? snapshot;
       const members = applyPendingMemberChanges(rid, snapshot, true);
       const errs = { ...get().memberErrors };
@@ -856,17 +880,17 @@ export const useChat = create<ChatState>((set, get) => ({
       return members;
     } catch (err) {
       if (memberVersion(rid) !== version) return get().members[rid] ?? [];
-      // 仍返回 [] 保持其它调用方(Composer/RoomInfoPanel/inviteMembers)不受影响，
-      // 但把失败原因记下来，让成员面板能区分「拉取失败」和「群里真没人」(P1-11)
+      // 保留已有缓存，让其它调用方继续可用；同时记录原因，使成员面板能区分
+      // 「拉取失败」和「群里真没人」(P1-11)。
       set({
         memberErrors: { ...get().memberErrors, [rid]: humanError(err, '无法获取成员列表') },
       });
-      return [];
+      return get().members[rid] ?? [];
     }
   },
 
   send: async (text, opts) => {
-    const rid = get().activeRid;
+    const rid = opts?.rid ?? get().activeRid;
     const trimmed = text.trim();
     const me = useAuth.getState().user;
     if (!rid || !trimmed || !me) return;
@@ -1103,7 +1127,7 @@ export const useChat = create<ChatState>((set, get) => ({
     let refreshed: RcUser[] | null = null;
     let refreshError: string | null = null;
     try {
-      refreshed = await rest.getMembers(rid, type);
+      refreshed = await requestMemberSnapshot(rid, type, version);
     } catch (err) {
       // 邀请本身已经成功；刷新失败时保留旧缓存并乐观加入新人。
       refreshError = humanError(err, '成员列表刷新失败');

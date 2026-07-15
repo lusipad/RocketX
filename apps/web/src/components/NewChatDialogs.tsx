@@ -5,6 +5,7 @@ import { rest } from '../lib/client';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
+import { settleScopedResult } from '../lib/scopedResult';
 import Avatar from './Avatar';
 import Dialog from './Dialog';
 
@@ -18,35 +19,58 @@ import Dialog from './Dialog';
  */
 export function useUserSearch(keyword: string): RcUser[] {
   const [roster, setRoster] = useState<RcUser[]>([]);
-  const [remote, setRemote] = useState<RcUser[]>([]);
+  const [remoteResult, setRemoteResult] = useState<{ query: string; users: RcUser[] }>({
+    query: '',
+    users: [],
+  });
   const me = useAuth((s) => s.user?.username);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    rest
-      .searchUsers('', 100)
-      .then((r) => setRoster(r.users.filter((u) => u.username !== me)))
-      .catch(() => setRoster([]));
+    let current = true;
+    void settleScopedResult(
+      () => rest.searchUsers('', 100),
+      {
+        success: (result) => setRoster(result.users.filter((u) => u.username !== me)),
+        error: () => setRoster([]),
+      },
+      () => current,
+    );
+    return () => {
+      current = false;
+    };
   }, [me]);
 
   useEffect(() => {
+    let current = true;
     if (timer.current) clearTimeout(timer.current);
-    if (!keyword.trim()) {
-      setRemote([]);
+    const q = keyword.trim();
+    if (!q) {
+      setRemoteResult({ query: '', users: [] });
       return;
     }
     timer.current = setTimeout(() => {
-      rest
-        .searchUsers(keyword, 30)
-        .then((r) => setRemote(r.users.filter((u) => u.username !== me)))
-        .catch(() => setRemote([]));
+      void settleScopedResult(
+        () => rest.searchUsers(q, 30),
+        {
+          success: (result) =>
+            setRemoteResult({
+              query: q,
+              users: result.users.filter((u) => u.username !== me),
+            }),
+          error: () => setRemoteResult({ query: q, users: [] }),
+        },
+        () => current,
+      );
     }, 300);
     return () => {
+      current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword, me]);
 
   const pinyinReady = usePinyinReady();
+  const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
   return useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();

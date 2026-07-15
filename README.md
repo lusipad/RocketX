@@ -62,6 +62,8 @@ pnpm smoke          # 50 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
+pnpm test:regression # 46 项回归：搜索并发、目录/成员分页、跨房间发送与结果隔离、
+                     # ADO 配置/查询/链接边界、桌面任务栏角标竞态
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
 RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin/rcxdev123
@@ -70,10 +72,11 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 `smoke` 会做真的写操作（踢人、禁言、归档、改昵称、传头像），**跑完全部还原**：
 改的名字改回去、头像 `resetAvatar`、建的房间删掉。
 
-改动 rc-client 或服务端设置后跑一次 `pnpm smoke`。`test:pure` 已接入 CI。
+改动 rc-client 或服务端设置后跑一次 `pnpm smoke`。`test:pure` 与
+`test:regression` 已接入 CI。
 
 > **这些跑绿了不代表界面是好的。** 它们只打 API 和纯函数，测不到渲染 —— 有次成员
-> 面板一打开就白屏，46 项冒烟照样全绿。动过 UI 就得真在浏览器里点一遍。
+> 面板一打开就白屏，50 项冒烟照样全绿。动过 UI 就得真在浏览器里点一遍。
 
 ## 桌面客户端
 

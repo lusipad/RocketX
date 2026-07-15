@@ -15,6 +15,7 @@ import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import { applyScopedResult, settleScopedResult } from '../lib/scopedResult';
 import {
   commandDesc,
   commandParams,
@@ -59,7 +60,11 @@ export default function Composer() {
   const [picker, setPicker] = useState(false);
   const [members, setMembers] = useState<RcUser[]>([]);
   // 目录里搜到的群外用户（@ 群外的人用，防抖搜索）
-  const [remoteUsers, setRemoteUsers] = useState<RcUser[]>([]);
+  const [remoteResult, setRemoteResult] = useState<{
+    rid: string | null;
+    query: string;
+    users: RcUser[];
+  }>({ rid: null, query: '', users: [] });
   const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // @ 了群外的人：记下来，发送前邀请入群（否则 RC 不会给非成员发 @ 提醒）
   const [pendingInvites, setPendingInvites] = useState<RcUser[]>([]);
@@ -75,13 +80,19 @@ export default function Composer() {
 
   // 切换会话时恢复该会话草稿并预取成员（供 @ 补全）
   useEffect(() => {
-    setText(activeRid ? (useChat.getState().drafts[activeRid] ?? '') : '');
+    const rid = activeRid;
+    setText(rid ? (useChat.getState().drafts[rid] ?? '') : '');
     setMentionQuery(null);
     setPicker(false);
     setPendingInvites([]); // 待邀请名单跟着会话走，切走就清
+    setMembers(rid ? (useChat.getState().members[rid] ?? []) : []);
     textareaRef.current?.focus();
-    if (activeRid) {
-      void loadMembers(activeRid).then(setMembers);
+    if (rid) {
+      void applyScopedResult(
+        () => loadMembers(rid),
+        setMembers,
+        () => useChat.getState().activeRid === rid,
+      );
     }
   }, [activeRid, loadMembers]);
 
@@ -108,22 +119,34 @@ export default function Composer() {
 
   // @ 群外的人：输入 @关键词 时防抖搜全局目录，把不在群里的人也拉进候选
   useEffect(() => {
+    let current = true;
+    const rid = activeRid;
     const q = mentionQuery?.trim();
     if (!q) {
-      setRemoteUsers([]);
+      setRemoteResult({ rid, query: '', users: [] });
       return;
     }
     if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     mentionSearchTimer.current = setTimeout(() => {
-      void rest
-        .searchUsers(q, 20)
-        .then(({ users }) => setRemoteUsers(users))
-        .catch(() => setRemoteUsers([]));
+      void settleScopedResult(
+        () => rest.searchUsers(q, 20),
+        {
+          success: ({ users }) => setRemoteResult({ rid, query: q, users }),
+          error: () => setRemoteResult({ rid, query: q, users: [] }),
+        },
+        () => current && useChat.getState().activeRid === rid,
+      );
     }, 250);
     return () => {
+      current = false;
       if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     };
-  }, [mentionQuery]);
+  }, [activeRid, mentionQuery]);
+
+  const remoteUsers =
+    remoteResult.rid === activeRid && remoteResult.query === mentionQuery?.trim()
+      ? remoteResult.users
+      : [];
 
   const candidates = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -272,7 +295,8 @@ export default function Composer() {
 
   const doSend = async () => {
     const value = text.trim();
-    if (!value) return;
+    const rid = activeRid;
+    if (!value || !rid) return;
 
     // 斜杠命令走服务端执行，不能当文本发出去
     const slash = parseSlash(value);
@@ -289,9 +313,8 @@ export default function Composer() {
 
     // @ 了群外的人 → 发送前先把他们拉进群，RC 才会把 @ 提醒送到（非成员收不到提及通知）。
     // 只对群/频道有效；DM 不适用。
-    const rid = activeRid;
     const toInvite =
-      rid && roomType && roomType !== 'd'
+      roomType && roomType !== 'd'
         ? pendingInvites.filter((u) => value.includes(`@${u.username}`))
         : [];
 
@@ -305,7 +328,11 @@ export default function Composer() {
       try {
         // inviteMembers 会邀请 + 清成员缓存 + toast「已添加」；之后 TA 是成员，@ 提醒才发得到
         await inviteMembers(rid, toInvite);
-        void loadMembers(rid).then(setMembers); // 缓存已清，重拉刷新本地 @ 补全用的成员表
+        void applyScopedResult(
+          () => loadMembers(rid),
+          setMembers,
+          () => useChat.getState().activeRid === rid,
+        ); // 缓存已清，重拉刷新本地 @ 补全用的成员表
       } catch (err) {
         // 邀请失败：消息照常发，但对方可能收不到提醒，得说一声
         toast.error(err, '把群外成员拉进群失败，对方可能收不到 @ 提醒');
@@ -313,7 +340,7 @@ export default function Composer() {
     }
 
     // 失败由消息气泡的红色标记与 toast「重试」承接
-    await send(value, quote ? { quote } : undefined);
+    await send(value, { rid, ...(quote ? { quote } : {}) });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
