@@ -16,6 +16,7 @@ import {
   type QuickSearchTab,
 } from '../lib/quickSearch';
 import { mergeUserSearchResults } from '../lib/userSearch';
+import { commandCenterConversations } from '../lib/conversationView';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -28,12 +29,22 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 /** 全局搜索（Ctrl/Cmd+K）：会话跳转 + 跨会话消息 + 联系人/频道 */
-export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
+export default function QuickSwitcher({
+  onClose,
+  initialTab,
+  commandCenter = false,
+}: {
+  onClose: () => void;
+  initialTab?: Tab;
+  commandCenter?: boolean;
+}) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
+  const setConvFilter = useUI((s) => s.setConvFilter);
+  const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'convs');
   const [keyword, setKeyword] = useState('');
@@ -74,9 +85,11 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                 pinyinScore(keyword, displayName(aliases, a, nameFormat)) -
                 pinyinScore(keyword, displayName(aliases, b, nameFormat)),
             )
-        : conversations
+        : commandCenter
+          ? commandCenterConversations(conversations)
+          : conversations
       ).slice(0, 8),
-    [conversations, keyword, aliases, nameFormat, pinyinReady],
+    [conversations, keyword, aliases, nameFormat, pinyinReady, commandCenter],
   );
   const contactUsers = useMemo(
     () =>
@@ -217,6 +230,11 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
   const pickConv = (rid: string) => {
+    const conversation = conversations.find((item) => item.rid === rid);
+    if (commandCenter && conversation && (conversation.unread > 0 || conversation.alert)) {
+      setConvFilter('unread');
+      retainUnread(rid);
+    }
     void openRoom(rid);
     setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
@@ -268,7 +286,7 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="全局搜索"
+        aria-label={commandCenter ? '全局指令中心' : '全局搜索'}
         tabIndex={-1}
         className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl"
       >
@@ -298,7 +316,11 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                 setTab(order[(order.indexOf(tab) + dir + order.length) % order.length]);
               }
             }}
-            placeholder="搜索会话、消息、联系人（Tab 切换范围）"
+            placeholder={
+              commandCenter
+                ? '直接回车打开下一条未读，或输入内容搜索'
+                : '搜索会话、消息、联系人（Tab 切换范围）'
+            }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
@@ -319,6 +341,13 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
         </div>
 
         <div className="min-h-40 flex-1 overflow-y-auto py-1">
+          {commandCenter && tab === 'convs' && !keyword.trim() && (
+            <div className="px-4 py-1.5 text-2xs text-ink-3">
+              {conversations.some((item) => item.unread > 0 || item.alert)
+                ? '未读会话 · 回车打开第一条'
+                : '暂无未读 · 显示最近会话'}
+            </div>
+          )}
           {tab === 'convs' &&
             filteredConvs.map((c, i) => (
               <button
@@ -338,6 +367,9 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                   <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-2xs text-white">
                     {c.unread}
                   </span>
+                )}
+                {c.unread === 0 && c.alert && (
+                  <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                 )}
               </button>
             ))}

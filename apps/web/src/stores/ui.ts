@@ -42,6 +42,7 @@ interface UIState {
   /** 未读会话打开后暂留在列表，切到下一条时再移除，避免列表当场跳动。 */
   retainedUnreadRid: string | null;
   switcherOpen: boolean;
+  switcherCommandCenter: boolean;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -55,6 +56,7 @@ interface UIState {
   setActiveFolder: (id: string | null) => void;
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
+  openCommandCenter: () => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
   setPrTab: (t: 'review' | 'mine') => void;
@@ -67,6 +69,7 @@ export const useUI = create<UIState>((set) => ({
   activeFolder: null,
   retainedUnreadRid: null,
   switcherOpen: false,
+  switcherCommandCenter: false,
   workbenchTab: 'overview',
   workItemStateFilter: '全部',
   prTab: 'review',
@@ -80,7 +83,9 @@ export const useUI = create<UIState>((set) => ({
     }),
   setActiveFolder: (id) => set({ activeFolder: id, retainedUnreadRid: null }),
   retainUnread: (rid) => set({ retainedUnreadRid: rid }),
-  setSwitcherOpen: (open) => set({ switcherOpen: open }),
+  setSwitcherOpen: (open) =>
+    set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
+  openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => set({ workItemStateFilter: s }),
   setPrTab: (t) => set({ prTab: t }),

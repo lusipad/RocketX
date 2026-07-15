@@ -16,6 +16,9 @@
     },
     "dialog:allow-save",
     "notification:default",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
     "fs:allow-write-file",
     {
       "identifier": "fs:scope",

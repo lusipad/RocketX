@@ -35,16 +35,19 @@ export function Row({
 export function Toggle({
   checked,
   onChange,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+      className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-60 ${
         checked ? 'bg-primary' : 'bg-fill-active'
       }`}
     >

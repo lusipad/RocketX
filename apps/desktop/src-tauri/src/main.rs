@@ -22,6 +22,11 @@ fn show_main(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    show_main(&app);
+}
+
+#[tauri::command]
 fn set_tray_icon_normal(app: tauri::AppHandle, normal: bool) -> Result<(), String> {
     let tray = app
         .tray_by_id(MAIN_TRAY_ID)
@@ -43,7 +48,8 @@ fn main() {
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
             winauth::win_auth_request,
-            set_tray_icon_normal
+            set_tray_icon_normal,
+            show_main_window
         ])
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
@@ -56,6 +62,8 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         // 系统通知：WebView2 里 Web Notification 常年被判 denied（issue #4）
         .plugin(tauri_plugin_notification::init())
+        // Windows 全局指令中心快捷键；具体组合由 Web 设置页注册和切换。
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // 系统托盘：显示 / 退出（issue #3）
             let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;

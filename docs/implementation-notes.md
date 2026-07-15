@@ -53,3 +53,30 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — Windows 全局指令中心（2.4）
+
+## Shipped vs planned
+
+已交付：Windows 桌面端使用系统全局快捷键唤起未读优先的统一指令中心；Web 只保留原有应用内搜索。设置页支持启停、三个预设组合和注册冲突提示。
+
+## Decisions
+
+- 使用官方 Tauri 2 `global-shortcut` 插件，不自建 Win32 消息循环。
+- 默认 `Ctrl+Alt+K`，设置页提供三个预设组合和关闭开关；首轮不支持任意按键录制。
+- 空输入优先显示未读会话；没有未读时退回最近会话，避免唤起空面板。
+- 配置是设备级本地状态，不按 Rocket.Chat 服务器或账号隔离。
+
+## Deviations
+
+- 桌面 Release `--no-bundle` 已完成 Web 构建并进入 Rust LTO 链接，但用户切换到下一项后停止等待；以 `cargo check` 和真实 `tauri dev` 验收作为本轮桌面证据。
+
+## Surprises
+
+- 现有托盘代码已经完整封装显示、取消最小化和聚焦，新增命令只需复用 `show_main()`。
+
+## Questions for review
+
+- 无。

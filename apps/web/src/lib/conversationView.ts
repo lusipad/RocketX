@@ -130,3 +130,15 @@ export function nextUnreadConversation(
   if (unread.length === 1) return null;
   return unread[(current + 1) % unread.length];
 }
+
+/** 全局指令中心：有未读时只给未读，没有未读时退回最近会话。 */
+export function commandCenterConversations(
+  conversations: Conversation[],
+): Conversation[] {
+  const unread = conversations.filter(
+    (conversation) => conversation.unread > 0 || conversation.alert,
+  );
+  return [...(unread.length > 0 ? unread : conversations)].sort(
+    (a, b) => b.lastTs - a.lastTs,
+  );
+}

@@ -55,6 +55,7 @@ export default function MainPage() {
   const activeRid = useChat((s) => s.activeRid);
   const module = useUI((s) => s.module);
   const switcher = useUI((s) => s.switcherOpen);
+  const switcherCommandCenter = useUI((s) => s.switcherCommandCenter);
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
 
   const loadPrefs = usePrefs((s) => s.load);
@@ -327,7 +328,13 @@ export default function MainPage() {
           连接中，消息推送可能延迟…
         </div>
       )}
-      {switcher && <QuickSwitcher onClose={() => setSwitcher(false)} initialTab={switcherTab.current} />}
+      {switcher && (
+        <QuickSwitcher
+          onClose={() => setSwitcher(false)}
+          initialTab={switcherCommandCenter ? 'convs' : switcherTab.current}
+          commandCenter={switcherCommandCenter}
+        />
+      )}
       <UploadConfirm />
       <Toaster />
       <FirstUseChecklist

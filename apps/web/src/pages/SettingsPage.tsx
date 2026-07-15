@@ -4,6 +4,7 @@ import {
   Camera,
   CheckCircle2,
   Info,
+  Keyboard,
   LayoutGrid,
   Loader2,
   MessageSquare,
@@ -27,6 +28,11 @@ import { useUiPrefs } from '../stores/uiPrefs';
 import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
 import { useWiTemplates } from '../stores/wiTemplates';
+import { useGlobalShortcut } from '../stores/globalShortcut';
+import {
+  GLOBAL_SHORTCUT_OPTIONS,
+  type GlobalShortcutValue,
+} from '../lib/globalShortcut';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
@@ -42,6 +48,7 @@ type Section =
   | 'sidebar'
   | 'message'
   | 'notification'
+  | 'shortcuts'
   | 'workbench'
   | 'about';
 
@@ -51,6 +58,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
   { key: 'notification', label: '通知', icon: Bell },
+  { key: 'shortcuts', label: '快捷键', icon: Keyboard },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
   { key: 'about', label: '关于', icon: Info },
 ];
@@ -395,6 +403,63 @@ function AppearanceSection() {
         })}
       </div>
     </Row>
+  );
+}
+
+/** Windows 桌面端本机快捷键，不跟随 Rocket.Chat 账号同步。 */
+function ShortcutSection() {
+  const config = useGlobalShortcut((state) => state.config);
+  const status = useGlobalShortcut((state) => state.status);
+  const error = useGlobalShortcut((state) => state.error);
+  const setEnabled = useGlobalShortcut((state) => state.setEnabled);
+  const setShortcut = useGlobalShortcut((state) => state.setShortcut);
+  const windowsDesktop =
+    isTauri && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+
+  const statusText = !windowsDesktop
+    ? '仅 Windows 桌面端支持系统全局快捷键'
+    : !config.enabled || status === 'disabled'
+      ? '已关闭'
+      : status === 'registered'
+        ? '已注册，在其他窗口或 RocketX 隐藏到托盘时也可使用'
+        : status === 'conflict'
+          ? '注册失败，快捷键可能已被其他程序占用'
+          : '正在注册…';
+
+  return (
+    <>
+      <Row
+        label="全局指令中心"
+        hint="唤起 RocketX；直接回车打开下一条未读，输入内容则搜索会话、消息、联系人和频道"
+        inline
+      >
+        <Toggle
+          checked={windowsDesktop && config.enabled}
+          disabled={!windowsDesktop}
+          onChange={setEnabled}
+        />
+      </Row>
+      <Row label="系统快捷键" hint="设置保存在本机，不跟随账号同步">
+        <select
+          value={config.shortcut}
+          disabled={!windowsDesktop || !config.enabled}
+          onChange={(event) => setShortcut(event.target.value as GlobalShortcutValue)}
+          className={`${inputCls} disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          {GLOBAL_SHORTCUT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <div
+          title={error ?? undefined}
+          className={`mt-2 text-xs ${status === 'conflict' ? 'text-danger' : 'text-ink-3'}`}
+        >
+          {statusText}
+        </div>
+      </Row>
+    </>
   );
 }
 
@@ -1089,6 +1154,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'sidebar' && <SidebarSection />}
               {section === 'message' && <MessageSection />}
               {section === 'notification' && <NotificationSection />}
+              {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
               {section === 'about' && <AboutSection />}
             </>

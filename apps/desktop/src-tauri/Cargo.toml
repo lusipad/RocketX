@@ -18,6 +18,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 # 系统通知：WebView2 里 Web Notification 常年被判 denied，改走系统通知插件（issue #4）
 tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

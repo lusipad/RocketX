@@ -5,6 +5,7 @@ import MainPage from './pages/MainPage';
 import AdoOnboardingPage from './pages/AdoOnboardingPage';
 import { useOnboarding } from './stores/onboarding';
 import { useImLayout } from './stores/imLayout';
+import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -26,20 +27,28 @@ export default function App() {
     }
   }, [hydrateImLayout, hydrateOnboarding, status, userId]);
 
+  let content;
   if (status === 'boot') {
-    return (
+    content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
         正在加载…
       </div>
     );
-  }
-  if (status !== 'authed') return <LoginPage />;
-  if (!userId || onboardingOwnerId !== userId || !onboarding) {
-    return (
+  } else if (status !== 'authed') {
+    content = <LoginPage />;
+  } else if (!userId || onboardingOwnerId !== userId || !onboarding) {
+    content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
         正在加载个人设置…
       </div>
     );
+  } else {
+    content = onboarding.ado === 'pending' ? <AdoOnboardingPage /> : <MainPage />;
   }
-  return onboarding.ado === 'pending' ? <AdoOnboardingPage /> : <MainPage />;
+  return (
+    <>
+      <GlobalShortcutBridge />
+      {content}
+    </>
+  );
 }
