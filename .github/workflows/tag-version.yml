@@ -1,0 +1,32 @@
+name: Tag Version
+
+# 从远程执行环境（Claude Code on the web 等）发版时用：那边的 git 代理只允许推分支、
+# 不允许推 tag。手动触发本工作流，在当前 main 上创建 vX.Y.Z 标签并触发桌面构建发布。
+# 注意：GITHUB_TOKEN 推的 tag 不会触发 on:push:tags（GitHub 防递归），
+# 所以这里显式再 dispatch 一次 desktop.yml —— 以 tag 为 ref 时行为与 push tag 完全一致。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '标签名（如 v0.10.0），打在 main 最新提交上'
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 创建并推送标签
+        run: |
+          git tag "${{ inputs.tag }}"
+          git push origin "refs/tags/${{ inputs.tag }}"
+
+      - name: 触发桌面构建与草稿 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run desktop.yml --ref "${{ inputs.tag }}" -R "${{ github.repository }}"
