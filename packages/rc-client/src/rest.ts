@@ -975,6 +975,11 @@ export class RcRestClient {
     return this.request('POST', 'channels.join', { roomId: rid });
   }
 
+  /** 加入房间；旧版兼容由调用方根据房间语义选择对应路径 */
+  joinRoom(rid: string): Promise<unknown> {
+    return this.request('POST', 'rooms.join', { roomId: rid });
+  }
+
   /** 邀请成员进群 */
   inviteToRoom(rid: string, type: RoomType, userId: string): Promise<unknown> {
     const endpoint = type === 'c' ? 'channels.invite' : 'groups.invite';

@@ -20,6 +20,73 @@ export function templateSupportsTypes(template: WiTemplate, availableTypes: stri
   );
 }
 
+function actualType(type: string, availableTypes: string[]): string | undefined {
+  const wanted = type.toLocaleLowerCase();
+  return availableTypes.find((available) => available.toLocaleLowerCase() === wanted);
+}
+
+function resolveTemplateTypes(template: WiTemplate, availableTypes: string[]): WiTemplate {
+  return {
+    ...template,
+    items: template.items.map((item) => ({
+      ...item,
+      type: item.type === '{type}' ? item.type : (actualType(item.type, availableTypes) ?? item.type),
+    })),
+  };
+}
+
+function inferredHierarchy(availableTypes: string[]): string[] {
+  const levels = [
+    ['Epic', 'Initiative'],
+    ['Feature', 'Capability'],
+    ['User Story', 'Product Backlog Item', 'Requirement', 'Issue', 'Story', 'Backlog Item'],
+    ['Task'],
+  ];
+  return levels.flatMap((candidates) => {
+    const type = candidates.map((candidate) => actualType(candidate, availableTypes)).find(Boolean);
+    return type ? [type] : [];
+  });
+}
+
+function hierarchyTemplate(types: string[]): WiTemplate {
+  const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
+  const chain = taskAtEnd ? types.slice(0, -1) : types;
+  const items: CascadeTemplateItem[] = chain.map((type, index) => ({
+    type,
+    title: '{title}',
+    ...(index > 0 ? { parent: index - 1 } : {}),
+  }));
+  if (taskAtEnd) {
+    const parent = items.length - 1;
+    items.push(
+      { type: types.at(-1)!, title: '【开发】{title}', parent },
+      { type: types.at(-1)!, title: '【测试】{title}', parent },
+    );
+  }
+  return { name: '层级工作项', items };
+}
+
+/**
+ * 返回项目真正可创建的模板，并把固定模板类型替换为服务器返回的精确名称。
+ * 当 Agile 专用内置模板不适配时，按过程配置生成 Basic/Scrum/CMMI/自定义层级入口。
+ */
+export function workItemTemplatesForTypes(
+  templates: WiTemplate[],
+  availableTypes: string[],
+  processHierarchy: string[] = [],
+): WiTemplate[] {
+  const compatible = templates
+    .filter((template) => templateSupportsTypes(template, availableTypes))
+    .map((template) => resolveTemplateTypes(template, availableTypes));
+  if (compatible.some((template) => template.items.length > 1)) return compatible;
+
+  const exactHierarchy = processHierarchy
+    .map((type) => actualType(type, availableTypes))
+    .filter((type): type is string => !!type);
+  const hierarchy = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
+  return hierarchy.length >= 2 ? [hierarchyTemplate(hierarchy), ...compatible] : compatible;
+}
+
 /** 优先保持常见的 Task；过程模板没有 Task 时退到第一个真实可用类型。 */
 export function preferredWorkItemType(availableTypes: string[]): string {
   return availableTypes.find((type) => type.toLocaleLowerCase() === 'task') ?? availableTypes[0] ?? '';

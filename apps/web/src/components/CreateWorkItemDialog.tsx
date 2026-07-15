@@ -3,9 +3,8 @@ import { Loader2 } from 'lucide-react';
 import { useWorkbench } from '../stores/workbench';
 import {
   preferredWorkItemType,
-  templateSupportsTypes,
+  workItemTemplatesForTypes,
   useWiTemplates,
-  type WiTemplate,
 } from '../stores/wiTemplates';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
@@ -32,6 +31,7 @@ export default function CreateWorkItemDialog({
   const [project, setProject] = useState('');
   const [projects, setProjects] = useState<string[]>([]);
   const [workItemTypes, setWorkItemTypes] = useState<string[]>([]);
+  const [workItemHierarchy, setWorkItemHierarchy] = useState<string[]>([]);
   const [typesLoading, setTypesLoading] = useState(false);
   const [createDiscussion, setCreateDiscussion] = useState(!!rid);
   const [loading, setLoading] = useState(false);
@@ -43,14 +43,10 @@ export default function CreateWorkItemDialog({
   const dialogRef = useDialogBehavior(requestClose);
 
   const compatibleTemplates = useMemo(
-    () => templates
-      .map((template, index) => ({ template, index }))
-      .filter(({ template }) => templateSupportsTypes(template, workItemTypes)),
-    [templates, workItemTypes],
+    () => workItemTemplatesForTypes(templates, workItemTypes, workItemHierarchy),
+    [templates, workItemTypes, workItemHierarchy],
   );
-  const tpl = compatibleTemplates.find(({ index }) => index === tplIdx)?.template as
-    | WiTemplate
-    | undefined;
+  const tpl = compatibleTemplates[tplIdx];
   const isSingle = tpl?.items.length === 1 && tpl.items[0].type === '{type}';
 
   useEffect(() => {
@@ -72,15 +68,20 @@ export default function CreateWorkItemDialog({
     let cancelled = false;
     setTypesLoading(true);
     setWorkItemTypes([]);
+    setWorkItemHierarchy([]);
     setType('');
     setError(null);
     void (async () => {
       try {
-        const { directGetWorkItemTypes } = await import('../lib/adoDirect');
+        const { directGetWorkItemHierarchy, directGetWorkItemTypes } = await import('../lib/adoDirect');
         const cfg = { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth };
-        const names = await directGetWorkItemTypes(cfg, project);
+        const [names, hierarchy] = await Promise.all([
+          directGetWorkItemTypes(cfg, project),
+          directGetWorkItemHierarchy(cfg, project).catch(() => []),
+        ]);
         if (cancelled) return;
         setWorkItemTypes(names);
+        setWorkItemHierarchy(hierarchy);
         setType((current) => names.includes(current) ? current : preferredWorkItemType(names));
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -92,12 +93,8 @@ export default function CreateWorkItemDialog({
   }, [config, project]);
 
   useEffect(() => {
-    if (!workItemTypes.length) return;
-    const indexes = templates
-      .map((template, index) => templateSupportsTypes(template, workItemTypes) ? index : -1)
-      .filter((index) => index >= 0);
-    setTplIdx((current) => indexes.includes(current) ? current : (indexes[0] ?? -1));
-  }, [templates, workItemTypes]);
+    setTplIdx((current) => current < compatibleTemplates.length ? current : 0);
+  }, [compatibleTemplates.length]);
 
   const doCreate = async () => {
     if (!title.trim() || !project || !config?.adoBase || !tpl || !workItemTypes.length || !type) return;
@@ -198,7 +195,7 @@ export default function CreateWorkItemDialog({
         <div className="mt-3 space-y-3">
           {/* 模板选择 */}
           <div className="flex flex-wrap gap-1.5">
-            {compatibleTemplates.map(({ template: t, index: i }) => (
+            {compatibleTemplates.map((t, i) => (
               <button
                 key={t.name}
                 onClick={() => setTplIdx(i)}

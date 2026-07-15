@@ -78,6 +78,46 @@ export function connectionIdentity(data: {
   };
 }
 
+function mapBuild(webBase: string, build: any): AdoBuild {
+  const project = build.project?.name ?? '';
+  return {
+    id: build.id,
+    buildNumber: build.buildNumber ?? String(build.id),
+    definition: build.definition?.name ?? '',
+    project,
+    status: build.status ?? '',
+    result: build.result ?? '',
+    requestedFor: build.requestedFor?.displayName ?? '',
+    queueTime: build.queueTime ?? '',
+    finishTime: build.finishTime ?? '',
+    webUrl:
+      build._links?.web?.href ??
+      `${webBase}/${encodeURIComponent(project)}/_build/results?buildId=${build.id}`,
+  };
+}
+
+function mapPullRequest(webBase: string, pr: any): AdoPullRequest {
+  const project = pr.repository?.project?.name ?? '';
+  const repo = pr.repository?.name ?? '';
+  return {
+    id: pr.pullRequestId,
+    title: pr.title ?? '',
+    repo,
+    project,
+    creator: pr.createdBy?.displayName ?? '',
+    creatorUnique: pr.createdBy?.uniqueName ?? '',
+    reviewers: (pr.reviewers ?? []).map((reviewer: any) => ({
+      name: reviewer.displayName ?? '',
+      unique: reviewer.uniqueName ?? '',
+      vote: reviewer.vote ?? 0,
+    })),
+    sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
+    targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
+    createdDate: pr.creationDate ?? '',
+    webUrl: `${webBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
+  };
+}
+
 export class AdoClient {
   constructor(private config: AdoConfig) {}
 
@@ -239,6 +279,22 @@ export class AdoClient {
     }
   }
 
+  async getBuild(project: string, id: number): Promise<AdoBuild> {
+    const build = await this.request<any>(
+      'GET',
+      `/${encodeURIComponent(project)}/_apis/build/builds/${id}?api-version=7.0`,
+    );
+    return mapBuild(this.webBase, build);
+  }
+
+  async getPullRequest(id: number): Promise<AdoPullRequest> {
+    const pullRequest = await this.request<any>(
+      'GET',
+      `/_apis/git/pullrequests/${id}?api-version=7.0`,
+    );
+    return mapPullRequest(this.webBase, pullRequest);
+  }
+
   /** 各项目最近构建（合并排序，工作台构建面板用） */
   async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
     const me = await this.getIdentity();
@@ -275,20 +331,7 @@ export class AdoClient {
     }
     return lists
       .flat()
-      .map((b) => ({
-        id: b.id,
-        buildNumber: b.buildNumber ?? String(b.id),
-        definition: b.definition?.name ?? '',
-        project: b.project?.name ?? '',
-        status: b.status ?? '',
-        result: b.result ?? '',
-        requestedFor: b.requestedFor?.displayName ?? '',
-        queueTime: b.queueTime ?? '',
-        finishTime: b.finishTime ?? '',
-        webUrl:
-          b._links?.web?.href ??
-          `${this.webBase}/${encodeURIComponent(b.project?.name ?? '')}/_build/results?buildId=${b.id}`,
-      }))
+      .map((build) => mapBuild(this.webBase, build))
       .sort((a, b) => (b.queueTime > a.queueTime ? 1 : -1))
       .slice(0, top);
   }
@@ -306,26 +349,6 @@ export class AdoClient {
       all.push(...page);
       if (page.length < pageSize) break;
     }
-    return all.map((pr) => {
-      const project = pr.repository?.project?.name ?? '';
-      const repo = pr.repository?.name ?? '';
-      return {
-        id: pr.pullRequestId,
-        title: pr.title ?? '',
-        repo,
-        project,
-        creator: pr.createdBy?.displayName ?? '',
-        creatorUnique: pr.createdBy?.uniqueName ?? '',
-        reviewers: (pr.reviewers ?? []).map((r: any) => ({
-          name: r.displayName ?? '',
-          unique: r.uniqueName ?? '',
-          vote: r.vote ?? 0,
-        })),
-        sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
-        targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
-        createdDate: pr.creationDate ?? '',
-        webUrl: `${this.webBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
-      };
-    });
+    return all.map((pullRequest) => mapPullRequest(this.webBase, pullRequest));
   }
 }

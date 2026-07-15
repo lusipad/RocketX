@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
 import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
 import { ensureAccountScope } from '../lib/accountScope';
+import { restoreTrayAttention } from '../lib/tray';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -128,6 +129,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     } catch {
       /* 忽略登出失败 */
     }
+    // reload 会销毁 JS 定时器；必须先等原生托盘恢复，避免透明帧永久残留。
+    await restoreTrayAttention();
     set({ status: 'guest', user: null });
     location.reload();
   },

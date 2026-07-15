@@ -415,6 +415,41 @@ export async function directGetWorkItemTypes(
   return (res.value ?? []).filter((t) => !t.isDisabled).map((t) => t.name);
 }
 
+interface WorkItemCategory {
+  workItemTypes?: { name: string }[];
+}
+
+/**
+ * 项目过程配置里的真实层级（Portfolio → Requirement → Task）。
+ * 与类型列表分开读取：类型列表决定“能不能创建”，这里仅决定层级模板怎么排列。
+ */
+export async function directGetWorkItemHierarchy(
+  cfg: DirectConfig,
+  project: string,
+): Promise<string[]> {
+  const res = await adoRequest<{
+    portfolioBacklogs?: WorkItemCategory[];
+    requirementBacklog?: WorkItemCategory;
+    taskBacklog?: WorkItemCategory;
+  }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/work/processconfiguration?api-version=7.0`,
+  );
+  const categories = [
+    ...(res.portfolioBacklogs ?? []),
+    res.requirementBacklog,
+    res.taskBacklog,
+  ];
+  const seen = new Set<string>();
+  return categories.flatMap((category) => {
+    const name = category?.workItemTypes?.[0]?.name?.trim();
+    if (!name || seen.has(name.toLocaleLowerCase())) return [];
+    seen.add(name.toLocaleLowerCase());
+    return [name];
+  });
+}
+
 export async function directGetCurrentIteration(cfg: DirectConfig, project: string, team?: string): Promise<string | null> {
   const t = team ? `/${encodeURIComponent(team)}` : '';
   try {
@@ -436,13 +471,25 @@ export interface CreateWorkItemOpts {
   parentId?: number;
 }
 
-export async function directCreateWorkItem(
+export interface CreateWorkItemRequest {
+  path: string;
+  body: { op: string; path: string; value: any }[];
+  contentType: 'application/json-patch+json';
+}
+
+/** ADO 创建工作项的可测试请求契约；路径中的类型始终来自项目实际类型名。 */
+export function createWorkItemRequest(
   cfg: DirectConfig,
   project: string,
   type: string,
   title: string,
   opts?: CreateWorkItemOpts,
-) {
+): CreateWorkItemRequest {
+  const projectName = project.trim();
+  const typeName = type.trim();
+  if (!projectName) throw new Error('项目不能为空');
+  if (!typeName) throw new Error('工作项类型不能为空');
+
   const ops: { op: string; path: string; value: any }[] = [
     { op: 'add', path: '/fields/System.Title', value: title },
   ];
@@ -459,12 +506,27 @@ export async function directCreateWorkItem(
       },
     });
   }
+  return {
+    path: `/${encodeURIComponent(projectName)}/_apis/wit/workitems/$${encodeURIComponent(typeName)}?api-version=7.0`,
+    body: ops,
+    contentType: 'application/json-patch+json',
+  };
+}
+
+export async function directCreateWorkItem(
+  cfg: DirectConfig,
+  project: string,
+  type: string,
+  title: string,
+  opts?: CreateWorkItemOpts,
+) {
+  const request = createWorkItemRequest(cfg, project, type, title, opts);
   const result = await adoRequest<{ id: number; fields: Record<string, any> }>(
     cfg,
     'POST',
-    `/${encodeURIComponent(project)}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=7.0`,
-    ops,
-    'application/json-patch+json',
+    request.path,
+    request.body,
+    request.contentType,
   );
   return mapWorkItem(cfg, result);
 }
@@ -487,15 +549,52 @@ export async function directCreateCascade(
   for (const item of template) {
     const title = resolve(item.title);
     const type = resolve(item.type);
-    const parentId = item.parent != null ? created[item.parent]?.id : undefined;
+    const parent = item.parent != null ? created[item.parent] : undefined;
+    if (item.parent != null && !parent) {
+      throw new Error(`层级模板第 ${created.length + 1} 项引用了无效父项 ${item.parent + 1}`);
+    }
     const wi = await directCreateWorkItem(cfg, project, type, title, {
       tags: item.parent == null ? opts?.tags : undefined,
       iterationPath: opts?.iterationPath,
-      parentId,
+      parentId: parent?.id,
     });
     created.push({ id: wi.id, type: wi.type, title: wi.title, webUrl: wi.webUrl });
   }
   return created;
+}
+
+function mapPullRequest(cfg: DirectConfig, pr: any) {
+  const project = pr.repository?.project?.name ?? '';
+  const repo = pr.repository?.name ?? '';
+  return {
+    id: pr.pullRequestId,
+    title: pr.title ?? '',
+    repo,
+    project,
+    creator: pr.createdBy?.displayName ?? '',
+    creatorUnique: pr.createdBy?.uniqueName ?? '',
+    reviewers: (pr.reviewers ?? []).map((reviewer: any) => ({
+      name: reviewer.displayName ?? '',
+      unique: reviewer.uniqueName ?? '',
+      vote: reviewer.vote ?? 0,
+    })),
+    sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
+    targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
+    createdDate: pr.creationDate ?? '',
+    webUrl: `${base(cfg)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
+  };
+}
+
+export async function directGetPullRequest(
+  cfg: DirectConfig,
+  id: number,
+) {
+  const pr = await adoRequest<any>(
+    cfg,
+    'GET',
+    `/_apis/git/pullrequests/${id}?api-version=7.0`,
+  );
+  return mapPullRequest(cfg, pr);
 }
 
 export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
@@ -534,28 +633,34 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
   const all = [...review, ...mine].filter((pr) =>
     seen.has(pr.pullRequestId) ? false : (seen.add(pr.pullRequestId), true),
   );
-  return all.map((pr) => {
-    const project = pr.repository?.project?.name ?? '';
-    const repo = pr.repository?.name ?? '';
-    return {
-      id: pr.pullRequestId,
-      title: pr.title ?? '',
-      repo,
-      project,
-      creator: pr.createdBy?.displayName ?? '',
-      creatorUnique: pr.createdBy?.uniqueName ?? '',
-      reviewers: (pr.reviewers ?? []).map((r: any) => ({
-        name: r.displayName ?? '',
-        unique: r.uniqueName ?? '',
-        vote: r.vote ?? 0,
-      })),
-      sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
-      targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
-      createdDate: pr.creationDate ?? '',
-      rel: rel.get(pr.pullRequestId),
-      webUrl: `${base(cfg)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
-    };
-  });
+  return all.map((pr) => ({ ...mapPullRequest(cfg, pr), rel: rel.get(pr.pullRequestId) }));
+}
+
+function mapBuild(cfg: DirectConfig, build: any) {
+  const project = build.project?.name ?? '';
+  return {
+    id: build.id,
+    buildNumber: build.buildNumber ?? String(build.id),
+    definition: build.definition?.name ?? '',
+    project,
+    status: build.status ?? '',
+    result: build.result ?? '',
+    requestedFor: build.requestedFor?.displayName ?? '',
+    queueTime: build.queueTime ?? '',
+    finishTime: build.finishTime ?? '',
+    webUrl:
+      build._links?.web?.href ??
+      `${base(cfg)}/${encodeURIComponent(project)}/_build/results?buildId=${build.id}`,
+  };
+}
+
+export async function directGetBuild(cfg: DirectConfig, project: string, id: number) {
+  const build = await adoRequest<any>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/build/builds/${id}?api-version=7.0`,
+  );
+  return mapBuild(cfg, build);
 }
 
 export async function directGetBuilds(cfg: DirectConfig, top = 20) {
@@ -584,20 +689,7 @@ export async function directGetBuilds(cfg: DirectConfig, top = 20) {
   }
   return lists
     .flat()
-    .map((b) => ({
-      id: b.id,
-      buildNumber: b.buildNumber ?? String(b.id),
-      definition: b.definition?.name ?? '',
-      project: b.project?.name ?? '',
-      status: b.status ?? '',
-      result: b.result ?? '',
-      requestedFor: b.requestedFor?.displayName ?? '',
-      queueTime: b.queueTime ?? '',
-      finishTime: b.finishTime ?? '',
-      webUrl:
-        b._links?.web?.href ??
-        `${base(cfg)}/${encodeURIComponent(b.project?.name ?? '')}/_build/results?buildId=${b.id}`,
-    }))
+    .map((build) => mapBuild(cfg, build))
     .sort((a, b) => (b.queueTime > a.queueTime ? 1 : -1))
     .slice(0, top);
 }

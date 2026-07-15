@@ -54,9 +54,115 @@ export interface AdoWorkItemInfo {
   webUrl: string;
 }
 
+export interface AdoPullRequestInfo {
+  id: number;
+  title: string;
+  repo: string;
+  project: string;
+  creator: string;
+  creatorUnique: string;
+  reviewers: { name: string; unique: string; vote: number }[];
+  sourceBranch: string;
+  targetBranch: string;
+  createdDate?: string;
+  webUrl: string;
+}
+
+export interface AdoBuildInfo {
+  id: number;
+  buildNumber: string;
+  definition: string;
+  project: string;
+  status: string;
+  result: string;
+  requestedFor: string;
+  queueTime: string;
+  finishTime: string;
+  webUrl: string;
+}
+
+export type AdoUrlEntity =
+  | { kind: 'workitem'; id: number; href: string }
+  | { kind: 'pullrequest'; id: number; href: string }
+  | { kind: 'build'; id: number; project: string; href: string };
+
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/** 只识别当前 ADO 集合内有稳定详情 API 的 URL；其他 URL 保持普通安全链接。 */
+export function parseAdoUrl(href: string, adoBase: string | null): AdoUrlEntity | null {
+  if (!adoBase) return null;
+  let target: URL;
+  let configured: URL;
+  try {
+    target = new URL(href);
+    configured = new URL(adoBase);
+  } catch {
+    return null;
+  }
+  const basePath = configured.pathname.replace(/\/+$/, '');
+  const targetPath = target.pathname.toLocaleLowerCase();
+  const configuredPath = basePath.toLocaleLowerCase();
+  if (
+    target.origin.toLocaleLowerCase() !== configured.origin.toLocaleLowerCase() ||
+    (targetPath !== configuredPath && !targetPath.startsWith(`${configuredPath}/`))
+  ) {
+    return null;
+  }
+
+  const relative = target.pathname.slice(basePath.length);
+  const workItem = /\/_workitems\/edit\/(\d+)\b/i.exec(relative);
+  if (workItem) return { kind: 'workitem', id: Number(workItem[1]), href };
+
+  const pullRequest = /^(?:\/[^/]+)?\/_git\/[^/]+\/pullrequest\/(\d+)\/?$/i.exec(relative);
+  if (pullRequest) {
+    return {
+      kind: 'pullrequest',
+      id: Number(pullRequest[1]),
+      href,
+    };
+  }
+
+  if (/^\/([^/]+)\/_build(?:\/results)?\/?$/i.test(relative)) {
+    const project = /^\/([^/]+)/.exec(relative)?.[1];
+    const buildId = [...target.searchParams].find(([key]) => key.toLocaleLowerCase() === 'buildid')?.[1];
+    if (project && /^\d+$/.test(buildId ?? '')) {
+      return { kind: 'build', project: decoded(project), id: Number(buildId), href };
+    }
+  }
+  return null;
+}
+
 const itemCache = new Map<string, { item: AdoWorkItemInfo | null; ts: number }>();
 const inflight = new Map<string, Promise<AdoWorkItemInfo | null>>();
 const CACHE_TTL = 60_000;
+
+const entityCache = new Map<string, { value: unknown | null; ts: number }>();
+const entityInflight = new Map<string, Promise<unknown | null>>();
+
+function cachedEntity<T>(key: string, load: () => Promise<T | null>): Promise<T | null> {
+  const cached = entityCache.get(key);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve(cached.value as T | null);
+  const existing = entityInflight.get(key);
+  if (existing) return existing as Promise<T | null>;
+  const promise = load()
+    .then((value) => {
+      entityCache.set(key, { value, ts: Date.now() });
+      return value;
+    })
+    .catch(() => {
+      entityCache.set(key, { value: null, ts: Date.now() });
+      return null;
+    })
+    .finally(() => entityInflight.delete(key));
+  entityInflight.set(key, promise);
+  return promise;
+}
 
 function itemKey(config: WorkbenchConfig, id: number): string {
   const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
@@ -99,6 +205,47 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
     .finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
+}
+
+export function fetchPullRequest(id: number): Promise<AdoPullRequestInfo | null> {
+  const config = loadWorkbenchConfig();
+  if (!config) return Promise.resolve(null);
+  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
+  const key = `${config.mode}:${endpoint ?? ''}:${config.account}:pr:${id}`;
+  return cachedEntity(key, () =>
+    config.mode === 'direct' && config.adoBase
+      ? import('./adoDirect').then((module) =>
+          module.directGetPullRequest(
+            { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth },
+            id,
+          ),
+        )
+      : fetch(`${config.bridge}/api/ado/pullrequest/${id}`).then(async (response) =>
+          response.ok ? ((await response.json()) as { item: AdoPullRequestInfo }).item : null,
+        ),
+  );
+}
+
+export function fetchBuild(project: string, id: number): Promise<AdoBuildInfo | null> {
+  const config = loadWorkbenchConfig();
+  if (!config) return Promise.resolve(null);
+  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
+  const key = `${config.mode}:${endpoint ?? ''}:${config.account}:build:${project}:${id}`;
+  return cachedEntity(key, () =>
+    config.mode === 'direct' && config.adoBase
+      ? import('./adoDirect').then((module) =>
+          module.directGetBuild(
+            { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth },
+            project,
+            id,
+          ),
+        )
+      : fetch(
+          `${config.bridge}/api/ado/build/${id}?project=${encodeURIComponent(project)}`,
+        ).then(async (response) =>
+          response.ok ? ((await response.json()) as { item: AdoBuildInfo }).item : null,
+        ),
+  );
 }
 
 export async function commentWorkItem(id: number, text: string): Promise<void> {

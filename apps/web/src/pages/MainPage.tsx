@@ -4,6 +4,12 @@ import { usePrefs } from '../stores/prefs';
 import { type ModuleKey, useUI } from '../stores/ui';
 import { requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
+import {
+  clearTrayAttention,
+  hasTrayAttention,
+  restoreTrayAttention,
+  setTrayAttention,
+} from '../lib/tray';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -37,9 +43,13 @@ export default function MainPage() {
 
   // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
   useEffect(() => {
+    void restoreTrayAttention();
     const onFocus = () => void clearTaskbarFlash();
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      void clearTrayAttention();
+    };
   }, []);
 
   // 标题栏未读数 + 任务栏角标（免打扰会话不计入）。
@@ -51,6 +61,7 @@ export default function MainPage() {
     );
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
     void setTaskbarBadge(total);
+    void setTrayAttention(hasTrayAttention(subscriptions));
   }, [subscriptions]);
 
   // 全局快捷键
