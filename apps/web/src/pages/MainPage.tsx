@@ -91,7 +91,7 @@ export default function MainPage() {
   }, []);
 
   return (
-    <div className="flex h-full overflow-hidden bg-fill-2">
+    <div className="flex h-full min-h-[640px] min-w-[940px] overflow-hidden bg-fill-2">
       <NavRail />
       {module === 'messages' ? (
         <>
