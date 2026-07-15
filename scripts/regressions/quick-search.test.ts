@@ -84,20 +84,20 @@ test('过期查询不会在全局搜索失败后继续发起回退请求', async
 });
 
 test('自动切换保留用户当前有结果的范围，只在当前范围为空时兜底', () => {
-  assert.deepEqual(QUICK_SEARCH_TABS, ['all', 'convs', 'messages', 'contacts', 'work']);
+  assert.deepEqual(QUICK_SEARCH_TABS, ['all', 'convs', 'messages', 'files', 'contacts', 'work']);
   assert.equal(searchesSettledFor('new', 'old', 'old'), false);
   assert.equal(searchesSettledFor('new', 'new', 'old'), false);
   assert.equal(searchesSettledFor('new', 'new', 'new'), true);
   assert.equal(
-    chooseAvailableSearchTab('contacts', { all: 6, convs: 0, messages: 3, contacts: 2, work: 1 }),
+    chooseAvailableSearchTab('contacts', { all: 6, convs: 0, messages: 3, files: 0, contacts: 2, work: 1 }),
     'contacts',
   );
   assert.equal(
-    chooseAvailableSearchTab('contacts', { all: 5, convs: 0, messages: 3, contacts: 0, work: 1 }),
+    chooseAvailableSearchTab('contacts', { all: 5, convs: 0, messages: 3, files: 0, contacts: 0, work: 1 }),
     'messages',
   );
   assert.equal(
-    chooseAvailableSearchTab('all', { all: 4, convs: 0, messages: 3, contacts: 0, work: 1 }),
+    chooseAvailableSearchTab('all', { all: 4, convs: 0, messages: 3, files: 0, contacts: 0, work: 1 }),
     'all',
   );
 });

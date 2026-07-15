@@ -5,6 +5,7 @@ import MainPage from './pages/MainPage';
 import AdoOnboardingPage from './pages/AdoOnboardingPage';
 import { useOnboarding } from './stores/onboarding';
 import { useImLayout } from './stores/imLayout';
+import { useFileIndex } from './stores/fileIndex';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 
 export default function App() {
@@ -15,6 +16,8 @@ export default function App() {
   const onboarding = useOnboarding((s) => s.state);
   const hydrateOnboarding = useOnboarding((s) => s.hydrate);
   const hydrateImLayout = useImLayout((s) => s.hydrate);
+  const fileIndexOwnerId = useFileIndex((s) => s.ownerId);
+  const hydrateFileIndex = useFileIndex((s) => s.hydrate);
 
   useEffect(() => {
     void resume();
@@ -24,8 +27,9 @@ export default function App() {
     if (status === 'authed' && userId) {
       hydrateOnboarding(userId);
       hydrateImLayout(userId);
+      hydrateFileIndex(userId);
     }
-  }, [hydrateImLayout, hydrateOnboarding, status, userId]);
+  }, [hydrateFileIndex, hydrateImLayout, hydrateOnboarding, status, userId]);
 
   let content;
   if (status === 'boot') {
@@ -36,7 +40,7 @@ export default function App() {
     );
   } else if (status !== 'authed') {
     content = <LoginPage />;
-  } else if (!userId || onboardingOwnerId !== userId || !onboarding) {
+  } else if (!userId || onboardingOwnerId !== userId || fileIndexOwnerId !== userId || !onboarding) {
     content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
         正在加载个人设置…

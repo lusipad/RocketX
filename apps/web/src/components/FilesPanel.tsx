@@ -3,6 +3,7 @@ import { tsMs, type RcRoomFile } from '@rcx/rc-client';
 import { AlertCircle, Download, FileText, Image as ImageIcon, Search } from 'lucide-react';
 import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
+import { useFileIndex } from '../stores/fileIndex';
 import { humanError, toast } from '../stores/toast';
 import { fmtConvTime, fmtSize } from '../lib/format';
 import { saveFile } from '../lib/download';
@@ -28,6 +29,13 @@ export default function FilesPanel() {
   const type = useChat((s) =>
     s.activeRid ? (s.subscriptions[s.activeRid]?.t ?? s.rooms[s.activeRid]?.t ?? 'c') : 'c',
   );
+  const targetFileId = useChat((s) => s.rightPanel?.kind === 'files' ? s.rightPanel.fileId : undefined);
+  const roomName = useChat((s) => {
+    if (!s.activeRid) return '会话';
+    return s.subscriptions[s.activeRid]?.fname || s.subscriptions[s.activeRid]?.name ||
+      s.rooms[s.activeRid]?.fname || s.rooms[s.activeRid]?.name || '会话';
+  });
+  const indexRoom = useFileIndex((s) => s.indexRoom);
 
   const [files, setFiles] = useState<RcRoomFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,13 +50,26 @@ export default function FilesPanel() {
     setError(null);
     rest
       .getRoomFiles(rid, type)
-      .then(setFiles)
+      .then((next) => {
+        setFiles(next);
+        indexRoom(rid, roomName, next);
+      })
       .catch((err: unknown) => {
         setFiles([]);
         setError(humanError(err, '无法获取文件列表'));
       })
       .finally(() => setLoading(false));
-  }, [rid, type]);
+  }, [indexRoom, rid, roomName, type]);
+
+  useEffect(() => {
+    if (!targetFileId || files.length === 0) return;
+    const target = files.find((file) => file._id === targetFileId);
+    if (target && (canPreview(target.name) || isImage(target))) setPreview(target);
+    const timer = setTimeout(() =>
+      document.querySelector<HTMLElement>('[data-target-file="true"]')?.scrollIntoView({ block: 'center' }),
+    );
+    return () => clearTimeout(timer);
+  }, [files, targetFileId]);
 
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
@@ -92,13 +113,15 @@ export default function FilesPanel() {
           !error &&
           filtered.map((f) => {
             const previewable = canPreview(f.name) || isImage(f);
+            const isTarget = f._id === targetFileId;
             return (
               <div
                 key={f._id}
+                data-target-file={isTarget || undefined}
                 onClick={() => previewable && setPreview(f)}
                 className={`group flex items-center gap-3 rounded-lg px-3 py-2 ${
-                  previewable ? 'cursor-pointer hover:bg-fill-hover' : ''
-                }`}
+                  previewable ? 'cursor-pointer' : ''
+                } ${isTarget ? 'bg-primary-light' : previewable ? 'hover:bg-fill-hover' : ''}`}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-2">
                   {isImage(f) ? <ImageIcon size={15} /> : <FileText size={15} />}

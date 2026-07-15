@@ -8,16 +8,16 @@ export interface MessageSearchBackend {
 const FALLBACK_ROOMS = 8;
 const FALLBACK_CONCURRENCY = 2;
 
-export type QuickSearchTab = 'all' | 'convs' | 'messages' | 'contacts' | 'work';
+export type QuickSearchTab = 'all' | 'convs' | 'messages' | 'files' | 'contacts' | 'work';
 
-export const QUICK_SEARCH_TABS: QuickSearchTab[] = ['all', 'convs', 'messages', 'contacts', 'work'];
+export const QUICK_SEARCH_TABS: QuickSearchTab[] = ['all', 'convs', 'messages', 'files', 'contacts', 'work'];
 
 export function chooseAvailableSearchTab(
   current: QuickSearchTab,
   counts: Record<QuickSearchTab, number>,
 ): QuickSearchTab {
   if (counts[current] > 0) return current;
-  return (['convs', 'messages', 'contacts', 'work'] as const).find((tab) => counts[tab] > 0) ?? current;
+  return (['convs', 'messages', 'files', 'contacts', 'work'] as const).find((tab) => counts[tab] > 0) ?? current;
 }
 
 export function searchesSettledFor(

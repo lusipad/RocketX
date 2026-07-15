@@ -86,7 +86,7 @@ export type RightPanel =
   | { kind: 'members' }
   | { kind: 'search' }
   | { kind: 'info' }
-  | { kind: 'files' }
+  | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
   | null;
 

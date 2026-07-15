@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
-import { BriefcaseBusiness, CalendarDays, Hash, ListTodo, Search } from 'lucide-react';
+import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
 import { openExternal, realtime, rest } from '../lib/client';
-import { fmtConvTime } from '../lib/format';
+import { fmtConvTime, fmtSize } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import {
@@ -22,6 +22,8 @@ import { searchWork, type WorkSearchResult } from '../lib/workSearch';
 import { useTodos } from '../stores/todos';
 import { useCalendar } from '../stores/calendar';
 import { useWorkbench } from '../stores/workbench';
+import { useFileIndex } from '../stores/fileIndex';
+import { canSearchIndexedRoom, searchIndexedFiles, type IndexedFileResult } from '../lib/fileIndex';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -42,6 +44,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'convs', label: '会话' },
   { key: 'messages', label: '消息' },
+  { key: 'files', label: '文件' },
   { key: 'contacts', label: '联系人/频道' },
   { key: 'work', label: '工作' },
 ];
@@ -49,6 +52,7 @@ const TABS: { key: Tab; label: string }[] = [
 const RESULT_LABELS: Record<ResultTab, string> = {
   convs: '会话',
   messages: '消息',
+  files: '文件',
   contacts: '联系人/频道',
   work: '工作',
 };
@@ -74,6 +78,7 @@ export default function QuickSwitcher({
   const todos = useTodos((s) => s.todos);
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
+  const fileIndex = useFileIndex((s) => s.index);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'all');
   const [keyword, setKeyword] = useState('');
   const [index, setIndex] = useState(0);
@@ -135,10 +140,17 @@ export default function QuickSwitcher({
     () => searchWork(keyword, todos, events, workItems),
     [keyword, todos, events, workItems],
   );
+  const fileResults = useMemo(
+    () => searchIndexedFiles(fileIndex, keyword).filter((result) =>
+      canSearchIndexedRoom(!!subscriptions[result.rid], rooms[result.rid]?.t),
+    ),
+    [fileIndex, keyword, rooms, subscriptions],
+  );
   const searchCounts: Record<Tab, number> = {
-    all: filteredConvs.length + messages.length + contactUsers.length + contacts.rooms.length + workResults.length,
+    all: filteredConvs.length + messages.length + fileResults.length + contactUsers.length + contacts.rooms.length + workResults.length,
     convs: filteredConvs.length,
     messages: messages.length,
+    files: fileResults.length,
     contacts: contactUsers.length + contacts.rooms.length,
     work: workResults.length,
   };
@@ -179,6 +191,7 @@ export default function QuickSwitcher({
       all: searchCounts.all,
       convs: filteredConvs.length,
       messages: messages.length,
+      files: fileResults.length,
       contacts: contactUsers.length + contacts.rooms.length,
       work: workResults.length,
     });
@@ -189,6 +202,7 @@ export default function QuickSwitcher({
     contactSearching,
     filteredConvs.length,
     messages.length,
+    fileResults.length,
     contactUsers.length,
     contacts.rooms.length,
     workResults.length,
@@ -289,6 +303,14 @@ export default function QuickSwitcher({
     onClose();
   };
 
+  const pickFile = (result: IndexedFileResult) => {
+    setModule('messages');
+    void openRoom(result.rid).then(() => {
+      useChat.getState().setPanel({ kind: 'files', fileId: result.file._id });
+    });
+    onClose();
+  };
+
   const pickWork = (result: WorkSearchResult) => {
     if (result.kind === 'todo') {
       setModule('messages');
@@ -328,6 +350,14 @@ export default function QuickSwitcher({
           detail: `${message.u.name || message.u.username} · ${roomName(message.rid)}`,
           avatar: { name: message.u.name || message.u.username, username: message.u.username },
           action: () => pickMessage(message),
+        })),
+        ...fileResults.slice(0, 3).map((result) => ({
+          section: 'files' as const,
+          key: `file:${result.rid}:${result.file._id}`,
+          title: result.file.name,
+          detail: `文件 · ${result.roomName}${result.file.size ? ` · ${fmtSize(result.file.size)}` : ''}`,
+          icon: <FileText size={16} />,
+          action: () => pickFile(result),
         })),
         ...contactUsers.slice(0, 3).map((user) => ({
           section: 'contacts' as const,
@@ -391,20 +421,22 @@ export default function QuickSwitcher({
     tab === 'all'
       ? overviewItems.map((item) => item.action)
       : tab === 'convs'
-      ? filteredConvs.map((c) => () => pickConv(c.rid))
-      : tab === 'messages'
-        ? messages.map((m) => () => pickMessage(m))
-        : tab === 'contacts'
-          ? [
-              ...contactUsers.map((u) => () => {
-                void startDM(u.username).then(() => {
-                  setModule('messages');
-                  onClose();
-                });
-              }),
-              ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
-            ]
-          : workResults.map((result) => () => pickWork(result));
+        ? filteredConvs.map((c) => () => pickConv(c.rid))
+        : tab === 'messages'
+          ? messages.map((m) => () => pickMessage(m))
+          : tab === 'files'
+            ? fileResults.map((result) => () => pickFile(result))
+            : tab === 'contacts'
+              ? [
+                  ...contactUsers.map((u) => () => {
+                    void startDM(u.username).then(() => {
+                      setModule('messages');
+                      onClose();
+                    });
+                  }),
+                  ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
+                ]
+              : workResults.map((result) => () => pickWork(result));
 
   function roomName(rid: string): string {
     return subscriptions[rid]?.fname || subscriptions[rid]?.name || rooms[rid]?.fname || rooms[rid]?.name || '会话';
@@ -463,7 +495,7 @@ export default function QuickSwitcher({
             placeholder={
               commandCenter
                 ? '直接回车打开下一条未读，或输入内容搜索'
-                : '搜索会话、消息、联系人和工作（Tab 切换范围）'
+                : '搜索会话、消息、文件、联系人和工作（Tab 切换范围）'
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
@@ -500,7 +532,7 @@ export default function QuickSwitcher({
               {keyword.trim() && (messageSearching || contactSearching) && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">正在补全远端结果…</div>
               )}
-              {(['convs', 'messages', 'contacts', 'work'] as const).map((section) => {
+              {(['convs', 'messages', 'files', 'contacts', 'work'] as const).map((section) => {
                 const items = overviewItems.filter((item) => item.section === section);
                 if (items.length === 0) return null;
                 return (
@@ -627,6 +659,51 @@ export default function QuickSwitcher({
                     </span>
                     <span className="line-clamp-2 text-sm break-words text-ink-2">
                       {highlightText(m.msg ?? '', keyword)}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
+
+          {tab === 'files' && (
+            <>
+              <div className="px-4 py-1.5 text-2xs text-ink-3">
+                已索引最近打开过文件面板的 {fileIndex.rooms.length} 个会话
+              </div>
+              {!keyword.trim() && (
+                <div className="py-8 text-center text-sm text-ink-3">输入文件名搜索已索引文件</div>
+              )}
+              {keyword.trim() && fileResults.length === 0 && (
+                <div className="py-8 text-center text-sm text-ink-3">
+                  {fileIndex.rooms.length === 0
+                    ? '先在会话中打开文件面板，文件会自动加入本机索引'
+                    : '已索引的文件中没有匹配结果'}
+                </div>
+              )}
+              {fileResults.map((result, i) => (
+                <button
+                  key={`${result.rid}:${result.file._id}`}
+                  onClick={() => pickFile(result)}
+                  onMouseEnter={() => setIndex(i)}
+                  className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
+                    i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                  }`}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-3">
+                    <FileText size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-ink">
+                      {highlightText(result.file.name, keyword)}
+                    </span>
+                    <span className="block truncate text-2xs text-ink-3">
+                      {[
+                        result.roomName,
+                        result.file.user?.name || result.file.user?.username,
+                        fmtSize(result.file.size),
+                        result.file.uploadedAt ? fmtConvTime(tsMs(result.file.uploadedAt)) : '',
+                      ].filter(Boolean).join(' · ')}
                     </span>
                   </span>
                 </button>
