@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
-import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search } from 'lucide-react';
+import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search, SlidersHorizontal } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
@@ -24,6 +24,13 @@ import { useCalendar } from '../stores/calendar';
 import { useWorkbench } from '../stores/workbench';
 import { useFileIndex } from '../stores/fileIndex';
 import { canSearchIndexedRoom, searchIndexedFiles, type IndexedFileResult } from '../lib/fileIndex';
+import {
+  filterFileResults,
+  filterMessageResults,
+  type SearchFileType,
+  type SearchResultFilters,
+  type SearchTimeRange,
+} from '../lib/searchFilters';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -81,6 +88,10 @@ export default function QuickSwitcher({
   const fileIndex = useFileIndex((s) => s.index);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'all');
   const [keyword, setKeyword] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [senderFilter, setSenderFilter] = useState('');
+  const [timeFilter, setTimeFilter] = useState<SearchTimeRange>('any');
+  const [fileTypeFilter, setFileTypeFilter] = useState<SearchFileType>('any');
   const [index, setIndex] = useState(0);
   const [messages, setMessages] = useState<RcMessage[]>([]);
   const [contacts, setContacts] = useState<{ users: RcUser[]; rooms: RcRoom[] }>({
@@ -140,16 +151,32 @@ export default function QuickSwitcher({
     () => searchWork(keyword, todos, events, workItems),
     [keyword, todos, events, workItems],
   );
-  const fileResults = useMemo(
+  const filters = useMemo<SearchResultFilters>(() => ({
+    sender: senderFilter,
+    timeRange: timeFilter,
+    fileType: fileTypeFilter,
+  }), [fileTypeFilter, senderFilter, timeFilter]);
+  const filteredMessages = useMemo(
+    () => filterMessageResults(messages, filters),
+    [filters, messages],
+  );
+  const rawFileResults = useMemo(
     () => searchIndexedFiles(fileIndex, keyword).filter((result) =>
       canSearchIndexedRoom(!!subscriptions[result.rid], rooms[result.rid]?.t),
     ),
     [fileIndex, keyword, rooms, subscriptions],
   );
+  const fileResults = useMemo(
+    () => filterFileResults(rawFileResults, filters),
+    [filters, rawFileResults],
+  );
+  const activeFilterCount = (senderFilter.trim() ? 1 : 0) +
+    (timeFilter === 'any' ? 0 : 1) +
+    (fileTypeFilter === 'any' ? 0 : 1);
   const searchCounts: Record<Tab, number> = {
-    all: filteredConvs.length + messages.length + fileResults.length + contactUsers.length + contacts.rooms.length + workResults.length,
+    all: filteredConvs.length + filteredMessages.length + fileResults.length + contactUsers.length + contacts.rooms.length + workResults.length,
     convs: filteredConvs.length,
-    messages: messages.length,
+    messages: filteredMessages.length,
     files: fileResults.length,
     contacts: contactUsers.length + contacts.rooms.length,
     work: workResults.length,
@@ -190,7 +217,7 @@ export default function QuickSwitcher({
     const next = chooseAvailableSearchTab(tabRef.current, {
       all: searchCounts.all,
       convs: filteredConvs.length,
-      messages: messages.length,
+      messages: filteredMessages.length,
       files: fileResults.length,
       contacts: contactUsers.length + contacts.rooms.length,
       work: workResults.length,
@@ -201,7 +228,7 @@ export default function QuickSwitcher({
     messageSearching,
     contactSearching,
     filteredConvs.length,
-    messages.length,
+    filteredMessages.length,
     fileResults.length,
     contactUsers.length,
     contacts.rooms.length,
@@ -343,7 +370,7 @@ export default function QuickSwitcher({
           },
           action: () => pickConv(conversation.rid),
         })),
-        ...messages.slice(0, 3).map((message) => ({
+        ...filteredMessages.slice(0, 3).map((message) => ({
           section: 'messages' as const,
           key: `message:${message._id}`,
           title: message.msg || '无文字消息',
@@ -423,7 +450,7 @@ export default function QuickSwitcher({
       : tab === 'convs'
         ? filteredConvs.map((c) => () => pickConv(c.rid))
         : tab === 'messages'
-          ? messages.map((m) => () => pickMessage(m))
+          ? filteredMessages.map((m) => () => pickMessage(m))
           : tab === 'files'
             ? fileResults.map((result) => () => pickFile(result))
             : tab === 'contacts'
@@ -517,7 +544,73 @@ export default function QuickSwitcher({
               )}
             </button>
           ))}
+          <button
+            onClick={() => setFiltersOpen((open) => !open)}
+            className={`ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs transition ${
+              filtersOpen || activeFilterCount > 0
+                ? 'bg-primary-light font-medium text-primary'
+                : 'text-ink-2 hover:bg-fill-hover'
+            }`}
+          >
+            <SlidersHorizontal size={13} />
+            筛选{activeFilterCount > 0 ? ` ${activeFilterCount}` : ''}
+          </button>
         </div>
+
+        {filtersOpen && (
+          <div className="grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-end gap-2 border-b border-line bg-fill-1/50 px-4 py-2.5">
+            <label className="text-2xs text-ink-3">
+              发送人
+              <input
+                value={senderFilter}
+                onChange={(event) => setSenderFilter(event.target.value)}
+                placeholder="姓名或用户名"
+                className="mt-1 block h-7 w-full rounded border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
+              />
+            </label>
+            <label className="text-2xs text-ink-3">
+              时间
+              <select
+                value={timeFilter}
+                onChange={(event) => setTimeFilter(event.target.value as SearchTimeRange)}
+                className="mt-1 block h-7 rounded border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
+              >
+                <option value="any">不限</option>
+                <option value="7d">近 7 天</option>
+                <option value="30d">近 30 天</option>
+                <option value="365d">近一年</option>
+              </select>
+            </label>
+            <label className="text-2xs text-ink-3">
+              文件类型
+              <select
+                value={fileTypeFilter}
+                onChange={(event) => setFileTypeFilter(event.target.value as SearchFileType)}
+                className="mt-1 block h-7 rounded border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
+              >
+                <option value="any">不限</option>
+                <option value="image">图片</option>
+                <option value="document">文档</option>
+                <option value="archive">压缩包</option>
+                <option value="other">其他</option>
+              </select>
+            </label>
+            <button
+              onClick={() => {
+                setSenderFilter('');
+                setTimeFilter('any');
+                setFileTypeFilter('any');
+              }}
+              disabled={activeFilterCount === 0}
+              className="h-7 rounded px-2 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-40"
+            >
+              清除
+            </button>
+            <div className="col-span-4 text-2xs text-ink-3">
+              筛选当前命中的消息和已索引文件，不会扩大服务器搜索范围
+            </div>
+          </div>
+        )}
 
         <div className="min-h-40 flex-1 overflow-y-auto py-1">
           {tab === 'all' && (
@@ -630,13 +723,15 @@ export default function QuickSwitcher({
               {!messageSearching && messageError && (
                 <div className="py-8 text-center text-sm text-danger">{messageError}</div>
               )}
-              {!messageSearching && !messageError && keyword.trim() && messages.length === 0 && (
-                <div className="py-8 text-center text-sm text-ink-3">没有找到相关消息</div>
+              {!messageSearching && !messageError && keyword.trim() && filteredMessages.length === 0 && (
+                <div className="py-8 text-center text-sm text-ink-3">
+                  {messages.length > 0 && activeFilterCount > 0 ? '当前筛选条件下没有消息' : '没有找到相关消息'}
+                </div>
               )}
               {!messageSearching && !messageError && !keyword.trim() && (
                 <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的消息</div>
               )}
-              {messages.map((m, i) => (
+              {filteredMessages.map((m, i) => (
                 <button
                   key={m._id}
                   onClick={() => pickMessage(m)}
@@ -678,7 +773,9 @@ export default function QuickSwitcher({
                 <div className="py-8 text-center text-sm text-ink-3">
                   {fileIndex.rooms.length === 0
                     ? '先在会话中打开文件面板，文件会自动加入本机索引'
-                    : '已索引的文件中没有匹配结果'}
+                    : rawFileResults.length > 0 && activeFilterCount > 0
+                      ? '当前筛选条件下没有文件'
+                      : '已索引的文件中没有匹配结果'}
                 </div>
               )}
               {fileResults.map((result, i) => (
