@@ -4,17 +4,20 @@
 
 1. **事件桥**：接收 ADO Service Hooks（工作项、PR、推送、构建、发布），
    转成飞书风格消息卡片发进 Rocket.Chat 频道；
-2. **工作台查询代理**：为客户端「工作台」模块提供只读查询
-   （我的工作项 WIQL、活跃 PR），PAT 保存在服务端，客户端不接触凭据。
+2. **工作台代理**：为客户端提供工作项、PR、构建、详情与评论接口，
+   PAT 保存在服务端，客户端不接触凭据。
 
 ## 工作台代理配置
 
 `.env` 里配置 `ADO_BASE_URL`（集合地址，如 `http://ado:8080/tfs/DefaultCollection`）
-和 `ADO_PAT`（只读：Work Items Read + Code Read）。接口：
+和 `ADO_PAT`。需授予 Work Items Read & Write、Code Read、Build Read。接口：
 
-- `GET /api/ado/config` → `{ webBase }`（客户端用于 #工作项号 链接）
-- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项
-- `GET /api/ado/pullrequests` → 活跃 PR（客户端按创建人/评审人过滤）
+- `GET /api/ado/config` → Web 地址与当前 ADO 身份
+- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项（不传时使用 `@Me`）
+- `GET /api/ado/pullrequests` → 与当前用户相关的 PR
+- `GET /api/ado/builds` → 当前用户最近发起的构建
+- `GET /api/ado/workitem/:id` → 工作项详情
+- `POST /api/ado/workitem/:id/comment` → 添加工作项评论
 
 本地联调可用 mock：`node mock/mock-ado.mjs`（端口 8378），
 然后 `ADO_BASE_URL=http://localhost:8378/DefaultCollection ADO_PAT=mock` 启动本服务。
