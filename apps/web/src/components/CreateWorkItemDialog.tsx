@@ -5,6 +5,7 @@ import { useWiTemplates, type WiTemplate } from '../stores/wiTemplates';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { rest } from '../lib/client';
+import { useDialogBehavior } from './Dialog';
 
 const SINGLE_TYPES = ['Task', 'Bug', 'User Story', 'Feature', 'Epic', 'Issue'];
 
@@ -31,6 +32,7 @@ export default function CreateWorkItemDialog({
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useDialogBehavior(onClose);
 
   const tpl = templates[tplIdx] as WiTemplate | undefined;
   const isSingle = tpl?.items.length === 1 && tpl.items[0].type === '{type}';
@@ -115,7 +117,14 @@ export default function CreateWorkItemDialog({
   if (!config?.adoBase || config.mode !== 'direct') {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="创建工作项"
+          tabIndex={-1}
+          className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
+        >
           <div className="text-[15px] font-semibold text-ink">创建工作项</div>
           <div className="mt-2 text-sm text-ink-2">请先在设置中配置 ADO 直连</div>
           <div className="mt-4 flex justify-end">
@@ -128,7 +137,14 @@ export default function CreateWorkItemDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="w-[460px] rounded-xl bg-surface-4 p-5 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="创建工作项"
+        tabIndex={-1}
+        className="w-[460px] rounded-xl bg-surface-4 p-5 shadow-2xl"
+      >
         <div className="text-[15px] font-semibold text-ink">创建工作项</div>
 
         <div className="mt-3 space-y-3">

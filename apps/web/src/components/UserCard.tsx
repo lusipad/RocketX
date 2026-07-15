@@ -5,6 +5,7 @@ import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
 import { personName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
+import { useDialogBehavior } from './Dialog';
 
 const STATUS_TEXT: Record<string, string> = {
   online: '在线',
@@ -34,6 +35,7 @@ export default function UserCard({
   const nameFormat = useAliases((s) => s.nameFormat);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useDialogBehavior(onClose);
   const isSelf = user.username === me;
   // 备注名在个人卡片也要生效（issue #18.5）
   const shownName = personName(aliases, user.username, user.name || user.username, nameFormat);
@@ -58,10 +60,18 @@ export default function UserCard({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-80 overflow-hidden rounded-xl bg-surface-4 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${shownName}的个人信息`}
+        tabIndex={-1}
+        className="w-80 overflow-hidden rounded-xl bg-surface-4 shadow-2xl"
+      >
         <div className="relative h-20 bg-gradient-to-r from-[#3370ff] to-[#4e83fd]">
           <button
             onClick={onClose}
+            aria-label="关闭个人信息"
             className="absolute top-2 right-2 flex h-7 w-7 items-center justify-center rounded text-white/90 hover:bg-white/20"
           >
             <X size={16} />

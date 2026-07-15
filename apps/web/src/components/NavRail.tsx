@@ -49,6 +49,11 @@ export default function NavRail() {
   const [confirmLogout, setConfirmLogout] = useState(false);
   const plusButtonRef = useRef<HTMLButtonElement>(null);
 
+  const closeCreateDialog = () => {
+    setDialog(null);
+    requestAnimationFrame(() => plusButtonRef.current?.focus());
+  };
+
   useEffect(() => {
     if (!plusMenu) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -247,9 +252,9 @@ export default function NavRail() {
         />
       )}
 
-      {dialog === 'dm' && <StartDMDialog onClose={() => setDialog(null)} />}
+      {dialog === 'dm' && <StartDMDialog onClose={closeCreateDialog} />}
       {(dialog === 'group' || dialog === 'team') && (
-        <CreateGroupDialog kind={dialog} onClose={() => setDialog(null)} />
+        <CreateGroupDialog kind={dialog} onClose={closeCreateDialog} />
       )}
       {selfCard && user && (
         <UserCard

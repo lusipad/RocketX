@@ -9,6 +9,7 @@ import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from './Avatar';
+import { useDialogBehavior } from './Dialog';
 
 type Tab = 'convs' | 'messages' | 'contacts';
 
@@ -56,6 +57,7 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dialogRef = useDialogBehavior(onClose);
 
   const conversations = useMemo(
     () => buildConversations(subscriptions, rooms),
@@ -163,7 +165,14 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="全局搜索"
+        tabIndex={-1}
+        className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl"
+      >
         <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-4">
           <Search size={16} className="text-ink-3" />
           <input

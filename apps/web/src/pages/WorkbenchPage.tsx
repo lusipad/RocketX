@@ -30,6 +30,7 @@ import { useCustomQueries, parseQueryUrl } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
+import { useDialogBehavior } from '../components/Dialog';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
 type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
@@ -104,10 +105,16 @@ function QueryDialog({
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const parsed = url.trim() ? parseQueryUrl(url.trim()) : null;
+  const dialogRef = useDialogBehavior(onClose);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="添加自定义查询"
+        tabIndex={-1}
         className="w-[440px] rounded-xl border border-line bg-surface-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -189,6 +196,8 @@ function FavoriteDialog({
   const [icon, setIcon] = useState(existing?.icon ?? '');
   const [color, setColor] = useState(existing?.color ?? randomFavColor());
   const [size, setSize] = useState<FavSize>(existing?.size ?? 'small');
+  const dialogTitle = existing ? '编辑收藏' : '添加收藏';
+  const dialogRef = useDialogBehavior(onClose);
 
   const handleSave = () => {
     if (!title.trim() || !url.trim()) return;
@@ -210,9 +219,17 @@ function FavoriteDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="w-[400px] rounded-xl border border-line bg-surface-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={dialogTitle}
+        tabIndex={-1}
+        className="w-[400px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
-          <span className="text-[15px] font-semibold text-ink">{existing ? '编辑收藏' : '添加收藏'}</span>
+          <span className="text-[15px] font-semibold text-ink">{dialogTitle}</span>
           <button onClick={onClose} className="text-ink-3 hover:text-ink"><XCircle size={16} /></button>
         </header>
         <div className="space-y-4 p-5">

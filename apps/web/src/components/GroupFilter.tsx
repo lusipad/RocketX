@@ -22,7 +22,7 @@ import { inFolder, useFolders } from '../stores/folders';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { toast } from '../stores/toast';
 import ContextMenu, { type MenuItem } from './ContextMenu';
-import { ConfirmDialog } from './Dialog';
+import { ConfirmDialog, useDialogBehavior } from './Dialog';
 import FolderRulesDialog from './FolderRulesDialog';
 
 const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
@@ -50,6 +50,7 @@ function FolderDialog({
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial ?? '');
+  const dialogRef = useDialogBehavior(onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
@@ -57,7 +58,14 @@ function FolderDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
+      >
         <div className="mb-3 text-[15px] font-semibold text-ink">{title}</div>
         <input
           autoFocus

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { X } from 'lucide-react';
 import {
   useCalendar,
@@ -9,6 +9,7 @@ import {
   type RepeatRule,
 } from '../stores/calendar';
 import { toast } from '../stores/toast';
+import { useDialogBehavior } from './Dialog';
 
 const COLORS = [
   '#3370ff', '#00b96b', '#7f3bf5', '#f54a45', '#ff8800',
@@ -57,17 +58,8 @@ export default function CalendarEventDialog({
   const [repeatEndDate, setRepeatEndDate] = useState(existing?.repeat?.endDate ?? '');
   const [repeatEndAfter, setRepeatEndAfter] = useState<number | undefined>(existing?.repeat?.endAfter);
   const [confirmDelete, setConfirmDelete] = useState(false);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  const dialogTitle = existing ? '编辑日程' : '新建日程';
+  const dialogRef = useDialogBehavior(onClose);
 
   const isEdit = !!existing;
   /**
@@ -124,12 +116,17 @@ export default function CalendarEventDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={dialogTitle}
+        tabIndex={-1}
         className="w-[480px] max-h-[85vh] overflow-y-auto rounded-xl border border-line bg-surface-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3.5">
           <span className="text-[15px] font-semibold text-ink">
-            {isEdit ? '编辑日程' : '新建日程'}
+            {dialogTitle}
           </span>
           <button onClick={onClose} className="text-ink-3 transition hover:text-ink">
             <X size={18} />
