@@ -62,6 +62,7 @@ export default function ChatArea() {
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
   const openRoom = useChat((s) => s.openRoom);
+  const joinRoom = useChat((s) => s.joinRoom);
   const parentRoom = useChat((s) => {
     if (!s.activeRid) return undefined;
     const p = s.subscriptions[s.activeRid]?.prid ?? s.rooms[s.activeRid]?.prid;
@@ -237,6 +238,21 @@ export default function ChatArea() {
           />
         )}
         <MessageList rid={activeRid} />
+        {/* 从讨论卡片/搜索进来但还没加入的公开房间：给出加入入口（issue #19-6）。
+            不加入也能看历史，但收不到通知、不在会话列表里。 */}
+        {!sub && room?.t === 'c' && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-primary-light/40 px-4 py-2.5">
+            <span className="min-w-0 truncate text-sm text-ink-2">
+              你还不是{prid ? '这个讨论' : '这个频道'}的成员，加入后才会收到新消息提醒
+            </span>
+            <button
+              onClick={() => void joinRoom(activeRid)}
+              className="h-7 shrink-0 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover"
+            >
+              加入{prid ? '讨论' : '频道'}
+            </button>
+          </div>
+        )}
         <Composer />
 
         {dragging && (

@@ -38,6 +38,8 @@ export interface RcMessageAttachment {
   title_link_download?: boolean;
   description?: string;
   image_url?: string;
+  /** 图片原始尺寸（RC 上传时探测）。渲染前按它预留空间，加载完成不再撑开列表 */
+  image_dimensions?: { width?: number; height?: number };
   author_name?: string;
   author_icon?: string;
   fields?: RcMessageAttachmentField[];

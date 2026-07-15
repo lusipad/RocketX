@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Download, Loader2, X } from 'lucide-react';
-import { rest } from '../lib/client';
+import { normalizeAssetPath, rest } from '../lib/client';
 import { renderMarkdownDoc } from '../lib/markdown';
 import PdfView from './PdfView';
 import { toast } from '../stores/toast';
@@ -111,7 +111,7 @@ export default function FilePreview({
     }
 
     void rest
-      .fetchFile(path)
+      .fetchFile(normalizeAssetPath(path))
       .then(async (blob) => {
         if (!alive) return;
         // PDF 交给 pdf.js 自己画（见 PdfView），不依赖 webview 自带的阅读器

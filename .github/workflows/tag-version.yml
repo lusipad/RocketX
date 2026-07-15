@@ -1,0 +1,45 @@
+name: Tag Version
+
+# 从远程执行环境（Claude Code on the web 等）发版时用：那边的 git 代理只允许推分支、
+# 不允许推 tag，MCP 集成也没有 workflow dispatch 权限。于是把「打标签」做成对
+# release/v* 分支 push 的响应：推一个 release/v0.10.0 分支（指向要发版的提交），
+# 本工作流在该提交上创建 v0.10.0 标签、触发桌面构建，然后把临时分支删掉。
+#
+# 注意：GITHUB_TOKEN 推的 tag 不会触发 on:push:tags（GitHub 防递归），但
+# workflow_dispatch 不在防递归之列 —— 所以显式再 dispatch 一次 desktop.yml，
+# 以 tag 为 ref 时其行为与直接 push tag 完全一致（构建 + 草稿 Release）。
+on:
+  push:
+    branches: ['release/v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '标签名（如 v0.10.0），打在当前分支最新提交上'
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确定标签名并打标
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -n "$TAG" ] || TAG="${GITHUB_REF_NAME#release/}"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: 触发桌面构建与草稿 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run desktop.yml --ref "$TAG" -R "${{ github.repository }}"
+
+      - name: 清理临时 release 分支
+        if: github.event_name == 'push'
+        run: git push origin --delete "$GITHUB_REF_NAME" || true

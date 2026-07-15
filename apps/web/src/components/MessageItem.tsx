@@ -71,15 +71,25 @@ function ImageAttachment({
   thumbPath,
   fullPath,
   name,
+  dims,
 }: {
   thumbPath: string;
   fullPath: string;
   name: string;
+  dims?: { width?: number; height?: number };
 }) {
   const autoLoad = usePrefs((s) => s.prefs.autoImageLoad);
   const [lightbox, setLightbox] = useState(false);
   const [manualLoad, setManualLoad] = useState(false);
   const show = autoLoad || manualLoad;
+
+  // 已知原图尺寸就按显示上限（360×288 = max-w-[360px] × max-h-72）等比预留好占位，
+  // 图片加载完成时不再撑开消息列表——异步撑高正是滚动「回缩/跳动」的来源之一（issue #19-3）
+  let box: React.CSSProperties | undefined;
+  if (dims?.width && dims.height) {
+    const scale = Math.min(360 / dims.width, 288 / dims.height, 1);
+    box = { width: Math.round(dims.width * scale), height: Math.round(dims.height * scale) };
+  }
 
   if (!show) {
     return (
@@ -100,7 +110,8 @@ function ImageAttachment({
         <AuthImage
           path={thumbPath}
           alt={name}
-          className="max-h-72 max-w-[360px] rounded-lg object-contain"
+          style={box}
+          className="max-h-72 max-w-[360px] rounded-lg bg-fill-1 object-contain"
           fallback={<span className="text-xs text-ink-3">[图片加载失败：{name}]</span>}
         />
       </button>
@@ -261,6 +272,7 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
         thumbPath={att.image_url}
         fullPath={att.title_link ?? att.image_url}
         name={name}
+        dims={att.image_dimensions}
       />
     );
   }

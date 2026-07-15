@@ -73,7 +73,9 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 桌面端图片/头像/文件 403 | `<img>` 带不上认证头，桌面端 cookie 又不生效 → 改为带头 fetch 成 blob 再显示 |
 | 桌面端登录 Failed to fetch | webview 的 CORS。改走 tauri-plugin-http（Rust 通道），并注意权限模式要写 `http://**:*`（`http://**` 不匹配自定义端口） |
 | `chat.getMessageReadReceipts` 返回 400 | 已读回执是**企业版**功能（错误信息就是 `This is an enterprise feature`）。别靠「打过去挨一个 400 再降级」——那样每次刷新都白打一个请求、控制台留一条红字。启动时读公开设置 `Message_Read_Receipt_Enabled` 就知道支不支持（社区版返回 `false, enterprise: true`）。失败熔断作为兜底保留 |
-| 置顶/星标后消息不刷新 | 服务端不推送这两类变更事件，需本地乐观更新 |
+| 置顶/星标后消息不刷新 | 服务端不推送这两类变更事件，需本地乐观更新。补充（8.6 实测）：**置顶**会发一条 `t='message_pinned'` 系统消息（原消息不推更新），客户端以它为信号拉 `chat.getPinnedMessages` 同步 `pinned` 标志；**取消置顶**反而会推原消息更新（`pinned:false`），无系统消息 |
+| 只有打开过的会话才收得到推送 | `stream-room-messages` 按房间订阅只覆盖 openRoom 过的房间，没点开过的会话来消息不进通知逻辑（表现为「有的人来消息会提醒、有的不会」）。订阅特殊事件名 **`__my_messages__`** 可收到自己所有房间的消息（8.6 实测有效）；房间级订阅保留兜底，重复送达靠 upsert 幂等 + 通知按消息 id 去重 |
+| 文件面板图片打不开/下载报网络失败 | `*.files` 返回的 `url` 是按 **Site_Url** 拼的绝对地址（8.6 实测形如 `http://<Site_Url>/ufs/GridFS:Uploads/...`）。客户端实际连接地址和 Site_Url 不一致（桌面填 IP、Web 走反代）时这个地址根本到不了。凡站内文件端点一律取路径重拼到当前连接地址（`normalizeAssetPath`） |
 | 频道未读数一直是 0 | RC 频道默认只有 @ 才累计 `unread`，普通新消息只置 `alert` 标志 |
 | Tauri plugin-http 上传 FormData 失败 | 该通道对 FormData 支持不可靠，手工构造 multipart 字节流 |
 | 打开任意会话，它就跳到列表最上面 | 会话排序**不能**把 `subscription._updatedAt` 当兜底时间：打开会话本身就会更新订阅（写 `ls`、清 `unread`/`alert`），`_updatedAt` 变成此刻。只取 `room.lm` / `room.lastMessage.ts` |

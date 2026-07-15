@@ -3,6 +3,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { type ModuleKey, useUI } from '../stores/ui';
 import { requestNotifyPermission } from '../lib/notify';
+import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -34,13 +35,22 @@ export default function MainPage() {
     void requestNotifyPermission().catch(() => {});
   }, [init, loadPrefs]);
 
-  // 标题栏未读数（免打扰会话不计入）
+  // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
+  useEffect(() => {
+    const onFocus = () => void clearTaskbarFlash();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  // 标题栏未读数 + 任务栏角标（免打扰会话不计入）。
+  // 角标是群聊消息的次级提示主体：不弹窗，但任务栏图标上有数字（读完自动清）
   useEffect(() => {
     const total = Object.values(subscriptions).reduce(
       (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
       0,
     );
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
+    void setTaskbarBadge(total);
   }, [subscriptions]);
 
   // 全局快捷键
@@ -80,9 +90,14 @@ export default function MainPage() {
         useUI.getState().setModule(MODULES[Number(key) - 1]);
         return;
       }
-      // Escape 关闭右侧面板
+      // Escape：优先退出多选（issue #19-2），其次关闭右侧面板。
+      // 弹窗/灯箱等自己捕获 Esc 并 stopPropagation，不会走到这里。
       if (e.key === 'Escape') {
         const state = useChat.getState();
+        if (state.selectMode) {
+          state.exitSelectMode();
+          return;
+        }
         if (state.rightPanel) state.setPanel(null);
       }
     };

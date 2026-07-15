@@ -787,8 +787,14 @@ export class RcRestClient {
         ? { authToken: this.authToken, userId: this.userId }
         : null);
     const doFetch = this.fetchImpl ?? fetch;
-    const res = await doFetch(`${this.baseUrl}${path}`, {
-      headers: auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {},
+    // 服务端部分字段给的是绝对地址（按 Site_Url 拼），再前缀 baseUrl 就是废 URL。
+    // 认证头只发给自己的服务器——外部存储（S3 等）的地址不该看到 RC 的 token
+    const absolute = /^https?:\/\//i.test(path);
+    const url = absolute ? path : `${this.baseUrl}${path}`;
+    const own = !absolute || (!!this.baseUrl && url.startsWith(`${this.baseUrl}/`));
+    const res = await doFetch(url, {
+      headers:
+        auth && own ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {},
     });
     if (!res.ok) throw new RcApiError(`HTTP ${res.status}`, res.status);
     return await res.blob();

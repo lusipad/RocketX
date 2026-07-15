@@ -53,6 +53,10 @@ const DEFAULTS = {
   hideUsernames: false,
   showThreadsInMainChannel: false,
   displayAvatars: true,
+  /**
+   * 默认全部消息都弹通知（飞书/微信同款默认）；吵闹的群靠会话右键「免打扰」降级——
+   * 免打扰后只剩未读数与任务栏角标（次级提示），@我 仍会穿透。
+   */
   desktopNotifications: 'all',
   unreadAlert: true,
   muteFocusedConversations: true,

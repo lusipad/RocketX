@@ -1,5 +1,5 @@
 import { useEffect, useState, type ImgHTMLAttributes } from 'react';
-import { assetUrl, isTauri, rest } from '../lib/client';
+import { assetUrl, isTauri, normalizeAssetPath, rest } from '../lib/client';
 
 // path(站内相对路径) -> objectURL 缓存，避免重复拉取
 const blobCache = new Map<string, string>();
@@ -29,7 +29,7 @@ async function loadAuthedBlob(path: string): Promise<string | null> {
  * - 桌面端 <img> 带不上认证（cookie 只作用于应用自身域），改为带头 fetch → blob。
  */
 export default function AuthImage({
-  path,
+  path: rawPath,
   fallback,
   ...imgProps
 }: {
@@ -37,6 +37,8 @@ export default function AuthImage({
   /** 加载失败时渲染的内容 */
   fallback?: React.ReactNode;
 } & ImgHTMLAttributes<HTMLImageElement>) {
+  // Site_Url 拼的绝对地址重拼到当前连接地址（否则打到不可达的主机上，issue #19-8）
+  const path = normalizeAssetPath(rawPath);
   const needsBlob = isTauri && path.startsWith('/');
   const [src, setSrc] = useState<string | null>(
     needsBlob ? (blobCache.get(path) ?? null) : path.startsWith('/') ? assetUrl(path) : path,

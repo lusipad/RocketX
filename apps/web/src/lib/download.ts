@@ -1,4 +1,4 @@
-import { assetUrl, isTauri, rest } from './client';
+import { assetUrl, isTauri, normalizeAssetPath, rest } from './client';
 
 /**
  * 保存站内文件到本地。
@@ -17,6 +17,8 @@ import { assetUrl, isTauri, rest } from './client';
  * 失败一律抛出，由调用方 toast，不要静默。
  */
 export async function saveFile(path: string, fileName: string): Promise<void> {
+  // Site_Url 拼出来的绝对地址重拼到当前连接地址上，见 normalizeAssetPath 的说明
+  path = normalizeAssetPath(path);
   if (isTauri) {
     const blob = await rest.fetchFile(path);
     const [{ save }, { writeFile }] = await Promise.all([
@@ -30,7 +32,7 @@ export async function saveFile(path: string, fileName: string): Promise<void> {
   }
 
   const a = document.createElement('a');
-  a.href = assetUrl(path);
+  a.href = path.startsWith('/') ? assetUrl(path) : path;
   a.download = fileName; // 同源时生效；跨域时由服务端的 Content-Disposition 决定
   a.rel = 'noreferrer';
   document.body.appendChild(a);

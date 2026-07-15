@@ -62,6 +62,25 @@ export function assetUrl(path: string): string {
   return `${getServerBase()}${path}`;
 }
 
+/**
+ * 站内文件路径归一化。服务器在部分字段里给的是按 Site_Url 拼出来的绝对地址
+ * （如 files.list 的 url 字段），而客户端实际连接的地址可能不一样（桌面端填 IP、
+ * Web 端走反向代理，参见引用回复对 Site_Url 的处理 #9）——直接拿去请求就会打到
+ * 一个到不了的主机上：图片显示不出来、下载报「网络连接失败」（issue #19-8）。
+ * 凡是站内文件端点，取出路径部分重拼到当前连接地址；外部存储（S3 等）原样保留。
+ */
+const RC_FILE_PATH_RE = /^\/(file-upload|ufs|avatar|emoji-custom|file-decrypt)\//;
+export function normalizeAssetPath(path: string): string {
+  if (!path || path.startsWith('/')) return path;
+  try {
+    const u = new URL(path);
+    if (RC_FILE_PATH_RE.test(u.pathname)) return u.pathname + u.search;
+  } catch {
+    /* 不是合法 URL：原样返回，交给下游按相对路径处理 */
+  }
+  return path;
+}
+
 // Site_Url：引用回复的消息链接必须以它为前缀，服务端才会展开成引用附件
 const SITE_URL_KEY = 'rcx-site-url';
 let siteUrlCache: string | null = null;

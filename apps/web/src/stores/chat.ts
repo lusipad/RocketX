@@ -157,6 +157,8 @@ interface ChatState {
   refreshRoomInfo: (rid: string) => Promise<RcRoom | null>;
   /** 从父频道的「讨论」卡片跳进讨论 */
   openDiscussion: (drid: string) => Promise<void>;
+  /** 加入公开频道/讨论（channels.join），成功后刷新订阅让它进会话列表 */
+  joinRoom: (rid: string) => Promise<void>;
   loadRoomRoles: (rid: string) => Promise<RcRoomRole[]>;
   kickMember: (rid: string, user: RcUser) => Promise<void>;
   setMemberRole: (
@@ -184,6 +186,12 @@ interface ChatState {
   deleteMessage: (msgId: string, recall?: boolean) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   togglePin: (msg: RcMessage) => Promise<void>;
+  /**
+   * 从服务端拉取置顶列表并把本房间消息的 pinned 标志同步成服务端状态，
+   * 返回置顶消息列表。RC 不随消息更新推送置顶变化，别人置顶后本地永远不知道 ——
+   * 右键菜单就只有「置顶」、看不到「取消置顶」（issue #19-5）。
+   */
+  reconcilePinned: (rid: string) => Promise<RcMessage[]>;
   toggleStar: (msg: RcMessage) => Promise<void>;
   toggleFavorite: (conv: Conversation) => Promise<void>;
   toggleMute: (conv: Conversation) => Promise<void>;
@@ -389,29 +397,51 @@ declare global {
   }
 }
 
+// 已处理过通知的消息 id：__my_messages__ 全局流和房间订阅流可能各送一次同一条消息，
+// 不去重的话桌面通知会弹两遍（浏览器端有 tag 去重，Tauri 通知插件没有）
+const notifiedMids = new Set<string>();
+
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
   if (!auth || msg.u._id === auth.userId || msg.t) return;
-  // 免打扰会话不弹通知
-  if (state.subscriptions[rid]?.disableNotifications) return;
+  if (notifiedMids.has(msg._id)) return;
+  notifiedMids.add(msg._id);
+  if (notifiedMids.size > 800) {
+    for (const id of notifiedMids) {
+      notifiedMids.delete(id);
+      if (notifiedMids.size <= 400) break;
+    }
+  }
+
+  const me = useAuth.getState().user?.username;
+  const mentioned =
+    !!me &&
+    new RegExp(`@(${me.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}|all|here)\\b`).test(msg.msg ?? '');
+
+  // 提醒模型对标飞书/微信：
+  // - 未免打扰的会话：群聊/私聊一视同仁，弹通知 + 闪任务栏（一级提醒）；
+  // - 免打扰的会话：这里直接静默，只留未读数与任务栏角标（次级提示，MainPage 维护）；
+  //   但 @我/@all/@here 穿透免打扰（飞书行为）——人在群里被点名不该错过。
+  if (state.subscriptions[rid]?.disableNotifications && !mentioned) return;
 
   const prefs = usePrefs.getState().prefs;
   if (prefs.desktopNotifications === 'nothing') return;
-  // 「仅 @我」：消息里没提到我就不弹
+  // 「私聊和 @我」：群聊（含多人直聊，t 也是 'd' 但多于 2 人）普通消息不弹
   if (prefs.desktopNotifications === 'mentions') {
-    const me = useAuth.getState().user?.username;
-    const mentioned =
-      !!me && new RegExp(`@(${me}|all|here)\\b`).test(msg.msg ?? '');
-    if (!mentioned) return;
+    const roomType = state.subscriptions[rid]?.t ?? state.rooms[rid]?.t;
+    const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
+    const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
+    if (isGroupish && !mentioned) return;
   }
 
   const focused = state.activeRid === rid && !document.hidden;
   // 关闭「当前会话不打扰」时，正在看的会话也会弹通知
   if (focused && (prefs.muteFocusedConversations ?? true)) return;
+  // 会弹通知的消息才闪任务栏（微信同款：什么消息闪，取决于它值不值得提醒）；
+  // 窗口已聚焦时内部自行跳过（issue #19-1）
+  void flashTaskbar();
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
-  // 有新消息且窗口不在前台 → 闪任务栏图标（桌面端;内部自查是否已聚焦）
-  void flashTaskbar();
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
   void desktopNotify({
     title,
@@ -551,14 +581,26 @@ export const useChat = create<ChatState>((set, get) => ({
     await realtime.connect();
     await realtime.login(auth.authToken);
 
-    realtime.onStream('stream-room-messages', (rid, args) => {
+    // 事件名可能是房间 id（房间订阅）或 '__my_messages__'（全局订阅），
+    // 一律以消息自带的 rid 为准
+    realtime.onStream('stream-room-messages', (_eventName, args) => {
       const msg = args[0] as RcMessage | undefined;
-      if (!msg?._id) return;
+      if (!msg?._id || !msg.rid) return;
+      const rid = msg.rid;
       const state = get();
-      set({ messages: { ...state.messages, [rid]: upsertMessage(state.messages[rid] ?? [], msg) } });
+      let nextList = upsertMessage(state.messages[rid] ?? [], msg);
+      // 还没打开过的会话只留个尾巴当预览：全局流会给所有房间推消息，
+      // 不截断的话长时间挂机后台房间会无限积累；打开时反正要拉历史再合并
+      if (!state.historyLoaded[rid] && nextList.length > 60) nextList = nextList.slice(-60);
+      set({ messages: { ...state.messages, [rid]: nextList } });
       const room = state.rooms[rid];
       if (room && !msg.tmid) {
         set({ rooms: { ...get().rooms, [rid]: { ...room, lastMessage: msg, lm: msg.ts } } });
+      }
+      // 置顶/取消置顶不推送消息更新，但会产生一条系统消息——以它为信号
+      // 同步一次本房间的 pinned 标志（issue #19-5）
+      if ((msg.t === 'message_pinned' || msg.t === 'message_unpinned') && state.historyLoaded[rid]) {
+        void get().reconcilePinned(rid).catch(() => {});
       }
       notifyIfNeeded(msg, rid, state);
       if (get().activeRid === rid) {
@@ -621,6 +663,13 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     realtime.subscribe('stream-notify-user', `${auth.userId}/rooms-changed`);
     realtime.subscribe('stream-notify-user', `${auth.userId}/subscriptions-changed`);
+
+    // 全局消息流：我加入的所有房间的新消息都推过来。
+    // 以前只订阅「本次会话里打开过的房间」（openRoom → subscribeRoomStreams），
+    // 没点开过的会话来消息就不会进 notifyIfNeeded —— 这正是「有些人发消息会提示、
+    // 有些人不会」的原因（issue #19-7）。房间级订阅保留作为兜底（服务器不支持
+    // __my_messages__ 时行为与从前一致），重复送达由 upsert 幂等 + 通知去重兜住。
+    realtime.subscribe('stream-room-messages', '__my_messages__');
 
     // 其他人的在线状态：RC 在有人状态变化时广播 [userId, username, statusNum, statusText]
     // statusNum：0=离线 1=在线 2=离开 3=忙。只推变化，初值由通讯录/成员列表播种。
@@ -1056,6 +1105,23 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
+  reconcilePinned: async (rid) => {
+    const pinned = await rest.getPinnedMessages(rid, 100);
+    const ids = new Set(pinned.map((m) => m._id));
+    const list = get().messages[rid];
+    if (list) {
+      let changed = false;
+      const next = list.map((m) => {
+        const val = ids.has(m._id);
+        if (!!m.pinned === val) return m;
+        changed = true;
+        return { ...m, pinned: val };
+      });
+      if (changed) set({ messages: { ...get().messages, [rid]: next } });
+    }
+    return pinned;
+  },
+
   toggleStar: async (msg) => {
     // 与置顶同理：服务器不推送星标变更，本地乐观更新
     const rid = msg.rid;
@@ -1186,6 +1252,17 @@ export const useChat = create<ChatState>((set, get) => ({
       await get().openRoom(drid);
     } catch (err) {
       toast.error(err, '打不开这个讨论，可能你不在讨论成员里');
+    }
+  },
+
+  joinRoom: async (rid) => {
+    try {
+      await rest.joinChannel(rid);
+      // 加入不一定推订阅变更，主动刷新让新订阅立刻生效（会话列表 + 通知过滤都靠它）
+      await refreshSubsAndRooms(set);
+      toast.success('已加入');
+    } catch (err) {
+      toast.error(err, '加入失败，该讨论可能是私有的，需要成员邀请你');
     }
   },
 

@@ -360,8 +360,19 @@ async function main(): Promise<void> {
   const React = (await import('react')).default;
   (globalThis as Record<string, unknown>).React = React;
   const { renderToStaticMarkup } = await import('react-dom/server');
-  const { renderMarkdown } = await import('../apps/web/src/lib/markdown');
+  const { renderMarkdown, isPureWorkItemText } = await import('../apps/web/src/lib/markdown');
   const html = (md: string) => renderToStaticMarkup(renderMarkdown(md) as any);
+
+  // 工作项引用的形态判定：整条消息只有 #号/ADO 链接 → 大卡片，夹在文字里 → chip + 悬浮卡
+  check('纯 #号 → 卡片', isPureWorkItemText('#123'));
+  check('多个 #号 → 卡片', isPureWorkItemText(' #123  #456 '));
+  check('文字夹 #号 → 悬浮 chip', !isPureWorkItemText('修复了 #123，请验证'));
+  check('纯 ADO 工作项链接 → 卡片', isPureWorkItemText('http://ado/c/p/_workitems/edit/12'));
+  check(
+    '文字夹 ADO 链接 → 悬浮 chip',
+    !isPureWorkItemText('看下 http://ado/c/p/_workitems/edit/12 这个'),
+  );
+  check('#号加频道名不算工作项', !isPureWorkItemText('#general'));
 
   check('标题：# 标题 → <h1>', html('# 发布计划').includes('<h1'), html('# 发布计划').slice(0, 60));
   check('标题：### → <h3>', html('### 三级').includes('<h3'));
@@ -796,6 +807,32 @@ async function main(): Promise<void> {
 
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
+
+  console.log('\n[站内文件路径归一化]');
+  const { normalizeAssetPath } = await import('../apps/web/src/lib/client');
+  check(
+    '相对路径原样返回',
+    normalizeAssetPath('/file-upload/abc/图.png') === '/file-upload/abc/图.png',
+  );
+  check(
+    'Site_Url 拼的绝对地址取回路径部分',
+    normalizeAssetPath('http://localhost:3300/file-upload/abc/a.png') === '/file-upload/abc/a.png',
+  );
+  check(
+    '中文文件名：取路径时百分号编码（请求层要的就是编码后的形态）',
+    normalizeAssetPath('http://localhost:3300/file-upload/abc/图.png') ===
+      '/file-upload/abc/%E5%9B%BE.png',
+  );
+  check(
+    '带查询串保留',
+    normalizeAssetPath('https://chat.example.com/avatar/lisi?etag=x') === '/avatar/lisi?etag=x',
+  );
+  check(
+    '外部存储地址（非站内端点）原样保留',
+    normalizeAssetPath('https://s3.example.com/bucket/abc.png') ===
+      'https://s3.example.com/bucket/abc.png',
+  );
+  check('非 URL 字符串原样返回', normalizeAssetPath('not-a-url') === 'not-a-url');
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);

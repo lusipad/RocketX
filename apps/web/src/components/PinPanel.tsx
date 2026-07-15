@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { AlertCircle, PinOff } from 'lucide-react';
-import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { humanError } from '../stores/toast';
 import PanelShell from './PanelShell';
@@ -13,6 +12,7 @@ export default function PinPanel() {
   const rid = useChat((s) => s.activeRid);
   const localMessages = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const togglePin = useChat((s) => s.togglePin);
+  const reconcilePinned = useChat((s) => s.reconcilePinned);
   const [fetched, setFetched] = useState<RcMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,15 +21,16 @@ export default function PinPanel() {
     if (!rid) return;
     setLoading(true);
     setError(null);
-    rest
-      .getPinnedMessages(rid)
+    // 顺带把消息列表里的 pinned 标志同步成服务端状态——右键菜单的
+    // 「取消置顶」入口靠这个标志显示（issue #19-5）
+    reconcilePinned(rid)
       .then(setFetched)
       .catch((err: unknown) => {
         setFetched([]);
         setError(humanError(err, '无法获取置顶消息'));
       })
       .finally(() => setLoading(false));
-  }, [rid]);
+  }, [rid, reconcilePinned]);
 
   // 服务器返回 + 本地实时状态合并（本地 pinned 显式为 false 才移除）
   const pinned = useMemo(() => {

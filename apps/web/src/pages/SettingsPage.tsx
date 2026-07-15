@@ -464,6 +464,7 @@ function MessageSection() {
           options={[
             { key: '500', label: '0.5 秒' },
             { key: '1000', label: '1 秒' },
+            { key: '2000', label: '2 秒' },
             { key: '3000', label: '3 秒' },
           ]}
         />
@@ -545,13 +546,16 @@ function NotificationSection() {
         </div>
       </Row>
 
-      <Row label="桌面通知" hint="哪些消息会弹出系统通知">
+      <Row
+        label="桌面通知"
+        hint="免打扰的会话不弹通知、只计未读和任务栏角标；@我 会穿透免打扰"
+      >
         <RadioGroup
           value={prefs.desktopNotifications}
           onChange={(v) => void update({ desktopNotifications: v })}
           options={[
             { key: 'all', label: '全部消息' },
-            { key: 'mentions', label: '仅 @我' },
+            { key: 'mentions', label: '私聊和 @我', hint: '群聊普通消息只计未读，不弹窗' },
             { key: 'nothing', label: '不通知' },
           ]}
         />
