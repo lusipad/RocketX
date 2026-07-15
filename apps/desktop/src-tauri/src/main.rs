@@ -44,6 +44,10 @@ fn set_tray_icon_normal(app: tauri::AppHandle, normal: bool) -> Result<(), Strin
 
 fn main() {
     tauri::Builder::default()
+        // 必须最先注册：第二次启动立即退出，并把已存在的主窗口带回前台。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         // Windows 集成认证（NTLM/Negotiate）：域内 ADO Server 的默认认证方式，
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![

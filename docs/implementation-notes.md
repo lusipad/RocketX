@@ -212,3 +212,30 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — 桌面端单实例（4.2）
+
+## Shipped vs planned
+
+已接入 Tauri 官方 single-instance 插件。再次启动 RocketX 时，新进程立即退出，已有进程的主窗口会显示、取消最小化并获得焦点。
+
+## Decisions
+
+- single-instance 作为第一个 Tauri 插件注册，遵循官方插件的初始化顺序要求。
+- 复用托盘与全局快捷键已经使用的 `show_main()`，避免出现三套不同的窗口恢复行为。
+- 当前忽略第二实例传入的参数和工作目录；通知深链或协议链接落地时再定义参数契约。
+- 单实例属于桌面可靠性约束，不增加允许用户关闭的设置项。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- 无。
+
+## Questions for review
+
+- 无。
