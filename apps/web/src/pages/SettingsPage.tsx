@@ -19,6 +19,7 @@ import {
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
+import { readAutostartEnabled, updateAutostartEnabled } from '../lib/autostart';
 import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
@@ -48,6 +49,7 @@ type Section =
   | 'sidebar'
   | 'message'
   | 'notification'
+  | 'desktop'
   | 'shortcuts'
   | 'workbench'
   | 'about';
@@ -58,6 +60,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
   { key: 'notification', label: '通知', icon: Bell },
+  { key: 'desktop', label: '桌面端', icon: Monitor },
   { key: 'shortcuts', label: '快捷键', icon: Keyboard },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
   { key: 'about', label: '关于', icon: Info },
@@ -460,6 +463,79 @@ function ShortcutSection() {
         </div>
       </Row>
     </>
+  );
+}
+
+/** 操作系统级桌面偏好，不跟随 Rocket.Chat 账号同步。 */
+function DesktopSection() {
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(isTauri);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let active = true;
+    void readAutostartEnabled()
+      .then((value) => {
+        if (active && value !== null) setEnabled(value);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const changeAutostart = async (next: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const actual = await updateAutostartEnabled(next);
+      setEnabled(actual);
+      if (actual !== next) throw new Error('系统没有保存该设置，请重试');
+      toast.success(next ? '已开启开机自启' : '已关闭开机自启');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      toast.error(err, '开机自启设置失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const statusText = !isTauri
+    ? '仅桌面客户端支持，网页版不会修改系统设置'
+    : loading
+      ? '正在读取系统设置…'
+      : error
+        ? `读取或保存失败：${error}`
+        : enabled
+          ? '已开启，登录系统后会自动启动 RocketX'
+          : '已关闭';
+
+  return (
+    <Row
+      label="开机时启动 RocketX"
+      hint="由操作系统管理，设置保存在本机，不跟随账号同步"
+      inline
+    >
+      <div className="flex min-w-0 flex-col items-end gap-1.5">
+        <Toggle
+          checked={isTauri && enabled}
+          disabled={!isTauri || loading}
+          onChange={(next) => void changeAutostart(next)}
+        />
+        <div
+          title={error ?? undefined}
+          className={`max-w-md text-right text-xs ${error ? 'text-danger' : 'text-ink-3'}`}
+        >
+          {statusText}
+        </div>
+      </div>
+    </Row>
   );
 }
 
@@ -1154,6 +1230,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'sidebar' && <SidebarSection />}
               {section === 'message' && <MessageSection />}
               {section === 'notification' && <NotificationSection />}
+              {section === 'desktop' && <DesktopSection />}
               {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
               {section === 'about' && <AboutSection />}

@@ -64,6 +64,11 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         // Windows 全局指令中心快捷键；具体组合由 Web 设置页注册和切换。
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // 开机自启由系统登记，设置页只负责读取和切换，不自行修改注册表。
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // 系统托盘：显示 / 退出（issue #3）
             let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;

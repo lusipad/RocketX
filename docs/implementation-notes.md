@@ -184,3 +184,31 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — 桌面端开机自启（4.1）
+
+## Shipped vs planned
+
+已接入 Tauri 官方 autostart 插件。桌面端设置页可读取操作系统中的真实注册状态，并显式开启或关闭开机自启；Web 端保持可用且不会尝试修改系统设置。
+
+## Decisions
+
+- 默认保持关闭，不在升级或登录时替用户开启。
+- 由官方插件管理各平台的系统启动项，不直接写 Windows 注册表。
+- 每次切换后重新读取系统状态，只有实际状态与用户选择一致才提示成功。
+- 本轮保持正常显示窗口的启动行为；静默驻留和单实例另行设计，避免用户登录系统后找不到应用。
+
+## Deviations
+
+- 无。
+
+## Verification limits
+
+- 自动化测试不切换开发机的真实系统启动项，避免留下机器级副作用；以插件权限、Rust 编译、Web 降级回归和生产构建验证集成边界。
+- 没有桌面设置页视觉稿可供 visual-verdict 对照，界面复用现有 Row 与 Toggle 组件保持一致。
+
+## Questions for review
+
+- 无。
