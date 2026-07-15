@@ -252,6 +252,7 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
     if (!subscriptions[room._id]) {
       await rest.joinChannel(room._id).catch(() => {});
     }
+    setModule('messages');
     void openRoom(room._id);
     onClose();
   };

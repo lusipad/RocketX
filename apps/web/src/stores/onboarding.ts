@@ -13,6 +13,7 @@ import {
 
 interface OnboardingStore {
   ownerId: string | null;
+  ownerServer: string | null;
   state: OnboardingStateV1 | null;
   hydrate: (userId: string) => void;
   setAdo: (ado: OnboardingAdoState) => void;
@@ -21,9 +22,9 @@ interface OnboardingStore {
   reset: () => void;
 }
 
-function save(ownerId: string, state: OnboardingStateV1): void {
+function save(server: string, ownerId: string, state: OnboardingStateV1): void {
   try {
-    localStorage.setItem(onboardingStorageKey(getServerBase(), ownerId), JSON.stringify(state));
+    localStorage.setItem(onboardingStorageKey(server, ownerId), JSON.stringify(state));
   } catch {
     /* 无痕模式或存储已满时仅保留当前会话状态 */
   }
@@ -31,53 +32,55 @@ function save(ownerId: string, state: OnboardingStateV1): void {
 
 export const useOnboarding = create<OnboardingStore>((set, get) => ({
   ownerId: null,
+  ownerServer: null,
   state: null,
 
   hydrate: (userId) => {
-    if (get().ownerId === userId && get().state) return;
+    const server = getServerBase();
+    if (get().ownerId === userId && get().ownerServer === server && get().state) return;
     let state: OnboardingStateV1 | null = null;
     try {
       state = parseOnboardingState(
-        localStorage.getItem(onboardingStorageKey(getServerBase(), userId)),
+        localStorage.getItem(onboardingStorageKey(server, userId)),
       );
     } catch {
       /* 使用默认状态 */
     }
     state ??= defaultOnboardingState(loadWorkbenchConfig());
-    save(userId, state);
-    set({ ownerId: userId, state });
+    save(server, userId, state);
+    set({ ownerId: userId, ownerServer: server, state });
   },
 
   setAdo: (ado) => {
-    const { ownerId, state } = get();
-    if (!ownerId || !state) return;
+    const { ownerId, ownerServer, state } = get();
+    if (!ownerId || ownerServer === null || !state) return;
     const next = { ...state, ado };
-    save(ownerId, next);
+    save(ownerServer, ownerId, next);
     set({ state: next });
   },
 
   markChecklist: (key) => {
-    const { ownerId, state } = get();
-    if (!ownerId || !state) return;
+    const { ownerId, ownerServer, state } = get();
+    if (!ownerId || ownerServer === null || !state) return;
     const next = updateChecklist(state, key);
     if (next === state) return;
-    save(ownerId, next);
+    save(ownerServer, ownerId, next);
     set({ state: next });
   },
 
   dismissChecklist: () => {
-    const { ownerId, state } = get();
-    if (!ownerId || !state || state.checklist.dismissed) return;
+    const { ownerId, ownerServer, state } = get();
+    if (!ownerId || ownerServer === null || !state || state.checklist.dismissed) return;
     const next = { ...state, checklist: { ...state.checklist, dismissed: true } };
-    save(ownerId, next);
+    save(ownerServer, ownerId, next);
     set({ state: next });
   },
 
   reset: () => {
-    const { ownerId } = get();
-    if (!ownerId) return;
+    const { ownerId, ownerServer } = get();
+    if (!ownerId || ownerServer === null) return;
     const state = defaultOnboardingState(null);
-    save(ownerId, state);
+    save(ownerServer, ownerId, state);
     set({ state });
   },
 }));

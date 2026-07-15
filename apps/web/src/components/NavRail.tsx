@@ -3,6 +3,7 @@ import {
   BookUser,
   Calendar,
   LayoutGrid,
+  Keyboard,
   ListTodo,
   LogOut,
   MessageCircle,
@@ -17,26 +18,31 @@ import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
-import { useUI, type ModuleKey } from '../stores/ui';
+import { MODULE_ORDER, useUI, type ModuleKey } from '../stores/ui';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
 import { ConfirmDialog } from './Dialog';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
-const MODULES: {
-  key: ModuleKey;
+type PrimaryModule = Exclude<ModuleKey, 'settings'>;
+
+const MODULE_META: Record<PrimaryModule, {
   label: string;
   icon: typeof MessageCircle;
-}[] = [
-  { key: 'messages', label: '消息', icon: MessageCircle },
-  { key: 'todos', label: '待办', icon: ListTodo },
-  { key: 'calendar', label: '日历', icon: Calendar },
-  { key: 'contacts', label: '通讯录', icon: BookUser },
-  { key: 'workbench', label: '工作台', icon: LayoutGrid },
-];
+}> = {
+  messages: { label: '消息', icon: MessageCircle },
+  todos: { label: '待办', icon: ListTodo },
+  calendar: { label: '日历', icon: Calendar },
+  contacts: { label: '通讯录', icon: BookUser },
+  workbench: { label: '工作台', icon: LayoutGrid },
+};
+
+const MODULES = MODULE_ORDER
+  .filter((key): key is PrimaryModule => key !== 'settings')
+  .map((key) => ({ key, ...MODULE_META[key] }));
 
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
-export default function NavRail() {
+export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
   const user = useAuth((s) => s.user);
   const logout = useAuth((s) => s.logout);
   const subscriptions = useChat((s) => s.subscriptions);
@@ -222,6 +228,13 @@ export default function NavRail() {
 
       {/* 底部 */}
       <div className="flex flex-col gap-0.5 border-t border-line pt-2">
+        <button
+          onClick={onOpenShortcuts}
+          className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+        >
+          <Keyboard size={15} />
+          快捷键
+        </button>
         <button
           onClick={() => setModule('settings')}
           className={`flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs transition ${

@@ -8,6 +8,16 @@ export type ModuleKey =
   | 'workbench'
   | 'settings';
 
+/** 左侧视觉顺序、Alt+数字和 Alt+上下都只认这一份。 */
+export const MODULE_ORDER: ModuleKey[] = [
+  'messages',
+  'todos',
+  'calendar',
+  'contacts',
+  'workbench',
+  'settings',
+];
+
 /** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
 export type WorkbenchTab = 'overview' | 'workitems' | 'prs' | 'builds' | `query:${string}`;
 
@@ -29,6 +39,8 @@ interface UIState {
   convFilter: ConvFilter;
   /** 选中的自定义分组 id（非空时覆盖 convFilter） */
   activeFolder: string | null;
+  /** 未读会话打开后暂留在列表，切到下一条时再移除，避免列表当场跳动。 */
+  retainedUnreadRid: string | null;
   switcherOpen: boolean;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
@@ -41,6 +53,7 @@ interface UIState {
   setModule: (m: ModuleKey) => void;
   setConvFilter: (f: ConvFilter) => void;
   setActiveFolder: (id: string | null) => void;
+  retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
@@ -52,14 +65,21 @@ export const useUI = create<UIState>((set) => ({
   module: 'messages',
   convFilter: 'all',
   activeFolder: null,
+  retainedUnreadRid: null,
   switcherOpen: false,
   workbenchTab: 'overview',
   workItemStateFilter: '全部',
   prTab: 'review',
   buildsFailedOnly: false,
   setModule: (m) => set({ module: m }),
-  setConvFilter: (f) => set({ convFilter: f, activeFolder: null }),
-  setActiveFolder: (id) => set({ activeFolder: id }),
+  setConvFilter: (f) =>
+    set({
+      convFilter: f,
+      activeFolder: null,
+      ...(f === 'unread' ? {} : { retainedUnreadRid: null }),
+    }),
+  setActiveFolder: (id) => set({ activeFolder: id, retainedUnreadRid: null }),
+  retainUnread: (rid) => set({ retainedUnreadRid: rid }),
   setSwitcherOpen: (open) => set({ switcherOpen: open }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => set({ workItemStateFilter: s }),

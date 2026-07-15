@@ -8,6 +8,7 @@ import {
   Hash,
   MessageSquareText,
   MessagesSquare,
+  PanelLeftClose,
   Pencil,
   Pin,
   RefreshCw,
@@ -107,13 +108,15 @@ function FolderDialog({
 }
 
 /** 飞书式「分组」栏：系统过滤器 + 自定义分组 */
-export default function GroupFilter() {
+export default function GroupFilter({ onCollapse }: { onCollapse: () => void }) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const filter = useUI((s) => s.convFilter);
   const setFilter = useUI((s) => s.setConvFilter);
   const activeFolder = useUI((s) => s.activeFolder);
   const setActiveFolder = useUI((s) => s.setActiveFolder);
+  const retainUnread = useUI((s) => s.retainUnread);
+  const activeRid = useChat((s) => s.activeRid);
 
   const folders = useFolders((s) => s.folders);
   const create = useFolders((s) => s.create);
@@ -182,13 +185,22 @@ export default function GroupFilter() {
     <aside className="flex w-[150px] shrink-0 flex-col border-r border-line bg-surface-2 px-2 py-3">
       <div className="flex items-center justify-between px-2 pb-2">
         <span className="text-xs font-medium text-ink">分组</span>
-        <button
-          title="新建分组"
-          onClick={() => setDialog({ mode: 'create' })}
-          className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-        >
-          <FolderPlus size={13} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            title="收起分组栏"
+            onClick={onCollapse}
+            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+          >
+            <PanelLeftClose size={13} />
+          </button>
+          <button
+            title="新建分组"
+            onClick={() => setDialog({ mode: 'create' })}
+            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+          >
+            <FolderPlus size={13} />
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
@@ -201,6 +213,10 @@ export default function GroupFilter() {
               key={key}
               onClick={() => {
                 setActiveFolder(null);
+                if (key === 'unread' && activeRid) {
+                  const active = subscriptions[activeRid];
+                  retainUnread(active && (active.unread > 0 || active.alert) ? activeRid : null);
+                }
                 setFilter(key);
               }}
               className={btnCls(active)}
@@ -264,10 +280,7 @@ export default function GroupFilter() {
         })}
 
         {folders.length === 0 && (
-          <div className="mt-2 px-2 text-2xs leading-relaxed text-ink-3">
-            点右上角 <FolderPlus size={11} className="inline" /> 新建分组。
-            会话可以拖进来，也可以右键分组设「规则」自动归类（比如名称以 WI 开头）。
-          </div>
+          <div className="mt-2 px-2 text-2xs text-ink-3">暂无自定义分组</div>
         )}
       </div>
 

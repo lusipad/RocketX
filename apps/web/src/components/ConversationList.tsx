@@ -18,12 +18,13 @@ import {
   Users,
   UsersRound,
 } from 'lucide-react';
-import { buildConversations, buildSections, useChat, type Conversation } from '../stores/chat';
+import { buildConversations, useChat, type Conversation } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
 import { inFolder, useFolders } from '../stores/folders';
 import { usePrefs } from '../stores/prefs';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { fmtConvTime, useDayTick } from '../lib/format';
+import { buildConversationView } from '../lib/conversationView';
 import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -40,35 +41,6 @@ const FILTER_TITLE: Record<ConvFilter, string> = {
   discussions: '讨论',
   favorites: '收藏',
 };
-
-/** 过滤器（@我 用 userMentions 而非 unread —— 频道普通未读不算被 @） */
-function applyFilter(convs: Conversation[], filter: ConvFilter): Conversation[] {
-  switch (filter) {
-    case 'unread':
-      return convs.filter((c) => c.unread > 0 || c.alert);
-    case 'mentions':
-      return convs.filter((c) => c.userMentions > 0);
-    // 单聊只算 1 对 1
-    case 'dm':
-      return convs.filter((c) => c.type === 'd' && !c.isMultiDM);
-    // 多人聊天：没名字、由参与者拼出来的临时群聊，独立成一类 ——
-    // 和「general-test」这种有名有姓的频道混在一起，用户根本分不清哪个是哪个
-    case 'multi':
-      return convs.filter((c) => c.isMultiDM);
-    case 'groups':
-      return convs.filter(
-        (c) => (c.type === 'c' || c.type === 'p') && !c.isTeam && !c.isDiscussion,
-      );
-    case 'teams':
-      return convs.filter((c) => c.isTeam || !!c.teamId);
-    case 'discussions':
-      return convs.filter((c) => c.isDiscussion);
-    case 'favorites':
-      return convs.filter((c) => c.favorite);
-    default:
-      return convs;
-  }
-}
 
 function ConversationItem({
   conv,
@@ -88,6 +60,8 @@ function ConversationItem({
   const markConvRead = useChat((s) => s.markConvRead);
   const hideConv = useChat((s) => s.hideConv);
   const draft = useChat((s) => s.drafts[conv.rid]);
+  const filter = useUI((s) => s.convFilter);
+  const retainUnread = useUI((s) => s.retainUnread);
   const showDraft = !!draft && !active;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -166,7 +140,10 @@ function ConversationItem({
       onClick={() => {
         // 再点已打开的会话 = 回到最新消息（跳去看历史后点会话名回底部，issue #18.6）
         if (active) scrollToLatest();
-        else void openRoom(conv.rid);
+        else {
+          if (filter === 'unread') retainUnread(conv.rid);
+          void openRoom(conv.rid);
+        }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -333,7 +310,7 @@ const NEW_ACTIONS: Partial<
   teams: { label: '创建团队', dialog: 'team', icon: Users },
 };
 
-export default function ConversationList() {
+export default function ConversationList({ width = 280 }: { width?: number }) {
   // 跨过零点后「昨天 / 周X」这类相对时间要跟着变
   useDayTick();
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
@@ -344,6 +321,7 @@ export default function ConversationList() {
   const ready = useChat((s) => s.ready);
   const filter = useUI((s) => s.convFilter);
   const activeFolder = useUI((s) => s.activeFolder);
+  const retainedUnreadRid = useUI((s) => s.retainedUnreadRid);
   const prefs = usePrefs((s) => s.prefs);
   const folders = useFolders((s) => s.folders);
   const collapsedKeys = useFolders((s) => s.collapsed);
@@ -355,34 +333,16 @@ export default function ConversationList() {
 
   const sections = useMemo(() => {
     const all = buildConversations(subscriptions, rooms);
-    const sortFn = (a: Conversation, b: Conversation) =>
-      prefs.sidebarSortby === 'alphabetical'
-        ? a.name.localeCompare(b.name, 'zh-CN')
-        : b.lastTs - a.lastTs;
-
-    // 自定义分组视图：手工拖入的排在前（按加入顺序），规则命中的接在后面
-    if (folder) {
-      const manual = folder.rids
-        .map((rid) => all.find((c) => c.rid === rid))
-        .filter((c): c is Conversation => !!c);
-      const byRule = all
-        .filter((c) => !folder.rids.includes(c.rid) && inFolder(folder, c))
-        .sort(sortFn);
-      return [{ key: 'all' as const, label: folder.name, items: [...manual, ...byRule] }];
-    }
-
-    const filtered = applyFilter(all, filter);
-    // 只有「全部」视图分区，其他过滤器是扁平列表
-    if (filter !== 'all') {
-      return [{ key: 'all' as const, label: FILTER_TITLE[filter], items: [...filtered].sort(sortFn) }];
-    }
-    return buildSections(filtered, {
+    return buildConversationView(all, {
+      filter,
+      folder,
+      retainedUnreadRid,
       groupByType: prefs.sidebarGroupByType,
       showUnread: prefs.sidebarShowUnread,
       showFavorites: prefs.sidebarShowFavorites,
       sortBy: prefs.sidebarSortby,
     });
-  }, [subscriptions, rooms, filter, prefs, folder]);
+  }, [subscriptions, rooms, filter, prefs, folder, retainedUnreadRid]);
 
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   const viewMode = prefs.sidebarViewMode;
@@ -402,7 +362,10 @@ export default function ConversationList() {
   };
 
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col border-r border-line bg-surface-2">
+    <aside
+      style={{ width }}
+      className="flex shrink-0 flex-col border-r border-line bg-surface-2"
+    >
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <span className="text-[15px] font-semibold text-ink">{title}</span>
         {newAction && (

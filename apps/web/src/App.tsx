@@ -4,6 +4,7 @@ import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
 import AdoOnboardingPage from './pages/AdoOnboardingPage';
 import { useOnboarding } from './stores/onboarding';
+import { useImLayout } from './stores/imLayout';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -12,14 +13,18 @@ export default function App() {
   const onboardingOwnerId = useOnboarding((s) => s.ownerId);
   const onboarding = useOnboarding((s) => s.state);
   const hydrateOnboarding = useOnboarding((s) => s.hydrate);
+  const hydrateImLayout = useImLayout((s) => s.hydrate);
 
   useEffect(() => {
     void resume();
   }, [resume]);
 
   useEffect(() => {
-    if (status === 'authed' && userId) hydrateOnboarding(userId);
-  }, [hydrateOnboarding, status, userId]);
+    if (status === 'authed' && userId) {
+      hydrateOnboarding(userId);
+      hydrateImLayout(userId);
+    }
+  }, [hydrateImLayout, hydrateOnboarding, status, userId]);
 
   if (status === 'boot') {
     return (

@@ -5,6 +5,7 @@ import {
   Info,
   MessageCircle,
   MoreHorizontal,
+  ListRestart,
   Pin,
   Search,
   Star,
@@ -54,7 +55,13 @@ function HeaderButton({
   );
 }
 
-export default function ChatArea() {
+export default function ChatArea({
+  hasUnread,
+  onNextUnread,
+}: {
+  hasUnread: boolean;
+  onNextUnread: () => void;
+}) {
   const activeRid = useChat((s) => s.activeRid);
   const rightPanel = useChat((s) => s.rightPanel);
   const setPanel = useChat((s) => s.setPanel);
@@ -180,6 +187,13 @@ export default function ChatArea() {
             )}
           </div>
           <div className="flex items-center gap-1">
+            {hasUnread ? (
+              <HeaderButton
+                icon={ListRestart}
+                label="下一条未读 (Ctrl+Shift+↓)"
+                onClick={onNextUnread}
+              />
+            ) : null}
             <HeaderButton
               icon={Pin}
               label="置顶消息"

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { PanelLeftOpen } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
-import { type ModuleKey, useUI } from '../stores/ui';
+import { MODULE_ORDER, useUI } from '../stores/ui';
+import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import {
   clearTrayAttention,
@@ -24,11 +26,32 @@ import SettingsPage from './SettingsPage';
 import FirstUseChecklist from '../components/FirstUseChecklist';
 import { StartDMDialog } from '../components/NewChatDialogs';
 import { useWorkbench } from '../stores/workbench';
+import { useImLayout } from '../stores/imLayout';
+import {
+  MAX_CONVERSATION_WIDTH,
+  MIN_CONVERSATION_WIDTH,
+  clampConversationWidth,
+} from '../lib/imLayout';
+import {
+  adjacentConversation,
+  buildConversationView,
+  flattenConversationView,
+  nextUnreadConversation,
+} from '../lib/conversationView';
+import ShortcutHelpDialog from '../components/ShortcutHelpDialog';
+
+const NARROW_LAYOUT_WIDTH = 1180;
+const MIN_CHAT_WIDTH = 420;
+const NAV_WIDTH = 210;
+const GROUP_WIDTH = 150;
+const COLLAPSED_GROUP_WIDTH = 32;
+const RESIZER_WIDTH = 6;
 
 export default function MainPage() {
   const init = useChat((s) => s.init);
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
+  const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
   const module = useUI((s) => s.module);
   const switcher = useUI((s) => s.switcherOpen);
@@ -37,7 +60,22 @@ export default function MainPage() {
   const loadPrefs = usePrefs((s) => s.load);
   const switcherTab = useRef<'messages' | undefined>(undefined);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [narrowGroupExpanded, setNarrowGroupExpanded] = useState(false);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const resizeStart = useRef<{
+    x: number;
+    width: number;
+    currentWidth: number;
+    moved: boolean;
+  } | null>(null);
   const workbenchConfig = useWorkbench((s) => s.config);
+  const savedConversationWidth = useImLayout((s) => s.layout.conversationWidth);
+  const savedGroupCollapsed = useImLayout((s) => s.layout.groupCollapsed);
+  const setConversationWidth = useImLayout((s) => s.setConversationWidth);
+  const resetConversationWidth = useImLayout((s) => s.resetConversationWidth);
+  const setGroupCollapsed = useImLayout((s) => s.setGroupCollapsed);
   const workbenchConnected = !!(
     workbenchConfig &&
     (workbenchConfig.mode === 'direct' ? workbenchConfig.adoBase : workbenchConfig.bridge)
@@ -59,6 +97,82 @@ export default function MainPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const narrowLayout = windowWidth < NARROW_LAYOUT_WIDTH;
+  const groupCollapsed = narrowLayout ? !narrowGroupExpanded : savedGroupCollapsed;
+  const maxConversationWidth = Math.min(
+    MAX_CONVERSATION_WIDTH,
+    Math.max(
+      MIN_CONVERSATION_WIDTH,
+      windowWidth -
+        NAV_WIDTH -
+        (groupCollapsed ? COLLAPSED_GROUP_WIDTH : GROUP_WIDTH) -
+        RESIZER_WIDTH -
+        MIN_CHAT_WIDTH,
+    ),
+  );
+  const conversationWidth = Math.min(
+    dragWidth ?? savedConversationWidth,
+    maxConversationWidth,
+  );
+
+  const toggleGroupFilter = () => {
+    if (narrowLayout) setNarrowGroupExpanded((expanded) => !expanded);
+    else setGroupCollapsed(!savedGroupCollapsed);
+  };
+
+  const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeStart.current = {
+      x: event.clientX,
+      width: conversationWidth,
+      currentWidth: conversationWidth,
+      moved: false,
+    };
+    setDragWidth(conversationWidth);
+  };
+
+  const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = resizeStart.current;
+    if (!start) return;
+    const next = Math.min(maxConversationWidth, clampConversationWidth(start.width + event.clientX - start.x));
+    if (next !== start.width) start.moved = true;
+    start.currentWidth = next;
+    setDragWidth(next);
+  };
+
+  const finishResize = () => {
+    const start = resizeStart.current;
+    if (start?.moved) setConversationWidth(start.currentWidth);
+    resizeStart.current = null;
+    setDragWidth(null);
+  };
+
+  const allConversations = useMemo(
+    () => buildConversations(subscriptions, rooms),
+    [subscriptions, rooms],
+  );
+  const hasUnread = allConversations.some((conversation) => conversation.unread > 0 || conversation.alert);
+
+  const openNextUnread = () => {
+    const chat = useChat.getState();
+    const next = nextUnreadConversation(
+      buildConversations(chat.subscriptions, chat.rooms),
+      chat.activeRid,
+    );
+    if (!next) return;
+    const ui = useUI.getState();
+    ui.setConvFilter('unread');
+    ui.retainUnread(next.rid);
+    ui.setModule('messages');
+    void chat.openRoom(next.rid);
+  };
+
   // 标题栏未读数 + 任务栏角标（免打扰会话不计入）。
   // 角标是群聊消息的次级提示主体：不弹窗，但任务栏图标上有数字（读完自动清）
   useEffect(() => {
@@ -73,15 +187,31 @@ export default function MainPage() {
 
   // 全局快捷键
   useEffect(() => {
-    const MODULES: ModuleKey[] = ['messages', 'todos', 'contacts', 'calendar', 'workbench', 'settings'];
-
     const switchConv = (delta: 1 | -1) => {
       const { subscriptions: subs, rooms: rms, activeRid } = useChat.getState();
-      const list = buildConversations(subs, rms).sort((a, b) => b.lastTs - a.lastTs);
-      if (!list.length) return;
-      const idx = list.findIndex((c) => c.rid === activeRid);
-      const next = list[Math.max(0, Math.min(list.length - 1, idx + delta))];
-      if (next) useChat.getState().openRoom(next.rid);
+      const ui = useUI.getState();
+      const prefs = usePrefs.getState().prefs;
+      const folderState = useFolders.getState();
+      const folder = folderState.folders.find((item) => item.id === ui.activeFolder);
+      const sections = buildConversationView(buildConversations(subs, rms), {
+        filter: ui.convFilter,
+        folder,
+        retainedUnreadRid: ui.retainedUnreadRid,
+        groupByType: prefs.sidebarGroupByType,
+        showUnread: prefs.sidebarShowUnread,
+        showFavorites: prefs.sidebarShowFavorites,
+        sortBy: prefs.sidebarSortby,
+      });
+      const visible = flattenConversationView(
+        sections,
+        folderState.collapsed,
+        !folder && ui.convFilter === 'all' && prefs.sidebarGroupByType,
+      );
+      const next = adjacentConversation(visible, activeRid, delta);
+      if (!next) return;
+      if (ui.convFilter === 'unread') ui.retainUnread(next.rid);
+      ui.setModule('messages');
+      void useChat.getState().openRoom(next.rid);
     };
 
     const onKey = (e: KeyboardEvent) => {
@@ -91,21 +221,28 @@ export default function MainPage() {
       if (mod && key === 'k' && !e.shiftKey) { e.preventDefault(); switcherTab.current = undefined; setSwitcher(!useUI.getState().switcherOpen); return; }
       // Ctrl+Shift+F 全局搜索消息
       if (mod && e.shiftKey && key === 'f') { e.preventDefault(); switcherTab.current = 'messages'; setSwitcher(true); return; }
+      // Ctrl+Shift+↓ 连续处理下一条未读
+      if (mod && e.shiftKey && e.key === 'ArrowDown') { e.preventDefault(); openNextUnread(); return; }
       // Ctrl+↑/↓ 上下切换会话
       if (mod && !e.shiftKey && e.key === 'ArrowUp') { e.preventDefault(); switchConv(-1); return; }
       if (mod && !e.shiftKey && e.key === 'ArrowDown') { e.preventDefault(); switchConv(1); return; }
       // Alt+↑/↓ 切换左侧模块
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        const cur = MODULES.indexOf(useUI.getState().module);
-        const next = e.key === 'ArrowUp' ? Math.max(0, cur - 1) : Math.min(MODULES.length - 1, cur + 1);
-        useUI.getState().setModule(MODULES[next]);
+        const cur = MODULE_ORDER.indexOf(useUI.getState().module);
+        const next = e.key === 'ArrowUp' ? Math.max(0, cur - 1) : Math.min(MODULE_ORDER.length - 1, cur + 1);
+        useUI.getState().setModule(MODULE_ORDER[next]);
         return;
       }
       // Alt+1~6 直接跳到指定模块
       if (e.altKey && !mod && key >= '1' && key <= '6') {
         e.preventDefault();
-        useUI.getState().setModule(MODULES[Number(key) - 1]);
+        useUI.getState().setModule(MODULE_ORDER[Number(key) - 1]);
+        return;
+      }
+      if (mod && key === '/') {
+        e.preventDefault();
+        setShortcutsOpen(true);
         return;
       }
       // Escape：优先退出多选（issue #19-2），其次关闭右侧面板。
@@ -125,12 +262,52 @@ export default function MainPage() {
 
   return (
     <div className="flex h-full min-h-[640px] min-w-[940px] overflow-hidden bg-fill-2">
-      <NavRail />
+      <NavRail onOpenShortcuts={() => setShortcutsOpen(true)} />
       {module === 'messages' ? (
         <>
-          <GroupFilter />
-          <ConversationList />
-          <ChatArea />
+          {groupCollapsed ? (
+            <button
+              onClick={toggleGroupFilter}
+              title="展开分组栏"
+              aria-label="展开分组栏"
+              className="flex w-8 shrink-0 items-start justify-center border-r border-line bg-surface-2 pt-4 text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            >
+              <PanelLeftOpen size={15} />
+            </button>
+          ) : (
+            <GroupFilter onCollapse={toggleGroupFilter} />
+          )}
+          <ConversationList width={conversationWidth} />
+          <div
+            role="separator"
+            aria-label="调整会话列表宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_CONVERSATION_WIDTH}
+            aria-valuemax={maxConversationWidth}
+            aria-valuenow={Math.round(conversationWidth)}
+            tabIndex={0}
+            title="拖动调整会话列表宽度，双击恢复默认"
+            onDoubleClick={resetConversationWidth}
+            onPointerDown={onResizePointerDown}
+            onPointerMove={onResizePointerMove}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                event.preventDefault();
+                const delta = event.key === 'ArrowLeft' ? -10 : 10;
+                setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
+              } else if (event.key === 'Home') {
+                event.preventDefault();
+                resetConversationWidth();
+              }
+            }}
+            style={{ touchAction: 'none' }}
+            className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
+          >
+            <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
+          </div>
+          <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
         </>
       ) : module === 'todos' ? (
         <TodosPage />
@@ -165,6 +342,7 @@ export default function MainPage() {
         }}
       />
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
+      {shortcutsOpen && <ShortcutHelpDialog onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }
