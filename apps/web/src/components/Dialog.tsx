@@ -1,5 +1,73 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+/** Modal keyboard contract: Esc, focus trap, and focus restoration. */
+export function useDialogBehavior(onClose: () => void, active = true) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!active) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog || dialog.contains(document.activeElement)) return;
+      dialog.querySelector<HTMLElement>(FOCUSABLE)?.focus() ?? dialog.focus();
+    });
+
+    const onKey = (event: KeyboardEvent) => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const openDialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')]
+        .filter((item) => item.getClientRects().length > 0);
+      if (openDialogs.at(-1) !== dialog) return;
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+        .filter((item) => item.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', onKey, true);
+      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+    };
+  }, [active]);
+
+  return dialogRef;
+}
 
 /**
  * 统一的弹窗外壳：遮罩点击关闭 + Esc 关闭 + 一致的标题/间距。
@@ -20,16 +88,7 @@ export default function Dialog({
   footer?: ReactNode;
   children: ReactNode;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation(); // 不让 MainPage 的全局 Esc 顺手关掉背后的面板
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  const dialogRef = useDialogBehavior(onClose);
 
   return (
     <div
@@ -39,6 +98,11 @@ export default function Dialog({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         style={{ width }}
         className="flex max-h-[72vh] flex-col rounded-xl bg-surface-4 shadow-2xl"
       >
@@ -49,6 +113,7 @@ export default function Dialog({
           </div>
           <button
             onClick={onClose}
+            aria-label={`关闭${title}`}
             className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover"
           >
             <X size={16} />

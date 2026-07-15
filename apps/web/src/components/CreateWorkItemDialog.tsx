@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useWorkbench } from '../stores/workbench';
-import { useWiTemplates, type WiTemplate } from '../stores/wiTemplates';
+import {
+  preferredWorkItemType,
+  templateSupportsTypes,
+  useWiTemplates,
+  type WiTemplate,
+} from '../stores/wiTemplates';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { rest } from '../lib/client';
-
-const SINGLE_TYPES = ['Task', 'Bug', 'User Story', 'Feature', 'Epic', 'Issue'];
+import { useDialogBehavior } from './Dialog';
 
 export default function CreateWorkItemDialog({
   defaultTitle,
@@ -27,12 +31,26 @@ export default function CreateWorkItemDialog({
   const [tags, setTags] = useState('');
   const [project, setProject] = useState('');
   const [projects, setProjects] = useState<string[]>([]);
+  const [workItemTypes, setWorkItemTypes] = useState<string[]>([]);
+  const [typesLoading, setTypesLoading] = useState(false);
   const [createDiscussion, setCreateDiscussion] = useState(!!rid);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const requestClose = useCallback(() => {
+    if (!loading) onClose();
+  }, [loading, onClose]);
+  const dialogRef = useDialogBehavior(requestClose);
 
-  const tpl = templates[tplIdx] as WiTemplate | undefined;
+  const compatibleTemplates = useMemo(
+    () => templates
+      .map((template, index) => ({ template, index }))
+      .filter(({ template }) => templateSupportsTypes(template, workItemTypes)),
+    [templates, workItemTypes],
+  );
+  const tpl = compatibleTemplates.find(({ index }) => index === tplIdx)?.template as
+    | WiTemplate
+    | undefined;
   const isSingle = tpl?.items.length === 1 && tpl.items[0].type === '{type}';
 
   useEffect(() => {
@@ -49,8 +67,40 @@ export default function CreateWorkItemDialog({
     })();
   }, [config]);
 
+  useEffect(() => {
+    if (!config?.adoBase || config.mode !== 'direct' || !project) return;
+    let cancelled = false;
+    setTypesLoading(true);
+    setWorkItemTypes([]);
+    setType('');
+    setError(null);
+    void (async () => {
+      try {
+        const { directGetWorkItemTypes } = await import('../lib/adoDirect');
+        const cfg = { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth };
+        const names = await directGetWorkItemTypes(cfg, project);
+        if (cancelled) return;
+        setWorkItemTypes(names);
+        setType((current) => names.includes(current) ? current : preferredWorkItemType(names));
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setTypesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [config, project]);
+
+  useEffect(() => {
+    if (!workItemTypes.length) return;
+    const indexes = templates
+      .map((template, index) => templateSupportsTypes(template, workItemTypes) ? index : -1)
+      .filter((index) => index >= 0);
+    setTplIdx((current) => indexes.includes(current) ? current : (indexes[0] ?? -1));
+  }, [templates, workItemTypes]);
+
   const doCreate = async () => {
-    if (!title.trim() || !project || !config?.adoBase || !tpl) return;
+    if (!title.trim() || !project || !config?.adoBase || !tpl || !workItemTypes.length || !type) return;
     setLoading(true);
     setError(null);
 
@@ -114,12 +164,19 @@ export default function CreateWorkItemDialog({
 
   if (!config?.adoBase || config.mode !== 'direct') {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="创建工作项"
+          tabIndex={-1}
+          className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
+        >
           <div className="text-[15px] font-semibold text-ink">创建工作项</div>
           <div className="mt-2 text-sm text-ink-2">请先在设置中配置 ADO 直连</div>
           <div className="mt-4 flex justify-end">
-            <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover">关闭</button>
+            <button onClick={requestClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover">关闭</button>
           </div>
         </div>
       </div>
@@ -127,14 +184,21 @@ export default function CreateWorkItemDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="w-[460px] rounded-xl bg-surface-4 p-5 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="创建工作项"
+        tabIndex={-1}
+        className="w-[460px] rounded-xl bg-surface-4 p-5 shadow-2xl"
+      >
         <div className="text-[15px] font-semibold text-ink">创建工作项</div>
 
         <div className="mt-3 space-y-3">
           {/* 模板选择 */}
           <div className="flex flex-wrap gap-1.5">
-            {templates.map((t, i) => (
+            {compatibleTemplates.map(({ template: t, index: i }) => (
               <button
                 key={t.name}
                 onClick={() => setTplIdx(i)}
@@ -147,6 +211,9 @@ export default function CreateWorkItemDialog({
                 {t.name}
               </button>
             ))}
+            {!typesLoading && workItemTypes.length > 0 && compatibleTemplates.length === 0 && (
+              <span className="text-xs text-danger">当前项目没有兼容的工作项模板</span>
+            )}
           </div>
 
           {/* 项目 + 类型（单个模式显示类型选择） */}
@@ -164,7 +231,7 @@ export default function CreateWorkItemDialog({
                 onChange={(e) => setType(e.target.value)}
                 className="h-8 w-28 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
               >
-                {SINGLE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                {workItemTypes.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             )}
           </div>
@@ -228,12 +295,16 @@ export default function CreateWorkItemDialog({
             )}
           </span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover">
+            <button
+              onClick={requestClose}
+              disabled={loading}
+              className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+            >
               取消
             </button>
             <button
               onClick={() => void doCreate()}
-              disabled={loading || !title.trim() || !project}
+              disabled={loading || typesLoading || !workItemTypes.length || !tpl || !type || !title.trim() || !project}
               className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
               {loading ? '创建中…' : '创建'}

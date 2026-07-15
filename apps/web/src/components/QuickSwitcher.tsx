@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { Hash, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
-import { displayName, useAliases } from '../stores/aliases';
+import { displayName, personName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
 import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from './Avatar';
+import { useDialogBehavior } from './Dialog';
 
 type Tab = 'convs' | 'messages' | 'contacts';
 
@@ -56,6 +57,8 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabRef = useRef(tab);
+  const dialogRef = useDialogBehavior(onClose);
 
   const conversations = useMemo(
     () => buildConversations(subscriptions, rooms),
@@ -65,54 +68,85 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
   // 备注名也参与匹配，否则「给人起了备注却搜不到」。
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const filteredConvs = useMemo(
     () =>
       (keyword
         ? conversations
-            .filter((c) => pinyinMatch(keyword, displayName(aliases, c), c.name))
+            .filter((c) => pinyinMatch(keyword, displayName(aliases, c, nameFormat), c.name))
             .sort(
               (a, b) =>
-                pinyinScore(keyword, displayName(aliases, a)) -
-                pinyinScore(keyword, displayName(aliases, b)),
+                pinyinScore(keyword, displayName(aliases, a, nameFormat)) -
+                pinyinScore(keyword, displayName(aliases, b, nameFormat)),
             )
         : conversations
       ).slice(0, 8),
-    [conversations, keyword, aliases, pinyinReady],
+    [conversations, keyword, aliases, nameFormat, pinyinReady],
   );
+  const conversationScope = useMemo(
+    () => [...new Set(conversations.map((conversation) => conversation.rid))].sort().join('\0'),
+    [conversations],
+  );
+  const conversationRidsRef = useRef<string[]>([]);
+  const filteredConvsRef = useRef(filteredConvs);
+  conversationRidsRef.current = conversations.map((conversation) => conversation.rid);
+  filteredConvsRef.current = filteredConvs;
 
   useEffect(() => inputRef.current?.focus(), [tab]);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
   useEffect(() => setIndex(0), [keyword, tab]);
 
-  // 消息 / 联系人搜索（防抖）
+  // 三个范围一起搜索；停稳后当前范围为空时，自动切到第一个有结果的范围（issue #24）。
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
-    if (!q || tab === 'convs') {
+    if (!q) {
       setMessages([]);
       setContacts({ users: [], rooms: [] });
+      setSearching(false);
       return;
     }
+    let cancelled = false;
+    setMessages([]);
+    setContacts({ users: [], rooms: [] });
+    setSearching(true);
     timer.current = setTimeout(() => {
-      setSearching(true);
-      if (tab === 'messages') {
-        void searchMessagesGlobal(
+      void Promise.all([
+        searchMessagesGlobal(
           q,
-          conversations.map((c) => c.rid),
-        )
-          .then((docs) => setMessages(docs.sort((a, b) => tsMs(b.ts) - tsMs(a.ts)).slice(0, 20)))
-          .finally(() => setSearching(false));
-      } else {
-        void rest
-          .spotlight(q)
-          .then((r) => setContacts({ users: r.users ?? [], rooms: r.rooms ?? [] }))
-          .catch(() => setContacts({ users: [], rooms: [] }))
-          .finally(() => setSearching(false));
-      }
+          conversationRidsRef.current,
+        ),
+        rest.spotlight(q).catch(() => ({ users: [], rooms: [] })),
+      ]).then(([messageDocs, found]) => {
+        if (cancelled) return;
+        const nextMessages = messageDocs
+          .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
+          .slice(0, 20);
+        const nextContacts = { users: found.users ?? [], rooms: found.rooms ?? [] };
+        const currentConversations = filteredConvsRef.current;
+        setMessages(nextMessages);
+        setContacts(nextContacts);
+        setSearching(false);
+
+        const current = tabRef.current;
+        const currentHasResults =
+          current === 'convs'
+            ? currentConversations.length > 0
+            : current === 'messages'
+              ? nextMessages.length > 0
+              : nextContacts.users.length + nextContacts.rooms.length > 0;
+        if (!currentHasResults) {
+          if (currentConversations.length > 0) setTab('convs');
+          else if (nextMessages.length > 0) setTab('messages');
+          else if (nextContacts.users.length + nextContacts.rooms.length > 0) setTab('contacts');
+        }
+      });
     }, 300);
     return () => {
+      cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [keyword, tab, conversations]);
+  }, [keyword, conversationScope]);
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
@@ -163,7 +197,14 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="全局搜索"
+        tabIndex={-1}
+        className="flex h-fit max-h-[70vh] w-[540px] flex-col overflow-hidden rounded-xl bg-surface-4 shadow-2xl"
+      >
         <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-4">
           <Search size={16} className="text-ink-3" />
           <input
@@ -221,8 +262,8 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                   i === index ? 'bg-primary-light' : ''
                 }`}
               >
-                <Avatar name={displayName(aliases, c)} username={c.avatarUsername} size={28} />
-                <span className="truncate text-sm text-ink">{displayName(aliases, c)}</span>
+                <Avatar name={displayName(aliases, c, nameFormat)} username={c.avatarUsername} size={28} />
+                <span className="truncate text-sm text-ink">{displayName(aliases, c, nameFormat)}</span>
                 {c.isDiscussion && (
                   <span className="rounded bg-fill-1 px-1 text-2xs text-ink-3">讨论</span>
                 )}
@@ -234,7 +275,9 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
               </button>
             ))}
           {tab === 'convs' && filteredConvs.length === 0 && (
-            <div className="py-8 text-center text-sm text-ink-3">未找到匹配的会话</div>
+            <div className="py-8 text-center text-sm text-ink-3">
+              {searching ? '正在搜索其它范围…' : '未找到匹配的会话'}
+            </div>
           )}
 
           {tab === 'messages' && (
@@ -285,7 +328,9 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
               {contacts.users.length > 0 && (
                 <div className="px-4 pt-2 pb-1 text-2xs text-ink-3">联系人</div>
               )}
-              {contacts.users.map((u, i) => (
+              {contacts.users.map((u, i) => {
+                const shown = personName(aliases, u.username, u.name || u.username, nameFormat);
+                return (
                 <button
                   key={u._id}
                   onClick={() => {
@@ -299,11 +344,12 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                     i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
                   }`}
                 >
-                  <Avatar name={u.name || u.username} username={u.username} size={28} />
-                  <span className="truncate text-sm text-ink">{u.name || u.username}</span>
+                  <Avatar name={shown} username={u.username} size={28} />
+                  <span className="truncate text-sm text-ink">{shown}</span>
                   <span className="text-xs text-ink-3">@{u.username}</span>
                 </button>
-              ))}
+                );
+              })}
               {contacts.rooms.length > 0 && (
                 <div className="px-4 pt-2 pb-1 text-2xs text-ink-3">频道</div>
               )}

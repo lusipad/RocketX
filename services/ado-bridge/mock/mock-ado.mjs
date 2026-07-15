@@ -53,9 +53,10 @@ const PULL_REQUESTS = [
   {
     pullRequestId: 42,
     title: '修复登录超时问题',
+    status: 'active',
     creationDate: '2026-07-12T09:00:00Z',
-    createdBy: { displayName: '张三', uniqueName: 'zhangsan@example.com' },
-    reviewers: [{ displayName: 'lus', uniqueName: 'lus@example.com', vote: 0 }],
+    createdBy: { id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com' },
+    reviewers: [{ id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com', vote: 0 }],
     sourceRefName: 'refs/heads/fix/login-timeout',
     targetRefName: 'refs/heads/main',
     repository: { name: 'rocketx', project: { name: 'RocketX' } },
@@ -63,10 +64,22 @@ const PULL_REQUESTS = [
   {
     pullRequestId: 45,
     title: 'feat: 工作台 ADO 集成',
+    status: 'active',
     creationDate: '2026-07-13T01:00:00Z',
-    createdBy: { displayName: 'lus', uniqueName: 'lus@example.com' },
-    reviewers: [{ displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
+    createdBy: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com' },
+    reviewers: [{ id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
     sourceRefName: 'refs/heads/feat/workbench',
+    targetRefName: 'refs/heads/main',
+    repository: { name: 'rocketx', project: { name: 'RocketX' } },
+  },
+  {
+    pullRequestId: 47,
+    title: 'chore: 已完成的发布准备',
+    status: 'completed',
+    creationDate: '2026-07-10T01:00:00Z',
+    createdBy: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com' },
+    reviewers: [{ id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
+    sourceRefName: 'refs/heads/chore/release',
     targetRefName: 'refs/heads/main',
     repository: { name: 'rocketx', project: { name: 'RocketX' } },
   },
@@ -80,7 +93,7 @@ const BUILDS = [
     project: { name: 'RocketX' },
     status: 'completed',
     result: 'succeeded',
-    requestedFor: { displayName: 'lus' },
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
     queueTime: '2026-07-13T02:40:00Z',
     finishTime: '2026-07-13T02:47:00Z',
   },
@@ -91,7 +104,7 @@ const BUILDS = [
     project: { name: 'RocketX' },
     status: 'inProgress',
     result: '',
-    requestedFor: { displayName: '张三' },
+    requestedFor: { id: 'user-zhangsan', displayName: '张三' },
     queueTime: '2026-07-13T03:30:00Z',
     finishTime: '',
   },
@@ -102,9 +115,20 @@ const BUILDS = [
     project: { name: 'Platform' },
     status: 'completed',
     result: 'failed',
-    requestedFor: { displayName: 'lus' },
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
     queueTime: '2026-07-12T20:00:00Z',
     finishTime: '2026-07-12T20:12:00Z',
+  },
+  {
+    id: 503,
+    buildNumber: '20260714.1',
+    definition: { name: 'late-project-ci' },
+    project: { name: 'LateProject' },
+    status: 'completed',
+    result: 'succeeded',
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
+    queueTime: '2026-07-14T02:00:00Z',
+    finishTime: '2026-07-14T02:05:00Z',
   },
 ];
 
@@ -124,7 +148,15 @@ createServer((req, res) => {
     res.end(JSON.stringify(data));
   };
 
-  if (url.pathname.endsWith('/_apis/wit/wiql')) {
+  if (url.pathname.endsWith('/_apis/connectionData')) {
+    send({
+      authenticatedUser: {
+        id: '00000000-0000-0000-0000-000000000001',
+        providerDisplayName: 'lus',
+        properties: { Account: { $value: 'lus@example.com' } },
+      },
+    });
+  } else if (url.pathname.endsWith('/_apis/wit/wiql')) {
     send({ workItems: WORK_ITEMS.map((w) => ({ id: w.id })) });
   } else if (url.pathname.endsWith('/_apis/wit/workitems')) {
     const ids = (url.searchParams.get('ids') ?? '').split(',').map(Number);
@@ -138,12 +170,34 @@ createServer((req, res) => {
       send({ id: Number(url.pathname.split('/').pop()), fields: {} });
     });
   } else if (url.pathname.endsWith('/_apis/projects')) {
-    send({ value: [{ name: 'RocketX' }, { name: 'Platform' }] });
+    send({
+      value: [
+        { name: 'RocketX' },
+        { name: 'Platform' },
+        { name: 'Project3' },
+        { name: 'Project4' },
+        { name: 'Project5' },
+        { name: 'Project6' },
+        { name: 'LateProject' },
+      ],
+    });
   } else if (url.pathname.endsWith('/_apis/build/builds')) {
     const project = decodeURIComponent(url.pathname.split('/_apis/')[0].split('/').pop() ?? '');
-    send({ value: BUILDS.filter((b) => b.project.name === project) });
+    const requestedFor = url.searchParams.get('requestedFor');
+    send({
+      value: BUILDS.filter(
+        (build) => build.project.name === project && (!requestedFor || build.requestedFor.id === requestedFor),
+      ),
+    });
   } else if (url.pathname.endsWith('/_apis/git/pullrequests')) {
-    send({ value: PULL_REQUESTS });
+    let items = PULL_REQUESTS;
+    const status = url.searchParams.get('searchCriteria.status');
+    const creatorId = url.searchParams.get('searchCriteria.creatorId');
+    const reviewerId = url.searchParams.get('searchCriteria.reviewerId');
+    if (status === 'active') items = items.filter((pr) => pr.status === 'active');
+    if (creatorId) items = items.filter((pr) => pr.createdBy.id === creatorId);
+    if (reviewerId) items = items.filter((pr) => pr.reviewers.some((reviewer) => reviewer.id === reviewerId));
+    send({ value: items });
   } else {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ message: `mock: 未实现 ${url.pathname}` }));

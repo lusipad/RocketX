@@ -9,6 +9,9 @@ import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
 
+const SUPPORTS_FIELD_SIZING =
+  typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
+
 /** 右侧话题（线程）面板：根消息 + 全部回复 + 回复框（表情/自动滚动/发送方式跟随偏好） */
 export default function ThreadPanel() {
   const rid = useChat((s) => s.activeRid);
@@ -46,6 +49,7 @@ export default function ThreadPanel() {
   }, [replies.length]);
 
   const autoResize = () => {
+    if (SUPPORTS_FIELD_SIZING) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
@@ -167,7 +171,6 @@ export default function ThreadPanel() {
             onChange={(e) => {
               setText(e.target.value);
               emitTyping();
-              requestAnimationFrame(autoResize);
             }}
             onKeyDown={onKeyDown}
             rows={1}
@@ -176,7 +179,7 @@ export default function ThreadPanel() {
                 ? '回复话题，Ctrl + Enter 发送，Enter 换行'
                 : '回复话题，Enter 发送，Shift + Enter 换行'
             }
-            className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
+            className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
           />
           <button
             onClick={() => void doSend()}

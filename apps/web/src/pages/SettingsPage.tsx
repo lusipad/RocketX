@@ -715,8 +715,16 @@ function WorkbenchSection() {
           const body = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(body.error ?? `桥接服务返回 ${res.status}`);
         }
-        const data = (await res.json()) as { webBase: string };
-        setResult({ ok: true, msg: `桥接服务正常，ADO 地址：${data.webBase}` });
+        const data = (await res.json()) as { webBase: string; account?: string; displayName?: string };
+        if (!config.account.trim() && data.account) {
+          setConfig((current) => ({ ...current, account: data.account! }));
+        }
+        setResult({
+          ok: true,
+          msg:
+            `桥接服务正常，ADO 地址：${data.webBase}` +
+            (data.account ? `，已识别你的账号：${data.displayName || data.account}` : ''),
+        });
       }
     } catch (err) {
       setResult({ ok: false, msg: err instanceof Error ? err.message : String(err) });
@@ -803,7 +811,7 @@ function WorkbenchSection() {
 
       <Row
         label="我的 ADO 账号"
-        hint="留空即可 —— 点「自动探测」时会向服务器确认你是谁并自动填入。「我的工作项」用 ADO 的 @Me 宏查询，不依赖这一栏。只有想看别人的工作项时才手动改。"
+        hint="留空即可 —— 连接测试会向服务器确认你是谁并自动填入，用于识别“待我评审 / 我提的”PR。“我的工作项”恒用 ADO 的 @Me 宏查询，不依赖这一栏。"
       >
         <input
           value={config.account}

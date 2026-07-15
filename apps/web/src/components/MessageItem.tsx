@@ -53,6 +53,7 @@ import ForwardDialog from './ForwardDialog';
 import TodoDialog from './TodoDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
+import { useDialogBehavior } from './Dialog';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -360,6 +361,7 @@ function ConfirmDeleteDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const dialogRef = useDialogBehavior(onCancel);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
@@ -367,7 +369,14 @@ function ConfirmDeleteDialog({
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      <div className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="删除消息"
+        tabIndex={-1}
+        className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
+      >
         <div className="text-[15px] font-semibold text-ink">删除消息</div>
         <div className="mt-2 text-sm text-ink-2">确定删除这条消息吗？删除后不可恢复。</div>
         <div className="mt-4 flex justify-end gap-2">
@@ -584,6 +593,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   return (
     <div
       ref={rootRef}
+      data-message-id={message._id}
       onContextMenu={onContextMenu}
       onMouseEnter={onBarEnter}
       onMouseLeave={onBarLeave}

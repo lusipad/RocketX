@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FileText, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
+import { useDialogBehavior } from './Dialog';
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -15,6 +16,8 @@ export default function UploadConfirm() {
   const cancelUpload = useChat((s) => s.cancelUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const [busy, setBusy] = useState(false);
+  const name = sub?.fname || sub?.name || '当前会话';
+  const dialogRef = useDialogBehavior(cancelUpload, !!pendingFiles);
 
   const previews = useMemo(
     () =>
@@ -49,15 +52,21 @@ export default function UploadConfirm() {
 
   if (!pendingFiles) return null;
 
-  const name = sub?.fname || sub?.name || '当前会话';
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-[420px] rounded-xl bg-surface-4 shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`发送文件给 ${name}`}
+        tabIndex={-1}
+        className="w-[420px] rounded-xl bg-surface-4 shadow-2xl"
+      >
         <header className="flex items-center justify-between px-5 pt-4 pb-2">
           <span className="text-[15px] font-semibold text-ink">发送给 {name}</span>
           <button
             onClick={cancelUpload}
+            aria-label="关闭文件发送确认"
             className="flex h-7 w-7 items-center justify-center rounded text-ink-2 hover:bg-fill-hover"
           >
             <X size={16} />

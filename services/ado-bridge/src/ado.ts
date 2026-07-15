@@ -24,6 +24,7 @@ export interface AdoWorkItem {
   project: string;
   assignedTo?: string;
   changedDate?: string;
+  dueDate?: string;
   webUrl: string;
 }
 
@@ -54,6 +55,29 @@ export interface AdoPullRequest {
   webUrl: string;
 }
 
+export interface AdoIdentity {
+  id: string;
+  displayName: string;
+  account: string;
+}
+
+export function connectionIdentity(data: {
+  authenticatedUser?: {
+    id?: string;
+    providerDisplayName?: string;
+    customDisplayName?: string;
+    properties?: { Account?: { $value?: string } };
+  };
+}): AdoIdentity {
+  const user = data.authenticatedUser ?? {};
+  const displayName = user.customDisplayName || user.providerDisplayName || '';
+  return {
+    id: user.id ?? '',
+    displayName,
+    account: user.properties?.Account?.$value || displayName,
+  };
+}
+
 export class AdoClient {
   constructor(private config: AdoConfig) {}
 
@@ -67,6 +91,13 @@ export class AdoClient {
     return {
       Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
     };
+  }
+
+  /** ADO 当前认证身份；前端据此过滤“我的”PR，无需用户猜账号格式。 */
+  async getIdentity(): Promise<AdoIdentity> {
+    return connectionIdentity(
+      await this.request('GET', '/_apis/connectionData?api-version=7.0-preview'),
+    );
   }
 
   private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
@@ -97,13 +128,14 @@ export class AdoClient {
   }
 
   /** 分配给某人的未关闭工作项（按最近变更排序） */
-  async getWorkItems(assignedTo: string, top = 50): Promise<AdoWorkItem[]> {
+  async getWorkItems(assignedTo = '', top = 50): Promise<AdoWorkItem[]> {
     // WIQL 里单引号转义为两个单引号
     const who = assignedTo.replace(/'/g, "''");
+    const assignee = who ? `'${who}'` : '@Me';
     const wiql = {
       query:
         `SELECT [System.Id] FROM WorkItems ` +
-        `WHERE [System.AssignedTo] = '${who}' ` +
+        `WHERE [System.AssignedTo] = ${assignee} ` +
         // 中文流程模板的状态是中文名，只排英文会把已完成的全拉回来
         `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复') ` +
         `ORDER BY [System.ChangedDate] DESC`,
@@ -124,6 +156,9 @@ export class AdoClient {
       'System.AssignedTo',
       'System.ChangedDate',
       'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.DueDate',
+      'Microsoft.VSTS.Scheduling.TargetDate',
+      'Microsoft.VSTS.Scheduling.FinishDate',
     ].join(',');
     const detail = await this.request<{
       value: { id: number; fields: Record<string, any> }[];
@@ -138,6 +173,10 @@ export class AdoClient {
       project: w.fields['System.TeamProject'] ?? '',
       assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
       changedDate: w.fields['System.ChangedDate'],
+      dueDate:
+        w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.FinishDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     }));
   }
@@ -152,6 +191,9 @@ export class AdoClient {
       'System.AssignedTo',
       'System.ChangedDate',
       'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.DueDate',
+      'Microsoft.VSTS.Scheduling.TargetDate',
+      'Microsoft.VSTS.Scheduling.FinishDate',
     ].join(',');
     const detail = await this.request<{ value: { id: number; fields: Record<string, any> }[] }>(
       'GET',
@@ -168,6 +210,10 @@ export class AdoClient {
       project: w.fields['System.TeamProject'] ?? '',
       assignedTo: w.fields['System.AssignedTo']?.displayName ?? w.fields['System.AssignedTo'],
       changedDate: w.fields['System.ChangedDate'],
+      dueDate:
+        w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
+        w.fields['Microsoft.VSTS.Scheduling.FinishDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     };
   }
@@ -195,24 +241,38 @@ export class AdoClient {
 
   /** 各项目最近构建（合并排序，工作台构建面板用） */
   async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
-    const projects = await this.request<{ value: { name: string }[] }>(
-      'GET',
-      '/_apis/projects?api-version=7.0&$top=10',
-    );
-    const lists = await Promise.all(
-      (projects.value ?? []).slice(0, 5).map(async (p) => {
-        try {
-          const res = await this.request<{ value: any[] }>(
-            'GET',
-            // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
-            `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
-          );
-          return res.value ?? [];
-        } catch {
-          return [];
-        }
-      }),
-    );
+    const me = await this.getIdentity();
+    if (!me.id) throw new Error('ADO 未返回当前用户标识，无法查询本人构建');
+    const pageSize = 100;
+    const projects: { name: string }[] = [];
+    for (let skip = 0; ; skip += pageSize) {
+      const res = await this.request<{ value: { name: string }[] }>(
+        'GET',
+        `/_apis/projects?api-version=7.0&$top=${pageSize}&$skip=${skip}`,
+      );
+      const page = res.value ?? [];
+      projects.push(...page);
+      if (page.length < pageSize) break;
+    }
+    const lists: any[][] = [];
+    for (let i = 0; i < projects.length; i += 8) {
+      lists.push(
+        ...(await Promise.all(
+          projects.slice(i, i + 8).map(async (p) => {
+            try {
+              const res = await this.request<{ value: any[] }>(
+                'GET',
+                // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
+                `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
+              );
+              return res.value ?? [];
+            } catch {
+              return [];
+            }
+          }),
+        )),
+      );
+    }
     return lists
       .flat()
       .map((b) => ({
@@ -237,7 +297,7 @@ export class AdoClient {
   async getActivePullRequests(pageSize = 100): Promise<AdoPullRequest[]> {
     // 单页最多 100 条，$skip 翻页拉全，否则超过 100 个活跃 PR 时会漏（issue #17.2）
     const all: any[] = [];
-    for (let skip = 0; skip < 2000; skip += pageSize) {
+    for (let skip = 0; ; skip += pageSize) {
       const res = await this.request<{ value: any[] }>(
         'GET',
         `/_apis/git/pullrequests?searchCriteria.status=active&$top=${pageSize}&$skip=${skip}&api-version=7.0`,

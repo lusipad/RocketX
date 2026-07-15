@@ -1,0 +1,76 @@
+import type { RcDate, RcMessageAttachment } from '@rcx/rc-client';
+
+export interface MergedForwardSource {
+  author: string;
+  text: string;
+  ts: RcDate;
+  attachments?: RcMessageAttachment[];
+}
+
+const PROTECTED_FILE_SEGMENTS = new Set(['file-upload', 'ufs', 'file-decrypt']);
+
+function protectedFileSegment(segment: string): boolean {
+  let decoded = segment;
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    }
+  } catch {
+    // 畸形编码无法安全规范化；疑似文件路由时按受保护链接处理。
+    return /file|ufs|decrypt|%(?:66|75|64)/i.test(segment);
+  }
+  return PROTECTED_FILE_SEGMENTS.has(decoded.toLowerCase());
+}
+
+function isProtectedRoomFile(url?: string): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url, 'https://rocketx.invalid').pathname
+      .split('/')
+      .some(protectedFileSegment);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rocket.Chat 的受保护文件仍归属于原房间。跨房间复制 URL 会让目标成员预览/下载
+ * 403；保留附件元数据，但去掉不可访问的资源链接并明确提示去原会话查看。
+ */
+export function forwardableAttachments(
+  attachments: RcMessageAttachment[] | undefined,
+  preserveProtectedFiles = false,
+): RcMessageAttachment[] {
+  return (attachments ?? [])
+    .filter((attachment) => !attachment.message_link)
+    .map((attachment) => {
+      const protectedFile =
+        isProtectedRoomFile(attachment.image_url) || isProtectedRoomFile(attachment.title_link);
+      if (preserveProtectedFiles || !protectedFile) return attachment;
+      const { image_url, image_dimensions, title_link, title_link_download, ...safe } = attachment;
+      const label = attachment.title || attachment.description || '文件';
+      const notice = `[附件：${label}，请在原会话查看]`;
+      return { ...safe, text: [safe.text, notice].filter(Boolean).join('\n') };
+    });
+}
+
+/** 合并转发仍是一条消息；每条原消息的文字和可安全复用的附件元数据都保留下来。 */
+export function mergedForwardAttachments(
+  sources: MergedForwardSource[],
+  preserveProtectedFiles = false,
+): RcMessageAttachment[] {
+  return sources.flatMap((source) => {
+    const attachments = forwardableAttachments(source.attachments, preserveProtectedFiles);
+    const header: RcMessageAttachment = {
+      author_name: source.author,
+      text:
+        source.text ||
+        attachments[0]?.title ||
+        (attachments.length > 0 ? '[图片/文件]' : '[空消息]'),
+      ts: source.ts,
+    };
+    return [header, ...attachments];
+  });
+}

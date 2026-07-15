@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookUser,
   Calendar,
@@ -47,6 +47,24 @@ export default function NavRail() {
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const plusButtonRef = useRef<HTMLButtonElement>(null);
+
+  const closeCreateDialog = () => {
+    setDialog(null);
+    requestAnimationFrame(() => plusButtonRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!plusMenu) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setPlusMenu(false);
+      plusButtonRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [plusMenu]);
 
   const todos = useTodos((s) => s.todos);
   const { todoOpen, todoOverdue } = useMemo(() => {
@@ -92,8 +110,11 @@ export default function NavRail() {
         </button>
         <div className="relative">
           <button
+            ref={plusButtonRef}
             onClick={() => setPlusMenu((v) => !v)}
             title="发起聊天 / 创建群组"
+            aria-haspopup="menu"
+            aria-expanded={plusMenu}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <Plus size={19} />
@@ -101,7 +122,7 @@ export default function NavRail() {
           {plusMenu && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setPlusMenu(false)} />
-              <div className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+              <div role="menu" className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
                 <button
                   onClick={() => {
                     setPlusMenu(false);
@@ -231,9 +252,9 @@ export default function NavRail() {
         />
       )}
 
-      {dialog === 'dm' && <StartDMDialog onClose={() => setDialog(null)} />}
+      {dialog === 'dm' && <StartDMDialog onClose={closeCreateDialog} />}
       {(dialog === 'group' || dialog === 'team') && (
-        <CreateGroupDialog kind={dialog} onClose={() => setDialog(null)} />
+        <CreateGroupDialog kind={dialog} onClose={closeCreateDialog} />
       )}
       {selfCard && user && (
         <UserCard
