@@ -781,6 +781,19 @@ async function main(): Promise<void> {
   check('拒绝 data 链接', normalizeFavoriteUrl('data:text/html,test') === null);
   check('拒绝无协议链接', normalizeFavoriteUrl('example.com') === null);
 
+  console.log('\n[ADO Bridge 身份识别]');
+  const { connectionIdentity } = await import('../services/ado-bridge/src/ado');
+  const bridgeIdentity = connectionIdentity({
+    authenticatedUser: {
+      id: 'guid',
+      providerDisplayName: '张三',
+      properties: { Account: { $value: 'CORP\\zhangsan' } },
+    },
+  });
+  check('优先使用 ADO Account 属性', bridgeIdentity.account === 'CORP\\zhangsan');
+  check('保留 ADO 身份 GUID', bridgeIdentity.id === 'guid');
+  check('缺少 Account 时退回显示名', connectionIdentity({ authenticatedUser: { customDisplayName: '李四' } }).account === '李四');
+
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
 

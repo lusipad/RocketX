@@ -44,7 +44,12 @@ app.get('/healthz', async () => ({ ok: true }));
 /** 客户端需要的 ADO 基本信息（web 链接前缀等） */
 app.get('/api/ado/config', async (_req, reply) => {
   if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
-  return { webBase: ado.webBase };
+  const identity = await ado.getIdentity().catch(() => null);
+  return {
+    webBase: ado.webBase,
+    account: identity?.account ?? '',
+    displayName: identity?.displayName ?? '',
+  };
 });
 
 app.get<{ Querystring: { assignedTo?: string } }>('/api/ado/workitems', async (req, reply) => {

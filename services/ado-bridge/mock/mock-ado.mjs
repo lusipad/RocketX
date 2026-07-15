@@ -124,7 +124,15 @@ createServer((req, res) => {
     res.end(JSON.stringify(data));
   };
 
-  if (url.pathname.endsWith('/_apis/wit/wiql')) {
+  if (url.pathname.endsWith('/_apis/connectionData')) {
+    send({
+      authenticatedUser: {
+        id: '00000000-0000-0000-0000-000000000001',
+        providerDisplayName: 'lus',
+        properties: { Account: { $value: 'lus@example.com' } },
+      },
+    });
+  } else if (url.pathname.endsWith('/_apis/wit/wiql')) {
     send({ workItems: WORK_ITEMS.map((w) => ({ id: w.id })) });
   } else if (url.pathname.endsWith('/_apis/wit/workitems')) {
     const ids = (url.searchParams.get('ids') ?? '').split(',').map(Number);

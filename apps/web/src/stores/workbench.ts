@@ -207,8 +207,13 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           const body = await bad.json().catch(() => ({}) as { error?: string });
           throw new Error(body.error ?? `桥接服务返回 ${bad.status}`);
         }
-        const webCfg = (await cfgRes.json()) as { webBase: string };
+        const webCfg = (await cfgRes.json()) as { webBase: string; account?: string };
         localStorage.setItem(ADO_WEB_KEY, webCfg.webBase);
+        if (!c.account && webCfg.account) {
+          const next = { ...c, account: webCfg.account };
+          saveWorkbenchConfig(next);
+          set({ config: next });
+        }
         set({
           workItems: ((await wiRes.json()) as { items: WorkItem[] }).items,
           prs: ((await prRes.json()) as { items: PullRequest[] }).items,

@@ -54,6 +54,29 @@ export interface AdoPullRequest {
   webUrl: string;
 }
 
+export interface AdoIdentity {
+  id: string;
+  displayName: string;
+  account: string;
+}
+
+export function connectionIdentity(data: {
+  authenticatedUser?: {
+    id?: string;
+    providerDisplayName?: string;
+    customDisplayName?: string;
+    properties?: { Account?: { $value?: string } };
+  };
+}): AdoIdentity {
+  const user = data.authenticatedUser ?? {};
+  const displayName = user.customDisplayName || user.providerDisplayName || '';
+  return {
+    id: user.id ?? '',
+    displayName,
+    account: user.properties?.Account?.$value || displayName,
+  };
+}
+
 export class AdoClient {
   constructor(private config: AdoConfig) {}
 
@@ -67,6 +90,13 @@ export class AdoClient {
     return {
       Authorization: `Basic ${Buffer.from(`:${this.config.pat}`).toString('base64')}`,
     };
+  }
+
+  /** ADO 当前认证身份；前端据此过滤“我的”PR，无需用户猜账号格式。 */
+  async getIdentity(): Promise<AdoIdentity> {
+    return connectionIdentity(
+      await this.request('GET', '/_apis/connectionData?api-version=7.0-preview'),
+    );
   }
 
   private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
