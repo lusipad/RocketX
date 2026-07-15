@@ -6,6 +6,19 @@
  */
 import { isTauri } from './http';
 
+export function createLatestBadgeSetter(
+  apply: (count: number, isCurrent: () => boolean) => Promise<void>,
+): (count: number) => Promise<void> {
+  let revision = 0;
+  let tail = Promise.resolve();
+  return (count) => {
+    const current = ++revision;
+    const request = tail.then(() => apply(count, () => revision === current));
+    tail = request.catch(() => undefined);
+    return request;
+  };
+}
+
 /** 新消息到达、窗口不在前台时闪任务栏(Windows 持续闪到用户点开;macOS 弹跳 Dock) */
 export async function flashTaskbar(): Promise<void> {
   if (!isTauri) return;
@@ -55,23 +68,28 @@ function drawBadge(text: string): ImageData {
  * macOS/Linux 走原生 setBadgeCount；Windows 任务栏没有原生数字角标，
  * 用 setOverlayIcon 画一个红色数字圆徽盖在图标右下角（Slack/Teams 同款做法）。
  */
-export async function setTaskbarBadge(count: number): Promise<void> {
-  if (!isTauri) return;
+const setLatestTaskbarBadge = createLatestBadgeSetter(async (count, isCurrent) => {
+  if (!isTauri || !isCurrent()) return;
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const w = getCurrentWindow();
     if (navigator.userAgent.includes('Windows')) {
       if (count <= 0) {
-        await w.setOverlayIcon(undefined);
+        if (isCurrent()) await w.setOverlayIcon(undefined);
         return;
       }
       const { Image } = await import('@tauri-apps/api/image');
       const img = drawBadge(count > 99 ? '99+' : String(count));
-      await w.setOverlayIcon(await Image.new(new Uint8Array(img.data.buffer), img.width, img.height));
-    } else {
+      const image = await Image.new(new Uint8Array(img.data.buffer), img.width, img.height);
+      if (isCurrent()) await w.setOverlayIcon(image);
+    } else if (isCurrent()) {
       await w.setBadgeCount(count > 0 ? count : undefined);
     }
   } catch {
     /* 权限不足 / 平台不支持时静默（角标是锦上添花，不该报错打扰） */
   }
+});
+
+export async function setTaskbarBadge(count: number): Promise<void> {
+  await setLatestTaskbarBadge(count);
 }
