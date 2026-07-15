@@ -109,6 +109,8 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 备注名 | `rcx-aliases` | `u:<username>` 跟人走，`r:<rid>` 跟会话走（多人直聊主要靠它） |
 | 待办 | `rcx-todos` | 锚定 `rid + mid`，可跳回原消息；存了消息快照，原消息删了也看得懂 |
 | 最近表情 | `rcx-recent-emojis` | |
+| ADO 工作台配置 | `rcx-workbench` / `rcx-ado-web` | 跟 Rocket.Chat 账号与服务器隔离；直连 PAT 只留在当前设备 |
+| ADO 自定义查询 | `rcx-custom-queries` | 跟 Rocket.Chat 账号隔离，再按稳定的 ADO 基址与认证方式分区；旧查询只在匹配连接后认领 |
 
 ### 中文环境必须的服务端设置
 
