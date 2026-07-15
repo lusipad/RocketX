@@ -65,3 +65,107 @@ export function parseQueryUrl(url: string): { project?: string; queryId: string 
   if (m2) return { queryId: m2[1] };
   return null;
 }
+
+export interface CustomQueryLoadState<T> {
+  scope: string;
+  cache: Record<string, T>;
+  loading: Record<string, number>;
+  errors: Record<string, string>;
+  revisions: Record<string, number>;
+}
+
+export function createCustomQueryLoadState<T>(scope: string): CustomQueryLoadState<T> {
+  return { scope, cache: {}, loading: {}, errors: {}, revisions: {} };
+}
+
+export function shouldFetchCustomQuery<T>(
+  id: string,
+  state: CustomQueryLoadState<T>,
+): boolean {
+  return (
+    state.cache[id] === undefined &&
+    state.loading[id] === undefined &&
+    state.errors[id] === undefined
+  );
+}
+
+export function beginCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  scope: string,
+  id: string,
+  force = false,
+): { state: CustomQueryLoadState<T>; revision: number } | null {
+  const current = state.scope === scope ? state : createCustomQueryLoadState<T>(scope);
+  if (!force && !shouldFetchCustomQuery(id, current)) return null;
+
+  const revision = (current.revisions[id] ?? 0) + 1;
+  const errors = { ...current.errors };
+  delete errors[id];
+  return {
+    revision,
+    state: {
+      ...current,
+      loading: { ...current.loading, [id]: revision },
+      errors,
+      revisions: { ...current.revisions, [id]: revision },
+    },
+  };
+}
+
+export function isCurrentCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  scope: string,
+  id: string,
+  revision: number,
+): boolean {
+  return state.scope === scope && state.revisions[id] === revision;
+}
+
+export function resolveCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  scope: string,
+  id: string,
+  revision: number,
+  value: T,
+): CustomQueryLoadState<T> {
+  if (!isCurrentCustomQueryLoad(state, scope, id, revision)) return state;
+  return { ...state, cache: { ...state.cache, [id]: value } };
+}
+
+export function rejectCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  scope: string,
+  id: string,
+  revision: number,
+  message: string,
+): CustomQueryLoadState<T> {
+  if (!isCurrentCustomQueryLoad(state, scope, id, revision)) return state;
+  return { ...state, errors: { ...state.errors, [id]: message } };
+}
+
+export function finishCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  scope: string,
+  id: string,
+  revision: number,
+): CustomQueryLoadState<T> {
+  if (!isCurrentCustomQueryLoad(state, scope, id, revision)) return state;
+  const loading = { ...state.loading };
+  delete loading[id];
+  return { ...state, loading };
+}
+
+export function removeCustomQueryLoad<T>(
+  state: CustomQueryLoadState<T>,
+  id: string,
+): CustomQueryLoadState<T> {
+  const cache = { ...state.cache };
+  const loading = { ...state.loading };
+  const errors = { ...state.errors };
+  const revisions = { ...state.revisions };
+  delete cache[id];
+  delete loading[id];
+  delete errors[id];
+  delete revisions[id];
+  return { ...state, cache, loading, errors, revisions };
+}

@@ -26,14 +26,32 @@ import { useTodos, todayKey, type Todo } from '../stores/todos';
 import { buildQueue, queueSummary, type QueueItem } from '../lib/queue';
 import { useCalendar, eventsForDate } from '../stores/calendar';
 import { useFavorites, SIZE_SPAN, SIZE_LABELS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
-import { useCustomQueries, parseQueryUrl } from '../stores/customQueries';
+import {
+  beginCustomQueryLoad,
+  createCustomQueryLoadState,
+  finishCustomQueryLoad,
+  isCurrentCustomQueryLoad,
+  rejectCustomQueryLoad,
+  removeCustomQueryLoad,
+  resolveCustomQueryLoad,
+  useCustomQueries,
+  parseQueryUrl,
+  shouldFetchCustomQuery,
+} from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { useDialogBehavior } from '../components/Dialog';
+import { settleScopedResult } from '../lib/scopedResult';
+import type { WorkbenchConfig } from '../lib/ado';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
 type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
+
+function savedQueryScope(config: WorkbenchConfig | null): string {
+  if (!config || config.mode !== 'direct') return '';
+  return `${config.adoBase ?? ''}\0${config.auth ?? ''}\0${config.pat ?? ''}`;
+}
 
 /**
  * 待处理队列的一行。
@@ -342,13 +360,38 @@ export default function WorkbenchPage() {
   const addQuery = useCustomQueries((s) => s.add);
   const removeQuery = useCustomQueries((s) => s.remove);
   const [queryDialog, setQueryDialog] = useState(false);
-  const [queryCache, setQueryCache] = useState<Record<string, WorkItem[]>>({});
-  const [queryLoading, setQueryLoading] = useState<string | null>(null);
-  const [queryError, setQueryError] = useState<string | null>(null);
 
   const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
   const activeQuery = customQueries.find((q) => q.id === activeQueryId);
   const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
+  const queryScope = savedQueryScope(config);
+  const [queryState, setQueryState] = useState(() =>
+    createCustomQueryLoadState<WorkItem[]>(queryScope),
+  );
+  const queryStateRef = useRef(queryState);
+  const visibleQueryState = useMemo(
+    () =>
+      queryState.scope === queryScope
+        ? queryState
+        : createCustomQueryLoadState<WorkItem[]>(queryScope),
+    [queryScope, queryState],
+  );
+
+  const updateQueryState = useCallback(
+    (update: (current: typeof queryState) => typeof queryState) => {
+      const next = update(queryStateRef.current);
+      queryStateRef.current = next;
+      setQueryState(next);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (queryStateRef.current.scope === queryScope) return;
+    const next = createCustomQueryLoadState<WorkItem[]>(queryScope);
+    queryStateRef.current = next;
+    setQueryState(next);
+  }, [queryScope]);
 
   useEffect(() => {
     if (!canUseCustomQueries && activeQueryId) setTab('overview');
@@ -357,28 +400,57 @@ export default function WorkbenchPage() {
   const fetchQuery = useCallback(
     async (q: typeof customQueries[0], force = false) => {
       if (!config || config.mode !== 'direct' || !config.adoBase) return;
-      if (!force && queryCache[q.id]) return;
-      setQueryLoading(q.id);
-      setQueryError(null);
-      try {
-        const { directRunSavedQuery } = await import('../lib/adoDirect');
-        const cfg = { adoBase: config.adoBase, pat: config.pat ?? '', auth: config.auth };
-        const items = await directRunSavedQuery(cfg, q.queryId, q.project);
-        setQueryCache((prev) => ({ ...prev, [q.id]: items as WorkItem[] }));
-      } catch (err) {
-        setQueryError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setQueryLoading(null);
-      }
+      const scope = savedQueryScope(config);
+      const started = beginCustomQueryLoad(queryStateRef.current, scope, q.id, force);
+      if (!started) return;
+      queryStateRef.current = started.state;
+      setQueryState(started.state);
+      const revision = started.revision;
+      await settleScopedResult(
+        async () => {
+          const { directRunSavedQuery } = await import('../lib/adoDirect');
+          const cfg = { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth };
+          return directRunSavedQuery(cfg, q.queryId, q.project);
+        },
+        {
+          success: (items) =>
+            updateQueryState((current) =>
+              resolveCustomQueryLoad(
+                current,
+                scope,
+                q.id,
+                revision,
+                items as WorkItem[],
+              ),
+            ),
+          error: (err) =>
+            updateQueryState((current) =>
+              rejectCustomQueryLoad(
+                current,
+                scope,
+                q.id,
+                revision,
+                err instanceof Error ? err.message : String(err),
+              ),
+            ),
+          complete: () =>
+            updateQueryState((current) =>
+              finishCustomQueryLoad(current, scope, q.id, revision),
+            ),
+        },
+        () =>
+          isCurrentCustomQueryLoad(queryStateRef.current, scope, q.id, revision) &&
+          savedQueryScope(useWorkbench.getState().config) === scope,
+      );
     },
-    [config, queryCache],
+    [config, updateQueryState],
   );
 
   useEffect(() => {
-    if (activeQuery && !queryCache[activeQuery.id] && queryLoading !== activeQuery.id) {
+    if (activeQuery && shouldFetchCustomQuery(activeQuery.id, visibleQueryState)) {
       void fetchQuery(activeQuery);
     }
-  }, [activeQuery, queryCache, queryLoading, fetchQuery]);
+  }, [activeQuery, fetchQuery, visibleQueryState]);
 
   const [favDialog, setFavDialog] = useState<{ existing?: Favorite } | null>(null);
 
@@ -515,18 +587,16 @@ export default function WorkbenchPage() {
                 >
                   <Search size={14} />
                   <span className="min-w-0 flex-1 truncate text-left">{q.name}</span>
-                  {queryCache[q.id] && (
-                    <span className="text-xs text-ink-3">{queryCache[q.id].length}</span>
+                  {visibleQueryState.cache[q.id] && (
+                    <span className="text-xs text-ink-3">
+                      {visibleQueryState.cache[q.id].length}
+                    </span>
                   )}
                 </button>
                 <button
                   onClick={() => {
                     removeQuery(q.id);
-                    setQueryCache((prev) => {
-                      const next = { ...prev };
-                      delete next[q.id];
-                      return next;
-                    });
+                    updateQueryState((current) => removeCustomQueryLoad(current, q.id));
                     if (tab === `query:${q.id}`) setTab('overview');
                     toast.success('已删除');
                   }}
@@ -571,10 +641,17 @@ export default function WorkbenchPage() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => void fetchQuery(activeQuery, true)}
-                  disabled={queryLoading === activeQuery.id}
+                  disabled={visibleQueryState.loading[activeQuery.id] !== undefined}
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
                 >
-                  <RefreshCw size={13} className={queryLoading === activeQuery.id ? 'animate-spin' : ''} />
+                  <RefreshCw
+                    size={13}
+                    className={
+                      visibleQueryState.loading[activeQuery.id] !== undefined
+                        ? 'animate-spin'
+                        : ''
+                    }
+                  />
                   刷新
                 </button>
                 <a
@@ -593,12 +670,16 @@ export default function WorkbenchPage() {
           </div>
 
           {activeQuery ? (
-            queryLoading === activeQuery.id && !queryCache[activeQuery.id] ? (
+            visibleQueryState.loading[activeQuery.id] !== undefined &&
+            !visibleQueryState.cache[activeQuery.id] ? (
               <SkeletonRows rows={8} />
-            ) : queryError && !queryCache[activeQuery.id] ? (
+            ) : visibleQueryState.errors[activeQuery.id] &&
+              !visibleQueryState.cache[activeQuery.id] ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-2">
                 <XCircle size={28} className="text-danger" />
-                <div className="max-w-md text-center text-sm text-danger">{queryError}</div>
+                <div className="max-w-md text-center text-sm text-danger">
+                  {visibleQueryState.errors[activeQuery.id]}
+                </div>
                 <button
                   onClick={() => void fetchQuery(activeQuery, true)}
                   className="mt-1 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
@@ -607,7 +688,7 @@ export default function WorkbenchPage() {
                 </button>
               </div>
             ) : (
-              <WorkItemList items={queryCache[activeQuery.id] ?? []} />
+              <WorkItemList items={visibleQueryState.cache[activeQuery.id] ?? []} />
             )
           ) : adoError ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2">
