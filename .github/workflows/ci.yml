@@ -27,5 +27,8 @@ jobs:
       - name: 纯函数测试（拼音检索、日期格式）
         run: pnpm test:pure
 
+      - name: 回归测试（并发、分页与状态隔离）
+        run: pnpm test:regression
+
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build
