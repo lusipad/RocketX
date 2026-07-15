@@ -501,7 +501,7 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
 
   const [review, mine] = await Promise.all([
     fetchPrs(`searchCriteria.reviewerId=${me.id}&searchCriteria.status=active`),
-    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=active`, 100),
+    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=all`, 100),
   ]);
   const rel = new Map<number, 'mine' | 'review' | 'both'>();
   for (const pr of review) rel.set(pr.pullRequestId, 'review');

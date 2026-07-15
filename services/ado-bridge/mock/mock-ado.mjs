@@ -53,9 +53,10 @@ const PULL_REQUESTS = [
   {
     pullRequestId: 42,
     title: '修复登录超时问题',
+    status: 'active',
     creationDate: '2026-07-12T09:00:00Z',
-    createdBy: { displayName: '张三', uniqueName: 'zhangsan@example.com' },
-    reviewers: [{ displayName: 'lus', uniqueName: 'lus@example.com', vote: 0 }],
+    createdBy: { id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com' },
+    reviewers: [{ id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com', vote: 0 }],
     sourceRefName: 'refs/heads/fix/login-timeout',
     targetRefName: 'refs/heads/main',
     repository: { name: 'rocketx', project: { name: 'RocketX' } },
@@ -63,10 +64,22 @@ const PULL_REQUESTS = [
   {
     pullRequestId: 45,
     title: 'feat: 工作台 ADO 集成',
+    status: 'active',
     creationDate: '2026-07-13T01:00:00Z',
-    createdBy: { displayName: 'lus', uniqueName: 'lus@example.com' },
-    reviewers: [{ displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
+    createdBy: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com' },
+    reviewers: [{ id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
     sourceRefName: 'refs/heads/feat/workbench',
+    targetRefName: 'refs/heads/main',
+    repository: { name: 'rocketx', project: { name: 'RocketX' } },
+  },
+  {
+    pullRequestId: 47,
+    title: 'chore: 已完成的发布准备',
+    status: 'completed',
+    creationDate: '2026-07-10T01:00:00Z',
+    createdBy: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus', uniqueName: 'lus@example.com' },
+    reviewers: [{ id: 'user-zhangsan', displayName: '张三', uniqueName: 'zhangsan@example.com', vote: 10 }],
+    sourceRefName: 'refs/heads/chore/release',
     targetRefName: 'refs/heads/main',
     repository: { name: 'rocketx', project: { name: 'RocketX' } },
   },
@@ -172,7 +185,14 @@ createServer((req, res) => {
     const project = decodeURIComponent(url.pathname.split('/_apis/')[0].split('/').pop() ?? '');
     send({ value: BUILDS.filter((b) => b.project.name === project) });
   } else if (url.pathname.endsWith('/_apis/git/pullrequests')) {
-    send({ value: PULL_REQUESTS });
+    let items = PULL_REQUESTS;
+    const status = url.searchParams.get('searchCriteria.status');
+    const creatorId = url.searchParams.get('searchCriteria.creatorId');
+    const reviewerId = url.searchParams.get('searchCriteria.reviewerId');
+    if (status === 'active') items = items.filter((pr) => pr.status === 'active');
+    if (creatorId) items = items.filter((pr) => pr.createdBy.id === creatorId);
+    if (reviewerId) items = items.filter((pr) => pr.reviewers.some((reviewer) => reviewer.id === reviewerId));
+    send({ value: items });
   } else {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ message: `mock: 未实现 ${url.pathname}` }));
