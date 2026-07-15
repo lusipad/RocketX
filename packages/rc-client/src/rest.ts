@@ -220,6 +220,18 @@ export class RcRestClient {
     await this.request('POST', 'users.setPreferences', { userId, data });
   }
 
+  /**
+   * 全量用户在线状态快照（官方客户端启动时也拉它）。
+   * 不拉的话，只有状态**变化**的人才会被实时流点亮——刚打开软件时会话列表一个状态点都没有。
+   */
+  async getPresences(): Promise<{ username: string; status?: string }[]> {
+    const res = await this.request<{ users: { username: string; status?: string }[] }>(
+      'GET',
+      'users.presence',
+    );
+    return res.users ?? [];
+  }
+
   /** 设置在线状态（online / away / busy / offline） */
   setStatus(status: string, message?: string): Promise<unknown> {
     return this.request('POST', 'users.setStatus', {

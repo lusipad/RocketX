@@ -95,6 +95,7 @@ interface FoldersState {
   /** 加入/移出会话 */
   addRoom: (folderId: string, rid: string) => void;
   removeRoom: (folderId: string, rid: string) => void;
+  reorderRoom: (folderId: string, rid: string, beforeRid: string | null) => void;
   /**
    * 丢掉已经不存在的会话（退群、被移出、在别的端删了）。
    * 分组只存在本地，服务器不会通知我们某个 rid 没了，
@@ -157,6 +158,21 @@ export const useFolders = create<FoldersState>((set, get) => ({
     const folders = get().folders.map((f) =>
       f.id === folderId ? { ...f, rids: f.rids.filter((r) => r !== rid) } : f,
     );
+    set({ folders });
+    persist(folders);
+  },
+
+  reorderRoom: (folderId, rid, beforeRid) => {
+    const folders = get().folders.map((f) => {
+      if (f.id !== folderId) return f;
+      const rids = f.rids.filter((r) => r !== rid);
+      if (!rids.includes(rid)) {
+        // ensure rid is present
+      }
+      const idx = beforeRid ? rids.indexOf(beforeRid) : rids.length;
+      rids.splice(idx >= 0 ? idx : rids.length, 0, rid);
+      return { ...f, rids };
+    });
     set({ folders });
     persist(folders);
   },

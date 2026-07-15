@@ -306,9 +306,10 @@ function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, 
  */
 export async function directGetIdentity(
   cfg: DirectConfig,
-): Promise<{ displayName: string; account: string }> {
+): Promise<{ id: string; displayName: string; account: string }> {
   const res = await adoRequest<{
     authenticatedUser?: {
+      id?: string;
       providerDisplayName?: string;
       customDisplayName?: string;
       properties?: { Account?: { $value?: string } };
@@ -317,34 +318,37 @@ export async function directGetIdentity(
   const u = res.authenticatedUser ?? {};
   const displayName = u.customDisplayName || u.providerDisplayName || '';
   return {
+    // GUID：给 PR/构建的服务端过滤用（creatorId/reviewerId/requestedFor）——
+    // 比账号字符串匹配可靠得多，字符串格式(域\名/邮箱/显示名)经常对不上
+    id: u.id ?? '',
     displayName,
     account: u.properties?.Account?.$value || displayName,
   };
 }
 
+/** identity 缓存：一次会话内不用反复打 connectionData。按 adoBase 键控，换服务器自动失效 */
+let identityCache: { key: string; me: { id: string; displayName: string; account: string } } | null =
+  null;
+export async function directGetMe(cfg: DirectConfig) {
+  if (identityCache?.key !== cfg.adoBase) {
+    identityCache = { key: cfg.adoBase, me: await directGetIdentity(cfg) };
+  }
+  return identityCache.me;
+}
+
 /**
- * 我的工作项。
- *
- * assignedTo 留空时用 ADO 的 @Me 宏 —— 由服务器解析成「当前认证的这个人」，
- * 不用去猜他的账号是 lus、CORP\lus 还是 lus@corp.com。
- * 只有想看别人的工作项时才需要显式传账号。
+ * 我的工作项：恒用 @Me 宏（服务器解析「我」，
+ * 账号字符串匹配格式经常对不上，会把「我的十几个」漏成几个）。
  */
-export async function directGetWorkItems(cfg: DirectConfig, assignedTo: string, top = 50) {
-  const who = assignedTo.trim()
-    ? `'${assignedTo.trim().replace(/'/g, "''")}'`
-    : '@Me';
-  const wiql = {
-    query:
-      `SELECT [System.Id] FROM WorkItems ` +
-      `WHERE [System.AssignedTo] = ${who} ` +
-      `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ` +
-      `ORDER BY [System.ChangedDate] DESC`,
-  };
+export async function directGetWorkItems(cfg: DirectConfig, _assignedTo = '', top = 100) {
+  const notDone =
+    `[System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复')`;
+
   const result = await adoRequest<{ workItems?: { id: number }[] }>(
     cfg,
     'POST',
     `/_apis/wit/wiql?api-version=7.0&$top=${top}`,
-    wiql,
+    { query: `SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me AND ${notDone} ORDER BY [System.ChangedDate] DESC` },
   );
   const ids = (result.workItems ?? []).slice(0, top).map((w) => w.id);
   if (ids.length === 0) return [];
@@ -382,20 +386,131 @@ export async function directComment(
   );
 }
 
-export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
-  // 集合级端点单页最多 100 条、不自动返回全部。活跃 PR 超过 100 时用 $skip 翻页拉全，
-  // 否则排在 100 名之后的（含我相关的）会整个消失（issue #17.2）。
-  const all: any[] = [];
-  for (let skip = 0; skip < 2000; skip += pageSize) {
-    const res = await adoRequest<{ value: any[] }>(
-      cfg,
-      'GET',
-      `/_apis/git/pullrequests?searchCriteria.status=active&$top=${pageSize}&$skip=${skip}&api-version=7.0`,
+export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
+  const res = await adoRequest<{ value: { name: string }[] }>(
+    cfg, 'GET', '/_apis/projects?api-version=7.0&$top=100');
+  return (res.value ?? []).map((p) => p.name).sort();
+}
+
+export async function directGetCurrentIteration(cfg: DirectConfig, project: string, team?: string): Promise<string | null> {
+  const t = team ? `/${encodeURIComponent(team)}` : '';
+  try {
+    const res = await adoRequest<{ value: { path: string; attributes?: { timeFrame?: string } }[] }>(
+      cfg, 'GET',
+      `/${encodeURIComponent(project)}${t}/_apis/work/teamsettings/iterations?$timeframe=current&api-version=7.0`,
     );
-    const page = res.value ?? [];
-    all.push(...page);
-    if (page.length < pageSize) break; // 最后一页
+    const cur = (res.value ?? []).find((it) => it.attributes?.timeFrame === 'current');
+    return cur?.path ?? (res.value?.[0]?.path ?? null);
+  } catch {
+    return null;
   }
+}
+
+export interface CreateWorkItemOpts {
+  description?: string;
+  tags?: string;
+  iterationPath?: string;
+  parentId?: number;
+}
+
+export async function directCreateWorkItem(
+  cfg: DirectConfig,
+  project: string,
+  type: string,
+  title: string,
+  opts?: CreateWorkItemOpts,
+) {
+  const ops: { op: string; path: string; value: any }[] = [
+    { op: 'add', path: '/fields/System.Title', value: title },
+  ];
+  if (opts?.description) ops.push({ op: 'add', path: '/fields/System.Description', value: opts.description });
+  if (opts?.tags) ops.push({ op: 'add', path: '/fields/System.Tags', value: opts.tags });
+  if (opts?.iterationPath) ops.push({ op: 'add', path: '/fields/System.IterationPath', value: opts.iterationPath });
+  if (opts?.parentId != null) {
+    ops.push({
+      op: 'add',
+      path: '/relations/-',
+      value: {
+        rel: 'System.LinkTypes.Hierarchy-Reverse',
+        url: `${base(cfg)}/_apis/wit/workitems/${opts.parentId}`,
+      },
+    });
+  }
+  const result = await adoRequest<{ id: number; fields: Record<string, any> }>(
+    cfg,
+    'POST',
+    `/${encodeURIComponent(project)}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=7.0`,
+    ops,
+    'application/json-patch+json',
+  );
+  return mapWorkItem(cfg, result);
+}
+
+export interface CascadeTemplateItem {
+  type: string;
+  title: string;
+  parent?: number;
+}
+
+export async function directCreateCascade(
+  cfg: DirectConfig,
+  project: string,
+  template: CascadeTemplateItem[],
+  vars: Record<string, string>,
+  opts?: { tags?: string; iterationPath?: string },
+) {
+  const resolve = (s: string) => s.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '');
+  const created: { id: number; type: string; title: string; webUrl: string }[] = [];
+  for (const item of template) {
+    const title = resolve(item.title);
+    const type = resolve(item.type);
+    const parentId = item.parent != null ? created[item.parent]?.id : undefined;
+    const wi = await directCreateWorkItem(cfg, project, type, title, {
+      tags: item.parent == null ? opts?.tags : undefined,
+      iterationPath: opts?.iterationPath,
+      parentId,
+    });
+    created.push({ id: wi.id, type: wi.type, title: wi.title, webUrl: wi.webUrl });
+  }
+  return created;
+}
+
+export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
+  /**
+   * 按用户 GUID 让服务端直接过滤，取代「拉全集合再前端按账号字符串匹配」：
+   *  - 待我评审：reviewerId=我 且 active
+   *  - 我提的  ：creatorId=我 且 **全部状态**（只拉 active 的话已完成的都看不见，
+   *              「由我提交的特别少」就是这么来的）
+   * 字符串匹配(matchUser)只留给桥接模式兜底。
+   */
+  const me = await directGetMe(cfg);
+  const fetchPrs = async (criteria: string, cap = 200) => {
+    const acc: any[] = [];
+    for (let skip = 0; skip < cap; skip += pageSize) {
+      const res = await adoRequest<{ value: any[] }>(
+        cfg,
+        'GET',
+        `/_apis/git/pullrequests?${criteria}&$top=${pageSize}&$skip=${skip}&api-version=7.0`,
+      );
+      const page = res.value ?? [];
+      acc.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return acc;
+  };
+
+  const [review, mine] = await Promise.all([
+    fetchPrs(`searchCriteria.reviewerId=${me.id}&searchCriteria.status=active`),
+    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=active`, 100),
+  ]);
+  const rel = new Map<number, 'mine' | 'review' | 'both'>();
+  for (const pr of review) rel.set(pr.pullRequestId, 'review');
+  for (const pr of mine)
+    rel.set(pr.pullRequestId, rel.has(pr.pullRequestId) ? 'both' : 'mine');
+  const seen = new Set<number>();
+  const all = [...review, ...mine].filter((pr) =>
+    seen.has(pr.pullRequestId) ? false : (seen.add(pr.pullRequestId), true),
+  );
   return all.map((pr) => {
     const project = pr.repository?.project?.name ?? '';
     const repo = pr.repository?.name ?? '';
@@ -414,26 +529,28 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
       sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
       targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
       createdDate: pr.creationDate ?? '',
+      rel: rel.get(pr.pullRequestId),
       webUrl: `${base(cfg)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
     };
   });
 }
 
-export async function directGetBuilds(cfg: DirectConfig, top = 15) {
+export async function directGetBuilds(cfg: DirectConfig, top = 20) {
+  // 「我最近发起的构建」：requestedFor=我的GUID 由服务端过滤 + queueTime 倒序。
+  // 项目要**全部**遍历——之前只看前 5 个项目，用户的项目不在里面就永远显示别处的老构建
+  const me = await directGetMe(cfg);
   const projects = await adoRequest<{ value: { name: string }[] }>(
     cfg,
     'GET',
-    '/_apis/projects?api-version=7.0&$top=10',
+    '/_apis/projects?api-version=7.0&$top=100',
   );
   const lists = await Promise.all(
-    (projects.value ?? []).slice(0, 5).map(async (p) => {
+    (projects.value ?? []).map(async (p) => {
       try {
         const res = await adoRequest<{ value: any[] }>(
           cfg,
           'GET',
-          // queryOrder 按触发时间倒序，拿的才是「我最近触发的」；不加的话 ADO 默认
-          // 返回最旧的 N 条，$top=10 拿回的全是老古董（issue #17.3）
-          `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
+          `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
         );
         return res.value ?? [];
       } catch {
@@ -459,4 +576,37 @@ export async function directGetBuilds(cfg: DirectConfig, top = 15) {
     }))
     .sort((a, b) => (b.queueTime > a.queueTime ? 1 : -1))
     .slice(0, top);
+}
+
+export async function directRunSavedQuery(
+  cfg: DirectConfig,
+  queryId: string,
+  project?: string,
+  top = 200,
+) {
+  const prefix = project ? `/${encodeURIComponent(project)}` : '';
+  const result = await adoRequest<{
+    workItems?: { id: number }[];
+    workItemRelations?: { target?: { id: number } }[];
+  }>(cfg, 'GET', `${prefix}/_apis/wit/wiql/${queryId}?api-version=7.0`);
+  const ids = result.workItems
+    ? result.workItems.slice(0, top).map((w) => w.id)
+    : (result.workItemRelations ?? [])
+        .map((r) => r.target?.id)
+        .filter((id): id is number => id != null)
+        .slice(0, top);
+  if (ids.length === 0) return [];
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+  const all = await Promise.all(
+    chunks.map((chunk) =>
+      adoRequest<{ value: { id: number; fields: Record<string, any> }[] }>(
+        cfg,
+        'GET',
+        `/_apis/wit/workitems?ids=${chunk.join(',')}&fields=${WI_FIELDS}&api-version=7.0`,
+      ).then((r) => (r.value ?? []).map((w) => mapWorkItem(cfg, w))),
+    ),
+  );
+  const idOrder = new Map(ids.map((id, i) => [id, i]));
+  return all.flat().sort((a, b) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
 }

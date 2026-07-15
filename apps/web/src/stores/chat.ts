@@ -21,6 +21,7 @@ import {
 import { emojify } from '../lib/emoji';
 import { findCommand } from '../lib/slash';
 import { desktopNotify } from '../lib/notify';
+import { flashTaskbar } from '../lib/taskbar';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { humanError, toast } from './toast';
@@ -115,6 +116,8 @@ interface ChatState {
   uploading: number;
   /** 每个会话的输入草稿（持久化） */
   drafts: Record<string, string>;
+  /** 撤回后待重新编辑的文本（Composer 消费后清空） */
+  recalledText: string | null;
   /** 「以下为新消息」分割线时间戳（打开有未读的会话时记录） */
   unreadMarkTs: Record<string, number>;
   /** 待确认发送的文件（粘贴/拖拽后进入预览确认） */
@@ -139,6 +142,8 @@ interface ChatState {
   init: () => Promise<void>;
   /** 批量播种在线状态（通讯录/成员列表拿到 status 时调用，不覆盖已有的实时值） */
   seedUserStatus: (users: { username: string; status?: string }[]) => void;
+  /** 滚到当前会话最新消息。再点一次已打开的会话时用（跳看历史后想回底部） */
+  scrollToLatest: () => void;
   openRoom: (rid: string) => Promise<void>;
   openThread: (mid: string) => Promise<void>;
   setPanel: (panel: RightPanel) => void;
@@ -176,7 +181,7 @@ interface ChatState {
   refreshReceipts: (rid: string) => Promise<void>;
   inviteMembers: (rid: string, users: RcUser[]) => Promise<void>;
   editMessage: (msgId: string, text: string) => Promise<void>;
-  deleteMessage: (msgId: string) => Promise<void>;
+  deleteMessage: (msgId: string, recall?: boolean) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   togglePin: (msg: RcMessage) => Promise<void>;
   toggleStar: (msg: RcMessage) => Promise<void>;
@@ -405,6 +410,8 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   if (focused && (prefs.muteFocusedConversations ?? true)) return;
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
+  // 有新消息且窗口不在前台 → 闪任务栏图标（桌面端;内部自查是否已聚焦）
+  void flashTaskbar();
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
   void desktopNotify({
     title,
@@ -432,6 +439,7 @@ export const useChat = create<ChatState>((set, get) => ({
   scrollNonce: 0,
   uploading: 0,
   drafts: loadDrafts(),
+  recalledText: null,
   unreadMarkTs: {},
   pendingFiles: null,
   replyTo: null,
@@ -443,6 +451,8 @@ export const useChat = create<ChatState>((set, get) => ({
   userStatus: {},
   selectMode: false,
   selectedMids: new Set(),
+
+  scrollToLatest: () => set({ scrollNonce: get().scrollNonce + 1 }),
 
   seedUserStatus: (users) => {
     const cur = get().userStatus;
@@ -635,6 +645,12 @@ export const useChat = create<ChatState>((set, get) => ({
       if (changed) set({ userStatus: next });
     });
     realtime.subscribe('stream-notify-logged', 'user-status');
+    // 启动播种全量在线状态：实时流只推「变化」，不播种的话刚打开软件时
+    // 会话列表/消息头像一个状态点都没有，要等别人恰好切状态才亮
+    void rest
+      .getPresences()
+      .then((users) => get().seedUserStatus(users))
+      .catch(() => {});
   },
 
   openRoom: async (rid) => {
@@ -992,13 +1008,15 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  deleteMessage: async (msgId) => {
+  deleteMessage: async (msgId, recall) => {
     const rid = get().activeRid;
     if (!rid) return;
     try {
-      await rest.deleteMessage(rid, msgId);
       const list = get().messages[rid] ?? [];
+      const msg = recall ? list.find((m) => m._id === msgId) : undefined;
+      await rest.deleteMessage(rid, msgId);
       set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
+      if (msg?.msg) set({ recalledText: msg.msg });
       const panel = get().rightPanel;
       if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
     } catch (err) {

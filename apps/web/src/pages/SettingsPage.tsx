@@ -23,7 +23,9 @@ import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { useAliases } from '../stores/aliases';
+import { useUiPrefs } from '../stores/uiPrefs';
 import { useWorkbench } from '../stores/workbench';
+import { useWiTemplates } from '../stores/wiTemplates';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
@@ -450,9 +452,23 @@ function SidebarSection() {
 function MessageSection() {
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
+  const hoverDelayMs = useUiPrefs((s) => s.hoverDelayMs);
+  const setHoverDelayMs = useUiPrefs((s) => s.setHoverDelayMs);
 
   return (
     <>
+      <Row label="悬浮工具栏触发" hint="鼠标在消息上停留多久后弹出表情/回复等快捷按钮（本机设置）">
+        <RadioGroup
+          value={String(hoverDelayMs)}
+          onChange={(v) => setHoverDelayMs(Number(v))}
+          options={[
+            { key: '500', label: '0.5 秒' },
+            { key: '1000', label: '1 秒' },
+            { key: '3000', label: '3 秒' },
+          ]}
+        />
+      </Row>
+
       <Row label="发送方式" hint="决定 Enter 键是发送还是换行">
         <RadioGroup
           value={prefs.sendOnEnter}
@@ -848,6 +864,8 @@ function WorkbenchSection() {
       )}
 
       {/* 探测过程：每一步试了什么地址、什么认证、结果如何 */}
+      <TemplateUrlSection />
+
       {steps.length > 0 && (
         <div className="mt-3 max-w-2xl overflow-hidden rounded-lg border border-line">
           <div className="border-b border-line bg-fill-2 px-3 py-2 text-xs font-medium text-ink-2">
@@ -878,6 +896,52 @@ function WorkbenchSection() {
         </div>
       )}
     </>
+  );
+}
+
+function TemplateUrlSection() {
+  const url = useWiTemplates((s) => s.url);
+  const setUrl = useWiTemplates((s) => s.setUrl);
+  const templates = useWiTemplates((s) => s.templates);
+  const loading = useWiTemplates((s) => s.loading);
+  const error = useWiTemplates((s) => s.error);
+  const fetchTpl = useWiTemplates((s) => s.fetch);
+  const [draft, setDraft] = useState(url);
+
+  return (
+    <div className="mt-6 max-w-2xl border-t border-line pt-4">
+      <h3 className="text-sm font-semibold text-ink">工作项模板</h3>
+      <p className="mt-1 text-xs text-ink-3">
+        团队可共享一个模板配置文件（JSON），放在 Git 仓库或任意 URL。留空则使用内置模板。
+      </p>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="模板 JSON 的 URL（留空使用内置模板）"
+          className="h-8 flex-1 rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
+        />
+        <button
+          onClick={() => setUrl(draft.trim())}
+          className="h-8 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
+        >
+          保存
+        </button>
+        {url && (
+          <button
+            onClick={() => void fetchTpl()}
+            disabled={loading}
+            className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+          >
+            {loading ? '拉取中…' : '重新拉取'}
+          </button>
+        )}
+      </div>
+      {error && <div className="mt-1 text-xs text-danger">{error}</div>}
+      <div className="mt-2 text-xs text-ink-3">
+        当前 {templates.length} 个模板：{templates.map((t) => t.name).join('、')}
+      </div>
+    </div>
   );
 }
 

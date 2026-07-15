@@ -39,13 +39,13 @@ async function searchMessagesGlobal(
 }
 
 /** 全局搜索（Ctrl/Cmd+K）：会话跳转 + 跨会话消息 + 联系人/频道 */
-export default function QuickSwitcher({ onClose }: { onClose: () => void }) {
+export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
-  const [tab, setTab] = useState<Tab>('convs');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'convs');
   const [keyword, setKeyword] = useState('');
   const [index, setIndex] = useState(0);
   const [messages, setMessages] = useState<RcMessage[]>([]);

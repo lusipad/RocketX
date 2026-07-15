@@ -9,7 +9,7 @@ export type ModuleKey =
   | 'settings';
 
 /** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
-export type WorkbenchTab = 'overview' | 'workitems' | 'prs' | 'builds';
+export type WorkbenchTab = 'overview' | 'workitems' | 'prs' | 'builds' | `query:${string}`;
 
 /** 会话列表分组过滤（飞书「分组」栏） */
 export type ConvFilter =
@@ -34,12 +34,18 @@ interface UIState {
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
   workItemStateFilter: string;
+  /** 拉取请求页的子 tab（待我评审/我提的），同样切走保持 */
+  prTab: 'review' | 'mine';
+  /** 构建页「只看失败」开关，切走保持 */
+  buildsFailedOnly: boolean;
   setModule: (m: ModuleKey) => void;
   setConvFilter: (f: ConvFilter) => void;
   setActiveFolder: (id: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
+  setPrTab: (t: 'review' | 'mine') => void;
+  setBuildsFailedOnly: (v: boolean) => void;
 }
 
 export const useUI = create<UIState>((set) => ({
@@ -49,10 +55,14 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   workbenchTab: 'overview',
   workItemStateFilter: '全部',
+  prTab: 'review',
+  buildsFailedOnly: false,
   setModule: (m) => set({ module: m }),
   setConvFilter: (f) => set({ convFilter: f, activeFolder: null }),
   setActiveFolder: (id) => set({ activeFolder: id }),
   setSwitcherOpen: (open) => set({ switcherOpen: open }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => set({ workItemStateFilter: s }),
+  setPrTab: (t) => set({ prTab: t }),
+  setBuildsFailedOnly: (v) => set({ buildsFailedOnly: v }),
 }));

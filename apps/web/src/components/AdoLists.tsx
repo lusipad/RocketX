@@ -13,6 +13,7 @@ import {
   isApproved,
   myPrsOf,
   reviewPrsOf,
+  stateBadgeClass,
   VOTE_LABELS,
   voteColor,
   type Build,
@@ -31,16 +32,7 @@ export const TYPE_COLORS: Record<string, string> = {
   Issue: '#ff8800',
 };
 
-/** 工作项状态的配色：ADO 各流程模板叫法不同，按语义归类 */
-function stateStyle(state: string): string {
-  const s = state.toLowerCase();
-  if (['new', 'to do', 'proposed', 'open'].includes(s)) return 'bg-fill-2 text-ink-2';
-  if (['active', 'in progress', 'doing', 'committed'].includes(s))
-    return 'bg-primary-light text-primary';
-  if (['resolved', 'in review'].includes(s)) return 'bg-warning/15 text-warning';
-  if (['closed', 'done', 'completed'].includes(s)) return 'bg-success/15 text-success';
-  return 'bg-fill-2 text-ink-2';
-}
+// 状态配色统一走 stateBadgeClass（中英文状态都认，中文 ADO 流程模板叫「活动/已解决/已关闭」）
 
 /** 优先级：P1 最紧急，标红 */
 function priorityStyle(p?: number): string {
@@ -99,7 +91,6 @@ function ListHeader({
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
   const [keyword, setKeyword] = useState('');
-  // 状态筛选提到全局 store：切到别的页面/模块再回来，筛选不重置（issue #17.1）
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
@@ -108,7 +99,6 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
     [items],
   );
 
-  // 存的筛选值在当前工作项里可能已不存在（换了项目/都关闭了），回退到「全部」免得列表空掉
   const effectiveState = states.includes(state) ? state : '全部';
 
   const filtered = useMemo(() => {
@@ -166,7 +156,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
             <span className="w-14 shrink-0 text-xs text-ink-3">#{w.id}</span>
             <span className="min-w-0 flex-1 truncate text-sm text-ink">{w.title}</span>
 
-            <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateStyle(w.state)}`}>
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(w.state)}`}>
               {w.state}
             </span>
             {w.priority !== undefined && (
@@ -242,7 +232,9 @@ function PrRow({ pr }: { pr: PullRequest }) {
 /** 拉取请求：待我评审 / 我提的（后者以前拉了数据却根本没渲染） */
 export function PullRequestList({ prs, account }: { prs: PullRequest[]; account: string }) {
   const [keyword, setKeyword] = useState('');
-  const [tab, setTab] = useState<'review' | 'mine'>('review');
+  // 子 tab 提到全局 store：切到别的页面再回来不重置（issue #7/#17 同一诉求）
+  const tab = useUI((s) => s.prTab);
+  const setTab = useUI((s) => s.setPrTab);
 
   const review = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
   const mine = useMemo(() => myPrsOf(prs, account), [prs, account]);
@@ -340,7 +332,8 @@ const BUILD_RESULT_LABELS: Record<string, string> = {
 /** 构建：完整列表（构建号、项目、触发人、结果都显示） */
 export function BuildList({ builds }: { builds: Build[] }) {
   const [keyword, setKeyword] = useState('');
-  const [failedOnly, setFailedOnly] = useState(false);
+  const failedOnly = useUI((s) => s.buildsFailedOnly);
+  const setFailedOnly = useUI((s) => s.setBuildsFailedOnly);
 
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
@@ -367,7 +360,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
         right={
           failedCount > 0 ? (
             <button
-              onClick={() => setFailedOnly((v) => !v)}
+              onClick={() => setFailedOnly(!failedOnly)}
               className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition ${
                 failedOnly
                   ? 'border-danger bg-danger/10 text-danger'
@@ -418,7 +411,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
           </a>
         ))}
         {filtered.length === 0 && (
-          <EmptyRow text={builds.length ? '没有匹配的构建' : '最近没有构建记录'} />
+          <EmptyRow text={builds.length ? '没有匹配的构建' : '你最近没有发起过构建'} />
         )}
       </div>
     </>

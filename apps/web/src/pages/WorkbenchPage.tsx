@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark,
   Calendar,
@@ -11,12 +11,13 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   Trash2,
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
+import { myPrsOf, reviewPrsOf, useWorkbench, type WorkItem } from '../stores/workbench';
 import { BuildList, PullRequestList, WorkItemList } from '../components/AdoLists';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
@@ -25,6 +26,7 @@ import { useTodos, todayKey, type Todo } from '../stores/todos';
 import { buildQueue, queueSummary, type QueueItem } from '../lib/queue';
 import { useCalendar, eventsForDate } from '../stores/calendar';
 import { useFavorites, SIZE_SPAN, SIZE_LABELS, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
+import { useCustomQueries, parseQueryUrl } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
@@ -88,6 +90,87 @@ function QueueRow({
     >
       {inner}
     </button>
+  );
+}
+
+// ---------- Custom Query Dialog ----------
+function QueryDialog({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void;
+  onSave: (name: string, url: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const parsed = url.trim() ? parseQueryUrl(url.trim()) : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="w-[440px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-line px-5 py-3">
+          <span className="text-[15px] font-semibold text-ink">添加自定义查询</span>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink">
+            <XCircle size={16} />
+          </button>
+        </header>
+        <div className="space-y-4 p-5">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-ink-2">查询名称</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例：本迭代待办、我的 Bug"
+              autoFocus
+              className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-ink-2">
+              ADO 查询链接
+            </label>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="粘贴浏览器地址栏里的查询页面链接"
+              className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
+            />
+            <p className="mt-1.5 text-2xs text-ink-3">
+              在 Azure DevOps 打开一个已存查询，复制浏览器地址栏的链接粘贴到这里
+            </p>
+            {url.trim() && !parsed && (
+              <p className="mt-1 text-2xs text-danger">无法从链接中解析出查询 ID</p>
+            )}
+            {parsed && (
+              <p className="mt-1 text-2xs text-success">
+                已识别查询 {parsed.queryId.slice(0, 8)}…
+                {parsed.project ? ` (${parsed.project})` : ''}
+              </p>
+            )}
+          </div>
+        </div>
+        <footer className="flex justify-end gap-2 border-t border-line px-5 py-3">
+          <button
+            onClick={onClose}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => {
+              if (name.trim() && parsed) onSave(name.trim(), url.trim());
+            }}
+            disabled={!name.trim() || !parsed}
+            className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
+          >
+            添加
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -235,6 +318,43 @@ export default function WorkbenchPage() {
   const lastRefresh = useWorkbench((s) => s.lastRefresh);
   const refresh = useWorkbench((s) => s.refresh);
 
+  const customQueries = useCustomQueries((s) => s.queries);
+  const addQuery = useCustomQueries((s) => s.add);
+  const removeQuery = useCustomQueries((s) => s.remove);
+  const [queryDialog, setQueryDialog] = useState(false);
+  const [queryCache, setQueryCache] = useState<Record<string, WorkItem[]>>({});
+  const [queryLoading, setQueryLoading] = useState<string | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
+
+  const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
+  const activeQuery = customQueries.find((q) => q.id === activeQueryId);
+
+  const fetchQuery = useCallback(
+    async (q: typeof customQueries[0], force = false) => {
+      if (!config || config.mode !== 'direct' || !config.adoBase) return;
+      if (!force && queryCache[q.id]) return;
+      setQueryLoading(q.id);
+      setQueryError(null);
+      try {
+        const { directRunSavedQuery } = await import('../lib/adoDirect');
+        const cfg = { adoBase: config.adoBase, pat: config.pat ?? '', auth: config.auth };
+        const items = await directRunSavedQuery(cfg, q.queryId, q.project);
+        setQueryCache((prev) => ({ ...prev, [q.id]: items as WorkItem[] }));
+      } catch (err) {
+        setQueryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setQueryLoading(null);
+      }
+    },
+    [config, queryCache],
+  );
+
+  useEffect(() => {
+    if (activeQuery && !queryCache[activeQuery.id] && queryLoading !== activeQuery.id) {
+      void fetchQuery(activeQuery);
+    }
+  }, [activeQuery, queryCache, queryLoading, fetchQuery]);
+
   const [favDialog, setFavDialog] = useState<{ existing?: Favorite } | null>(null);
 
   const today = todayKey();
@@ -357,6 +477,53 @@ export default function WorkbenchPage() {
           </button>
         ))}
 
+        {connected && customQueries.length > 0 && (
+          <>
+            <div className="mt-4 mb-1 px-2 text-2xs font-medium text-ink-3">自定义查询</div>
+            {customQueries.map((q) => (
+              <div key={q.id} className="group relative">
+                <button
+                  onClick={() => setTab(`query:${q.id}`)}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+                    tab === `query:${q.id}` ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
+                  }`}
+                >
+                  <Search size={14} />
+                  <span className="min-w-0 flex-1 truncate text-left">{q.name}</span>
+                  {queryCache[q.id] && (
+                    <span className="text-xs text-ink-3">{queryCache[q.id].length}</span>
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    removeQuery(q.id);
+                    setQueryCache((prev) => {
+                      const next = { ...prev };
+                      delete next[q.id];
+                      return next;
+                    });
+                    if (tab === `query:${q.id}`) setTab('overview');
+                    toast.success('已删除');
+                  }}
+                  className="absolute top-1 right-1 hidden h-5 w-5 items-center justify-center rounded text-ink-3 hover:text-danger group-hover:flex"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {connected && (
+          <button
+            onClick={() => setQueryDialog(true)}
+            className="mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+          >
+            <Plus size={14} />
+            添加查询
+          </button>
+        )}
+
         <button
           onClick={() => setModule('settings')}
           className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
@@ -370,15 +537,54 @@ export default function WorkbenchPage() {
         <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
           <div className="flex items-center justify-between pb-3">
             <span className="text-[15px] font-semibold text-ink">
-              {tabs.find((t) => t.key === tab)?.label}
+              {activeQuery ? activeQuery.name : tabs.find((t) => t.key === tab)?.label}
               <span className="ml-2 text-xs font-normal text-ink-3">
                 {adoTitle}
               </span>
             </span>
-            {refreshBar}
+            {activeQuery ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void fetchQuery(activeQuery, true)}
+                  disabled={queryLoading === activeQuery.id}
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={queryLoading === activeQuery.id ? 'animate-spin' : ''} />
+                  刷新
+                </button>
+                <a
+                  href={activeQuery.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
+                >
+                  <ExternalLink size={13} />
+                  在 ADO 中打开
+                </a>
+              </div>
+            ) : (
+              refreshBar
+            )}
           </div>
 
-          {adoError ? (
+          {activeQuery ? (
+            queryLoading === activeQuery.id && !queryCache[activeQuery.id] ? (
+              <SkeletonRows rows={8} />
+            ) : queryError && !queryCache[activeQuery.id] ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2">
+                <XCircle size={28} className="text-danger" />
+                <div className="max-w-md text-center text-sm text-danger">{queryError}</div>
+                <button
+                  onClick={() => void fetchQuery(activeQuery, true)}
+                  className="mt-1 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
+                >
+                  重试
+                </button>
+              </div>
+            ) : (
+              <WorkItemList items={queryCache[activeQuery.id] ?? []} />
+            )
+          ) : adoError ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2">
               <XCircle size={28} className="text-danger" />
               <div className="text-sm text-danger">{adoError}</div>
@@ -607,6 +813,19 @@ export default function WorkbenchPage() {
 
       {favDialog && (
         <FavoriteDialog existing={favDialog.existing} onClose={() => setFavDialog(null)} />
+      )}
+      {queryDialog && (
+        <QueryDialog
+          onClose={() => setQueryDialog(false)}
+          onSave={(name, url) => {
+            const parsed = parseQueryUrl(url);
+            if (!parsed) return;
+            const id = addQuery(name, url, parsed.queryId, parsed.project);
+            setQueryDialog(false);
+            setTab(`query:${id}`);
+            toast.success('查询已添加');
+          }}
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
-import { useChat } from '../stores/chat';
+import { useEffect, useRef } from 'react';
+import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
-import { useUI } from '../stores/ui';
+import { type ModuleKey, useUI } from '../stores/ui';
 import { requestNotifyPermission } from '../lib/notify';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
@@ -25,6 +25,7 @@ export default function MainPage() {
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
 
   const loadPrefs = usePrefs((s) => s.load);
+  const switcherTab = useRef<'messages' | undefined>(undefined);
 
   useEffect(() => {
     void init();
@@ -42,13 +43,45 @@ export default function MainPage() {
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
   }, [subscriptions]);
 
-  // 全局快捷键：Ctrl/Cmd+K 快速切换会话，Esc 关闭右侧面板
+  // 全局快捷键
   useEffect(() => {
+    const MODULES: ModuleKey[] = ['messages', 'todos', 'contacts', 'calendar', 'workbench', 'settings'];
+
+    const switchConv = (delta: 1 | -1) => {
+      const { subscriptions: subs, rooms: rms, activeRid } = useChat.getState();
+      const list = buildConversations(subs, rms).sort((a, b) => b.lastTs - a.lastTs);
+      if (!list.length) return;
+      const idx = list.findIndex((c) => c.rid === activeRid);
+      const next = list[Math.max(0, Math.min(list.length - 1, idx + delta))];
+      if (next) useChat.getState().openRoom(next.rid);
+    };
+
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      // Ctrl+K 快速切换会话
+      if (mod && key === 'k' && !e.shiftKey) { e.preventDefault(); switcherTab.current = undefined; setSwitcher(!useUI.getState().switcherOpen); return; }
+      // Ctrl+Shift+F 全局搜索消息
+      if (mod && e.shiftKey && key === 'f') { e.preventDefault(); switcherTab.current = 'messages'; setSwitcher(true); return; }
+      // Ctrl+↑/↓ 上下切换会话
+      if (mod && !e.shiftKey && e.key === 'ArrowUp') { e.preventDefault(); switchConv(-1); return; }
+      if (mod && !e.shiftKey && e.key === 'ArrowDown') { e.preventDefault(); switchConv(1); return; }
+      // Alt+↑/↓ 切换左侧模块
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        setSwitcher(!useUI.getState().switcherOpen);
-      } else if (e.key === 'Escape') {
+        const cur = MODULES.indexOf(useUI.getState().module);
+        const next = e.key === 'ArrowUp' ? Math.max(0, cur - 1) : Math.min(MODULES.length - 1, cur + 1);
+        useUI.getState().setModule(MODULES[next]);
+        return;
+      }
+      // Alt+1~6 直接跳到指定模块
+      if (e.altKey && !mod && key >= '1' && key <= '6') {
+        e.preventDefault();
+        useUI.getState().setModule(MODULES[Number(key) - 1]);
+        return;
+      }
+      // Escape 关闭右侧面板
+      if (e.key === 'Escape') {
         const state = useChat.getState();
         if (state.rightPanel) state.setPanel(null);
       }
@@ -82,7 +115,7 @@ export default function MainPage() {
           连接中，消息推送可能延迟…
         </div>
       )}
-      {switcher && <QuickSwitcher onClose={() => setSwitcher(false)} />}
+      {switcher && <QuickSwitcher onClose={() => setSwitcher(false)} initialTab={switcherTab.current} />}
       <UploadConfirm />
       <Toaster />
     </div>

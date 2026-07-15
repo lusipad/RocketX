@@ -163,8 +163,12 @@ export function buildQueue(input: QueueInput): QueueItem[] {
   }
 
   for (const pr of input.prs) {
-    const mine = matchUser(input.account, pr.creatorUnique, pr.creator);
-    const iReview = pr.reviewers.some((r) => matchUser(input.account, r.unique, r.name));
+    const mine = pr.rel
+      ? pr.rel === 'mine' || pr.rel === 'both'
+      : matchUser(input.account, pr.creatorUnique, pr.creator);
+    const iReview = pr.rel
+      ? pr.rel === 'review' || pr.rel === 'both'
+      : pr.reviewers.some((r) => matchUser(input.account, r.unique, r.name));
 
     if (!mine && iReview) {
       items.push({
@@ -193,7 +197,6 @@ export function buildQueue(input: QueueInput): QueueItem[] {
   }
 
   for (const w of input.workItems) {
-    // 已解决/已关闭的不进「待处理」队列，更不该被标成逾期（issue #17.4）
     if (isWorkItemDone(w.state)) continue;
     const due = adoDateToLocal(w.dueDate);
     const overdue = !!due && due < today;

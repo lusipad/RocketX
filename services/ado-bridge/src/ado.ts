@@ -104,7 +104,8 @@ export class AdoClient {
       query:
         `SELECT [System.Id] FROM WorkItems ` +
         `WHERE [System.AssignedTo] = '${who}' ` +
-        `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ` +
+        // 中文流程模板的状态是中文名，只排英文会把已完成的全拉回来
+        `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复') ` +
         `ORDER BY [System.ChangedDate] DESC`,
     };
     const result = await this.request<{ workItems?: { id: number }[] }>(

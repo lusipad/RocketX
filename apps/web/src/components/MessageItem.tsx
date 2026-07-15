@@ -10,6 +10,7 @@ import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
   AlertCircle,
   Check,
+  ClipboardList,
   Copy,
   Link2,
   Download,
@@ -44,12 +45,14 @@ import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
+import { useUiPrefs } from '../stores/uiPrefs';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import ForwardDialog from './ForwardDialog';
 import TodoDialog from './TodoDialog';
 import UserCard from './UserCard';
+import CreateWorkItemDialog from './CreateWorkItemDialog';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -409,9 +412,6 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
   );
 }
 
-/** 悬浮操作栏出现前的停留时长（ms）。调这个数字即可改「停多久才弹按钮」 */
-const HOVER_DELAY_MS = 500;
-
 type MessageItemProps = {
   message: RcMessage;
   mine: boolean;
@@ -458,14 +458,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
+  const [createWi, setCreateWi] = useState(false);
 
-  // 悬浮操作栏延迟出现：鼠标停留 HOVER_DELAY_MS 才显示，避免划过消息就闪一排按钮
-  // （issue #18.4）。离开立即收起。菜单/表情面板/编辑态打开时保持显示。
+  // 悬浮操作栏延迟出现：鼠标停留一段时间才显示，避免划过消息就闪一排按钮
+  // （issue #18.4，默认 3 秒，设置里可调）。离开立即收起。
+  const hoverDelayMs = useUiPrefs((s) => s.hoverDelayMs);
   const [hoverActions, setHoverActions] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onBarEnter = () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => setHoverActions(true), HOVER_DELAY_MS);
+    hoverTimer.current = setTimeout(() => setHoverActions(true), hoverDelayMs);
   };
   const onBarLeave = () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
@@ -547,6 +549,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       icon: Star,
       onClick: () => void toggleStar(message),
     },
+    { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
     ...(mine && message.msg
       ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
       : []),
@@ -822,9 +825,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <ConfirmDeleteDialog
           onConfirm={() => {
             setConfirmDelete(false);
-            void deleteMessage(message._id);
+            void deleteMessage(message._id, deleteLabel === '撤回');
           }}
           onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+      {createWi && (
+        <CreateWorkItemDialog
+          defaultTitle={stripQuotePrefix(message.msg ?? '').slice(0, 200)}
+          rid={message.rid}
+          onClose={() => setCreateWi(false)}
         />
       )}
     </div>

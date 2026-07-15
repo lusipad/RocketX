@@ -82,6 +82,7 @@ function ConversationItem({
   showAvatar: boolean;
 }) {
   const openRoom = useChat((s) => s.openRoom);
+  const scrollToLatest = useChat((s) => s.scrollToLatest);
   const toggleFavorite = useChat((s) => s.toggleFavorite);
   const toggleMute = useChat((s) => s.toggleMute);
   const markConvRead = useChat((s) => s.markConvRead);
@@ -162,7 +163,11 @@ function ConversationItem({
         setDragging(true);
       }}
       onDragEnd={() => setDragging(false)}
-      onClick={() => void openRoom(conv.rid)}
+      onClick={() => {
+        // 再点已打开的会话 = 回到最新消息（跳去看历史后点会话名回底部，issue #18.6）
+        if (active) scrollToLatest();
+        else void openRoom(conv.rid);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
@@ -343,6 +348,8 @@ export default function ConversationList() {
   const folders = useFolders((s) => s.folders);
   const collapsedKeys = useFolders((s) => s.collapsed);
   const toggleCollapse = useFolders((s) => s.toggleCollapse);
+  const reorderRoom = useFolders((s) => s.reorderRoom);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   const folder = folders.find((f) => f.id === activeFolder);
 
@@ -462,15 +469,30 @@ export default function ConversationList() {
                 </button>
               )}
               {(!showHeaders || !isCollapsed) &&
-                section.items.map((c) => (
-                  <ConversationItem
-                    key={c.rid}
-                    conv={c}
-                    active={c.rid === activeRid}
-                    viewMode={viewMode}
-                    showAvatar={showAvatar}
-                  />
-                ))}
+                section.items.map((c) =>
+                  folder ? (
+                    <div
+                      key={c.rid}
+                      onDragOver={(e) => {
+                        if (!e.dataTransfer.types.includes('text/rcx-rid')) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        setDropTarget(c.rid);
+                      }}
+                      onDragLeave={() => setDropTarget((prev) => (prev === c.rid ? null : prev))}
+                      onDrop={(e) => {
+                        const rid = e.dataTransfer.getData('text/rcx-rid');
+                        if (rid && rid !== c.rid) reorderRoom(folder.id, rid, c.rid);
+                        setDropTarget(null);
+                      }}
+                      className={dropTarget === c.rid ? 'border-t-2 border-primary' : ''}
+                    >
+                      <ConversationItem conv={c} active={c.rid === activeRid} viewMode={viewMode} showAvatar={showAvatar} />
+                    </div>
+                  ) : (
+                    <ConversationItem key={c.rid} conv={c} active={c.rid === activeRid} viewMode={viewMode} showAvatar={showAvatar} />
+                  ),
+                )}
             </div>
           );
         })}

@@ -228,6 +228,47 @@ async function main(): Promise<void> {
   check('归一化：DOMAIN\\lus 能匹配 lus@corp.com', matchUser('CORP\\lus', 'lus@corp.com', '张三'));
   check('归一化：不同的人仍然不匹配', !matchUser('CORP\\lus', 'wang@corp.com', '王五'));
 
+  // 直连模式：PR 归属改由服务端 rel 标记判定（GUID 过滤），不再靠账号字符串。
+  // 传空账号也要能分组——之前空账号会让「待我评审/我提的」全空
+  const relPrs = [
+    { ...mkPr(11, 'x', []), rel: 'review' as const },
+    { ...mkPr(12, 'x', []), rel: 'mine' as const },
+    { ...mkPr(14, 'x', []), rel: 'both' as const },
+  ];
+  check('rel 路由：待我评审含 review',
+    reviewPrsOf(relPrs, '').map((p) => p.id).join(',') === '11',
+    reviewPrsOf(relPrs, '').map((p) => p.id).join(',') || '空');
+  check('rel 路由：我提的含 mine/both',
+    myPrsOf(relPrs, '').map((p) => p.id).join(',') === '12,14',
+    myPrsOf(relPrs, '').map((p) => p.id).join(','));
+  check('rel 路由：both 不进「待我评审」（是我提的）',
+    !reviewPrsOf(relPrs, '').some((p) => p.id === 14));
+
+  // 自定义查询 URL 解析
+  const { parseQueryUrl } = await import('../apps/web/src/stores/customQueries');
+  const cq1 = parseQueryUrl('http://ado:8080/DefaultCollection/MyProject/_queries/query/abcdef01-2345-6789-abcd-ef0123456789');
+  check('查询URL：标准格式解析出 project 和 queryId',
+    cq1?.project === 'MyProject' && cq1?.queryId === 'abcdef01-2345-6789-abcd-ef0123456789',
+    JSON.stringify(cq1));
+  const cq2 = parseQueryUrl('http://ado:8080/DefaultCollection/My%20Project/_queries/query-edit/abcdef01-2345-6789-abcd-ef0123456789');
+  check('查询URL：URL 编码的项目名 + query-edit 路径',
+    cq2?.project === 'My Project' && cq2?.queryId === 'abcdef01-2345-6789-abcd-ef0123456789',
+    JSON.stringify(cq2));
+  const cq3 = parseQueryUrl('abcdef01-2345-6789-abcd-ef0123456789');
+  check('查询URL：裸 GUID 也能识别', cq3?.queryId === 'abcdef01-2345-6789-abcd-ef0123456789');
+  check('查询URL：无效输入返回 null', parseQueryUrl('not-a-query-url') === null);
+
+  // 中文 ADO：状态判断必须中英文都认，否则中文流程模板（活动/已解决/已关闭）全部失效
+  const { isWorkItemDone, workItemStateCategory } = await import(
+    '../apps/web/src/stores/workbench'
+  );
+  check('中文状态：已解决 算已完成', isWorkItemDone('已解决'));
+  check('中文状态：已关闭 算已完成', isWorkItemDone('已关闭'));
+  check('中文状态：活动 不算已完成', !isWorkItemDone('活动'));
+  check('英文状态：Resolved 仍算已完成', isWorkItemDone('Resolved'));
+  check('中文状态归类：进行中 → active', workItemStateCategory('进行中') === 'active');
+  check('未知状态归 other 不误杀', workItemStateCategory('自定义状态') === 'other' && !isWorkItemDone('自定义状态'));
+
   console.log('\n[工作台 · 待处理队列]');
   const { buildQueue, queueSummary } = await import('../apps/web/src/lib/queue');
 
@@ -302,6 +343,7 @@ async function main(): Promise<void> {
   check('已完成的待办不进队列', !q.some((i) => i.key === 'todo-done'));
   check('成功的构建不进队列', !q.some((i) => i.key === 'build-P-1'));
   check('与我无关的 PR 不进队列', !q.some((i) => i.key === 'pr-5'));
+
   check('待办带上原消息，可跳回上下文', !!q.find((i) => i.kind === 'overdue-todo')?.todo);
   check('ADO 条目带外链', !!q.find((i) => i.kind === 'failed-build')?.href);
   check(

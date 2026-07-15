@@ -10,6 +10,8 @@ import {
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
+import { rest } from '../lib/client';
+import { toast } from '../stores/toast';
 import { useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
@@ -34,8 +36,10 @@ const SUPPORTS_FIELD_SIZING =
 
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
+  const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const send = useChat((s) => s.send);
   const loadMembers = useChat((s) => s.loadMembers);
+  const inviteMembers = useChat((s) => s.inviteMembers);
   const requestUpload = useChat((s) => s.requestUpload);
   const uploading = useChat((s) => s.uploading);
   const setDraft = useChat((s) => s.setDraft);
@@ -48,11 +52,17 @@ export default function Composer() {
 
   const runSlash = useChat((s) => s.runSlash);
   const slashCommands = useChat((s) => s.slashCommands);
+  const recalledText = useChat((s) => s.recalledText);
 
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [picker, setPicker] = useState(false);
   const [members, setMembers] = useState<RcUser[]>([]);
+  // 目录里搜到的群外用户（@ 群外的人用，防抖搜索）
+  const [remoteUsers, setRemoteUsers] = useState<RcUser[]>([]);
+  const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // @ 了群外的人：记下来，发送前邀请入群（否则 RC 不会给非成员发 @ 提醒）
+  const [pendingInvites, setPendingInvites] = useState<RcUser[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   /** 光标停在命令名上时的前缀（'' 表示刚打了个 /）；null 表示不在命令补全状态 */
@@ -68,11 +78,21 @@ export default function Composer() {
     setText(activeRid ? (useChat.getState().drafts[activeRid] ?? '') : '');
     setMentionQuery(null);
     setPicker(false);
+    setPendingInvites([]); // 待邀请名单跟着会话走，切走就清
     textareaRef.current?.focus();
     if (activeRid) {
       void loadMembers(activeRid).then(setMembers);
     }
   }, [activeRid, loadMembers]);
+
+  // 撤回后自动填入原文
+  useEffect(() => {
+    if (recalledText) {
+      setText(recalledText);
+      useChat.setState({ recalledText: null });
+      textareaRef.current?.focus();
+    }
+  }, [recalledText]);
 
   // 草稿防抖保存
   const persistDraft = (value: string) => {
@@ -84,10 +104,30 @@ export default function Composer() {
 
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
+
+  // @ 群外的人：输入 @关键词 时防抖搜全局目录，把不在群里的人也拉进候选
+  useEffect(() => {
+    const q = mentionQuery?.trim();
+    if (!q) {
+      setRemoteUsers([]);
+      return;
+    }
+    if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
+    mentionSearchTimer.current = setTimeout(() => {
+      void rest
+        .searchUsers(q, 20)
+        .then(({ users }) => setRemoteUsers(users))
+        .catch(() => setRemoteUsers([]));
+    }, 250);
+    return () => {
+      if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
+    };
+  }, [mentionQuery]);
+
   const candidates = useMemo(() => {
     if (mentionQuery === null) return [];
     const q = mentionQuery.trim();
-    const base: { username: string; name?: string }[] = [
+    const base: { username: string; name?: string; isRemote?: boolean }[] = [
       { username: 'all', name: '通知所有人' },
       { username: 'here', name: '通知在线成员' },
       ...members,
@@ -95,12 +135,17 @@ export default function Composer() {
     // 支持拼音（zhangsan / zs → 张三）与备注名（给谁起了备注就按备注找谁）
     const label = (u: { username: string; name?: string }) =>
       aliases[`u:${u.username}`] || u.name || u.username;
-    return base
+    const local = base
       .filter((u) => pinyinMatch(q, aliases[`u:${u.username}`], u.name, u.username))
-      .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)))
-      .slice(0, 6);
+      .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)));
+    // 群外用户：目录搜到的、不在群成员里的，标 isRemote 拼在本地结果后面
+    const memberNames = new Set(base.map((u) => u.username));
+    const remote = remoteUsers
+      .filter((u) => u.username && !memberNames.has(u.username))
+      .map((u) => ({ username: u.username, name: u.name, isRemote: true }));
+    return [...local, ...remote].slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [mentionQuery, members, aliases, pinyinReady]);
+  }, [mentionQuery, members, aliases, pinyinReady, remoteUsers]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -186,6 +231,13 @@ export default function Composer() {
     const next = before + text.slice(cursor);
     setText(next);
     persistDraft(next); // 同上（P2-g）
+    // @ 的是群外的人 → 记下来，发送前拉进群（这样 TA 才收得到 @ 提醒）
+    const remote = remoteUsers.find((u) => u.username === username);
+    if (remote && !members.some((m) => m.username === username)) {
+      setPendingInvites((prev) =>
+        prev.some((u) => u.username === username) ? prev : [...prev, remote],
+      );
+    }
     setMentionQuery(null);
     requestAnimationFrame(() => {
       el?.focus();
@@ -234,11 +286,33 @@ export default function Composer() {
       return;
     }
 
+    // @ 了群外的人 → 发送前先把他们拉进群，RC 才会把 @ 提醒送到（非成员收不到提及通知）。
+    // 只对群/频道有效；DM 不适用。
+    const rid = activeRid;
+    const toInvite =
+      rid && roomType && roomType !== 'd'
+        ? pendingInvites.filter((u) => value.includes(`@${u.username}`))
+        : [];
+
+    const quote = replyTo;
     // 乐观发送：立刻清空输入框，不阻塞下一条（连发不会被吞）
     clearInput();
     setReplyTo(null);
+    setPendingInvites([]);
+
+    if (rid && toInvite.length > 0) {
+      try {
+        // inviteMembers 会邀请 + 清成员缓存 + toast「已添加」；之后 TA 是成员，@ 提醒才发得到
+        await inviteMembers(rid, toInvite);
+        void loadMembers(rid).then(setMembers); // 缓存已清，重拉刷新本地 @ 补全用的成员表
+      } catch (err) {
+        // 邀请失败：消息照常发，但对方可能收不到提醒，得说一声
+        toast.error(err, '把群外成员拉进群失败，对方可能收不到 @ 提醒');
+      }
+    }
+
     // 失败由消息气泡的红色标记与 toast「重试」承接
-    await send(value, replyTo ? { quote: replyTo } : undefined);
+    await send(value, quote ? { quote } : undefined);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -385,7 +459,12 @@ export default function Composer() {
               <span className="font-medium text-ink">
                 {aliases[`u:${u.username}`] || u.name || u.username}
               </span>
-              <span className="truncate text-xs text-ink-3">@{u.username}</span>
+              <span className="min-w-0 truncate text-xs text-ink-3">@{u.username}</span>
+              {u.isRemote && (
+                <span className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-2xs text-ink-3">
+                  非群成员
+                </span>
+              )}
             </button>
           ))}
         </div>

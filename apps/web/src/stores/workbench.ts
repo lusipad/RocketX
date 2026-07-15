@@ -49,6 +49,8 @@ export interface PullRequest {
   targetBranch: string;
   createdDate?: string;
   webUrl: string;
+  /** 服务端按 GUID 判定的与我的关系（直连模式）。桥接模式无此标记，退回字符串匹配 */
+  rel?: 'mine' | 'review' | 'both';
 }
 
 export interface Build {
@@ -159,14 +161,30 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       if (c.mode === 'direct' && c.adoBase) {
-        const { directGetWorkItems, directGetPullRequests, directGetBuilds } = await import(
-          '../lib/adoDirect'
-        );
+        const { directGetWorkItems, directGetPullRequests, directGetBuilds, directGetIdentity } =
+          await import('../lib/adoDirect');
         const cfg = { adoBase: c.adoBase, pat: c.pat ?? '', auth: c.auth };
         // markdown 渲染器靠它把消息里的 #123 变成工作项链接
         localStorage.setItem(ADO_WEB_KEY, c.adoBase.replace(/\/+$/, ''));
+        // 账号为空(NTLM 集成认证的常态：什么都不用填)时自动探测回填——
+        // 工作项走 @Me 不受影响，但 PR 是前端按账号过滤的，账号空着
+        // 「待我评审/我提的」就永远是空的（issue #12）
+        if (!c.account) {
+          try {
+            const who = await directGetIdentity(cfg);
+            if (who.account) {
+              const next = { ...c, account: who.account };
+              saveWorkbenchConfig(next);
+              set({ config: next });
+            }
+          } catch {
+            /* 探测失败不拦刷新，PR 过滤退化为空，其余照常 */
+          }
+        }
         const [workItems, prs, builds] = await Promise.all([
-          directGetWorkItems(cfg, c.account),
+          // 恒用 @Me（传空）：显式账号字符串和 ADO identity 格式对不上会漏工作项。
+          // account 只用于 PR 的前端过滤，不进 WIQL
+          directGetWorkItems(cfg, ''),
           directGetPullRequests(cfg),
           // 构建要遍历项目，慢且容易超时，挂了不该拖垮整个面板
           directGetBuilds(cfg).catch(() => []),
@@ -214,18 +232,21 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
 }));
 
-/** 派生：待我评审的 PR（我是评审人，且不是我提的） */
+/** 派生：待我评审的 PR。直连模式有服务端 rel 标记；桥接退回字符串匹配 */
 export function reviewPrsOf(prs: PullRequest[], account: string): PullRequest[] {
-  return prs.filter(
-    (pr) =>
-      pr.reviewers.some((r) => matchUser(account, r.unique, r.name)) &&
-      !matchUser(account, pr.creatorUnique, pr.creator),
+  return prs.filter((pr) =>
+    pr.rel
+      ? pr.rel === 'review'
+      : pr.reviewers.some((r) => matchUser(account, r.unique, r.name)) &&
+        !matchUser(account, pr.creatorUnique, pr.creator),
   );
 }
 
-/** 派生：我提的 PR —— 之前拉回来了却从没在界面上出现过 */
+/** 派生：我提的 PR */
 export function myPrsOf(prs: PullRequest[], account: string): PullRequest[] {
-  return prs.filter((pr) => matchUser(account, pr.creatorUnique, pr.creator));
+  return prs.filter((pr) =>
+    pr.rel ? pr.rel === 'mine' || pr.rel === 'both' : matchUser(account, pr.creatorUnique, pr.creator),
+  );
 }
 
 /** 我提的 PR 里，评审已经通过的（可以合了） */
@@ -234,7 +255,48 @@ export function isApproved(pr: PullRequest): boolean {
   return voted.length > 0 && voted.every((r) => r.vote >= 5);
 }
 
+/**
+ * 工作项状态归类。**必须中英文都认**：Azure DevOps Server 的中文流程模板里
+ * 状态就叫「活动 / 已解决 / 已关闭」，只认英文的话所有状态判断（逾期排除、
+ * 配色区分、划线）在中文环境全部失效——这正是「已解决工作项没有区分」的根因。
+ */
+export type WorkItemStateCategory = 'new' | 'active' | 'resolved' | 'done' | 'other';
+
+const STATE_CATEGORY: Record<string, WorkItemStateCategory> = {
+  // 新建/待办
+  new: 'new', 'to do': 'new', proposed: 'new', open: 'new', approved: 'new',
+  新建: 'new', 待办: 'new', 已建议: 'new', 待处理: 'new', 已批准: 'new',
+  // 进行中
+  active: 'active', 'in progress': 'active', doing: 'active', committed: 'active',
+  活动: 'active', 进行中: 'active', 正在进行: 'active', 处理中: 'active', 已提交: 'active',
+  // 已解决/评审中
+  resolved: 'resolved', 'in review': 'resolved',
+  已解决: 'resolved', 评审中: 'resolved', 已修复: 'resolved',
+  // 已关闭/完成
+  closed: 'done', done: 'done', completed: 'done', removed: 'done',
+  已关闭: 'done', 已完成: 'done', 已删除: 'done', 已移除: 'done', 关闭: 'done', 完成: 'done',
+};
+
+export function workItemStateCategory(state: string): WorkItemStateCategory {
+  return STATE_CATEGORY[state.trim().toLowerCase()] ?? 'other';
+}
+
 /** 工作项是否已完成（已解决/已关闭/已移除）——已完成的不算逾期，也不进待处理队列 */
 export function isWorkItemDone(state: string): boolean {
-  return ['resolved', 'closed', 'done', 'completed', 'removed'].includes(state.toLowerCase());
+  const c = workItemStateCategory(state);
+  return c === 'resolved' || c === 'done';
+}
+
+/** 状态徽标配色（列表/悬停卡/内联卡片共用一份，语义按归类走） */
+export function stateBadgeClass(state: string): string {
+  switch (workItemStateCategory(state)) {
+    case 'active':
+      return 'bg-primary-light text-primary';
+    case 'resolved':
+      return 'bg-warning/15 text-warning';
+    case 'done':
+      return 'bg-success/15 text-success';
+    default:
+      return 'bg-fill-2 text-ink-2';
+  }
 }

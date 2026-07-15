@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, Star, Trash2 } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
 import { fmtDayDivider, sameDay, systemMessageText, useDayTick } from '../lib/format';
+import { toast } from '../stores/toast';
 import MessageItem from './MessageItem';
 import DiscussionCard from './DiscussionCard';
 import ForwardDialog from './ForwardDialog';
@@ -28,6 +29,8 @@ export default function MessageList({ rid }: { rid: string }) {
   const selectMode = useChat((s) => s.selectMode);
   const selectedMids = useChat((s) => s.selectedMids);
   const exitSelectMode = useChat((s) => s.exitSelectMode);
+  const deleteMessage = useChat((s) => s.deleteMessage);
+  const toggleStar = useChat((s) => s.toggleStar);
   const [forwardOpen, setForwardOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -169,7 +172,31 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMids.size === 0}
               className="h-7 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
-              合并转发
+              转发
+            </button>
+            <button
+              onClick={() => {
+                for (const m of selectedMessages) toggleStar(m);
+                toast.success(`已标记 ${selectedMessages.length} 条消息`);
+                exitSelectMode();
+              }}
+              disabled={selectedMids.size === 0}
+              className="h-7 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+              title="批量收藏"
+            >
+              <Star size={14} />
+            </button>
+            <button
+              onClick={() => {
+                if (!confirm(`确定删除 ${selectedMids.size} 条消息吗？`)) return;
+                for (const mid of selectedMids) deleteMessage(mid);
+                exitSelectMode();
+              }}
+              disabled={selectedMids.size === 0}
+              className="h-7 rounded-md border border-line px-2.5 text-xs text-danger transition hover:bg-danger/10 disabled:opacity-40"
+              title="批量删除"
+            >
+              <Trash2 size={14} />
             </button>
             <button
               onClick={exitSelectMode}
