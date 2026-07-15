@@ -93,7 +93,7 @@ const BUILDS = [
     project: { name: 'RocketX' },
     status: 'completed',
     result: 'succeeded',
-    requestedFor: { displayName: 'lus' },
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
     queueTime: '2026-07-13T02:40:00Z',
     finishTime: '2026-07-13T02:47:00Z',
   },
@@ -104,7 +104,7 @@ const BUILDS = [
     project: { name: 'RocketX' },
     status: 'inProgress',
     result: '',
-    requestedFor: { displayName: '张三' },
+    requestedFor: { id: 'user-zhangsan', displayName: '张三' },
     queueTime: '2026-07-13T03:30:00Z',
     finishTime: '',
   },
@@ -115,7 +115,7 @@ const BUILDS = [
     project: { name: 'Platform' },
     status: 'completed',
     result: 'failed',
-    requestedFor: { displayName: 'lus' },
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
     queueTime: '2026-07-12T20:00:00Z',
     finishTime: '2026-07-12T20:12:00Z',
   },
@@ -126,7 +126,7 @@ const BUILDS = [
     project: { name: 'LateProject' },
     status: 'completed',
     result: 'succeeded',
-    requestedFor: { displayName: 'lus' },
+    requestedFor: { id: '00000000-0000-0000-0000-000000000001', displayName: 'lus' },
     queueTime: '2026-07-14T02:00:00Z',
     finishTime: '2026-07-14T02:05:00Z',
   },
@@ -183,7 +183,12 @@ createServer((req, res) => {
     });
   } else if (url.pathname.endsWith('/_apis/build/builds')) {
     const project = decodeURIComponent(url.pathname.split('/_apis/')[0].split('/').pop() ?? '');
-    send({ value: BUILDS.filter((b) => b.project.name === project) });
+    const requestedFor = url.searchParams.get('requestedFor');
+    send({
+      value: BUILDS.filter(
+        (build) => build.project.name === project && (!requestedFor || build.requestedFor.id === requestedFor),
+      ),
+    });
   } else if (url.pathname.endsWith('/_apis/git/pullrequests')) {
     let items = PULL_REQUESTS;
     const status = url.searchParams.get('searchCriteria.status');

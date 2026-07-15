@@ -241,6 +241,8 @@ export class AdoClient {
 
   /** 各项目最近构建（合并排序，工作台构建面板用） */
   async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
+    const me = await this.getIdentity();
+    if (!me.id) throw new Error('ADO 未返回当前用户标识，无法查询本人构建');
     const projects = await this.request<{ value: { name: string }[] }>(
       'GET',
       '/_apis/projects?api-version=7.0&$top=100',
@@ -251,7 +253,7 @@ export class AdoClient {
           const res = await this.request<{ value: any[] }>(
             'GET',
             // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
-            `/${encodeURIComponent(p.name)}/_apis/build/builds?$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
+            `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
           );
           return res.value ?? [];
         } catch {
