@@ -19,9 +19,20 @@ const COLORS = [
   '#14b8a6', '#f472b6', '#8b5cf6', '#06b6d4', '#84cc16',
 ];
 
+/** 收藏卡片只允许可安全打开的新窗口 Web 链接。 */
+export function normalizeFavoriteUrl(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function load(): Favorite[] {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]') as Favorite[];
+    return (JSON.parse(localStorage.getItem(KEY) ?? '[]') as Favorite[])
+      .filter((favorite) => normalizeFavoriteUrl(favorite.url));
   } catch {
     return [];
   }

@@ -25,7 +25,7 @@ import { useChat } from '../stores/chat';
 import { useTodos, todayKey, type Todo } from '../stores/todos';
 import { buildQueue, queueSummary, type QueueItem } from '../lib/queue';
 import { useCalendar, eventsForDate } from '../stores/calendar';
-import { useFavorites, SIZE_SPAN, SIZE_LABELS, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
+import { useFavorites, SIZE_SPAN, SIZE_LABELS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
 import { useCustomQueries, parseQueryUrl } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
@@ -198,10 +198,12 @@ function FavoriteDialog({
   const [size, setSize] = useState<FavSize>(existing?.size ?? 'small');
   const dialogTitle = existing ? '编辑收藏' : '添加收藏';
   const dialogRef = useDialogBehavior(onClose);
+  const normalizedUrl = normalizeFavoriteUrl(url);
+  const urlInvalid = !!url.trim() && !normalizedUrl;
 
   const handleSave = () => {
-    if (!title.trim() || !url.trim()) return;
-    const data = { title: title.trim(), url: url.trim(), icon: icon || undefined, color, size };
+    if (!title.trim() || !normalizedUrl) return;
+    const data = { title: title.trim(), url: normalizedUrl, icon: icon || undefined, color, size };
     if (existing) {
       update(existing.id, data);
       toast.success('已更新');
@@ -242,6 +244,7 @@ function FavoriteDialog({
               autoFocus
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
+            {urlInvalid && <p className="mt-1 text-2xs text-danger">请输入以 http:// 或 https:// 开头的链接</p>}
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-ink-2">链接</label>
@@ -296,7 +299,7 @@ function FavoriteDialog({
           <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover">取消</button>
           <button
             onClick={handleSave}
-            disabled={!title.trim() || !url.trim()}
+            disabled={!title.trim() || !normalizedUrl}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
             {existing ? '保存' : '添加'}

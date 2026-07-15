@@ -773,6 +773,14 @@ async function main(): Promise<void> {
   check('禁言名单按 username 匹配', isMuted(['lisi'], 'lisi') && !isMuted(['lisi'], 'zhangsan'));
   check('没有禁言名单时不误判', !isMuted(undefined, 'lisi'));
 
+  console.log('\n[收藏链接安全]');
+  const { normalizeFavoriteUrl } = await import('../apps/web/src/stores/favorites');
+  check('允许 https 收藏链接', normalizeFavoriteUrl('https://example.com/path') === 'https://example.com/path');
+  check('允许 http 收藏链接', normalizeFavoriteUrl(' http://localhost:8080 ') === 'http://localhost:8080/');
+  check('拒绝 javascript 链接', normalizeFavoriteUrl('javascript:alert(1)') === null);
+  check('拒绝 data 链接', normalizeFavoriteUrl('data:text/html,test') === null);
+  check('拒绝无协议链接', normalizeFavoriteUrl('example.com') === null);
+
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
 
