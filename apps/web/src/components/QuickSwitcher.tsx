@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { BriefcaseBusiness, CalendarDays, Hash, ListTodo, Search } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
@@ -11,6 +11,7 @@ import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import {
   chooseAvailableSearchTab,
+  QUICK_SEARCH_TABS,
   searchMessagesGlobal,
   searchesSettledFor,
   type QuickSearchTab,
@@ -25,13 +26,32 @@ import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
 type Tab = QuickSearchTab;
+type ResultTab = Exclude<Tab, 'all'>;
+
+interface OverviewItem {
+  section: ResultTab;
+  key: string;
+  title: string;
+  detail: string;
+  avatar?: { name: string; username?: string };
+  icon?: ReactNode;
+  action: () => void;
+}
 
 const TABS: { key: Tab; label: string }[] = [
+  { key: 'all', label: '全部' },
   { key: 'convs', label: '会话' },
   { key: 'messages', label: '消息' },
   { key: 'contacts', label: '联系人/频道' },
   { key: 'work', label: '工作' },
 ];
+
+const RESULT_LABELS: Record<ResultTab, string> = {
+  convs: '会话',
+  messages: '消息',
+  contacts: '联系人/频道',
+  work: '工作',
+};
 
 /** 全局搜索（Ctrl/Cmd+K）：会话、消息、联系人/频道与本机已有的工作数据。 */
 export default function QuickSwitcher({
@@ -54,7 +74,7 @@ export default function QuickSwitcher({
   const todos = useTodos((s) => s.todos);
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
-  const [tab, setTab] = useState<Tab>(initialTab ?? 'convs');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'all');
   const [keyword, setKeyword] = useState('');
   const [index, setIndex] = useState(0);
   const [messages, setMessages] = useState<RcMessage[]>([]);
@@ -115,6 +135,13 @@ export default function QuickSwitcher({
     () => searchWork(keyword, todos, events, workItems),
     [keyword, todos, events, workItems],
   );
+  const searchCounts: Record<Tab, number> = {
+    all: filteredConvs.length + messages.length + contactUsers.length + contacts.rooms.length + workResults.length,
+    convs: filteredConvs.length,
+    messages: messages.length,
+    contacts: contactUsers.length + contacts.rooms.length,
+    work: workResults.length,
+  };
   const conversationScope = useMemo(
     () => [...new Set(conversations.map((conversation) => conversation.rid))].sort().join('\0'),
     [conversations],
@@ -149,6 +176,7 @@ export default function QuickSwitcher({
       return;
     }
     const next = chooseAvailableSearchTab(tabRef.current, {
+      all: searchCounts.all,
       convs: filteredConvs.length,
       messages: messages.length,
       contacts: contactUsers.length + contacts.rooms.length,
@@ -280,9 +308,89 @@ export default function QuickSwitcher({
     onClose();
   };
 
+  const overviewItems: OverviewItem[] = keyword.trim()
+    ? [
+        ...filteredConvs.slice(0, 3).map((conversation) => ({
+          section: 'convs' as const,
+          key: `conv:${conversation.rid}`,
+          title: displayName(aliases, conversation, nameFormat),
+          detail: conversation.unread > 0 ? `${conversation.unread} 条未读` : '会话',
+          avatar: {
+            name: displayName(aliases, conversation, nameFormat),
+            username: conversation.avatarUsername,
+          },
+          action: () => pickConv(conversation.rid),
+        })),
+        ...messages.slice(0, 3).map((message) => ({
+          section: 'messages' as const,
+          key: `message:${message._id}`,
+          title: message.msg || '无文字消息',
+          detail: `${message.u.name || message.u.username} · ${roomName(message.rid)}`,
+          avatar: { name: message.u.name || message.u.username, username: message.u.username },
+          action: () => pickMessage(message),
+        })),
+        ...contactUsers.slice(0, 3).map((user) => ({
+          section: 'contacts' as const,
+          key: `user:${user._id}`,
+          title: personName(aliases, user.username, user.name || user.username, nameFormat),
+          detail: `联系人 · @${user.username}`,
+          avatar: {
+            name: personName(aliases, user.username, user.name || user.username, nameFormat),
+            username: user.username,
+          },
+          action: () => {
+            void startDM(user.username).then(() => {
+              setModule('messages');
+              onClose();
+            });
+          },
+        })),
+        ...contacts.rooms.slice(0, Math.max(0, 3 - contactUsers.length)).map((room) => ({
+          section: 'contacts' as const,
+          key: `room:${room._id}`,
+          title: room.fname || room.name || '频道',
+          detail: subscriptions[room._id] ? '频道' : '频道 · 点击加入',
+          avatar: { name: room.fname || room.name || '频道' },
+          action: () => void openSpotlightRoom(room),
+        })),
+        ...workResults.slice(0, 3).map((result) => ({
+          section: 'work' as const,
+          key: `${result.kind}:${result.item.id}`,
+          title: result.kind === 'todo'
+            ? result.item.note || result.item.excerpt
+            : result.kind === 'event'
+              ? result.item.title
+              : `#${result.item.id} ${result.item.title}`,
+          detail: result.kind === 'todo'
+            ? `待办 · ${result.item.roomName}`
+            : result.kind === 'event'
+              ? `日程 · ${result.item.date}`
+              : `工作项 · ${result.item.project} · ${result.item.state}`,
+          icon: result.kind === 'todo'
+            ? <ListTodo size={16} />
+            : result.kind === 'event'
+              ? <CalendarDays size={16} />
+              : <BriefcaseBusiness size={16} />,
+          action: () => pickWork(result),
+        })),
+      ]
+    : filteredConvs.map((conversation) => ({
+        section: 'convs' as const,
+        key: `conv:${conversation.rid}`,
+        title: displayName(aliases, conversation, nameFormat),
+        detail: conversation.unread > 0 ? `${conversation.unread} 条未读` : '最近会话',
+        avatar: {
+          name: displayName(aliases, conversation, nameFormat),
+          username: conversation.avatarUsername,
+        },
+        action: () => pickConv(conversation.rid),
+      }));
+
   /** 统一的键盘导航：所有 tab 都能用方向键 + Enter */
   const currentItems: (() => void)[] =
-    tab === 'convs'
+    tab === 'all'
+      ? overviewItems.map((item) => item.action)
+      : tab === 'convs'
       ? filteredConvs.map((c) => () => pickConv(c.rid))
       : tab === 'messages'
         ? messages.map((m) => () => pickMessage(m))
@@ -298,8 +406,9 @@ export default function QuickSwitcher({
             ]
           : workResults.map((result) => () => pickWork(result));
 
-  const roomName = (rid: string) =>
-    subscriptions[rid]?.fname || subscriptions[rid]?.name || rooms[rid]?.fname || rooms[rid]?.name || '会话';
+  function roomName(rid: string): string {
+    return subscriptions[rid]?.fname || subscriptions[rid]?.name || rooms[rid]?.fname || rooms[rid]?.name || '会话';
+  }
 
   const openSpotlightRoom = async (room: RcRoom) => {
     if (!subscriptions[room._id]) {
@@ -346,7 +455,7 @@ export default function QuickSwitcher({
                 onClose();
               } else if (e.key === 'Tab') {
                 e.preventDefault();
-                const order: Tab[] = ['convs', 'messages', 'contacts', 'work'];
+                const order = QUICK_SEARCH_TABS;
                 const dir = e.shiftKey ? -1 : 1;
                 setTab(order[(order.indexOf(tab) + dir + order.length) % order.length]);
               }
@@ -371,11 +480,80 @@ export default function QuickSwitcher({
               }`}
             >
               {label}
+              {!!keyword.trim() && !messageSearching && !contactSearching && (
+                <span className="ml-1 text-2xs opacity-70">{searchCounts[key]}</span>
+              )}
             </button>
           ))}
         </div>
 
         <div className="min-h-40 flex-1 overflow-y-auto py-1">
+          {tab === 'all' && (
+            <>
+              {!keyword.trim() && commandCenter && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">
+                  {conversations.some((item) => item.unread > 0 || item.alert)
+                    ? '未读会话 · 回车打开第一条'
+                    : '暂无未读 · 显示最近会话'}
+                </div>
+              )}
+              {keyword.trim() && (messageSearching || contactSearching) && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">正在补全远端结果…</div>
+              )}
+              {(['convs', 'messages', 'contacts', 'work'] as const).map((section) => {
+                const items = overviewItems.filter((item) => item.section === section);
+                if (items.length === 0) return null;
+                return (
+                  <div key={section}>
+                    <div className="flex items-center justify-between px-4 pt-2 pb-1 text-2xs text-ink-3">
+                      <span>{RESULT_LABELS[section]}</span>
+                      {!!keyword.trim() && searchCounts[section] > items.length && (
+                        <button className="text-primary hover:underline" onClick={() => setTab(section)}>
+                          查看全部 {searchCounts[section]}
+                        </button>
+                      )}
+                    </div>
+                    {items.map((item) => {
+                      const idx = overviewItems.indexOf(item);
+                      return (
+                        <button
+                          key={item.key}
+                          onClick={item.action}
+                          onMouseEnter={() => setIndex(idx)}
+                          className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
+                            idx === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                          }`}
+                        >
+                          {item.avatar ? (
+                            <Avatar name={item.avatar.name} username={item.avatar.username} size={28} />
+                          ) : (
+                            <span className="flex h-7 w-7 items-center justify-center text-ink-3">{item.icon}</span>
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm text-ink">
+                              {highlightText(item.title, keyword)}
+                            </span>
+                            <span className="block truncate text-2xs text-ink-3">{item.detail}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              {keyword.trim() &&
+                !messageSearching &&
+                !contactSearching &&
+                !messageError &&
+                !contactError &&
+                overviewItems.length === 0 && (
+                  <div className="py-8 text-center text-sm text-ink-3">未找到匹配结果</div>
+                )}
+              {keyword.trim() && !messageSearching && !contactSearching && (messageError || contactError) && (
+                <div className="px-4 py-2 text-2xs text-warning">部分远端结果暂时不可用</div>
+              )}
+            </>
+          )}
           {commandCenter && tab === 'convs' && !keyword.trim() && (
             <div className="px-4 py-1.5 text-2xs text-ink-3">
               {conversations.some((item) => item.unread > 0 || item.alert)

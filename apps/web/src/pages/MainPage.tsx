@@ -331,7 +331,7 @@ export default function MainPage() {
       {switcher && (
         <QuickSwitcher
           onClose={() => setSwitcher(false)}
-          initialTab={switcherCommandCenter ? 'convs' : switcherTab.current}
+          initialTab={switcherCommandCenter ? 'all' : switcherTab.current}
           commandCenter={switcherCommandCenter}
         />
       )}

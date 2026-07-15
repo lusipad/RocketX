@@ -8,7 +8,9 @@ export interface MessageSearchBackend {
 const FALLBACK_ROOMS = 8;
 const FALLBACK_CONCURRENCY = 2;
 
-export type QuickSearchTab = 'convs' | 'messages' | 'contacts' | 'work';
+export type QuickSearchTab = 'all' | 'convs' | 'messages' | 'contacts' | 'work';
+
+export const QUICK_SEARCH_TABS: QuickSearchTab[] = ['all', 'convs', 'messages', 'contacts', 'work'];
 
 export function chooseAvailableSearchTab(
   current: QuickSearchTab,
