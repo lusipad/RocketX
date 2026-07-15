@@ -198,7 +198,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       } else if (c.bridge) {
         const [cfgRes, wiRes, prRes, buildRes] = await Promise.all([
           fetch(`${c.bridge}/api/ado/config`),
-          fetch(`${c.bridge}/api/ado/workitems?assignedTo=${encodeURIComponent(c.account)}`),
+          // 与直连模式一致，始终让 ADO 用 @Me 识别当前身份。自动探测出的
+          // account 只用于 PR 的前端分组；域账号/邮箱格式拿去做 WIQL 全等匹配会漏数据。
+          fetch(`${c.bridge}/api/ado/workitems?assignedTo=`),
           fetch(`${c.bridge}/api/ado/pullrequests`),
           fetch(`${c.bridge}/api/ado/builds`),
         ]);

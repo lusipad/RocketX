@@ -807,7 +807,7 @@ function WorkbenchSection() {
 
       <Row
         label="我的 ADO 账号"
-        hint="留空即可 —— 点「自动探测」时会向服务器确认你是谁并自动填入。「我的工作项」用 ADO 的 @Me 宏查询，不依赖这一栏。只有想看别人的工作项时才手动改。"
+        hint="留空即可 —— 连接测试会向服务器确认你是谁并自动填入，用于识别“待我评审 / 我提的”PR。“我的工作项”恒用 ADO 的 @Me 宏查询，不依赖这一栏。"
       >
         <input
           value={config.account}
