@@ -387,9 +387,32 @@ export async function directComment(
 }
 
 export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
-  const res = await adoRequest<{ value: { name: string }[] }>(
-    cfg, 'GET', '/_apis/projects?api-version=7.0&$top=100');
-  return (res.value ?? []).map((p) => p.name).sort();
+  const pageSize = 100;
+  const projects: string[] = [];
+  for (let skip = 0; ; skip += pageSize) {
+    const res = await adoRequest<{ value: { name: string }[] }>(
+      cfg,
+      'GET',
+      `/_apis/projects?api-version=7.0&$top=${pageSize}&$skip=${skip}`,
+    );
+    const page = res.value ?? [];
+    projects.push(...page.map((project) => project.name));
+    if (page.length < pageSize) break;
+  }
+  return projects.sort();
+}
+
+/** 当前项目实际启用的工作项类型；不同过程模板（Basic/Agile/Scrum/CMMI）并不相同。 */
+export async function directGetWorkItemTypes(
+  cfg: DirectConfig,
+  project: string,
+): Promise<string[]> {
+  const res = await adoRequest<{ value: { name: string; isDisabled?: boolean }[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/wit/workitemtypes?api-version=7.0`,
+  );
+  return (res.value ?? []).filter((t) => !t.isDisabled).map((t) => t.name);
 }
 
 export async function directGetCurrentIteration(cfg: DirectConfig, project: string, team?: string): Promise<string | null> {
@@ -484,9 +507,9 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
    * 字符串匹配(matchUser)只留给桥接模式兜底。
    */
   const me = await directGetMe(cfg);
-  const fetchPrs = async (criteria: string, cap = 200) => {
+  const fetchPrs = async (criteria: string) => {
     const acc: any[] = [];
-    for (let skip = 0; skip < cap; skip += pageSize) {
+    for (let skip = 0; ; skip += pageSize) {
       const res = await adoRequest<{ value: any[] }>(
         cfg,
         'GET',
@@ -501,7 +524,7 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
 
   const [review, mine] = await Promise.all([
     fetchPrs(`searchCriteria.reviewerId=${me.id}&searchCriteria.status=active`),
-    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=all`, 100),
+    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=all`),
   ]);
   const rel = new Map<number, 'mine' | 'review' | 'both'>();
   for (const pr of review) rel.set(pr.pullRequestId, 'review');
@@ -539,25 +562,26 @@ export async function directGetBuilds(cfg: DirectConfig, top = 20) {
   // 「我最近发起的构建」：requestedFor=我的GUID 由服务端过滤 + queueTime 倒序。
   // 项目要**全部**遍历——之前只看前 5 个项目，用户的项目不在里面就永远显示别处的老构建
   const me = await directGetMe(cfg);
-  const projects = await adoRequest<{ value: { name: string }[] }>(
-    cfg,
-    'GET',
-    '/_apis/projects?api-version=7.0&$top=100',
-  );
-  const lists = await Promise.all(
-    (projects.value ?? []).map(async (p) => {
-      try {
-        const res = await adoRequest<{ value: any[] }>(
-          cfg,
-          'GET',
-          `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
-        );
-        return res.value ?? [];
-      } catch {
-        return [];
-      }
-    }),
-  );
+  const projects = await directGetProjects(cfg);
+  const lists: any[][] = [];
+  for (let i = 0; i < projects.length; i += 8) {
+    lists.push(
+      ...(await Promise.all(
+        projects.slice(i, i + 8).map(async (project) => {
+          try {
+            const res = await adoRequest<{ value: any[] }>(
+              cfg,
+              'GET',
+              `/${encodeURIComponent(project)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
+            );
+            return res.value ?? [];
+          } catch {
+            return [];
+          }
+        }),
+      )),
+    );
+  }
   return lists
     .flat()
     .map((b) => ({

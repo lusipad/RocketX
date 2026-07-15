@@ -194,6 +194,7 @@ export default function RoomInfoPanel() {
   const me = useAuth((s) => s.user);
 
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const setRoomAlias = useAliases((s) => s.setRoomAlias);
 
@@ -224,7 +225,7 @@ export default function RoomInfoPanel() {
 
   if (!rid || !conv) return null;
 
-  const shownName = displayName(aliases, conv);
+  const shownName = displayName(aliases, conv, nameFormat);
   const aliasIsUser = !!conv.avatarUsername;
   const currentAlias = aliasIsUser
     ? aliases[`u:${conv.avatarUsername}`]
@@ -257,7 +258,9 @@ export default function RoomInfoPanel() {
               <TypeIcon size={14} className="text-ink-3" />
               {shownName}
             </div>
-            {currentAlias && <div className="mt-0.5 text-xs text-ink-3">原名：{conv.name}</div>}
+            {currentAlias && nameFormat === 'alias' && (
+              <div className="mt-0.5 text-xs text-ink-3">原名：{conv.name}</div>
+            )}
             {count !== undefined && !(isDM && !conv.isMultiDM) && (
               <button
                 onClick={() => setPanel({ kind: 'members' })}

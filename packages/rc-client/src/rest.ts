@@ -334,12 +334,12 @@ export class RcRestClient {
   }
 
   /** 用户列表（需要 view-outside-room 权限，作为 directory 的回退） */
-  async listUsers(count = 100): Promise<{ users: RcUser[]; total: number }> {
+  async listUsers(count = 100, offset = 0): Promise<{ users: RcUser[]; total: number }> {
     const res = await this.request<{ users: RcUser[]; total: number }>(
       'GET',
       'users.list',
       undefined,
-      { count },
+      { count, offset },
     );
     return { users: res.users ?? [], total: res.total ?? 0 };
   }
@@ -357,16 +357,12 @@ export class RcRestClient {
     try {
       const { result, total } = await this.directory('users', text, count, offset);
       if (result.length > 0) return { users: result as RcUser[], total, via: 'directory' };
-      // directory 返回空且是翻页请求（offset>0）→ 说明已经到底，别再落到不支持翻页的
-      // listUsers/spotlight，否则它们会把第 0 页原样再返回，调用方翻页永远停不下来
-      if (offset > 0) return { users: [], total: 0, via: 'directory' };
       errors.push('directory 返回空');
     } catch (err) {
       errors.push(`directory: ${err instanceof Error ? err.message : err}`);
-      if (offset > 0) return { users: [], total: 0, via: 'directory' };
     }
     try {
-      const { users, total } = await this.listUsers(count);
+      const { users, total } = await this.listUsers(count, offset);
       const filtered = text
         ? users.filter(
             (u) =>
@@ -375,10 +371,13 @@ export class RcRestClient {
           )
         : users;
       if (filtered.length > 0) return { users: filtered, total: total || filtered.length, via: 'users.list' };
+      if (offset > 0) return { users: [], total, via: 'users.list' };
       errors.push('users.list 返回空');
     } catch (err) {
       errors.push(`users.list: ${err instanceof Error ? err.message : err}`);
     }
+    // spotlight 没有 offset，翻页时不能回退，否则会不断重复首屏。
+    if (offset > 0) return { users: [], total: 0, via: 'spotlight' };
     try {
       const { users } = await this.spotlight(text);
       if (users.length > 0) return { users, total: users.length, via: 'spotlight' };
@@ -503,11 +502,23 @@ export class RcRestClient {
   async getMembers(rid: string, type: RoomType, count = 200): Promise<RcUser[]> {
     const endpoint =
       type === 'c' ? 'channels.members' : type === 'p' ? 'groups.members' : 'im.members';
-    const res = await this.request<{ members: RcUser[] }>('GET', endpoint, undefined, {
-      roomId: rid,
-      count,
-    });
-    return res.members ?? [];
+    const pageSize = Math.max(1, count);
+    const members = new Map<string, RcUser>();
+    let offset = 0;
+    while (true) {
+      const res = await this.request<{ members: RcUser[]; total?: number }>(
+        'GET',
+        endpoint,
+        undefined,
+        { roomId: rid, count: pageSize, offset },
+      );
+      const page = res.members ?? [];
+      for (const member of page) members.set(member._id, member);
+      if (page.length === 0) break;
+      offset += page.length;
+      if (res.total !== undefined ? offset >= res.total : page.length < pageSize) break;
+    }
+    return [...members.values()];
   }
 
   /** 房间完整信息（含 topic / description / announcement / 拥有者） */
@@ -787,15 +798,50 @@ export class RcRestClient {
         ? { authToken: this.authToken, userId: this.userId }
         : null);
     const doFetch = this.fetchImpl ?? fetch;
-    // 服务端部分字段给的是绝对地址（按 Site_Url 拼），再前缀 baseUrl 就是废 URL。
-    // 认证头只发给自己的服务器——外部存储（S3 等）的地址不该看到 RC 的 token
     const absolute = /^https?:\/\//i.test(path);
-    const url = absolute ? path : `${this.baseUrl}${path}`;
-    const own = !absolute || (!!this.baseUrl && url.startsWith(`${this.baseUrl}/`));
-    const res = await doFetch(url, {
-      headers:
-        auth && own ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {},
-    });
+    const base = this.baseUrl.replace(/\/+$/, '');
+    const url = absolute ? path : `${base}${path}`;
+    const ownServer = !absolute || (!!base && (url === base || url.startsWith(`${base}/`)));
+    const authHeaders: Record<string, string> =
+      auth && ownServer
+        ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId }
+        : {};
+
+    // 同源 Web 部署用 rc_uid/rc_token cookie 即可。不要再附自定义认证头：浏览器
+    // 跟随到 CDN 时 cookie 会按域自动隔离，而自定义 X-* 头可能被原样转发。
+    const cookieAuth =
+      ownServer &&
+      typeof location !== 'undefined' &&
+      new URL(url, location.href).origin === location.origin;
+
+    let res: Response;
+    if (!auth || !ownServer || cookieAuth) {
+      res = await doFetch(url, cookieAuth ? { credentials: 'include' } : {});
+    } else {
+      // 桌面端/跨源直连必须显式带 RC 头。手动跟随重定向，并且只在仍属于
+      // Rocket.Chat 本源时保留凭据；跳到 S3/CDN 后立即去掉，避免 token 泄露。
+      let current = url;
+      let headers: Record<string, string> = authHeaders;
+      const serverOrigin = base ? new URL(base).origin : '';
+      for (let redirects = 0; ; redirects += 1) {
+        // Tauri plugin-http 不识别标准 redirect:'manual'，但会读取
+        // maxRedirections:0；原生 fetch 则忽略这个扩展字段、按 manual 返回 3xx。
+        // 两者都必须在客户端逐跳处理，才能在跨源时剥离 Rocket.Chat 凭据。
+        res = await doFetch(current, {
+          headers,
+          redirect: 'manual',
+          maxRedirections: 0,
+        } as RequestInit & { maxRedirections: number });
+        if (![301, 302, 303, 307, 308].includes(res.status)) break;
+        if (redirects >= 5) throw new RcApiError('文件下载重定向次数过多', 508);
+        const locationHeader = res.headers.get('location');
+        if (!locationHeader) {
+          throw new RcApiError('文件下载发生无法安全跟随的重定向', res.status || 502);
+        }
+        current = new URL(locationHeader, current).href;
+        headers = serverOrigin && new URL(current).origin === serverOrigin ? authHeaders : {};
+      }
+    }
     if (!res.ok) throw new RcApiError(`HTTP ${res.status}`, res.status);
     return await res.blob();
   }

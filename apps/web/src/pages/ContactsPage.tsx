@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { Hash, Lock, MessageCircle, Search, Tag, Users, UsersRound } from 'lucide-react';
 import { rest } from '../lib/client';
-import { useAliases } from '../stores/aliases';
+import { personName, useAliases } from '../stores/aliases';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
@@ -28,6 +28,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [aliasFor, setAliasFor] = useState<RcUser | null>(null);
   const setUserAlias = useAliases((s) => s.setUserAlias);
@@ -38,25 +39,41 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
   useEffect(() => {
     let cancelled = false;
     const PAGE = 100;
-    const MAX = 5000; // 安全上限，避免超大目录把内存拉爆
     (async () => {
       try {
         const first = await rest.searchUsers('', PAGE, 0);
         if (cancelled) return;
         setTotal(first.total);
         setError(null);
-        const acc = [...first.users];
-        setRoster(acc);
+        setWarning(null);
+        const acc = new Map(first.users.map((user) => [user._id, user]));
+        setRoster([...acc.values()]);
         seedUserStatus(first.users);
         setLoading(false);
-        // directory 才支持翻页；命中它且还有更多就继续拉
-        if (first.via === 'directory') {
-          for (let offset = PAGE; offset < Math.min(first.total, MAX); offset += PAGE) {
-            const page = await rest.searchUsers('', PAGE, offset);
-            if (cancelled || page.users.length === 0) break;
-            acc.push(...page.users);
-            setRoster([...acc]);
-            seedUserStatus(page.users);
+        // directory 与 users.list 都支持 offset；按服务端 total 拉完整个花名册。
+        if (first.via === 'directory' || first.via === 'users.list') {
+          let offset = first.users.length;
+          try {
+            while (offset < first.total) {
+              const page = await rest.searchUsers('', PAGE, offset);
+              if (cancelled) return;
+              if (page.users.length === 0) {
+                setWarning(`服务端报告共 ${first.total} 人，但只返回了 ${acc.size} 人`);
+                break;
+              }
+              for (const user of page.users) acc.set(user._id, user);
+              offset += page.users.length;
+            }
+          } catch (err: unknown) {
+            if (cancelled) return;
+            setWarning(
+              `已加载 ${acc.size} 人，后续分页失败：${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          if (!cancelled) {
+            const all = [...acc.values()];
+            setRoster(all);
+            seedUserStatus(all.slice(first.users.length));
           }
         }
       } catch (err: unknown) {
@@ -95,6 +112,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
 
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const users = useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();
@@ -154,6 +172,11 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
       </div>
       <div className="flex-1 overflow-y-auto rounded-lg border border-line">
         {loading && <SkeletonList rows={6} avatar={36} />}
+        {!loading && warning && (
+          <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
+            {warning}
+          </div>
+        )}
         {!loading && error && (
           <div className="px-6 py-10 text-center">
             <div className="text-sm text-danger">无法获取成员列表</div>
@@ -171,26 +194,26 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
           users.map((u) => {
             const alias = aliases[`u:${u.username}`];
             const real = u.name || u.username;
+            const shownName = personName(aliases, u.username, real, nameFormat);
             return (
               <div
                 key={u._id}
                 onClick={() => onOpenCard(u)}
-                className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
+                className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 [contain-intrinsic-size:auto_57px] [content-visibility:auto] last:border-b-0 hover:bg-fill-2"
               >
                 <Avatar
-                  name={alias || real}
+                  name={shownName}
                   username={u.username}
                   size={36}
                   status={userStatus[u.username] ?? u.status}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink">
-                    {alias || real}
+                    {shownName}
                     {u.username === me && <span className="ml-1 text-xs text-ink-3">（我）</span>}
                   </div>
                   <div className="truncate text-xs text-ink-3">
-                    {/* 起了备注就把原名带出来，否则认不出这是谁 */}
-                    {alias ? `${real} · @${u.username}` : `@${u.username}`}
+                    @{u.username}
                   </div>
                 </div>
                 {u.username !== me && (

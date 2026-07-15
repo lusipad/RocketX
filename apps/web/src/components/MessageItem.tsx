@@ -593,6 +593,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   return (
     <div
       ref={rootRef}
+      data-message-id={message._id}
       onContextMenu={onContextMenu}
       onMouseEnter={onBarEnter}
       onMouseLeave={onBarLeave}

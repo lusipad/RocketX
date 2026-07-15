@@ -158,7 +158,7 @@ export class AdoClient {
       'Microsoft.VSTS.Common.Priority',
       'Microsoft.VSTS.Scheduling.DueDate',
       'Microsoft.VSTS.Scheduling.TargetDate',
-      'Microsoft.VSTS.Common.DueDate',
+      'Microsoft.VSTS.Scheduling.FinishDate',
     ].join(',');
     const detail = await this.request<{
       value: { id: number; fields: Record<string, any> }[];
@@ -176,7 +176,7 @@ export class AdoClient {
       dueDate:
         w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
         w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
-        w.fields['Microsoft.VSTS.Common.DueDate'],
+        w.fields['Microsoft.VSTS.Scheduling.FinishDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     }));
   }
@@ -193,7 +193,7 @@ export class AdoClient {
       'Microsoft.VSTS.Common.Priority',
       'Microsoft.VSTS.Scheduling.DueDate',
       'Microsoft.VSTS.Scheduling.TargetDate',
-      'Microsoft.VSTS.Common.DueDate',
+      'Microsoft.VSTS.Scheduling.FinishDate',
     ].join(',');
     const detail = await this.request<{ value: { id: number; fields: Record<string, any> }[] }>(
       'GET',
@@ -213,7 +213,7 @@ export class AdoClient {
       dueDate:
         w.fields['Microsoft.VSTS.Scheduling.DueDate'] ??
         w.fields['Microsoft.VSTS.Scheduling.TargetDate'] ??
-        w.fields['Microsoft.VSTS.Common.DueDate'],
+        w.fields['Microsoft.VSTS.Scheduling.FinishDate'],
       webUrl: `${this.webBase}/${encodeURIComponent(w.fields['System.TeamProject'] ?? '')}/_workitems/edit/${w.id}`,
     };
   }
@@ -243,24 +243,36 @@ export class AdoClient {
   async getRecentBuilds(top = 15): Promise<AdoBuild[]> {
     const me = await this.getIdentity();
     if (!me.id) throw new Error('ADO 未返回当前用户标识，无法查询本人构建');
-    const projects = await this.request<{ value: { name: string }[] }>(
-      'GET',
-      '/_apis/projects?api-version=7.0&$top=100',
-    );
-    const lists = await Promise.all(
-      (projects.value ?? []).map(async (p) => {
-        try {
-          const res = await this.request<{ value: any[] }>(
-            'GET',
-            // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
-            `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
-          );
-          return res.value ?? [];
-        } catch {
-          return [];
-        }
-      }),
-    );
+    const pageSize = 100;
+    const projects: { name: string }[] = [];
+    for (let skip = 0; ; skip += pageSize) {
+      const res = await this.request<{ value: { name: string }[] }>(
+        'GET',
+        `/_apis/projects?api-version=7.0&$top=${pageSize}&$skip=${skip}`,
+      );
+      const page = res.value ?? [];
+      projects.push(...page);
+      if (page.length < pageSize) break;
+    }
+    const lists: any[][] = [];
+    for (let i = 0; i < projects.length; i += 8) {
+      lists.push(
+        ...(await Promise.all(
+          projects.slice(i, i + 8).map(async (p) => {
+            try {
+              const res = await this.request<{ value: any[] }>(
+                'GET',
+                // queryOrder 倒序：拿最近触发的，不加会返回最旧的 N 条（issue #17.3）
+                `/${encodeURIComponent(p.name)}/_apis/build/builds?requestedFor=${encodeURIComponent(me.id)}&$top=10&queryOrder=queueTimeDescending&api-version=7.0`,
+              );
+              return res.value ?? [];
+            } catch {
+              return [];
+            }
+          }),
+        )),
+      );
+    }
     return lists
       .flat()
       .map((b) => ({
@@ -285,7 +297,7 @@ export class AdoClient {
   async getActivePullRequests(pageSize = 100): Promise<AdoPullRequest[]> {
     // 单页最多 100 条，$skip 翻页拉全，否则超过 100 个活跃 PR 时会漏（issue #17.2）
     const all: any[] = [];
-    for (let skip = 0; skip < 2000; skip += pageSize) {
+    for (let skip = 0; ; skip += pageSize) {
       const res = await this.request<{ value: any[] }>(
         'GET',
         `/_apis/git/pullrequests?searchCriteria.status=active&$top=${pageSize}&$skip=${skip}&api-version=7.0`,

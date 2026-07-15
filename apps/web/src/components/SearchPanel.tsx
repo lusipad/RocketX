@@ -74,7 +74,7 @@ export default function SearchPanel() {
         {!searching && !error && touched && results.length === 0 && (
           <div className="py-10 text-center text-sm text-ink-3">
             没有找到相关消息
-            <div className="mt-1 text-xs">中文搜索需要服务端开启正则搜索</div>
+            <div className="mt-1 text-xs">请尝试更短或更精确的关键词</div>
           </div>
         )}
         {!searching && !error && !touched && (

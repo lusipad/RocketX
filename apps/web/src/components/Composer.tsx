@@ -12,7 +12,7 @@ import { AtSign, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { rest } from '../lib/client';
 import { toast } from '../stores/toast';
-import { useAliases } from '../stores/aliases';
+import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import {
@@ -104,6 +104,7 @@ export default function Composer() {
 
   const pinyinReady = usePinyinReady();
   const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
 
   // @ 群外的人：输入 @关键词 时防抖搜全局目录，把不在群里的人也拉进候选
   useEffect(() => {
@@ -134,7 +135,7 @@ export default function Composer() {
     ];
     // 支持拼音（zhangsan / zs → 张三）与备注名（给谁起了备注就按备注找谁）
     const label = (u: { username: string; name?: string }) =>
-      aliases[`u:${u.username}`] || u.name || u.username;
+      personName(aliases, u.username, u.name || u.username, nameFormat);
     const local = base
       .filter((u) => pinyinMatch(q, aliases[`u:${u.username}`], u.name, u.username))
       .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)));
@@ -145,7 +146,7 @@ export default function Composer() {
       .map((u) => ({ username: u.username, name: u.name, isRemote: true }));
     return [...local, ...remote].slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [mentionQuery, members, aliases, pinyinReady, remoteUsers]);
+  }, [mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -451,13 +452,13 @@ export default function Composer() {
                 </span>
               ) : (
                 <Avatar
-                  name={aliases[`u:${u.username}`] || u.name || u.username}
+                  name={personName(aliases, u.username, u.name || u.username, nameFormat)}
                   username={u.username}
                   size={24}
                 />
               )}
               <span className="font-medium text-ink">
-                {aliases[`u:${u.username}`] || u.name || u.username}
+                {personName(aliases, u.username, u.name || u.username, nameFormat)}
               </span>
               <span className="min-w-0 truncate text-xs text-ink-3">@{u.username}</span>
               {u.isRemote && (

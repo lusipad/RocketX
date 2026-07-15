@@ -102,6 +102,7 @@ export default function ChatArea() {
   const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername }, nameFormat);
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
+  const requiresJoin = !sub && !!room && (room.t === 'c' || !!room.prid);
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
     setPanel(rightPanel?.kind === panel.kind ? null : panel);
@@ -110,6 +111,7 @@ export default function ChatArea() {
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
+    if (requiresJoin) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) requestUpload(files);
   };
@@ -119,7 +121,7 @@ export default function ChatArea() {
       <main
         className="relative flex min-w-0 flex-1 flex-col bg-surface-3"
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('Files')) {
+          if (!requiresJoin && e.dataTransfer.types.includes('Files')) {
             e.preventDefault();
             setDragging(true);
           }
@@ -240,7 +242,7 @@ export default function ChatArea() {
         <MessageList rid={activeRid} />
         {/* 从讨论卡片/搜索进来但还没加入的公开房间：给出加入入口（issue #19-6）。
             不加入也能看历史，但收不到通知、不在会话列表里。 */}
-        {!sub && room?.t === 'c' && (
+        {requiresJoin && (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-primary-light/40 px-4 py-2.5">
             <span className="min-w-0 truncate text-sm text-ink-2">
               你还不是{prid ? '这个讨论' : '这个频道'}的成员，加入后才会收到新消息提醒
@@ -253,7 +255,7 @@ export default function ChatArea() {
             </button>
           </div>
         )}
-        <Composer />
+        {!requiresJoin && <Composer />}
 
         {dragging && (
           <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary-light/60">

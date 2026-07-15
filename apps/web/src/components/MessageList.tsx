@@ -36,8 +36,14 @@ export default function MessageList({ rid }: { rid: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  /** 翻页前的内容高度快照：还原时按「新增高度」平移当前位置 */
-  const anchor = useRef<number | null>(null);
+  /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
+  const anchor = useRef<{
+    height: number;
+    messageId?: string;
+    messageTop?: number;
+    settled: boolean;
+  } | null>(null);
+  const [anchorTick, setAnchorTick] = useState(0);
   /** 已经为本会话定位过未读分割线（只做一次，之后正常跟随） */
   const didLocateUnread = useRef(false);
 
@@ -71,8 +77,30 @@ export default function MessageList({ rid }: { rid: string }) {
 
     if (el.scrollTop < 60 && hasMore && !loadingOlder) {
       setLoadingOlder(true);
-      anchor.current = el.scrollHeight;
-      void loadOlder().finally(() => setLoadingOlder(false));
+      const viewportTop = el.getBoundingClientRect().top;
+      const visible = [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+        (node) => node.getBoundingClientRect().bottom >= viewportTop,
+      );
+      anchor.current = {
+        height: el.scrollHeight,
+        messageId: visible?.dataset.messageId,
+        messageTop: visible?.offsetTop,
+        settled: false,
+      };
+      void loadOlder()
+        .then(() => {
+          // Zustand 已先写入旧消息；下一帧再让 layout effect 读取更新后的 DOM。
+          requestAnimationFrame(() => {
+            if (!anchor.current) return;
+            anchor.current.settled = true;
+            setAnchorTick((tick) => tick + 1);
+          });
+        })
+        .catch((err: unknown) => {
+          anchor.current = null;
+          toast.error(err, '加载更早消息失败');
+        })
+        .finally(() => setLoadingOlder(false));
     }
   };
 
@@ -90,11 +118,22 @@ export default function MessageList({ rid }: { rid: string }) {
     const el = scrollRef.current;
     if (!el || list.length === 0) return;
 
-    // 1) 向上翻页：按新增的内容高度平移，保持视口位置不跳。
-    //    必须用「当前 scrollTop + 增量」而不是回写请求发起时记下的绝对位置 ——
-    //    加载期间用户往下滚过的话，绝对回写会把视口猛地拽回上面（issue #19-3）
-    if (anchor.current !== null) {
-      el.scrollTop += el.scrollHeight - anchor.current;
+    // 1) 向上翻页：基于当前 scrollTop 增加新内容高度，避免加载期间用户继续
+    //    滚动后又被旧的绝对位置拉回去（issue #19-3）。
+    const pendingAnchor = anchor.current;
+    if (pendingAnchor?.settled) {
+      const sameMessage = pendingAnchor.messageId
+        ? [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+            (node) => node.dataset.messageId === pendingAnchor.messageId,
+          )
+        : undefined;
+      const delta =
+        sameMessage && pendingAnchor.messageTop !== undefined
+          ? sameMessage.offsetTop - pendingAnchor.messageTop
+          : el.scrollHeight - pendingAnchor.height;
+      // 加到「用户此刻的位置」上：请求期间继续滚动也不会被拉回旧绝对位置；
+      // 用同一条消息的 offset 差值又能排除底部新消息造成的高度变化。
+      el.scrollTop += delta;
       anchor.current = null;
       return;
     }
@@ -115,7 +154,7 @@ export default function MessageList({ rid }: { rid: string }) {
     if (stickToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [list, historyLoaded]);
+  }, [list, historyLoaded, anchorTick]);
 
   // 不在底部时来了新消息 → 计数（用于「N 条新消息」浮条）
   const prevLen = useRef(0);

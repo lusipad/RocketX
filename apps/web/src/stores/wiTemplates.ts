@@ -11,6 +11,20 @@ export interface WiTemplatesConfig {
   templates: WiTemplate[];
 }
 
+/** 模板里的每个固定类型都必须存在于项目过程模板；{type} 由单项类型选择器决定。 */
+export function templateSupportsTypes(template: WiTemplate, availableTypes: string[]): boolean {
+  if (availableTypes.length === 0) return false;
+  const available = new Set(availableTypes.map((type) => type.toLocaleLowerCase()));
+  return template.items.every(
+    (item) => item.type === '{type}' || available.has(item.type.toLocaleLowerCase()),
+  );
+}
+
+/** 优先保持常见的 Task；过程模板没有 Task 时退到第一个真实可用类型。 */
+export function preferredWorkItemType(availableTypes: string[]): string {
+  return availableTypes.find((type) => type.toLocaleLowerCase() === 'task') ?? availableTypes[0] ?? '';
+}
+
 const BUILTIN: WiTemplate[] = [
   {
     name: 'Feature 全套',
@@ -39,7 +53,11 @@ const URL_KEY = 'rcx-wi-template-url';
 const CACHE_KEY = 'rcx-wi-template-cache';
 
 function loadUrl(): string {
-  return localStorage.getItem(URL_KEY) ?? '';
+  try {
+    return localStorage.getItem(URL_KEY) ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function loadCache(): WiTemplatesConfig | null {

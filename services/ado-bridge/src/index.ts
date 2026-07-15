@@ -42,14 +42,19 @@ app.get('/healthz', async () => ({ ok: true }));
 // ---- 工作台查询代理 ----
 
 /** 客户端需要的 ADO 基本信息（web 链接前缀等） */
-app.get('/api/ado/config', async (_req, reply) => {
+app.get('/api/ado/config', async (req, reply) => {
   if (!ado) return reply.code(503).send({ error: 'ADO_BASE_URL / ADO_PAT 未配置' });
-  const identity = await ado.getIdentity().catch(() => null);
-  return {
-    webBase: ado.webBase,
-    account: identity?.account ?? '',
-    displayName: identity?.displayName ?? '',
-  };
+  try {
+    const identity = await ado.getIdentity();
+    return {
+      webBase: ado.webBase,
+      account: identity.account,
+      displayName: identity.displayName,
+    };
+  } catch (err) {
+    req.log.error(err);
+    return reply.code(502).send({ error: err instanceof Error ? err.message : 'ADO 连接失败' });
+  }
 });
 
 app.get<{ Querystring: { assignedTo?: string } }>('/api/ado/workitems', async (req, reply) => {

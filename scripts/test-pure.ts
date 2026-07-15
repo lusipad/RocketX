@@ -134,7 +134,7 @@ async function main(): Promise<void> {
   check('文案：已逾期 1 天', dueLabel(yesterday, today) === '已逾期 1 天', dueLabel(yesterday, today));
 
   console.log('\n[备注名]');
-  const { displayName } = await import('../apps/web/src/stores/aliases');
+  const { displayName, personName } = await import('../apps/web/src/stores/aliases');
   const aliases = { 'u:zhangsan': '老张', 'r:rid2': '项目群' };
 
   check(
@@ -151,6 +151,15 @@ async function main(): Promise<void> {
   );
   check('群组用会话备注', displayName(aliases, { rid: 'rid2', name: '一堆人' }) === '项目群');
   check('没备注就用原名', displayName(aliases, { rid: 'rid9', name: '产品周会' }) === '产品周会');
+  check(
+    '备注名（原名）格式用于人员名称',
+    personName(aliases, 'zhangsan', '张三', 'aliasWithReal') === '老张（张三）',
+  );
+  check(
+    '备注名（原名）格式用于会话名称',
+    displayName(aliases, { rid: 'rid1', name: '张三', avatarUsername: 'zhangsan' }, 'aliasWithReal') ===
+      '老张（张三）',
+  );
 
   console.log('\n[emoji]');
   const { emojiFromShortcode, emojify } = await import('../apps/web/src/lib/emoji');
@@ -792,8 +801,165 @@ async function main(): Promise<void> {
   check('拒绝 data 链接', normalizeFavoriteUrl('data:text/html,test') === null);
   check('拒绝无协议链接', normalizeFavoriteUrl('example.com') === null);
 
+  console.log('\n[ADO · 工作项模板兼容性]');
+  const { preferredWorkItemType, templateSupportsTypes } = await import(
+    '../apps/web/src/stores/wiTemplates'
+  );
+  const featureTemplate = {
+    name: 'Feature 全套',
+    items: [
+      { type: 'Feature', title: '{title}' },
+      { type: 'User Story', title: '{title}', parent: 0 },
+      { type: 'Task', title: '{title}', parent: 1 },
+    ],
+  };
+  const singleTemplate = { name: '单个', items: [{ type: '{type}', title: '{title}' }] };
+  check(
+    'Basic 过程不展示 Agile 级联模板',
+    !templateSupportsTypes(featureTemplate, ['Epic', 'Issue', 'Task']),
+  );
+  check(
+    '单项模板兼容任意项目类型',
+    templateSupportsTypes(singleTemplate, ['Issue']),
+  );
+  check('类型列表加载失败时不显示可创建模板', !templateSupportsTypes(singleTemplate, []));
+  check('优先选择项目真实存在的 Task', preferredWorkItemType(['Issue', 'Task']) === 'Task');
+  check(
+    '没有 Task 时退到首个真实类型',
+    preferredWorkItemType(['Product Backlog Item']) === 'Product Backlog Item',
+  );
+
+  console.log('\n[消息 · 合并转发附件]');
+  const { forwardableAttachments, mergedForwardAttachments } = await import('../apps/web/src/lib/forward');
+  const forwardSources = [
+    {
+      author: '张三',
+      text: '请看附件',
+      ts: '2026-07-15T00:00:00.000Z',
+      attachments: [
+        { image_url: '/file-upload/thumb', title_link: '/file-upload/original', title: '图.png' },
+      ],
+    },
+    {
+      author: '李四',
+      text: '',
+      ts: '2026-07-15T00:01:00.000Z',
+      attachments: [
+        { title: '说明.pdf', title_link: '/file-upload/pdf', title_link_download: true },
+      ],
+    },
+  ];
+  const mergedAttachments = mergedForwardAttachments(forwardSources);
+  check('合并转发保留原消息作者和文字', mergedAttachments[0]?.author_name === '张三' && mergedAttachments[0]?.text === '请看附件');
+  check(
+    '跨房间转发去掉目标成员无权访问的文件链接',
+    !mergedAttachments[1]?.image_url &&
+      !mergedAttachments[1]?.title_link &&
+      mergedAttachments[1]?.text?.includes('请在原会话查看') === true,
+  );
+  check(
+    '跨房间转发保留附件名称和查看提示',
+    mergedAttachments[3]?.title === '说明.pdf' &&
+      !mergedAttachments[3]?.title_link &&
+      mergedAttachments[3]?.text?.includes('请在原会话查看') === true,
+  );
+  const sameRoomAttachments = mergedForwardAttachments(forwardSources, true);
+  check(
+    '同房间转发仍保留图片预览和原图链接',
+    sameRoomAttachments[1]?.image_url === '/file-upload/thumb' &&
+      sameRoomAttachments[1]?.title_link === '/file-upload/original',
+  );
+  check(
+    '同房间转发仍保留文件下载链接',
+    sameRoomAttachments[3]?.title_link_download === true &&
+      sameRoomAttachments[3]?.title_link === '/file-upload/pdf',
+  );
+  const prefixedProtected = forwardableAttachments([
+    {
+      title: '私密.pdf',
+      title_link: 'https://chat.example/rocket/%66ile-upload/id/secret.pdf',
+      title_link_download: true,
+    },
+  ]);
+  check(
+    '部署前缀和编码路径不能绕过受保护文件识别',
+    !prefixedProtected[0]?.title_link &&
+      prefixedProtected[0]?.text?.includes('请在原会话查看') === true,
+  );
+
+  console.log('\n[Rocket.Chat REST 安全与分页]');
+  const { RcRestClient } = await import('../packages/rc-client/src/rest');
+  const redirectCalls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    maxRedirections?: number;
+  }> = [];
+  const redirectFetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = String(input);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    redirectCalls.push({
+      url,
+      headers,
+      maxRedirections: (init as RequestInit & { maxRedirections?: number } | undefined)
+        ?.maxRedirections,
+    });
+    if (url === 'https://chat.example/file-upload/a.txt') {
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://cdn.example/a.txt' },
+      });
+    }
+    return new Response('附件内容', { status: 200 });
+  }) as typeof fetch;
+  const fileClient = new RcRestClient({
+    baseUrl: 'https://chat.example',
+    fetchImpl: redirectFetch,
+  });
+  fileClient.setAuth('secret-token', 'user-1');
+  const redirectedFile = await fileClient.fetchFile('/file-upload/a.txt');
+  check('文件重定向后仍能下载', (await redirectedFile.text()) === '附件内容');
+  check(
+    'Rocket.Chat 本源请求带认证头',
+    redirectCalls[0]?.headers['X-Auth-Token'] === 'secret-token' &&
+      redirectCalls[0]?.maxRedirections === 0,
+  );
+  check(
+    '跳转到外部 CDN 时不泄露认证头',
+    redirectCalls[1]?.url === 'https://cdn.example/a.txt' &&
+      !redirectCalls[1]?.headers['X-Auth-Token'] &&
+      !redirectCalls[1]?.headers['X-User-Id'],
+  );
+
+  const memberOffsets: number[] = [];
+  const membersFetch = (async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    memberOffsets.push(offset);
+    const members =
+      offset === 0
+        ? [
+            { _id: 'u1', username: 'one', name: '一' },
+            { _id: 'u2', username: 'two', name: '二' },
+          ]
+        : [{ _id: 'u3', username: 'three', name: '三' }];
+    return new Response(JSON.stringify({ success: true, members, total: 3 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  const membersClient = new RcRestClient({
+    baseUrl: 'https://chat.example',
+    fetchImpl: membersFetch,
+  });
+  const allMembers = await membersClient.getMembers('room-1', 'c', 2);
+  check(
+    '成员列表自动翻页并完整去重',
+    allMembers.map((member) => member._id).join(',') === 'u1,u2,u3',
+  );
+  check('成员列表翻页使用正确 offset', memberOffsets.join(',') === '0,2');
+
   console.log('\n[ADO Bridge 身份识别]');
-  const { connectionIdentity } = await import('../services/ado-bridge/src/ado');
+  const { AdoClient, connectionIdentity } = await import('../services/ado-bridge/src/ado');
   const bridgeIdentity = connectionIdentity({
     authenticatedUser: {
       id: 'guid',
@@ -804,6 +970,49 @@ async function main(): Promise<void> {
   check('优先使用 ADO Account 属性', bridgeIdentity.account === 'CORP\\zhangsan');
   check('保留 ADO 身份 GUID', bridgeIdentity.id === 'guid');
   check('缺少 Account 时退回显示名', connectionIdentity({ authenticatedUser: { customDisplayName: '李四' } }).account === '李四');
+
+  const originalGlobalFetch = globalThis.fetch;
+  const adoBridgeCalls: string[] = [];
+  globalThis.fetch = (async (input: URL | RequestInfo) => {
+    const url = String(input);
+    adoBridgeCalls.push(url);
+    const payload = url.includes('/_apis/wit/wiql')
+      ? { workItems: [{ id: 7 }] }
+      : {
+          value: [
+            {
+              id: 7,
+              fields: {
+                'System.Title': '交付版本',
+                'System.WorkItemType': 'Task',
+                'System.State': 'Active',
+                'System.TeamProject': 'test',
+                'Microsoft.VSTS.Scheduling.FinishDate': '2026-07-31T00:00:00Z',
+              },
+            },
+          ],
+        };
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const bridgeItems = await new AdoClient({ baseUrl: 'http://ado.local/DefaultCollection', pat: '' })
+      .getWorkItems('', 1);
+    const detailUrl = adoBridgeCalls.find((url) => url.includes('/_apis/wit/workitems?')) ?? '';
+    check(
+      'Bridge 工作项字段只请求 Server 2022 存在的截止日期字段',
+      detailUrl.includes('Microsoft.VSTS.Scheduling.FinishDate') &&
+        !detailUrl.includes('Microsoft.VSTS.Common.DueDate'),
+    );
+    check(
+      'Bridge 使用 FinishDate 作为截止日期兜底',
+      bridgeItems[0]?.dueDate === '2026-07-31T00:00:00Z',
+    );
+  } finally {
+    globalThis.fetch = originalGlobalFetch;
+  }
 
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));

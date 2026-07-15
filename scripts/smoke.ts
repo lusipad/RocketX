@@ -4,6 +4,8 @@
  * 用法（需要一个可登录的 RC 服务器）：
  *   cd services/ado-bridge && pnpm exec tsx ../../scripts/smoke.ts
  * 环境变量：RC_BASE_URL / RC_USER / RC_PASS / RC_USER2 / RC_PASS2
+ * 也可用 RC_TOKEN / RC_UID（以及 RC_TOKEN2 / RC_UID2）注入临时测试会话，
+ * 避免为了自动化修改真实账号密码。
  */
 import { RcRestClient, RcRealtimeClient, tsMs, type RcMessage } from '../packages/rc-client/src/index';
 
@@ -12,6 +14,10 @@ const USER = process.env.RC_USER ?? 'admin';
 const PASS = process.env.RC_PASS ?? 'rcxdev123';
 const USER2 = process.env.RC_USER2 ?? 'zhangsan';
 const PASS2 = process.env.RC_PASS2 ?? 'zhangsan123';
+const TOKEN = process.env.RC_TOKEN;
+const UID = process.env.RC_UID;
+const TOKEN2 = process.env.RC_TOKEN2;
+const UID2 = process.env.RC_UID2;
 
 let passed = 0;
 let failed = 0;
@@ -41,20 +47,32 @@ async function main() {
 
   console.log('[认证]');
   await check('登录', async () => {
-    me = await rest.login(USER, PASS);
+    if (TOKEN && UID) {
+      rest.setAuth(TOKEN, UID);
+      const profile = await rest.me();
+      me = { ...profile, authToken: TOKEN, userId: UID, me: profile } as typeof me;
+    } else {
+      me = await rest.login(USER, PASS);
+    }
     assert(me.authToken && me.userId, '未拿到 token');
     return me.me.username;
   });
   await check('token 续期', async () => {
     const resumed = await rest.loginWithToken(me.authToken);
     assert(resumed.userId === me.userId, 'userId 不一致');
+    me = resumed;
   });
   // 踢人 / 设角色 都要用第二用户的 id
   let user2Id = '';
   await check('第二用户登录', async () => {
-    const d = await rest2.login(USER2, PASS2);
-    user2Id = d.userId;
-    return d.me.username;
+    if (TOKEN2 && UID2) {
+      rest2.setAuth(TOKEN2, UID2);
+      user2Id = UID2;
+      return (await rest2.me()).username;
+    }
+    const profile = await rest2.login(USER2, PASS2);
+    user2Id = profile.userId;
+    return profile.me.username;
   });
 
   // ---- 会话 ----
@@ -62,6 +80,8 @@ async function main() {
   const stamp = Date.now().toString(36);
   let channelId = '';
   let dmId = '';
+  let discussionId = '';
+  let discussionType: 'c' | 'p' = 'c';
   // 测试建出来的房间要记下来，跑完删掉 —— 每跑一次留一个「冒烟测试-xxx」频道，
   // 跑几十次就把真实用户的会话列表淹了
   const createdRooms: { rid: string; type: 'c' | 'p' }[] = [];
@@ -167,9 +187,11 @@ async function main() {
   });
   await check('创建讨论', async () => {
     const d = await rest.createDiscussion(channelId, `讨论-${stamp}`, firstId);
+    discussionId = d._id;
+    discussionType = d.t === 'p' ? 'p' : 'c';
     assert(d._id && d.prid === channelId, '讨论未正确关联父房间');
     // 讨论是独立房间，删父频道不会连带删掉它
-    createdRooms.push({ rid: d._id, type: d.t === 'p' ? 'p' : 'c' });
+    createdRooms.push({ rid: d._id, type: discussionType });
 
     // 父频道里会多出一条 t='discussion-created' 的消息，drid 指向讨论房间 ——
     // 这就是 RC 那张「讨论」卡片的数据来源。没认出 drid 的话，它会掉进系统消息的
@@ -180,6 +202,22 @@ async function main() {
     assert(card!.drid === d._id, `卡片的 drid 指错了：${card!.drid}`);
     assert(card!.msg === `讨论-${stamp}`, `卡片标题不对：${card!.msg}`);
     return `父频道生成卡片 → ${card!.msg}`;
+  });
+  await check('他人从讨论卡片加入公开讨论', async () => {
+    const info = await rest2.getRoomInfo(discussionId);
+    assert(info.prid === channelId, '非成员无法读取公开讨论信息');
+    await rest2.joinChannel(discussionId);
+    const subs = await rest2.getSubscriptions();
+    assert(subs.some((s) => s.rid === discussionId), '加入后订阅列表里没有讨论');
+  });
+  await check('讨论邀请后成员列表立即包含新人', async () => {
+    await rest.kickFromRoom(discussionId, discussionType, user2Id);
+    let members = await rest.getMembers(discussionId, discussionType, 1);
+    assert(!members.some((member) => member._id === user2Id), '被移出的成员仍在列表里');
+    await rest.inviteToRoom(discussionId, discussionType, user2Id);
+    members = await rest.getMembers(discussionId, discussionType, 1);
+    assert(members.some((member) => member._id === user2Id), '邀请成功后成员列表没有新人');
+    return `${members.length} 名成员，分页回读成功`;
   });
 
   // ---- 文件 ----
@@ -210,7 +248,10 @@ async function main() {
     assert(link, '找不到文件链接');
     const blob = await rest.fetchFile(link!);
     assert(blob.size > 0, '下载内容为空');
-    return `${blob.size} 字节`;
+    const absolute = /^https?:\/\//i.test(link!) ? link! : `${BASE}${link}`;
+    const absoluteBlob = await rest.fetchFile(absolute);
+    assert(absoluteBlob.size === blob.size, '绝对地址下载内容不一致');
+    return `${blob.size} 字节（相对/绝对地址均成功）`;
   });
 
   // ---- 会话管理 ----
@@ -274,6 +315,30 @@ async function main() {
     const msg = await received;
     rt.close();
     return `收到「${msg.msg}」`;
+  });
+  await check('__my_messages__ 收到未按房间订阅的消息', async () => {
+    const rt = new RcRealtimeClient(`${BASE.replace(/^http/, 'ws')}/websocket`);
+    await rt.connect();
+    await rt.login(me.authToken);
+    try {
+      const received = new Promise<RcMessage>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('10 秒未收到全局消息流')), 10_000);
+        rt.onStream('stream-room-messages', (_eventName, args) => {
+          const msg = args[0] as RcMessage;
+          if (msg?.rid === channelId && msg.msg?.includes('全局消息流测试')) {
+            clearTimeout(timer);
+            resolve(msg);
+          }
+        });
+      });
+      rt.subscribe('stream-room-messages', '__my_messages__');
+      await new Promise((r) => setTimeout(r, 500));
+      await rest2.sendMessage(channelId, '全局消息流测试');
+      const msg = await received;
+      return `收到 ${msg._id}`;
+    } finally {
+      rt.close();
+    }
   });
 
   // ---- 多人聊天 ----
@@ -507,6 +572,9 @@ async function main() {
     }
     assert(removed === createdRooms.length, `${createdRooms.length} 个房间只删掉了 ${removed} 个`);
     return `已清理 ${removed} 个房间`;
+  });
+  await check('注销测试会话', async () => {
+    await Promise.all([rest.logout(), rest2.logout()]);
   });
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);

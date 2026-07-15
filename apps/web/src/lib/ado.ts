@@ -54,19 +54,25 @@ export interface AdoWorkItemInfo {
   webUrl: string;
 }
 
-const itemCache = new Map<number, { item: AdoWorkItemInfo | null; ts: number }>();
-const inflight = new Map<number, Promise<AdoWorkItemInfo | null>>();
+const itemCache = new Map<string, { item: AdoWorkItemInfo | null; ts: number }>();
+const inflight = new Map<string, Promise<AdoWorkItemInfo | null>>();
 const CACHE_TTL = 60_000;
+
+function itemKey(config: WorkbenchConfig, id: number): string {
+  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
+  return `${config.mode}:${endpoint ?? ''}:${config.account}:${id}`;
+}
 
 /** 悬停卡片查询：60s 缓存 + 并发去重；未配置工作台返回 null */
 export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   const config = loadWorkbenchConfig();
   if (!config) return Promise.resolve(null);
+  const key = itemKey(config, id);
 
-  const cached = itemCache.get(id);
+  const cached = itemCache.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve(cached.item);
 
-  const existing = inflight.get(id);
+  const existing = inflight.get(key);
   if (existing) return existing;
 
   const load =
@@ -83,15 +89,15 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
 
   const promise = load
     .then((item) => {
-      itemCache.set(id, { item: item ?? null, ts: Date.now() });
+      itemCache.set(key, { item: item ?? null, ts: Date.now() });
       return item ?? null;
     })
     .catch(() => {
-      itemCache.set(id, { item: null, ts: Date.now() });
+      itemCache.set(key, { item: null, ts: Date.now() });
       return null;
     })
-    .finally(() => inflight.delete(id));
-  inflight.set(id, promise);
+    .finally(() => inflight.delete(key));
+  inflight.set(key, promise);
   return promise;
 }
 

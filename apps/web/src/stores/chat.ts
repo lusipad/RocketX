@@ -22,6 +22,7 @@ import { emojify } from '../lib/emoji';
 import { findCommand } from '../lib/slash';
 import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
+import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { humanError, toast } from './toast';
@@ -271,6 +272,59 @@ let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
 /** 正在飞的 channels.roles 请求，按房间去重 */
 const rolesInflight = new Map<string, Promise<RcRoomRole[]>>();
+/** 成员列表请求版本；邀请/移除后让更早的请求结果失效，避免旧名单回滚新状态。 */
+const memberVersions = new Map<string, number>();
+/** 服务端成员快照确认前，跨并发请求保留本地已成功的增删变更。 */
+const pendingMemberAdds = new Map<string, Map<string, RcUser>>();
+const pendingMemberRemovals = new Map<string, Set<string>>();
+
+function memberVersion(rid: string): number {
+  return memberVersions.get(rid) ?? 0;
+}
+
+function invalidateMemberRequests(rid: string): number {
+  const next = memberVersion(rid) + 1;
+  memberVersions.set(rid, next);
+  return next;
+}
+
+function stageMemberAdds(rid: string, users: RcUser[]) {
+  const additions = pendingMemberAdds.get(rid) ?? new Map<string, RcUser>();
+  const removals = pendingMemberRemovals.get(rid);
+  for (const user of users) {
+    additions.set(user._id, user);
+    removals?.delete(user._id);
+  }
+  pendingMemberAdds.set(rid, additions);
+}
+
+function stageMemberRemoval(rid: string, userId: string) {
+  pendingMemberAdds.get(rid)?.delete(userId);
+  const removals = pendingMemberRemovals.get(rid) ?? new Set<string>();
+  removals.add(userId);
+  pendingMemberRemovals.set(rid, removals);
+}
+
+function applyPendingMemberChanges(
+  rid: string,
+  members: RcUser[],
+  serverSnapshot = false,
+): RcUser[] {
+  const merged = new Map(members.map((member) => [member._id, member]));
+  const additions = pendingMemberAdds.get(rid);
+  for (const [id, member] of additions ?? []) {
+    if (serverSnapshot && merged.has(id)) additions?.delete(id);
+    else merged.set(id, member);
+  }
+  const removals = pendingMemberRemovals.get(rid);
+  for (const id of removals ?? []) {
+    if (serverSnapshot && !merged.has(id)) removals?.delete(id);
+    else merged.delete(id);
+  }
+  if (additions?.size === 0) pendingMemberAdds.delete(rid);
+  if (removals?.size === 0) pendingMemberRemovals.delete(rid);
+  return [...merged.values()];
+}
 /**
  * 已读回执是 RC 企业版功能。
  *
@@ -789,15 +843,19 @@ export const useChat = create<ChatState>((set, get) => ({
 
   loadMembers: async (rid) => {
     const cached = get().members[rid];
-    if (cached) return cached;
+    if (cached && !get().memberErrors[rid]) return cached;
     const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
+    const version = memberVersion(rid);
     try {
-      const members = await rest.getMembers(rid, type);
+      const snapshot = await rest.getMembers(rid, type);
+      if (memberVersion(rid) !== version) return get().members[rid] ?? snapshot;
+      const members = applyPendingMemberChanges(rid, snapshot, true);
       const errs = { ...get().memberErrors };
       delete errs[rid];
       set({ members: { ...get().members, [rid]: members }, memberErrors: errs });
       return members;
     } catch (err) {
+      if (memberVersion(rid) !== version) return get().members[rid] ?? [];
       // 仍返回 [] 保持其它调用方(Composer/RoomInfoPanel/inviteMembers)不受影响，
       // 但把失败原因记下来，让成员面板能区分「拉取失败」和「群里真没人」(P1-11)
       set({
@@ -1033,10 +1091,51 @@ export const useChat = create<ChatState>((set, get) => ({
     for (const u of users) {
       await rest.inviteToRoom(rid, type, u._id);
     }
-    // 邀请后清缓存，成员面板重新拉取
-    const members = { ...get().members };
-    delete members[rid];
-    set({ members });
+    // 邀请接口成功即代表这些用户已经是成员。服务端成员列表在高并发时可能短暂滞后，
+    // 直接清缓存并立刻重拉会偶发把刚邀请的人漏掉（issue #23）。刷新成功时以
+    // 服务器结果为准并补上本次邀请；只有刷新失败才退回旧缓存。这样既能立即显示
+    // 新人，也不会把其他管理员刚移除的旧成员重新塞回来。
+    stageMemberAdds(rid, users);
+    const version = invalidateMemberRequests(rid);
+    const optimistic = applyPendingMemberChanges(rid, get().members[rid] ?? []);
+    set({ members: { ...get().members, [rid]: optimistic } });
+
+    let refreshed: RcUser[] | null = null;
+    let refreshError: string | null = null;
+    try {
+      refreshed = await rest.getMembers(rid, type);
+    } catch (err) {
+      // 邀请本身已经成功；刷新失败时保留旧缓存并乐观加入新人。
+      refreshError = humanError(err, '成员列表刷新失败');
+    }
+    if (memberVersion(rid) !== version) return;
+    const nextMembers = applyPendingMemberChanges(
+      rid,
+      refreshed ?? get().members[rid] ?? [],
+      refreshed !== null,
+    );
+    const memberErrors = { ...get().memberErrors };
+    if (refreshError) memberErrors[rid] = refreshError;
+    else delete memberErrors[rid];
+    const room = get().rooms[rid];
+    set({
+      members: { ...get().members, [rid]: nextMembers },
+      memberErrors,
+      ...(room
+        ? {
+            rooms: {
+              ...get().rooms,
+              [rid]: {
+                ...room,
+                usersCount:
+                  refreshed === null
+                    ? Math.max(room.usersCount ?? 0, nextMembers.length)
+                    : nextMembers.length,
+              },
+            },
+          }
+        : {}),
+    });
     toast.success(
       users.length === 1
         ? `已添加 ${users[0].name || users[0].username}`
@@ -1112,10 +1211,10 @@ export const useChat = create<ChatState>((set, get) => ({
     if (list) {
       let changed = false;
       const next = list.map((m) => {
-        const val = ids.has(m._id);
-        if (!!m.pinned === val) return m;
+        const value = ids.has(m._id);
+        if (!!m.pinned === value) return m;
         changed = true;
-        return { ...m, pinned: val };
+        return { ...m, pinned: value };
       });
       if (changed) set({ messages: { ...get().messages, [rid]: next } });
     }
@@ -1239,14 +1338,23 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   openDiscussion: async (drid) => {
-    // 讨论多半是私有房间（继承父频道），而 openRoom 对不认识的 rid 会按 'c' 去
-    // channels.history 取历史 —— 那会 403。先把房间信息拿回来，类型就对了。
-    if (!get().subscriptions[drid] && !get().rooms[drid]) {
-      const info = await get().refreshRoomInfo(drid);
+    // 非成员先只展示房间与「加入」入口；直接 openRoom 会先请求 history 并报 403，
+    // 加入按钮即使随后成功也会因 historyLoaded=false 一直停在骨架屏。
+    if (!get().subscriptions[drid]) {
+      const info = get().rooms[drid] ?? (await get().refreshRoomInfo(drid));
       if (!info) {
         toast.show({ kind: 'error', message: '打不开这个讨论，可能你不在讨论成员里' });
         return;
       }
+      set({
+        activeRid: drid,
+        rightPanel: null,
+        pendingFiles: null,
+        replyTo: null,
+        selectMode: false,
+        selectedMids: new Set(),
+      });
+      return;
     }
     try {
       await get().openRoom(drid);
@@ -1258,8 +1366,9 @@ export const useChat = create<ChatState>((set, get) => ({
   joinRoom: async (rid) => {
     try {
       await rest.joinChannel(rid);
-      // 加入不一定推订阅变更，主动刷新让新订阅立刻生效（会话列表 + 通知过滤都靠它）
+      // 加入不一定推订阅变更，主动刷新并重新打开讨论。
       await refreshSubsAndRooms(set);
+      await get().openRoom(rid);
       toast.success('已加入');
     } catch (err) {
       toast.error(err, '加入失败，该讨论可能是私有的，需要成员邀请你');
@@ -1295,10 +1404,12 @@ export const useChat = create<ChatState>((set, get) => ({
     const type = roomTypeOf(get(), rid);
     try {
       await rest.kickFromRoom(rid, type, user._id);
+      stageMemberRemoval(rid, user._id);
+      invalidateMemberRequests(rid);
       set({
         members: {
           ...get().members,
-          [rid]: (get().members[rid] ?? []).filter((m) => m._id !== user._id),
+          [rid]: applyPendingMemberChanges(rid, get().members[rid] ?? []),
         },
       });
       toast.success(`已把 ${user.name || user.username} 移出群聊`);
@@ -1418,7 +1529,7 @@ export const useChat = create<ChatState>((set, get) => ({
       await rest.sendMessageRaw({
         rid,
         msg: stripQuotePrefix(msg.msg || '') || undefined,
-        attachments: msg.attachments?.filter((a) => !a.message_link),
+        attachments: forwardableAttachments(msg.attachments, rid === msg.rid),
       });
     }
     toast.success(
@@ -1440,12 +1551,15 @@ export const useChat = create<ChatState>((set, get) => ({
           _id: randomMessageId(),
           rid,
           msg: `[聊天记录] 共 ${ordered.length} 条`,
-          attachments: ordered.map((m) => ({
-            author_name: m.u.name || m.u.username,
-            text:
-              stripQuotePrefix(m.msg || '') || m.attachments?.[0]?.title || '[图片/文件]',
-            ts: m.ts,
-          })),
+          attachments: mergedForwardAttachments(
+            ordered.map((m) => ({
+              author: m.u.name || m.u.username,
+              text: stripQuotePrefix(m.msg || ''),
+              ts: m.ts,
+              attachments: m.attachments,
+            })),
+            ordered.every((message) => message.rid === rid),
+          ),
         });
       } else {
         for (const m of ordered) {
@@ -1453,7 +1567,7 @@ export const useChat = create<ChatState>((set, get) => ({
             _id: randomMessageId(),
             rid,
             msg: stripQuotePrefix(m.msg || '') || undefined,
-            attachments: m.attachments?.filter((a) => !a.message_link),
+            attachments: forwardableAttachments(m.attachments, rid === m.rid),
           });
         }
       }
