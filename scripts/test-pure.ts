@@ -776,6 +776,32 @@ async function main(): Promise<void> {
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
 
+  console.log('\n[站内文件路径归一化]');
+  const { normalizeAssetPath } = await import('../apps/web/src/lib/client');
+  check(
+    '相对路径原样返回',
+    normalizeAssetPath('/file-upload/abc/图.png') === '/file-upload/abc/图.png',
+  );
+  check(
+    'Site_Url 拼的绝对地址取回路径部分',
+    normalizeAssetPath('http://localhost:3300/file-upload/abc/a.png') === '/file-upload/abc/a.png',
+  );
+  check(
+    '中文文件名：取路径时百分号编码（请求层要的就是编码后的形态）',
+    normalizeAssetPath('http://localhost:3300/file-upload/abc/图.png') ===
+      '/file-upload/abc/%E5%9B%BE.png',
+  );
+  check(
+    '带查询串保留',
+    normalizeAssetPath('https://chat.example.com/avatar/lisi?etag=x') === '/avatar/lisi?etag=x',
+  );
+  check(
+    '外部存储地址（非站内端点）原样保留',
+    normalizeAssetPath('https://s3.example.com/bucket/abc.png') ===
+      'https://s3.example.com/bucket/abc.png',
+  );
+  check('非 URL 字符串原样返回', normalizeAssetPath('not-a-url') === 'not-a-url');
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   if (failed > 0) process.exit(1);
 }

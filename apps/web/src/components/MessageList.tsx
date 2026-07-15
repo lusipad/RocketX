@@ -36,7 +36,8 @@ export default function MessageList({ rid }: { rid: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  const anchor = useRef<{ h: number; t: number } | null>(null);
+  /** 翻页前的内容高度快照：还原时按「新增高度」平移当前位置 */
+  const anchor = useRef<number | null>(null);
   /** 已经为本会话定位过未读分割线（只做一次，之后正常跟随） */
   const didLocateUnread = useRef(false);
 
@@ -70,7 +71,7 @@ export default function MessageList({ rid }: { rid: string }) {
 
     if (el.scrollTop < 60 && hasMore && !loadingOlder) {
       setLoadingOlder(true);
-      anchor.current = { h: el.scrollHeight, t: el.scrollTop };
+      anchor.current = el.scrollHeight;
       void loadOlder().finally(() => setLoadingOlder(false));
     }
   };
@@ -89,9 +90,11 @@ export default function MessageList({ rid }: { rid: string }) {
     const el = scrollRef.current;
     if (!el || list.length === 0) return;
 
-    // 1) 向上翻页：保持视口位置不跳
-    if (anchor.current) {
-      el.scrollTop = el.scrollHeight - anchor.current.h + anchor.current.t;
+    // 1) 向上翻页：按新增的内容高度平移，保持视口位置不跳。
+    //    必须用「当前 scrollTop + 增量」而不是回写请求发起时记下的绝对位置 ——
+    //    加载期间用户往下滚过的话，绝对回写会把视口猛地拽回上面（issue #19-3）
+    if (anchor.current !== null) {
+      el.scrollTop += el.scrollHeight - anchor.current;
       anchor.current = null;
       return;
     }
@@ -165,7 +168,10 @@ export default function MessageList({ rid }: { rid: string }) {
       {/* 多选操作栏（issue #16 合并转发） */}
       {selectMode && (
         <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1 px-4 py-2">
-          <span className="text-sm text-ink-2">已选 {selectedMids.size} 条</span>
+          <span className="text-sm text-ink-2">
+            已选 {selectedMids.size} 条
+            <span className="ml-2 text-xs text-ink-3">Esc 取消</span>
+          </span>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setForwardOpen(true)}
@@ -207,7 +213,13 @@ export default function MessageList({ rid }: { rid: string }) {
           </div>
         </div>
       )}
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      {/* overflow-anchor 关掉：翻页/贴底的滚动补偿全由我们自己做，
+          浏览器原生锚定再插一脚就是双重补偿，表现为滚动时突然回跳 */}
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-6 py-4 [overflow-anchor:none]"
+      >
         <div>
           {hasMore && (
             <div className="py-2 text-center text-xs text-ink-3">

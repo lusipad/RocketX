@@ -84,9 +84,26 @@ export default function WorkItemLink({ id }: { id: number }) {
   }
 
   if (info === 'loading') {
+    // 配置了 ADO 时大概率会展开成卡片：占位就按卡片尺寸画骨架，
+    // 否则加载完成的一瞬间消息列表会被撑开、滚动位置跟着跳（issue #19-3）。
+    // 没配置时 fetchWorkItem 立即返回 null，保持小号占位避免闪一下大骨架。
+    if (!webBase) {
+      return (
+        <span className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-line bg-fill-1 px-2 py-1 align-middle text-xs text-primary">
+          #{id} …
+        </span>
+      );
+    }
     return (
-      <span className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-line bg-fill-1 px-2 py-1 align-middle text-xs text-primary">
-        #{id} …
+      <span className="my-1 inline-block w-full max-w-sm align-middle">
+        <span className="flex animate-pulse flex-col rounded-lg border border-line bg-fill-1">
+          <span className="block h-1 rounded-t-lg bg-line" />
+          <span className="px-3 pt-1.5 pb-2">
+            <span className="block text-xs text-ink-3">#{id} 加载中…</span>
+            <span className="mt-1 block h-4 w-44 max-w-full rounded bg-fill-2" />
+            <span className="mt-1.5 block h-[18px] w-24 rounded bg-fill-2" />
+          </span>
+        </span>
       </span>
     );
   }

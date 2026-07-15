@@ -7,7 +7,7 @@ import { create } from 'zustand';
 const KEY = 'rcx-ui-prefs';
 
 interface UiPrefsState {
-  /** 鼠标停留多久才弹出消息悬浮工具栏（毫秒）。按 issue #18.4 的要求默认 3 秒 */
+  /** 鼠标停留多久才弹出消息悬浮工具栏（毫秒）。issue #19-4 要求从 3 秒改为默认 2 秒 */
   hoverDelayMs: number;
   setHoverDelayMs: (ms: number) => void;
 }
@@ -21,7 +21,7 @@ function load(): { hoverDelayMs?: number } {
 }
 
 export const useUiPrefs = create<UiPrefsState>((set) => ({
-  hoverDelayMs: load().hoverDelayMs ?? 3000,
+  hoverDelayMs: load().hoverDelayMs ?? 2000,
   setHoverDelayMs: (ms) => {
     try {
       localStorage.setItem(KEY, JSON.stringify({ ...load(), hoverDelayMs: ms }));

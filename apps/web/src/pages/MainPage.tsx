@@ -3,6 +3,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { type ModuleKey, useUI } from '../stores/ui';
 import { requestNotifyPermission } from '../lib/notify';
+import { clearTaskbarFlash } from '../lib/taskbar';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -33,6 +34,13 @@ export default function MainPage() {
     // 申请桌面通知权限（桌面端走系统通知插件，浏览器走 Web Notification）
     void requestNotifyPermission().catch(() => {});
   }, [init, loadPrefs]);
+
+  // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
+  useEffect(() => {
+    const onFocus = () => void clearTaskbarFlash();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
 
   // 标题栏未读数（免打扰会话不计入）
   useEffect(() => {
@@ -80,9 +88,14 @@ export default function MainPage() {
         useUI.getState().setModule(MODULES[Number(key) - 1]);
         return;
       }
-      // Escape 关闭右侧面板
+      // Escape：优先退出多选（issue #19-2），其次关闭右侧面板。
+      // 弹窗/灯箱等自己捕获 Esc 并 stopPropagation，不会走到这里。
       if (e.key === 'Escape') {
         const state = useChat.getState();
+        if (state.selectMode) {
+          state.exitSelectMode();
+          return;
+        }
         if (state.rightPanel) state.setPanel(null);
       }
     };

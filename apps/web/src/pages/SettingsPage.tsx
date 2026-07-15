@@ -464,6 +464,7 @@ function MessageSection() {
           options={[
             { key: '500', label: '0.5 秒' },
             { key: '1000', label: '1 秒' },
+            { key: '2000', label: '2 秒' },
             { key: '3000', label: '3 秒' },
           ]}
         />
