@@ -348,6 +348,11 @@ export default function WorkbenchPage() {
 
   const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
   const activeQuery = customQueries.find((q) => q.id === activeQueryId);
+  const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
+
+  useEffect(() => {
+    if (!canUseCustomQueries && activeQueryId) setTab('overview');
+  }, [activeQueryId, canUseCustomQueries, setTab]);
 
   const fetchQuery = useCallback(
     async (q: typeof customQueries[0], force = false) => {
@@ -497,7 +502,7 @@ export default function WorkbenchPage() {
           </button>
         ))}
 
-        {connected && customQueries.length > 0 && (
+        {canUseCustomQueries && customQueries.length > 0 && (
           <>
             <div className="mt-4 mb-1 px-2 text-2xs font-medium text-ink-3">自定义查询</div>
             {customQueries.map((q) => (
@@ -534,7 +539,7 @@ export default function WorkbenchPage() {
           </>
         )}
 
-        {connected && (
+        {canUseCustomQueries && (
           <button
             onClick={() => setQueryDialog(true)}
             className="mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-primary"
