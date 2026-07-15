@@ -502,10 +502,12 @@ export class RcRestClient {
   async getMembers(rid: string, type: RoomType, count = 200): Promise<RcUser[]> {
     const endpoint =
       type === 'c' ? 'channels.members' : type === 'p' ? 'groups.members' : 'im.members';
-    const pageSize = Math.max(1, count);
+    const pageSize = Number.isFinite(count) ? Math.max(1, count) : 200;
+    const maxPages = 1_000;
     const members = new Map<string, RcUser>();
     let offset = 0;
-    while (true) {
+    let total: number | undefined;
+    for (let pageNumber = 0; pageNumber < maxPages; pageNumber++) {
       const res = await this.request<{ members: RcUser[]; total?: number }>(
         'GET',
         endpoint,
@@ -513,12 +515,45 @@ export class RcRestClient {
         { roomId: rid, count: pageSize, offset },
       );
       const page = res.members ?? [];
+      if (Number.isFinite(res.total) && res.total! >= 0) total = Math.floor(res.total!);
+      const before = members.size;
       for (const member of page) members.set(member._id, member);
-      if (page.length === 0) break;
+      if (page.length === 0) {
+        if (total !== undefined && members.size < total) {
+          throw new RcApiError(
+            `成员列表不完整：服务端报告 ${total} 人，只返回 ${members.size} 人`,
+            502,
+            'members-pagination-incomplete',
+          );
+        }
+        return [...members.values()];
+      }
+      if (members.size === before) {
+        throw new RcApiError(
+          `成员列表分页没有新增成员（offset ${offset}）`,
+          502,
+          'members-pagination-stalled',
+        );
+      }
       offset += page.length;
-      if (res.total !== undefined ? offset >= res.total : page.length < pageSize) break;
+      if (total !== undefined) {
+        if (members.size >= total) return [...members.values()];
+        if (offset >= total) {
+          throw new RcApiError(
+            `成员列表不完整：服务端报告 ${total} 人，只返回 ${members.size} 个唯一成员`,
+            502,
+            'members-pagination-incomplete',
+          );
+        }
+      } else if (page.length < pageSize) {
+        return [...members.values()];
+      }
     }
-    return [...members.values()];
+    throw new RcApiError(
+      `成员列表分页请求达到 ${maxPages} 页上限`,
+      502,
+      'members-pagination-limit',
+    );
   }
 
   /** 房间完整信息（含 topic / description / announcement / 拥有者） */
