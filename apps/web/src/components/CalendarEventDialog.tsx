@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import {
   useCalendar,
@@ -57,6 +57,17 @@ export default function CalendarEventDialog({
   const [repeatEndDate, setRepeatEndDate] = useState(existing?.repeat?.endDate ?? '');
   const [repeatEndAfter, setRepeatEndAfter] = useState<number | undefined>(existing?.repeat?.endAfter);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
 
   const isEdit = !!existing;
   /**
