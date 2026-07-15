@@ -10,6 +10,7 @@
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
     "smoke": "tsx scripts/smoke.ts",
     "test:pure": "tsx scripts/test-pure.ts",
+    "test:regression": "tsx --test scripts/regressions/*.test.ts",
     "gen:emoji": "tsx scripts/gen-emoji.ts",
     "test:classify": "tsx scripts/test-classify.ts"
   },

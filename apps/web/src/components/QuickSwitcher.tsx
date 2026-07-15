@@ -8,6 +8,7 @@ import { realtime, rest } from '../lib/client';
 import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import { searchMessagesGlobal } from '../lib/quickSearch';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -18,26 +19,6 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'messages', label: '消息' },
   { key: 'contacts', label: '联系人/频道' },
 ];
-
-/** 跨会话全局搜索消息：优先服务端全局搜索，失败时回退逐会话搜索 */
-async function searchMessagesGlobal(
-  keyword: string,
-  recentRids: string[],
-): Promise<RcMessage[]> {
-  try {
-    const result = (await realtime.call('rocketchatSearch.search', keyword, {
-      rid: undefined,
-    })) as { message?: { docs?: RcMessage[] } };
-    const docs = result?.message?.docs ?? [];
-    if (docs.length > 0) return docs;
-  } catch {
-    /* 服务器未开全局搜索时回退 */
-  }
-  const lists = await Promise.all(
-    recentRids.slice(0, 8).map((rid) => rest.searchMessages(rid, keyword, 5).catch(() => [])),
-  );
-  return lists.flat();
-}
 
 /** 全局搜索（Ctrl/Cmd+K）：会话跳转 + 跨会话消息 + 联系人/频道 */
 export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
@@ -54,7 +35,10 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
     users: [],
     rooms: [],
   });
-  const [searching, setSearching] = useState(false);
+  const [messageSearching, setMessageSearching] = useState(false);
+  const [contactSearching, setContactSearching] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
+  const [contactError, setContactError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabRef = useRef(tab);
@@ -103,44 +87,66 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
     if (!q) {
       setMessages([]);
       setContacts({ users: [], rooms: [] });
-      setSearching(false);
+      setMessageSearching(false);
+      setContactSearching(false);
+      setMessageError(null);
+      setContactError(null);
       return;
     }
     let cancelled = false;
     setMessages([]);
     setContacts({ users: [], rooms: [] });
-    setSearching(true);
+    setMessageSearching(true);
+    setContactSearching(true);
+    setMessageError(null);
+    setContactError(null);
     timer.current = setTimeout(() => {
-      void Promise.all([
-        searchMessagesGlobal(
-          q,
-          conversationRidsRef.current,
-        ),
-        rest.spotlight(q).catch(() => ({ users: [], rooms: [] })),
-      ]).then(([messageDocs, found]) => {
-        if (cancelled) return;
-        const nextMessages = messageDocs
-          .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
-          .slice(0, 20);
-        const nextContacts = { users: found.users ?? [], rooms: found.rooms ?? [] };
-        const currentConversations = filteredConvsRef.current;
-        setMessages(nextMessages);
-        setContacts(nextContacts);
-        setSearching(false);
+      void searchMessagesGlobal(
+        q,
+        conversationRidsRef.current,
+        {
+          global: (keyword) => realtime.call('rocketchatSearch.search', keyword, { rid: undefined }),
+          room: (rid, keyword) => rest.searchMessages(rid, keyword, 5),
+        },
+        () => !cancelled,
+      )
+        .then((messageDocs) => {
+          if (cancelled) return;
+          const nextMessages = messageDocs
+            .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
+            .slice(0, 20);
+          setMessages(nextMessages);
+          setMessageSearching(false);
+          if (filteredConvsRef.current.length === 0 && nextMessages.length > 0) {
+            setTab('messages');
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMessageSearching(false);
+          setMessageError('消息搜索暂时不可用，请稍后重试');
+        });
 
-        const current = tabRef.current;
-        const currentHasResults =
-          current === 'convs'
-            ? currentConversations.length > 0
-            : current === 'messages'
-              ? nextMessages.length > 0
-              : nextContacts.users.length + nextContacts.rooms.length > 0;
-        if (!currentHasResults) {
-          if (currentConversations.length > 0) setTab('convs');
-          else if (nextMessages.length > 0) setTab('messages');
-          else if (nextContacts.users.length + nextContacts.rooms.length > 0) setTab('contacts');
-        }
-      });
+      void rest
+        .spotlight(q)
+        .then((found) => {
+          if (cancelled) return;
+          const nextContacts = { users: found.users ?? [], rooms: found.rooms ?? [] };
+          setContacts(nextContacts);
+          setContactSearching(false);
+          if (
+            filteredConvsRef.current.length === 0 &&
+            nextContacts.users.length + nextContacts.rooms.length > 0 &&
+            tabRef.current !== 'messages'
+          ) {
+            setTab('contacts');
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setContactSearching(false);
+          setContactError('联系人和频道搜索暂时不可用，请稍后重试');
+        });
     }, 300);
     return () => {
       cancelled = true;
@@ -276,17 +282,20 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
             ))}
           {tab === 'convs' && filteredConvs.length === 0 && (
             <div className="py-8 text-center text-sm text-ink-3">
-              {searching ? '正在搜索其它范围…' : '未找到匹配的会话'}
+              {messageSearching || contactSearching ? '正在搜索其它范围…' : '未找到匹配的会话'}
             </div>
           )}
 
           {tab === 'messages' && (
             <>
-              {searching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
-              {!searching && keyword.trim() && messages.length === 0 && (
+              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
+              {!messageSearching && messageError && (
+                <div className="py-8 text-center text-sm text-danger">{messageError}</div>
+              )}
+              {!messageSearching && !messageError && keyword.trim() && messages.length === 0 && (
                 <div className="py-8 text-center text-sm text-ink-3">没有找到相关消息</div>
               )}
-              {!searching && !keyword.trim() && (
+              {!messageSearching && !messageError && !keyword.trim() && (
                 <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的消息</div>
               )}
               {messages.map((m, i) => (
@@ -321,8 +330,11 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
 
           {tab === 'contacts' && (
             <>
-              {searching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
-              {!searching && !keyword.trim() && (
+              {contactSearching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
+              {!contactSearching && contactError && (
+                <div className="py-8 text-center text-sm text-danger">{contactError}</div>
+              )}
+              {!contactSearching && !contactError && !keyword.trim() && (
                 <div className="py-8 text-center text-sm text-ink-3">输入用户名或频道名搜索</div>
               )}
               {contacts.users.length > 0 && (
@@ -372,7 +384,8 @@ export default function QuickSwitcher({ onClose, initialTab }: { onClose: () => 
                 </button>
                 );
               })}
-              {!searching &&
+              {!contactSearching &&
+                !contactError &&
                 keyword.trim() &&
                 contacts.users.length === 0 &&
                 contacts.rooms.length === 0 && (
