@@ -25,6 +25,7 @@ import { usePrefs } from '../stores/prefs';
 import { useAliases } from '../stores/aliases';
 import { useUiPrefs } from '../stores/uiPrefs';
 import { useWorkbench } from '../stores/workbench';
+import { useOnboarding } from '../stores/onboarding';
 import { useWiTemplates } from '../stores/wiTemplates';
 import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
@@ -75,6 +76,8 @@ function AccountSection() {
   const [statusText, setStatusText] = useState('');
   const [saved, setSaved] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const [confirmSetup, setConfirmSetup] = useState(false);
+  const resetOnboarding = useOnboarding((s) => s.reset);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -320,6 +323,15 @@ function AccountSection() {
         </button>
       </Row>
 
+      <Row label="首次设置" hint="重新确认 Rocket.Chat 登录、Azure DevOps 连接和首用清单">
+        <button
+          onClick={() => setConfirmSetup(true)}
+          className="h-9 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
+        >
+          重新运行首次设置
+        </button>
+      </Row>
+
       {confirmLogout && (
         <ConfirmDialog
           title="退出登录"
@@ -327,6 +339,18 @@ function AccountSection() {
           confirmLabel="退出"
           onConfirm={() => void logout()}
           onClose={() => setConfirmLogout(false)}
+        />
+      )}
+      {confirmSetup && (
+        <ConfirmDialog
+          title="重新运行首次设置"
+          message="将退出当前登录并回到登录页。已有 Azure DevOps 配置会保留并自动回填。"
+          confirmLabel="重新开始"
+          onConfirm={() => {
+            resetOnboarding();
+            void logout();
+          }}
+          onClose={() => setConfirmSetup(false)}
         />
       )}
     </>
@@ -513,6 +537,7 @@ function MessageSection() {
 function NotificationSection() {
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
+  const markChecklist = useOnboarding((s) => s.markChecklist);
   // granted / default(未开启,可申请)。桌面端无法区分 denied,统一按可申请处理
   const [permission, setPermission] = useState<'granted' | 'default'>('default');
 
@@ -534,9 +559,10 @@ function NotificationSection() {
           {permission === 'default' && (
             <button
               onClick={() =>
-                void requestNotifyPermission().then((ok) =>
-                  setPermission(ok ? 'granted' : 'default'),
-                )
+                void requestNotifyPermission().then((ok) => {
+                  setPermission(ok ? 'granted' : 'default');
+                  if (ok) markChecklist('notificationsEnabled');
+                })
               }
               className="h-8 rounded-md bg-primary px-3 text-xs text-white hover:bg-primary-hover"
             >
@@ -625,6 +651,7 @@ function WorkbenchSection() {
       },
   );
   const setWorkbenchConfig = useWorkbench((s) => s.setConfig);
+  const setOnboardingAdo = useOnboarding((s) => s.setAdo);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [steps, setSteps] = useState<ProbeStep[]>([]);
@@ -841,6 +868,7 @@ function WorkbenchSection() {
               auth: config.auth,
               account: config.account.trim(),
             });
+            setOnboardingAdo('configured');
             setSaved(true);
             setDirty(false);
             toast.success('工作台配置已保存');
@@ -996,8 +1024,8 @@ function AboutSection() {
   );
 }
 
-export default function SettingsPage() {
-  const [section, setSection] = useState<Section>('account');
+export default function SettingsPage({ initialSection = 'account' }: { initialSection?: Section }) {
+  const [section, setSection] = useState<Section>(initialSection);
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
   const loadPrefs = usePrefs((s) => s.load);

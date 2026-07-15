@@ -582,6 +582,7 @@ export default function Composer() {
       <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
+          data-composer-input
           value={text}
           onChange={onChange}
           onKeyDown={onKeyDown}

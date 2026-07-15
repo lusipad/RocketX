@@ -26,6 +26,7 @@ import { flashTaskbar } from '../lib/taskbar';
 import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
+import { useOnboarding } from './onboarding';
 import { humanError, toast } from './toast';
 
 export interface Conversation {
@@ -973,13 +974,17 @@ export const useChat = create<ChatState>((set, get) => ({
         ...(opts?.tmid ? { tmid: opts.tmid } : {}),
       });
       set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
+      useOnboarding.getState().markChecklist('sentMessage');
       scheduleReceiptRefresh(rid);
     } catch (err) {
       // 只对**仍是 pending** 的那条标失败：WS 回声可能已抢先把 temp 替换成真实消息
       //（同 _id、无 pending 字段），此时其实发送成功了，不能给它扣一顶失败的帽子。
       const cur = get().messages[rid] ?? [];
       const stillPending = cur.some((m) => m._id === clientId && m.pending);
-      if (!stillPending) return;
+      if (!stillPending) {
+        useOnboarding.getState().markChecklist('sentMessage');
+        return;
+      }
       set({
         messages: {
           ...get().messages,
@@ -1680,6 +1685,7 @@ export const useChat = create<ChatState>((set, get) => ({
     await rest.openDirectMessage(room._id).catch(() => {});
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);
+    useOnboarding.getState().markChecklist('startedConversation');
     return room._id;
   },
 
@@ -1687,6 +1693,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const room = await rest.createGroup(name, members, priv);
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);
+    useOnboarding.getState().markChecklist('startedConversation');
     toast.success(`已创建群组「${name}」`);
     return room._id;
   },
@@ -1695,6 +1702,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const team = await rest.createTeam(name, members, priv);
     await refreshSubsAndRooms(set);
     await get().openRoom(team.roomId);
+    useOnboarding.getState().markChecklist('startedConversation');
     toast.success(`已创建团队「${name}」`);
     return team.roomId;
   },

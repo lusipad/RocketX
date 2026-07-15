@@ -3,6 +3,7 @@ import type { RcUser } from '@rcx/rc-client';
 import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
 import { ensureAccountScope } from '../lib/accountScope';
 import { restoreTrayAttention } from '../lib/tray';
+import { loginFailureMessage } from '../lib/loginDiagnostic';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -107,17 +108,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       }
       set({ status: 'authed', user: data.me, error: null });
     } catch (err) {
-      // Tauri 插件可能抛字符串而非 Error，都要兜住
-      const raw = err instanceof Error ? err.message : String(err ?? '');
-      let friendly: string;
-      if (/unauthorized/i.test(raw)) {
-        friendly = '用户名或密码错误';
-      } else if (/fetch|network|load failed|error sending request|not allowed|scope/i.test(raw)) {
-        friendly = '无法连接服务器：请检查服务器地址是否正确、网络是否可达';
-      } else {
-        friendly = raw || '登录失败，请重试';
-      }
-      set({ status: 'guest', error: friendly });
+      set({ status: 'guest', error: loginFailureMessage(err) });
     }
   },
 

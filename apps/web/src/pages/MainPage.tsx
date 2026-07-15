@@ -1,8 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { type ModuleKey, useUI } from '../stores/ui';
-import { requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import {
   clearTrayAttention,
@@ -22,23 +21,31 @@ import TodosPage from './TodosPage';
 import CalendarPage from './CalendarPage';
 import WorkbenchPage from './WorkbenchPage';
 import SettingsPage from './SettingsPage';
+import FirstUseChecklist from '../components/FirstUseChecklist';
+import { StartDMDialog } from '../components/NewChatDialogs';
+import { useWorkbench } from '../stores/workbench';
 
 export default function MainPage() {
   const init = useChat((s) => s.init);
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
+  const activeRid = useChat((s) => s.activeRid);
   const module = useUI((s) => s.module);
   const switcher = useUI((s) => s.switcherOpen);
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
 
   const loadPrefs = usePrefs((s) => s.load);
   const switcherTab = useRef<'messages' | undefined>(undefined);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const workbenchConfig = useWorkbench((s) => s.config);
+  const workbenchConnected = !!(
+    workbenchConfig &&
+    (workbenchConfig.mode === 'direct' ? workbenchConfig.adoBase : workbenchConfig.bridge)
+  );
 
   useEffect(() => {
     void init();
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
-    // 申请桌面通知权限（桌面端走系统通知插件，浏览器走 Web Notification）
-    void requestNotifyPermission().catch(() => {});
   }, [init, loadPrefs]);
 
   // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
@@ -131,8 +138,10 @@ export default function MainPage() {
         <ContactsPage />
       ) : module === 'calendar' ? (
         <CalendarPage />
-      ) : module === 'workbench' ? (
+      ) : module === 'workbench' && workbenchConnected ? (
         <WorkbenchPage />
+      ) : module === 'workbench' ? (
+        <SettingsPage initialSection="workbench" />
       ) : (
         <SettingsPage />
       )}
@@ -144,6 +153,18 @@ export default function MainPage() {
       {switcher && <QuickSwitcher onClose={() => setSwitcher(false)} initialTab={switcherTab.current} />}
       <UploadConfirm />
       <Toaster />
+      <FirstUseChecklist
+        hasActiveConversation={!!activeRid}
+        onStartConversation={() => {
+          useUI.getState().setModule('messages');
+          setNewChatOpen(true);
+        }}
+        onFocusComposer={() => {
+          useUI.getState().setModule('messages');
+          setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-composer-input]')?.focus());
+        }}
+      />
+      {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
     </div>
   );
 }

@@ -2,18 +2,23 @@ import { useState, type FormEvent } from 'react';
 import { Rocket } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { getServerBase, isTauri, setServerBase } from '../lib/client';
+import { loginFailureMessage, probeRocketChat } from '../lib/loginDiagnostic';
 
 export default function LoginPage() {
   const { status, error, login } = useAuth();
   const [server, setServer] = useState(
-    () => getServerBase() || (isTauri ? 'http://localhost:3300' : ''),
+    () =>
+      getServerBase() ||
+      (import.meta.env.VITE_ROCKETCHAT_URL as string | undefined) ||
+      (isTauri ? 'http://localhost:3300' : ''),
   );
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
-  const busy = status === 'authing';
+  const [checking, setChecking] = useState(false);
+  const busy = checking || status === 'authing';
 
-  const onSubmit = (e: FormEvent) => {
+  const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
     const trimmed = server.trim();
@@ -21,13 +26,27 @@ export default function LoginPage() {
       setServerError('桌面端必须填写服务器地址');
       return;
     }
-    if (trimmed && !/^https?:\/\//.test(trimmed)) {
-      setServerError('服务器地址需以 http:// 或 https:// 开头');
-      return;
+    if (trimmed) {
+      try {
+        const url = new URL(trimmed);
+        if (!url.hostname || !['http:', 'https:'].includes(url.protocol)) throw new Error();
+      } catch {
+        setServerError('服务器地址无效，请填写以 http:// 或 https:// 开头的完整地址');
+        return;
+      }
     }
     setServerError(null);
     setServerBase(trimmed);
-    void login(username, password);
+    setChecking(true);
+    try {
+      await probeRocketChat(trimmed);
+    } catch (err) {
+      setServerError(loginFailureMessage(err));
+      setChecking(false);
+      return;
+    }
+    setChecking(false);
+    await login(username, password);
   };
 
   return (
@@ -41,6 +60,7 @@ export default function LoginPage() {
             <Rocket size={24} />
           </div>
           <div>
+            <div className="mb-0.5 text-xs text-primary">连接 Rocket.Chat</div>
             <div className="text-xl font-semibold">RocketChat X</div>
             <div className="text-xs text-ink-3">飞书体验 · Rocket.Chat 内核</div>
           </div>
@@ -86,7 +106,7 @@ export default function LoginPage() {
             disabled={busy || !username || !password}
             className="h-10 w-full rounded-md bg-primary text-sm font-medium text-white transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {busy ? '登录中…' : '登录'}
+            {checking ? '正在检查服务器…' : status === 'authing' ? '登录中…' : '登录'}
           </button>
         </form>
 

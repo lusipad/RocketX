@@ -1,0 +1,28 @@
+# Implementation notes — 普通员工首次上手
+
+Plan: 当前任务对话中的《第一项：普通员工首次上手》
+
+## Shipped vs planned
+
+已交付 Rocket.Chat 登录预检、可跳过的 Azure DevOps 第二步，以及按服务器和账号隔离的首用清单。通知授权改为用户主动触发，工作台未配置时直接进入连接设置。既有 ADO 配置会跳过第二步，未新增服务端接口或依赖。
+
+## Decisions
+
+- 首次引导状态按 Rocket.Chat 服务器和用户 ID 组合隔离，不复用账号数据归档机制。
+- 已有有效 ADO 配置的用户直接视为第二步已完成，避免升级后强制重复配置。
+- 首用清单只在会话创建、消息服务端确认和通知实际授权三个成功点写入完成状态。
+- Web 首次引导默认选择 ado-bridge；Windows 桌面端默认直连并优先尝试集成认证。
+- 登录页始终使用中性“连接 Rocket.Chat”文案；只有登录后读取到当前服务器和账号的待处理状态，才显示首次设置，避免普通重新登录被误判为首次使用。
+
+## Deviations
+
+- ADO 连接成功后直接进入主界面，不额外停留在成功确认页；失败信息留在当前步骤供修改和重试。
+
+## Surprises
+
+- `SettingsPage` 已经包含完整 ADO 探测 UI，但连接编排仍在页面内部；首次引导直接复用底层 `probeAdo` / `directGetIdentity`，不复制探测算法。
+- 真实 smoke 首次运行时本地 `admin` 密码与仓库声明的开发凭据漂移；恢复 Meteor 的 SHA-256 后 bcrypt 哈希后，50 项全部通过。
+
+## Questions for review
+
+- 无。
