@@ -13,8 +13,10 @@ import {
   chooseAvailableSearchTab,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
+  mergeMessageSearchResults,
   searchMessagesCached,
   searchMessagesGlobal,
+  searchLoadedMessages,
   searchesSettledFor,
   type QuickSearchTab,
 } from '../lib/quickSearch';
@@ -186,8 +188,18 @@ export default function QuickSwitcher({
     contacts: contactUsers.length + contacts.rooms.length,
     work: workResults.length,
   };
-  const messageSearchRids = useMemo(() => Object.keys(subscriptions).sort(), [subscriptions]);
-  const conversationScope = useMemo(() => messageSearchRids.join('\0'), [messageSearchRids]);
+  const messageSearchRids = useMemo(() => {
+    const recent = conversations.map((conversation) => conversation.rid);
+    const seen = new Set(recent);
+    return [
+      ...recent,
+      ...Object.keys(subscriptions).filter((rid) => !seen.has(rid)).sort(),
+    ];
+  }, [conversations, subscriptions]);
+  const conversationScope = useMemo(
+    () => Object.keys(subscriptions).sort().join('\0'),
+    [subscriptions],
+  );
   const conversationRidsRef = useRef<string[]>([]);
   conversationRidsRef.current = messageSearchRids;
 
@@ -256,7 +268,8 @@ export default function QuickSwitcher({
       return;
     }
     let cancelled = false;
-    setMessages([]);
+    const localMessages = searchLoadedMessages(q, useChat.getState().messages);
+    setMessages(localMessages);
     setContacts({ users: [], rooms: [] });
     setMessageSearching(true);
     setContactSearching(true);
@@ -285,14 +298,17 @@ export default function QuickSwitcher({
               room: (rid, keyword) => rest.searchMessages(rid, keyword, 20),
             },
             () => !cancelled,
+            (partialMessages) => {
+              if (!cancelled) {
+                setMessages(mergeMessageSearchResults(localMessages, partialMessages));
+              }
+            },
           ),
         () => !cancelled,
       )
         .then((messageDocs) => {
           if (cancelled) return;
-          const nextMessages = messageDocs
-            .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
-            .slice(0, 20);
+          const nextMessages = mergeMessageSearchResults(localMessages, messageDocs);
           setMessages(nextMessages);
           setMessageSearching(false);
           setMessageSettledKeyword(q);
@@ -643,8 +659,15 @@ export default function QuickSwitcher({
                     : '暂无未读 · 显示最近会话'}
                 </div>
               )}
-              {keyword.trim() && (messageSearching || contactSearching) && (
-                <div className="px-4 py-1.5 text-2xs text-ink-3">正在补全远端结果…</div>
+              {keyword.trim() && contactSearching && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">正在补全联系人和频道…</div>
+              )}
+              {keyword.trim() && messageSearching && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">
+                  {messages.length > 0
+                    ? '已显示本机结果，正在后台搜索完整历史…'
+                    : '正在后台搜索完整历史消息…'}
+                </div>
               )}
               {QUICK_SEARCH_RESULT_SECTIONS.map((section) => {
                 const items = overviewItems.filter((item) => item.section === section);
@@ -750,9 +773,23 @@ export default function QuickSwitcher({
 
           {tab === 'messages' && (
             <>
-              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">正在搜索全部历史…</div>}
+              {messageSearching && (
+                <div className={messages.length > 0
+                  ? 'px-4 py-1.5 text-2xs text-ink-3'
+                  : 'py-8 text-center text-sm text-ink-3'}
+                >
+                  {messages.length > 0
+                    ? '已显示本机和已完成会话的结果，正在继续搜索完整历史…'
+                    : '正在搜索全部历史…'}
+                </div>
+              )}
               {!messageSearching && messageError && (
-                <div className="py-8 text-center text-sm text-danger">{messageError}</div>
+                <div className={messages.length > 0
+                  ? 'px-4 py-1.5 text-2xs text-warning'
+                  : 'py-8 text-center text-sm text-danger'}
+                >
+                  {messages.length > 0 ? '已显示本机结果，部分远端历史暂时不可用' : messageError}
+                </div>
               )}
               {!messageSearching && !messageError && keyword.trim() && filteredMessages.length === 0 && (
                 <div className="py-8 text-center text-sm text-ink-3">
