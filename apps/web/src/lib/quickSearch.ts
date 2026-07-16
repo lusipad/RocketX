@@ -2,18 +2,28 @@ import { tsMs, type RcMessage } from '@rcx/rc-client';
 
 export interface MessageSearchBackend {
   provider: () => Promise<unknown>;
-  global: (keyword: string) => Promise<unknown>;
-  room: (rid: string, keyword: string) => Promise<RcMessage[]>;
+  global: (keyword: string, limit: number) => Promise<unknown>;
+  room: (rid: string, keyword: string, offset: number, count: number) => Promise<RcMessage[]>;
 }
 
 const FALLBACK_CONCURRENCY = 2;
-const MAX_MESSAGE_RESULTS = 20;
+export const MESSAGE_SEARCH_PAGE_SIZE = 20;
 const MESSAGE_SEARCH_CACHE_TTL_MS = 30_000;
-const MESSAGE_SEARCH_CACHE_MAX = 20;
+const MESSAGE_SEARCH_CACHE_MAX = 5;
+const MESSAGE_SEARCH_CACHE_RESULT_MAX = 200;
+
+export type MessageSearchSource = 'global' | 'rooms';
+
+export interface MessageSearchPage {
+  messages: RcMessage[];
+  source: MessageSearchSource;
+  page: number;
+  hasMore: boolean;
+}
 
 interface MessageSearchCacheEntry {
   expiresAt: number;
-  messages: RcMessage[];
+  result: MessageSearchPage;
 }
 
 const messageSearchCache = new Map<string, MessageSearchCacheEntry>();
@@ -43,31 +53,32 @@ export function searchesSettledFor(
 /** 短时复用同一服务器、账号和会话范围的成功搜索，避免反复逐房间请求。 */
 export async function searchMessagesCached(
   key: string,
-  load: () => Promise<RcMessage[]>,
+  load: () => Promise<MessageSearchPage>,
   isCurrent: () => boolean = () => true,
   now: () => number = Date.now,
-): Promise<RcMessage[]> {
+): Promise<MessageSearchPage> {
   const cached = messageSearchCache.get(key);
   if (cached && cached.expiresAt > now()) {
     messageSearchCache.delete(key);
     messageSearchCache.set(key, cached);
-    return cached.messages;
+    return cached.result;
   }
   if (cached) messageSearchCache.delete(key);
 
-  const messages = await load();
-  if (!isCurrent()) return messages;
+  const result = await load();
+  if (!isCurrent()) return result;
+  if (result.messages.length > MESSAGE_SEARCH_CACHE_RESULT_MAX) return result;
 
   messageSearchCache.set(key, {
     expiresAt: now() + MESSAGE_SEARCH_CACHE_TTL_MS,
-    messages,
+    result,
   });
   while (messageSearchCache.size > MESSAGE_SEARCH_CACHE_MAX) {
     const oldest = messageSearchCache.keys().next().value;
     if (oldest === undefined) break;
     messageSearchCache.delete(oldest);
   }
-  return messages;
+  return result;
 }
 
 export function clearMessageSearchCache(): void {
@@ -80,8 +91,7 @@ export function mergeMessageSearchResults(...groups: readonly RcMessage[][]): Rc
     for (const message of messages) unique.set(message._id, message);
   }
   return [...unique.values()]
-    .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
-    .slice(0, MAX_MESSAGE_RESULTS);
+    .sort((a, b) => tsMs(b.ts) - tsMs(a.ts));
 }
 
 function attachmentSearchText(
@@ -123,7 +133,34 @@ export function searchLoadedMessages(
       if (text.includes(query)) matches.push(message);
     }
   }
-  return mergeMessageSearchResults(matches);
+  return mergeMessageSearchResults(matches).slice(0, MESSAGE_SEARCH_PAGE_SIZE);
+}
+
+async function searchRoomMessagePage(
+  keyword: string,
+  recentRids: string[],
+  page: number,
+  backend: MessageSearchBackend,
+  isCurrent: () => boolean,
+  onProgress: (result: MessageSearchPage) => void,
+): Promise<MessageSearchPage> {
+  let messages: RcMessage[] = [];
+  let hasMore = false;
+  const offset = page * MESSAGE_SEARCH_PAGE_SIZE;
+  for (let i = 0; i < recentRids.length; i += FALLBACK_CONCURRENCY) {
+    if (!isCurrent()) {
+      return { messages: [], source: 'rooms', page, hasMore: false };
+    }
+    const batch = await Promise.all(
+      recentRids.slice(i, i + FALLBACK_CONCURRENCY).map((rid) =>
+        backend.room(rid, keyword, offset, MESSAGE_SEARCH_PAGE_SIZE),
+      ),
+    );
+    hasMore ||= batch.some((roomMessages) => roomMessages.length === MESSAGE_SEARCH_PAGE_SIZE);
+    messages = mergeMessageSearchResults(messages, batch.flat());
+    if (isCurrent()) onProgress({ messages, source: 'rooms', page, hasMore });
+  }
+  return { messages, source: 'rooms', page, hasMore };
 }
 
 /**
@@ -137,8 +174,8 @@ export async function searchMessagesGlobal(
   recentRids: string[],
   backend: MessageSearchBackend,
   isCurrent: () => boolean = () => true,
-  onProgress: (messages: RcMessage[]) => void = () => {},
-): Promise<RcMessage[]> {
+  onProgress: (result: MessageSearchPage) => void = () => {},
+): Promise<MessageSearchPage> {
   try {
     const provider = (await backend.provider()) as {
       settings?: { GlobalSearchEnabled?: boolean };
@@ -146,25 +183,54 @@ export async function searchMessagesGlobal(
     if (!provider || provider.settings?.GlobalSearchEnabled === false) {
       throw new Error('global search disabled');
     }
-    const result = (await backend.global(keyword)) as {
+    const result = (await backend.global(keyword, MESSAGE_SEARCH_PAGE_SIZE)) as {
       message?: { docs?: RcMessage[] };
     };
     const docs = result?.message?.docs;
-    if (Array.isArray(docs)) return mergeMessageSearchResults(docs);
+    if (Array.isArray(docs)) {
+      const messages = mergeMessageSearchResults(docs);
+      return {
+        messages,
+        source: 'global',
+        page: 0,
+        hasMore: docs.length === MESSAGE_SEARCH_PAGE_SIZE,
+      };
+    }
   } catch {
     /* 服务器未开全局搜索时回退 */
   }
 
-  if (!isCurrent()) return [];
-
-  let messages: RcMessage[] = [];
-  for (let i = 0; i < recentRids.length; i += FALLBACK_CONCURRENCY) {
-    if (!isCurrent()) return [];
-    const batch = await Promise.all(
-      recentRids.slice(i, i + FALLBACK_CONCURRENCY).map((rid) => backend.room(rid, keyword)),
-    );
-    messages = mergeMessageSearchResults(messages, batch.flat());
-    if (isCurrent()) onProgress(messages);
+  if (!isCurrent()) {
+    return { messages: [], source: 'rooms', page: 0, hasMore: false };
   }
-  return messages;
+
+  return searchRoomMessagePage(keyword, recentRids, 0, backend, isCurrent, onProgress);
+}
+
+/** 已有首批结果后继续加载下一页；全局提供器扩大 limit，逐房间回退使用 offset。 */
+export async function searchMoreMessages(
+  keyword: string,
+  recentRids: string[],
+  source: MessageSearchSource,
+  page: number,
+  backend: MessageSearchBackend,
+  isCurrent: () => boolean = () => true,
+  onProgress: (result: MessageSearchPage) => void = () => {},
+): Promise<MessageSearchPage> {
+  if (source === 'rooms') {
+    return searchRoomMessagePage(keyword, recentRids, page, backend, isCurrent, onProgress);
+  }
+
+  const limit = (page + 1) * MESSAGE_SEARCH_PAGE_SIZE;
+  const result = (await backend.global(keyword, limit)) as {
+    message?: { docs?: RcMessage[] };
+  };
+  const docs = result?.message?.docs;
+  if (!Array.isArray(docs)) throw new Error('global search returned no messages');
+  return {
+    messages: mergeMessageSearchResults(docs),
+    source: 'global',
+    page,
+    hasMore: docs.length === limit,
+  };
 }

@@ -63,7 +63,7 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 154 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 157 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、任务栏与托盘、消息输入、缓存边界与账号隔离
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
