@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   initialMessageScrollTop,
@@ -22,6 +23,14 @@ test('首次打开会话始终以列表底部为初始位置', () => {
     }),
     undefined,
   );
+});
+
+test('首次贴底会在下一帧复核，并同时观察内容与视口尺寸', () => {
+  const source = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
+  assert.match(source, /scrollToBottom\(false, true\)/);
+  assert.match(source, /settleScrollFrame\.current = requestAnimationFrame/);
+  assert.match(source, /ro\.observe\(el\)/);
+  assert.match(source, /ro\.observe\(content\)/);
 });
 
 test('有更早消息时，当前页首条不能伪装成真实未读分界', () => {

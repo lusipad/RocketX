@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.14.5"
+version = "0.14.6"
 dependencies = [
  "log",
  "notify-rust",

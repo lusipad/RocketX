@@ -65,6 +65,9 @@ export default function MessageList({ rid }: { rid: string }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const activeRidRef = useRef(rid);
+  activeRidRef.current = rid;
+  const settleScrollFrame = useRef<number | null>(null);
   /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
   const anchor = useRef<{
     height: number;
@@ -87,13 +90,30 @@ export default function MessageList({ rid }: { rid: string }) {
     [all, showThreadsInMain],
   );
 
-  const scrollToBottom = useCallback((smooth = false) => {
+  const scrollToBottom = useCallback((smooth = false, settleNextFrame = false) => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
     setShowJump(false);
     setNewCount(0);
+
+    if (!smooth && settleNextFrame) {
+      if (settleScrollFrame.current !== null) {
+        cancelAnimationFrame(settleScrollFrame.current);
+      }
+      const targetRid = activeRidRef.current;
+      settleScrollFrame.current = requestAnimationFrame(() => {
+        settleScrollFrame.current = null;
+        if (activeRidRef.current !== targetRid) return;
+        const current = scrollRef.current;
+        if (!current) return;
+        current.scrollTop = current.scrollHeight;
+        stickToBottom.current = true;
+        setShowJump(false);
+        setNewCount(0);
+      });
+    }
   }, []);
 
   const onScroll = () => {
@@ -135,6 +155,10 @@ export default function MessageList({ rid }: { rid: string }) {
 
   // 切换会话：重置状态
   useLayoutEffect(() => {
+    if (settleScrollFrame.current !== null) {
+      cancelAnimationFrame(settleScrollFrame.current);
+      settleScrollFrame.current = null;
+    }
     stickToBottom.current = true;
     didInitialScroll.current = false;
     setShowJump(false);
@@ -175,10 +199,7 @@ export default function MessageList({ rid }: { rid: string }) {
     });
     if (initialScrollTop !== undefined) {
       didInitialScroll.current = true;
-      el.scrollTop = initialScrollTop;
-      stickToBottom.current = true;
-      setShowJump(false);
-      setNewCount(0);
+      scrollToBottom(false, true);
       return;
     }
 
@@ -186,7 +207,7 @@ export default function MessageList({ rid }: { rid: string }) {
     if (stickToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [list, historyLoaded, anchorTick]);
+  }, [list, historyLoaded, anchorTick, scrollToBottom]);
 
   // 不在底部时来了新消息 → 计数（用于「N 条新消息」浮条）
   const prevLen = useRef(0);
@@ -200,7 +221,7 @@ export default function MessageList({ rid }: { rid: string }) {
 
   // 自己发消息后强制到底
   useEffect(() => {
-    if (scrollNonce > 0) scrollToBottom();
+    if (scrollNonce > 0) scrollToBottom(false, true);
   }, [scrollNonce, scrollToBottom]);
 
   /**
@@ -217,11 +238,21 @@ export default function MessageList({ rid }: { rid: string }) {
     const ro = new ResizeObserver(() => {
       if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     });
-    // 观察内容容器（第一个子元素）的高度变化
+    // 内容异步撑高、输入区/窗口改变导致视口缩放，都要保持贴底。
+    ro.observe(el);
     const content = el.firstElementChild;
     if (content) ro.observe(content);
     return () => ro.disconnect();
   }, [rid, historyLoaded]);
+
+  useEffect(
+    () => () => {
+      if (settleScrollFrame.current !== null) {
+        cancelAnimationFrame(settleScrollFrame.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!selectMode || forwardOpen) return;

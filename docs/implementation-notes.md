@@ -58,6 +58,32 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 
 ---
 
+# Implementation notes — 会话打开定位最新消息（Issue #51）
+
+## Shipped vs planned
+
+打开新会话、切回已缓存会话或重复点击当前会话时，消息列表会立即贴底，并在下一帧布局稳定后再次确认位置。消息内容和滚动视口的尺寸变化都会触发贴底补偿。
+
+## Decisions
+
+- 保留现有向上翻页锚点和用户主动浏览历史时不自动拉回的行为。
+- 不引入消息列表虚拟化或新的滚动库，只补齐首次布局和视口尺寸变化两个时序边界。
+- 延迟贴底带房间校验，快速切换会话时旧房间的下一帧任务不能影响新房间。
+
+## Deviations
+
+- 无。
+
+## Verification limits
+
+- Windows 浏览器自动化工具的持久会话在本机连续调用时会丢失页面，未完成自动化点击录屏；已用结构回归覆盖下一帧复核与双 ResizeObserver，并通过完整构建和真实 Rocket.Chat smoke。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — 长时间运行内存边界
 
 ## Shipped vs planned
