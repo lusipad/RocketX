@@ -82,7 +82,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 GitHub Actions 自动构建 Windows（msi/nsis）、macOS（dmg，universal）、Linux（deb/rpm/AppImage）安装包：
 
-- **正式发版**：推送 `release/v0.13.0` 临时分支 → workflow 自动创建同名标签、删除临时分支，
+- **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
   并构建三平台安装包与草稿 Release；
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
 - **本地开发**：`pnpm --filter @rcx/desktop dev`（需要 [Rust 工具链](https://tauri.app/start/prerequisites/)）。
