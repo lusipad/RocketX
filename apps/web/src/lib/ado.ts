@@ -1,5 +1,7 @@
 /** 工作台（Azure DevOps）客户端侧：配置读写 + 经 ado-bridge 的查询 */
 
+import { TimedLruCache } from './timedLruCache';
+
 export const WORKBENCH_CONFIG_KEY = 'rcx-workbench';
 /** markdown 渲染器用它把消息里的 #123 链接到 ADO 工作项 */
 export const ADO_WEB_KEY = 'rcx-ado-web';
@@ -144,25 +146,26 @@ export function parseAdoUrl(href: string, adoBase: string | null): AdoUrlEntity 
   return null;
 }
 
-const itemCache = new Map<string, { item: AdoWorkItemInfo | null; ts: number }>();
-const inflight = new Map<string, Promise<AdoWorkItemInfo | null>>();
 const CACHE_TTL = 60_000;
+const CACHE_LIMIT = 300;
+const itemCache = new TimedLruCache<AdoWorkItemInfo | null>(CACHE_LIMIT, CACHE_TTL);
+const inflight = new Map<string, Promise<AdoWorkItemInfo | null>>();
 
-const entityCache = new Map<string, { value: unknown | null; ts: number }>();
+const entityCache = new TimedLruCache<unknown | null>(CACHE_LIMIT, CACHE_TTL);
 const entityInflight = new Map<string, Promise<unknown | null>>();
 
 function cachedEntity<T>(key: string, load: () => Promise<T | null>): Promise<T | null> {
   const cached = entityCache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve(cached.value as T | null);
+  if (cached.hit) return Promise.resolve(cached.value as T | null);
   const existing = entityInflight.get(key);
   if (existing) return existing as Promise<T | null>;
   const promise = load()
     .then((value) => {
-      entityCache.set(key, { value, ts: Date.now() });
+      entityCache.set(key, value);
       return value;
     })
     .catch(() => {
-      entityCache.set(key, { value: null, ts: Date.now() });
+      entityCache.set(key, null);
       return null;
     })
     .finally(() => entityInflight.delete(key));
@@ -182,7 +185,7 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   const key = itemKey(config, id);
 
   const cached = itemCache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve(cached.item);
+  if (cached.hit) return Promise.resolve(cached.value);
 
   const existing = inflight.get(key);
   if (existing) return existing;
@@ -201,11 +204,11 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
 
   const promise = load
     .then((item) => {
-      itemCache.set(key, { item: item ?? null, ts: Date.now() });
+      itemCache.set(key, item ?? null);
       return item ?? null;
     })
     .catch(() => {
-      itemCache.set(key, { item: null, ts: Date.now() });
+      itemCache.set(key, null);
       return null;
     })
     .finally(() => inflight.delete(key));
