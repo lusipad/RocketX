@@ -104,11 +104,13 @@ function attachmentSearchText(
 export function searchLoadedMessages(
   keyword: string,
   messagesByRoom: Readonly<Record<string, readonly RcMessage[]>>,
+  canSearchRoom: (rid: string) => boolean = () => true,
 ): RcMessage[] {
   const query = keyword.trim().toLocaleLowerCase();
   if (!query) return [];
   const matches: RcMessage[] = [];
-  for (const messages of Object.values(messagesByRoom)) {
+  for (const [rid, messages] of Object.entries(messagesByRoom)) {
+    if (!canSearchRoom(rid)) continue;
     for (const message of messages) {
       const text = [
         message.msg,

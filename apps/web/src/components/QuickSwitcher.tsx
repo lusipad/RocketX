@@ -268,7 +268,11 @@ export default function QuickSwitcher({
       return;
     }
     let cancelled = false;
-    const localMessages = searchLoadedMessages(q, useChat.getState().messages);
+    const localMessages = searchLoadedMessages(
+      q,
+      useChat.getState().messages,
+      (rid) => canSearchIndexedRoom(!!subscriptions[rid], rooms[rid]?.t),
+    );
     setMessages(localMessages);
     setContacts({ users: [], rooms: [] });
     setMessageSearching(true);
