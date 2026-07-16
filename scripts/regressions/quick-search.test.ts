@@ -5,10 +5,12 @@ import type { RcMessage } from '../../packages/rc-client/src/index';
 import {
   clearMessageSearchCache,
   chooseAvailableSearchTab,
+  mergeMessageSearchResults,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
   searchMessagesCached,
   searchMessagesGlobal,
+  searchLoadedMessages,
   searchesSettledFor,
 } from '../../apps/web/src/lib/quickSearch';
 import { searchWork } from '../../apps/web/src/lib/workSearch';
@@ -54,6 +56,51 @@ test('全局搜索不可用时逐房间回退并发不超过 2', async () => {
 
   assert.deepEqual(result.map((item) => item._id), ['a', 'b', 'c', 'd']);
   assert.equal(maxActive, 2);
+});
+
+test('逐房间回退按批次返回进度，不必等全部会话搜索完成', async () => {
+  const progress: string[][] = [];
+  const result = await searchMessagesGlobal(
+    'needle',
+    ['recent-a', 'recent-b', 'old-c'],
+    {
+      provider: async () => ({ settings: { GlobalSearchEnabled: false } }),
+      global: async () => ({ message: { docs: [] } }),
+      room: async (rid) => [message(rid)],
+    },
+    () => true,
+    (messages) => progress.push(messages.map((item) => item._id)),
+  );
+
+  assert.deepEqual(progress, [
+    ['recent-a', 'recent-b'],
+    ['recent-a', 'recent-b', 'old-c'],
+  ]);
+  assert.deepEqual(result.map((item) => item._id), ['recent-a', 'recent-b', 'old-c']);
+});
+
+test('已加载消息先提供即时结果，并与远端结果去重合并', () => {
+  const local = searchLoadedMessages('发布', {
+    recent: [
+      { ...message('local', 30), rid: 'recent', msg: '准备发布', file: undefined, attachments: undefined },
+      { ...message('file', 20), rid: 'recent', msg: '', file: { _id: 'f1', name: '发布清单.docx' } },
+    ],
+    old: [
+      {
+        ...message('attachment', 10),
+        rid: 'old',
+        msg: '',
+        attachments: [{ title: '发布说明' }],
+      },
+    ],
+  });
+  const merged = mergeMessageSearchResults(local, [
+    { ...message('local', 30), rid: 'recent', msg: '准备发布' },
+    { ...message('remote', 40), rid: 'remote', msg: '历史发布记录' },
+  ]);
+
+  assert.deepEqual(local.map((item) => item._id), ['local', 'file', 'attachment']);
+  assert.deepEqual(merged.map((item) => item._id), ['remote', 'local', 'file', 'attachment']);
 });
 
 test('逐房间回退失败会向界面抛错而不是伪装成零命中', async () => {
@@ -166,7 +213,9 @@ test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消�
   assert.match(source, /rocketchatSearch\.getProvider/);
   assert.match(source, /\{ limit: 20, searchAll: true \}/);
   assert.match(source, /rest\.searchMessages\(rid, keyword, 20\)/);
-  assert.match(source, /Object\.keys\(subscriptions\)\.sort\(\)/);
+  assert.match(source, /conversations\.map\(\(conversation\) => conversation\.rid\)/);
+  assert.match(source, /Object\.keys\(subscriptions\)\.sort\(\)\.join\('\\0'\)/);
+  assert.match(source, /searchLoadedMessages\(q, useChat\.getState\(\)\.messages\)/);
 });
 
 test('同一服务器账号和会话范围在 30 秒内复用成功搜索', async () => {

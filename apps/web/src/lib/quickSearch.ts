@@ -74,25 +74,68 @@ export function clearMessageSearchCache(): void {
   messageSearchCache.clear();
 }
 
-function keepNewestMessages(messages: RcMessage[]): RcMessage[] {
+export function mergeMessageSearchResults(...groups: readonly RcMessage[][]): RcMessage[] {
   const unique = new Map<string, RcMessage>();
-  for (const message of messages) unique.set(message._id, message);
+  for (const messages of groups) {
+    for (const message of messages) unique.set(message._id, message);
+  }
   return [...unique.values()]
     .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
     .slice(0, MAX_MESSAGE_RESULTS);
+}
+
+function attachmentSearchText(
+  attachments: RcMessage['attachments'],
+): string {
+  if (!attachments?.length) return '';
+  return attachments
+    .flatMap((attachment) => [
+      attachment.title,
+      attachment.text,
+      attachment.description,
+      ...(attachment.fields ?? []).flatMap((field) => [field.title, field.value]),
+      attachmentSearchText(attachment.attachments),
+    ])
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** 先搜索已经加载到内存的消息，让用户不必等远端完整历史扫描结束。 */
+export function searchLoadedMessages(
+  keyword: string,
+  messagesByRoom: Readonly<Record<string, readonly RcMessage[]>>,
+): RcMessage[] {
+  const query = keyword.trim().toLocaleLowerCase();
+  if (!query) return [];
+  const matches: RcMessage[] = [];
+  for (const messages of Object.values(messagesByRoom)) {
+    for (const message of messages) {
+      const text = [
+        message.msg,
+        message.file?.name,
+        attachmentSearchText(message.attachments),
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .toLocaleLowerCase();
+      if (text.includes(query)) matches.push(message);
+    }
+  }
+  return mergeMessageSearchResults(matches);
 }
 
 /**
  * 跨会话消息搜索：服务端已启用全局搜索时以它为准；否则逐房间回退。
  *
  * 已启用全局搜索时，空数组同样是完整结果。未启用时低并发搜索所有可访问会话，
- * 每批只保留最新 20 条候选，保证历史搜索范围完整且内存占用有界。
+ * 每批只保留最新 20 条候选并回报进度，保证历史搜索范围完整且内存占用有界。
  */
 export async function searchMessagesGlobal(
   keyword: string,
   recentRids: string[],
   backend: MessageSearchBackend,
   isCurrent: () => boolean = () => true,
+  onProgress: (messages: RcMessage[]) => void = () => {},
 ): Promise<RcMessage[]> {
   try {
     const provider = (await backend.provider()) as {
@@ -105,7 +148,7 @@ export async function searchMessagesGlobal(
       message?: { docs?: RcMessage[] };
     };
     const docs = result?.message?.docs;
-    if (Array.isArray(docs)) return keepNewestMessages(docs);
+    if (Array.isArray(docs)) return mergeMessageSearchResults(docs);
   } catch {
     /* 服务器未开全局搜索时回退 */
   }
@@ -118,7 +161,8 @@ export async function searchMessagesGlobal(
     const batch = await Promise.all(
       recentRids.slice(i, i + FALLBACK_CONCURRENCY).map((rid) => backend.room(rid, keyword)),
     );
-    messages = keepNewestMessages([...messages, ...batch.flat()]);
+    messages = mergeMessageSearchResults(messages, batch.flat());
+    if (isCurrent()) onProgress(messages);
   }
   return messages;
 }
