@@ -4,7 +4,8 @@
 name: rcx-dev
 services:
   rocketchat:
-    image: registry.rocket.chat/rocketchat/rocket.chat:latest
+    # 版本固定到已验证矩阵（见 README「兼容性承诺」）；升级前先跑 pnpm smoke 复核
+    image: registry.rocket.chat/rocketchat/rocket.chat:8.6.1
     restart: unless-stopped
     environment:
       MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
