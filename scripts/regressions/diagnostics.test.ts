@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   buildDiagnosticReport,
@@ -33,4 +34,12 @@ test('诊断报告保留多行日志但再次脱敏', () => {
   assert.match(report, /app_version: 1\.2\.3/);
   assert.match(report, /\[info\] started\n\[error\]/);
   assert.equal(report.includes('do-not-export'), false);
+});
+
+test('诊断导出复用已授权的二进制写入命令', () => {
+  const source = readFileSync('apps/web/src/lib/diagnostics.ts', 'utf8');
+  const exportSource = source.slice(source.indexOf('export async function exportDiagnostics'));
+
+  assert.match(exportSource, /writeFile\(target,\s*new TextEncoder\(\)\.encode\(/);
+  assert.doesNotMatch(exportSource, /writeTextFile/);
 });
