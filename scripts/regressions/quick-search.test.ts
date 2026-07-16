@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type { RcMessage } from '../../packages/rc-client/src/index';
 import {
+  clearMessageSearchCache,
   chooseAvailableSearchTab,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
+  searchMessagesCached,
   searchMessagesGlobal,
   searchesSettledFor,
 } from '../../apps/web/src/lib/quickSearch';
@@ -13,11 +16,14 @@ import type { Todo } from '../../apps/web/src/stores/todos';
 import type { CalendarEvent } from '../../apps/web/src/stores/calendar';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 
-const message = (id: string) => ({ _id: id } as RcMessage);
+const message = (id: string, time = 0) => ({ _id: id, ts: new Date(time).toISOString() } as RcMessage);
+
+test.afterEach(() => clearMessageSearchCache());
 
 test('全局消息搜索的合法空结果不会触发逐房间回退', async () => {
   let roomCalls = 0;
   const result = await searchMessagesGlobal('nothing', ['a', 'b'], {
+    provider: async () => ({ settings: { GlobalSearchEnabled: true } }),
     global: async () => ({ message: { docs: [] } }),
     room: async () => {
       roomCalls++;
@@ -33,6 +39,7 @@ test('全局搜索不可用时逐房间回退并发不超过 2', async () => {
   let active = 0;
   let maxActive = 0;
   const result = await searchMessagesGlobal('needle', ['a', 'b', 'c', 'd'], {
+    provider: async () => ({ settings: { GlobalSearchEnabled: true } }),
     global: async () => {
       throw new Error('global unavailable');
     },
@@ -52,6 +59,7 @@ test('全局搜索不可用时逐房间回退并发不超过 2', async () => {
 test('逐房间回退失败会向界面抛错而不是伪装成零命中', async () => {
   await assert.rejects(
     searchMessagesGlobal('needle', ['a'], {
+      provider: async () => ({ settings: { GlobalSearchEnabled: true } }),
       global: async () => {
         throw new Error('global unavailable');
       },
@@ -69,6 +77,7 @@ test('过期查询不会在全局搜索失败后继续发起回退请求', async
     'stale',
     ['a', 'b'],
     {
+      provider: async () => ({ settings: { GlobalSearchEnabled: true } }),
       global: async () => {
         throw new Error('global unavailable');
       },
@@ -82,6 +91,142 @@ test('过期查询不会在全局搜索失败后继续发起回退请求', async
 
   assert.deepEqual(result, []);
   assert.equal(roomCalls, 0);
+});
+
+test('服务端未启用全局搜索时会逐房间查找，不会把合法空结果当成最终结果', async () => {
+  let globalCalls = 0;
+  const rids = Array.from({ length: 10 }, (_, index) => `room-${index + 1}`);
+  const result = await searchMessagesGlobal('needle', rids, {
+    provider: async () => ({ settings: { GlobalSearchEnabled: false } }),
+    global: async () => {
+      globalCalls++;
+      return { message: { docs: [] } };
+    },
+    room: async (rid) => rid === 'room-10' ? [message('found')] : [],
+  });
+
+  assert.deepEqual(result.map((item) => item._id), ['found']);
+  assert.equal(globalCalls, 0);
+});
+
+test('搜索提供器不可用时会逐房间回退', async () => {
+  const result = await searchMessagesGlobal('needle', ['room-1'], {
+    provider: async () => {
+      throw new Error('provider unavailable');
+    },
+    global: async () => ({ message: { docs: [] } }),
+    room: async () => [message('fallback')],
+  });
+
+  assert.deepEqual(result.map((item) => item._id), ['fallback']);
+});
+
+test('未声明默认全局开关的第三方搜索提供器继续使用全局搜索', async () => {
+  let roomCalls = 0;
+  const result = await searchMessagesGlobal('needle', ['room-1'], {
+    provider: async () => ({ settings: {} }),
+    global: async () => ({ message: { docs: [message('global')] } }),
+    room: async () => {
+      roomCalls++;
+      return [];
+    },
+  });
+
+  assert.deepEqual(result.map((item) => item._id), ['global']);
+  assert.equal(roomCalls, 0);
+});
+
+test('逐房间回退会搜索全部会话并只保留全局最新 20 条', async () => {
+  let roomCalls = 0;
+  const result = await searchMessagesGlobal(
+    'needle',
+    Array.from({ length: 20 }, (_, index) => `room-${index + 1}`),
+    {
+      provider: async () => ({ settings: { GlobalSearchEnabled: false } }),
+      global: async () => ({ message: { docs: [] } }),
+      room: async (rid) => {
+        roomCalls++;
+        const roomNumber = Number(rid.split('-')[1]);
+        return Array.from(
+          { length: 20 },
+          (_, index) => message(`${rid}-${index}`, roomNumber * 1_000 + index),
+        );
+      },
+    },
+  );
+
+  assert.equal(result.length, 20);
+  assert.equal(roomCalls, 20);
+  assert.ok(result.every((item) => item._id.startsWith('room-20-')));
+});
+
+test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消息', () => {
+  const source = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
+
+  assert.match(source, /rocketchatSearch\.getProvider/);
+  assert.match(source, /\{ limit: 20, searchAll: true \}/);
+  assert.match(source, /rest\.searchMessages\(rid, keyword, 20\)/);
+  assert.match(source, /Object\.keys\(subscriptions\)\.sort\(\)/);
+});
+
+test('同一服务器账号和会话范围在 30 秒内复用成功搜索', async () => {
+  let calls = 0;
+  let now = 1_000;
+  const load = async () => {
+    calls++;
+    return [message(`result-${calls}`)];
+  };
+
+  const first = await searchMessagesCached('server\0user\0rooms\0needle', load, () => true, () => now);
+  now += 29_999;
+  const second = await searchMessagesCached('server\0user\0rooms\0needle', load, () => true, () => now);
+
+  assert.deepEqual(first.map((item) => item._id), ['result-1']);
+  assert.deepEqual(second.map((item) => item._id), ['result-1']);
+  assert.equal(calls, 1);
+});
+
+test('搜索缓存过期、账号变化或会话范围变化都会重新请求', async () => {
+  let calls = 0;
+  let now = 1_000;
+  const load = async () => [message(`result-${++calls}`)];
+
+  await searchMessagesCached('server\0user-a\0rooms-a\0needle', load, () => true, () => now);
+  now += 30_000;
+  await searchMessagesCached('server\0user-a\0rooms-a\0needle', load, () => true, () => now);
+  await searchMessagesCached('server\0user-b\0rooms-a\0needle', load, () => true, () => now);
+  await searchMessagesCached('server\0user-a\0rooms-b\0needle', load, () => true, () => now);
+
+  assert.equal(calls, 4);
+});
+
+test('失败和已经过期的查询结果不会写入搜索缓存', async () => {
+  let calls = 0;
+  await assert.rejects(
+    searchMessagesCached('error', async () => {
+      calls++;
+      throw new Error('search failed');
+    }),
+    /search failed/,
+  );
+  await searchMessagesCached('error', async () => [message(`result-${++calls}`)]);
+  await searchMessagesCached('stale', async () => [message(`result-${++calls}`)], () => false);
+  await searchMessagesCached('stale', async () => [message(`result-${++calls}`)]);
+
+  assert.equal(calls, 4);
+});
+
+test('搜索缓存最多保留 20 个最近使用的查询', async () => {
+  let calls = 0;
+  const load = async () => [message(`result-${++calls}`)];
+  for (let index = 0; index < 21; index++) {
+    await searchMessagesCached(`key-${index}`, load);
+  }
+
+  await searchMessagesCached('key-0', load);
+  await searchMessagesCached('key-20', load);
+
+  assert.equal(calls, 22);
 });
 
 test('自动切换保留用户当前有结果的范围，只在当前范围为空时兜底', () => {

@@ -5,7 +5,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
-import { openExternal, realtime, rest } from '../lib/client';
+import { getServerBase, openExternal, realtime, rest } from '../lib/client';
 import { fmtConvTime, fmtSize } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
@@ -13,6 +13,7 @@ import {
   chooseAvailableSearchTab,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
+  searchMessagesCached,
   searchMessagesGlobal,
   searchesSettledFor,
   type QuickSearchTab,
@@ -77,12 +78,14 @@ export default function QuickSwitcher({
 }) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
+  const activeRid = useChat((s) => s.activeRid);
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
   const setConvFilter = useUI((s) => s.setConvFilter);
   const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
+  const myId = useAuth((s) => s.user?._id);
   const todos = useTodos((s) => s.todos);
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
@@ -108,6 +111,7 @@ export default function QuickSwitcher({
   const [contactSettledKeyword, setContactSettledKeyword] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchProviderRef = useRef<Promise<unknown> | null>(null);
   const tabRef = useRef(tab);
   const dialogRef = useDialogBehavior(onClose);
 
@@ -182,12 +186,10 @@ export default function QuickSwitcher({
     contacts: contactUsers.length + contacts.rooms.length,
     work: workResults.length,
   };
-  const conversationScope = useMemo(
-    () => [...new Set(conversations.map((conversation) => conversation.rid))].sort().join('\0'),
-    [conversations],
-  );
+  const messageSearchRids = useMemo(() => Object.keys(subscriptions).sort(), [subscriptions]);
+  const conversationScope = useMemo(() => messageSearchRids.join('\0'), [messageSearchRids]);
   const conversationRidsRef = useRef<string[]>([]);
-  conversationRidsRef.current = conversations.map((conversation) => conversation.rid);
+  conversationRidsRef.current = messageSearchRids;
 
   useEffect(() => inputRef.current?.focus(), [tab]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
@@ -261,13 +263,29 @@ export default function QuickSwitcher({
     setMessageError(null);
     setContactError(null);
     timer.current = setTimeout(() => {
-      void searchMessagesGlobal(
-        q,
-        conversationRidsRef.current,
-        {
-          global: (keyword) => realtime.call('rocketchatSearch.search', keyword, { rid: undefined }),
-          room: (rid, keyword) => rest.searchMessages(rid, keyword, 5),
-        },
+      const cacheKey = `${getServerBase()}\0${myId ?? ''}\0${conversationScope}\0${q}`;
+      void searchMessagesCached(
+        cacheKey,
+        () =>
+          searchMessagesGlobal(
+            q,
+            conversationRidsRef.current,
+            {
+              provider: () => {
+                searchProviderRef.current ??= realtime.call('rocketchatSearch.getProvider');
+                return searchProviderRef.current;
+              },
+              global: (keyword) =>
+                realtime.call(
+                  'rocketchatSearch.search',
+                  keyword,
+                  { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
+                  { limit: 20, searchAll: true },
+                ),
+              room: (rid, keyword) => rest.searchMessages(rid, keyword, 20),
+            },
+            () => !cancelled,
+          ),
         () => !cancelled,
       )
         .then((messageDocs) => {
@@ -309,7 +327,7 @@ export default function QuickSwitcher({
       cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [keyword, conversationScope, me]);
+  }, [keyword, conversationScope, me, myId, activeRid]);
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
@@ -732,7 +750,7 @@ export default function QuickSwitcher({
 
           {tab === 'messages' && (
             <>
-              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
+              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">正在搜索全部历史…</div>}
               {!messageSearching && messageError && (
                 <div className="py-8 text-center text-sm text-danger">{messageError}</div>
               )}
@@ -742,7 +760,12 @@ export default function QuickSwitcher({
                 </div>
               )}
               {!messageSearching && !messageError && !keyword.trim() && (
-                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的消息</div>
+                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的完整历史</div>
+              )}
+              {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">
+                  已搜索全部可访问历史，显示最近 {messages.length} 条
+                </div>
               )}
               {filteredMessages.map((m, i) => (
                 <button
