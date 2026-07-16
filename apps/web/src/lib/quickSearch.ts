@@ -1,4 +1,4 @@
-import type { RcMessage } from '@rcx/rc-client';
+import { tsMs, type RcMessage } from '@rcx/rc-client';
 
 export interface MessageSearchBackend {
   provider: () => Promise<unknown>;
@@ -74,11 +74,19 @@ export function clearMessageSearchCache(): void {
   messageSearchCache.clear();
 }
 
+function keepNewestMessages(messages: RcMessage[]): RcMessage[] {
+  const unique = new Map<string, RcMessage>();
+  for (const message of messages) unique.set(message._id, message);
+  return [...unique.values()]
+    .sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
+    .slice(0, MAX_MESSAGE_RESULTS);
+}
+
 /**
  * 跨会话消息搜索：服务端已启用全局搜索时以它为准；否则逐房间回退。
  *
- * 已启用全局搜索时，空数组同样是完整结果。未启用时按最近会话顺序低并发搜索，
- * 收集到界面所需的结果数后停止，避免一次性并发请求全部房间。
+ * 已启用全局搜索时，空数组同样是完整结果。未启用时低并发搜索所有可访问会话，
+ * 每批只保留最新 20 条候选，保证历史搜索范围完整且内存占用有界。
  */
 export async function searchMessagesGlobal(
   keyword: string,
@@ -97,21 +105,20 @@ export async function searchMessagesGlobal(
       message?: { docs?: RcMessage[] };
     };
     const docs = result?.message?.docs;
-    if (Array.isArray(docs)) return docs;
+    if (Array.isArray(docs)) return keepNewestMessages(docs);
   } catch {
     /* 服务器未开全局搜索时回退 */
   }
 
   if (!isCurrent()) return [];
 
-  const messages: RcMessage[] = [];
+  let messages: RcMessage[] = [];
   for (let i = 0; i < recentRids.length; i += FALLBACK_CONCURRENCY) {
     if (!isCurrent()) return [];
     const batch = await Promise.all(
       recentRids.slice(i, i + FALLBACK_CONCURRENCY).map((rid) => backend.room(rid, keyword)),
     );
-    messages.push(...batch.flat());
-    if (messages.length >= MAX_MESSAGE_RESULTS) return messages.slice(0, MAX_MESSAGE_RESULTS);
+    messages = keepNewestMessages([...messages, ...batch.flat()]);
   }
   return messages;
 }

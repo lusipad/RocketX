@@ -186,12 +186,10 @@ export default function QuickSwitcher({
     contacts: contactUsers.length + contacts.rooms.length,
     work: workResults.length,
   };
-  const conversationScope = useMemo(
-    () => [...new Set(conversations.map((conversation) => conversation.rid))].sort().join('\0'),
-    [conversations],
-  );
+  const messageSearchRids = useMemo(() => Object.keys(subscriptions).sort(), [subscriptions]);
+  const conversationScope = useMemo(() => messageSearchRids.join('\0'), [messageSearchRids]);
   const conversationRidsRef = useRef<string[]>([]);
-  conversationRidsRef.current = conversations.map((conversation) => conversation.rid);
+  conversationRidsRef.current = messageSearchRids;
 
   useEffect(() => inputRef.current?.focus(), [tab]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
@@ -284,7 +282,7 @@ export default function QuickSwitcher({
                   { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
                   { limit: 20, searchAll: true },
                 ),
-              room: (rid, keyword) => rest.searchMessages(rid, keyword, 5),
+              room: (rid, keyword) => rest.searchMessages(rid, keyword, 20),
             },
             () => !cancelled,
           ),
@@ -752,7 +750,7 @@ export default function QuickSwitcher({
 
           {tab === 'messages' && (
             <>
-              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
+              {messageSearching && <div className="py-8 text-center text-sm text-ink-3">正在搜索全部历史…</div>}
               {!messageSearching && messageError && (
                 <div className="py-8 text-center text-sm text-danger">{messageError}</div>
               )}
@@ -762,7 +760,12 @@ export default function QuickSwitcher({
                 </div>
               )}
               {!messageSearching && !messageError && !keyword.trim() && (
-                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的消息</div>
+                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的完整历史</div>
+              )}
+              {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
+                <div className="px-4 py-1.5 text-2xs text-ink-3">
+                  已搜索全部可访问历史，显示最近 {messages.length} 条
+                </div>
               )}
               {filteredMessages.map((m, i) => (
                 <button

@@ -16,7 +16,7 @@ import type { Todo } from '../../apps/web/src/stores/todos';
 import type { CalendarEvent } from '../../apps/web/src/stores/calendar';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 
-const message = (id: string) => ({ _id: id } as RcMessage);
+const message = (id: string, time = 0) => ({ _id: id, ts: new Date(time).toISOString() } as RcMessage);
 
 test.afterEach(() => clearMessageSearchCache());
 
@@ -136,7 +136,7 @@ test('未声明默认全局开关的第三方搜索提供器继续使用全局�
   assert.equal(roomCalls, 0);
 });
 
-test('逐房间回退收集到 20 条消息后停止继续请求', async () => {
+test('逐房间回退会搜索全部会话并只保留全局最新 20 条', async () => {
   let roomCalls = 0;
   const result = await searchMessagesGlobal(
     'needle',
@@ -146,13 +146,18 @@ test('逐房间回退收集到 20 条消息后停止继续请求', async () => {
       global: async () => ({ message: { docs: [] } }),
       room: async (rid) => {
         roomCalls++;
-        return Array.from({ length: 5 }, (_, index) => message(`${rid}-${index}`));
+        const roomNumber = Number(rid.split('-')[1]);
+        return Array.from(
+          { length: 20 },
+          (_, index) => message(`${rid}-${index}`, roomNumber * 1_000 + index),
+        );
       },
     },
   );
 
   assert.equal(result.length, 20);
-  assert.equal(roomCalls, 4);
+  assert.equal(roomCalls, 20);
+  assert.ok(result.every((item) => item._id.startsWith('room-20-')));
 });
 
 test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消息', () => {
@@ -160,6 +165,8 @@ test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消�
 
   assert.match(source, /rocketchatSearch\.getProvider/);
   assert.match(source, /\{ limit: 20, searchAll: true \}/);
+  assert.match(source, /rest\.searchMessages\(rid, keyword, 20\)/);
+  assert.match(source, /Object\.keys\(subscriptions\)\.sort\(\)/);
 });
 
 test('同一服务器账号和会话范围在 30 秒内复用成功搜索', async () => {
