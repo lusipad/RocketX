@@ -268,6 +268,7 @@ export async function probeAdo(
 const WI_FIELDS = [
   'System.Title',
   'System.WorkItemType',
+  'System.Parent',
   'System.State',
   'System.TeamProject',
   'System.AssignedTo',
@@ -284,6 +285,7 @@ const WI_FIELDS = [
 function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, any> }) {
   return {
     id: w.id,
+    parentId: w.fields['System.Parent'],
     title: w.fields['System.Title'] ?? '',
     type: w.fields['System.WorkItemType'] ?? '',
     state: w.fields['System.State'] ?? '',
@@ -706,12 +708,12 @@ export async function directRunSavedQuery(
     workItems?: { id: number }[];
     workItemRelations?: { target?: { id: number } }[];
   }>(cfg, 'GET', `${prefix}/_apis/wit/wiql/${queryId}?api-version=7.0`);
-  const ids = result.workItems
-    ? result.workItems.slice(0, top).map((w) => w.id)
+  const rawIds = result.workItems
+    ? result.workItems.map((w) => w.id)
     : (result.workItemRelations ?? [])
         .map((r) => r.target?.id)
-        .filter((id): id is number => id != null)
-        .slice(0, top);
+        .filter((id): id is number => id != null);
+  const ids = Array.from(new Set(rawIds)).slice(0, top);
   if (ids.length === 0) return [];
   const chunks: number[][] = [];
   for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));

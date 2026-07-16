@@ -17,6 +17,7 @@ export interface AdoConfig {
 
 export interface AdoWorkItem {
   id: number;
+  parentId?: number;
   title: string;
   type: string;
   state: string;
@@ -199,6 +200,7 @@ export class AdoClient {
     const fields = [
       'System.Title',
       'System.WorkItemType',
+      'System.Parent',
       'System.State',
       'System.TeamProject',
       'System.AssignedTo',
@@ -214,6 +216,7 @@ export class AdoClient {
 
     return (detail.value ?? []).map((w) => ({
       id: w.id,
+      parentId: w.fields['System.Parent'],
       title: w.fields['System.Title'] ?? '',
       type: w.fields['System.WorkItemType'] ?? '',
       state: w.fields['System.State'] ?? '',
@@ -234,6 +237,7 @@ export class AdoClient {
     const fields = [
       'System.Title',
       'System.WorkItemType',
+      'System.Parent',
       'System.State',
       'System.TeamProject',
       'System.AssignedTo',
@@ -251,6 +255,7 @@ export class AdoClient {
     if (!w) return null;
     return {
       id: w.id,
+      parentId: w.fields['System.Parent'],
       title: w.fields['System.Title'] ?? '',
       type: w.fields['System.WorkItemType'] ?? '',
       state: w.fields['System.State'] ?? '',

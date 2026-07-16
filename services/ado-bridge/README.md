@@ -13,7 +13,7 @@
 和 `ADO_PAT`。需授予 Work Items Read & Write、Code Read、Build Read。接口：
 
 - `GET /api/ado/config` → Web 地址与当前 ADO 身份
-- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项（不传时使用 `@Me`）
+- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项及其 `parentId`（不传时使用 `@Me`）
 - `GET /api/ado/pullrequests` → 与当前用户相关的 PR
 - `GET /api/ado/builds` → 当前用户最近发起的构建
 - `GET /api/ado/workitem/:id` → 工作项详情

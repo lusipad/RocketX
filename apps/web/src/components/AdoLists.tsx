@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ExternalLink,
   GitPullRequest,
   Loader2,
@@ -21,6 +22,7 @@ import {
   type WorkItem,
 } from '../stores/workbench';
 import { fmtConvTime } from '../lib/format';
+import { workItemTreeRows } from '../lib/workItemTree';
 import { useUI } from '../stores/ui';
 
 export const TYPE_COLORS: Record<string, string> = {
@@ -91,6 +93,7 @@ function ListHeader({
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
   const [keyword, setKeyword] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
@@ -101,7 +104,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
 
   const effectiveState = states.includes(state) ? state : '全部';
 
-  const filtered = useMemo(() => {
+  const matched = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     return items.filter(
       (w) =>
@@ -109,6 +112,20 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         (!q || w.title.toLowerCase().includes(q) || String(w.id).includes(q)),
     );
   }, [items, keyword, effectiveState]);
+  const filtering = effectiveState !== '全部' || keyword.trim() !== '';
+  const rows = useMemo(
+    () => workItemTreeRows(items, new Set(matched.map((item) => item.id)), collapsed, filtering),
+    [items, matched, collapsed, filtering],
+  );
+
+  const toggleCollapsed = (id: number) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <>
@@ -116,7 +133,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         keyword={keyword}
         onKeyword={setKeyword}
         placeholder="搜索标题或 #编号"
-        count={filtered.length}
+        count={matched.length}
         total={items.length}
         right={
           <div className="relative">
@@ -140,43 +157,68 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
       />
 
       <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
-        {filtered.map((w) => (
-          <a
-            key={w.id}
-            href={w.webUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="group flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
-          >
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ background: TYPE_COLORS[w.type] ?? '#8f959e' }}
-              title={w.type}
-            />
-            <span className="w-14 shrink-0 text-xs text-ink-3">#{w.id}</span>
-            <span className="min-w-0 flex-1 truncate text-sm text-ink">{w.title}</span>
-
-            <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(w.state)}`}>
-              {w.state}
-            </span>
-            {w.priority !== undefined && (
-              <span className={`w-6 shrink-0 text-2xs ${priorityStyle(w.priority)}`}>
-                P{w.priority}
+        {rows.map(({ item: w, depth, hasChildren }) => {
+          const isCollapsed = collapsed.has(w.id) && !filtering;
+          return (
+            <div
+              key={w.id}
+              className="group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2"
+            >
+              <span
+                className="flex h-full shrink-0 items-center"
+                style={{ paddingLeft: `${12 + depth * 20}px` }}
+              >
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(w.id)}
+                    className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-3 hover:text-ink"
+                    title={isCollapsed ? '展开子项' : '折叠子项'}
+                    aria-label={isCollapsed ? `展开工作项 #${w.id}` : `折叠工作项 #${w.id}`}
+                  >
+                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                ) : (
+                  <span className="h-7 w-7" />
+                )}
               </span>
-            )}
-            <span className="w-24 shrink-0 truncate text-2xs text-ink-3" title={w.assignedTo}>
-              {w.assignedTo ?? '未分配'}
-            </span>
-            <span className="w-20 shrink-0 truncate text-right text-2xs text-ink-3">
-              {w.project}
-            </span>
-            <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
-              {relTime(w.changedDate)}
-            </span>
-            <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
-          </a>
-        ))}
-        {filtered.length === 0 && (
+              <a
+                href={w.webUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4"
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: TYPE_COLORS[w.type] ?? '#8f959e' }}
+                  title={w.type}
+                />
+                <span className="w-14 shrink-0 text-xs text-ink-3">#{w.id}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">{w.title}</span>
+
+                <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(w.state)}`}>
+                  {w.state}
+                </span>
+                {w.priority !== undefined && (
+                  <span className={`w-6 shrink-0 text-2xs ${priorityStyle(w.priority)}`}>
+                    P{w.priority}
+                  </span>
+                )}
+                <span className="w-24 shrink-0 truncate text-2xs text-ink-3" title={w.assignedTo}>
+                  {w.assignedTo ?? '未分配'}
+                </span>
+                <span className="w-20 shrink-0 truncate text-right text-2xs text-ink-3">
+                  {w.project}
+                </span>
+                <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
+                  {relTime(w.changedDate)}
+                </span>
+                <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+              </a>
+            </div>
+          );
+        })}
+        {matched.length === 0 && (
           <EmptyRow text={items.length ? '没有匹配的工作项' : '当前没有分配给你的未关闭工作项'} />
         )}
       </div>

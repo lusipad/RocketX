@@ -33,6 +33,14 @@ test('首次贴底会在下一帧复核，并同时观察内容与视口尺寸',
   assert.match(source, /ro\.observe\(content\)/);
 });
 
+test('普通打开会话会清除旧消息定位，避免贴底后又平滑回弹', () => {
+  const source = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
+  const openRoom = source.slice(source.indexOf('openRoom: async (rid) => {'), source.indexOf('openThread: async'));
+
+  assert.match(openRoom, /highlightMid: null/);
+  assert.match(openRoom, /scrollNonce: get\(\)\.scrollNonce \+ 1/);
+});
+
 test('有更早消息时，当前页首条不能伪装成真实未读分界', () => {
   assert.equal(
     shouldShowUnreadDivider({

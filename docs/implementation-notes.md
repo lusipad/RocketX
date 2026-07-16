@@ -1,3 +1,30 @@
+# Implementation notes — GitHub Issues #51 与 #54
+
+## Shipped vs planned
+
+#51 清除普通打开会话时遗留的消息定位，避免列表贴底后又被旧高亮拉回。#54 在现有 ADO 查询结果中按 `System.Parent` 展示父子层级，并支持逐级折叠；未扩大查询范围或增加额外请求。
+
+## Decisions
+
+- 工作项父子关系只在当前结果集内建立；父项不在结果中时，子项作为根显示，保持“我的工作项”和已保存查询的原始语义。
+- 默认展开全部层级；筛选和搜索时保留命中项的祖先路径，并临时忽略折叠状态，避免结果被隐藏。
+- 直连和 ado-bridge 统一请求 `System.Parent`，复用现有批量详情请求，不增加新接口。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- 会话回弹并非贴底时序本身失效，而是三秒内遗留的 `highlightMid` 在贴底后再次触发 `scrollIntoView`。
+- 已保存的树查询可能在 `workItemRelations` 中重复出现同一目标工作项；读取详情前按 ID 去重，避免重复行。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — GitHub Issue #48
 
 ## Shipped vs planned
