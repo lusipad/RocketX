@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../stores/auth';
+import { observeNearViewport } from '../lib/nearViewport';
 import AuthImage from './AuthImage';
 
 const PALETTE = ['#3370ff', '#7f3bf5', '#00b96b', '#ff8800', '#f54a45', '#04a5a5', '#c71fbf'];
@@ -50,6 +52,23 @@ export default function Avatar({
     : roomId
       ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`
       : null;
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const [readyPath, setReadyPath] = useState<string | null>(() =>
+    typeof IntersectionObserver === 'undefined' ? path : null,
+  );
+
+  useEffect(() => {
+    if (!path) {
+      setReadyPath(null);
+      return;
+    }
+    const node = rootRef.current;
+    if (!node) {
+      setReadyPath(path);
+      return;
+    }
+    return observeNearViewport(node, () => setReadyPath(path));
+  }, [path]);
 
   const style = {
     width: size,
@@ -76,7 +95,7 @@ export default function Avatar({
     />
   ) : null;
 
-  const inner = !path ? (
+  const inner = !path || readyPath !== path ? (
     letterTile
   ) : (
     <AuthImage
@@ -88,10 +107,12 @@ export default function Avatar({
     />
   );
 
-  // 没有状态点时不套额外容器，保持原有布局不变
-  if (!dot) return inner;
   return (
-    <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+    <span
+      ref={rootRef}
+      className="relative inline-flex shrink-0"
+      style={{ width: size, height: size }}
+    >
       {inner}
       {dot}
     </span>

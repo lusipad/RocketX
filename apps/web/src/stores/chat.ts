@@ -25,6 +25,12 @@ import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
 import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
 import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
+import {
+  canApplyRetainedRoomResult,
+  omitRoomEntries,
+  retainRecentRooms,
+  trimRoomMessages,
+} from '../lib/chatMemory';
 import { useUiPrefs } from './uiPrefs';
 import { createActiveRoomStreams } from '../lib/roomStreams';
 import { useAuth } from './auth';
@@ -97,6 +103,8 @@ export type RightPanel =
   | null;
 
 const HISTORY_PAGE = 50;
+const INACTIVE_ROOM_MESSAGE_LIMIT = 60;
+const RECENT_INACTIVE_ROOM_LIMIT = 8;
 const DRAFTS_KEY = 'rcx-drafts';
 
 export function roomMembershipPolicy(
@@ -317,6 +325,8 @@ const memberInflight = new Map<string, { version: number; promise: Promise<RcUse
 /** 服务端成员快照确认前，跨并发请求保留本地已成功的增删变更。 */
 const pendingMemberAdds = new Map<string, Map<string, RcUser>>();
 const pendingMemberRemovals = new Map<string, Set<string>>();
+let retainedRoomOrder: string[] = [];
+let retainedRoomGeneration = 0;
 
 function memberVersion(rid: string): number {
   return memberVersions.get(rid) ?? 0;
@@ -346,6 +356,35 @@ function resetMemberRequestState() {
   memberInflight.clear();
   pendingMemberAdds.clear();
   pendingMemberRemovals.clear();
+}
+
+function resetRoomRetention() {
+  retainedRoomOrder = [];
+  retainedRoomGeneration += 1;
+}
+
+function evictMemberRequestState(rid: string) {
+  if (memberInflight.has(rid)) {
+    invalidateMemberRequests(rid);
+    memberInflight.delete(rid);
+  } else {
+    memberVersions.delete(rid);
+  }
+  pendingMemberAdds.delete(rid);
+  pendingMemberRemovals.delete(rid);
+}
+
+function compactEvictedRoomData(state: ChatState, evictedRids: readonly string[]) {
+  return {
+    messages: trimRoomMessages(state.messages, evictedRids, INACTIVE_ROOM_MESSAGE_LIMIT),
+    historyLoaded: omitRoomEntries(state.historyLoaded, evictedRids),
+    hasMore: omitRoomEntries(state.hasMore, evictedRids),
+    members: omitRoomEntries(state.members, evictedRids),
+    memberErrors: omitRoomEntries(state.memberErrors, evictedRids),
+    typing: omitRoomEntries(state.typing, evictedRids),
+    readReceipts: omitRoomEntries(state.readReceipts, evictedRids),
+    roomRoles: omitRoomEntries(state.roomRoles, evictedRids),
+  };
 }
 
 function stageMemberAdds(rid: string, users: RcUser[]) {
@@ -646,6 +685,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!auth) return;
     // 重新登录/切换服务器后不能复用上一个会话尚未完成的成员请求。
     resetMemberRequestState();
+    resetRoomRetention();
     // 预热 Site_Url 缓存（引用回复的链接前缀需要）
     void ensureSiteUrl();
     // 已读回执是企业版功能，社区版直接别调，省掉每次刷新那个 400
@@ -736,7 +776,9 @@ export const useChat = create<ChatState>((set, get) => ({
       let nextList = upsertMessage(state.messages[rid] ?? [], msg);
       // 还没打开过的会话只留个尾巴当预览：全局流会给所有房间推消息，
       // 不截断的话长时间挂机后台房间会无限积累；打开时反正要拉历史再合并
-      if (!state.historyLoaded[rid] && nextList.length > 60) nextList = nextList.slice(-60);
+      if (!state.historyLoaded[rid] && nextList.length > INACTIVE_ROOM_MESSAGE_LIMIT) {
+        nextList = nextList.slice(-INACTIVE_ROOM_MESSAGE_LIMIT);
+      }
       set({ messages: { ...state.messages, [rid]: nextList } });
       const room = state.rooms[rid];
       if (room && !msg.tmid) {
@@ -848,13 +890,21 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   openRoom: async (rid) => {
+    const requestGeneration = retainedRoomGeneration;
     const sub = get().subscriptions[rid];
     // 打开有未读的会话时记录「以下为新消息」位置（取上次已读时间）。
     // RC 对频道默认只有 @ 才累计 unread，普通新消息只置 alert，两者都算未读
     const marks = { ...get().unreadMarkTs };
     if (sub && (sub.unread > 0 || sub.alert) && sub.ls) marks[rid] = tsMs(sub.ls);
     else delete marks[rid];
+    const retention = retainRecentRooms(retainedRoomOrder, rid, RECENT_INACTIVE_ROOM_LIMIT);
+    retainedRoomOrder = retention.order;
+    for (const evictedRid of retention.evicted) evictMemberRequestState(evictedRid);
+    const compacted = retention.evicted.length
+      ? compactEvictedRoomData(get(), retention.evicted)
+      : {};
     set({
+      ...compacted,
       activeRid: rid,
       rightPanel: null,
       unreadMarkTs: marks,
@@ -880,6 +930,18 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!historyLoaded[rid]) {
       const type = subscriptions[rid]?.t ?? rooms[rid]?.t ?? 'c';
       const history = await rest.getHistory(rid, type, HISTORY_PAGE);
+      // 用户快速切过很多房间时，旧请求可能在该房间已被淘汰后才返回。
+      // 不再保留的房间由下次打开重新加载，避免迟到响应绕过内存上限。
+      if (
+        !canApplyRetainedRoomResult(
+          requestGeneration,
+          retainedRoomGeneration,
+          retainedRoomOrder,
+          rid,
+        )
+      ) {
+        return;
+      }
       const existing = get().messages[rid] ?? [];
       let merged = history;
       for (const m of existing) merged = upsertMessage(merged, m);
@@ -1145,6 +1207,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   refreshReceipts: async (rid) => {
+    const requestGeneration = retainedRoomGeneration;
     const me = useAuth.getState().user;
     if (!me || !receiptsSupported) return;
     const list = (get().messages[rid] ?? []).filter(
@@ -1157,6 +1220,16 @@ export const useChat = create<ChatState>((set, get) => ({
       const users = receipts
         .filter((r) => r.user?._id !== me._id)
         .map((r) => ({ username: r.user?.username ?? '', name: r.user?.name }));
+      if (
+        !canApplyRetainedRoomResult(
+          requestGeneration,
+          retainedRoomGeneration,
+          retainedRoomOrder,
+          rid,
+        )
+      ) {
+        return;
+      }
       set({ readReceipts: { ...get().readReceipts, [rid]: { mid: lastOwn._id, users } } });
     } catch (err) {
       // 社区版 / 未开启回执：停止后续请求，功能静默降级
@@ -1495,6 +1568,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   loadRoomRoles: async (rid) => {
+    const requestGeneration = retainedRoomGeneration;
     const type = roomTypeOf(get(), rid);
     // 单聊和多人聊天（都是 t='d'）没有角色一说，groups.roles 对它们直接 400
     if (type === 'd') return [];
@@ -1506,7 +1580,16 @@ export const useChat = create<ChatState>((set, get) => ({
     const p = (async () => {
       try {
         const roles = await rest.getRoomRoles(rid, type);
-        set({ roomRoles: { ...get().roomRoles, [rid]: roles } });
+        if (
+          canApplyRetainedRoomResult(
+            requestGeneration,
+            retainedRoomGeneration,
+            retainedRoomOrder,
+            rid,
+          )
+        ) {
+          set({ roomRoles: { ...get().roomRoles, [rid]: roles } });
+        }
         return roles;
       } catch {
         // 拿不到角色就当自己没权限，界面退回只读——不该因此报错打断用户

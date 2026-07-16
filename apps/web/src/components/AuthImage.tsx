@@ -7,14 +7,14 @@ import {
   normalizeAssetPath,
   rest,
 } from '../lib/client';
-import { BlobUrlCache } from '../lib/blobUrlCache';
+import { AuthImageBlobCache } from '../lib/authImageCache';
 
-// 头像/站内图片的 objectURL 必须有界，否则长时间切换会话会一直占用 WebView2 内存。
-const blobCache = new BlobUrlCache(128, (url) => URL.revokeObjectURL(url));
+// 头像比聊天图片更常复用，必须分池：否则浏览图片或打开大通讯录会把会话头像全部挤掉。
+const blobCache = new AuthImageBlobCache(256, 128, (url) => URL.revokeObjectURL(url));
 const inflight = new Map<string, Promise<string | null>>();
 
 async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | null> {
-  const cached = blobCache.get(cacheKey);
+  const cached = blobCache.get(path, cacheKey);
   if (cached) return cached;
   const running = inflight.get(cacheKey);
   if (running) return running;
@@ -22,8 +22,8 @@ async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | 
     .fetchFile(path)
     .then((blob) => {
       const url = URL.createObjectURL(blob);
-      blobCache.put(cacheKey, url);
-      return blobCache.get(cacheKey);
+      blobCache.put(path, cacheKey, url);
+      return blobCache.get(path, cacheKey);
     })
     .catch(() => null)
     .finally(() => inflight.delete(cacheKey));
@@ -50,7 +50,11 @@ export default function AuthImage({
   const needsBlob = isTauri && path.startsWith('/');
   const cacheKey = `${getServerBase()}\0${loadStoredAuth()?.userId ?? ''}\0${path}`;
   const [src, setSrc] = useState<string | null>(
-    needsBlob ? (blobCache.get(cacheKey) ?? null) : path.startsWith('/') ? assetUrl(path) : path,
+    needsBlob
+      ? (blobCache.get(path, cacheKey) ?? null)
+      : path.startsWith('/')
+        ? assetUrl(path)
+        : path,
   );
   const [failed, setFailed] = useState(false);
 
@@ -63,9 +67,9 @@ export default function AuthImage({
     let alive = true;
     let retained = false;
     setFailed(false);
-    const cached = blobCache.get(cacheKey);
+    const cached = blobCache.get(path, cacheKey);
     if (cached) {
-      blobCache.retain(cacheKey);
+      blobCache.retain(path, cacheKey);
       retained = true;
       setSrc(cached);
     } else {
@@ -75,7 +79,7 @@ export default function AuthImage({
       if (!alive) return;
       if (url) {
         if (!retained) {
-          blobCache.retain(cacheKey);
+          blobCache.retain(path, cacheKey);
           retained = true;
         }
         setSrc(url);
@@ -84,7 +88,7 @@ export default function AuthImage({
     });
     return () => {
       alive = false;
-      if (retained) blobCache.release(cacheKey);
+      if (retained) blobCache.release(path, cacheKey);
     };
   }, [path, needsBlob, cacheKey]);
 
