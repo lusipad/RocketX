@@ -8,6 +8,7 @@ import { parseSlash } from '../lib/slash';
 import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
+import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
 
 const SUPPORTS_FIELD_SIZING =
   typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
@@ -83,11 +84,12 @@ export default function ThreadPanel() {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     // 偏好未加载完先按保守规则（Ctrl+Enter 才发），避免默认 Enter 发送把半句发出去（P1-6）
     const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
-    const shouldSend =
-      effectiveMode === 'alternative'
-        ? e.ctrlKey || e.metaKey
-        : !e.shiftKey && !e.ctrlKey && !e.metaKey;
-    if (shouldSend) {
+    if (shouldInsertNewline(effectiveMode, e)) {
+      e.preventDefault();
+      insertText('\n');
+      return;
+    }
+    if (shouldSendMessage(effectiveMode, e)) {
       e.preventDefault();
       void doSend();
     }
@@ -177,7 +179,7 @@ export default function ThreadPanel() {
             placeholder={
               sendOnEnter === 'alternative'
                 ? '回复话题，Ctrl + Enter 发送，Enter 换行'
-                : '回复话题，Enter 发送，Shift + Enter 换行'
+                : '回复话题，Enter 发送，Alt + Enter 换行'
             }
             className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
           />

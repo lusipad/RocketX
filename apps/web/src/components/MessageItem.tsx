@@ -55,6 +55,7 @@ import TodoDialog from './TodoDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
+import { findQuoteImage } from '../lib/messageQuote';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -199,6 +200,7 @@ function FileAttachment({
 /** 引用回复的原消息：点击跳转并高亮原消息（飞书交互） */
 function QuoteCard({ att }: { att: RcMessageAttachment }) {
   const jumpToMessage = useChat((s) => s.jumpToMessage);
+  const image = findQuoteImage(att);
   // message_link 形如 .../channel/xx?msg=<id>
   const mid = att.message_link?.match(/[?&]msg=([^&]+)/)?.[1];
 
@@ -214,6 +216,14 @@ function QuoteCard({ att }: { att: RcMessageAttachment }) {
     >
       <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
       <div className="line-clamp-2 text-xs break-words text-ink-3">{att.text}</div>
+      {image?.image_url && (
+        <AuthImage
+          path={image.image_url}
+          alt={image.title || '引用图片'}
+          className="mt-1.5 max-h-28 max-w-48 rounded-md object-contain"
+          fallback={<span className="mt-1 block text-xs text-ink-3">[引用图片加载失败]</span>}
+        />
+      )}
     </button>
   );
 }
@@ -530,9 +540,6 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     toast.success('消息链接已复制');
   };
 
-  // 2 分钟内显示「撤回」，之后是「删除」（行为一致：消息被移除）
-  const deleteLabel = Date.now() - tsMs(message.ts) < 2 * 60 * 1000 ? '撤回' : '删除';
-
   const menuItems: MenuItem[] = [
     { label: '回复', icon: Reply, onClick: () => setReplyTo(message) },
     ...(!inThread
@@ -580,11 +587,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
       : []),
     ...(mine
-      ? [{ label: deleteLabel, icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
+      ? [{ label: '删除', icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
       : []),
   ];
 
   const onContextMenu = (e: ReactMouseEvent) => {
+    if (selectMode) {
+      e.preventDefault();
+      return;
+    }
     // 附件卡片里的链接保持浏览器默认右键；发送中/失败的消息无菜单
     if ((e.target as HTMLElement).closest('a')) return;
     if (message.pending || message.failed) return;
@@ -611,13 +622,23 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     >
       {/* 多选合并转发：勾选框（issue #16） */}
       {selectMode && (
-        <span
-          className={`mt-1 flex h-4.5 w-4.5 shrink-0 items-center justify-center self-center rounded-full border transition ${
-            selected ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
-          }`}
+        <button
+          type="button"
+          aria-label={selected ? '取消选择消息' : '选择消息'}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleSelectMid(message._id);
+          }}
+          className="flex h-8 w-8 shrink-0 items-center justify-center self-center rounded-full"
         >
-          {selected && <Check size={12} strokeWidth={3} />}
-        </span>
+          <span
+            className={`flex h-4.5 w-4.5 items-center justify-center rounded-full border transition ${
+              selected ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
+            }`}
+          >
+            {selected && <Check size={12} strokeWidth={3} />}
+          </span>
+        </button>
       )}
       {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片。多选态下整条只响应「选中」 */}
       {showAvatars && (
@@ -652,7 +673,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           {/* 悬浮操作栏：整体浮在气泡上方（bottom-full = 底边贴气泡顶边），不再盖住本条
               第一行文字（issue #6）。停留 HOVER_DELAY_MS 才出现（issue #18.4）；
               表情面板/菜单打开时保持显示，免得选到一半栏没了。 */}
-          {!editing && !message.pending && !message.failed && (hoverActions || !!picker || !!menu) && (
+          {!selectMode &&
+            !editing &&
+            !message.pending &&
+            !message.failed &&
+            (hoverActions || !!picker || !!menu) && (
             <div
               className={`absolute bottom-full z-10 mb-0.5 flex ${
                 mine ? 'right-0' : 'left-0'
@@ -852,7 +877,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <ConfirmDeleteDialog
           onConfirm={() => {
             setConfirmDelete(false);
-            void deleteMessage(message._id, deleteLabel === '撤回');
+            void deleteMessage(message._id);
           }}
           onCancel={() => setConfirmDelete(false)}
         />

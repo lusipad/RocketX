@@ -22,6 +22,7 @@ function conversation(
     userMentions: 0,
     favorite: false,
     muted: false,
+    hidden: false,
     isDiscussion: false,
     isMultiDM: false,
     isTeam: false,

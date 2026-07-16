@@ -9,6 +9,7 @@
  */
 import { RcRestClient, RcRealtimeClient, tsMs, type RcMessage } from '../packages/rc-client/src/index';
 import { mergedForwardAttachments } from '../apps/web/src/lib/forward';
+import { findQuoteImage } from '../apps/web/src/lib/messageQuote';
 
 const BASE = process.env.RC_BASE_URL ?? 'http://localhost:3300';
 const USER = process.env.RC_USER ?? 'admin';
@@ -272,6 +273,20 @@ async function main() {
     await rest.uploadMedia(channelId, new File([png], '截图.png', { type: 'image/png' }));
     const history = await rest.getHistory(channelId, 'c', 1);
     assert(history[0]?.attachments?.[0]?.image_url, '图片附件缺少 image_url');
+  });
+  await check('引用图片消息仍保留图片', async () => {
+    const history = await rest.getHistory(channelId, 'c', 5);
+    const image = history.find((message) => message.attachments?.some((a) => a.image_url));
+    assert(image, '找不到刚上传的图片消息');
+    const link = `${BASE}/channel/冒烟测试-${stamp}?msg=${image!._id}`;
+    const quoted = await rest.sendMessageRaw({
+      rid: channelId,
+      msg: `[ ](${link}) 引用图片`,
+    });
+    const refreshed = await rest.getHistory(channelId, 'c', 5);
+    const attachment = refreshed.find((message) => message._id === quoted._id)?.attachments?.[0];
+    assert(attachment?.message_link, '服务端未展开图片引用');
+    assert(attachment && findQuoteImage(attachment), '图片引用未保留原图片附件');
   });
   await check('带认证下载文件', async () => {
     const history = await rest.getHistory(channelId, 'c', 5);
@@ -588,7 +603,13 @@ async function main() {
     const history = await rest.getHistory(channelId, 'c', 30);
     assert(!history.some((m) => m._id === tmp._id), '消息未删除');
   });
-  await check('隐藏会话', async () => {
+  await check('隐藏并恢复会话', async () => {
+    await rest.hideRoom(dmId, 'd');
+    let subscriptions = await rest.getSubscriptions();
+    assert(subscriptions.find((sub) => sub.rid === dmId)?.open === false, '会话未标记为隐藏');
+    await rest.openRoom(dmId, 'd');
+    subscriptions = await rest.getSubscriptions();
+    assert(subscriptions.find((sub) => sub.rid === dmId)?.open !== false, '会话未恢复');
     await rest.hideRoom(dmId, 'd');
   });
   await check('删除测试期间建的房间', async () => {

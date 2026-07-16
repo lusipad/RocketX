@@ -45,6 +45,8 @@ export interface Conversation {
   favorite: boolean;
   /** 免打扰 */
   muted: boolean;
+  /** 已从常用会话列表隐藏 */
+  hidden: boolean;
   /** 讨论（Discussion，父房间的子会话） */
   isDiscussion: boolean;
   /** 多人直聊：RC 里 t 仍是 'd'，但成员多于两人——对用户来说是群聊 */
@@ -135,8 +137,6 @@ interface ChatState {
   uploading: number;
   /** 每个会话的输入草稿（持久化） */
   drafts: Record<string, string>;
-  /** 撤回后待重新编辑的文本（Composer 消费后清空） */
-  recalledText: string | null;
   /** 「以下为新消息」分割线时间戳（打开有未读的会话时记录） */
   unreadMarkTs: Record<string, number>;
   /** 待确认发送的文件（粘贴/拖拽后进入预览确认） */
@@ -202,7 +202,7 @@ interface ChatState {
   refreshReceipts: (rid: string) => Promise<void>;
   inviteMembers: (rid: string, users: RcUser[]) => Promise<void>;
   editMessage: (msgId: string, text: string) => Promise<void>;
-  deleteMessage: (msgId: string, recall?: boolean) => Promise<void>;
+  deleteMessage: (msgId: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   togglePin: (msg: RcMessage) => Promise<void>;
   /**
@@ -216,6 +216,7 @@ interface ChatState {
   toggleMute: (conv: Conversation) => Promise<void>;
   markConvRead: (rid: string) => Promise<void>;
   hideConv: (conv: Conversation) => Promise<void>;
+  restoreConv: (conv: Conversation) => Promise<void>;
   /** 改群设置（话题/公告/描述/名称）；无权限时会抛出 */
   saveRoomSettings: (
     rid: string,
@@ -478,12 +479,21 @@ export function permalinkOf(rid: string, mid: string): string {
 }
 
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
-function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
+export function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
+  const image = quoted.attachments?.find((attachment) => !!attachment.image_url);
   return {
     message_link: `local-quote`,
     author_name: quoted.u.name || quoted.u.username,
     text: stripQuotePrefix(quoted.msg) || quoted.attachments?.[0]?.title || '[卡片消息]',
     ts: quoted.ts,
+    ...(image
+      ? {
+          image_url: image.image_url,
+          image_dimensions: image.image_dimensions,
+          title: image.title,
+          title_link: image.title_link,
+        }
+      : {}),
   };
 }
 
@@ -603,7 +613,6 @@ export const useChat = create<ChatState>((set, get) => ({
   scrollNonce: 0,
   uploading: 0,
   drafts: loadDrafts(),
-  recalledText: null,
   unreadMarkTs: {},
   pendingFiles: null,
   replyTo: null,
@@ -1244,15 +1253,13 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  deleteMessage: async (msgId, recall) => {
+  deleteMessage: async (msgId) => {
     const rid = get().activeRid;
     if (!rid) return;
     try {
       const list = get().messages[rid] ?? [];
-      const msg = recall ? list.find((m) => m._id === msgId) : undefined;
       await rest.deleteMessage(rid, msgId);
       set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
-      if (msg?.msg) set({ recalledText: msg.msg });
       const panel = get().rightPanel;
       if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
     } catch (err) {
@@ -1394,6 +1401,22 @@ export const useChat = create<ChatState>((set, get) => ({
       toast.success(`已隐藏「${conv.name}」，收到新消息时会重新出现`);
     } catch (err) {
       toast.error(err, '隐藏会话失败');
+    }
+  },
+
+  restoreConv: async (conv) => {
+    try {
+      await rest.openRoom(conv.rid, conv.type);
+      const sub = get().subscriptions[conv.rid];
+      if (sub) {
+        set({
+          subscriptions: { ...get().subscriptions, [conv.rid]: { ...sub, open: true } },
+        });
+      }
+      toast.success(`已恢复「${conv.name}」`);
+    } catch (err) {
+      toast.error(err, '恢复会话失败');
+      throw err;
     }
   },
 
@@ -1776,10 +1799,12 @@ if (typeof window !== 'undefined') window.__chat = useChat;
 export function buildConversations(
   subscriptions: Record<string, RcSubscription>,
   rooms: Record<string, RcRoom>,
+  includeHidden = false,
 ): Conversation[] {
   const items: Conversation[] = [];
   for (const sub of Object.values(subscriptions)) {
-    if (sub.open === false) continue;
+    const hidden = sub.open === false;
+    if (hidden && !includeHidden) continue;
     const room = rooms[sub.rid];
     /**
      * 只认「真实的最后一条消息时间」。
@@ -1807,6 +1832,7 @@ export function buildConversations(
       userMentions: sub.userMentions ?? 0,
       favorite: !!sub.f,
       muted: !!sub.disableNotifications,
+      hidden,
       isDiscussion: !!prid,
       isMultiDM,
       parentName: parent ? parent.fname || parent.name : undefined,

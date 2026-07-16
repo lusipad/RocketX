@@ -42,6 +42,8 @@ export interface RcMessageAttachment {
   image_dimensions?: { width?: number; height?: number };
   author_name?: string;
   author_icon?: string;
+  /** 引用消息展开后的原附件列表。 */
+  attachments?: RcMessageAttachment[];
   fields?: RcMessageAttachmentField[];
   collapsed?: boolean;
 }

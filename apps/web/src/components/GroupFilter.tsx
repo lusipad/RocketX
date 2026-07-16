@@ -6,6 +6,7 @@ import {
   Folder as FolderIcon,
   FolderPlus,
   Hash,
+  EyeOff,
   MessageSquareText,
   MessagesSquare,
   PanelLeftClose,
@@ -36,6 +37,7 @@ const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'groups', label: '群组', icon: Hash },
   { key: 'teams', label: '团队', icon: Users },
   { key: 'discussions', label: '讨论', icon: MessagesSquare },
+  { key: 'hidden', label: '隐藏', icon: EyeOff },
 ];
 
 /** 新建 / 重命名分组弹窗 */
@@ -140,6 +142,7 @@ export default function GroupFilter({ onCollapse }: { onCollapse: () => void }) 
 
   const counts = useMemo(() => {
     const convs = buildConversations(subscriptions, rooms);
+    const hidden = buildConversations(subscriptions, rooms, true).filter((c) => c.hidden);
     return {
       all: 0,
       unread: convs.filter((c) => c.unread > 0 || c.alert).length,
@@ -152,6 +155,7 @@ export default function GroupFilter({ onCollapse }: { onCollapse: () => void }) 
       ).length,
       teams: convs.filter((c) => c.isTeam || !!c.teamId).length,
       discussions: convs.filter((c) => c.isDiscussion).length,
+      hidden: hidden.length,
     } as Record<ConvFilter, number>;
   }, [subscriptions, rooms]);
 

@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Eye,
   EyeOff,
   Folder as FolderIcon,
   FolderMinus,
@@ -40,6 +41,7 @@ const FILTER_TITLE: Record<ConvFilter, string> = {
   teams: '团队',
   discussions: '讨论',
   favorites: '收藏',
+  hidden: '隐藏',
 };
 
 function ConversationItem({
@@ -59,6 +61,7 @@ function ConversationItem({
   const toggleMute = useChat((s) => s.toggleMute);
   const markConvRead = useChat((s) => s.markConvRead);
   const hideConv = useChat((s) => s.hideConv);
+  const restoreConv = useChat((s) => s.restoreConv);
   const draft = useChat((s) => s.drafts[conv.rid]);
   const filter = useUI((s) => s.convFilter);
   const retainUnread = useUI((s) => s.retainUnread);
@@ -120,7 +123,13 @@ function ConversationItem({
       icon: FolderMinus,
       onClick: () => removeRoom(f.id, conv.rid),
     })),
-    { label: '隐藏会话', icon: EyeOff, danger: true, onClick: () => void hideConv(conv) },
+    conv.hidden
+      ? {
+          label: '恢复会话',
+          icon: Eye,
+          onClick: () => void restoreConv(conv).catch(() => {}),
+        }
+      : { label: '隐藏会话', icon: EyeOff, danger: true, onClick: () => void hideConv(conv) },
   ];
 
   const avatarSize = viewMode === 'extended' ? 40 : viewMode === 'medium' ? 34 : 26;
@@ -142,7 +151,9 @@ function ConversationItem({
         if (active) scrollToLatest();
         else {
           if (filter === 'unread') retainUnread(conv.rid);
-          void openRoom(conv.rid);
+          void (conv.hidden
+            ? restoreConv(conv).then(() => openRoom(conv.rid))
+            : openRoom(conv.rid)).catch(() => {});
         }
       }}
       onContextMenu={(e) => {
@@ -333,7 +344,7 @@ export default function ConversationList({ width = 280 }: { width?: number }) {
   const folder = folders.find((f) => f.id === activeFolder);
 
   const sections = useMemo(() => {
-    const all = buildConversations(subscriptions, rooms);
+    const all = buildConversations(subscriptions, rooms, filter === 'hidden');
     return buildConversationView(all, {
       filter,
       folder,

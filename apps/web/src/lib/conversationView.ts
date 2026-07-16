@@ -50,8 +50,10 @@ export function filterConversations(
       return conversations.filter((conversation) => conversation.isDiscussion);
     case 'favorites':
       return conversations.filter((conversation) => conversation.favorite);
+    case 'hidden':
+      return conversations.filter((conversation) => conversation.hidden);
     default:
-      return conversations;
+      return conversations.filter((conversation) => !conversation.hidden);
   }
 }
 

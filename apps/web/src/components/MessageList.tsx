@@ -242,6 +242,7 @@ export default function MessageList({ rid }: { rid: string }) {
   }
 
   const selectedMessages = list.filter((m) => selectedMids.has(m._id));
+  const deletableSelected = selectedMessages.filter((message) => message.u._id === myId);
   const copySelected = async () => {
     await navigator.clipboard.writeText(messagesToMarkdown(selectedMessages));
     toast.success(`已复制 ${selectedMessages.length} 条消息`);
@@ -260,13 +261,13 @@ export default function MessageList({ rid }: { rid: string }) {
       {selectMode && (
         <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1 px-4 py-2">
           <span className="text-sm text-ink-2">
-            已选 {selectedMids.size} 条
+            已选 {selectedMessages.length} 条
             <span className="ml-2 text-xs text-ink-3">Esc 取消</span>
           </span>
           <div className="flex items-center gap-2">
             <button
               onClick={() => void copySelected().catch((err) => toast.error(err, '复制失败'))}
-              disabled={selectedMids.size === 0}
+              disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
               <Copy size={13} />
@@ -274,7 +275,7 @@ export default function MessageList({ rid }: { rid: string }) {
             </button>
             <button
               onClick={() => setForwardOpen(true)}
-              disabled={selectedMids.size === 0}
+              disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
               <Share2 size={13} />
@@ -282,7 +283,7 @@ export default function MessageList({ rid }: { rid: string }) {
             </button>
             <button
               onClick={() => void exportSelected().catch((err) => toast.error(err, '导出失败'))}
-              disabled={selectedMids.size === 0}
+              disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
               <Download size={13} />
@@ -294,7 +295,7 @@ export default function MessageList({ rid }: { rid: string }) {
                 toast.success(`已标记 ${selectedMessages.length} 条消息`);
                 exitSelectMode();
               }}
-              disabled={selectedMids.size === 0}
+              disabled={selectedMessages.length === 0}
               className="h-7 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
               title="批量收藏"
             >
@@ -302,13 +303,16 @@ export default function MessageList({ rid }: { rid: string }) {
             </button>
             <button
               onClick={() => {
-                if (!confirm(`确定删除 ${selectedMids.size} 条消息吗？`)) return;
-                for (const mid of selectedMids) deleteMessage(mid);
-                exitSelectMode();
+                if (!confirm(`确定删除自己的 ${deletableSelected.length} 条消息吗？`)) return;
+                void (async () => {
+                  // 逐条等待：并发删除会让各请求用同一份旧列表回写，已删消息可能重新出现。
+                  for (const message of deletableSelected) await deleteMessage(message._id);
+                  exitSelectMode();
+                })();
               }}
-              disabled={selectedMids.size === 0}
+              disabled={deletableSelected.length === 0}
               className="h-7 rounded-md border border-line px-2.5 text-xs text-danger transition hover:bg-danger/10 disabled:opacity-40"
-              title="批量删除"
+              title="批量删除自己的消息"
             >
               <Trash2 size={14} />
             </button>

@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.14.3"
+version = "0.14.4"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"

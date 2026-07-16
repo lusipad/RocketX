@@ -32,7 +32,8 @@ export type ConvFilter =
   | 'multi'
   | 'groups'
   | 'teams'
-  | 'discussions';
+  | 'discussions'
+  | 'hidden';
 
 interface UIState {
   module: ModuleKey;

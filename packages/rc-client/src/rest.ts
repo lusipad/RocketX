@@ -912,6 +912,12 @@ export class RcRestClient {
     return this.request('POST', endpoint, { roomId });
   }
 
+  /** 恢复已隐藏的会话。 */
+  openRoom(roomId: string, type: RoomType): Promise<unknown> {
+    const endpoint = type === 'c' ? 'channels.open' : type === 'p' ? 'groups.open' : 'im.open';
+    return this.request('POST', endpoint, { roomId });
+  }
+
   // ---- 标记（星标） ----
 
   starMessage(messageId: string): Promise<unknown> {

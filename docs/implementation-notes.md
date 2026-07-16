@@ -1,3 +1,32 @@
+# Implementation notes — GitHub Issue #48
+
+## Shipped vs planned
+
+修复消息多选、发送换行键、图片引用、隐藏会话恢复入口和删除文案五项反馈。未扩大到消息权限、会话归档或通知模型。
+
+## Decisions
+
+- 多选态使用独立可点击的勾选按钮，点击消息正文仍可切换选择；批量删除只处理自己的消息，并逐条等待服务端完成，避免并发回写旧列表。
+- 默认发送方式保持 Enter 发送，但显式处理 Alt+Enter，在当前光标位置插入换行；Ctrl+Enter 发送模式继续可配置。
+- 引用图片同时兼容本地乐观附件和 Rocket.Chat 服务端展开后的嵌套附件结构。
+- 隐藏会话使用 Rocket.Chat 原生 close/open 接口，单独放在“隐藏”过滤分组，不复制房间或订阅数据。
+- 消息菜单统一使用“删除”，移除基于两分钟窗口切换为“撤回”和回填输入框的隐含行为。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- Windows Chromium 不会可靠地把 Alt+Enter 当作 textarea 默认换行，必须由输入框显式插入。
+- Rocket.Chat 展开的图片引用把原图片放在引用附件的嵌套 `attachments` 中，而不是顶层 `image_url`。
+
+## Questions for review
+
+- #41 仍缺少出现“私密”的完整 Windows 通知截图，本版不猜测修改通知内容。
+
+---
+
 # Implementation notes — 普通员工首次上手
 
 Plan: 当前任务对话中的《第一项：普通员工首次上手》

@@ -688,7 +688,7 @@ function MessageSection() {
           value={prefs.sendOnEnter}
           onChange={(v) => void update({ sendOnEnter: v })}
           options={[
-            { key: 'normal', label: 'Enter 发送', hint: 'Shift+Enter 换行' },
+            { key: 'normal', label: 'Enter 发送', hint: 'Alt+Enter 换行' },
             { key: 'alternative', label: 'Ctrl+Enter 发送', hint: 'Enter 换行' },
           ]}
         />

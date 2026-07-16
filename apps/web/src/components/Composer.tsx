@@ -25,6 +25,7 @@ import {
 } from '../lib/slash';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
+import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
 
 // @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
 const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
@@ -53,8 +54,6 @@ export default function Composer() {
 
   const runSlash = useChat((s) => s.runSlash);
   const slashCommands = useChat((s) => s.slashCommands);
-  const recalledText = useChat((s) => s.recalledText);
-
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [picker, setPicker] = useState(false);
@@ -95,15 +94,6 @@ export default function Composer() {
       );
     }
   }, [activeRid, loadMembers]);
-
-  // 撤回后自动填入原文
-  useEffect(() => {
-    if (recalledText) {
-      setText(recalledText);
-      useChat.setState({ recalledText: null });
-      textareaRef.current?.focus();
-    }
-  }, [recalledText]);
 
   // 草稿防抖保存
   const persistDraft = (value: string) => {
@@ -293,6 +283,21 @@ export default function Composer() {
     textareaRef.current?.focus();
   };
 
+  const insertNewline = () => {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? start;
+    const next = `${text.slice(0, start)}\n${text.slice(end)}`;
+    setText(next);
+    persistDraft(next);
+    setMentionQuery(null);
+    setSlashQuery(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + 1, start + 1);
+    });
+  };
+
   const doSend = async () => {
     const value = text.trim();
     const rid = activeRid;
@@ -346,6 +351,12 @@ export default function Composer() {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 输入法合成中，方向键/回车/Esc 都归 IME 选字用，补全面板一律不拦（P2-f）
     const composing = e.nativeEvent.isComposing;
+    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
+    if (!composing && e.key === 'Enter' && shouldInsertNewline(effectiveMode, e)) {
+      e.preventDefault();
+      insertNewline();
+      return;
+    }
     if (!composing && slashQuery !== null && slashCandidates.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -402,12 +413,7 @@ export default function Composer() {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     // 偏好还没加载完就先按「Ctrl+Enter 才发送」这条保守规则：否则默认值是 Enter 发送，
     // 而用户真实设置可能是「Enter 换行」，一按回车就把半句话发出去（P1-6）。
-    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
-    const shouldSend =
-      effectiveMode === 'alternative'
-        ? e.ctrlKey || e.metaKey // Ctrl/Cmd + Enter 发送
-        : !e.shiftKey && !e.ctrlKey && !e.metaKey; // Enter 发送
-    if (shouldSend) {
+    if (shouldSendMessage(effectiveMode, e)) {
       e.preventDefault();
       void doSend();
     }
@@ -595,7 +601,7 @@ export default function Composer() {
             sendOnEnter === 'alternative'
               // 「怎么发送」和「怎么换行」得同时讲 —— 只说一半，想发多行的人就卡住了
               ? '输入消息，Ctrl + Enter 发送，Enter 换行'
-              : '输入消息，Enter 发送，Shift + Enter 换行'
+              : '输入消息，Enter 发送，Alt + Enter 换行'
           }
           className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
         />
