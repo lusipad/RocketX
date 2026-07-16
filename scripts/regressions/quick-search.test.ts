@@ -49,6 +49,52 @@ test('全局消息搜索的合法空结果不会触发逐房间回退', async ()
   assert.equal(roomCalls, 0);
 });
 
+test('默认消息搜索保持当前会话范围，只有显式操作才搜索全部会话', async () => {
+  const scopes: boolean[] = [];
+  const backend = {
+    provider: async () => ({ settings: { GlobalSearchEnabled: true } }),
+    global: async (_keyword: string, _limit: number, searchAll: boolean) => {
+      scopes.push(searchAll);
+      return { message: { docs: [] } };
+    },
+    room: async () => [],
+  };
+
+  await searchMessagesGlobal('needle', ['current-room'], backend, () => true, () => {}, {
+    searchAll: false,
+  });
+  await searchMessagesGlobal('needle', ['current-room', 'other-room'], backend, () => true, () => {}, {
+    searchAll: true,
+  });
+
+  assert.deepEqual(scopes, [false, true]);
+});
+
+test('全局搜索关闭时，当前会话搜索仍使用提供器而不是触发跨会话回退', async () => {
+  let roomCalls = 0;
+  const result = await searchMessagesGlobal(
+    'needle',
+    ['current-room'],
+    {
+      provider: async () => ({ settings: { GlobalSearchEnabled: false } }),
+      global: async (_keyword, _limit, searchAll) => {
+        assert.equal(searchAll, false);
+        return { message: { docs: [message('current')] } };
+      },
+      room: async () => {
+        roomCalls++;
+        return [];
+      },
+    },
+    () => true,
+    () => {},
+    { searchAll: false },
+  );
+
+  assert.deepEqual(result.messages.map((item) => item._id), ['current']);
+  assert.equal(roomCalls, 0);
+});
+
 test('全局搜索不可用时逐房间回退并发不超过 2', async () => {
   let active = 0;
   let maxActive = 0;
@@ -262,6 +308,29 @@ test('全局搜索滚动加载时扩大 limit 并返回下一批状态', async (
   assert.equal(result.hasMore, true);
 });
 
+test('当前会话滚动加载不会把提供器调用升级为搜索全部', async () => {
+  const scopes: boolean[] = [];
+  await searchMoreMessages(
+    'needle',
+    ['current-room'],
+    'global',
+    1,
+    {
+      provider: async () => ({ settings: { GlobalSearchEnabled: false } }),
+      global: async (_keyword, _limit, searchAll) => {
+        scopes.push(searchAll);
+        return { message: { docs: [] } };
+      },
+      room: async () => [],
+    },
+    () => true,
+    () => {},
+    { searchAll: false },
+  );
+
+  assert.deepEqual(scopes, [false]);
+});
+
 test('逐房间滚动加载使用 offset 获取下一页并渐进返回', async () => {
   const calls: { rid: string; offset: number; count: number }[] = [];
   const progress: string[][] = [];
@@ -299,10 +368,12 @@ test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消�
   const source = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
 
   assert.match(source, /rocketchatSearch\.getProvider/);
-  assert.match(source, /\{ limit, searchAll: true \}/);
+  assert.match(source, /\{ limit, searchAll \}/);
   assert.match(source, /rest\.searchMessages\(rid, searchKeyword, count, offset\)/);
   assert.match(source, /onScroll=\{handleResultsScroll\}/);
   assert.match(source, /searchMoreMessages\(/);
+  assert.match(source, /搜索全部/);
+  assert.match(source, /setMessageSearchAllKeyword\(q\)/);
   assert.match(source, /shownMessages\.map/);
   assert.match(source, /conversations\.map\(\(conversation\) => conversation\.rid\)/);
   assert.match(source, /Object\.keys\(subscriptions\)\.sort\(\)\.join\('\\0'\)/);

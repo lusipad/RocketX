@@ -118,12 +118,13 @@ export default function QuickSwitcher({
   const [contactError, setContactError] = useState<string | null>(null);
   const [messageSettledKeyword, setMessageSettledKeyword] = useState('');
   const [contactSettledKeyword, setContactSettledKeyword] = useState('');
+  const [messageSearchAllKeyword, setMessageSearchAllKeyword] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchProviderRef = useRef<Promise<unknown> | null>(null);
   const messageSearchSourceRef = useRef<MessageSearchSource | null>(null);
   const messageSearchPageRef = useRef(0);
-  const messageQueryRef = useRef('');
+  const messageSearchRequestRef = useRef('');
   const tabRef = useRef(tab);
   const dialogRef = useDialogBehavior(onClose);
 
@@ -222,12 +223,12 @@ export default function QuickSwitcher({
       searchProviderRef.current ??= realtime.call('rocketchatSearch.getProvider');
       return searchProviderRef.current;
     },
-    global: (searchKeyword: string, limit: number) =>
+    global: (searchKeyword: string, limit: number, searchAll: boolean) =>
       realtime.call(
         'rocketchatSearch.search',
         searchKeyword,
         { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
-        { limit, searchAll: true },
+        { limit, searchAll },
       ),
     room: (rid: string, searchKeyword: string, offset: number, count: number) =>
       rest.searchMessages(rid, searchKeyword, count, offset),
@@ -287,7 +288,7 @@ export default function QuickSwitcher({
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
     if (!q) {
-      messageQueryRef.current = '';
+      messageSearchRequestRef.current = '';
       messageSearchSourceRef.current = null;
       messageSearchPageRef.current = 0;
       setMessages([]);
@@ -305,9 +306,17 @@ export default function QuickSwitcher({
       return;
     }
     let cancelled = false;
-    messageQueryRef.current = q;
+    const searchAllMessages = messageSearchAllKeyword === q;
+    const requestKey = `${q}\0${searchAllMessages ? 'all' : 'current'}`;
+    messageSearchRequestRef.current = requestKey;
     messageSearchSourceRef.current = null;
     messageSearchPageRef.current = 0;
+    const currentRid = activeRid ?? conversationRidsRef.current[0];
+    const searchRids = searchAllMessages
+      ? conversationRidsRef.current
+      : currentRid
+        ? [currentRid]
+        : [];
     const localMessages = searchLoadedMessages(
       q,
       useChat.getState().messages,
@@ -324,28 +333,30 @@ export default function QuickSwitcher({
     setMessageError(null);
     setContactError(null);
     timer.current = setTimeout(() => {
-      const cacheKey = `${getServerBase()}\0${myId ?? ''}\0${conversationScope}\0${q}`;
+      const searchScope = searchAllMessages ? `all:${conversationScope}` : `room:${currentRid ?? ''}`;
+      const cacheKey = `${getServerBase()}\0${myId ?? ''}\0${searchScope}\0${q}`;
       void searchMessagesCached(
         cacheKey,
         () =>
           searchMessagesGlobal(
             q,
-            conversationRidsRef.current,
+            searchRids,
             messageSearchBackend(),
-            () => !cancelled,
+            () => !cancelled && messageSearchRequestRef.current === requestKey,
             (partialResult) => {
-              if (!cancelled) {
+              if (!cancelled && messageSearchRequestRef.current === requestKey) {
                 messageSearchSourceRef.current = partialResult.source;
                 messageSearchPageRef.current = partialResult.page;
                 setMessageHasMore(partialResult.hasMore);
                 setMessages(mergeMessageSearchResults(localMessages, partialResult.messages));
               }
             },
+            { searchAll: searchAllMessages },
           ),
-        () => !cancelled,
+        () => !cancelled && messageSearchRequestRef.current === requestKey,
       )
         .then((result) => {
-          if (cancelled) return;
+          if (cancelled || messageSearchRequestRef.current !== requestKey) return;
           messageSearchSourceRef.current = result.source;
           messageSearchPageRef.current = result.page;
           setMessageHasMore(result.hasMore);
@@ -355,7 +366,7 @@ export default function QuickSwitcher({
           setMessageSettledKeyword(q);
         })
         .catch(() => {
-          if (cancelled) return;
+          if (cancelled || messageSearchRequestRef.current !== requestKey) return;
           setMessageSearching(false);
           setMessageError('消息搜索暂时不可用，请稍后重试');
           setMessageSettledKeyword(q);
@@ -384,7 +395,7 @@ export default function QuickSwitcher({
       cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [keyword, conversationScope, me, myId, activeRid]);
+  }, [keyword, conversationScope, me, myId, activeRid, messageSearchAllKeyword]);
 
   const loadMoreMessages = () => {
     if (tab !== 'messages') return;
@@ -396,27 +407,43 @@ export default function QuickSwitcher({
     }
 
     const q = keyword.trim();
+    const searchAllMessages = messageSearchAllKeyword === q;
+    const requestKey = `${q}\0${searchAllMessages ? 'all' : 'current'}`;
     const source = messageSearchSourceRef.current;
-    if (!q || !source || messageSearching || messageLoadingMore || !messageHasMore) return;
+    if (
+      !q ||
+      !source ||
+      messageSearchRequestRef.current !== requestKey ||
+      messageSearching ||
+      messageLoadingMore ||
+      !messageHasMore
+    ) return;
 
     const nextPage = messageSearchPageRef.current + 1;
+    const currentRid = activeRid ?? conversationRidsRef.current[0];
+    const searchRids = searchAllMessages
+      ? conversationRidsRef.current
+      : currentRid
+        ? [currentRid]
+        : [];
     setMessageLoadingMore(true);
     setMessageLoadMoreError(false);
     void searchMoreMessages(
       q,
-      conversationRidsRef.current,
+      searchRids,
       source,
       nextPage,
       messageSearchBackend(),
-      () => messageQueryRef.current === q,
+      () => messageSearchRequestRef.current === requestKey,
       (partialResult) => {
-        if (messageQueryRef.current !== q) return;
+        if (messageSearchRequestRef.current !== requestKey) return;
         setMessages((current) => mergeMessageSearchResults(current, partialResult.messages));
         setMessageHasMore(partialResult.hasMore);
       },
+      { searchAll: searchAllMessages },
     )
       .then((result) => {
-        if (messageQueryRef.current !== q) return;
+        if (messageSearchRequestRef.current !== requestKey) return;
         messageSearchSourceRef.current = result.source;
         messageSearchPageRef.current = result.page;
         setMessages((current) => mergeMessageSearchResults(current, result.messages));
@@ -425,10 +452,17 @@ export default function QuickSwitcher({
         setMessageLoadingMore(false);
       })
       .catch(() => {
-        if (messageQueryRef.current !== q) return;
+        if (messageSearchRequestRef.current !== requestKey) return;
         setMessageLoadingMore(false);
         setMessageLoadMoreError(true);
       });
+  };
+
+  const requestFullMessageSearch = () => {
+    const q = keyword.trim();
+    if (!q || messageSearchAllKeyword === q) return;
+    setMessageSearchAllKeyword(q);
+    setTab('messages');
   };
 
   const handleResultsScroll = (event: UIEvent<HTMLDivElement>) => {
@@ -628,7 +662,10 @@ export default function QuickSwitcher({
           <input
             ref={inputRef}
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(e) => {
+              setKeyword(e.target.value);
+              setMessageSearchAllKeyword('');
+            }}
             onKeyDown={(e) => {
               const n = currentItems.length;
               if (e.key === 'ArrowDown') {
@@ -742,6 +779,26 @@ export default function QuickSwitcher({
           </div>
         )}
 
+        {!!keyword.trim() && (
+          <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1/40 px-4 py-2 text-2xs text-ink-3">
+            <span>
+              {messageSearchAllKeyword === keyword.trim()
+                ? messageSearching
+                  ? '正在搜索全部会话的消息…'
+                  : '消息搜索范围：全部会话'
+                : `消息默认搜索本机和${activeRid ? '当前会话' : '最近会话'}`}
+            </span>
+            {messageSearchAllKeyword !== keyword.trim() && (
+              <button
+                className="rounded px-2 py-1 font-medium text-primary hover:bg-primary-light"
+                onClick={requestFullMessageSearch}
+              >
+                搜索全部
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="min-h-40 flex-1 overflow-y-auto py-1" onScroll={handleResultsScroll}>
           {tab === 'all' && (
             <>
@@ -758,8 +815,12 @@ export default function QuickSwitcher({
               {keyword.trim() && messageSearching && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">
                   {messages.length > 0
-                    ? '已显示本机结果，正在后台搜索完整历史…'
-                    : '正在后台搜索完整历史消息…'}
+                    ? messageSearchAllKeyword === keyword.trim()
+                      ? '已显示本机结果，正在后台搜索全部会话…'
+                      : '已显示本机结果，正在补充当前会话…'
+                    : messageSearchAllKeyword === keyword.trim()
+                      ? '正在后台搜索全部会话…'
+                      : '正在搜索当前会话…'}
                 </div>
               )}
               {QUICK_SEARCH_RESULT_SECTIONS.map((section) => {
@@ -872,8 +933,12 @@ export default function QuickSwitcher({
                   : 'py-8 text-center text-sm text-ink-3'}
                 >
                   {messages.length > 0
-                    ? '已显示本机和已完成会话的结果，正在继续搜索完整历史…'
-                    : '正在搜索全部历史…'}
+                    ? messageSearchAllKeyword === keyword.trim()
+                      ? '已显示本机和已完成会话的结果，正在继续搜索全部会话…'
+                      : '已显示本机结果，正在补充当前会话…'
+                    : messageSearchAllKeyword === keyword.trim()
+                      ? '正在搜索全部会话…'
+                      : '正在搜索当前会话…'}
                 </div>
               )}
               {!messageSearching && messageError && (
@@ -886,18 +951,24 @@ export default function QuickSwitcher({
               )}
               {!messageSearching && !messageError && keyword.trim() && filteredMessages.length === 0 && (
                 <div className="py-8 text-center text-sm text-ink-3">
-                  {messages.length > 0 && activeFilterCount > 0 ? '当前筛选条件下没有消息' : '没有找到相关消息'}
+                  {messages.length > 0 && activeFilterCount > 0
+                    ? '当前筛选条件下没有消息'
+                    : messageSearchAllKeyword === keyword.trim()
+                      ? '全部会话中没有找到相关消息'
+                      : '本机和当前会话中没有找到相关消息'}
                 </div>
               )}
               {!messageSearching && !messageError && !keyword.trim() && (
-                <div className="py-8 text-center text-sm text-ink-3">输入关键词，搜索所有会话的完整历史</div>
+                <div className="py-8 text-center text-sm text-ink-3">输入关键词，先搜索本机和当前会话</div>
               )}
               {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">
                   已显示 {shownMessages.length} 条
                   {(shownMessages.length < filteredMessages.length || messageHasMore)
                     ? '，滚动到底继续加载'
-                    : '，已加载全部匹配消息'}
+                    : messageSearchAllKeyword === keyword.trim()
+                      ? '，已加载全部匹配消息'
+                      : '，当前范围已加载完成'}
                 </div>
               )}
               {shownMessages.map((m, i) => (

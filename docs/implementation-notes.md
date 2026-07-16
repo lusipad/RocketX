@@ -29,6 +29,34 @@
 
 ---
 
+# Implementation notes — 受控消息搜索范围
+
+Plan: 当前任务中的“默认轻量搜索 + 显式搜索全部”实施计划。
+
+## Decisions
+
+- 默认远端搜索只覆盖当前会话；本机已经加载的其它会话消息仍即时参与结果。
+- “搜索全部”是显式深度搜索开关，点击后才请求跨会话全局搜索或逐房间回退。
+- 分页继承发起搜索时的范围，局部搜索滚动不会自动升级为全量搜索。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- Rocket.Chat 默认提供器即使关闭全局搜索，仍可用同一方法搜索当前房间；只有 `searchAll: true` 需要全局开关。
+
+## Verification
+
+- Windows Tauri 开发版已实机确认：输入关键词后显示“搜索全部”，点击后先显示全会话搜索进度，完成后范围状态切换为“全部会话”；按钮、状态条和搜索结果区均无溢出。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — v0.14.9 搜索渐进补全
 
 ## Shipped vs planned

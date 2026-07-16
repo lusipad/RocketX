@@ -2,8 +2,12 @@ import { tsMs, type RcMessage } from '@rcx/rc-client';
 
 export interface MessageSearchBackend {
   provider: () => Promise<unknown>;
-  global: (keyword: string, limit: number) => Promise<unknown>;
+  global: (keyword: string, limit: number, searchAll: boolean) => Promise<unknown>;
   room: (rid: string, keyword: string, offset: number, count: number) => Promise<RcMessage[]>;
+}
+
+export interface MessageSearchOptions {
+  searchAll?: boolean;
 }
 
 const FALLBACK_CONCURRENCY = 2;
@@ -164,9 +168,9 @@ async function searchRoomMessagePage(
 }
 
 /**
- * 跨会话消息搜索：服务端已启用全局搜索时以它为准；否则逐房间回退。
+ * 消息搜索：默认可限制在当前会话；用户显式搜索全部时才跨会话查询。
  *
- * 已启用全局搜索时，空数组同样是完整结果。未启用时低并发搜索所有可访问会话，
+ * 搜索全部且服务端已启用全局搜索时，空数组同样是完整结果。未启用时低并发搜索传入会话，
  * 每批只保留最新 20 条候选并回报进度，保证历史搜索范围完整且内存占用有界。
  */
 export async function searchMessagesGlobal(
@@ -175,15 +179,17 @@ export async function searchMessagesGlobal(
   backend: MessageSearchBackend,
   isCurrent: () => boolean = () => true,
   onProgress: (result: MessageSearchPage) => void = () => {},
+  options: MessageSearchOptions = {},
 ): Promise<MessageSearchPage> {
+  const searchAll = options.searchAll ?? true;
   try {
     const provider = (await backend.provider()) as {
       settings?: { GlobalSearchEnabled?: boolean };
     } | undefined;
-    if (!provider || provider.settings?.GlobalSearchEnabled === false) {
+    if (!provider || (searchAll && provider.settings?.GlobalSearchEnabled === false)) {
       throw new Error('global search disabled');
     }
-    const result = (await backend.global(keyword, MESSAGE_SEARCH_PAGE_SIZE)) as {
+    const result = (await backend.global(keyword, MESSAGE_SEARCH_PAGE_SIZE, searchAll)) as {
       message?: { docs?: RcMessage[] };
     };
     const docs = result?.message?.docs;
@@ -216,13 +222,14 @@ export async function searchMoreMessages(
   backend: MessageSearchBackend,
   isCurrent: () => boolean = () => true,
   onProgress: (result: MessageSearchPage) => void = () => {},
+  options: MessageSearchOptions = {},
 ): Promise<MessageSearchPage> {
   if (source === 'rooms') {
     return searchRoomMessagePage(keyword, recentRids, page, backend, isCurrent, onProgress);
   }
 
   const limit = (page + 1) * MESSAGE_SEARCH_PAGE_SIZE;
-  const result = (await backend.global(keyword, limit)) as {
+  const result = (await backend.global(keyword, limit, options.searchAll ?? true)) as {
     message?: { docs?: RcMessage[] };
   };
   const docs = result?.message?.docs;
