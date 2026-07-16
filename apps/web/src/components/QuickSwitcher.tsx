@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
 import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search, SlidersHorizontal } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
@@ -11,13 +11,16 @@ import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import {
   chooseAvailableSearchTab,
+  MESSAGE_SEARCH_PAGE_SIZE,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
   mergeMessageSearchResults,
   searchMessagesCached,
   searchMessagesGlobal,
+  searchMoreMessages,
   searchLoadedMessages,
   searchesSettledFor,
+  type MessageSearchSource,
   type QuickSearchTab,
 } from '../lib/quickSearch';
 import { mergeUserSearchResults } from '../lib/userSearch';
@@ -106,6 +109,10 @@ export default function QuickSwitcher({
   });
   const [contactRoster, setContactRoster] = useState<RcUser[]>([]);
   const [messageSearching, setMessageSearching] = useState(false);
+  const [messageLoadingMore, setMessageLoadingMore] = useState(false);
+  const [messageHasMore, setMessageHasMore] = useState(false);
+  const [messageLoadMoreError, setMessageLoadMoreError] = useState(false);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_SEARCH_PAGE_SIZE);
   const [contactSearching, setContactSearching] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
   const [contactError, setContactError] = useState<string | null>(null);
@@ -114,6 +121,9 @@ export default function QuickSwitcher({
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchProviderRef = useRef<Promise<unknown> | null>(null);
+  const messageSearchSourceRef = useRef<MessageSearchSource | null>(null);
+  const messageSearchPageRef = useRef(0);
+  const messageQueryRef = useRef('');
   const tabRef = useRef(tab);
   const dialogRef = useDialogBehavior(onClose);
 
@@ -167,6 +177,10 @@ export default function QuickSwitcher({
     () => filterMessageResults(messages, filters),
     [filters, messages],
   );
+  const shownMessages = useMemo(
+    () => filteredMessages.slice(0, visibleMessageCount),
+    [filteredMessages, visibleMessageCount],
+  );
   const rawFileResults = useMemo(
     () => searchIndexedFiles(fileIndex, keyword).filter((result) =>
       canSearchIndexedRoom(!!subscriptions[result.rid], rooms[result.rid]?.t),
@@ -202,6 +216,22 @@ export default function QuickSwitcher({
   );
   const conversationRidsRef = useRef<string[]>([]);
   conversationRidsRef.current = messageSearchRids;
+
+  const messageSearchBackend = () => ({
+    provider: () => {
+      searchProviderRef.current ??= realtime.call('rocketchatSearch.getProvider');
+      return searchProviderRef.current;
+    },
+    global: (searchKeyword: string, limit: number) =>
+      realtime.call(
+        'rocketchatSearch.search',
+        searchKeyword,
+        { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
+        { limit, searchAll: true },
+      ),
+    room: (rid: string, searchKeyword: string, offset: number, count: number) =>
+      rest.searchMessages(rid, searchKeyword, count, offset),
+  });
 
   useEffect(() => inputRef.current?.focus(), [tab]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
@@ -257,9 +287,16 @@ export default function QuickSwitcher({
     if (timer.current) clearTimeout(timer.current);
     const q = keyword.trim();
     if (!q) {
+      messageQueryRef.current = '';
+      messageSearchSourceRef.current = null;
+      messageSearchPageRef.current = 0;
       setMessages([]);
       setContacts({ users: [], rooms: [] });
       setMessageSearching(false);
+      setMessageLoadingMore(false);
+      setMessageHasMore(false);
+      setMessageLoadMoreError(false);
+      setVisibleMessageCount(MESSAGE_SEARCH_PAGE_SIZE);
       setContactSearching(false);
       setMessageError(null);
       setContactError(null);
@@ -268,14 +305,21 @@ export default function QuickSwitcher({
       return;
     }
     let cancelled = false;
+    messageQueryRef.current = q;
+    messageSearchSourceRef.current = null;
+    messageSearchPageRef.current = 0;
     const localMessages = searchLoadedMessages(
       q,
       useChat.getState().messages,
       (rid) => canSearchIndexedRoom(!!subscriptions[rid], rooms[rid]?.t),
     );
     setMessages(localMessages);
+    setVisibleMessageCount(MESSAGE_SEARCH_PAGE_SIZE);
     setContacts({ users: [], rooms: [] });
     setMessageSearching(true);
+    setMessageLoadingMore(false);
+    setMessageHasMore(false);
+    setMessageLoadMoreError(false);
     setContactSearching(true);
     setMessageError(null);
     setContactError(null);
@@ -287,32 +331,25 @@ export default function QuickSwitcher({
           searchMessagesGlobal(
             q,
             conversationRidsRef.current,
-            {
-              provider: () => {
-                searchProviderRef.current ??= realtime.call('rocketchatSearch.getProvider');
-                return searchProviderRef.current;
-              },
-              global: (keyword) =>
-                realtime.call(
-                  'rocketchatSearch.search',
-                  keyword,
-                  { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
-                  { limit: 20, searchAll: true },
-                ),
-              room: (rid, keyword) => rest.searchMessages(rid, keyword, 20),
-            },
+            messageSearchBackend(),
             () => !cancelled,
-            (partialMessages) => {
+            (partialResult) => {
               if (!cancelled) {
-                setMessages(mergeMessageSearchResults(localMessages, partialMessages));
+                messageSearchSourceRef.current = partialResult.source;
+                messageSearchPageRef.current = partialResult.page;
+                setMessageHasMore(partialResult.hasMore);
+                setMessages(mergeMessageSearchResults(localMessages, partialResult.messages));
               }
             },
           ),
         () => !cancelled,
       )
-        .then((messageDocs) => {
+        .then((result) => {
           if (cancelled) return;
-          const nextMessages = mergeMessageSearchResults(localMessages, messageDocs);
+          messageSearchSourceRef.current = result.source;
+          messageSearchPageRef.current = result.page;
+          setMessageHasMore(result.hasMore);
+          const nextMessages = mergeMessageSearchResults(localMessages, result.messages);
           setMessages(nextMessages);
           setMessageSearching(false);
           setMessageSettledKeyword(q);
@@ -348,6 +385,58 @@ export default function QuickSwitcher({
       if (timer.current) clearTimeout(timer.current);
     };
   }, [keyword, conversationScope, me, myId, activeRid]);
+
+  const loadMoreMessages = () => {
+    if (tab !== 'messages') return;
+    if (visibleMessageCount < filteredMessages.length) {
+      setVisibleMessageCount((count) =>
+        Math.min(count + MESSAGE_SEARCH_PAGE_SIZE, filteredMessages.length),
+      );
+      return;
+    }
+
+    const q = keyword.trim();
+    const source = messageSearchSourceRef.current;
+    if (!q || !source || messageSearching || messageLoadingMore || !messageHasMore) return;
+
+    const nextPage = messageSearchPageRef.current + 1;
+    setMessageLoadingMore(true);
+    setMessageLoadMoreError(false);
+    void searchMoreMessages(
+      q,
+      conversationRidsRef.current,
+      source,
+      nextPage,
+      messageSearchBackend(),
+      () => messageQueryRef.current === q,
+      (partialResult) => {
+        if (messageQueryRef.current !== q) return;
+        setMessages((current) => mergeMessageSearchResults(current, partialResult.messages));
+        setMessageHasMore(partialResult.hasMore);
+      },
+    )
+      .then((result) => {
+        if (messageQueryRef.current !== q) return;
+        messageSearchSourceRef.current = result.source;
+        messageSearchPageRef.current = result.page;
+        setMessages((current) => mergeMessageSearchResults(current, result.messages));
+        setMessageHasMore(result.hasMore);
+        setVisibleMessageCount((count) => count + MESSAGE_SEARCH_PAGE_SIZE);
+        setMessageLoadingMore(false);
+      })
+      .catch(() => {
+        if (messageQueryRef.current !== q) return;
+        setMessageLoadingMore(false);
+        setMessageLoadMoreError(true);
+      });
+  };
+
+  const handleResultsScroll = (event: UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    if (target.scrollHeight - target.scrollTop - target.clientHeight <= 48) {
+      loadMoreMessages();
+    }
+  };
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
@@ -491,7 +580,7 @@ export default function QuickSwitcher({
       : tab === 'convs'
         ? filteredConvs.map((c) => () => pickConv(c.rid))
         : tab === 'messages'
-          ? filteredMessages.map((m) => () => pickMessage(m))
+          ? shownMessages.map((m) => () => pickMessage(m))
           : tab === 'files'
             ? fileResults.map((result) => () => pickFile(result))
             : tab === 'contacts'
@@ -653,7 +742,7 @@ export default function QuickSwitcher({
           </div>
         )}
 
-        <div className="min-h-40 flex-1 overflow-y-auto py-1">
+        <div className="min-h-40 flex-1 overflow-y-auto py-1" onScroll={handleResultsScroll}>
           {tab === 'all' && (
             <>
               {!keyword.trim() && commandCenter && (
@@ -805,10 +894,13 @@ export default function QuickSwitcher({
               )}
               {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">
-                  已搜索全部可访问历史，显示最近 {messages.length} 条
+                  已显示 {shownMessages.length} 条
+                  {(shownMessages.length < filteredMessages.length || messageHasMore)
+                    ? '，滚动到底继续加载'
+                    : '，已加载全部匹配消息'}
                 </div>
               )}
-              {filteredMessages.map((m, i) => (
+              {shownMessages.map((m, i) => (
                 <button
                   key={m._id}
                   onClick={() => pickMessage(m)}
@@ -835,6 +927,23 @@ export default function QuickSwitcher({
                   </span>
                 </button>
               ))}
+              {messageLoadingMore && (
+                <div className="px-4 py-3 text-center text-2xs text-ink-3">
+                  正在搜索更早消息…
+                </div>
+              )}
+              {!messageLoadingMore &&
+                keyword.trim() &&
+                shownMessages.length > 0 &&
+                (shownMessages.length < filteredMessages.length ||
+                  (!messageSearching && messageHasMore)) && (
+                  <button
+                    className="w-full px-4 py-3 text-center text-2xs text-primary hover:bg-fill-hover"
+                    onClick={loadMoreMessages}
+                  >
+                    {messageLoadMoreError ? '继续加载失败，点击重试' : '继续向下滚动加载更早消息'}
+                  </button>
+                )}
             </>
           )}
 

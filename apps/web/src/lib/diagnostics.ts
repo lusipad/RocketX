@@ -68,7 +68,7 @@ export function buildDiagnosticReport(snapshot: DiagnosticSnapshot, logs: string
 
 export async function exportDiagnostics(snapshot: DiagnosticSnapshot): Promise<boolean> {
   if (!isTauri) throw new Error('诊断日志导出仅桌面端可用');
-  const [{ invoke }, { save }, { writeTextFile }] = await Promise.all([
+  const [{ invoke }, { save }, { writeFile }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/plugin-fs'),
@@ -77,6 +77,6 @@ export async function exportDiagnostics(snapshot: DiagnosticSnapshot): Promise<b
   const date = new Date().toISOString().slice(0, 10);
   const target = await save({ defaultPath: `RocketX-diagnostics-${date}.txt` });
   if (!target) return false;
-  await writeTextFile(target, buildDiagnosticReport(snapshot, logs));
+  await writeFile(target, new TextEncoder().encode(buildDiagnosticReport(snapshot, logs)));
   return true;
 }

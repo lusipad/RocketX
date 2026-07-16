@@ -183,9 +183,14 @@ async function main() {
     return `${thread.length} 条回复`;
   });
   await check('搜索消息（中文子串）', async () => {
+    await rest.sendMessage(channelId, '冒烟测试：分页消息');
     const found = await rest.searchMessages(channelId, '冒烟');
     assert(found.length > 0, '中文子串搜不到（检查 Message_AlwaysSearchRegExp）');
-    return `${found.length} 条命中`;
+    const firstPage = await rest.searchMessages(channelId, '冒烟', 1, 0);
+    const secondPage = await rest.searchMessages(channelId, '冒烟', 1, 1);
+    assert(firstPage.length === 1 && secondPage.length === 1, '搜索分页没有返回两页');
+    assert(firstPage[0]._id !== secondPage[0]._id, '搜索 offset 重复返回首条结果');
+    return `${found.length} 条命中，offset 分页正常`;
   });
   await check('多选消息逐条转发（含附件）', async () => {
     const media = await rest.sendMessageRaw({

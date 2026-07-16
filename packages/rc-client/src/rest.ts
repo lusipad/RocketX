@@ -965,13 +965,19 @@ export class RcRestClient {
   }
 
   /** 搜索某个会话内的消息 */
-  async searchMessages(rid: string, searchText: string, count = 30): Promise<RcMessage[]> {
+  async searchMessages(
+    rid: string,
+    searchText: string,
+    count = 30,
+    offset = 0,
+  ): Promise<RcMessage[]> {
     const res = await this.request<{ messages: RcMessage[] }>('GET', 'chat.search', undefined, {
       roomId: rid,
       // 中文子串：服务端 Message_AlwaysSearchRegExp=false 时 Mongo 文本索引不切分中文，
       // 直接搜「工作项」搜不到；手动包成 /工作项/ 走正则才命中。用户已经手包 /.../ 的不动。
       searchText: wrapCjkAsRegex(searchText),
       count,
+      offset,
     });
     return res.messages ?? [];
   }
