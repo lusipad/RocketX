@@ -34,6 +34,7 @@ import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
 import { saveFile } from '../lib/download';
 import { toast } from '../stores/toast';
+import { messagesToMarkdown } from '../lib/messageOutput';
 import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
@@ -514,10 +515,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     !!message.attachments?.length &&
     message.attachments.every((a) => !!a.image_url || !!a.title_link_download);
 
-  const copy = () => {
-    void navigator.clipboard?.writeText(stripQuotePrefix(message.msg ?? ''));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(messagesToMarkdown([message]));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (err) {
+      toast.error(err, '复制失败');
+    }
   };
 
   const copyLink = () => {
@@ -550,7 +555,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           },
         ]
       : []),
-    ...(message.msg ? [{ label: copied ? '已复制' : '复制', icon: Copy, onClick: copy }] : []),
+    { label: copied ? '已复制' : '复制', icon: Copy, onClick: () => void copy() },
     { label: '复制消息链接', icon: Link2, onClick: copyLink },
     {
       label: inTodo ? '已在待办中' : '标记为待办',

@@ -11,6 +11,7 @@ import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import {
   chooseAvailableSearchTab,
+  QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
   searchMessagesGlobal,
   searchesSettledFor,
@@ -359,6 +360,30 @@ export default function QuickSwitcher({
 
   const overviewItems: OverviewItem[] = keyword.trim()
     ? [
+        ...contactUsers.slice(0, 3).map((user) => ({
+          section: 'contacts' as const,
+          key: `user:${user._id}`,
+          title: personName(aliases, user.username, user.name || user.username, nameFormat),
+          detail: `联系人 · @${user.username}`,
+          avatar: {
+            name: personName(aliases, user.username, user.name || user.username, nameFormat),
+            username: user.username,
+          },
+          action: () => {
+            void startDM(user.username).then(() => {
+              setModule('messages');
+              onClose();
+            });
+          },
+        })),
+        ...contacts.rooms.slice(0, Math.max(0, 3 - contactUsers.length)).map((room) => ({
+          section: 'contacts' as const,
+          key: `room:${room._id}`,
+          title: room.fname || room.name || '频道',
+          detail: subscriptions[room._id] ? '频道' : '频道 · 点击加入',
+          avatar: { name: room.fname || room.name || '频道', roomId: room._id },
+          action: () => void openSpotlightRoom(room),
+        })),
         ...filteredConvs.slice(0, 3).map((conversation) => ({
           section: 'convs' as const,
           key: `conv:${conversation.rid}`,
@@ -386,30 +411,6 @@ export default function QuickSwitcher({
           detail: `文件 · ${result.roomName}${result.file.size ? ` · ${fmtSize(result.file.size)}` : ''}`,
           icon: <FileText size={16} />,
           action: () => pickFile(result),
-        })),
-        ...contactUsers.slice(0, 3).map((user) => ({
-          section: 'contacts' as const,
-          key: `user:${user._id}`,
-          title: personName(aliases, user.username, user.name || user.username, nameFormat),
-          detail: `联系人 · @${user.username}`,
-          avatar: {
-            name: personName(aliases, user.username, user.name || user.username, nameFormat),
-            username: user.username,
-          },
-          action: () => {
-            void startDM(user.username).then(() => {
-              setModule('messages');
-              onClose();
-            });
-          },
-        })),
-        ...contacts.rooms.slice(0, Math.max(0, 3 - contactUsers.length)).map((room) => ({
-          section: 'contacts' as const,
-          key: `room:${room._id}`,
-          title: room.fname || room.name || '频道',
-          detail: subscriptions[room._id] ? '频道' : '频道 · 点击加入',
-          avatar: { name: room.fname || room.name || '频道', roomId: room._id },
-          action: () => void openSpotlightRoom(room),
         })),
         ...workResults.slice(0, 3).map((result) => ({
           section: 'work' as const,
@@ -627,7 +628,7 @@ export default function QuickSwitcher({
               {keyword.trim() && (messageSearching || contactSearching) && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">正在补全远端结果…</div>
               )}
-              {(['convs', 'messages', 'files', 'contacts', 'work'] as const).map((section) => {
+              {QUICK_SEARCH_RESULT_SECTIONS.map((section) => {
                 const items = overviewItems.filter((item) => item.section === section);
                 if (items.length === 0) return null;
                 return (

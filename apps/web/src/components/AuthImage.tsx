@@ -7,9 +7,10 @@ import {
   normalizeAssetPath,
   rest,
 } from '../lib/client';
+import { BlobUrlCache } from '../lib/blobUrlCache';
 
-// path(站内相对路径) -> objectURL 缓存，避免重复拉取
-const blobCache = new Map<string, string>();
+// 头像/站内图片的 objectURL 必须有界，否则长时间切换会话会一直占用 WebView2 内存。
+const blobCache = new BlobUrlCache(128, (url) => URL.revokeObjectURL(url));
 const inflight = new Map<string, Promise<string | null>>();
 
 async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | null> {
@@ -21,8 +22,8 @@ async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | 
     .fetchFile(path)
     .then((blob) => {
       const url = URL.createObjectURL(blob);
-      blobCache.set(cacheKey, url);
-      return url;
+      blobCache.put(cacheKey, url);
+      return blobCache.get(cacheKey);
     })
     .catch(() => null)
     .finally(() => inflight.delete(cacheKey));
@@ -60,15 +61,30 @@ export default function AuthImage({
       return;
     }
     let alive = true;
+    let retained = false;
     setFailed(false);
-    setSrc(blobCache.get(cacheKey) ?? null);
+    const cached = blobCache.get(cacheKey);
+    if (cached) {
+      blobCache.retain(cacheKey);
+      retained = true;
+      setSrc(cached);
+    } else {
+      setSrc(null);
+    }
     void loadAuthedBlob(path, cacheKey).then((url) => {
       if (!alive) return;
-      if (url) setSrc(url);
+      if (url) {
+        if (!retained) {
+          blobCache.retain(cacheKey);
+          retained = true;
+        }
+        setSrc(url);
+      }
       else setFailed(true);
     });
     return () => {
       alive = false;
+      if (retained) blobCache.release(cacheKey);
     };
   }, [path, needsBlob, cacheKey]);
 

@@ -10,11 +10,19 @@ interface UiPrefsState {
   /** 鼠标停留多久才弹出消息悬浮工具栏（毫秒）。issue #19-4 要求从 3 秒改为默认 2 秒 */
   hoverDelayMs: number;
   setHoverDelayMs: (ms: number) => void;
+  /** Windows 任务栏是否持续闪烁；与托盘图标闪烁分开控制。 */
+  taskbarFlash: boolean;
+  setTaskbarFlash: (enabled: boolean) => void;
 }
 
-function load(): { hoverDelayMs?: number } {
+interface StoredUiPrefs {
+  hoverDelayMs?: number;
+  taskbarFlash?: boolean;
+}
+
+function load(): StoredUiPrefs {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as { hoverDelayMs?: number };
+    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as StoredUiPrefs;
   } catch {
     return {};
   }
@@ -22,6 +30,7 @@ function load(): { hoverDelayMs?: number } {
 
 export const useUiPrefs = create<UiPrefsState>((set) => ({
   hoverDelayMs: load().hoverDelayMs ?? 2000,
+  taskbarFlash: load().taskbarFlash ?? true,
   setHoverDelayMs: (ms) => {
     try {
       localStorage.setItem(KEY, JSON.stringify({ ...load(), hoverDelayMs: ms }));
@@ -29,5 +38,13 @@ export const useUiPrefs = create<UiPrefsState>((set) => ({
       /* 存储满/无痕 */
     }
     set({ hoverDelayMs: ms });
+  },
+  setTaskbarFlash: (enabled) => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ ...load(), taskbarFlash: enabled }));
+    } catch {
+      /* 存储满/无痕 */
+    }
+    set({ taskbarFlash: enabled });
   },
 }));

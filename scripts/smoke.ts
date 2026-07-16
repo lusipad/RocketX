@@ -8,6 +8,7 @@
  * 避免为了自动化修改真实账号密码。
  */
 import { RcRestClient, RcRealtimeClient, tsMs, type RcMessage } from '../packages/rc-client/src/index';
+import { mergedForwardAttachments } from '../apps/web/src/lib/forward';
 
 const BASE = process.env.RC_BASE_URL ?? 'http://localhost:3300';
 const USER = process.env.RC_USER ?? 'admin';
@@ -184,6 +185,37 @@ async function main() {
     const found = await rest.searchMessages(channelId, '冒烟');
     assert(found.length > 0, '中文子串搜不到（检查 Message_AlwaysSearchRegExp）');
     return `${found.length} 条命中`;
+  });
+  await check('多选消息逐条转发（含附件）', async () => {
+    const media = await rest.sendMessageRaw({
+      rid: channelId,
+      msg: '转发图片说明',
+      attachments: [{ title: '示例.png', image_url: 'https://example.com/image.png' }],
+    });
+    await rest.sendMessageRaw({ rid: dmId, msg: '冒烟测试：已编辑' });
+    await rest.sendMessageRaw({ rid: dmId, msg: media.msg, attachments: media.attachments });
+    const history = await rest.getHistory(dmId, 'd', 10);
+    assert(history.some((message) => message.attachments?.[0]?.title === '示例.png'), '附件未转发');
+  });
+  await check('多选消息合并转发且不携带原发送人', async () => {
+    const history = await rest.getHistory(channelId, 'c', 10);
+    const sources = history.filter((message) => !message.t).slice(-2);
+    const merged = await rest.sendMessageRaw({
+      rid: dmId,
+      msg: `[聊天记录] 共 ${sources.length} 条`,
+      attachments: mergedForwardAttachments(
+        sources.map((message) => ({
+          text: message.msg,
+          ts: message.ts,
+          attachments: message.attachments,
+        })),
+      ),
+    });
+    assert(merged.attachments?.length, '合并转发没有附件内容');
+    assert(
+      merged.attachments?.every((attachment) => !attachment.author_name),
+      '合并转发泄露了原发送人',
+    );
   });
   await check('创建讨论', async () => {
     const d = await rest.createDiscussion(channelId, `讨论-${stamp}`, firstId);

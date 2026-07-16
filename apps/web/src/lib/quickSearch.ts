@@ -11,6 +11,7 @@ const FALLBACK_CONCURRENCY = 2;
 export type QuickSearchTab = 'all' | 'convs' | 'messages' | 'files' | 'contacts' | 'work';
 
 export const QUICK_SEARCH_TABS: QuickSearchTab[] = ['all', 'convs', 'messages', 'files', 'contacts', 'work'];
+export const QUICK_SEARCH_RESULT_SECTIONS = ['contacts', 'convs', 'messages', 'files', 'work'] as const;
 
 export function chooseAvailableSearchTab(
   current: QuickSearchTab,

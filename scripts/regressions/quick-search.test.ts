@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { RcMessage } from '../../packages/rc-client/src/index';
 import {
   chooseAvailableSearchTab,
+  QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
   searchMessagesGlobal,
   searchesSettledFor,
@@ -85,6 +86,7 @@ test('过期查询不会在全局搜索失败后继续发起回退请求', async
 
 test('自动切换保留用户当前有结果的范围，只在当前范围为空时兜底', () => {
   assert.deepEqual(QUICK_SEARCH_TABS, ['all', 'convs', 'messages', 'files', 'contacts', 'work']);
+  assert.deepEqual(QUICK_SEARCH_RESULT_SECTIONS, ['contacts', 'convs', 'messages', 'files', 'work']);
   assert.equal(searchesSettledFor('new', 'old', 'old'), false);
   assert.equal(searchesSettledFor('new', 'new', 'old'), false);
   assert.equal(searchesSettledFor('new', 'new', 'new'), true);

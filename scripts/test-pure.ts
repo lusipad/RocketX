@@ -833,7 +833,6 @@ async function main(): Promise<void> {
   const { forwardableAttachments, mergedForwardAttachments } = await import('../apps/web/src/lib/forward');
   const forwardSources = [
     {
-      author: '张三',
       text: '请看附件',
       ts: '2026-07-15T00:00:00.000Z',
       attachments: [
@@ -841,7 +840,6 @@ async function main(): Promise<void> {
       ],
     },
     {
-      author: '李四',
       text: '',
       ts: '2026-07-15T00:01:00.000Z',
       attachments: [
@@ -850,7 +848,10 @@ async function main(): Promise<void> {
     },
   ];
   const mergedAttachments = mergedForwardAttachments(forwardSources);
-  check('合并转发保留原消息作者和文字', mergedAttachments[0]?.author_name === '张三' && mergedAttachments[0]?.text === '请看附件');
+  check(
+    '合并转发保留原消息文字但不附带发送人',
+    !mergedAttachments[0]?.author_name && mergedAttachments[0]?.text === '请看附件',
+  );
   check(
     '跨房间转发去掉目标成员无权访问的文件链接',
     !mergedAttachments[1]?.image_url &&

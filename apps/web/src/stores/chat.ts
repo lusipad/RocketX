@@ -24,6 +24,9 @@ import { findCommand } from '../lib/slash';
 import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
 import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
+import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
+import { useUiPrefs } from './uiPrefs';
+import { createActiveRoomStreams } from '../lib/roomStreams';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { useOnboarding } from './onboarding';
@@ -297,7 +300,10 @@ async function refreshSubsAndRooms(
   set({ subscriptions: subMap, rooms: roomMap });
 }
 
-const subscribedRooms = new Set<string>();
+const subscribeRoomStreams = createActiveRoomStreams(
+  (stream, key) => realtime.subscribe(stream, key),
+  (stream, key) => realtime.unsubscribe(stream, key),
+);
 let markReadTimer: ReturnType<typeof setTimeout> | null = null;
 let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
@@ -402,14 +408,6 @@ function scheduleReceiptRefresh(rid: string) {
   }, 1200);
 }
 
-function subscribeRoomStreams(rid: string) {
-  if (subscribedRooms.has(rid)) return;
-  subscribedRooms.add(rid);
-  realtime.subscribe('stream-room-messages', rid);
-  realtime.subscribe('stream-notify-room', `${rid}/deleteMessage`);
-  realtime.subscribe('stream-notify-room', `${rid}/user-activity`);
-}
-
 /**
  * 房间类型。订阅里没有就退到 rooms —— 从讨论卡片跳进一个自己还没订阅的私有讨论时，
  * 只有 rooms[rid] 有值。少了这层兜底，'p' 会被当成 'c'，归档/只读/删除全都会打到
@@ -490,12 +488,7 @@ function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
 }
 
 /** 消息文本开头的引用链接（渲染与预览时隐藏） */
-export const QUOTE_LINK_RE = /^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/;
-
-/** 去掉消息文本开头的引用链接前缀（编辑/复制/引用展示都用可见文本） */
-export function stripQuotePrefix(text: string): string {
-  return text.replace(QUOTE_LINK_RE, '');
-}
+export { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
 
 // 开发调试：控制台可通过 window.__chat 检查 store 状态
 declare global {
@@ -516,6 +509,7 @@ export function notificationAttentionPolicy(input: {
   isGroupish: boolean;
   desktopNotifications: 'all' | 'mentions' | 'nothing';
   muteFocusedConversations: boolean;
+  taskbarFlash: boolean;
 }): { flashTaskbar: boolean; showDesktopNotification: boolean } {
   if (!input.subscribed) {
     return { flashTaskbar: false, showDesktopNotification: false };
@@ -523,7 +517,7 @@ export function notificationAttentionPolicy(input: {
   const muted = input.muted && !input.mentioned;
   return {
     // 任务栏是未读注意力信号，不受桌面通知内容偏好控制。
-    flashTaskbar: !muted && !input.focused,
+    flashTaskbar: input.taskbarFlash && !muted && !input.focused,
     showDesktopNotification:
       !muted &&
       input.desktopNotifications !== 'nothing' &&
@@ -572,6 +566,7 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     isGroupish,
     desktopNotifications: prefs.desktopNotifications,
     muteFocusedConversations: prefs.muteFocusedConversations ?? true,
+    taskbarFlash: useUiPrefs.getState().taskbarFlash,
   });
   if (policy.flashTaskbar) void flashTaskbar();
   if (!policy.showDesktopNotification) return;
@@ -1654,7 +1649,6 @@ export const useChat = create<ChatState>((set, get) => ({
           msg: `[聊天记录] 共 ${ordered.length} 条`,
           attachments: mergedForwardAttachments(
             ordered.map((m) => ({
-              author: m.u.name || m.u.username,
               text: stripQuotePrefix(m.msg || ''),
               ts: m.ts,
               attachments: m.attachments,

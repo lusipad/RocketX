@@ -69,6 +69,7 @@ export default function ForwardDialog({
   return (
     <Dialog
       title="转发到"
+      hint={multi ? '默认逐条转发并保留图片/文件；合并转发不会附带原发送人信息' : undefined}
       width={440}
       onClose={onClose}
       footer={
@@ -81,22 +82,22 @@ export default function ForwardDialog({
           </button>
           {multi && (
             <button
-              onClick={() => void doForward(false)}
+              onClick={() => void doForward(true)}
               disabled={selected.size === 0 || sending}
               className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
-              逐条转发
+              合并转发
             </button>
           )}
           <button
-            onClick={() => void doForward(true)}
+            onClick={() => void doForward(false)}
             disabled={selected.size === 0 || sending}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             {sending
               ? '发送中…'
               : multi
-                ? `合并转发${selected.size > 0 ? `（${selected.size}）` : ''}`
+                ? `转发${selected.size > 0 ? `（${selected.size}）` : ''}`
                 : `发送${selected.size > 0 ? `（${selected.size}）` : ''}`}
           </button>
         </>

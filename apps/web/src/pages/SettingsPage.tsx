@@ -20,6 +20,7 @@ import {
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
+import { clearTaskbarFlash } from '../lib/taskbar';
 import { readAutostartEnabled, updateAutostartEnabled } from '../lib/autostart';
 import { exportDiagnostics } from '../lib/diagnostics';
 import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
@@ -726,6 +727,8 @@ function NotificationSection() {
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
   const markChecklist = useOnboarding((s) => s.markChecklist);
+  const taskbarFlash = useUiPrefs((s) => s.taskbarFlash);
+  const setTaskbarFlash = useUiPrefs((s) => s.setTaskbarFlash);
   // granted / default(未开启,可申请)。桌面端无法区分 denied,统一按可申请处理
   const [permission, setPermission] = useState<'granted' | 'default'>('default');
 
@@ -790,7 +793,17 @@ function NotificationSection() {
         />
       </Row>
 
-      <Row label="托盘图标闪烁" hint="关闭后仍保留未读数字，但右下角图标不再闪烁" inline>
+      <Row label="任务栏窗口闪烁" hint="关闭后仍保留未读角标和系统通知" inline>
+        <Toggle
+          checked={taskbarFlash}
+          onChange={(enabled) => {
+            setTaskbarFlash(enabled);
+            if (!enabled) void clearTaskbarFlash();
+          }}
+        />
+      </Row>
+
+      <Row label="托盘图标闪烁" hint="关闭后仍保留未读数字和任务栏提醒" inline>
         <Toggle
           checked={prefs.unreadAlert}
           onChange={(v) => void update({ unreadAlert: v })}

@@ -1,7 +1,6 @@
-import type { RcDate, RcMessageAttachment } from '@rcx/rc-client';
+import { tsMs, type RcDate, type RcMessageAttachment } from '@rcx/rc-client';
 
 export interface MergedForwardSource {
-  author: string;
   text: string;
   ts: RcDate;
   attachments?: RcMessageAttachment[];
@@ -61,10 +60,9 @@ export function mergedForwardAttachments(
   sources: MergedForwardSource[],
   preserveProtectedFiles = false,
 ): RcMessageAttachment[] {
-  return sources.flatMap((source) => {
+  return [...sources].sort((left, right) => tsMs(left.ts) - tsMs(right.ts)).flatMap((source) => {
     const attachments = forwardableAttachments(source.attachments, preserveProtectedFiles);
     const header: RcMessageAttachment = {
-      author_name: source.author,
       text:
         source.text ||
         attachments[0]?.title ||

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
-import { ArrowDown, Star, Trash2 } from 'lucide-react';
+import { ArrowDown, Copy, Download, Share2, Star, Trash2 } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
@@ -10,6 +10,8 @@ import MessageItem from './MessageItem';
 import DiscussionCard from './DiscussionCard';
 import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
+import { messagesToMarkdown } from '../lib/messageOutput';
+import { saveTextFile } from '../lib/exportText';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
@@ -221,6 +223,15 @@ export default function MessageList({ rid }: { rid: string }) {
     return () => ro.disconnect();
   }, [rid, historyLoaded]);
 
+  useEffect(() => {
+    if (!selectMode || forwardOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') exitSelectMode();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [exitSelectMode, forwardOpen, selectMode]);
+
   // 首次加载：骨架屏，避免闪一下「暂无消息」
   if (!historyLoaded && list.length === 0) {
     return (
@@ -231,6 +242,17 @@ export default function MessageList({ rid }: { rid: string }) {
   }
 
   const selectedMessages = list.filter((m) => selectedMids.has(m._id));
+  const copySelected = async () => {
+    await navigator.clipboard.writeText(messagesToMarkdown(selectedMessages));
+    toast.success(`已复制 ${selectedMessages.length} 条消息`);
+  };
+  const exportSelected = async () => {
+    const saved = await saveTextFile(
+      messagesToMarkdown(selectedMessages),
+      `RocketX-消息导出-${new Date().toISOString().slice(0, 10)}.md`,
+    );
+    if (saved) toast.success(`已导出 ${selectedMessages.length} 条消息`);
+  };
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -243,11 +265,28 @@ export default function MessageList({ rid }: { rid: string }) {
           </span>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => void copySelected().catch((err) => toast.error(err, '复制失败'))}
+              disabled={selectedMids.size === 0}
+              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+            >
+              <Copy size={13} />
+              复制
+            </button>
+            <button
               onClick={() => setForwardOpen(true)}
               disabled={selectedMids.size === 0}
-              className="h-7 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
+              className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
+              <Share2 size={13} />
               转发
+            </button>
+            <button
+              onClick={() => void exportSelected().catch((err) => toast.error(err, '导出失败'))}
+              disabled={selectedMids.size === 0}
+              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+            >
+              <Download size={13} />
+              导出
             </button>
             <button
               onClick={() => {
