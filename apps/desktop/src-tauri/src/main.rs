@@ -115,15 +115,48 @@ fn set_tray_icon_normal(app: tauri::AppHandle, normal: bool) -> Result<(), Strin
     let tray = app
         .tray_by_id(MAIN_TRAY_ID)
         .ok_or_else(|| "main tray icon is not available".to_string())?;
+    let default_icon = app
+        .default_window_icon()
+        .ok_or_else(|| "default window icon is not available".to_string())?;
     let icon = if normal {
-        app.default_window_icon()
-            .cloned()
-            .ok_or_else(|| "default window icon is not available".to_string())?
+        default_icon.clone()
     } else {
-        // 保留透明的 32x32 占位图，而不是隐藏托盘对象；闪烁间隙仍可点击。
-        Image::new_owned(vec![0; 32 * 32 * 4], 32, 32)
+        // Windows 会把全透明的动态托盘帧合成为黑底；保留原 alpha，只降低 RGB 亮度。
+        dim_tray_icon(default_icon)
     };
     tray.set_icon(Some(icon)).map_err(|err| err.to_string())
+}
+
+fn dim_tray_icon(source: &Image<'_>) -> Image<'static> {
+    let mut rgba = source.rgba().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[0] = ((pixel[0] as u16 * 35) / 100) as u8;
+        pixel[1] = ((pixel[1] as u16 * 35) / 100) as u8;
+        pixel[2] = ((pixel[2] as u16 * 35) / 100) as u8;
+    }
+    Image::new_owned(rgba, source.width(), source.height())
+}
+
+#[tauri::command]
+fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String> {
+    let tray = app
+        .tray_by_id(MAIN_TRAY_ID)
+        .ok_or_else(|| "main tray icon is not available".to_string())?;
+    tray.set_tooltip(Some(tooltip))
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tray_icon_tests {
+    use super::dim_tray_icon;
+    use tauri::image::Image;
+
+    #[test]
+    fn dim_frame_keeps_alpha_channel() {
+        let source = Image::new_owned(vec![100, 200, 50, 0, 200, 100, 40, 255], 2, 1);
+        let dimmed = dim_tray_icon(&source);
+        assert_eq!(dimmed.rgba(), &[35, 70, 17, 0, 70, 35, 14, 255]);
+    }
 }
 
 fn main() {
@@ -138,6 +171,7 @@ fn main() {
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,
             set_tray_icon_normal,
+            set_tray_tooltip,
             show_main_window,
             show_message_notification
         ])

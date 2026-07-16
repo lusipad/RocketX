@@ -7,9 +7,11 @@ import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import {
   clearTrayAttention,
+  formatTrayTooltip,
   hasTrayAttention,
   restoreTrayAttention,
   setTrayAttention,
+  setTrayTooltip,
 } from '../lib/tray';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
@@ -59,6 +61,7 @@ export default function MainPage() {
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
 
   const loadPrefs = usePrefs((s) => s.load);
+  const unreadAlert = usePrefs((s) => s.prefs.unreadAlert);
   const switcherTab = useRef<'messages' | undefined>(undefined);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -183,8 +186,9 @@ export default function MainPage() {
     );
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
     void setTaskbarBadge(total);
-    void setTrayAttention(hasTrayAttention(subscriptions));
-  }, [subscriptions]);
+    void setTrayAttention(hasTrayAttention(subscriptions, unreadAlert));
+    void setTrayTooltip(formatTrayTooltip(allConversations));
+  }, [allConversations, subscriptions, unreadAlert]);
 
   // 全局快捷键
   useEffect(() => {

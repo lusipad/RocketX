@@ -790,7 +790,7 @@ function NotificationSection() {
         />
       </Row>
 
-      <Row label="未读提醒" hint="有未读时在标题栏与图标上提示" inline>
+      <Row label="托盘图标闪烁" hint="关闭后仍保留未读数字，但右下角图标不再闪烁" inline>
         <Toggle
           checked={prefs.unreadAlert}
           onChange={(v) => void update({ unreadAlert: v })}

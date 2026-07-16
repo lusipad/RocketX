@@ -247,11 +247,27 @@ interface ChatState {
   uploadFiles: (files: File[], tmid?: string) => Promise<void>;
 }
 
+/**
+ * chat.sendMessage 的即时响应可能早于服务端引用展开，不带 attachments。
+ * 同 id 的乐观/WS 消息已有引用卡时，不能被这个半成品响应覆盖。
+ */
+export function mergeMessageUpdate(current: RcMessage, incoming: RcMessage): RcMessage {
+  const quote = current.attachments?.find((attachment) => attachment.message_link);
+  const incomingHasQuote = incoming.attachments?.some((attachment) => attachment.message_link);
+  if (quote && !incomingHasQuote && QUOTE_LINK_RE.test(incoming.msg)) {
+    return {
+      ...incoming,
+      attachments: [quote, ...(incoming.attachments ?? [])],
+    };
+  }
+  return incoming;
+}
+
 function upsertMessage(list: RcMessage[], msg: RcMessage): RcMessage[] {
   const idx = list.findIndex((m) => m._id === msg._id);
   if (idx >= 0) {
     const next = list.slice();
-    next[idx] = msg;
+    next[idx] = mergeMessageUpdate(list[idx], msg);
     return next;
   }
   return [...list, msg];
@@ -448,7 +464,7 @@ function quoteLinkPrefix(
   subs: Record<string, RcSubscription>,
   site: string,
 ): string {
-  return `[ ](${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}) `;
+  return `[ ](${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id})\n`;
 }
 
 /**
