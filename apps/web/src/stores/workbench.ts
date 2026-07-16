@@ -18,6 +18,8 @@ import {
 
 export interface WorkItem {
   id: number;
+  /** 当前工作项的父项 ID；父项不在当前查询结果中时仍保留此值 */
+  parentId?: number;
   title: string;
   type: string;
   state: string;
