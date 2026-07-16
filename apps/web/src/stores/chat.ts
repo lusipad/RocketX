@@ -910,6 +910,9 @@ export const useChat = create<ChatState>((set, get) => ({
       unreadMarkTs: marks,
       pendingFiles: null,
       replyTo: null,
+      // 普通打开/重复点击会话应回到最新消息，不能让上一次搜索或通知跳转
+      // 遗留的高亮随后 scrollIntoView，把列表从底部再次拉回旧消息。
+      highlightMid: null,
       // 切会话退出多选态
       selectMode: false,
       selectedMids: new Set(),
