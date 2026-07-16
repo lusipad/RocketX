@@ -5,6 +5,7 @@ import {
   defaultOnboardingState,
   onboardingStorageKey,
   parseOnboardingState,
+  skipChecklist,
   updateChecklist,
 } from '../../apps/web/src/lib/onboarding';
 import {
@@ -56,6 +57,13 @@ test('首用清单只在三个真实完成点均成功后结束', () => {
   assert.equal(checklistComplete(state), false);
   state = updateChecklist(state, 'notificationsEnabled');
   assert.equal(checklistComplete(state), true);
+});
+
+test('跳过首用清单会持久标记不再提醒且保持幂等', () => {
+  const state = defaultOnboardingState(null);
+  const skipped = skipChecklist(state);
+  assert.equal(skipped.checklist.dismissed, true);
+  assert.equal(skipChecklist(skipped), skipped);
 });
 
 test('登录失败能区分地址、网络、服务类型、凭据和会话失效', () => {

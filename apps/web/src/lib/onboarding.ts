@@ -67,6 +67,11 @@ export function updateChecklist(
   return { ...state, checklist: { ...state.checklist, [key]: true } };
 }
 
+export function skipChecklist(state: OnboardingStateV1): OnboardingStateV1 {
+  if (state.checklist.dismissed) return state;
+  return { ...state, checklist: { ...state.checklist, dismissed: true } };
+}
+
 export function checklistComplete(state: OnboardingStateV1): boolean {
   const { checklist } = state;
   return (

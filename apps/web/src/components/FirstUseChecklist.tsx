@@ -17,6 +17,7 @@ export default function FirstUseChecklist({
   const markChecklist = useOnboarding((store) => store.markChecklist);
   const dismiss = useOnboarding((store) => store.dismissChecklist);
   const [notificationError, setNotificationError] = useState(false);
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     void notifyPermissionGranted().then((granted) => {
@@ -24,7 +25,7 @@ export default function FirstUseChecklist({
     });
   }, [markChecklist]);
 
-  if (!state || state.checklist.dismissed || checklistComplete(state)) return null;
+  if (hidden || !state || state.checklist.dismissed || checklistComplete(state)) return null;
 
   const tasks = [
     {
@@ -65,8 +66,9 @@ export default function FirstUseChecklist({
           <div className="mt-0.5 text-xs text-ink-3">完成三个动作，确认消息链路正常</div>
         </div>
         <button
-          onClick={dismiss}
-          title="关闭首次使用清单"
+          onClick={() => setHidden(true)}
+          title="暂时关闭"
+          aria-label="暂时关闭首次使用清单"
           className="flex h-6 w-6 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-ink"
         >
           <X size={14} />
@@ -97,6 +99,15 @@ export default function FirstUseChecklist({
           );
         })}
       </div>
+      <label className="mt-3 flex cursor-pointer items-center gap-2 border-t border-line pt-3 text-xs text-ink-3 hover:text-ink-2">
+        <input
+          type="checkbox"
+          checked={false}
+          onChange={dismiss}
+          className="h-3.5 w-3.5 cursor-pointer accent-primary"
+        />
+        跳过引导，不再提醒
+      </label>
     </section>
   );
 }

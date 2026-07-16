@@ -5,6 +5,7 @@ import {
   defaultOnboardingState,
   onboardingStorageKey,
   parseOnboardingState,
+  skipChecklist,
   updateChecklist,
   type OnboardingAdoState,
   type OnboardingChecklistKey,
@@ -71,7 +72,7 @@ export const useOnboarding = create<OnboardingStore>((set, get) => ({
   dismissChecklist: () => {
     const { ownerId, ownerServer, state } = get();
     if (!ownerId || ownerServer === null || !state || state.checklist.dismissed) return;
-    const next = { ...state, checklist: { ...state.checklist, dismissed: true } };
+    const next = skipChecklist(state);
     save(ownerServer, ownerId, next);
     set({ state: next });
   },
