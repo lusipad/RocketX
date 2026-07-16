@@ -1,25 +1,32 @@
 import { useEffect, useState, type ImgHTMLAttributes } from 'react';
-import { assetUrl, isTauri, normalizeAssetPath, rest } from '../lib/client';
+import {
+  assetUrl,
+  getServerBase,
+  isTauri,
+  loadStoredAuth,
+  normalizeAssetPath,
+  rest,
+} from '../lib/client';
 
 // path(站内相对路径) -> objectURL 缓存，避免重复拉取
 const blobCache = new Map<string, string>();
 const inflight = new Map<string, Promise<string | null>>();
 
-async function loadAuthedBlob(path: string): Promise<string | null> {
-  const cached = blobCache.get(path);
+async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | null> {
+  const cached = blobCache.get(cacheKey);
   if (cached) return cached;
-  const running = inflight.get(path);
+  const running = inflight.get(cacheKey);
   if (running) return running;
   const promise = rest
     .fetchFile(path)
     .then((blob) => {
       const url = URL.createObjectURL(blob);
-      blobCache.set(path, url);
+      blobCache.set(cacheKey, url);
       return url;
     })
     .catch(() => null)
-    .finally(() => inflight.delete(path));
-  inflight.set(path, promise);
+    .finally(() => inflight.delete(cacheKey));
+  inflight.set(cacheKey, promise);
   return promise;
 }
 
@@ -40,8 +47,9 @@ export default function AuthImage({
   // Site_Url 拼的绝对地址重拼到当前连接地址（否则打到不可达的主机上，issue #19-8）
   const path = normalizeAssetPath(rawPath);
   const needsBlob = isTauri && path.startsWith('/');
+  const cacheKey = `${getServerBase()}\0${loadStoredAuth()?.userId ?? ''}\0${path}`;
   const [src, setSrc] = useState<string | null>(
-    needsBlob ? (blobCache.get(path) ?? null) : path.startsWith('/') ? assetUrl(path) : path,
+    needsBlob ? (blobCache.get(cacheKey) ?? null) : path.startsWith('/') ? assetUrl(path) : path,
   );
   const [failed, setFailed] = useState(false);
 
@@ -53,7 +61,8 @@ export default function AuthImage({
     }
     let alive = true;
     setFailed(false);
-    void loadAuthedBlob(path).then((url) => {
+    setSrc(blobCache.get(cacheKey) ?? null);
+    void loadAuthedBlob(path, cacheKey).then((url) => {
       if (!alive) return;
       if (url) setSrc(url);
       else setFailed(true);
@@ -61,10 +70,10 @@ export default function AuthImage({
     return () => {
       alive = false;
     };
-  }, [path, needsBlob]);
+  }, [path, needsBlob, cacheKey]);
 
   if (failed || (!src && needsBlob)) {
-    return failed ? <>{fallback ?? null}</> : null;
+    return <>{fallback ?? null}</>;
   }
   return <img src={src ?? undefined} onError={() => setFailed(true)} {...imgProps} />;
 }

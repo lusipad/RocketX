@@ -159,6 +159,7 @@ function ConversationItem({
           <Avatar
             name={shownName}
             username={conv.avatarUsername}
+            roomId={conv.avatarUsername ? undefined : conv.rid}
             size={avatarSize}
             status={peerStatus}
           />

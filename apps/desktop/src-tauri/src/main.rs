@@ -34,6 +34,7 @@ fn show_main_window(app: tauri::AppHandle) {
 #[derive(Clone, serde::Serialize)]
 struct NotificationRoomPayload {
     rid: String,
+    mid: String,
 }
 
 #[cfg(windows)]
@@ -48,10 +49,18 @@ fn show_message_notification(
     title: String,
     body: String,
     rid: String,
+    mid: String,
 ) -> Result<(), String> {
     let rid = rid.trim().to_string();
-    if rid.is_empty() || rid.len() > 256 || rid.chars().any(char::is_control) {
-        return Err("invalid notification room id".to_string());
+    let mid = mid.trim().to_string();
+    if rid.is_empty()
+        || rid.len() > 256
+        || rid.chars().any(char::is_control)
+        || mid.is_empty()
+        || mid.len() > 256
+        || mid.chars().any(char::is_control)
+    {
+        return Err("invalid notification target".to_string());
     }
 
     let mut notification = notify_rust::Notification::new();
@@ -75,7 +84,10 @@ fn show_message_notification(
         let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
             if notification_opens_room(response) {
                 show_main(&app);
-                let _ = app.emit("notification-open-room", NotificationRoomPayload { rid });
+                let _ = app.emit(
+                    "notification-open-room",
+                    NotificationRoomPayload { rid, mid },
+                );
             }
         });
     });
@@ -106,6 +118,7 @@ fn show_message_notification(
     _title: String,
     _body: String,
     _rid: String,
+    _mid: String,
 ) -> Result<(), String> {
     Err("clickable notifications are only available on Windows".to_string())
 }

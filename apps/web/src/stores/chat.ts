@@ -584,10 +584,11 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     body: body.slice(0, 120),
     tag: msg._id,
     rid,
+    mid: msg._id,
     onClick: () => {
       window.focus();
       useUI.getState().setModule('messages');
-      void useChat.getState().openRoom(rid);
+      void useChat.getState().jumpToMessage(msg._id, rid);
     },
   }).catch(() => {});
 }
@@ -858,6 +859,8 @@ export const useChat = create<ChatState>((set, get) => ({
       // 切会话退出多选态
       selectMode: false,
       selectedMids: new Set(),
+      // 即使重复点击当前会话，也回到最新消息，而不是停留在之前浏览的历史位置。
+      scrollNonce: get().scrollNonce + 1,
     });
 
     const { historyLoaded, subscriptions, rooms } = get();

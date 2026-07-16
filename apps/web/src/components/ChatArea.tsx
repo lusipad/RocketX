@@ -145,7 +145,12 @@ export default function ChatArea({
             className="mr-2.5 shrink-0 rounded-lg transition hover:opacity-80"
             title="查看群信息"
           >
-            <Avatar name={name} username={avatarUsername} size={36} />
+            <Avatar
+              name={name}
+              username={avatarUsername}
+              roomId={avatarUsername ? undefined : activeRid}
+              size={36}
+            />
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">

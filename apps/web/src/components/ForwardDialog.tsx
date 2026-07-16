@@ -131,7 +131,12 @@ export default function ForwardDialog({
               >
                 {checked && <Check size={12} strokeWidth={3} />}
               </span>
-              <Avatar name={c.name} username={c.avatarUsername} size={32} />
+              <Avatar
+                name={c.name}
+                username={c.avatarUsername}
+                roomId={c.avatarUsername ? undefined : c.rid}
+                size={32}
+              />
               <span className="truncate text-sm text-ink">{c.name}</span>
             </button>
           );

@@ -42,7 +42,7 @@ interface OverviewItem {
   key: string;
   title: string;
   detail: string;
-  avatar?: { name: string; username?: string };
+  avatar?: { name: string; username?: string; roomId?: string };
   icon?: ReactNode;
   action: () => void;
 }
@@ -367,6 +367,7 @@ export default function QuickSwitcher({
           avatar: {
             name: displayName(aliases, conversation, nameFormat),
             username: conversation.avatarUsername,
+            roomId: conversation.avatarUsername ? undefined : conversation.rid,
           },
           action: () => pickConv(conversation.rid),
         })),
@@ -407,7 +408,7 @@ export default function QuickSwitcher({
           key: `room:${room._id}`,
           title: room.fname || room.name || '频道',
           detail: subscriptions[room._id] ? '频道' : '频道 · 点击加入',
-          avatar: { name: room.fname || room.name || '频道' },
+          avatar: { name: room.fname || room.name || '频道', roomId: room._id },
           action: () => void openSpotlightRoom(room),
         })),
         ...workResults.slice(0, 3).map((result) => ({
@@ -439,6 +440,7 @@ export default function QuickSwitcher({
         avatar: {
           name: displayName(aliases, conversation, nameFormat),
           username: conversation.avatarUsername,
+          roomId: conversation.avatarUsername ? undefined : conversation.rid,
         },
         action: () => pickConv(conversation.rid),
       }));
@@ -650,7 +652,12 @@ export default function QuickSwitcher({
                           }`}
                         >
                           {item.avatar ? (
-                            <Avatar name={item.avatar.name} username={item.avatar.username} size={28} />
+                            <Avatar
+                              name={item.avatar.name}
+                              username={item.avatar.username}
+                              roomId={item.avatar.roomId}
+                              size={28}
+                            />
                           ) : (
                             <span className="flex h-7 w-7 items-center justify-center text-ink-3">{item.icon}</span>
                           )}
@@ -696,7 +703,12 @@ export default function QuickSwitcher({
                   i === index ? 'bg-primary-light' : ''
                 }`}
               >
-                <Avatar name={displayName(aliases, c, nameFormat)} username={c.avatarUsername} size={28} />
+                <Avatar
+                  name={displayName(aliases, c, nameFormat)}
+                  username={c.avatarUsername}
+                  roomId={c.avatarUsername ? undefined : c.rid}
+                  size={28}
+                />
                 <span className="truncate text-sm text-ink">{displayName(aliases, c, nameFormat)}</span>
                 {c.isDiscussion && (
                   <span className="rounded bg-fill-1 px-1 text-2xs text-ink-3">讨论</span>
@@ -859,7 +871,7 @@ export default function QuickSwitcher({
                     idx === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
                   }`}
                 >
-                  <Avatar name={r.fname || r.name || '频道'} size={28} />
+                  <Avatar name={r.fname || r.name || '频道'} roomId={r._id} size={28} />
                   <span className="truncate text-sm text-ink">{r.fname || r.name}</span>
                   {!subscriptions[r._id] && (
                     <span className="ml-auto text-2xs text-primary">点击加入</span>

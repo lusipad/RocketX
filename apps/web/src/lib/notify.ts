@@ -15,6 +15,8 @@ export interface DesktopNotifyOptions {
   onClick?: () => void;
   /** Windows 桌面端点击通知后打开的 Rocket.Chat 房间 */
   rid?: string;
+  /** Windows 桌面端点击通知后定位的消息 */
+  mid?: string;
 }
 
 /** 申请通知权限,返回是否已授权。桌面端和浏览器端各走各的通道 */
@@ -48,12 +50,13 @@ export async function desktopNotify(opts: DesktopNotifyOptions): Promise<void> {
       '@tauri-apps/plugin-notification'
     );
     if (!(await isPermissionGranted())) return;
-    if (opts.rid && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)) {
+    if (opts.rid && opts.mid && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)) {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('show_message_notification', {
         title: opts.title,
         body: opts.body,
         rid: opts.rid,
+        mid: opts.mid,
       });
       return;
     }

@@ -252,7 +252,12 @@ export default function RoomInfoPanel() {
       <div className="flex-1 overflow-y-auto">
         {/* 头部：头像 + 名称 */}
         <div className="flex flex-col items-center gap-2 border-b border-line px-4 py-5">
-          <Avatar name={shownName} username={conv.avatarUsername} size={64} />
+          <Avatar
+            name={shownName}
+            username={conv.avatarUsername}
+            roomId={conv.avatarUsername ? undefined : conv.rid}
+            size={64}
+          />
           <div className="text-center">
             <div className="flex items-center justify-center gap-1.5 text-[15px] font-semibold text-ink">
               <TypeIcon size={14} className="text-ink-3" />

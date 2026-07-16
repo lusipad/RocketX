@@ -10,3 +10,4 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 .gstack/
+memory-trend.csv
