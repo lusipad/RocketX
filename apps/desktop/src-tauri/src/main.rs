@@ -1,6 +1,7 @@
 // 阻止 Windows release 版本弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diagnostics;
 mod winauth;
 
 #[cfg(windows)]
@@ -11,6 +12,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 
 const MAIN_TRAY_ID: &str = "main";
 
@@ -133,6 +135,7 @@ fn main() {
         // Windows 集成认证（NTLM/Negotiate）：域内 ADO Server 的默认认证方式，
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
+            diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,
             set_tray_icon_normal,
             show_main_window,
@@ -147,6 +150,21 @@ fn main() {
         // 必须用原生「另存为」对话框 + 文件写入
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 只持久化前端显式写入的脱敏诊断事件；不接管 console，也不收集依赖日志。
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .target(
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some("rocketx".into()),
+                    })
+                    .filter(|metadata| metadata.target().starts_with(WEBVIEW_TARGET)),
+                )
+                .level(log::LevelFilter::Info)
+                .max_file_size(1_000_000)
+                .rotation_strategy(RotationStrategy::KeepOne)
+                .build(),
+        )
         // 系统通知：WebView2 里 Web Notification 常年被判 denied（issue #4）
         .plugin(tauri_plugin_notification::init())
         // Windows 全局指令中心快捷键；具体组合由 Web 设置页注册和切换。

@@ -3,6 +3,7 @@ import {
   Bell,
   Camera,
   CheckCircle2,
+  FileDown,
   Info,
   Keyboard,
   LayoutGrid,
@@ -20,6 +21,7 @@ import { getServerBase, isTauri, rest } from '../lib/client';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { readAutostartEnabled, updateAutostartEnabled } from '../lib/autostart';
+import { exportDiagnostics } from '../lib/diagnostics';
 import { loadWorkbenchConfig, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
@@ -30,6 +32,7 @@ import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
 import { useWiTemplates } from '../stores/wiTemplates';
 import { useGlobalShortcut } from '../stores/globalShortcut';
+import { useChat } from '../stores/chat';
 import {
   GLOBAL_SHORTCUT_OPTIONS,
   type GlobalShortcutValue,
@@ -471,6 +474,7 @@ function DesktopSection() {
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(isTauri);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -516,26 +520,69 @@ function DesktopSection() {
           ? '已开启，登录系统后会自动启动 RocketX'
           : '已关闭';
 
+  const exportLogs = async () => {
+    setExporting(true);
+    try {
+      const server = getServerBase();
+      let serverOrigin = 'not_configured';
+      try {
+        if (server) serverOrigin = new URL(server).origin;
+      } catch {
+        serverOrigin = 'invalid';
+      }
+      const ado = loadWorkbenchConfig();
+      const saved = await exportDiagnostics({
+        appVersion: APP_VERSION,
+        authStatus: useAuth.getState().status,
+        chatConnection: useChat.getState().connection,
+        serverOrigin,
+        adoMode: ado?.mode ?? 'not_configured',
+      });
+      if (saved) toast.success('诊断日志已导出');
+    } catch (err) {
+      toast.error(err, '诊断日志导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
-    <Row
-      label="开机时启动 RocketX"
-      hint="由操作系统管理，设置保存在本机，不跟随账号同步"
-      inline
-    >
-      <div className="flex min-w-0 flex-col items-end gap-1.5">
-        <Toggle
-          checked={isTauri && enabled}
-          disabled={!isTauri || loading}
-          onChange={(next) => void changeAutostart(next)}
-        />
-        <div
-          title={error ?? undefined}
-          className={`max-w-md text-right text-xs ${error ? 'text-danger' : 'text-ink-3'}`}
-        >
-          {statusText}
+    <>
+      <Row
+        label="开机时启动 RocketX"
+        hint="由操作系统管理，设置保存在本机，不跟随账号同步"
+        inline
+      >
+        <div className="flex min-w-0 flex-col items-end gap-1.5">
+          <Toggle
+            checked={isTauri && enabled}
+            disabled={!isTauri || loading}
+            onChange={(next) => void changeAutostart(next)}
+          />
+          <div
+            title={error ?? undefined}
+            className={`max-w-md text-right text-xs ${error ? 'text-danger' : 'text-ink-3'}`}
+          >
+            {statusText}
+          </div>
         </div>
-      </div>
-    </Row>
+      </Row>
+      <Row
+        label="导出诊断日志"
+        hint="包含应用版本、连接状态和脱敏后的近期错误；不会包含密码、PAT、令牌或消息正文"
+        inline
+      >
+        <button
+          type="button"
+          disabled={!isTauri || exporting}
+          onClick={() => void exportLogs()}
+          className="flex h-9 items-center gap-2 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {exporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+          {exporting ? '正在导出…' : '导出日志'}
+        </button>
+      </Row>
+    </>
   );
 }
 

@@ -8,6 +8,7 @@ import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
+import DiagnosticBridge from './components/DiagnosticBridge';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -52,6 +53,7 @@ export default function App() {
   }
   return (
     <>
+      <DiagnosticBridge />
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />
       {content}

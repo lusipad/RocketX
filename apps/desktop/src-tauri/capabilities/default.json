@@ -15,6 +15,7 @@
       "allow": [{ "url": "http://**:*" }, { "url": "https://**:*" }]
     },
     "dialog:allow-save",
+    "log:default",
     "notification:default",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
