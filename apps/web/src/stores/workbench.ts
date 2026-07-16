@@ -35,6 +35,8 @@ export interface Reviewer {
   unique: string;
   /** ADO 投票：10=批准 5=有建议地批准 0=未投 -5=等待作者 -10=拒绝 */
   vote: number;
+  isRequired?: boolean;
+  isContainer?: boolean;
 }
 
 export interface PullRequest {

@@ -577,6 +577,8 @@ function mapPullRequest(cfg: DirectConfig, pr: any) {
       name: reviewer.displayName ?? '',
       unique: reviewer.uniqueName ?? '',
       vote: reviewer.vote ?? 0,
+      isRequired: reviewer.isRequired === true,
+      isContainer: reviewer.isContainer === true,
     })),
     sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
     targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),
@@ -601,8 +603,7 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
   /**
    * 按用户 GUID 让服务端直接过滤，取代「拉全集合再前端按账号字符串匹配」：
    *  - 待我评审：reviewerId=我 且 active
-   *  - 我提的  ：creatorId=我 且 **全部状态**（只拉 active 的话已完成的都看不见，
-   *              「由我提交的特别少」就是这么来的）
+   *  - 我提的  ：creatorId=我 且 active，工作台不展示已经完成或放弃的 PR
    * 字符串匹配(matchUser)只留给桥接模式兜底。
    */
   const me = await directGetMe(cfg);
@@ -623,7 +624,7 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
 
   const [review, mine] = await Promise.all([
     fetchPrs(`searchCriteria.reviewerId=${me.id}&searchCriteria.status=active`),
-    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=all`),
+    fetchPrs(`searchCriteria.creatorId=${me.id}&searchCriteria.status=active`),
   ]);
   const rel = new Map<number, 'mine' | 'review' | 'both'>();
   for (const pr of review) rel.set(pr.pullRequestId, 'review');

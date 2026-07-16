@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useWorkbench } from '../stores/workbench';
 import {
+  loadLastWorkItemProject,
+  preferredWorkItemProject,
   preferredWorkItemType,
+  saveLastWorkItemProject,
   workItemTemplatesForTypes,
   useWiTemplates,
 } from '../stores/wiTemplates';
@@ -57,11 +60,15 @@ export default function CreateWorkItemDialog({
         const cfg = { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth };
         const names = await directGetProjects(cfg);
         setProjects(names);
-        const def = defaultProject && names.includes(defaultProject) ? defaultProject : names[0];
-        if (def && !project) setProject(def);
+        const preferred = preferredWorkItemProject(
+          names,
+          loadLastWorkItemProject(config.adoBase!),
+          defaultProject,
+        );
+        setProject((current) => current && names.includes(current) ? current : preferred);
       } catch { /* ignore */ }
     })();
-  }, [config]);
+  }, [config, defaultProject]);
 
   useEffect(() => {
     if (!config?.adoBase || config.mode !== 'direct' || !project) return;
@@ -217,7 +224,10 @@ export default function CreateWorkItemDialog({
           <div className="flex gap-2">
             <select
               value={project}
-              onChange={(e) => setProject(e.target.value)}
+              onChange={(e) => {
+                setProject(e.target.value);
+                saveLastWorkItemProject(config.adoBase!, e.target.value);
+              }}
               className="h-8 flex-1 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
             >
               {projects.map((p) => <option key={p} value={p}>{p}</option>)}

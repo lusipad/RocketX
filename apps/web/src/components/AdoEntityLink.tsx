@@ -17,6 +17,16 @@ import {
 
 type RichAdoEntity = Exclude<AdoUrlEntity, { kind: 'workitem' }>;
 
+export function pullRequestReviewSummary(item: AdoPullRequestInfo) {
+  const voted = item.reviewers.filter((reviewer) => reviewer.vote !== 0).length;
+  const approved = item.reviewers.filter((reviewer) => reviewer.vote >= 5).length;
+  const rejected = item.reviewers.filter((reviewer) => reviewer.vote <= -10).length;
+  const requiredGroups = item.reviewers
+    .filter((reviewer) => reviewer.isRequired && reviewer.isContainer)
+    .map((reviewer) => reviewer.name);
+  return { voted, approved, rejected, total: item.reviewers.length, requiredGroups };
+}
+
 function BuildIcon({ build, size = 14 }: { build: AdoBuildInfo; size?: number }) {
   if (build.status === 'inProgress' || build.status === 'notStarted') {
     return <Loader2 size={size} className="shrink-0 animate-spin text-primary" />;
@@ -77,6 +87,7 @@ function PullRequestLink({
   item: AdoPullRequestInfo;
   variant: 'card' | 'chip';
 }) {
+  const review = pullRequestReviewSummary(item);
   if (variant === 'chip') {
     return (
       <a
@@ -92,7 +103,7 @@ function PullRequestLink({
     );
   }
   return (
-    <span className="my-1 inline-block w-full max-w-sm align-middle">
+    <span className="my-1 inline-block w-full max-w-lg align-middle">
       <span className="flex flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
         <span className="block h-1 rounded-t-lg bg-[#7f3bf5]" />
         <span className="px-3 pb-2 pt-1.5">
@@ -113,9 +124,24 @@ function PullRequestLink({
           >
             {item.title}
           </a>
-          <span className="mt-1.5 block truncate text-xs text-ink-3">
-            {item.sourceBranch} → {item.targetBranch}{item.creator ? ` · ${item.creator}` : ''}
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+            <span className="truncate">{item.sourceBranch} → {item.targetBranch}</span>
+            <span>发起人 {item.creator || '未知'}</span>
+            <span className={review.approved === review.total && review.total > 0 ? 'text-success' : ''}>
+              {review.total > 0 ? `${review.voted}/${review.total} 已审核` : '尚未指定评审人'}
+            </span>
+            {review.rejected > 0 && <span className="text-danger">{review.rejected} 人拒绝</span>}
           </span>
+          {review.requiredGroups.length > 0 && (
+            <span className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-ink-3">
+              <span>必审组</span>
+              {review.requiredGroups.map((group) => (
+                <span key={group} className="rounded bg-fill-2 px-1.5 py-0.5 text-ink-2">
+                  {group}
+                </span>
+              ))}
+            </span>
+          )}
         </span>
       </span>
     </span>

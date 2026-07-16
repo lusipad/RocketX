@@ -48,7 +48,13 @@ export interface AdoPullRequest {
   project: string;
   creator: string;
   creatorUnique: string;
-  reviewers: { name: string; unique: string; vote: number }[];
+  reviewers: {
+    name: string;
+    unique: string;
+    vote: number;
+    isRequired?: boolean;
+    isContainer?: boolean;
+  }[];
   sourceBranch: string;
   targetBranch: string;
   createdDate: string;
@@ -110,6 +116,8 @@ function mapPullRequest(webBase: string, pr: any): AdoPullRequest {
       name: reviewer.displayName ?? '',
       unique: reviewer.uniqueName ?? '',
       vote: reviewer.vote ?? 0,
+      isRequired: reviewer.isRequired === true,
+      isContainer: reviewer.isContainer === true,
     })),
     sourceBranch: (pr.sourceRefName ?? '').replace('refs/heads/', ''),
     targetBranch: (pr.targetRefName ?? '').replace('refs/heads/', ''),

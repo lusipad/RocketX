@@ -61,7 +61,13 @@ export interface AdoPullRequestInfo {
   project: string;
   creator: string;
   creatorUnique: string;
-  reviewers: { name: string; unique: string; vote: number }[];
+  reviewers: {
+    name: string;
+    unique: string;
+    vote: number;
+    isRequired?: boolean;
+    isContainer?: boolean;
+  }[];
   sourceBranch: string;
   targetBranch: string;
   createdDate?: string;

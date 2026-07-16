@@ -29,6 +29,31 @@ Plan: 当前任务对话中的《第一项：普通员工首次上手》
 
 ---
 
+# Implementation notes — GitHub Issues #36–#39
+
+## Decisions
+
+- #36 的界面字段实际是 ADO 项目；最近选择按 Rocket.Chat 账号隔离，并在同一 ADO 连接内优先恢复。Issue 要求的 Feature/User Story/开发与测试 Task 模板已存在，不重复增加。
+- #39 在直连请求源头把“我提的”限制为 active，避免下载后再过滤已完成 PR；bridge 原本就只请求 active。
+- #37 只展示 ADO 返回的 `isRequired` / `isContainer` 和 vote，不从名称猜测必审组或策略要求。
+- #38 同时统计 RocketX 及其 WebView2 子进程的工作集和私有内存，避免只测壳进程或把共享页重复计入后直接下结论。
+
+## Deviations
+
+- #21 缺少失败请求 URL 和响应体，本轮不猜测 404 根因，也不改认证或 API 路径。
+
+## Surprises
+
+- #36 描述的层级模板与现有 `Feature 全套` 完全一致，缺口只是项目选择未持久化。
+- 直连“我提的 PR”仍显式请求全部状态，而 bridge 已经只取 active，两个模式行为不一致。
+- Windows release 客户端在已登录并连接状态启动 10 秒后共 7 个进程，合计工作集 476.5 MB、私有内存 271.8 MB；这是当前机器的首个基线，不是跨机器的产品阈值。
+
+## Questions for review
+
+- #38 尚无目标内存阈值；本轮交付 `pnpm measure:memory` 和实测基线，不做无数据支撑的缓存重构。后续应在相同账号、页面和采样时刻比较私有内存趋势。
+
+---
+
 # Implementation notes — 日常高频 IM 易用性（2.1 + 2.3）
 
 ## Shipped vs planned

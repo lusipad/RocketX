@@ -8,9 +8,16 @@ import {
   directGetBuild,
   directGetWorkItemHierarchy,
   directGetPullRequest,
+  directGetPullRequests,
 } from '../../apps/web/src/lib/adoDirect';
 import { fetchPullRequest, parseAdoUrl } from '../../apps/web/src/lib/ado';
-import { workItemTemplatesForTypes } from '../../apps/web/src/stores/wiTemplates';
+import {
+  loadLastWorkItemProject,
+  preferredWorkItemProject,
+  saveLastWorkItemProject,
+  workItemTemplatesForTypes,
+} from '../../apps/web/src/stores/wiTemplates';
+import { pullRequestReviewSummary } from '../../apps/web/src/components/AdoEntityLink';
 import { AdoClient } from '../../services/ado-bridge/src/ado';
 
 (globalThis as Record<string, unknown>).React = React;
@@ -167,6 +174,59 @@ test('固定模板创建时保留服务器返回的精确类型名', () => {
     ['FEATURE', 'USER STORY', 'TASK'],
   );
   assert.deepEqual(resolved[0]?.items.map((item) => item.type), ['FEATURE', 'USER STORY', 'TASK']);
+});
+
+test('创建工作项优先恢复上次项目，再回退配置默认值和首项', () => {
+  const projects = ['Alpha', 'Beta', 'Gamma'];
+  assert.equal(preferredWorkItemProject(projects, 'Gamma', 'Beta'), 'Gamma');
+  assert.equal(preferredWorkItemProject(projects, 'Missing', 'Beta'), 'Beta');
+  assert.equal(preferredWorkItemProject(projects, 'Missing', 'Other'), 'Alpha');
+
+  saveLastWorkItemProject('HTTP://ado/tfs/DefaultCollection/', 'Gamma');
+  assert.equal(loadLastWorkItemProject('http://ado/tfs/DefaultCollection'), 'Gamma');
+});
+
+test('我提的 PR 只请求活动状态', async () => {
+  const requested: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes('/_apis/connectionData')) {
+      return adoJson({ authenticatedUser: { id: 'me', properties: {} } });
+    }
+    return adoJson({ value: [] });
+  }) as typeof fetch;
+
+  await directGetPullRequests({ adoBase: 'http://ado/tfs/DefaultCollection', pat: '', auth: 'none' });
+
+  const mine = requested.find((url) => url.includes('creatorId=me'));
+  assert.match(mine ?? '', /searchCriteria\.status=active/);
+  assert.doesNotMatch(mine ?? '', /status=all/);
+});
+
+test('PR 卡片摘要保留批准进度和必审组', () => {
+  const summary = pullRequestReviewSummary({
+    id: 7,
+    title: '完善卡片',
+    repo: 'RocketX',
+    project: 'Road Map',
+    creator: 'Alice',
+    creatorUnique: 'alice',
+    reviewers: [
+      { name: 'Core Team', unique: 'core', vote: 10, isRequired: true, isContainer: true },
+      { name: 'Bob', unique: 'bob', vote: 0, isRequired: true, isContainer: false },
+    ],
+    sourceBranch: 'feature/card',
+    targetBranch: 'main',
+    webUrl: 'http://ado/Road/_git/RocketX/pullrequest/7',
+  });
+  assert.deepEqual(summary, {
+    voted: 1,
+    approved: 1,
+    rejected: 0,
+    total: 2,
+    requiredGroups: ['Core Team'],
+  });
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

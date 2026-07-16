@@ -11,6 +11,39 @@ export interface WiTemplatesConfig {
   templates: WiTemplate[];
 }
 
+const LAST_PROJECTS_KEY = 'rcx-wi-last-projects';
+
+function projectScope(adoBase: string): string {
+  return adoBase.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+export function loadLastWorkItemProject(adoBase: string): string | undefined {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_PROJECTS_KEY) ?? '{}') as Record<string, string>;
+    return saved[projectScope(adoBase)] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveLastWorkItemProject(adoBase: string, project: string): void {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_PROJECTS_KEY) ?? '{}') as Record<string, string>;
+    saved[projectScope(adoBase)] = project;
+    localStorage.setItem(LAST_PROJECTS_KEY, JSON.stringify(saved));
+  } catch {
+    /* 存储不可用时只影响下次默认选择 */
+  }
+}
+
+export function preferredWorkItemProject(
+  projects: string[],
+  lastProject?: string,
+  configuredDefault?: string,
+): string {
+  return [lastProject, configuredDefault].find((value) => value && projects.includes(value)) ?? projects[0] ?? '';
+}
+
 /** 模板里的每个固定类型都必须存在于项目过程模板；{type} 由单项类型选择器决定。 */
 export function templateSupportsTypes(template: WiTemplate, availableTypes: string[]): boolean {
   if (availableTypes.length === 0) return false;

@@ -31,6 +31,7 @@ const SCOPED_KEYS = [
   'rcx-workbench',
   'rcx-ado-web',
   'rcx-custom-queries',
+  'rcx-wi-last-projects',
 ];
 
 /**
