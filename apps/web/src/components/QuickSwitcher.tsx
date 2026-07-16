@@ -5,7 +5,7 @@ import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
 import { useUI } from '../stores/ui';
-import { openExternal, realtime, rest } from '../lib/client';
+import { getServerBase, openExternal, realtime, rest } from '../lib/client';
 import { fmtConvTime, fmtSize } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
@@ -13,6 +13,7 @@ import {
   chooseAvailableSearchTab,
   QUICK_SEARCH_RESULT_SECTIONS,
   QUICK_SEARCH_TABS,
+  searchMessagesCached,
   searchMessagesGlobal,
   searchesSettledFor,
   type QuickSearchTab,
@@ -77,12 +78,14 @@ export default function QuickSwitcher({
 }) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
+  const activeRid = useChat((s) => s.activeRid);
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
   const setConvFilter = useUI((s) => s.setConvFilter);
   const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
+  const myId = useAuth((s) => s.user?._id);
   const todos = useTodos((s) => s.todos);
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
@@ -108,6 +111,7 @@ export default function QuickSwitcher({
   const [contactSettledKeyword, setContactSettledKeyword] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchProviderRef = useRef<Promise<unknown> | null>(null);
   const tabRef = useRef(tab);
   const dialogRef = useDialogBehavior(onClose);
 
@@ -261,13 +265,29 @@ export default function QuickSwitcher({
     setMessageError(null);
     setContactError(null);
     timer.current = setTimeout(() => {
-      void searchMessagesGlobal(
-        q,
-        conversationRidsRef.current,
-        {
-          global: (keyword) => realtime.call('rocketchatSearch.search', keyword, { rid: undefined }),
-          room: (rid, keyword) => rest.searchMessages(rid, keyword, 5),
-        },
+      const cacheKey = `${getServerBase()}\0${myId ?? ''}\0${conversationScope}\0${q}`;
+      void searchMessagesCached(
+        cacheKey,
+        () =>
+          searchMessagesGlobal(
+            q,
+            conversationRidsRef.current,
+            {
+              provider: () => {
+                searchProviderRef.current ??= realtime.call('rocketchatSearch.getProvider');
+                return searchProviderRef.current;
+              },
+              global: (keyword) =>
+                realtime.call(
+                  'rocketchatSearch.search',
+                  keyword,
+                  { uid: myId, rid: activeRid ?? conversationRidsRef.current[0] ?? '' },
+                  { limit: 20, searchAll: true },
+                ),
+              room: (rid, keyword) => rest.searchMessages(rid, keyword, 5),
+            },
+            () => !cancelled,
+          ),
         () => !cancelled,
       )
         .then((messageDocs) => {
@@ -309,7 +329,7 @@ export default function QuickSwitcher({
       cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [keyword, conversationScope, me]);
+  }, [keyword, conversationScope, me, myId, activeRid]);
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
