@@ -87,7 +87,7 @@ export class AppServerClient {
     }
     try {
       const initialized = await this.request('initialize', {
-        clientInfo: { name: 'rocketx', title: 'RocketX', version: '1.0.0' },
+        clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.20.0' },
         capabilities: {
           experimentalApi: true,
           requestAttestation: false,

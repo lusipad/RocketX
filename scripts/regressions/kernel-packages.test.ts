@@ -56,7 +56,7 @@ test('app-sdk npm 包只发布可执行 ESM、类型声明和开源说明', asyn
     publishConfig?: { access?: string };
   };
   assert.notEqual(packageJson.private, true);
-  assert.equal(packageJson.version, '1.0.0');
+  assert.equal(packageJson.version, '0.20.0');
   assert.equal(packageJson.license, 'MIT');
   assert.equal(packageJson.main, './dist/index.js');
   assert.equal(packageJson.types, './dist/index.d.ts');
