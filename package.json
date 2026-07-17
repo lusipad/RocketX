@@ -9,6 +9,7 @@
     "typecheck": "pnpm -r typecheck",
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
     "smoke": "tsx scripts/smoke.ts",
+    "spike:rc-offline-contract": "tsx scripts/spike-rc-offline-contract.ts",
     "test:pure": "tsx scripts/test-pure.ts",
     "test:regression": "tsx --test scripts/regressions/*.test.ts",
     "codex:protocol:generate": "node scripts/codex-protocol.mjs --write",
