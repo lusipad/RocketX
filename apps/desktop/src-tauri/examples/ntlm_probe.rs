@@ -16,10 +16,7 @@ fn main() {
     for (label, path) in [
         ("项目列表", "/_apis/projects?api-version=7.0"),
         // connectionData 会回显「服务器认为你是谁」——用来确认 NTLM 认到的是当前 Windows 用户
-        (
-            "当前身份",
-            "/_apis/connectionData?api-version=7.0-preview",
-        ),
+        ("当前身份", "/_apis/connectionData?api-version=7.0-preview"),
     ] {
         let url = format!("{base}{path}");
         print!("{label:<8} {url}\n  -> ");

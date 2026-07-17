@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage } from '../kernel/ai/provider';
+import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
 import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
+import { askButlerCodex, friendlyButlerCodexError } from './butlerCodex';
 import { useRoutines } from './routines';
 
 const HISTORY_LIMIT = 40;
@@ -35,8 +37,10 @@ export interface ButlerState {
 }
 
 type ButlerLoopRunner = typeof runAgentLoop;
+type ButlerCodexRunner = typeof askButlerCodex;
 
 let loopRunner: ButlerLoopRunner = runAgentLoop;
+let codexRunner: ButlerCodexRunner = askButlerCodex;
 let butlerNow = () => Date.now();
 
 const toolLabels: Record<string, string> = {
@@ -80,6 +84,14 @@ export function setButlerLoopRunner(runner: ButlerLoopRunner): () => void {
   };
 }
 
+export function setButlerCodexRunner(runner: ButlerCodexRunner): () => void {
+  const previous = codexRunner;
+  codexRunner = runner;
+  return () => {
+    codexRunner = previous;
+  };
+}
+
 export function setButlerNowProvider(provider: () => number): () => void {
   const previous = butlerNow;
   butlerNow = provider;
@@ -104,11 +116,14 @@ export const useButler = create<ButlerState>((set, get) => ({
     const content = text.trim();
     if (!content || get().running) return;
 
-    const history = trimButlerHistory([...get().history, { role: 'user', content }]);
+    const brain = getButlerBrain();
+    const history = brain === 'api'
+      ? trimButlerHistory([...get().history, { role: 'user', content }])
+      : get().history;
     set((state) => ({
       lines: [...state.lines, line('user', content)],
       activity: null,
-      history,
+      ...(brain === 'api' ? { history } : {}),
       running: true,
       error: null,
     }));
@@ -146,6 +161,26 @@ export const useButler = create<ButlerState>((set, get) => ({
     };
 
     try {
+      if (brain === 'codex') {
+        const availability = codexBrainAvailability();
+        if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
+        const result = await codexRunner({
+          text: content,
+          context,
+          now: butlerNow(),
+          onEvent,
+        });
+        set((state) => ({
+          lines: result.text
+            ? assistantLineId
+              ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text } : item)
+              : [...state.lines, line('assistant', result.text)]
+            : state.lines,
+          activity: null,
+          running: false,
+        }));
+        return;
+      }
       const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}${
         context
           ? `\n用户当前所在房间：${context.roomName}\n查询本房间消息时优先用 search_messages 的 roomName 参数限定范围`
@@ -171,7 +206,10 @@ export const useButler = create<ButlerState>((set, get) => ({
         running: false,
       }));
     } catch (error) {
-      set({ activity: null, running: false, error: friendlyButlerError(error) });
+      const message = brain === 'codex'
+        ? `${friendlyButlerCodexError(error).replace(/[。.]$/, '')}。可在设置页切换为 API 大脑。`
+        : friendlyButlerError(error);
+      set({ activity: null, running: false, error: message });
     }
   },
 

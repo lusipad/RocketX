@@ -9,10 +9,12 @@ import {
 } from '../kernel/ai/config';
 import { deleteAiSecret, setAiSecret } from '../kernel/ai/secrets';
 import { testAiProvider } from '../kernel/ai/runtime';
+import { codexBrainAvailability, getButlerBrain, setButlerBrain, type ButlerBrainKind } from '../lib/butlerBrain';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
+import { RadioGroup, Row } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -32,6 +34,7 @@ function newProvider(): AiProviderConfig {
 
 export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
+  const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -132,6 +135,8 @@ export default function AiSettings() {
     }
   };
 
+  const codexAvailability = codexBrainAvailability();
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-line bg-surface p-4 text-sm text-ink-2">
@@ -141,6 +146,27 @@ export default function AiSettings() {
           仅用于总结、晨报、翻译等可选能力；桌面端密钥只存系统钥匙串。
         </p>
       </div>
+
+      <section className="rounded-lg border border-line bg-surface px-4">
+        <Row label="管家大脑" hint="切换后立即对下一次管家提问生效；不会静默降级。">
+          <RadioGroup
+            value={butlerBrain}
+            onChange={(brain) => {
+              setButlerBrain(brain);
+              setButlerBrainState(brain);
+            }}
+            options={[
+              {
+                key: 'codex',
+                label: 'Codex（本机，桌面端）',
+                hint: codexAvailability.available ? '使用本机 ChatGPT 账号模型' : codexAvailability.reason,
+                disabled: !codexAvailability.available,
+              },
+              { key: 'api', label: 'API Provider', hint: '使用下方配置的模型 Provider' },
+            ]}
+          />
+        </Row>
+      </section>
 
       <section>
         <div className="mb-2 flex items-center justify-between">

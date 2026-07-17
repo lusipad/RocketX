@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {
+  setButlerBrain,
+  setButlerBrainStorage,
+  setButlerBrainTauriProvider,
+  setCodexBrainUnavailableReason,
+} from '../../apps/web/src/lib/butlerBrain';
 import { checkWatchers } from '../../apps/web/src/lib/butlerWatchers';
 import {
   dueRoutines,
+  setRoutineCodexRunner,
   setRoutineLoopRunner,
   setRoutineNowProvider,
   setRoutineStorage,
@@ -128,6 +135,33 @@ test('runNow 将未配置 Provider 转成友好错误，并防止重入', async 
   } finally {
     restoreNow();
     restoreRunner();
+    resetRoutineStore();
+  }
+});
+
+test('选择 Codex 大脑时，runNow 使用独立的 ephemeral runner', async () => {
+  resetRoutineStore([routine()]);
+  const storage = new MemoryStorage();
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restorePlatform = setButlerBrainTauriProvider(() => true);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  setCodexBrainUnavailableReason(undefined);
+  setButlerBrain('codex');
+  let input = '';
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    input = options.text;
+    return { text: 'Codex 晨报' };
+  });
+
+  try {
+    await useRoutines.getState().runNow('routine-1');
+    assert.match(input, /请按以下方法论执行并直接输出结果/);
+    assert.equal(useRoutines.getState().routines[0].runs[0].text, 'Codex 晨报');
+  } finally {
+    restoreRunner();
+    restoreNow();
+    restorePlatform();
+    restoreBrainStorage();
     resetRoutineStore();
   }
 });

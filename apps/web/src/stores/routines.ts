@@ -1,10 +1,12 @@
 import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
 import { runAgentLoop } from '../kernel/ai/agent-loop';
+import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
 import { createButlerTools } from '../lib/butlerTools';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { useAuth } from './auth';
+import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
 import { useChat } from './chat';
 import { useWorkbench } from './workbench';
 
@@ -67,6 +69,7 @@ const localStorageRoutines: ButlerProfileStorage = {
 
 let routineStorage: ButlerProfileStorage = localStorageRoutines;
 let routineRunner: typeof runAgentLoop = runAgentLoop;
+let routineCodexRunner: typeof runButlerCodexEphemeral = runButlerCodexEphemeral;
 let routineNow = () => Date.now();
 let scheduler: ReturnType<typeof setInterval> | undefined;
 
@@ -83,6 +86,14 @@ export function setRoutineLoopRunner(runner: typeof runAgentLoop): () => void {
   routineRunner = runner;
   return () => {
     routineRunner = previous;
+  };
+}
+
+export function setRoutineCodexRunner(runner: typeof runButlerCodexEphemeral): () => void {
+  const previous = routineCodexRunner;
+  routineCodexRunner = runner;
+  return () => {
+    routineCodexRunner = previous;
   };
 }
 
@@ -254,19 +265,35 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (!routine || get().runningIds.includes(id)) return;
     set((state) => ({ runningIds: [...state.runningIds, id] }));
     const at = routineNow();
+    const brain = getButlerBrain();
     let run: RoutineRun;
     try {
-      const result = await routineRunner({
-        messages: [
-          { role: 'system', content: `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(at)}` },
-          { role: 'user', content: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}` },
-        ],
-        tools: createButlerTools(),
-        maxRounds: 6,
-      });
+      let result: { text: string };
+      if (brain === 'codex') {
+        const availability = codexBrainAvailability();
+        if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
+        result = await routineCodexRunner({
+          text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}`,
+          now: at,
+        });
+      } else {
+        result = await routineRunner({
+          messages: [
+            { role: 'system', content: `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(at)}` },
+            { role: 'user', content: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}` },
+          ],
+          tools: createButlerTools(),
+          maxRounds: 6,
+        });
+      }
       run = { id: crypto.randomUUID(), at, status: 'ok', text: result.text };
     } catch (error) {
-      run = { id: crypto.randomUUID(), at, status: 'error', text: friendlyButlerError(error) };
+      run = {
+        id: crypto.randomUUID(),
+        at,
+        status: 'error',
+        text: brain === 'codex' ? friendlyButlerCodexError(error) : friendlyButlerError(error),
+      };
     }
     let routines: Routine[] = [];
     set((state) => {

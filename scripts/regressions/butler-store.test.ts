@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AiMessage } from '../../apps/web/src/kernel/ai/provider';
+import {
+  setButlerBrain,
+  setButlerBrainStorage,
+  setButlerBrainTauriProvider,
+  type ButlerBrainStorage,
+} from '../../apps/web/src/lib/butlerBrain';
 import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
 import { setButlerLoopRunner, setButlerNowProvider, useButler } from '../../apps/web/src/stores/butler';
 import { useRoutines } from '../../apps/web/src/stores/routines';
 
 function resetStore(): void {
   useButler.getState().reset();
+}
+
+class BrainStorage implements ButlerBrainStorage {
+  private readonly values = new Map<string, string>();
+
+  get(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  set(key: string, value: string): void {
+    this.values.set(key, value);
+  }
 }
 
 test('管家连续提问会累积模型历史和展示行', async () => {
@@ -155,6 +173,30 @@ test('未配置 Provider 时保留输入并显示友好错误', async () => {
     assert.equal(state.lines.at(-1)?.text, '帮我看看今天的情况');
   } finally {
     restore();
+    resetStore();
+  }
+});
+
+test('选择不可用的 Codex 大脑时不静默回退，并提示设置页切换 API', async () => {
+  resetStore();
+  const restoreStorage = setButlerBrainStorage(new BrainStorage());
+  const restorePlatform = setButlerBrainTauriProvider(() => false);
+  setButlerBrain('codex');
+  let apiCalled = false;
+  const restoreRunner = setButlerLoopRunner(async () => {
+    apiCalled = true;
+    return { text: '不应执行', messages: [] };
+  });
+
+  try {
+    await useButler.getState().ask('帮我看看今天的情况');
+    const state = useButler.getState();
+    assert.equal(apiCalled, false);
+    assert.equal(state.error, 'Codex 大脑仅桌面端可用。可在设置页切换为 API 大脑。');
+  } finally {
+    restoreRunner();
+    restorePlatform();
+    restoreStorage();
     resetStore();
   }
 });

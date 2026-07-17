@@ -453,6 +453,22 @@ pub fn codex_agent_workspace(app: tauri::AppHandle, session_id: String) -> Resul
     Ok(path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve Butler home directory: {error}"))?
+        .join("butler");
+    std::fs::create_dir_all(&path)
+        .map_err(|error| format!("failed to prepare Butler home directory: {error}"))?;
+    for directory in ["memory", "skills"] {
+        std::fs::create_dir_all(path.join(directory))
+            .map_err(|error| format!("failed to prepare Butler {directory} directory: {error}"))?;
+    }
+    Ok(host_path(&path))
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let processes = state
