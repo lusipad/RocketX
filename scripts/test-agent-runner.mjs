@@ -1,19 +1,36 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const runnerDir = join(root, 'apps', 'desktop', 'agent-runner');
-const nestedDocker = process.env.ROCKETX_RUNNER_TEST_NESTED_DOCKER === '1';
-const image = nestedDocker
-  ? 'rocketx/codex-runner-ci:0.144.4'
-  : 'rocketx/codex-runner:0.144.4';
+const image = 'rocketx/codex-runner:0.144.4';
+const hostSandbox = process.env.ROCKETX_RUNNER_TEST_HOST === '1';
 const temporary = mkdtempSync(join(tmpdir(), 'rocketx-agent-runner-'));
 const workspace = join(temporary, 'workspace');
 const home = join(temporary, 'codex-home');
 const attachments = join(temporary, 'attachments');
 const auth = join(temporary, 'auth.json');
+const hostBin = join(temporary, 'host-bin');
+const hostRunner = join(hostBin, 'rocketx-codex');
+const sandboxWorkspace = hostSandbox ? workspace : '/workspace';
+const sandboxAttachments = hostSandbox
+  ? join(workspace, '.rocketx-agent', 'attachments')
+  : '/workspace/.rocketx-agent/attachments';
+const sandboxAuth = hostSandbox ? auth : '/home/node/.codex/auth.json';
+
+if (hostSandbox && process.platform !== 'linux') {
+  throw new Error('ROCKETX_RUNNER_TEST_HOST 仅支持 Linux CI 宿主');
+}
 
 function docker(args, options = {}) {
   return execFileSync('docker', args, { cwd: root, encoding: 'utf8', ...options });
@@ -24,18 +41,27 @@ function mount(source, target, readOnly = false) {
 }
 
 function sandbox(profile, command) {
+  if (hostSandbox) {
+    return execFileSync(
+      hostRunner,
+      ['sandbox', '-P', profile, '-C', workspace, '/bin/sh', '-lc', command],
+      {
+        cwd: workspace,
+        encoding: 'utf8',
+        env: { ...process.env, CODEX_HOME: home },
+      },
+    ).trim();
+  }
   const args = [
     'run',
     '--rm',
   ];
-  if (nestedDocker) args.push('--privileged');
   args.push(
     '--workdir',
     '/workspace',
     '--read-only',
   );
-  if (!nestedDocker) args.push('--cap-drop', 'ALL');
-  if (!nestedDocker) args.push('--security-opt', 'no-new-privileges');
+  args.push('--cap-drop', 'ALL', '--security-opt', 'no-new-privileges');
   args.push(
     '--security-opt',
     'seccomp=unconfined',
@@ -77,34 +103,62 @@ try {
   mkdirSync(join(workspace, '.rocketx-agent', 'attachments'), { recursive: true });
   mkdirSync(attachments, { recursive: true });
   mkdirSync(home, { recursive: true });
+  mkdirSync(hostBin, { recursive: true });
   writeFileSync(join(workspace, 'allowed.txt'), 'ROCKETX_ALLOWED_FILE\n');
   writeFileSync(join(workspace, '.env'), 'ROOT_ENV_MUST_NOT_BE_READABLE\n');
   writeFileSync(join(workspace, 'nested', '.env'), 'NESTED_ENV_MUST_NOT_BE_READABLE\n');
   writeFileSync(join(workspace, 'nested', 'credentials.json'), 'CREDENTIALS_MUST_NOT_BE_READABLE\n');
   writeFileSync(join(workspace, 'nested', 'private.pem'), 'PRIVATE_KEY_MUST_NOT_BE_READABLE\n');
-  writeFileSync(join(attachments, 'context.log'), 'ROCKETX_CONTEXT_FILE\n');
+  const contextFile = hostSandbox
+    ? join(workspace, '.rocketx-agent', 'attachments', 'context.log')
+    : join(attachments, 'context.log');
+  writeFileSync(contextFile, 'ROCKETX_CONTEXT_FILE\n');
+  if (hostSandbox) chmodSync(contextFile, 0o444);
   writeFileSync(auth, '{"fixture":"AUTH_MUST_NOT_BE_READABLE"}\n');
-  copyFileSync(join(runnerDir, 'runner.config.toml'), join(home, 'config.toml'));
+  const config = readFileSync(join(runnerDir, 'runner.config.toml'), 'utf8')
+    .replaceAll('/workspace', sandboxWorkspace)
+    .replaceAll('/home/node/.codex/auth.json', sandboxAuth);
+  writeFileSync(join(home, 'config.toml'), config);
 
   const buildArgs = ['build', '--quiet', '--tag', image];
-  if (nestedDocker) buildArgs.push('--build-arg', 'ROCKETX_BWRAP_SETUID=1');
   buildArgs.push(runnerDir);
   docker(buildArgs, { stdio: 'inherit' });
   const version = docker(['run', '--rm', image, '--version']).trim();
   if (version !== 'codex-cli 0.144.4') throw new Error(`Runner 版本不匹配：${version}`);
+  if (hostSandbox) {
+    const container = docker(['create', image]).trim();
+    try {
+      docker(['cp', `${container}:/usr/local/bin/rocketx-codex`, hostRunner]);
+      docker(['cp', `${container}:/usr/local/bin/codex-linux-sandbox`, join(hostBin, 'codex-linux-sandbox')]);
+      docker(['cp', `${container}:/usr/local/bin/codex-resources`, hostBin]);
+    } finally {
+      docker(['rm', container]);
+    }
+    chmodSync(hostRunner, 0o755);
+    chmodSync(join(hostBin, 'codex-linux-sandbox'), 0o755);
+    const bundledBwrap = join(hostBin, 'codex-resources', 'bwrap');
+    if (!existsSync(bundledBwrap)) throw new Error('Runner 镜像缺少匹配版本的 codex-resources/bwrap');
+    const hostVersion = execFileSync(hostRunner, ['--version'], {
+      encoding: 'utf8',
+      env: { ...process.env, CODEX_HOME: home },
+    }).trim();
+    if (hostVersion !== 'codex-cli 0.144.4') {
+      throw new Error(`宿主 Runner 版本不匹配：${hostVersion}`);
+    }
+  }
 
   const readOnly = sandbox(
     'rocketx_read',
     [
       'set -eu',
-      'test "$(cat /workspace/allowed.txt)" = ROCKETX_ALLOWED_FILE',
-      'test "$(cat /workspace/.rocketx-agent/attachments/context.log)" = ROCKETX_CONTEXT_FILE',
-      'if cat /workspace/.env >/dev/null 2>&1; then exit 21; fi',
-      'if cat /workspace/nested/.env >/dev/null 2>&1; then exit 22; fi',
-      'if cat /workspace/nested/credentials.json >/dev/null 2>&1; then exit 27; fi',
-      'if cat /workspace/nested/private.pem >/dev/null 2>&1; then exit 30; fi',
-      'if cat /home/node/.codex/auth.json >/dev/null 2>&1; then exit 23; fi',
-      'if touch /workspace/read-only-write >/dev/null 2>&1; then exit 24; fi',
+      `test "$(cat ${sandboxWorkspace}/allowed.txt)" = ROCKETX_ALLOWED_FILE`,
+      `test "$(cat ${sandboxAttachments}/context.log)" = ROCKETX_CONTEXT_FILE`,
+      `if cat ${sandboxWorkspace}/.env >/dev/null 2>&1; then exit 21; fi`,
+      `if cat ${sandboxWorkspace}/nested/.env >/dev/null 2>&1; then exit 22; fi`,
+      `if cat ${sandboxWorkspace}/nested/credentials.json >/dev/null 2>&1; then exit 27; fi`,
+      `if cat ${sandboxWorkspace}/nested/private.pem >/dev/null 2>&1; then exit 30; fi`,
+      `if cat ${sandboxAuth} >/dev/null 2>&1; then exit 23; fi`,
+      `if touch ${sandboxWorkspace}/read-only-write >/dev/null 2>&1; then exit 24; fi`,
       'echo READ_PROFILE_OK',
     ].join('; '),
   );
@@ -114,13 +168,13 @@ try {
     'rocketx_write',
     [
       'set -eu',
-      'printf ok > /workspace/write-probe',
-      'test "$(cat /workspace/write-probe)" = ok',
-      'if (printf changed > /workspace/.rocketx-agent/attachments/context.log) 2>/dev/null; then exit 29; fi',
-      'if cat /workspace/nested/.env >/dev/null 2>&1; then exit 25; fi',
-      'if cat /workspace/nested/credentials.json >/dev/null 2>&1; then exit 28; fi',
-      'if cat /workspace/nested/private.pem >/dev/null 2>&1; then exit 31; fi',
-      'if cat /home/node/.codex/auth.json >/dev/null 2>&1; then exit 26; fi',
+      `printf ok > ${sandboxWorkspace}/write-probe`,
+      `test "$(cat ${sandboxWorkspace}/write-probe)" = ok`,
+      `if (printf changed > ${sandboxAttachments}/context.log) 2>/dev/null; then exit 29; fi`,
+      `if cat ${sandboxWorkspace}/nested/.env >/dev/null 2>&1; then exit 25; fi`,
+      `if cat ${sandboxWorkspace}/nested/credentials.json >/dev/null 2>&1; then exit 28; fi`,
+      `if cat ${sandboxWorkspace}/nested/private.pem >/dev/null 2>&1; then exit 31; fi`,
+      `if cat ${sandboxAuth} >/dev/null 2>&1; then exit 26; fi`,
       'echo WRITE_PROFILE_OK',
     ].join('; '),
   );

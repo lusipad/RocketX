@@ -16,9 +16,6 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ARG ROCKETX_BWRAP_SETUID=0
-RUN if [ "$ROCKETX_BWRAP_SETUID" = "1" ]; then chmod 4755 /usr/local/bin/codex-resources/bwrap; fi
-
 RUN mkdir --parents /home/node/.codex \
     && chown node:node /home/node/.codex
 
