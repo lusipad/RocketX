@@ -32,10 +32,11 @@ test('待发布版本可以从 CHANGELOG 提取用户向 Release notes', async (
 });
 
 test('发布工作流先验证 main 上的注解标签再执行标签代码', async () => {
-  const [npmWorkflow, releaseWorkflow, desktopWorkflow] = await Promise.all([
+  const [npmWorkflow, releaseWorkflow, desktopWorkflow, tagWorkflow] = await Promise.all([
     readFile(new URL('../../.github/workflows/npm-publish.yml', import.meta.url), 'utf8'),
     readFile(new URL('../../.github/workflows/publish-release.yml', import.meta.url), 'utf8'),
     readFile(new URL('../../.github/workflows/desktop.yml', import.meta.url), 'utf8'),
+    readFile(new URL('../../.github/workflows/tag-version.yml', import.meta.url), 'utf8'),
   ]);
 
   for (const workflow of [npmWorkflow, releaseWorkflow]) {
@@ -45,4 +46,6 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   }
   assert.match(npmWorkflow, /RELEASE_SHA/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
+  assert.match(tagWorkflow, /git config user\.name/);
+  assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);
 });
