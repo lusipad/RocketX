@@ -3,7 +3,7 @@
  * 桌面端走 Tauri Rust 通道没有 CORS 限制，可直接连内网 ADO；
  * Web 端仅当 ADO 服务器允许跨域时可用，否则请用桥接模式。
  */
-import { httpFetch, isTauri } from './http';
+import { ensureHttpOrigin, httpFetch, isTauri } from './http';
 
 /** 认证方式。企业内网的 ADO Server 默认是 Windows 集成认证，所以 ntlm 排在最前。 */
 export type AdoAuth = 'ntlm' | 'pat' | 'bearer' | 'none';
@@ -87,6 +87,7 @@ async function adoRequest<T>(
       }
       ({ status, text } = await ntlmRequest(url, method, payload, contentType));
     } else {
+      await ensureHttpOrigin(url);
       const res = await httpFetch(url, {
         method,
         headers: {

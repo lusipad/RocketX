@@ -21,6 +21,7 @@ import {
 } from '../lib/client';
 import { emojify } from '../lib/emoji';
 import { findCommand } from '../lib/slash';
+import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
 import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
@@ -100,6 +101,7 @@ export type RightPanel =
   | { kind: 'info' }
   | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
+  | { kind: `app:${string}`; props?: unknown }
   | null;
 
 const HISTORY_PAGE = 50;
@@ -1095,6 +1097,17 @@ export const useChat = create<ChatState>((set, get) => ({
   runSlash: async (command, params, tmid) => {
     const rid = get().activeRid;
     if (!rid) return;
+    const local = kernelRegistry
+      .get('composer.command')
+      .find((candidate) => candidate.name.toLowerCase() === command.toLowerCase());
+    if (local) {
+      try {
+        await local.run({ rid, params, ...(tmid ? { tmid } : {}) });
+      } catch (err) {
+        toast.error(err, `/${command} 执行失败`);
+      }
+      return;
+    }
     // 认不出来的命令**不发**。以前会把 `/kick @张三` 原样广播给全群——
     // 打错一个字母就变成公开处刑，宁可让用户看见「没有这个命令」。
     if (!findCommand(get().slashCommands, command)) {

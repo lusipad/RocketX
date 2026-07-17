@@ -4,10 +4,12 @@
 mod diagnostics;
 mod winauth;
 
+use std::{collections::HashSet, sync::Mutex};
 #[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
     image::Image,
+    ipc::CapabilityBuilder,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
@@ -15,6 +17,54 @@ use tauri::{
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 
 const MAIN_TRAY_ID: &str = "main";
+
+struct AllowedHttpOrigins(Mutex<HashSet<String>>);
+
+fn normalize_http_origin(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
+        return Err("invalid HTTP origin".to_string());
+    }
+    let url = tauri::Url::parse(value).map_err(|_| "invalid HTTP origin".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("only credential-free http/https origins are allowed".to_string());
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+#[tauri::command]
+fn allow_http_origin(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    origins: tauri::State<'_, AllowedHttpOrigins>,
+    origin: String,
+) -> Result<String, String> {
+    if webview.label() != "main" {
+        return Err("HTTP origin registration is limited to the main webview".to_string());
+    }
+    let origin = normalize_http_origin(&origin)?;
+    let mut allowed = origins
+        .0
+        .lock()
+        .map_err(|_| "HTTP origin registry is unavailable".to_string())?;
+    if allowed.contains(&origin) {
+        return Ok(origin);
+    }
+    let capability = CapabilityBuilder::new(format!("http-origin-{}", allowed.len()))
+        .webview("main")
+        .permission_scoped(
+            "http:default",
+            vec![origin.clone()],
+            Vec::<String>::new(),
+        );
+    app.add_capability(capability).map_err(|error| error.to_string())?;
+    allowed.insert(origin.clone());
+    Ok(origin)
+}
 
 /// 显示并聚焦主窗口（从托盘点回来）
 fn show_main(app: &tauri::AppHandle) {
@@ -161,7 +211,7 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 
 #[cfg(test)]
 mod tray_icon_tests {
-    use super::dim_tray_icon;
+    use super::{dim_tray_icon, normalize_http_origin};
     use tauri::image::Image;
 
     #[test]
@@ -169,6 +219,16 @@ mod tray_icon_tests {
         let source = Image::new_owned(vec![100, 200, 50, 0, 200, 100, 40, 255], 2, 1);
         let dimmed = dim_tray_icon(&source);
         assert_eq!(dimmed.rgba(), &[35, 70, 17, 0, 70, 35, 14, 255]);
+    }
+
+    #[test]
+    fn http_scope_keeps_only_exact_origin() {
+        assert_eq!(
+            normalize_http_origin("https://chat.example.test:8443/path?q=1").unwrap(),
+            "https://chat.example.test:8443"
+        );
+        assert!(normalize_http_origin("ftp://chat.example.test").is_err());
+        assert!(normalize_http_origin("https://user:secret@chat.example.test").is_err());
     }
 }
 
@@ -181,6 +241,7 @@ fn main() {
         // Windows 集成认证（NTLM/Negotiate）：域内 ADO Server 的默认认证方式，
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
+            allow_http_origin,
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,
             set_tray_icon_normal,
@@ -188,9 +249,13 @@ fn main() {
             show_main_window,
             show_message_notification
         ])
+        .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
         .plugin(tauri_plugin_http::init())
+        // GitHub Releases 更新通道；签名公钥和 endpoint 由 tauri.conf.json 固定。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 外部链接用系统默认浏览器打开（webview 里 target="_blank" 无效）
         .plugin(tauri_plugin_opener::init())
         // 下载文件：webview 忽略 blob URL 上的 download 属性，

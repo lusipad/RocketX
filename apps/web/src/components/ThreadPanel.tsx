@@ -4,7 +4,7 @@ import { AtSign, SendHorizontal, Smile } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
-import { parseSlash } from '../lib/slash';
+import { composerCommands, dispatchInput } from '../kernel/dispatch';
 import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
@@ -66,13 +66,10 @@ export default function ThreadPanel() {
 
     // 话题里也得认斜杠命令 —— 不然在话题里打 `/kick @张三`，它会原样广播成一条文本。
     // 这里没有补全面板（主输入框才有），但拦截是必须的。
-    const slash = parseSlash(value);
-    if (slash) {
-      const known = useChat
-        .getState()
-        .slashCommands.some((c) => c.command.toLowerCase() === slash.command);
-      if (known) setText('');
-      await runSlash(slash.command, slash.params, rootId);
+    const commands = composerCommands(useChat.getState().slashCommands);
+    const dispatched = await dispatchInput(value, { rid, runSlash, commands }, rootId);
+    if (dispatched.handled) {
+      if (dispatched.accepted) setText('');
       return;
     }
 

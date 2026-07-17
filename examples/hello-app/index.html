@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Hello RocketX</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f7f8fa; color: #1f2329; font: 14px system-ui; }
+      main { width: min(420px, calc(100% - 48px)); padding: 28px; border: 1px solid #dee0e3; border-radius: 14px; background: white; box-shadow: 0 8px 30px #1f232914; }
+      h1 { margin: 0 0 8px; font-size: 22px; } p { color: #646a73; line-height: 1.6; }
+      button { border: 0; border-radius: 7px; padding: 9px 14px; background: #3370ff; color: white; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hello, RocketX</h1>
+      <p>这个页面运行在没有 <code>allow-same-origin</code> 的沙箱 iframe 中，只能通过 Bridge 请求宿主能力。</p>
+      <p id="isolation">正在检查桌面 IPC 隔离…</p>
+      <button id="notify">测试 Bridge 通知</button>
+    </main>
+    <script>
+      let nextId = 1;
+      const isolation = document.querySelector('#isolation');
+      const internals = window.__TAURI_INTERNALS__;
+      if (!internals?.invoke) {
+        isolation.textContent = '隔离自检通过：iframe 未暴露 Tauri IPC';
+      } else {
+        const blocked = new Promise((resolve) => {
+          setTimeout(() => resolve('blocked'), 1000);
+        });
+        Promise.race([
+          internals.invoke('allow_http_origin', { origin: 'https://ipc-probe.invalid' }).then(
+            () => 'allowed',
+            () => 'blocked',
+          ),
+          blocked,
+        ]).then((result) => {
+          if (result === 'allowed') {
+            isolation.textContent = '隔离自检失败：iframe 调用了宿主命令';
+            isolation.style.color = '#d4380d';
+            return;
+          }
+          isolation.textContent = '隔离自检通过：Tauri ACL 已阻断 iframe IPC';
+        });
+      }
+      document.querySelector('#notify').addEventListener('click', () => {
+        window.__RCX_BRIDGE__.postMessage({
+          jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI',
+          params: { kind: 'notify', props: { message: 'Hello 应用已通过权限闸门调用通知', level: 'success' } }
+        });
+      });
+    </script>
+  </body>
+</html>

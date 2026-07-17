@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
-import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
+import { getServerBase, loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
+import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope } from '../lib/accountScope';
 import { restoreTrayAttention } from '../lib/tray';
 import { loginFailureMessage } from '../lib/loginDiagnostic';
@@ -81,6 +82,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       return;
     }
     try {
+      await ensureHttpOrigin(getServerBase());
       const data = await rest.loginWithToken(stored.authToken);
       // 重新写一遍认证信息，确保 rc_uid/rc_token cookie 就位（头像、文件下载要用）
       saveAuth({ authToken: data.authToken, userId: data.userId });
@@ -99,6 +101,7 @@ export const useAuth = create<AuthState>((set, get) => ({
   login: async (username, password) => {
     set({ status: 'authing', error: null });
     try {
+      await ensureHttpOrigin(getServerBase());
       const data = await rest.login(username, password);
       saveAuth({ authToken: data.authToken, userId: data.userId });
       // 同一台机器换账号登录：先把上一个人的本地数据搬走、还原自己的,再重载

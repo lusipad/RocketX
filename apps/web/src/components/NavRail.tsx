@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookUser,
+  Blocks,
   Calendar,
   LayoutGrid,
   Keyboard,
@@ -18,15 +19,14 @@ import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
-import { MODULE_ORDER, useUI, type ModuleKey } from '../stores/ui';
+import { useUI } from '../stores/ui';
+import { useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
 import { ConfirmDialog } from './Dialog';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
-type PrimaryModule = Exclude<ModuleKey, 'settings'>;
-
-const MODULE_META: Record<PrimaryModule, {
+const MODULE_META: Record<string, {
   label: string;
   icon: typeof MessageCircle;
 }> = {
@@ -37,10 +37,6 @@ const MODULE_META: Record<PrimaryModule, {
   workbench: { label: '工作台', icon: LayoutGrid },
 };
 
-const MODULES = MODULE_ORDER
-  .filter((key): key is PrimaryModule => key !== 'settings')
-  .map((key) => ({ key, ...MODULE_META[key] }));
-
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
 export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
   const user = useAuth((s) => s.user);
@@ -49,6 +45,15 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const active = useUI((s) => s.module);
   const setModule = useUI((s) => s.setModule);
   const setSwitcherOpen = useUI((s) => s.setSwitcherOpen);
+  const registeredModules = useKernelContributions('nav.module');
+  const modules = [
+    { key: 'messages', ...MODULE_META.messages },
+    ...registeredModules.map((module) => ({
+      key: module.id,
+      label: module.label,
+      icon: module.icon ?? MODULE_META[module.id]?.icon ?? Blocks,
+    })),
+  ];
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
@@ -176,7 +181,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
 
       {/* 模块列表 */}
       <div className="flex flex-1 flex-col gap-0.5">
-        {MODULES.map(({ key, label, icon: Icon }) => {
+        {modules.map(({ key, label, icon: Icon }) => {
           const isActive = key === active;
           return (
             <button

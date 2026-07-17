@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { PanelLeftOpen } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
-import { MODULE_ORDER, useUI } from '../stores/ui';
+import { useUI } from '../stores/ui';
+import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import {
@@ -19,15 +20,9 @@ import ConversationList from '../components/ConversationList';
 import ChatArea from '../components/ChatArea';
 import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
-import Toaster from '../components/Toaster';
-import ContactsPage from './ContactsPage';
-import TodosPage from './TodosPage';
-import CalendarPage from './CalendarPage';
-import WorkbenchPage from './WorkbenchPage';
 import SettingsPage from './SettingsPage';
 import FirstUseChecklist from '../components/FirstUseChecklist';
 import { StartDMDialog } from '../components/NewChatDialogs';
-import { useWorkbench } from '../stores/workbench';
 import { useImLayout } from '../stores/imLayout';
 import {
   MAX_CONVERSATION_WIDTH,
@@ -56,6 +51,7 @@ export default function MainPage() {
   const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
   const module = useUI((s) => s.module);
+  const registeredModules = useKernelContributions('nav.module');
   const switcher = useUI((s) => s.switcherOpen);
   const switcherCommandCenter = useUI((s) => s.switcherCommandCenter);
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
@@ -74,16 +70,12 @@ export default function MainPage() {
     currentWidth: number;
     moved: boolean;
   } | null>(null);
-  const workbenchConfig = useWorkbench((s) => s.config);
   const savedConversationWidth = useImLayout((s) => s.layout.conversationWidth);
   const savedGroupCollapsed = useImLayout((s) => s.layout.groupCollapsed);
   const setConversationWidth = useImLayout((s) => s.setConversationWidth);
   const resetConversationWidth = useImLayout((s) => s.resetConversationWidth);
   const setGroupCollapsed = useImLayout((s) => s.setGroupCollapsed);
-  const workbenchConnected = !!(
-    workbenchConfig &&
-    (workbenchConfig.mode === 'direct' ? workbenchConfig.adoBase : workbenchConfig.bridge)
-  );
+  const ActiveModule = registeredModules.find((candidate) => candidate.id === module)?.render;
 
   useEffect(() => {
     void init();
@@ -234,15 +226,26 @@ export default function MainPage() {
       // Alt+↑/↓ 切换左侧模块
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        const cur = MODULE_ORDER.indexOf(useUI.getState().module);
-        const next = e.key === 'ArrowUp' ? Math.max(0, cur - 1) : Math.min(MODULE_ORDER.length - 1, cur + 1);
-        useUI.getState().setModule(MODULE_ORDER[next]);
+        const moduleOrder = [
+          'messages',
+          ...kernelRegistry.get('nav.module').map((candidate) => candidate.id),
+          'settings',
+        ];
+        const cur = moduleOrder.indexOf(useUI.getState().module);
+        const next = e.key === 'ArrowUp' ? Math.max(0, cur - 1) : Math.min(moduleOrder.length - 1, cur + 1);
+        useUI.getState().setModule(moduleOrder[next]);
         return;
       }
-      // Alt+1~6 直接跳到指定模块
-      if (e.altKey && !mod && key >= '1' && key <= '6') {
+      // Alt+1~9 直接跳到当前可见模块
+      if (e.altKey && !mod && key >= '1' && key <= '9') {
         e.preventDefault();
-        useUI.getState().setModule(MODULE_ORDER[Number(key) - 1]);
+        const moduleOrder = [
+          'messages',
+          ...kernelRegistry.get('nav.module').map((candidate) => candidate.id),
+          'settings',
+        ];
+        const target = moduleOrder[Number(key) - 1];
+        if (target) useUI.getState().setModule(target);
         return;
       }
       if (mod && key === '/') {
@@ -314,16 +317,8 @@ export default function MainPage() {
           </div>
           <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
         </>
-      ) : module === 'todos' ? (
-        <TodosPage />
-      ) : module === 'contacts' ? (
-        <ContactsPage />
-      ) : module === 'calendar' ? (
-        <CalendarPage />
-      ) : module === 'workbench' && workbenchConnected ? (
-        <WorkbenchPage />
-      ) : module === 'workbench' ? (
-        <SettingsPage initialSection="workbench" />
+      ) : ActiveModule ? (
+        <ActiveModule />
       ) : (
         <SettingsPage />
       )}
@@ -340,7 +335,6 @@ export default function MainPage() {
         />
       )}
       <UploadConfirm />
-      <Toaster />
       <FirstUseChecklist
         hasActiveConversation={!!activeRid}
         onStartConversation={() => {

@@ -1,4 +1,4 @@
-import { httpFetch } from './http';
+import { ensureHttpOrigin, httpFetch } from './http';
 
 export type LoginFailureKind =
   | 'invalid_address'
@@ -47,8 +47,10 @@ export function loginFailureMessage(error: unknown): string {
 export async function probeRocketChat(baseUrl: string): Promise<string> {
   let response: Response;
   try {
+    await ensureHttpOrigin(baseUrl);
     response = await httpFetch(`${baseUrl}/api/info`);
   } catch (error) {
+    if (import.meta.env.DEV) throw error;
     throw new Error(classifyLoginFailure(error) === 'invalid_address' ? 'invalid_address' : 'unreachable');
   }
   if (!response.ok) throw new Error(response.status === 404 ? 'not_rocket_chat' : `HTTP ${response.status}`);
