@@ -1,3 +1,49 @@
+# Implementation notes — M8 共享 Agent 与反向 MCP
+
+Plan: `docs/m8-implementation-plan.md`
+
+## Shipped vs planned
+
+- Rocket.Chat 话题现在承载共享 Codex 长会话：指令先成为普通消息，完整回复回到话题，过程事件只留在本机 Agent 面板。
+- 宿主租约、成员首次指挥审批、危险动作审批、串行指令队列、进程中断和 thread resume 均已落地。
+- 反向 MCP 以 `rocketx.exe --mcp` 提供三个只读 Rocket.Chat 上下文工具；可选 Agent Bot 只负责完整回复。
+
+## Decisions
+
+- 协议基线锁定为 `codex-cli 0.144.4`；生成类型与真实 stdio 握手均以同一二进制验证。
+- Rust 只负责受管子进程和 JSONL 传输，TypeScript 负责协议语义、会话和审批。
+- 第一版使用单个受管 stdio 子进程；daemon/proxy 仅在恢复实测证明必要时启用。
+- 当前 11 类 server-initiated request 必须显式处理，未知请求安全拒绝。
+- Codex 默认只读；工作区写入和执行动作必须由当前宿主审批，显式敏感路径请求和审批命令会被拒绝。
+- MCP 与 Bot token 只存 Windows 凭据库；Bot 发送前还必须匹配当前 Rocket.Chat 服务器，避免切换账号后跨服务器代发。
+
+## Surprises
+
+- 本机 PATH CLI 为 `0.144.4`，桌面内置 CLI 为 `0.144.2`；两者都能握手，但不能共享同一份未校验的协议绑定。
+- 当前服务端主动请求面比蓝图列举更宽，包含认证刷新、attestation、当前时间和旧版审批兼容请求。
+- PowerShell 不会按 CLI 管道语义等待 Windows GUI 子系统程序；release MCP 必须用真实客户端的子进程 stdio pipe 方式验证，不能用 PowerShell 管道是否有输出判断。
+
+## Verification
+
+- `codex app-server generate-ts --experimental` 已生成 671 个类型文件，`pnpm codex:protocol:check` 确认无漂移。
+- `pnpm smoke:codex-app-server` 在真实 `0.144.4` 进程完成 initialize、thread/start、turn/start、流式响应和 turn complete。
+- `pnpm test:pure`（219）、`pnpm test:regression`（224）、`pnpm smoke`（53）、`pnpm test:classify`（5）、`pnpm typecheck`、`pnpm build` 全部通过。
+- `cargo test --locked`（9）通过；`tauri build --no-bundle` 生成 v0.17.0 release 二进制。
+- Node 子进程以 stdin/stdout pipe 启动 release `rocketx.exe --mcp`，initialize 返回协议 `2025-06-18`，tools/list 仅返回三个只读工具。
+- 仓库及待提交 diff 的密钥样式扫描为零命中；合成密钥脱敏测试使用运行时拼接，避免假阳性。
+
+## Verification limits
+
+- 本轮 Windows Computer Use 官方 JavaScript 能力列表为空，无法完成 Agent 面板的真实窗口视觉验收；协议、状态机、生产构建和 release 进程路径已由自动化与真实子进程覆盖。
+- 反向 MCP 的三个工具未使用真实 Rocket.Chat token 从外部客户端调用；认证请求、URL 编码和工具结果契约由 Rust 单元测试与现有 Rocket.Chat 实服 smoke 分别覆盖。
+- **未关闭的安全门禁**：Codex 0.144.4 在 Windows 上的 read-only sandbox 与 permission profile 均未能阻止读取工作区内 `.env` 或工作区外文件。本轮实测确认 `:minimal + :project_roots` 和精确 deny-read 规则仍可读出探针内容，因此提示词、输入预检和输出脱敏不能被宣称为文件系统隔离。M8 合并前必须选择隔离 runner（推荐）或显式修改蓝图安全验收。
+
+## Questions for review
+
+- M8 是否接受新增隔离 runner 依赖（例如 Linux/WSL 容器 + 只挂载会话工作区），还是将 Windows 固定目录模式降级为“显式风险确认 + 输出防泄漏”？当前实现不应在这个选择前合并。
+
+---
+
 # Implementation notes — 消息搜索无限滚动
 
 ## Shipped vs planned

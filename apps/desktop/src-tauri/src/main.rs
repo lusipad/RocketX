@@ -1,7 +1,10 @@
 // 阻止 Windows release 版本弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_bot;
 mod diagnostics;
+mod mcp;
+mod proc;
 mod winauth;
 
 use std::{
@@ -207,7 +210,9 @@ fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult,
         }
         let item = event.get("item");
         if event.get("type").and_then(|value| value.as_str()) == Some("item.completed")
-            && item.and_then(|value| value.get("type")).and_then(|value| value.as_str())
+            && item
+                .and_then(|value| value.get("type"))
+                .and_then(|value| value.as_str())
                 == Some("agent_message")
         {
             if let Some(value) = item
@@ -272,12 +277,9 @@ fn allow_http_origin(
     }
     let capability = CapabilityBuilder::new(format!("http-origin-{}", allowed.len()))
         .webview("main")
-        .permission_scoped(
-            "http:default",
-            vec![origin.clone()],
-            Vec::<String>::new(),
-        );
-    app.add_capability(capability).map_err(|error| error.to_string())?;
+        .permission_scoped("http:default", vec![origin.clone()], Vec::<String>::new());
+    app.add_capability(capability)
+        .map_err(|error| error.to_string())?;
     allowed.insert(origin.clone());
     Ok(origin)
 }
@@ -456,6 +458,13 @@ mod tray_icon_tests {
 }
 
 fn main() {
+    if std::env::args().any(|argument| argument == "--mcp") {
+        if let Err(error) = mcp::run_stdio() {
+            eprintln!("rcx-mcp: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     tauri::Builder::default()
         // 必须最先注册：第二次启动立即退出，并把已存在的主窗口带回前台。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -474,10 +483,24 @@ fn main() {
             ai_secret_set,
             ai_secret_get,
             ai_secret_delete,
-            codex_exec_once
+            codex_exec_once,
+            proc::codex_app_server_start,
+            proc::codex_app_server_write,
+            proc::codex_app_server_stop,
+            proc::codex_agent_workspace,
+            mcp::mcp_config_enable,
+            mcp::mcp_config_status,
+            mcp::mcp_config_disable,
+            agent_bot::agent_bot_config_set,
+            agent_bot::agent_bot_config_status,
+            agent_bot::agent_bot_config_delete,
+            agent_bot::agent_bot_send
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(AiKeychainLock(Mutex::new(())))
+        .manage(proc::CodexAppServerState::default())
+        .manage(mcp::McpConfigLock(Mutex::new(())))
+        .manage(agent_bot::AgentBotLock(Mutex::new(())))
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
         .plugin(tauri_plugin_http::init())
@@ -551,6 +574,11 @@ fn main() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running RocketX");
+        .build(tauri::generate_context!())
+        .expect("error while building RocketX")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                proc::shutdown(app);
+            }
+        });
 }

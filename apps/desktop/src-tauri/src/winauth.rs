@@ -59,13 +59,9 @@ mod imp {
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) => (
                 h.to_string(),
-                p.parse::<u16>()
-                    .map_err(|_| format!("端口不是数字：{p}"))?,
+                p.parse::<u16>().map_err(|_| format!("端口不是数字：{p}"))?,
             ),
-            None => (
-                authority.to_string(),
-                if secure { 443u16 } else { 80u16 },
-            ),
+            None => (authority.to_string(), if secure { 443u16 } else { 80u16 }),
         };
         if host.is_empty() {
             return Err(format!("地址里没有主机名：{url}"));
@@ -148,11 +144,13 @@ mod imp {
         Ok(())
     }
 
-    pub fn request(
+    fn request_inner(
         url: &str,
         method: &str,
         body: Option<&str>,
         content_type: &str,
+        extra_headers: &str,
+        integrated_auth: bool,
     ) -> Result<HttpResponse, String> {
         let (host, port, path, secure) = split_url(url)?;
 
@@ -214,13 +212,14 @@ mod imp {
             .map_err(|e| format!("设置自动登录策略失败：{e}"))?;
         }
 
-        let headers = format!("Content-Type: {content_type}\r\nAccept: application/json\r\n");
+        let headers =
+            format!("Content-Type: {content_type}\r\nAccept: application/json\r\n{extra_headers}");
         send(request.0, &headers, body)?;
         let mut status = query_status(request.0)?;
 
         // 401：问服务器支持哪些认证方式，选一个，用「当前用户凭据」(NULL/NULL) 重发。
         // 这就是 NTLM/Negotiate 的挑战-应答握手，WinHTTP 内部替我们走完。
-        if status == 401 {
+        if integrated_auth && status == 401 {
             let mut supported: u32 = 0;
             let mut first: u32 = 0;
             let mut target: u32 = 0;
@@ -255,6 +254,35 @@ mod imp {
         Ok(HttpResponse { status, body })
     }
 
+    pub fn request(
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+        content_type: &str,
+    ) -> Result<HttpResponse, String> {
+        request_inner(url, method, body, content_type, "", true)
+    }
+
+    pub fn token_request(
+        url: &str,
+        method: &str,
+        user_id: &str,
+        token: &str,
+        body: Option<&str>,
+    ) -> Result<HttpResponse, String> {
+        if user_id.is_empty()
+            || token.is_empty()
+            || user_id.len() > 512
+            || token.len() > 8192
+            || user_id.chars().any(char::is_control)
+            || token.chars().any(char::is_control)
+        {
+            return Err("Rocket.Chat credentials are invalid".to_string());
+        }
+        let headers = format!("X-User-Id: {user_id}\r\nX-Auth-Token: {token}\r\n");
+        request_inner(url, method, body, "application/json", &headers, false)
+    }
+
     // PWSTR 只在个别 API 里需要，这里显式引用一下避免未使用告警
     #[allow(dead_code)]
     fn _unused(_: PWSTR) {}
@@ -272,6 +300,16 @@ mod imp {
     ) -> Result<HttpResponse, String> {
         Err("Windows 集成认证只在 Windows 上可用，请改用 PAT".into())
     }
+
+    pub fn token_request(
+        _url: &str,
+        _method: &str,
+        _user_id: &str,
+        _token: &str,
+        _body: Option<&str>,
+    ) -> Result<HttpResponse, String> {
+        Err("RocketX reverse MCP currently requires Windows".into())
+    }
 }
 
 /// 同步版本：给 examples / 测试用（不依赖 Tauri 运行时）
@@ -282,6 +320,16 @@ pub fn blocking_request(
     content_type: &str,
 ) -> Result<HttpResponse, String> {
     imp::request(url, method, body, content_type)
+}
+
+pub fn blocking_token_request(
+    url: &str,
+    method: &str,
+    user_id: &str,
+    token: &str,
+    body: Option<&str>,
+) -> Result<HttpResponse, String> {
+    imp::token_request(url, method, user_id, token, body)
 }
 
 /// 用 Windows 当前登录用户的凭据发一次 HTTP 请求（NTLM / Negotiate 自动握手）。

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { tsMs } from '@rcx/rc-client';
-import { AtSign, SendHorizontal, Smile } from 'lucide-react';
+import { AtSign, Bot, SendHorizontal, Smile } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
@@ -21,6 +21,7 @@ export default function ThreadPanel() {
   const send = useChat((s) => s.send);
   const runSlash = useChat((s) => s.runSlash);
   const emitTyping = useChat((s) => s.emitTyping);
+  const setPanel = useChat((s) => s.setPanel);
   const myId = useAuth((s) => s.user?._id);
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const prefsLoaded = usePrefs((s) => s.loaded);
@@ -104,7 +105,20 @@ export default function ThreadPanel() {
   };
 
   return (
-    <PanelShell title="话题">
+    <PanelShell
+      title={
+        <span className="flex items-center gap-2">
+          话题
+          <button
+            title="共享 Agent"
+            onClick={() => setPanel({ kind: 'agent', tmid: rootId })}
+            className="rounded p-1 text-ink-2 hover:bg-fill-hover hover:text-primary"
+          >
+            <Bot size={16} />
+          </button>
+        </span>
+      }
+    >
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         {root ? (
           <>

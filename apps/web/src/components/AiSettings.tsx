@@ -11,6 +11,8 @@ import { deleteAiSecret, setAiSecret } from '../kernel/ai/secrets';
 import { testAiProvider } from '../kernel/ai/runtime';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
+import ReverseMcpSettings from './ReverseMcpSettings';
+import AgentBotSettings from './AgentBotSettings';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -297,6 +299,9 @@ export default function AiSettings() {
           })}
         </div>
       </section>
+
+      <ReverseMcpSettings />
+      <AgentBotSettings />
 
       <button
         onClick={() => void save()}
