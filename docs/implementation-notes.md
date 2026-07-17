@@ -737,7 +737,7 @@ Plan: [`m11-implementation-plan.md`](m11-implementation-plan.md)
 
 SDK、CLI、三个正式样板、固定版本 Docker 栈与双语开源文档已按计划落地，manifest 契约只有
 SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Windows Release 均已通过；三平台
-安装包交给标签工作流最终验证。M11 实现可合并，但蓝图的外部 G3/G4 真人计时和 README
+安装包交给标签工作流最终验证。M11 实现已通过 PR #72 合并，但蓝图的外部 G3/G4 真人计时和 README
 真实截图/GIF 尚未取得，因此不得把 v1.0.0 标记为正式发布。
 
 ## Decisions
@@ -746,6 +746,8 @@ SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Wind
 - `create-rcx-app` 单包暴露 `create-rcx-app` 与 `rcx-app` 两个命令；开发预览不放宽宿主 iframe CSP。
 - Web 的 `manifest.ts`/`types.ts` 使用指向 SDK `src` 的薄重导出，因为 Vite 6 不读取 TypeScript
   `paths`，而 fresh clone 尚无发布用 `dist`；这只改变开发期解析路径，契约实现仍只有 SDK 一份。
+- 标签合同要求严格 SemVer、最新 `main`、全仓版本一致、已定稿 CHANGELOG、真实 PNG/GIF 和两位
+  不同外部开发者证据；桌面工作流只准备草稿，npm 与 GitHub Release 分别显式批准。
 
 ## Deviations
 
@@ -753,12 +755,16 @@ SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Wind
   localhost 信任边界，也不放宽宿主 CSP。
 - npm 包已通过真实 tarball 与临时项目安装验证，但本机 `npm whoami` 返回 `ENEEDAUTH`；在
   registry 账号和 `@rcx` scope 权限确认前不执行公开发布。
+- 视觉素材优先尝试正式浏览器控制通道；gstack 后台进程与应用内浏览器初始化均在本机运行时失败，
+  因此保留真实人工录制门禁，不用 mock 截图代替。
 
 ## Surprises
 
 - Windows 从 Node 启动 `.cmd` 时，`cmd /s` 和对所有参数统一加引号会把引号传给 pnpm；
   clean-room 启动器改为只引用确实需要引用的参数。
 - Codex 0.144.4 协议生成树有 671 个文件；旧树必须整体重新生成，不能只更新客户端版本常量。
+- 原桌面工作流会在标签构建结束后立即把草稿转正式，且重跑会把旧 `SHA256SUMS.txt` 自身写入新哈希；
+  发布加固把草稿准备和公开发布拆开，并在资产目录内生成可直接 `sha256sum -c` 的文件名。
 
 ## Questions for review
 

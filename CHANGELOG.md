@@ -12,12 +12,14 @@
 ### 发布工程
 
 - 统一仓库、Web、桌面、SDK、CLI 与桥接服务版本为 1.0.0，并把 Codex 0.144.4 的 671 个协议生成文件纳入 CI 一致性门禁。
-- 三平台 Release 工作流先执行协议、类型、测试、应用生态和 Web 构建门禁，再核验 Windows、macOS、Linux 产物并生成 `SHA256SUMS.txt` 后发布。
+- 三平台 Release 工作流先执行协议、类型、测试、应用生态和 Web 构建门禁，再核验 Windows、macOS、Linux 产物、Updater 元数据与签名，并生成可直接校验的 `SHA256SUMS.txt`。
+- 标签只能来自版本完全一致的最新 `main`，且必须已提交两位外部开发者的 30 分钟验收证据和真实 README PNG/GIF；桌面构建只准备草稿，npm 与 GitHub Release 均由受保护的独立工作流显式发布。
 - 本地 clean-room 应用生态、三服务 Docker、真实 Rocket.Chat、Codex app-server、Agent Runner、Rust 和 Windows Release 已通过；正式标签仍以外部开发者 G3/G4 真人计时及三平台 CI 为门禁。
 
 ### 安全
 
 - CLI 开发服务只绑定回环地址；应用 manifest、entry 路径和权限继续由 SDK 单一解析器校验，不为开发模式放宽宿主 CSP。
+- 发布确认输入只通过工作流环境变量进入 shell；同版本 npm 包已存在时必须与标签提交一致，避免重跑覆盖或命令注入。
 - Compose 明确定位为本地/评估基线；生产部署仍必须配置 TLS、强凭据、网络收敛与备份恢复。
 
 ## v0.19.0 - 2026-07-17
