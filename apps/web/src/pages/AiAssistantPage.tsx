@@ -11,6 +11,7 @@ import {
   Send,
   Sparkles,
   SquareCheckBig,
+  TerminalSquare,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import CreateWorkItemDialog from '../components/CreateWorkItemDialog';
@@ -85,7 +86,7 @@ export default function AiAssistantPage() {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [lines, setLines] = useState<AssistantLine[]>([
-    { id: 'welcome', role: 'assistant', text: '可以直接说：搜索消息、查询待办/日程/工作项/PR/构建，或创建 Azure DevOps 工作项。' },
+    { id: 'welcome', role: 'assistant', text: '搜索、查询和创建工作项草案不需要 DeepSeek；普通聊天、读代码和本地干活请直接打开 Codex。' },
   ]);
   const [results, setResults] = useState<AssistantResult[]>([]);
   const [draft, setDraft] = useState<WorkItemDraft | null>(null);
@@ -283,7 +284,7 @@ export default function AiAssistantPage() {
         command = fallbackAssistantCommand(value);
         localFallback = true;
       }
-      const prefix = localFallback ? 'DeepSeek 暂不可用，已按本地安全规则处理。' : '';
+      const prefix = localFallback ? 'Codex 暂不可用，已按本地安全规则处理。' : '';
       if (command.type === 'search') {
         const next = await searchEverything(command.query);
         setResults(next);
@@ -311,10 +312,15 @@ export default function AiAssistantPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Sparkles size={20} className="text-primary" />AI 助手</div>
-            <p className="mt-1 text-sm text-ink-3">用自然语言搜索 RocketX 与 Azure DevOps；写操作始终需要你确认。</p>
+            <p className="mt-1 text-sm text-ink-3">本地规则处理明确查询，模糊表达由 Codex 解析；写操作始终需要你确认。</p>
           </div>
-          <div className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-3">
-            {config ? 'ADO 已连接' : 'ADO 未配置'} · {getServerBase() ? 'Rocket.Chat 已连接' : '当前站点'}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button onClick={() => useUI.getState().setModule('codex')} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
+              <TerminalSquare size={13} />聊天与本地工作
+            </button>
+            <div className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-3">
+              {config ? 'ADO 已连接' : 'ADO 未配置'} · {getServerBase() ? 'Rocket.Chat 已连接' : '当前站点'}
+            </div>
           </div>
         </div>
 
@@ -325,7 +331,7 @@ export default function AiAssistantPage() {
               <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>{line.text}</div>
             </div>
           ))}
-          {running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />DeepSeek 正在理解请求…</div> : null}
+          {running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div> : null}
 
           {draft ? (
             <div className="ml-10 rounded-lg border border-primary/30 bg-primary-light/40 p-4">

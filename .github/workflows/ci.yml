@@ -42,15 +42,6 @@ jobs:
       - name: UI 渲染冒烟（登录、消息、搜索与右键菜单）
         run: pnpm test:ui
 
-      - name: Agent Runner 隔离边界
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          pnpm agent:runner:test
-        env:
-          # 托管机的 Docker-in-Docker 禁止 bubblewrap 配置 loopback；从刚构建的
-          # 产品镜像提取同一二进制和资源，在宿主执行同一权限 profile。
-          ROCKETX_RUNNER_TEST_HOST: "1"
-
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build
 

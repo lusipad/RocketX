@@ -8,7 +8,6 @@ import {
 } from '../agent/safety';
 import { isTauri } from '../lib/http';
 
-const RUNNER_WORKSPACE = '/workspace';
 const STORAGE_PREFIX = 'rcx-local-codex-v1';
 const TRACE_LIMIT = 200;
 const MESSAGE_LIMIT = 100;
@@ -119,8 +118,16 @@ function persist(state: LocalCodexState): void {
   }
 }
 
-function permissionProfile(mode: LocalCodexState['sandboxMode']): string {
-  return mode === 'workspace-write' ? 'rocketx_write' : 'rocketx_read';
+function sandboxPolicy(mode: LocalCodexState['sandboxMode'], workspaceRoot: string) {
+  return mode === 'workspace-write'
+    ? {
+        type: 'workspaceWrite' as const,
+        writableRoots: [workspaceRoot],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      }
+    : { type: 'readOnly' as const, networkAccess: false };
 }
 
 function trace(kind: LocalCodexTrace['kind'], text: string): void {
@@ -345,11 +352,11 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       const appServer = await ensureClient();
       const state = get();
       const response = await appServer.request('thread/start', {
-        cwd: RUNNER_WORKSPACE,
-        runtimeWorkspaceRoots: [RUNNER_WORKSPACE],
+        cwd: state.workspaceRoot,
+        runtimeWorkspaceRoots: [state.workspaceRoot],
         approvalPolicy: APPROVAL_POLICY,
         approvalsReviewer: 'user',
-        permissions: permissionProfile(state.sandboxMode),
+        sandbox: state.sandboxMode,
       });
       set({ threadId: response.thread.id, status: 'ready', error: null });
       persist(get());
@@ -369,11 +376,11 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       const appServer = await ensureClient();
       const response = await appServer.request('thread/resume', {
         threadId: state.threadId,
-        cwd: RUNNER_WORKSPACE,
-        runtimeWorkspaceRoots: [RUNNER_WORKSPACE],
+        cwd: state.workspaceRoot,
+        runtimeWorkspaceRoots: [state.workspaceRoot],
         approvalPolicy: APPROVAL_POLICY,
         approvalsReviewer: 'user',
-        permissions: permissionProfile(state.sandboxMode),
+        sandbox: state.sandboxMode,
         excludeTurns: true,
       });
       set({ threadId: response.thread.id, status: 'ready', error: null });
@@ -398,11 +405,11 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       const response = await appServer.request('turn/start', {
         threadId: state.threadId,
         input: [{ type: 'text', text: input, text_elements: [] }],
-        cwd: RUNNER_WORKSPACE,
-        runtimeWorkspaceRoots: [RUNNER_WORKSPACE],
+        cwd: state.workspaceRoot,
+        runtimeWorkspaceRoots: [state.workspaceRoot],
         approvalPolicy: APPROVAL_POLICY,
         approvalsReviewer: 'user',
-        permissions: permissionProfile(get().sandboxMode),
+        sandboxPolicy: sandboxPolicy(get().sandboxMode, state.workspaceRoot),
       });
       set({ activeTurnId: response.turn.id, status: 'running' });
     } catch (error) {
@@ -420,13 +427,13 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
     let permissions = {};
     if (accepted) {
       try {
-        validateApprovalPaths(params, [RUNNER_WORKSPACE]);
+        validateApprovalPaths(params, [get().workspaceRoot]);
         if (commandRequestMentionsSensitivePath(params.command)) throw new Error('命令涉及敏感路径');
         const requested = params.permissions ?? params.additionalPermissions;
         if (requested) {
           permissions = validatePermissionRequest(
             requested as Parameters<typeof validatePermissionRequest>[0],
-            [RUNNER_WORKSPACE],
+            [get().workspaceRoot],
           );
         }
       } catch (error) {

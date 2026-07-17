@@ -31,7 +31,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 
 The detailed product and technical scope lives in the [blueprint](docs/blueprint.md). See the [architecture notes](docs/architecture.md), [compatibility matrix](docs/compatibility.md), and [changelog](CHANGELOG.md) for evidence and constraints.
 
-## Self-host with Docker
+## Optional self-host with Docker
 
 Prerequisite: Docker Engine or Docker Desktop with Compose v2.
 
@@ -52,11 +52,12 @@ docker compose -f docker/docker-compose.yml down
 
 ## Develop locally
 
-Prerequisites: Node.js 22, pnpm 11.12.0, and Docker. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work.
+Prerequisites: Node.js 22 and pnpm 11.12.0. Docker is only needed when using the bundled Rocket.Chat self-host stack. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work, and Codex features require the compatible Codex CLI on `PATH`.
 
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
+# Optional: start the bundled Rocket.Chat development server.
 docker compose -f docker/docker-compose.yml up -d
 pnpm dev
 ```
@@ -69,7 +70,7 @@ Desktop development:
 pnpm --filter @rcx/desktop dev
 ```
 
-After signing in, open **AI Assistant** from the primary navigation to search messages and work data, query Azure DevOps work items, pull requests, and builds, or prepare a work-item draft. Every write still requires confirmation in the existing creation dialog. The desktop-only **Codex** entry lets you choose a local project directory and run or resume an isolated Codex session for that directory. Configure DeepSeek or another provider under **Settings → AI Steward**; API keys remain in the operating-system credential store.
+After signing in, open **Codex** from the primary navigation to chat or work directly in a chosen local project directory. **AI Assistant** searches messages and work data, queries Azure DevOps work items, pull requests, and builds, and prepares work-item drafts; explicit requests run locally while ambiguous intent uses `codex exec`. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers under **Settings → AI Steward** are optional enhancements for summaries, reviews, and text features; API keys remain in the operating-system credential store.
 
 ## Verify changes
 

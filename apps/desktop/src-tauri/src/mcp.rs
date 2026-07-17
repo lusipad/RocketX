@@ -275,7 +275,7 @@ fn handle(message: Value) -> Option<Value> {
             json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {"name": "rcx-mcp", "title": "RocketX Chat Context", "version": "0.20.0"},
+                "serverInfo": {"name": "rcx-mcp", "title": "RocketX Chat Context", "version": "0.20.1"},
                 "instructions": "Read-only access to chat context visible to the configured Rocket.Chat account."
             }),
         )),

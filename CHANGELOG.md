@@ -1,5 +1,19 @@
 # 更新日志
 
+## v0.20.1 - 2026-07-17
+
+### 变更
+
+- Codex 成为默认聊天与本地工作入口：独立入口和共享话题 Agent 都直接在用户选择的本地目录启动 `codex app-server`，不再要求安装、构建或运行 Agent Runner Docker 镜像。
+- AI 助手的明确搜索、查询和工作项草案指令继续本地解析；模糊自然语言改用带 JSON Schema 的 `codex exec` 做白名单意图路由，DeepSeek 降为总结、晨报和文本能力的可选 Provider。
+- 共享 Agent 默认复用 Codex 入口已配置的工作目录；临时附件通过额外运行时根提供，工作区写入仍受 Codex 原生 sandbox 与 RocketX 审批限制。
+- 删除 Agent Runner Dockerfile、安装设置、镜像 smoke 和每次 PR 重建镜像的 CI 步骤；Rocket.Chat、MongoDB 与 RocketX Web 的可选自部署 Compose 保持不变。
+
+### 安全与兼容
+
+- 本地目录现在是真实的 Codex 工作目录，不再映射为容器内 `/workspace`。用户应只选择允许 Codex 读取的目录；网络默认关闭，写入模式只授权当前工作区。
+- Codex CLI 仍锁定并验证为 `0.144.4`；缺失或版本不兼容时直接报错，不回退到外部模型或无沙箱进程。
+
 ## v0.20.0 - 2026-07-17
 
 ### 新增

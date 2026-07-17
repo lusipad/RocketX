@@ -403,12 +403,12 @@ function activateApp(app: InstalledApp): () => void {
 function registerBuiltins(): void {
   const modules = [
     ['today', '今日', TodayPage, undefined],
+    ['codex', 'Codex', CodexPage, TerminalSquare],
     ['ai-assistant', 'AI 助手', AiAssistantPage, Sparkles],
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
     ['contacts', '通讯录', ContactsPage, undefined],
     ['workbench', '工作台', WorkbenchModule, undefined],
-    ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });

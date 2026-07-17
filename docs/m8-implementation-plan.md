@@ -23,9 +23,9 @@ M8 把 Rocket.Chat 话题作为共享 Agent 会话：消息始终先进入 Rocke
 
 ## 实施边界
 
-- Rust 只托管每会话一个固定 Docker Runner 内的 `codex app-server --stdio`、JSONL 输入输出、退出和强制终止；不解释 Agent 业务协议，也不开放任意命令执行入口。
+- Rust 只在用户选择的本地目录托管每会话一个 `codex app-server --stdio`、JSONL 输入输出、退出和强制终止；不解释 Agent 业务协议，也不开放任意命令执行入口。
 - TypeScript 负责生成协议类型、请求关联、会话状态机、审批策略、聊天上下文打包和 UI。
-- 每个话题会话使用独立 stdio 容器和 Codex home，避免多工作区挂载扩大读取面；不引入 daemon/proxy。
+- 每个话题会话使用独立本机 stdio 进程和所选工作目录；不引入 daemon/proxy。
 - 不预先抽象多 Agent Provider；M8 直接绑定 Codex app-server。
 - 会话元数据复用现有 `appData`，使用稳定前缀隔离，不新增 IndexedDB schema。
 - Bot 账号优先；没有 Bot 配置时允许宿主账号降级发送。消息展示标记不参与审批和信任判断。
@@ -42,9 +42,8 @@ M8 把 Rocket.Chat 话题作为共享 Agent 会话：消息始终先进入 Rocke
 
 ## 已关闭门禁
 
-- Windows 原生 `codex-cli 0.144.4` 的 read-only sandbox 不能限制读取范围，因此不再作为 M8 执行路径。
-- 固定 Linux Runner 只挂载单个会话工作区；bubblewrap 权限配置已实测拒绝根目录与嵌套 `.env`、通用 credentials 文件、Codex 认证文件，同时分别验证只读与宿主启用后的工作区写入。
-- Docker 缺失、镜像未安装或 Codex 未登录时安全失败，不回退到原生进程。
+- 用户明确选择本机目录模式；独立 Codex 与共享 Agent 均使用 Codex 原生 OS sandbox，不再构建或运行 Agent Runner 容器。
+- Codex CLI 缺失、版本不兼容或未登录时安全失败；Docker 只服务于可选的 Rocket.Chat 自部署栈。
 
 ## 风险与回退条件
 

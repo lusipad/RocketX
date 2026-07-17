@@ -13,7 +13,6 @@ import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
-import AgentRunnerSettings from './AgentRunnerSettings';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -138,8 +137,8 @@ export default function AiSettings() {
       <div className="rounded-lg border border-line bg-surface p-4 text-sm text-ink-2">
         <div className="font-medium text-ink">模型调用与隐私</div>
         <p className="mt-1 leading-6">
-          DeepSeek 默认使用即将长期支持的 deepseek-v4-flash。桌面端密钥只存系统钥匙串；AI
-          审计只记录 Provider、能力、耗时和结果，不记录提示词或密钥。
+          Codex 默认负责聊天、本地工作和 AI 助手的模糊意图解析，无需配置 DeepSeek。下方 Provider
+          仅用于总结、晨报、翻译等可选能力；桌面端密钥只存系统钥匙串。
         </p>
       </div>
 
@@ -302,7 +301,6 @@ export default function AiSettings() {
       </section>
 
       <ReverseMcpSettings />
-      <AgentRunnerSettings />
       <AgentBotSettings />
 
       <button

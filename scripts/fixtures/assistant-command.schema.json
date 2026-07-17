@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "search",
+        "list_todos",
+        "list_calendar",
+        "list_work_items",
+        "list_pull_requests",
+        "list_builds",
+        "create_work_item",
+        "help"
+      ]
+    },
+    "query": { "type": ["string", "null"] },
+    "failedOnly": { "type": ["boolean", "null"] },
+    "title": { "type": ["string", "null"] },
+    "description": { "type": ["string", "null"] },
+    "workItemType": { "type": ["string", "null"] }
+  },
+  "required": ["type", "query", "failedOnly", "title", "description", "workItemType"],
+  "additionalProperties": false
+}
