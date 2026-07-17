@@ -1,5 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
-import { Blocks } from 'lucide-react';
+import { Blocks, Sparkles, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, rest } from '../lib/client';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
@@ -12,6 +12,8 @@ import CalendarPage from '../pages/CalendarPage';
 import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
 import TodayPage from '../pages/TodayPage';
+import AiAssistantPage from '../pages/AiAssistantPage';
+import CodexPage from '../pages/CodexPage';
 import ThreadPanel from '../components/ThreadPanel';
 import AgentPanel from '../components/AgentPanel';
 import PinPanel from '../components/PinPanel';
@@ -400,14 +402,16 @@ function activateApp(app: InstalledApp): () => void {
 
 function registerBuiltins(): void {
   const modules = [
-    ['today', '今日', TodayPage],
-    ['todos', '待办', TodosPage],
-    ['calendar', '日历', CalendarPage],
-    ['contacts', '通讯录', ContactsPage],
-    ['workbench', '工作台', WorkbenchModule],
+    ['today', '今日', TodayPage, undefined],
+    ['ai-assistant', 'AI 助手', AiAssistantPage, Sparkles],
+    ['todos', '待办', TodosPage, undefined],
+    ['calendar', '日历', CalendarPage, undefined],
+    ['contacts', '通讯录', ContactsPage, undefined],
+    ['workbench', '工作台', WorkbenchModule, undefined],
+    ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
-  for (const [id, label, render] of modules) {
-    kernelRegistry.register('core', 'nav.module', { id, label, render });
+  for (const [id, label, render, icon] of modules) {
+    kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
   }
   const panels = [
     ['thread', ThreadPanel],
