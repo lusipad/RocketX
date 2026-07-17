@@ -206,12 +206,11 @@ export default function GroupFilter({
     setFilter(key);
   };
 
-  const compactCount = (count: number, highlight = false) =>
+  // 窄条只给未读/@ 这类需要注意的数字留角标，会话总数不展示。
+  const compactCount = (count: number) =>
     count > 0 ? (
       <span
-        className={`absolute -right-1 -top-1 min-w-3.5 rounded-full px-0.5 text-center text-[9px] leading-3 text-surface-4 ${
-          highlight ? 'bg-danger' : 'bg-ink-3'
-        }`}
+        className="absolute -right-1 -top-1 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-[9px] leading-3 text-surface-4"
       >
         {count > 9 ? '9+' : count}
       </span>
@@ -246,11 +245,10 @@ export default function GroupFilter({
           }}
           {...dragProps}
           title={folder.name}
-          aria-label={`分组：${folder.name}${count > 0 ? `，${count} 个会话` : ''}`}
+          aria-label={`分组：${folder.name}`}
           className={`${compactBtnCls(active)} ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
         >
           <FolderIcon size={16} />
-          {compactCount(count)}
         </button>
       );
     }
@@ -291,11 +289,11 @@ export default function GroupFilter({
                   key={key}
                   onClick={() => selectFilter(key)}
                   title={label}
-                  aria-label={`${label}${count > 0 ? `，${count} 个会话` : ''}`}
+                  aria-label={`${label}${highlight && count > 0 ? `，${count} 个未读` : ''}`}
                   className={compactBtnCls(active)}
                 >
                   <Icon size={16} />
-                  {compactCount(count, highlight)}
+                  {highlight ? compactCount(count) : null}
                 </button>
               );
             })}
