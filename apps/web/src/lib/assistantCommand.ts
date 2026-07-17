@@ -1,7 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
-import { asRecord, optionalString, requiredString } from '../kernel/ai/features/structured-output';
-import { isTauri } from './http';
-
 export type AssistantCommand =
   | { type: 'search'; query: string }
   | { type: 'list_todos'; query?: string }
@@ -11,37 +7,6 @@ export type AssistantCommand =
   | { type: 'list_builds'; query?: string; failedOnly: boolean }
   | { type: 'create_work_item'; title: string; description?: string; workItemType?: string }
   | { type: 'help' };
-
-export function parseAssistantCommand(value: unknown): AssistantCommand {
-  const result = asRecord(value, 'AI 助手指令');
-  const type = requiredString(result.type, '指令类型');
-  if (type === 'search') return { type, query: requiredString(result.query, '搜索关键词') };
-  if (type === 'create_work_item') {
-    return {
-      type,
-      title: requiredString(result.title, '工作项标题'),
-      description: optionalString(result.description, '工作项描述'),
-      workItemType: optionalString(result.workItemType, '工作项类型'),
-    };
-  }
-  if (type === 'list_builds') {
-    return {
-      type,
-      query: optionalString(result.query, '查询条件'),
-      failedOnly: result.failedOnly === true,
-    };
-  }
-  if (type === 'help') return { type };
-  if (
-    type === 'list_todos' ||
-    type === 'list_calendar' ||
-    type === 'list_work_items' ||
-    type === 'list_pull_requests'
-  ) {
-    return { type, query: optionalString(result.query, '查询条件') };
-  }
-  throw new Error(`AI 助手不支持指令：${type}`);
-}
 
 function queryAfterVerb(text: string): string {
   return text
@@ -81,15 +46,8 @@ export function fallbackAssistantCommand(text: string): AssistantCommand {
   return { type: 'search', query: queryAfterVerb(content) || content };
 }
 
-function hasExplicitLocalIntent(text: string): boolean {
+export function isAssistantWorkCommand(text: string): boolean {
   return /搜索|查找|查询|查看|待办|日历|日程|工作项|构建|\b(?:pr|pull request)\b|拉取请求|合并请求/iu.test(
     text,
   );
-}
-
-export async function understandAssistantCommand(text: string): Promise<AssistantCommand> {
-  const content = text.trim();
-  if (!content) throw new Error('请输入要搜索或处理的内容');
-  if (hasExplicitLocalIntent(content) || !isTauri) return fallbackAssistantCommand(content);
-  return parseAssistantCommand(await invoke<unknown>('codex_assistant_command', { text: content }));
 }

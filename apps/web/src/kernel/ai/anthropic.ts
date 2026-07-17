@@ -56,6 +56,14 @@ interface AnthropicMessage {
   content: string | AnthropicContentBlock[];
 }
 
+function toolInput(argumentsText: string): unknown {
+  try {
+    return JSON.parse(argumentsText || '{}');
+  } catch {
+    return {};
+  }
+}
+
 function assistantContent(message: AiMessage): string | AnthropicContentBlock[] {
   if (!message.toolCalls?.length) return message.content;
   return [
@@ -64,7 +72,7 @@ function assistantContent(message: AiMessage): string | AnthropicContentBlock[] 
       type: 'tool_use' as const,
       id: toolCall.id,
       name: toolCall.name,
-      input: JSON.parse(toolCall.arguments || '{}'),
+      input: toolInput(toolCall.arguments),
     })),
   ];
 }

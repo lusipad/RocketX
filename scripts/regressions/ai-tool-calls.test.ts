@@ -157,6 +157,40 @@ test('Anthropic 映射工具历史、合并同角色消息并解析 input_json_d
   ]);
 });
 
+test('Anthropic 重放非法工具参数时回退为空 input', async () => {
+  let body: Record<string, unknown> = {};
+  const provider = new AnthropicProvider({
+    id: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    model: 'claude-test',
+    locality: 'external',
+    getApiKey: async () => 'secret',
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseResponse(['event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n']);
+    },
+  });
+
+  for await (const _chunk of provider.chat({
+    messages: [{
+      role: 'assistant',
+      content: '我来查询。',
+      toolCalls: [{ id: 'call_1', name: 'list_todos', arguments: '{坏 JSON' }],
+    }],
+    tools: [{ type: 'function', function: { name: 'list_todos', parameters: {} } }],
+  })) {
+    // 消费完整流
+  }
+
+  assert.deepEqual(body.messages, [{
+    role: 'assistant',
+    content: [
+      { type: 'text', text: '我来查询。' },
+      { type: 'tool_use', id: 'call_1', name: 'list_todos', input: {} },
+    ],
+  }]);
+});
+
 test('两个 Provider 不传 tools 时请求体不含 tools 字段', async () => {
   let openAiBody: Record<string, unknown> = {};
   const openAi = new OpenAiCompatibleProvider({

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import CreateWorkItemDialog from '../components/CreateWorkItemDialog';
-import { fallbackAssistantCommand, understandAssistantCommand, type AssistantCommand } from '../lib/assistantCommand';
+import { fallbackAssistantCommand, isAssistantWorkCommand, type AssistantCommand } from '../lib/assistantCommand';
 import { getServerBase, openExternal, realtime, rest } from '../lib/client';
 import { mergeMessageSearchResults, searchLoadedMessages, searchMessagesGlobal } from '../lib/quickSearch';
 import { searchWork } from '../lib/workSearch';
@@ -25,12 +25,7 @@ import { useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
-
-interface AssistantLine {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-}
+import { appendButlerLine, useButler } from '../stores/butler';
 
 interface AssistantResult {
   id: string;
@@ -83,14 +78,17 @@ export default function AiAssistantPage() {
   const builds = useWorkbench((state) => state.builds);
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
   const refreshWorkbench = useWorkbench((state) => state.refresh);
+  const lines = useButler((state) => state.lines);
+  const activity = useButler((state) => state.activity);
+  const butlerRunning = useButler((state) => state.running);
+  const butlerError = useButler((state) => state.error);
+  const askButler = useButler((state) => state.ask);
   const [input, setInput] = useState('');
-  const [running, setRunning] = useState(false);
-  const [lines, setLines] = useState<AssistantLine[]>([
-    { id: 'welcome', role: 'assistant', text: '搜索、查询和创建工作项草案不需要 DeepSeek；普通聊天、读代码和本地干活请直接打开 Codex。' },
-  ]);
+  const [quickRunning, setQuickRunning] = useState(false);
   const [results, setResults] = useState<AssistantResult[]>([]);
   const [draft, setDraft] = useState<WorkItemDraft | null>(null);
   const [createDialog, setCreateDialog] = useState(false);
+  const running = quickRunning || butlerRunning;
 
   useEffect(() => {
     if (config && !lastRefresh) void refreshWorkbench();
@@ -271,38 +269,35 @@ export default function AiAssistantPage() {
     const value = text.trim();
     if (!value || running) return;
     setInput('');
-    setRunning(true);
     setDraft(null);
     setResults([]);
-    setLines((current) => [...current, { id: crypto.randomUUID(), role: 'user', text: value }]);
+    if (!isAssistantWorkCommand(value)) {
+      await askButler(value);
+      return;
+    }
+
+    setQuickRunning(true);
+    appendButlerLine('user', value);
     try {
-      let command: AssistantCommand;
-      let localFallback = false;
-      try {
-        command = await understandAssistantCommand(value);
-      } catch {
-        command = fallbackAssistantCommand(value);
-        localFallback = true;
-      }
-      const prefix = localFallback ? 'Codex 暂不可用，已按本地安全规则处理。' : '';
+      const command: AssistantCommand = fallbackAssistantCommand(value);
       if (command.type === 'search') {
         const next = await searchEverything(command.query);
         setResults(next);
-        setLines((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', text: `${prefix}${prefix ? ' ' : ''}${next.length ? `找到 ${next.length} 条相关结果。` : '没有找到相关结果，可以换个关键词。'}` }]);
+        appendButlerLine('assistant', next.length ? `找到 ${next.length} 条相关结果。` : '没有找到相关结果，可以换个关键词。');
       } else if (command.type === 'create_work_item') {
         setDraft({ title: command.title, description: command.description, workItemType: command.workItemType });
-        setLines((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', text: `${prefix}${prefix ? ' ' : ''}已生成工作项草案。检查后点击“确认创建”，最终字段仍会在创建窗口里由你确认。` }]);
+        appendButlerLine('assistant', '已生成工作项草案。检查后点击“确认创建”，最终字段仍会在创建窗口里由你确认。');
       } else if (command.type === 'help') {
-        setLines((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', text: `${prefix}${prefix ? ' ' : ''}我可以搜索消息/会话/联系人/工作数据，查询待办、日程、工作项、PR、构建，也可以生成工作项创建草案。` }]);
+        appendButlerLine('assistant', '我可以搜索消息/会话/联系人/工作数据，查询待办、日程、工作项、PR、构建，也可以生成工作项创建草案。');
       } else {
         const next = queryResults(command);
         setResults(next);
-        setLines((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', text: `${prefix}${prefix ? ' ' : ''}${next.length ? `查询到 ${next.length} 条记录。` : '当前没有符合条件的记录。'}` }]);
+        appendButlerLine('assistant', next.length ? `查询到 ${next.length} 条记录。` : '当前没有符合条件的记录。');
       }
     } catch (error) {
-      setLines((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', text: `处理失败：${error instanceof Error ? error.message : String(error)}` }]);
+      appendButlerLine('assistant', `处理失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setRunning(false);
+      setQuickRunning(false);
     }
   };
 
@@ -312,7 +307,7 @@ export default function AiAssistantPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Sparkles size={20} className="text-primary" />AI 助手</div>
-            <p className="mt-1 text-sm text-ink-3">本地规则处理明确查询，模糊表达由 Codex 解析；写操作始终需要你确认。</p>
+            <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button onClick={() => useUI.getState().setModule('codex')} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
@@ -331,7 +326,8 @@ export default function AiAssistantPage() {
               <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>{line.text}</div>
             </div>
           ))}
-          {running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div> : null}
+          {butlerError ? <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div> : null}
+          {activity ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />{activity}</div> : running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div> : null}
 
           {draft ? (
             <div className="ml-10 rounded-lg border border-primary/30 bg-primary-light/40 p-4">
