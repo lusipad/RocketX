@@ -1,7 +1,8 @@
-import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, Circle, ExternalLink, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, X } from 'lucide-react';
+import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, Circle, ExternalLink, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
+import { shouldExpandRun } from '../lib/butlerReport';
 import { useAuth } from '../stores/auth';
 import { useCalendar } from '../stores/calendar';
 import { useChat } from '../stores/chat';
@@ -9,7 +10,7 @@ import { useToday } from '../stores/today';
 import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
-import { useRoutines } from '../stores/routines';
+import { useRoutines, type Routine } from '../stores/routines';
 import { renderMarkdown } from '../lib/markdown';
 import { IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
@@ -39,13 +40,63 @@ function routineScheduleLabel(trigger: { time: string; days?: number[] }): strin
   return `${dayText} ${trigger.time}`;
 }
 
-function stripMarkdownInline(text: string): string {
-  return text
-    .replace(/^\s*\|?[-:]+(?:\|[-:]+)+\|?\s*$/gm, ' ')
-    .replace(/^\s*---+\s*$/gm, ' ')
-    .replace(/[#*_`|]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+interface RoutineReportCardProps {
+  routine: Routine;
+  running: boolean;
+  onSetEnabled: (id: string, enabled: boolean) => void;
+  onRunNow: (id: string) => Promise<void>;
+}
+
+function RoutineReportCard({ routine, running, onSetEnabled, onRunNow }: RoutineReportCardProps) {
+  const latest = routine.runs[0];
+  const [expanded, setExpanded] = useState(() => shouldExpandRun(latest, Date.now()));
+  const status = latest
+    ? latest.status === 'ok'
+      ? { label: '成功', dotClassName: 'bg-success' }
+      : { label: '失败', dotClassName: 'bg-danger' }
+    : { label: '未运行', dotClassName: 'bg-ink-3' };
+
+  const handleRunNow = async () => {
+    await onRunNow(routine.id);
+    setExpanded(true);
+  };
+
+  return (
+    <div className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+          <input className="accent-primary" type="checkbox" checked={routine.enabled} onChange={(event) => onSetEnabled(routine.id, event.target.checked)} />
+          <span className="truncate">{routine.name}</span>
+        </label>
+        <span className="shrink-0 text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
+          <span className={`h-1.5 w-1.5 rounded-full ${status.dotClassName}`} />
+          {latest ? `${displayTime(latest.at)} · ${status.label}` : status.label}
+        </span>
+        <button title="立即运行" aria-label={`立即运行${routine.name}`} onClick={() => void handleRunNow()} disabled={running} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50">
+          {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+        </button>
+        {latest ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={expanded ? `收起${routine.name}报告` : `展开${routine.name}报告`}
+            onClick={() => setExpanded((value) => !value)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-fill-hover hover:text-ink"
+          >
+            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+        ) : null}
+      </div>
+      {latest && expanded ? (
+        <div className="mt-3 border-t border-line pt-3">
+          {latest.status === 'ok'
+            ? <div className="text-sm leading-6 text-ink">{renderMarkdown(latest.text)}</div>
+            : <p className="text-sm leading-6 text-danger">{latest.text}</p>}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function TodayPage() {
@@ -156,40 +207,15 @@ export default function TodayPage() {
             </div>
           ) : null}
           <div className="mt-3 space-y-2">
-            {routines.map((routine) => {
-              const latest = routine.runs[0];
-              const running = runningIds.includes(routine.id);
-              const previewText = latest ? stripMarkdownInline(latest.text) : '';
-              const preview = previewText.slice(0, 200);
-              const status = latest
-                ? latest.status === 'ok'
-                  ? { label: '成功', dotClassName: 'bg-success' }
-                  : { label: '失败', dotClassName: 'bg-danger' }
-                : { label: '未运行', dotClassName: 'bg-ink-3' };
-              return (
-                <div key={routine.id} className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm font-medium text-ink">
-                      <input className="accent-primary" type="checkbox" checked={routine.enabled} onChange={(event) => setRoutineEnabled(routine.id, event.target.checked)} />
-                      <span className="truncate">{routine.name}</span>
-                    </label>
-                    <span className="shrink-0 text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
-                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
-                      <span className={`h-1.5 w-1.5 rounded-full ${status.dotClassName}`} />{status.label}
-                    </span>
-                    <button title="立即运行" aria-label={`立即运行${routine.name}`} onClick={() => void runRoutineNow(routine.id)} disabled={running} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50">
-                      {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-                    </button>
-                  </div>
-                  {latest ? (
-                    <details className="mt-2 text-xs text-ink-3">
-                      <summary className="cursor-pointer list-none">{displayTime(latest.at)} · {latest.status === 'ok' ? '成功' : '失败'} · {preview}{previewText.length > 200 ? '…' : ''}</summary>
-                      <div className="mt-2 rounded bg-fill-1 p-2 text-sm leading-6 text-ink">{renderMarkdown(latest.text)}</div>
-                    </details>
-                  ) : null}
-                </div>
-              );
-            })}
+            {routines.map((routine) => (
+              <RoutineReportCard
+                key={routine.id}
+                routine={routine}
+                running={runningIds.includes(routine.id)}
+                onSetEnabled={setRoutineEnabled}
+                onRunNow={runRoutineNow}
+              />
+            ))}
           </div>
         </section>
 
