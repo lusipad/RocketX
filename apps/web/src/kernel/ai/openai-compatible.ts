@@ -4,6 +4,7 @@ import type {
   AiMessage,
   AiProvider,
   AiProviderLocality,
+  AiToolCall,
   AiUsage,
 } from './provider';
 
@@ -26,7 +27,15 @@ interface OpenAiUsage {
 
 interface OpenAiChunkPayload {
   choices?: Array<{
-    delta?: { content?: string | null; reasoning_content?: string | null };
+    delta?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
     finish_reason?: string | null;
   }>;
   usage?: OpenAiUsage | null;
@@ -45,12 +54,21 @@ function usage(value: OpenAiUsage | null | undefined): AiUsage | undefined {
   };
 }
 
-function apiMessages(messages: AiMessage[]): Array<Record<string, string>> {
+function apiMessages(messages: AiMessage[]): Array<Record<string, unknown>> {
   return messages.map((message) => ({
     role: message.role,
     content: message.content,
     ...(message.name ? { name: message.name } : {}),
     ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+    ...(message.role === 'assistant' && message.toolCalls?.length
+      ? {
+          tool_calls: message.toolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            type: 'function',
+            function: { name: toolCall.name, arguments: toolCall.arguments },
+          })),
+        }
+      : {}),
   }));
 }
 
@@ -59,11 +77,21 @@ async function errorMessage(response: Response): Promise<string> {
   return `AI 请求失败（HTTP ${response.status}）${body ? `: ${body}` : ''}`;
 }
 
-async function* parseSse(response: Response): AsyncGenerator<AiChunk> {
+async function* parseSse(response: Response, parseToolCalls: boolean): AsyncGenerator<AiChunk> {
   if (!response.body) throw new Error('AI 流式响应没有响应体');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  const toolCalls = new Map<number, AiToolCall>();
+
+  const takeToolCalls = (): AiToolCall[] | undefined => {
+    if (!toolCalls.size) return undefined;
+    const result = [...toolCalls.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, toolCall]) => toolCall);
+    toolCalls.clear();
+    return result;
+  };
 
   const consume = function* (event: string): Generator<AiChunk> {
     for (const line of event.split(/\r?\n/)) {
@@ -76,8 +104,23 @@ async function* parseSse(response: Response): AsyncGenerator<AiChunk> {
       const reasoning = choice?.delta?.reasoning_content ?? undefined;
       const finishReason = choice?.finish_reason ?? undefined;
       const tokenUsage = usage(payload.usage);
+      if (parseToolCalls) {
+        for (const partial of choice?.delta?.tool_calls ?? []) {
+          const current = toolCalls.get(partial.index) ?? { id: '', name: '', arguments: '' };
+          toolCalls.set(partial.index, {
+            id: partial.id ?? current.id,
+            name: partial.function?.name ?? current.name,
+            arguments: current.arguments + (partial.function?.arguments ?? ''),
+          });
+        }
+      }
+      const completedToolCalls = finishReason ? takeToolCalls() : undefined;
       if (content || reasoning || finishReason || tokenUsage) {
-        yield { content, reasoning, finishReason, usage: tokenUsage };
+        if (completedToolCalls) {
+          yield { content, reasoning, finishReason, usage: tokenUsage, toolCalls: completedToolCalls };
+        } else {
+          yield { content, reasoning, finishReason, usage: tokenUsage };
+        }
       }
     }
   };
@@ -92,6 +135,8 @@ async function* parseSse(response: Response): AsyncGenerator<AiChunk> {
       if (done) break;
     }
     if (buffer.trim()) yield* consume(buffer);
+    const completedToolCalls = takeToolCalls();
+    if (completedToolCalls) yield { toolCalls: completedToolCalls };
   } finally {
     reader.releaseLock();
   }
@@ -146,7 +191,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
       },
     );
     if (!response.ok) throw new Error(await errorMessage(response));
-    yield* parseSse(response);
+    yield* parseSse(response, !!request.tools?.length);
   }
 
   async embed(texts: string[]): Promise<number[][]> {
