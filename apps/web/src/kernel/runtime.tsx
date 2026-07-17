@@ -1,5 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
-import { Blocks, Sparkles, TerminalSquare } from 'lucide-react';
+import { Blocks, Bot, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, rest } from '../lib/client';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
@@ -406,12 +406,12 @@ function activateApp(app: InstalledApp): () => void {
 function registerBuiltins(): void {
   const modules = [
     ['today', '今日', TodayPage, undefined],
-    ['codex', 'Codex', CodexPage, TerminalSquare],
-    ['ai-assistant', 'AI 助手', AiAssistantPage, Sparkles],
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
-    ['contacts', '通讯录', ContactsPage, undefined],
     ['workbench', '工作台', WorkbenchModule, undefined],
+    ['contacts', '通讯录', ContactsPage, undefined],
+    ['ai-assistant', '管家', AiAssistantPage, Bot],
+    ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });

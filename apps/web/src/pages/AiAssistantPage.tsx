@@ -9,7 +9,6 @@ import {
   MessageSquare,
   Search,
   Send,
-  Sparkles,
   SquareCheckBig,
   TerminalSquare,
 } from 'lucide-react';
@@ -315,7 +314,7 @@ export default function AiAssistantPage() {
       <div className="mx-auto flex min-h-full max-w-5xl flex-col px-8 py-7">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Sparkles size={20} className="text-primary" />AI 助手</div>
+            <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Bot size={20} className="text-primary" />管家</div>
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">

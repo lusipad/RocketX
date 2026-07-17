@@ -6,12 +6,12 @@ export type ModuleKey = string;
 export const MODULE_ORDER: ModuleKey[] = [
   'messages',
   'today',
-  'codex',
-  'ai-assistant',
   'todos',
   'calendar',
-  'contacts',
   'workbench',
+  'contacts',
+  'ai-assistant',
+  'codex',
   'settings',
 ];
 
