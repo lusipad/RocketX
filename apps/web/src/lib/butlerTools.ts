@@ -1,5 +1,6 @@
 import { tsMs } from '@rcx/rc-client';
 import type { ButlerTool } from '../kernel/ai/agent-loop';
+import { loadButlerSkill, rememberButlerFact } from './butlerProfile';
 import { realtime, rest } from './client';
 import {
   mergeMessageSearchResults,
@@ -208,6 +209,14 @@ function listBuilds(args: Record<string, unknown>): string {
   );
 }
 
+function loadSkill(args: Record<string, unknown>): string {
+  return loadButlerSkill(optionalString(args, 'name') ?? '');
+}
+
+function remember(args: Record<string, unknown>): string {
+  return rememberButlerFact(optionalString(args, 'fact') ?? '');
+}
+
 const searchMessagesParameters: Record<string, unknown> = {
   type: 'object',
   properties: {
@@ -299,6 +308,28 @@ export function createButlerTools(): ButlerTool[] {
         additionalProperties: false,
       },
       execute: async (args) => listBuilds(args),
+    },
+    {
+      name: 'load_skill',
+      description: '按名称加载技能的方法论正文。',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '技能名称。' } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+      execute: async (args) => loadSkill(args),
+    },
+    {
+      name: 'remember',
+      description: '当用户告诉你一个应长期记住的事实（偏好、别名、纠错、承诺）时调用；不要存储能从数据里查到的内容。',
+      parameters: {
+        type: 'object',
+        properties: { fact: { type: 'string', description: '要长期记住的事实。' } },
+        required: ['fact'],
+        additionalProperties: false,
+      },
+      execute: async (args) => remember(args),
     },
   ];
 }

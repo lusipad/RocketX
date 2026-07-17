@@ -73,6 +73,31 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
   }
 });
 
+test('管家透明展示 remember 工具写入的记忆', async () => {
+  resetStore();
+  const restore = setButlerLoopRunner(async (options) => {
+    options.onEvent?.({
+      type: 'tool-call',
+      toolCall: { id: 'remember_1', name: 'remember', arguments: '{"fact":"我偏好简短回复"}' },
+    });
+    options.onEvent?.({ type: 'tool-result', toolCallId: 'remember_1', content: '已记住：我偏好简短回复' });
+    return { text: '我会按这个偏好回复。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('以后简短一点');
+
+    assert.deepEqual(useButler.getState().lines.slice(1).map(({ role, text }) => ({ role, text })), [
+      { role: 'user', text: '以后简短一点' },
+      { role: 'assistant', text: '📌 已记住：我偏好简短回复' },
+      { role: 'assistant', text: '我会按这个偏好回复。' },
+    ]);
+  } finally {
+    restore();
+    resetStore();
+  }
+});
+
 test('未配置 Provider 时保留输入并显示友好错误', async () => {
   resetStore();
   const restore = setButlerLoopRunner(async () => {

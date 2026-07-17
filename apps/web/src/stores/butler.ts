@@ -1,16 +1,13 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage } from '../kernel/ai/provider';
+import { buildButlerSystemPrompt } from '../lib/butlerProfile';
 import { createButlerTools } from '../lib/butlerTools';
 
 const HISTORY_LIMIT = 40;
 const PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
 
-export const BUTLER_SYSTEM_PROMPT = `你是 RocketX 管家，服务于 GTD 与注意力保护。
-
-默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时先用工具查询；出现多个候选时列出证据，请用户二选一。绝不编造数据。
-
-你可以查询消息、联系人与会话、待办、日程、工作项、拉取请求和构建。`;
+export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
 
 export interface ButlerLine {
   id: string;
@@ -40,6 +37,8 @@ const toolLabels: Record<string, string> = {
   list_work_items: '查询工作项',
   list_pull_requests: '查询拉取请求',
   list_builds: '查询构建',
+  load_skill: '加载技能',
+  remember: '记录记忆',
 };
 
 function line(role: ButlerLine['role'], text: string): ButlerLine {
@@ -101,6 +100,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     }));
 
     let assistantLineId: string | undefined;
+    const toolCallNames = new Map<string, string>();
     const onEvent = (event: AgentLoopEvent) => {
       if (event.type === 'content') {
         const id = assistantLineId ?? crypto.randomUUID();
@@ -116,15 +116,24 @@ export const useButler = create<ButlerState>((set, get) => ({
         return;
       }
       if (event.type === 'tool-call') {
+        toolCallNames.set(event.toolCall.id, event.toolCall.name);
         set({ activity: activityFor(event) });
         return;
       }
-      if (event.type === 'tool-result') set({ activity: null });
+      if (event.type === 'tool-result') {
+        const toolName = toolCallNames.get(event.toolCallId);
+        set((state) => ({
+          activity: null,
+          lines: toolName === 'remember'
+            ? [...state.lines, line('assistant', `📌 ${event.content}`)]
+            : state.lines,
+        }));
+      }
     };
 
     try {
       const result = await loopRunner({
-        messages: [{ role: 'system', content: BUTLER_SYSTEM_PROMPT }, ...history],
+        messages: [{ role: 'system', content: buildButlerSystemPrompt() }, ...history],
         tools: createButlerTools(),
         onEvent,
       });
