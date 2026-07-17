@@ -30,5 +30,8 @@ jobs:
       - name: 回归测试（并发、分页与状态隔离）
         run: pnpm test:regression
 
+      - name: Agent Runner 隔离边界
+        run: pnpm agent:runner:test
+
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build

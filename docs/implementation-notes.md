@@ -11,9 +11,11 @@ Plan: `docs/m8-implementation-plan.md`
 ## Decisions
 
 - 协议基线锁定为 `codex-cli 0.144.4`；生成类型与真实 stdio 握手均以同一二进制验证。
-- Rust 只负责受管子进程和 JSONL 传输，TypeScript 负责协议语义、会话和审批。
-- 第一版使用单个受管 stdio 子进程；daemon/proxy 仅在恢复实测证明必要时启用。
+- Rust 只负责每会话一个固定 Docker Runner、JSONL 传输和容器回收，TypeScript 负责协议语义、会话和审批。
+- Runner 只挂载当前会话工作区、独立 Codex 会话目录、只读临时附件和一个只读认证文件；宿主其他路径不进入容器。
 - 当前 11 类 server-initiated request 必须显式处理，未知请求安全拒绝。
+- 上下文包包含当前话题、被引用消息的整条已加载线程、参与者和消息中关联的 ADO 工作项；站内代码、日志、图片附件限量写入应用缓存并只读挂载，不写入用户项目。
+- 正常结束会话时清理临时附件；进程中断时保留，以便同一 Codex thread 恢复后继续引用。
 - Codex 默认只读；工作区写入和执行动作必须由当前宿主审批，显式敏感路径请求和审批命令会被拒绝。
 - MCP 与 Bot token 只存 Windows 凭据库；Bot 发送前还必须匹配当前 Rocket.Chat 服务器，避免切换账号后跨服务器代发。
 
@@ -22,25 +24,27 @@ Plan: `docs/m8-implementation-plan.md`
 - 本机 PATH CLI 为 `0.144.4`，桌面内置 CLI 为 `0.144.2`；两者都能握手，但不能共享同一份未校验的协议绑定。
 - 当前服务端主动请求面比蓝图列举更宽，包含认证刷新、attestation、当前时间和旧版审批兼容请求。
 - PowerShell 不会按 CLI 管道语义等待 Windows GUI 子系统程序；release MCP 必须用真实客户端的子进程 stdio pipe 方式验证，不能用 PowerShell 管道是否有输出判断。
+- Windows 原生 sandbox 无法兑现读隔离；Linux Runner 还需要为 npm 包内的 Codex 原生二进制提供 `codex-linux-sandbox` argv0 入口，才能让 bubblewrap 权限配置真正执行。
 
 ## Verification
 
 - `codex app-server generate-ts --experimental` 已生成 671 个类型文件，`pnpm codex:protocol:check` 确认无漂移。
 - `pnpm smoke:codex-app-server` 在真实 `0.144.4` 进程完成 initialize、thread/start、turn/start、流式响应和 turn complete。
-- `pnpm test:pure`（219）、`pnpm test:regression`（224）、`pnpm smoke`（53）、`pnpm test:classify`（5）、`pnpm typecheck`、`pnpm build` 全部通过。
-- `cargo test --locked`（9）通过；`tauri build --no-bundle` 生成 v0.17.0 release 二进制。
-- Node 子进程以 stdin/stdout pipe 启动 release `rocketx.exe --mcp`，initialize 返回协议 `2025-06-18`，tools/list 仅返回三个只读工具。
+- `pnpm agent:runner:test` 验证固定 0.144.4 镜像、只读/可写双配置、只读上下文附件、根目录与嵌套 `.env`、通用 credentials 文件、Codex 认证文件拒绝。
+- `pnpm smoke:agent-runner` 完成真实模型读取只读上下文附件、宿主逐次批准写入，并在强制移除容器后以同一 threadId resume 完成第二轮。
+- `pnpm test:pure`（219）、`pnpm test:regression`（229）、`pnpm smoke`（53）、`pnpm test:classify`（5）、`pnpm typecheck`、`pnpm build` 全部通过。
+- `cargo test --locked`（14）通过；`tauri build --no-bundle` 生成 v0.17.0 release 二进制。
+- Node 子进程以 stdin/stdout pipe 启动 `rocketx.exe --mcp`，initialize 返回协议 `2025-06-18`，tools/list 仅返回三个只读工具；专用测试账号可列出 54 个授权会话并读取其中一个，随机私有房间被拒绝。
 - 仓库及待提交 diff 的密钥样式扫描为零命中；合成密钥脱敏测试使用运行时拼接，避免假阳性。
 
 ## Verification limits
 
 - 本轮 Windows Computer Use 官方 JavaScript 能力列表为空，无法完成 Agent 面板的真实窗口视觉验收；协议、状态机、生产构建和 release 进程路径已由自动化与真实子进程覆盖。
-- 反向 MCP 的三个工具未使用真实 Rocket.Chat token 从外部客户端调用；认证请求、URL 编码和工具结果契约由 Rust 单元测试与现有 Rocket.Chat 实服 smoke 分别覆盖。
-- **未关闭的安全门禁**：Codex 0.144.4 在 Windows 上的 read-only sandbox 与 permission profile 均未能阻止读取工作区内 `.env` 或工作区外文件。本轮实测确认 `:minimal + :project_roots` 和精确 deny-read 规则仍可读出探针内容，因此提示词、输入预检和输出脱敏不能被宣称为文件系统隔离。M8 合并前必须选择隔离 runner（推荐）或显式修改蓝图安全验收。
+- 共享 Agent 现在依赖正在运行的 Docker Desktop；AI 设置页提供状态诊断和一键构建固定 Runner 镜像，不会在 Docker 缺失时退回不安全的原生进程。
 
 ## Questions for review
 
-- M8 是否接受新增隔离 runner 依赖（例如 Linux/WSL 容器 + 只挂载会话工作区），还是将 Windows 固定目录模式降级为“显式风险确认 + 输出防泄漏”？当前实现不应在这个选择前合并。
+- 无。
 
 ---
 

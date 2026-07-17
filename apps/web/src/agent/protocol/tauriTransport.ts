@@ -17,6 +17,11 @@ export class TauriCodexTransport implements CodexTransport {
   private processId: string | null = null;
   private unlisten: UnlistenFn[] = [];
 
+  constructor(
+    private readonly sessionId: string,
+    private readonly workspaceRoot: string,
+  ) {}
+
   async start(handlers: CodexTransportHandlers): Promise<CodexProcessInfo> {
     const output = await listen<OutputEvent>('codex-app-server-output', (event) => {
       if (event.payload.processId !== this.processId) return;
@@ -27,7 +32,10 @@ export class TauriCodexTransport implements CodexTransport {
     });
     this.unlisten.push(output, exit);
     try {
-      const process = await invoke<CodexProcessInfo>('codex_app_server_start');
+      const process = await invoke<CodexProcessInfo>('codex_app_server_start', {
+        sessionId: this.sessionId,
+        workspaceRoot: this.workspaceRoot,
+      });
       this.processId = process.processId;
       return process;
     } catch (error) {

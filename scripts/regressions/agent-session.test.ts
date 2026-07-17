@@ -6,6 +6,7 @@ import {
   assertHost,
   commandAccess,
   interruptSession,
+  restoreSession,
   resumeSession,
   takeHostLease,
   type AgentSession,
@@ -15,7 +16,10 @@ import {
   commandMentionsSensitivePath,
   commandRequestMentionsSensitivePath,
   pathIsSensitive,
+  permissionRequestSummary,
   redactAgentOutput,
+  validateApprovalPaths,
+  validatePermissionRequest,
 } from '../../apps/web/src/agent/safety';
 
 function session(overrides: Partial<AgentSession> = {}): AgentSession {
@@ -68,6 +72,14 @@ test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
   assert.equal(resumed.codexThreadId, 'codex-thread');
 });
 
+test('恢复时标记中断，超过孤儿超时则自动结束', () => {
+  const value = session({ codexThreadId: 'codex-thread', activeTurnId: 'turn' });
+  assert.equal(restoreSession(value, 2_500, 10_000).status, 'interrupted');
+  const ended = restoreSession(value, 12_000, 10_000);
+  assert.equal(ended.status, 'ended');
+  assert.equal(ended.activeTurnId, undefined);
+});
+
 test('指令队列严格串行，失败不会阻断后一条', async () => {
   const queue = new SerialCommandQueue();
   const order: string[] = [];
@@ -118,4 +130,48 @@ test('回帖前脱敏常见密钥、Bearer、JWT 和键值凭据', () => {
   assert.equal(result.redacted, 4);
   assert.equal(result.text.includes('super-secret-value'), false);
   assert.equal(result.text.includes('sk-1234'), false);
+});
+
+test('增量权限只允许工作区内明确路径并拒绝网络与敏感文件', () => {
+  const requested = {
+    network: null,
+    fileSystem: {
+      read: null,
+      write: ['/workspace/approved.txt'],
+      entries: [{ path: { type: 'path' as const, path: '/workspace/approved.txt' }, access: 'write' as const }],
+    },
+  };
+  assert.deepEqual(validatePermissionRequest(requested, ['/workspace']), { fileSystem: requested.fileSystem });
+  assert.deepEqual(permissionRequestSummary(requested), ['写入：/workspace/approved.txt']);
+  assert.throws(
+    () => validatePermissionRequest({ network: { enabled: true }, fileSystem: null }, ['/workspace']),
+    /网络访问/,
+  );
+  assert.throws(
+    () =>
+      validatePermissionRequest(
+        { network: null, fileSystem: { read: null, write: ['/workspace/.env'] } },
+        ['/workspace'],
+      ),
+    /敏感路径/,
+  );
+  assert.throws(
+    () =>
+      validatePermissionRequest(
+        { network: null, fileSystem: { read: null, write: ['/outside/file.txt'] } },
+        ['/workspace'],
+      ),
+    /白名单/,
+  );
+  assert.doesNotThrow(() =>
+    validateApprovalPaths({ cwd: '/workspace', fileChanges: { '/workspace/src/main.ts': true } }, ['/workspace']),
+  );
+  assert.throws(
+    () => validateApprovalPaths({ grantRoot: '/home/node/.codex' }, ['/workspace']),
+    /白名单/,
+  );
+  assert.throws(
+    () => validateApprovalPaths({ fileChanges: { '/workspace/.env': true } }, ['/workspace']),
+    /敏感路径/,
+  );
 });

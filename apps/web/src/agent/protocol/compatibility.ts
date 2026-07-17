@@ -1,6 +1,6 @@
 export const CODEX_APP_SERVER_VERSION = '0.144.4' as const;
 
-const VERSION_PATTERN = /Codex Desktop\/(\d+\.\d+\.\d+)/;
+const VERSION_PATTERN = /(?:Codex Desktop|rocketx)\/(\d+\.\d+\.\d+)/;
 
 export function codexVersionFromUserAgent(userAgent: string): string | null {
   return VERSION_PATTERN.exec(userAgent)?.[1] ?? null;

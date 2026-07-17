@@ -13,6 +13,7 @@ import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
+import AgentRunnerSettings from './AgentRunnerSettings';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -301,6 +302,7 @@ export default function AiSettings() {
       </section>
 
       <ReverseMcpSettings />
+      <AgentRunnerSettings />
       <AgentBotSettings />
 
       <button

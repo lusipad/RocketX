@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   AppServerClient,
   CODEX_APP_SERVER_VERSION,
+  codexVersionFromUserAgent,
   type CodexTransport,
 } from '../../apps/web/src/agent/protocol';
 
@@ -56,6 +57,14 @@ test('初始化严格校验 CLI 和 userAgent 版本后才发送 initialized', a
   const incompatible = new FakeTransport('0.144.2');
   await assert.rejects(() => new AppServerClient(incompatible).start(), /CLI 版本不兼容/);
   assert.equal(incompatible.stopped, true);
+});
+
+test('兼容性检查接受已验证的 Linux Runner userAgent', () => {
+  assert.equal(
+    codexVersionFromUserAgent(`rocketx/${CODEX_APP_SERVER_VERSION} (Debian 12.0.0; x86_64)`),
+    CODEX_APP_SERVER_VERSION,
+  );
+  assert.equal(codexVersionFromUserAgent(`other/${CODEX_APP_SERVER_VERSION} (Linux)`), null);
 });
 
 test('客户端请求按 id 关联响应', async () => {

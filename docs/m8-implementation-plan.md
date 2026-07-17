@@ -23,9 +23,9 @@ M8 把 Rocket.Chat 话题作为共享 Agent 会话：消息始终先进入 Rocke
 
 ## 实施边界
 
-- Rust 只托管固定的 `codex app-server --stdio` 子进程、JSONL 输入输出、退出和强制终止；不解释 Agent 业务协议，也不开放任意命令执行入口。
+- Rust 只托管每会话一个固定 Docker Runner 内的 `codex app-server --stdio`、JSONL 输入输出、退出和强制终止；不解释 Agent 业务协议，也不开放任意命令执行入口。
 - TypeScript 负责生成协议类型、请求关联、会话状态机、审批策略、聊天上下文打包和 UI。
-- 第一版使用单个受管 stdio 子进程；不引入 daemon/proxy，除非故障恢复实测证明单进程模型不满足要求。
+- 每个话题会话使用独立 stdio 容器和 Codex home，避免多工作区挂载扩大读取面；不引入 daemon/proxy。
 - 不预先抽象多 Agent Provider；M8 直接绑定 Codex app-server。
 - 会话元数据复用现有 `appData`，使用稳定前缀隔离，不新增 IndexedDB schema。
 - Bot 账号优先；没有 Bot 配置时允许宿主账号降级发送。消息展示标记不参与审批和信任判断。
@@ -36,14 +36,15 @@ M8 把 Rocket.Chat 话题作为共享 Agent 会话：消息始终先进入 Rocke
 2. **进程宿主**：新增 `proc.rs`，提供发现、启动、写入、终止和事件桥。验证：Rust 单测、真实启动、kill 后退出事件。
 3. **协议客户端与状态机**：实现 JSON-RPC 关联、turn 串行、thread start/resume、租约和中断恢复。验证：纯单测覆盖正常、拒绝、超时、崩溃和 resume。
 4. **审批与安全**：把 app-server 请求映射为主持人审批，加入白名单、敏感路径拒绝、外部副作用限制和输出脱敏。验证：`.env` 拒绝、密钥样式脱敏、非主持人不能批准执行。
-5. **话题集成与 Agent 面板**：订阅话题、识别触发、打包上下文、完整回复回帖，展示队列/过程/审批/中断状态。验证：宿主与第二成员各完成一轮查阅，执行请求等待宿主。
-6. **反向 MCP**：实现受范围约束的 `rcx-mcp` stdio server，提供会话列表、话题上下文和引用消息读取。验证：外部 Codex 连接后能读取允许范围，越权范围被拒绝。
+5. **话题集成与 Agent 面板**：订阅话题、识别触发，打包话题/引用线程/参与者/ADO/只读附件上下文，完整回复回帖，展示队列/过程/审批/中断状态。验证：宿主与第二成员各完成一轮查阅，执行请求等待宿主。
+6. **反向 MCP**：实现受范围约束的 `rcx-mcp` stdio server，提供会话列表、话题上下文和房间历史读取。验证：外部 Codex 连接后能读取允许范围，越权范围被拒绝。
 7. **端到端验收**：真实 Rocket.Chat + Tauri + Codex 走完整修复流程，并用官方客户端旁观；随后运行 typecheck、纯测试、回归、smoke、Rust 测试和生产构建。
 
-## 未关闭门禁
+## 已关闭门禁
 
-- Windows `codex-cli 0.144.4` 的 read-only sandbox 不能限制读取范围；permission profile 的精确 deny-read 与项目根规则也未通过本机 `.env` / 工作区外文件探针。输入预检和回帖脱敏只能降低风险，不能替代蓝图要求的文件系统边界。
-- 因此 M8 在引入可验证的隔离 runner，或由产品决策明确修改该项验收之前，只能保持 Draft，不能宣称安全验收完成。
+- Windows 原生 `codex-cli 0.144.4` 的 read-only sandbox 不能限制读取范围，因此不再作为 M8 执行路径。
+- 固定 Linux Runner 只挂载单个会话工作区；bubblewrap 权限配置已实测拒绝根目录与嵌套 `.env`、通用 credentials 文件、Codex 认证文件，同时分别验证只读与宿主启用后的工作区写入。
+- Docker 缺失、镜像未安装或 Codex 未登录时安全失败，不回退到原生进程。
 
 ## 风险与回退条件
 

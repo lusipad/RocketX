@@ -1,6 +1,7 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { Bot, Check, ChevronLeft, FolderOpen, Play, Shield, Square, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, FolderOpen, Play, Shield, Square, Users, X } from 'lucide-react';
 import { useState } from 'react';
+import { permissionRequestSummary } from '../agent/safety';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
 import PanelShell from './PanelShell';
@@ -12,6 +13,8 @@ function approvalSummary(method: string, params: unknown): string {
   if (typeof value.fileChanges === 'object' && value.fileChanges !== null) {
     return Object.keys(value.fileChanges).join('\n');
   }
+  const permissionLines = permissionRequestSummary(value.permissions ?? value.additionalPermissions);
+  if (permissionLines.length > 0) return permissionLines.join('\n');
   if (typeof value.grantRoot === 'string') return `写入目录：${value.grantRoot}`;
   if (typeof value.reason === 'string') return value.reason;
   return method;
@@ -32,6 +35,7 @@ export default function AgentPanel() {
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
   const resolveApproval = useSharedAgent((state) => state.resolveApproval);
   const setSandboxMode = useSharedAgent((state) => state.setSandboxMode);
+  const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
 
@@ -78,7 +82,7 @@ export default function AgentPanel() {
             <span className="truncate">{workspaceRoot ?? '选择项目目录（可选）'}</span>
           </button>
           <button
-            onClick={() => void start(rid, tmid, workspaceRoot)}
+            onClick={() => void start(rid, tmid, workspaceRoot).catch(() => undefined)}
             className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
           >
             <Play size={15} /> 启动 Agent
@@ -108,6 +112,21 @@ export default function AgentPanel() {
               >
                 <Shield size={13} />
                 {session.sandboxMode === 'read-only' ? '只读' : '工作区可写'}
+              </button>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-ink-3">指挥范围</span>
+              <button
+                onClick={() =>
+                  void setAccess(
+                    tmid,
+                    session.access === 'host-only' ? 'room-members' : 'host-only',
+                  )
+                }
+                className="flex items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2"
+              >
+                <Users size={13} />
+                {session.access === 'host-only' ? '仅自己' : '房间成员'}
               </button>
             </div>
             <div className="truncate text-xs text-ink-3" title={session.workspaceRoots[0]}>

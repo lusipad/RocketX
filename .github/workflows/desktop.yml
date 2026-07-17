@@ -51,6 +51,10 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: Rust 单元测试
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
       - name: 构建桌面客户端
         uses: tauri-apps/tauri-action@v0
         env:

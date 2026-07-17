@@ -108,6 +108,18 @@ export function interruptSession(session: AgentSession, now = Date.now()): Agent
   return { ...session, status: 'interrupted', activeTurnId: undefined, updatedAt: now };
 }
 
+export function restoreSession(
+  session: AgentSession,
+  now: number,
+  orphanTimeoutMs: number,
+): AgentSession {
+  if (session.status === 'ended') return session;
+  if (now >= session.host.expiresAt + orphanTimeoutMs) {
+    return { ...session, status: 'ended', activeTurnId: undefined, updatedAt: now };
+  }
+  return interruptSession(session, now);
+}
+
 export function resumeSession(
   session: AgentSession,
   actor: Pick<AgentHostLease, 'userId' | 'deviceId'>,
