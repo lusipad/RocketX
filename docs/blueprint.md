@@ -212,7 +212,7 @@ agent 侧的 MCP 工具走 codex 自带的 Host（M8）；宿主自身的 MCP Ho
 
 | ID | 挂载位置 | 对应现有代码 | 首个用例 |
 |---|---|---|---|
-| `nav.module` | 左侧一级导航 | `NavRail.tsx` MODULES | 「今日」收件箱（M7） |
+| `nav.module` | 左侧一级导航 | `NavRail.tsx` MODULES | 「今日」、AI 助手与 Codex（M7/M8） |
 | `panel.right` | 右侧上下文栏 | `ChatArea.tsx` rightPanel | Agent 会话面板（M8） |
 | `message.action` | 消息右键 / 悬浮操作 | `MessageItem.tsx` menuItems | "让 codex 看看这条" |
 | `message.renderer` | 自定义消息类型 / 附件卡片 | `AttachmentCard` 分发链 | AI 卡片、Agent 会话卡片 |
@@ -416,6 +416,7 @@ interface AiProvider {
 | 优先级 | 能力 | GTD 阶段 | 入口 | 备注 |
 |---|---|---|---|---|
 | ★ 旗舰 | **统一收件箱「今日」** | 回顾 | `nav.module` 新模块 | 见 §4.3a |
+| P0 | **AI 助手统一入口** | 理清 / 回顾 | `nav.module` 新模块 | 自然语言搜索与只读查询直接执行；工作项创建先生成草案，再由用户确认 |
 | P0 | 未读速览 / 会话总结 | 理清 | `/summary`、会话列表右键、「今日」内嵌 | "我不在的这两小时群里发生了什么" |
 | P0 | 消息 → 待办 / 工作项一键转化 | 理清 | `message.action` + AI 预填标题/截止日 | 现有待办与 ADO 创建链路已通，AI 只做结构化提取 |
 | P1 | AI 晨报 / 晚间回顾 | 回顾 | 「今日」内 + 定时生成（M7 先内置，`background.task` 扩展点随真实用例落地） | 晨报=今天要什么，晚回顾=今天欠什么 |
@@ -436,6 +437,10 @@ AI 管家的主场景，双支柱的直接体现——**唯一的拉取式消化
   各条目点击跳回原消息/待办/工作项（复用现有跳转链路）。
 
 ### 4.4 共享 Agent 会话（M8）——「线程即会话」
+
+交互补充（v0.20.0）：共享线程模型继续保留，同时增加独立 `Codex` 一级入口。它面向单机开发者，
+由用户选择并持久化本地工作目录，复用同一 app-server、Runner、权限配置和审批协议；不复制 Agent
+执行内核，也不让网页环境直接访问宿主文件系统。
 
 **v1 §4.4 的拦截式设计作废**，它有五个硬伤：需要 message-impersonate 权限（实测 admin 都
 没有）；"路由给 agent 不发 RC"让线程对其他成员断片；流式 `chat.update` 写放大；群消息

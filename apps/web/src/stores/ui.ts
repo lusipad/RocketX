@@ -5,10 +5,13 @@ export type ModuleKey = string;
 /** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
   'messages',
+  'today',
+  'ai-assistant',
   'todos',
   'calendar',
   'contacts',
   'workbench',
+  'codex',
   'settings',
 ];
 

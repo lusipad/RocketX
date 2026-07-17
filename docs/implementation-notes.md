@@ -773,3 +773,37 @@ SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Wind
 - npm registry 名称当前未占用，但本机账号是否拥有 `@rcx` scope 必须在发布动作前验证。
 - 蓝图要求的两位外部开发者 G3/G4 真人计时不能由自动 clean-room 代理结果替代。
 - 英文 README 的真实产品截图与 GIF 演示仍需从可用的 UI 自动化或人工录制流程取得。
+
+---
+
+# Implementation notes — v0.20.0 AI 助手与 Codex 独立入口
+
+## Shipped vs planned
+
+M7/M8 原有能力不再只藏在快捷搜索、消息动作和话题右侧面板。左侧新增两个内置一级入口：
+「AI 助手」统一承载自然语言搜索、只读查询和 ADO 工作项创建草案；「Codex」承载单机本地目录
+会话。共享线程 Agent、`$codex` 快速通道和 Ctrl+K 搜索继续保留。
+
+## Decisions
+
+- DeepSeek 只负责输出白名单意图 JSON；RocketX 执行查询。Provider 不可用时，显式搜索和查询
+  使用本地规则回退，避免入口整体失效。
+- 搜索复用现有 Rocket.Chat 全局/逐房间回退、spotlight 和本地工作数据搜索；不建立第二套索引。
+- 创建工作项只生成草案，最终仍进入 `CreateWorkItemDialog`，由用户检查项目、真实类型、模板和字段
+  后确认；模型不能直接调用 ADO 写接口。
+- Codex 独立入口复用锁定版本的 app-server 与 Docker Runner。宿主目录只映射为 `/workspace`，
+  默认只读；写入、命令和增量权限仍走既有路径校验、敏感路径拒绝与用户审批。
+- 工作目录、sessionId 与当前 threadId 按 Rocket.Chat 服务器与账号分区保存在本机；对话正文不写
+  `localStorage`。切换目录会创建新会话，切换账号会停止原进程，避免跨账号继承宿主能力。
+
+## Deviations
+
+- 蓝图最初把 M8 主入口定义为 Rocket.Chat 线程右侧面板；根据 2026-07-17 的产品反馈，增加单机
+  Codex 一级入口，但不改变线程即共享会话的协作模型。
+- 当前 UI 自动化入口仍返回空能力，无法代替用户点击真实桌面窗口；已用导航注册契约、TypeScript、
+  生产构建、254 项全量回归、219 项纯函数、Rust 与 Runner 隔离测试覆盖可自动验证部分。
+
+## Questions for review
+
+- 真实 DeepSeek 密钥已在聊天中暴露，不再写入命令或日志；应先轮换，再从「设置 → AI 管家」保存
+  新密钥并在桌面端执行最终 live 请求。
