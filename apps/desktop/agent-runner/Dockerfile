@@ -11,9 +11,13 @@ RUN apt-get update \
     && test -n "$CODEX_BIN" \
     && cp "$CODEX_BIN" /usr/local/bin/rocketx-codex \
     && cp /usr/local/bin/rocketx-codex /usr/local/bin/codex-linux-sandbox \
-    && chmod 0755 /usr/local/bin/rocketx-codex /usr/local/bin/codex-linux-sandbox \
+    && cp --recursive "$(dirname "$(dirname "$CODEX_BIN")")/codex-resources" /usr/local/bin/codex-resources \
+    && chmod 0755 /usr/local/bin/rocketx-codex /usr/local/bin/codex-linux-sandbox /usr/local/bin/codex-resources/bwrap \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+ARG ROCKETX_BWRAP_SETUID=0
+RUN if [ "$ROCKETX_BWRAP_SETUID" = "1" ]; then chmod 4755 /usr/local/bin/codex-resources/bwrap; fi
 
 RUN mkdir --parents /home/node/.codex \
     && chown node:node /home/node/.codex

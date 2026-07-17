@@ -5,13 +5,15 @@ import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const runnerDir = join(root, 'apps', 'desktop', 'agent-runner');
-const image = 'rocketx/codex-runner:0.144.4';
+const nestedDocker = process.env.ROCKETX_RUNNER_TEST_NESTED_DOCKER === '1';
+const image = nestedDocker
+  ? 'rocketx/codex-runner-ci:0.144.4'
+  : 'rocketx/codex-runner:0.144.4';
 const temporary = mkdtempSync(join(tmpdir(), 'rocketx-agent-runner-'));
 const workspace = join(temporary, 'workspace');
 const home = join(temporary, 'codex-home');
 const attachments = join(temporary, 'attachments');
 const auth = join(temporary, 'auth.json');
-const nestedDocker = process.env.ROCKETX_RUNNER_TEST_NESTED_DOCKER === '1';
 
 function docker(args, options = {}) {
   return execFileSync('docker', args, { cwd: root, encoding: 'utf8', ...options });
@@ -33,9 +35,8 @@ function sandbox(profile, command) {
     '--read-only',
   );
   if (!nestedDocker) args.push('--cap-drop', 'ALL');
+  if (!nestedDocker) args.push('--security-opt', 'no-new-privileges');
   args.push(
-    '--security-opt',
-    'no-new-privileges',
     '--security-opt',
     'seccomp=unconfined',
     '--network',
@@ -57,6 +58,8 @@ function sandbox(profile, command) {
     '--mount',
     mount(auth, '/home/node/.codex/auth.json', true),
     image,
+  );
+  args.push(
     'sandbox',
     '-P',
     profile,
@@ -83,7 +86,10 @@ try {
   writeFileSync(auth, '{"fixture":"AUTH_MUST_NOT_BE_READABLE"}\n');
   copyFileSync(join(runnerDir, 'runner.config.toml'), join(home, 'config.toml'));
 
-  docker(['build', '--tag', image, runnerDir], { stdio: 'inherit' });
+  const buildArgs = ['build', '--quiet', '--tag', image];
+  if (nestedDocker) buildArgs.push('--build-arg', 'ROCKETX_BWRAP_SETUID=1');
+  buildArgs.push(runnerDir);
+  docker(buildArgs, { stdio: 'inherit' });
   const version = docker(['run', '--rm', image, '--version']).trim();
   if (version !== 'codex-cli 0.144.4') throw new Error(`Runner 版本不匹配：${version}`);
 
