@@ -118,6 +118,15 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 最近表情 | `rcx-recent-emojis` | |
 | ADO 工作台配置 | `rcx-workbench` / `rcx-ado-web` | 跟 Rocket.Chat 账号与服务器隔离；直连 PAT 只留在当前设备 |
 | ADO 自定义查询 | `rcx-custom-queries` | 跟 Rocket.Chat 账号隔离，再按稳定的 ADO 基址与认证方式分区；旧查询只在匹配连接后认领 |
+| LAN 设备信任 | IndexedDB `appData` + OS keychain | 公钥按服务器/用户/设备固定；Ed25519 私钥只进系统凭据库，mDNS/UDP 广播永远不直接建立信任 |
+| LAN 离线消息 | IndexedDB `outbox` | 作者保存稳定 `_id` 并负责回灌；接收方只保存本地副本，避免代发造成身份错误和重复消息 |
+
+### M9 LAN 数据面
+
+- `_rcx._tcp.local` mDNS 为主发现，`239.255.82.67:45826`、TTL 1 的 UDP 组播为兜底；两者只产生不可信候选。
+- TCP 连接先用双方随机 nonce、服务器指纹、用户/设备 ID 和公钥组成摘要，再做 Ed25519 双向签名；只有与 Rocket.Chat 认证通道固定值完全一致的公钥可通过。
+- 文件固定 1 MiB 分片、最多四路 TCP；接收端在应用数据目录保存 `.part` 与缺块清单，断线重连只请求缺失索引。每片 BLAKE3 通过才写入，整文件 BLAKE3 通过才发布。
+- 普通消息使用稳定 `_id`。服务器恢复后只有作者回灌；重复请求即使返回 500，也会按 `_id` 回查确认是否已落库。
 
 ### 中文环境必须的服务端设置
 

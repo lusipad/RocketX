@@ -58,6 +58,8 @@ import { ensureHttpOrigin, httpFetch } from '../lib/http';
 import AiSettings from '../components/AiSettings';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
+import { currentLanPeers } from '../lan/runtime';
+import { lanOutboxCapability } from '../lan/outbox';
 
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
@@ -496,6 +498,7 @@ function DesktopSection() {
   const [loading, setLoading] = useState(isTauri);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
 
   useEffect(() => {
     if (!isTauri) return;
@@ -513,6 +516,20 @@ function DesktopSection() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      const peers = currentLanPeers();
+      setLanStatus({
+        peers: peers.length,
+        trusted: peers.filter((peer) => peer.trusted).length,
+        metadata: lanOutboxCapability(),
+      });
+    };
+    refresh();
+    const timer = setInterval(refresh, 3_000);
+    return () => clearInterval(timer);
   }, []);
 
   const changeAutostart = async (next: boolean) => {
@@ -586,6 +603,29 @@ function DesktopSection() {
           >
             {statusText}
           </div>
+        </div>
+      </Row>
+      <Row
+        label="局域网直传与离线回灌"
+        hint="广播只用于发现；设备必须先通过 Rocket.Chat 认证通道固定公钥"
+      >
+        <div className="max-w-md text-sm text-ink-2">
+          {!isTauri ? (
+            '网页版不启用原生 LAN socket，文件和消息继续走 Rocket.Chat。'
+          ) : (
+            <>
+              <div>
+                在线候选 {lanStatus.peers} 台，其中可信 {lanStatus.trusted} 台。
+              </div>
+              <div className="mt-1 text-xs text-ink-3">
+                {lanStatus.metadata === 'server-metadata'
+                  ? '服务器保留离线原始时间元数据，其他 RocketX 设备也能恢复原时间。'
+                  : lanStatus.metadata === 'local-only'
+                    ? '服务器未启用消息自定义字段；只有参与原 LAN 会话的设备保留原始时间。'
+                    : '尚未发生离线回灌；首次恢复连接时会探测服务器是否保留原始时间元数据。'}
+              </div>
+            </>
+          )}
         </div>
       </Row>
       <Row

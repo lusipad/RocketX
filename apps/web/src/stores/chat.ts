@@ -314,6 +314,10 @@ function messageTime(message: RcMessage): number {
   return message.rocketxOriginalTs ?? tsMs(message.ts);
 }
 
+export function shouldUseLanFallback(error: unknown, tmid?: string): boolean {
+  return !tmid && (!(error instanceof RcApiError) || error.status >= 500);
+}
+
 async function lanRecipientIds(rid: string): Promise<string[]> {
   const state = useChat.getState();
   const me = useAuth.getState().user?._id;
@@ -362,9 +366,16 @@ async function acceptLanMessage(event: LanMessageEvent): Promise<void> {
 function localLanFileMessage(
   event: Pick<
     LanFileEvent,
-    'messageId' | 'roomId' | 'originalTs' | 'fileName' | 'size' | 'blake3' | 'localPath'
+    | 'messageId'
+    | 'roomId'
+    | 'originalTs'
+    | 'fileName'
+    | 'size'
+    | 'blake3'
+    | 'localPath'
   >,
   author: Pick<RcUser, '_id' | 'username' | 'name'>,
+  bytesPerSecond?: number,
 ): RcMessage {
   return {
     _id: event.messageId,
@@ -389,6 +400,7 @@ function localLanFileMessage(
     rocketxOffline: true,
     rocketxLocalPath: event.localPath,
     rocketxLanHash: event.blake3,
+    rocketxLanBytesPerSecond: bytesPerSecond,
   };
 }
 
@@ -972,6 +984,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       const rid = msg.rid;
       const state = get();
+      const alreadyKnown = (state.messages[rid] ?? []).some((message) => message._id === msg._id);
       let nextList = upsertMessage(state.messages[rid] ?? [], msg);
       // 还没打开过的会话只留个尾巴当预览：全局流会给所有房间推消息，
       // 不截断的话长时间挂机后台房间会无限积累；打开时反正要拉历史再合并
@@ -988,7 +1001,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if ((msg.t === 'message_pinned' || msg.t === 'message_unpinned') && state.historyLoaded[rid]) {
         void get().reconcilePinned(rid).catch(() => {});
       }
-      notifyIfNeeded(msg, rid, state);
+      if (!alreadyKnown) notifyIfNeeded(msg, rid, state);
       if (get().activeRid === rid) {
         if (get().subscriptions[rid]) scheduleMarkRead(rid);
         scheduleReceiptRefresh(rid);
@@ -1288,7 +1301,7 @@ export const useChat = create<ChatState>((set, get) => ({
         /* 服务端不可达或确实未落库，继续判断 LAN 降级 */
       }
 
-      const canUseLan = !opts?.tmid && (!(err instanceof RcApiError) || err.status >= 500);
+      const canUseLan = shouldUseLanFallback(err, opts?.tmid);
       if (canUseLan) {
         const recipients = await lanRecipientIds(rid).catch(() => []);
         const originalTs = tsMs(temp.ts);
@@ -2162,7 +2175,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
     set({ uploading: get().uploading + paths.length });
     try {
-      const { readFile } = await import('@tauri-apps/plugin-fs');
+      const { readFile, stat } = await import('@tauri-apps/plugin-fs');
       for (const path of paths) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
@@ -2186,6 +2199,7 @@ export const useChat = create<ChatState>((set, get) => ({
                     localPath: path,
                   },
                   me,
+                  receipt.bytesPerSecond,
                 ),
               );
               sentOverLan = true;
@@ -2195,6 +2209,21 @@ export const useChat = create<ChatState>((set, get) => ({
           }
         }
         if (!sentOverLan) {
+          const [metadata, configuredLimit] = await Promise.all([
+            stat(path),
+            getPublicSetting('FileUpload_MaxFileSize'),
+          ]);
+          const maxBytes =
+            typeof configuredLimit === 'number' && Number.isFinite(configuredLimit)
+              ? configuredLimit
+              : 0;
+          if (maxBytes > 0 && metadata.size > maxBytes) {
+            throw new Error(
+              `可信局域网传输不可用，且 Rocket.Chat 上传上限为 ${Math.round(
+                maxBytes / 1024 / 1024,
+              )} MiB`,
+            );
+          }
           const bytes = await readFile(path);
           await rest.uploadMedia(rid, new Blob([bytes]), { tmid, fileName });
         }

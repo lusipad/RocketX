@@ -54,6 +54,7 @@ export interface LanFileReceipt {
   fileName: string;
   size: number;
   blake3: string;
+  bytesPerSecond: number;
 }
 
 interface LanServiceInfo {
@@ -251,7 +252,8 @@ export async function sendLanFile(
   payload: { messageId: string; roomId: string; originalTs: number },
 ): Promise<LanFileReceipt> {
   if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
-  return invoke<LanFileReceipt>('lan_send_file', {
+  const startedAt = performance.now();
+  const receipt = await invoke<Omit<LanFileReceipt, 'bytesPerSecond'>>('lan_send_file', {
     userId,
     deviceId: null,
     path,
@@ -259,4 +261,6 @@ export async function sendLanFile(
     roomId: payload.roomId,
     originalTs: payload.originalTs,
   });
+  const elapsedSeconds = Math.max((performance.now() - startedAt) / 1_000, 0.001);
+  return { ...receipt, bytesPerSecond: receipt.size / elapsedSeconds };
 }

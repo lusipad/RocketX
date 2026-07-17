@@ -507,7 +507,8 @@ fn read_proof(stream: &mut TcpStream) -> Result<String, String> {
 
 fn configure_stream(stream: &TcpStream) -> Result<(), String> {
     stream
-        .set_read_timeout(Some(IO_TIMEOUT))
+        .set_nonblocking(false)
+        .and_then(|_| stream.set_read_timeout(Some(IO_TIMEOUT)))
         .and_then(|_| stream.set_write_timeout(Some(IO_TIMEOUT)))
         .and_then(|_| stream.set_nodelay(true))
         .map_err(|error| format!("failed to configure LAN connection: {error}"))
@@ -941,21 +942,24 @@ fn write_file_chunk(
         return Err("LAN file chunk failed validation".to_string());
     }
     let lock = transfer_lock(transfers, transfer_id)?;
-    let _guard = lock
-        .lock()
-        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
     let (part_path, manifest_path) = transfer_paths(root, transfer_id);
-    let mut transfer = load_transfer(&manifest_path)?;
-    if transfer.from_user_id != peer.user_id
-        || transfer.from_device_id != peer.device_id
-        || index >= transfer.chunk_count
-    {
-        return Err("LAN file chunk does not match its offer".to_string());
-    }
-    let expected = if index + 1 == transfer.chunk_count {
-        (transfer.size - index * transfer.chunk_bytes as u64) as usize
-    } else {
-        transfer.chunk_bytes as usize
+    let (offset, expected) = {
+        let _guard = lock
+            .lock()
+            .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
+        let transfer = load_transfer(&manifest_path)?;
+        if transfer.from_user_id != peer.user_id
+            || transfer.from_device_id != peer.device_id
+            || index >= transfer.chunk_count
+        {
+            return Err("LAN file chunk does not match its offer".to_string());
+        }
+        let expected = if index + 1 == transfer.chunk_count {
+            (transfer.size - index * transfer.chunk_bytes as u64) as usize
+        } else {
+            transfer.chunk_bytes as usize
+        };
+        (index * transfer.chunk_bytes as u64, expected)
     };
     if bytes.len() != expected {
         return Err("LAN file chunk has an invalid length".to_string());
@@ -964,16 +968,18 @@ fn write_file_chunk(
         .write(true)
         .open(&part_path)
         .map_err(|error| format!("failed to open LAN partial file: {error}"))?;
-    part.seek(SeekFrom::Start(index * transfer.chunk_bytes as u64))
+    part.seek(SeekFrom::Start(offset))
         .and_then(|_| part.write_all(bytes))
-        .and_then(|_| part.sync_data())
         .map_err(|error| format!("failed to write LAN file chunk: {error}"))?;
+    let _guard = lock
+        .lock()
+        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
+    let mut transfer = load_transfer(&manifest_path)?;
     transfer.received[index as usize] = true;
     save_transfer(&manifest_path, &transfer)
 }
 
 fn finish_file_transfer(
-    app: &tauri::AppHandle,
     root: &Path,
     peer: &HandshakePeer,
     transfers: &SharedTransfers,
@@ -1010,7 +1016,7 @@ fn finish_file_transfer(
     } else if !final_path.exists() || hash_file(&final_path)? != transfer.blake3 {
         return Err("LAN completed file is missing or corrupted".to_string());
     }
-    let event = LanFileEvent {
+    Ok(LanFileEvent {
         from_user_id: peer.user_id.clone(),
         from_device_id: peer.device_id.clone(),
         message_id: transfer.message_id,
@@ -1020,10 +1026,7 @@ fn finish_file_transfer(
         size: transfer.size,
         blake3: transfer.blake3,
         local_path: final_path.to_string_lossy().to_string(),
-    };
-    app.emit("rocketx://lan-file", event.clone())
-        .map_err(|error| format!("failed to deliver LAN file event: {error}"))?;
-    Ok(event)
+    })
 }
 
 fn handle_incoming(
@@ -1146,7 +1149,9 @@ fn handle_incoming(
                 )?;
             }
             ControlFrame::FileComplete { transfer_id } => {
-                finish_file_transfer(&app, &root, &peer, &transfers, &transfer_id)?;
+                let event = finish_file_transfer(&root, &peer, &transfers, &transfer_id)?;
+                app.emit("rocketx://lan-file", event)
+                    .map_err(|error| format!("failed to deliver LAN file event: {error}"))?;
                 write_control_frame(&mut stream, &ControlFrame::Ack { id: transfer_id })?;
                 return Ok(());
             }
@@ -1474,32 +1479,52 @@ pub async fn lan_send_chat(
         (peer, current.identity.clone(), current.trusted.clone())
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let address: SocketAddr = format!("{}:{}", peer.ip, peer.port)
-            .parse()
-            .map_err(|_| "LAN peer address is invalid".to_string())?;
-        let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-            .map_err(|error| format!("failed to connect LAN peer: {error}"))?;
-        configure_stream(&stream)?;
-        connect_handshake(&mut stream, &identity, &peer, &trusted)?;
-        write_control_frame(
-            &mut stream,
-            &ControlFrame::Chat {
-                message_id: message_id.clone(),
-                room_id,
-                original_ts,
-                text,
-            },
-        )?;
-        match read_control_frame(&mut stream)? {
-            ControlFrame::Ack { id } if id == message_id => Ok(()),
-            ControlFrame::Error { code, message } => {
-                Err(format!("LAN peer rejected message ({code}): {message}"))
-            }
-            _ => Err("LAN peer returned an invalid acknowledgement".to_string()),
-        }
+        send_chat_to_peer(
+            &peer,
+            &identity,
+            &trusted,
+            message_id,
+            room_id,
+            original_ts,
+            text,
+        )
     })
     .await
     .map_err(|error| format!("LAN send task failed: {error}"))?
+}
+
+fn send_chat_to_peer(
+    peer: &LanPeer,
+    identity: &RuntimeIdentity,
+    trusted: &SharedTrusted,
+    message_id: String,
+    room_id: String,
+    original_ts: i64,
+    text: String,
+) -> Result<(), String> {
+    let address: SocketAddr = format!("{}:{}", peer.ip, peer.port)
+        .parse()
+        .map_err(|_| "LAN peer address is invalid".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+        .map_err(|error| format!("failed to connect LAN peer: {error}"))?;
+    configure_stream(&stream)?;
+    connect_handshake(&mut stream, identity, peer, trusted)?;
+    write_control_frame(
+        &mut stream,
+        &ControlFrame::Chat {
+            message_id: message_id.clone(),
+            room_id,
+            original_ts,
+            text,
+        },
+    )?;
+    match read_control_frame(&mut stream)? {
+        ControlFrame::Ack { id } if id == message_id => Ok(()),
+        ControlFrame::Error { code, message } => {
+            Err(format!("LAN peer rejected message ({code}): {message}"))
+        }
+        _ => Err("LAN peer returned an invalid acknowledgement".to_string()),
+    }
 }
 
 fn connect_to_peer(
@@ -1751,6 +1776,7 @@ pub async fn lan_send_file(
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::mpsc;
 
     use super::*;
 
@@ -1790,6 +1816,98 @@ mod tests {
             peer_key(&identity.peer.user_id, &identity.peer.device_id),
             identity.peer.public_key.clone(),
         )])))
+    }
+
+    fn handle_test_file_connection(
+        mut stream: TcpStream,
+        identity: Arc<RuntimeIdentity>,
+        trusted: SharedTrusted,
+        transfers: SharedTransfers,
+        root: PathBuf,
+        completed: mpsc::Sender<LanFileEvent>,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        configure_stream(&stream)?;
+        let peer = accept_handshake(&mut stream, &identity, &trusted)?;
+        loop {
+            match read_control_frame(&mut stream) {
+                Ok(ControlFrame::FileOffer {
+                    transfer_id,
+                    message_id,
+                    room_id,
+                    original_ts,
+                    file_name,
+                    size,
+                    chunk_bytes,
+                    chunk_count,
+                    blake3,
+                }) => {
+                    let indexes = prepare_file_offer(
+                        &root,
+                        &peer,
+                        &transfers,
+                        IncomingTransfer {
+                            version: PROTOCOL_VERSION,
+                            transfer_id: transfer_id.clone(),
+                            from_user_id: peer.user_id.clone(),
+                            from_device_id: peer.device_id.clone(),
+                            message_id,
+                            room_id,
+                            original_ts,
+                            file_name,
+                            size,
+                            chunk_bytes,
+                            chunk_count,
+                            blake3,
+                            received: Vec::new(),
+                        },
+                    )?;
+                    write_control_frame(
+                        &mut stream,
+                        &ControlFrame::MissingChunks {
+                            transfer_id,
+                            indexes,
+                        },
+                    )?;
+                    return Ok(());
+                }
+                Ok(ControlFrame::FileChunk {
+                    transfer_id,
+                    index,
+                    length,
+                    blake3,
+                }) => {
+                    let mut bytes = vec![0_u8; length as usize];
+                    stream
+                        .read_exact(&mut bytes)
+                        .map_err(|error| error.to_string())?;
+                    write_file_chunk(
+                        &root,
+                        &peer,
+                        &transfers,
+                        &transfer_id,
+                        index,
+                        &blake3,
+                        &bytes,
+                    )?;
+                    write_control_frame(
+                        &mut stream,
+                        &ControlFrame::Ack {
+                            id: format!("{transfer_id}:{index}"),
+                        },
+                    )?;
+                }
+                Ok(ControlFrame::FileComplete { transfer_id }) => {
+                    let event = finish_file_transfer(&root, &peer, &transfers, &transfer_id)?;
+                    completed.send(event).map_err(|error| error.to_string())?;
+                    write_control_frame(&mut stream, &ControlFrame::Ack { id: transfer_id })?;
+                    stop.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+                Ok(other) => return Err(format!("unexpected test frame: {other:?}")),
+                Err(_) => return Ok(()),
+            }
+        }
     }
 
     #[test]
@@ -1852,6 +1970,61 @@ mod tests {
         configure_stream(&stream).unwrap();
         connect_handshake(&mut stream, &alice, &expected_bob, &alice_trust).unwrap();
         assert_eq!(server.join().unwrap(), alice.peer);
+    }
+
+    #[test]
+    fn tcp_chat_delivers_without_any_rocket_chat_connection() {
+        let alice = runtime_identity("alice", "alice-device", signing_key(7));
+        let bob = runtime_identity("bob", "bob-device", signing_key(9));
+        let alice_trust = trust(&bob);
+        let bob_trust = trust(&alice);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_bob = LanPeer {
+            user_id: bob.peer.user_id.clone(),
+            device_id: bob.peer.device_id.clone(),
+            device_name: bob.device_name.clone(),
+            ip: address.ip().to_string(),
+            port: address.port(),
+            public_key: bob.peer.public_key.clone(),
+            trusted: true,
+            source: "test".to_string(),
+            last_seen_ms: now_ms(),
+        };
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            configure_stream(&stream).unwrap();
+            let peer = accept_handshake(&mut stream, &bob, &bob_trust).unwrap();
+            let frame = read_control_frame(&mut stream).unwrap();
+            assert_eq!(peer.user_id, "alice");
+            assert_eq!(
+                frame,
+                ControlFrame::Chat {
+                    message_id: "message-1".to_string(),
+                    room_id: "room-1".to_string(),
+                    original_ts: 123,
+                    text: "offline hello".to_string(),
+                }
+            );
+            write_control_frame(
+                &mut stream,
+                &ControlFrame::Ack {
+                    id: "message-1".to_string(),
+                },
+            )
+            .unwrap();
+        });
+        send_chat_to_peer(
+            &expected_bob,
+            &alice,
+            &alice_trust,
+            "message-1".to_string(),
+            "room-1".to_string(),
+            123,
+            "offline hello".to_string(),
+        )
+        .unwrap();
+        server.join().unwrap();
     }
 
     #[test]
@@ -1950,6 +2123,153 @@ mod tests {
         );
         let (part, _) = transfer_paths(&root, &transfer.transfer_id);
         assert_eq!(hash_file(&part).unwrap(), transfer.blake3);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn tcp_file_transfer_resumes_across_four_authenticated_streams() {
+        let root = std::env::temp_dir().join(format!(
+            "rocketx-lan-e2e-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let incoming = root.join("incoming");
+        fs::create_dir_all(&incoming).unwrap();
+        let source = root.join("payload.bin");
+        let mut source_file = File::create(&source).unwrap();
+        let payload_size = std::env::var("ROCKETX_LAN_E2E_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(CHUNK_BYTES as u64 * 3 + 17);
+        let payload = (0..CHUNK_BYTES as usize)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut remaining = payload_size;
+        while remaining > 0 {
+            let length = remaining.min(payload.len() as u64) as usize;
+            source_file.write_all(&payload[..length]).unwrap();
+            remaining -= length as u64;
+        }
+        source_file.sync_all().unwrap();
+
+        let alice = Arc::new(runtime_identity("alice", "alice-device", signing_key(7)));
+        let bob = Arc::new(runtime_identity("bob", "bob-device", signing_key(9)));
+        let alice_trust = trust(&bob);
+        let bob_trust = trust(&alice);
+        let transfers = Arc::new(Mutex::new(HashMap::new()));
+        let file_hash = hash_file(&source).unwrap();
+        let message_id = "message-file-1".to_string();
+        let transfer_id = blake3::hash(
+            format!(
+                "{}\0{}\0{}\0{}",
+                message_id, file_hash, bob.peer.user_id, bob.peer.device_id
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let metadata = fs::metadata(&source).unwrap();
+        let offer = IncomingTransfer {
+            version: PROTOCOL_VERSION,
+            transfer_id: transfer_id.clone(),
+            from_user_id: alice.peer.user_id.clone(),
+            from_device_id: alice.peer.device_id.clone(),
+            message_id: message_id.clone(),
+            room_id: "room-1".to_string(),
+            original_ts: 123,
+            file_name: "payload.bin".to_string(),
+            size: metadata.len(),
+            chunk_bytes: CHUNK_BYTES,
+            chunk_count: metadata.len().div_ceil(CHUNK_BYTES as u64),
+            blake3: file_hash.clone(),
+            received: Vec::new(),
+        };
+        prepare_file_offer(&incoming, &alice.peer, &transfers, offer).unwrap();
+        let mut first_chunk = vec![0_u8; CHUNK_BYTES as usize];
+        File::open(&source)
+            .unwrap()
+            .read_exact(&mut first_chunk)
+            .unwrap();
+        write_file_chunk(
+            &incoming,
+            &alice.peer,
+            &transfers,
+            &transfer_id,
+            0,
+            &blake3::hash(&first_chunk).to_hex().to_string(),
+            &first_chunk,
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_bob = LanPeer {
+            user_id: bob.peer.user_id.clone(),
+            device_id: bob.peer.device_id.clone(),
+            device_name: bob.device_name.clone(),
+            ip: address.ip().to_string(),
+            port: address.port(),
+            public_key: bob.peer.public_key.clone(),
+            trusted: true,
+            source: "test".to_string(),
+            last_seen_ms: now_ms(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let server = {
+            let bob = bob.clone();
+            let trusted = bob_trust.clone();
+            let transfers = transfers.clone();
+            let incoming = incoming.clone();
+            let stop = stop.clone();
+            thread::spawn(move || {
+                let mut handlers = Vec::new();
+                while !stop.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let bob = bob.clone();
+                            let trusted = trusted.clone();
+                            let transfers = transfers.clone();
+                            let incoming = incoming.clone();
+                            let completed = completed_tx.clone();
+                            let stop = stop.clone();
+                            handlers.push(thread::spawn(move || {
+                                let result = handle_test_file_connection(
+                                    stream, bob, trusted, transfers, incoming, completed, stop,
+                                );
+                                if let Err(error) = &result {
+                                    eprintln!("test receiver rejected connection: {error}");
+                                }
+                                result
+                            }));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("test listener failed: {error}"),
+                    }
+                }
+                for handler in handlers {
+                    handler.join().unwrap().unwrap();
+                }
+            })
+        };
+        let receipt = send_file_to_peer(
+            source.clone(),
+            expected_bob,
+            alice,
+            alice_trust,
+            message_id.clone(),
+            "room-1".to_string(),
+            123,
+        )
+        .unwrap();
+        let event = completed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        assert_eq!(receipt.blake3, file_hash);
+        assert_eq!(event.message_id, message_id);
+        assert_eq!(hash_file(Path::new(&event.local_path)).unwrap(), file_hash);
         fs::remove_dir_all(&root).unwrap();
     }
 

@@ -877,7 +877,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               className="mb-0.5 shrink-0 text-2xs text-ink-3"
               title="已通过可信局域网投递，等待 Rocket.Chat 恢复后回灌"
             >
-              局域网 · 待回灌
+              {message.rocketxLanBytesPerSecond
+                ? `局域网直传 · ${fmtSize(message.rocketxLanBytesPerSecond)}/s`
+                : '局域网 · 待回灌'}
             </span>
           )}
           {message.failed && (

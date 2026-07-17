@@ -107,6 +107,8 @@ export interface RcMessage {
   rocketxLocalPath?: string;
   /** LAN 文件整文件 BLAKE3，用于去重与验收。 */
   rocketxLanHash?: string;
+  /** 发送端实测的 LAN 文件吞吐量。 */
+  rocketxLanBytesPerSecond?: number;
 }
 
 export interface RcRoom {

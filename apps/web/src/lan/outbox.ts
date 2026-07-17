@@ -19,6 +19,12 @@ const entries = new Map<string, LanOutboxEntry>();
 let customFieldsSupported: boolean | undefined;
 const RETAIN_SYNCED_MS = 30 * 24 * 60 * 60 * 1000;
 
+export function lanOutboxCapability(): 'unknown' | 'server-metadata' | 'local-only' {
+  if (customFieldsSupported === true) return 'server-metadata';
+  if (customFieldsSupported === false) return 'local-only';
+  return 'unknown';
+}
+
 async function store() {
   return (await import('../kernel/store')).kernelStore;
 }
@@ -32,7 +38,7 @@ function storeId(scope: string, messageId: string): string {
   return `lan:${encodeURIComponent(scope)}:${messageId}`;
 }
 
-function validEntry(value: unknown): value is LanOutboxEntry {
+export function isLanOutboxEntry(value: unknown): value is LanOutboxEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<LanOutboxEntry>;
   return (
@@ -65,7 +71,7 @@ export async function hydrateLanOutbox(): Promise<RcMessage[]> {
   const cutoff = Date.now() - RETAIN_SYNCED_MS;
   const outbox = (await store()).outbox;
   for (const { id, value } of await outbox.list<unknown>()) {
-    if (!validEntry(value)) continue;
+    if (!isLanOutboxEntry(value)) continue;
     if (value.scope !== scope) continue;
     if (value.status === 'synced' && value.updatedAt < cutoff) {
       await outbox.delete(id);
@@ -135,6 +141,14 @@ function customOriginalTs(message: RcMessage): number | undefined {
   return undefined;
 }
 
+export function selectLanReplayEntries(
+  values: Iterable<LanOutboxEntry>,
+): LanOutboxEntry[] {
+  return [...values]
+    .filter((entry) => entry.direction === 'outgoing' && entry.status !== 'synced')
+    .sort((left, right) => left.originalTs - right.originalTs);
+}
+
 export function decorateLanMessage(message: RcMessage): RcMessage {
   const originalTs = customOriginalTs(message) ?? entries.get(message._id)?.originalTs;
   if (originalTs == null) return message;
@@ -188,9 +202,7 @@ async function sendAndReconcile(entry: LanOutboxEntry): Promise<RcMessage> {
 export async function flushLanOutbox(
   onSynced: (message: RcMessage) => void,
 ): Promise<number> {
-  const pending = [...entries.values()]
-    .filter((entry) => entry.direction === 'outgoing' && entry.status !== 'synced')
-    .sort((left, right) => left.originalTs - right.originalTs);
+  const pending = selectLanReplayEntries(entries.values());
   let synced = 0;
   for (const entry of pending) {
     await persist({ ...entry, status: 'syncing', updatedAt: Date.now() });
