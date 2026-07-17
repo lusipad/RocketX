@@ -9,7 +9,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 ```text
 ┌──────────────────────────────────────────┐
 │ RocketX Web / Desktop                    │
-│ Messages · Today · Tasks · Apps · Agents │
+│ Messages · Today · AI Assistant · Tasks · Codex │
 └──────────────┬───────────────────────────┘
                │ public REST + WebSocket APIs
         ┌──────▼──────┐       ┌──────────────────┐
@@ -68,6 +68,8 @@ Desktop development:
 ```bash
 pnpm --filter @rcx/desktop dev
 ```
+
+After signing in, open **AI Assistant** from the primary navigation to search messages and work data, query Azure DevOps work items, pull requests, and builds, or prepare a work-item draft. Every write still requires confirmation in the existing creation dialog. The desktop-only **Codex** entry lets you choose a local project directory and run or resume an isolated Codex session for that directory. Configure DeepSeek or another provider under **Settings → AI Steward**; API keys remain in the operating-system credential store.
 
 ## Verify changes
 
