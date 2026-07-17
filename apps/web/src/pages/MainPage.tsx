@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { PanelLeftOpen } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useUI } from '../stores/ui';
@@ -48,7 +47,7 @@ const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
 const NAV_WIDTH = 210;
 const GROUP_WIDTH = 150;
-const COLLAPSED_GROUP_WIDTH = 32;
+const COLLAPSED_GROUP_WIDTH = 48;
 const RESIZER_WIDTH = 6;
 
 export default function MainPage() {
@@ -332,18 +331,7 @@ export default function MainPage() {
       <NavRail onOpenShortcuts={() => setShortcutsOpen(true)} />
       {module === 'messages' ? (
         <>
-          {groupCollapsed ? (
-            <button
-              onClick={toggleGroupFilter}
-              title="展开分组栏"
-              aria-label="展开分组栏"
-              className="flex w-8 shrink-0 items-start justify-center border-r border-line bg-surface-2 pt-4 text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-            >
-              <PanelLeftOpen size={15} />
-            </button>
-          ) : (
-            <GroupFilter onCollapse={toggleGroupFilter} />
-          )}
+          <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
           <ConversationList width={conversationWidth} />
           <div
             role="separator"
