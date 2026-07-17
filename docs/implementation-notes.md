@@ -1,3 +1,53 @@
+# Implementation notes — M8 共享 Agent 与反向 MCP
+
+Plan: `docs/m8-implementation-plan.md`
+
+## Shipped vs planned
+
+- Rocket.Chat 话题现在承载共享 Codex 长会话：指令先成为普通消息，完整回复回到话题，过程事件只留在本机 Agent 面板。
+- 宿主租约、成员首次指挥审批、危险动作审批、串行指令队列、进程中断和 thread resume 均已落地。
+- 反向 MCP 以 `rocketx.exe --mcp` 提供三个只读 Rocket.Chat 上下文工具；可选 Agent Bot 只负责完整回复。
+
+## Decisions
+
+- 协议基线锁定为 `codex-cli 0.144.4`；生成类型与真实 stdio 握手均以同一二进制验证。
+- Rust 只负责每会话一个固定 Docker Runner、JSONL 传输和容器回收，TypeScript 负责协议语义、会话和审批。
+- Runner 只挂载当前会话工作区、独立 Codex 会话目录、只读临时附件和一个只读认证文件；宿主其他路径不进入容器。
+- 当前 11 类 server-initiated request 必须显式处理，未知请求安全拒绝。
+- 上下文包包含当前话题、被引用消息的整条已加载线程、参与者和消息中关联的 ADO 工作项；站内代码、日志、图片附件限量写入应用缓存并只读挂载，不写入用户项目。
+- 正常结束会话时清理临时附件；进程中断时保留，以便同一 Codex thread 恢复后继续引用。
+- Codex 默认只读；工作区写入和执行动作必须由当前宿主审批，显式敏感路径请求和审批命令会被拒绝。
+- MCP 与 Bot token 只存 Windows 凭据库；Bot 发送前还必须匹配当前 Rocket.Chat 服务器，避免切换账号后跨服务器代发。
+
+## Surprises
+
+- 本机 PATH CLI 为 `0.144.4`，桌面内置 CLI 为 `0.144.2`；两者都能握手，但不能共享同一份未校验的协议绑定。
+- 当前服务端主动请求面比蓝图列举更宽，包含认证刷新、attestation、当前时间和旧版审批兼容请求。
+- PowerShell 不会按 CLI 管道语义等待 Windows GUI 子系统程序；release MCP 必须用真实客户端的子进程 stdio pipe 方式验证，不能用 PowerShell 管道是否有输出判断。
+- Windows 原生 sandbox 无法兑现读隔离；Linux Runner 还需要为 npm 包内的 Codex 原生二进制提供 `codex-linux-sandbox` argv0 入口，才能让 bubblewrap 权限配置真正执行。
+
+## Verification
+
+- `codex app-server generate-ts --experimental` 已生成 671 个类型文件，`pnpm codex:protocol:check` 确认无漂移。
+- `pnpm smoke:codex-app-server` 在真实 `0.144.4` 进程完成 initialize、thread/start、turn/start、流式响应和 turn complete。
+- `pnpm agent:runner:test` 验证固定 0.144.4 镜像、只读/可写双配置、只读上下文附件、根目录与嵌套 `.env`、通用 credentials 文件、Codex 认证文件拒绝。
+- `pnpm smoke:agent-runner` 完成真实模型读取只读上下文附件、宿主逐次批准写入，并在强制移除容器后以同一 threadId resume 完成第二轮。
+- `pnpm test:pure`（219）、`pnpm test:regression`（229）、`pnpm smoke`（53）、`pnpm test:classify`（5）、`pnpm typecheck`、`pnpm build` 全部通过。
+- `cargo test --locked`（14）通过；`tauri build --no-bundle` 生成 v0.17.0 release 二进制。
+- Node 子进程以 stdin/stdout pipe 启动 `rocketx.exe --mcp`，initialize 返回协议 `2025-06-18`，tools/list 仅返回三个只读工具；专用测试账号可列出 54 个授权会话并读取其中一个，随机私有房间被拒绝。
+- 仓库及待提交 diff 的密钥样式扫描为零命中；合成密钥脱敏测试使用运行时拼接，避免假阳性。
+
+## Verification limits
+
+- 本轮 Windows Computer Use 官方 JavaScript 能力列表为空，无法完成 Agent 面板的真实窗口视觉验收；协议、状态机、生产构建和 release 进程路径已由自动化与真实子进程覆盖。
+- 共享 Agent 现在依赖正在运行的 Docker Desktop；AI 设置页提供状态诊断和一键构建固定 Runner 镜像，不会在 Docker 缺失时退回不安全的原生进程。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — 消息搜索无限滚动
 
 ## Shipped vs planned

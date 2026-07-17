@@ -72,7 +72,8 @@ export interface ComposerCommandContribution {
 export interface ComposerTriggerContribution {
   id: string;
   prefix: string;
-  run: (context: { rid: string; text: string; tmid?: string }) => void | Promise<void>;
+  /** 返回 false 表示保留原消息并继续正常发送。 */
+  run: (context: { rid: string; text: string; tmid?: string }) => boolean | void | Promise<boolean | void>;
 }
 
 export interface EntityLinkContribution {

@@ -13,6 +13,7 @@ import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
 import TodayPage from '../pages/TodayPage';
 import ThreadPanel from '../components/ThreadPanel';
+import AgentPanel from '../components/AgentPanel';
 import PinPanel from '../components/PinPanel';
 import StarredPanel from '../components/StarredPanel';
 import MembersPanel from '../components/MembersPanel';
@@ -22,6 +23,7 @@ import FilesPanel from '../components/FilesPanel';
 import MentionsPanel from '../components/MentionsPanel';
 import SummaryPanel from '../components/SummaryPanel';
 import { useAiAssistant } from '../stores/aiAssistant';
+import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
 import { AppManager, setActiveAppManager, type InstalledApp } from './installed';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
@@ -386,6 +388,7 @@ function registerBuiltins(): void {
     ['files', FilesPanel],
     ['mentions', MentionsPanel],
     ['ai', SummaryPanel],
+    ['agent', AgentPanel],
   ] as const;
   for (const [id, render] of panels) {
     kernelRegistry.register('core', 'panel.right', { id, render });
@@ -403,6 +406,8 @@ function registerBuiltins(): void {
     id: 'codex',
     prefix: '$codex',
     run: async (context) => {
+      // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
+      if (context.tmid) return false;
       try {
         await runCodexTrigger(context);
       } catch (error) {
@@ -410,11 +415,21 @@ function registerBuiltins(): void {
       }
     },
   });
+  kernelRegistry.register('core', 'composer.command', {
+    id: 'agent-exit',
+    name: 'exit',
+    description: '结束当前话题的共享 Agent 会话',
+    run: async ({ tmid }) => {
+      if (!tmid) throw new Error('/exit 只能在话题中结束共享 Agent 会话');
+      await useSharedAgent.getState().endSession(tmid);
+    },
+  });
 }
 
 function registerBridgeEvents(): void {
   if (bridgeEventsStarted) return;
   bridgeEventsStarted = true;
+  startSharedAgentBridge();
   useChat.subscribe((state, previous) => {
     if (state.activeRid !== previous.activeRid) {
       bridgeHost.emitAll('room.changed', { rid: state.activeRid });

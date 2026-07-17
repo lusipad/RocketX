@@ -30,7 +30,8 @@ export async function dispatchInput(
     .get('composer.trigger')
     .find((candidate) => text === candidate.prefix || text.startsWith(`${candidate.prefix} `));
   if (trigger) {
-    await trigger.run({ rid: dispatcher.rid, text, ...(tmid ? { tmid } : {}) });
+    const handled = await trigger.run({ rid: dispatcher.rid, text, ...(tmid ? { tmid } : {}) });
+    if (handled === false) return { handled: false };
     return { handled: true, accepted: true };
   }
   const slash = parseSlash(text);
