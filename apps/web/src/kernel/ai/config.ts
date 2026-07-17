@@ -24,6 +24,10 @@ export function getButlerBrain(): ButlerBrain {
   return defaultButlerBrain();
 }
 
+/** Codex 大脑在当前环境不可用时的统一文案（不静默回退，指引用户显式切换）。 */
+export const CODEX_BRAIN_UNAVAILABLE_MESSAGE =
+  '当前大脑设置为 Codex，但此环境不可用。请在 设置 → AI 管家 中切换为 API 大脑。';
+
 export function setButlerBrain(brain: ButlerBrain): void {
   localStorage.setItem(BUTLER_BRAIN_KEY, brain);
   window.dispatchEvent(new CustomEvent('rcx-butler-brain-changed'));
