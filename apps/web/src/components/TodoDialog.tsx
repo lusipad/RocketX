@@ -25,20 +25,24 @@ function shift(days: number): string {
 export default function TodoDialog({
   source,
   existing,
+  initialNote,
+  initialDue,
   onClose,
 }: {
   /** 新建时传消息快照 */
   source?: Omit<Todo, 'id' | 'done' | 'createdAt' | 'note' | 'due'>;
   /** 编辑时传已有待办 */
   existing?: Todo;
+  initialNote?: string;
+  initialDue?: string;
   onClose: () => void;
 }) {
   const add = useTodos((s) => s.add);
   const update = useTodos((s) => s.update);
   const setModule = useUI((s) => s.setModule);
 
-  const [note, setNote] = useState(existing?.note ?? '');
-  const [due, setDue] = useState(existing?.due ?? '');
+  const [note, setNote] = useState(existing?.note ?? initialNote ?? '');
+  const [due, setDue] = useState(existing?.due ?? initialDue ?? '');
 
   const excerpt = existing?.excerpt ?? source?.excerpt ?? '';
   const roomName = existing?.roomName ?? source?.roomName ?? '';

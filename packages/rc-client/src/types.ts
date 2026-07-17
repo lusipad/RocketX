@@ -48,6 +48,13 @@ export interface RcMessageAttachment {
   collapsed?: boolean;
 }
 
+export interface RcMessageMention {
+  _id: string;
+  username: string;
+  name?: string;
+  type?: 'user' | 'team';
+}
+
 export interface RcMessage {
   _id: string;
   rid: string;
@@ -79,6 +86,8 @@ export interface RcMessage {
   }[];
   attachments?: RcMessageAttachment[];
   reactions?: Record<string, { usernames: string[] }>;
+  /** 服务端解析后的结构化提及；比正文正则可靠。 */
+  mentions?: RcMessageMention[];
   pinned?: boolean;
   /** 标记（星标）了这条消息的用户 */
   starred?: { _id: string }[];

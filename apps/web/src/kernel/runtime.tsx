@@ -1,4 +1,3 @@
-import { createRcxStore } from '@rcx/rcx-store';
 import type { RcMessage } from '@rcx/rc-client';
 import { Blocks } from 'lucide-react';
 import { getServerBase, httpFetch, rest } from '../lib/client';
@@ -12,6 +11,7 @@ import TodosPage from '../pages/TodosPage';
 import CalendarPage from '../pages/CalendarPage';
 import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
+import TodayPage from '../pages/TodayPage';
 import ThreadPanel from '../components/ThreadPanel';
 import PinPanel from '../components/PinPanel';
 import StarredPanel from '../components/StarredPanel';
@@ -20,6 +20,8 @@ import SearchPanel from '../components/SearchPanel';
 import RoomInfoPanel from '../components/RoomInfoPanel';
 import FilesPanel from '../components/FilesPanel';
 import MentionsPanel from '../components/MentionsPanel';
+import SummaryPanel from '../components/SummaryPanel';
+import { useAiAssistant } from '../stores/aiAssistant';
 import { AppManager, setActiveAppManager, type InstalledApp } from './installed';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
@@ -29,12 +31,15 @@ import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
+import { initializeAiRuntime } from './ai/runtime';
+import { kernelStore } from './store';
+import { runCodexTrigger } from '../lib/codexOnce';
 
-const store = createRcxStore();
-export const permissionGate = new PermissionGate((entry) => store.audit.append(entry).then(() => {}));
+export { kernelStore } from './store';
+export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
 export const capabilityBus = new CapabilityBus(permissionGate);
 export const bridgeHost = new BridgeHost(capabilityBus);
-export const installedApps = new AppManager(store);
+export const installedApps = new AppManager(kernelStore);
 
 let initialized = false;
 let bridgeEventsStarted = false;
@@ -131,20 +136,20 @@ function registerCapabilities(): void {
     return { type: blob.type, size: blob.size, base64: btoa(binary) };
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>
-    store.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),
+    kernelStore.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),
   );
   capabilityBus.register('storage.set', 'storage:local', async (params, context) => {
     const object = params as { key?: unknown; value?: unknown } | undefined;
     if (typeof object?.key !== 'string' || !object.key) throw new Error('storage.set 缺少 key');
-    await store.appData.set(scopedAppId(context.appId), object.key, object.value);
+    await kernelStore.appData.set(scopedAppId(context.appId), object.key, object.value);
     return { ok: true };
   });
   capabilityBus.register('storage.delete', 'storage:local', async (params, context) => {
-    await store.appData.delete(scopedAppId(context.appId), stringParam(params, 'key'));
+    await kernelStore.appData.delete(scopedAppId(context.appId), stringParam(params, 'key'));
     return { ok: true };
   });
   capabilityBus.register('storage.list', 'storage:local', (_params, context) =>
-    store.appData.list(scopedAppId(context.appId)),
+    kernelStore.appData.list(scopedAppId(context.appId)),
   );
   capabilityBus.register('ui.notify', 'ui:notify', (params) => {
     const object = params as { kind?: unknown; props?: unknown } | undefined;
@@ -362,6 +367,7 @@ function activateApp(app: InstalledApp): () => void {
 
 function registerBuiltins(): void {
   const modules = [
+    ['today', '今日', TodayPage],
     ['todos', '待办', TodosPage],
     ['calendar', '日历', CalendarPage],
     ['contacts', '通讯录', ContactsPage],
@@ -379,10 +385,31 @@ function registerBuiltins(): void {
     ['info', RoomInfoPanel],
     ['files', FilesPanel],
     ['mentions', MentionsPanel],
+    ['ai', SummaryPanel],
   ] as const;
   for (const [id, render] of panels) {
     kernelRegistry.register('core', 'panel.right', { id, render });
   }
+  kernelRegistry.register('core', 'composer.command', {
+    id: 'summary',
+    name: 'summary',
+    description: '用 AI 总结当前会话未读消息',
+    run: ({ rid }) => {
+      useChat.getState().setPanel({ kind: 'ai' });
+      void useAiAssistant.getState().summarize(rid);
+    },
+  });
+  kernelRegistry.register('core', 'composer.trigger', {
+    id: 'codex',
+    prefix: '$codex',
+    run: async (context) => {
+      try {
+        await runCodexTrigger(context);
+      } catch (error) {
+        toast.error(error, 'Codex 执行失败');
+      }
+    },
+  });
 }
 
 function registerBridgeEvents(): void {
@@ -410,6 +437,7 @@ export function initializeKernel(): void {
   if (initialized) return;
   initialized = true;
   setActiveAppManager(installedApps);
+  initializeAiRuntime(kernelStore);
   registerCapabilities();
   registerBuiltins();
   installModuleValidator(

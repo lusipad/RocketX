@@ -4,7 +4,15 @@
 mod diagnostics;
 mod winauth;
 
-use std::{collections::HashSet, sync::Mutex};
+use std::{
+    collections::HashSet,
+    io::{Read, Write},
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
+};
 #[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
@@ -19,6 +27,214 @@ use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 const MAIN_TRAY_ID: &str = "main";
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
+
+struct AiKeychainLock(Mutex<()>);
+
+const AI_KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.ai";
+
+fn validate_ai_provider_id(provider_id: &str) -> Result<&str, String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty()
+        || provider_id.len() > 128
+        || provider_id.chars().any(char::is_control)
+    {
+        return Err("invalid AI provider id".to_string());
+    }
+    Ok(provider_id)
+}
+
+fn ai_keychain_entry(provider_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(AI_KEYCHAIN_SERVICE, validate_ai_provider_id(provider_id)?)
+        .map_err(|error| format!("AI keychain is unavailable: {error}"))
+}
+
+#[tauri::command]
+fn ai_secret_set(
+    keychain: tauri::State<'_, AiKeychainLock>,
+    provider_id: String,
+    secret: String,
+) -> Result<(), String> {
+    if secret.is_empty() || secret.len() > 64 * 1024 {
+        return Err("invalid AI provider secret".to_string());
+    }
+    let _guard = keychain
+        .0
+        .lock()
+        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
+    ai_keychain_entry(&provider_id)?
+        .set_password(&secret)
+        .map_err(|error| format!("failed to save AI provider secret: {error}"))
+}
+
+#[tauri::command]
+fn ai_secret_get(
+    keychain: tauri::State<'_, AiKeychainLock>,
+    provider_id: String,
+) -> Result<Option<String>, String> {
+    let _guard = keychain
+        .0
+        .lock()
+        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
+    match ai_keychain_entry(&provider_id)?.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("failed to read AI provider secret: {error}")),
+    }
+}
+
+#[tauri::command]
+fn ai_secret_delete(
+    keychain: tauri::State<'_, AiKeychainLock>,
+    provider_id: String,
+) -> Result<(), String> {
+    let _guard = keychain
+        .0
+        .lock()
+        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
+    match ai_keychain_entry(&provider_id)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("failed to delete AI provider secret: {error}")),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecResult {
+    text: String,
+    thread_id: Option<String>,
+}
+
+fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult, String> {
+    if prompt.trim().is_empty() || prompt.len() > 100_000 {
+        return Err("Codex prompt is empty or too long".to_string());
+    }
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
+    let mut command = Command::new("codex");
+    command.args([
+        "exec",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "-C",
+    ]);
+    command.arg(&cache_dir).arg("-");
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Codex CLI is unavailable: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Codex stdin is unavailable".to_string())?
+        .write_all(prompt.as_bytes())
+        .map_err(|error| format!("failed to send prompt to Codex: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Codex stdout is unavailable".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Codex stderr is unavailable".to_string())?;
+    let stdout_reader = thread::spawn(move || {
+        let mut value = String::new();
+        let _ = stdout.read_to_string(&mut value);
+        value
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut value = String::new();
+        let _ = stderr.read_to_string(&mut value);
+        value
+    });
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed to monitor Codex: {error}"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Codex timed out after 5 minutes".to_string());
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "failed to read Codex output".to_string())?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "failed to read Codex error output".to_string())?;
+    if !status.success() {
+        let detail = stderr.trim().chars().take(2_000).collect::<String>();
+        return Err(format!(
+            "Codex exited with {}{}",
+            status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        ));
+    }
+    let mut text = String::new();
+    let mut thread_id = None;
+    for line in stdout.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(|value| value.as_str()) == Some("thread.started") {
+            thread_id = event
+                .get("thread_id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned);
+        }
+        let item = event.get("item");
+        if event.get("type").and_then(|value| value.as_str()) == Some("item.completed")
+            && item.and_then(|value| value.get("type")).and_then(|value| value.as_str())
+                == Some("agent_message")
+        {
+            if let Some(value) = item
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str())
+            {
+                text = value.to_string();
+            }
+        }
+    }
+    if text.trim().is_empty() {
+        return Err("Codex completed without an agent response".to_string());
+    }
+    Ok(CodexExecResult { text, thread_id })
+}
+
+#[tauri::command]
+async fn codex_exec_once(app: tauri::AppHandle, prompt: String) -> Result<CodexExecResult, String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("failed to resolve app cache directory: {error}"))?
+        .join("codex-once");
+    tauri::async_runtime::spawn_blocking(move || run_codex_once(cache_dir, prompt))
+        .await
+        .map_err(|error| format!("Codex task failed: {error}"))?
+}
 
 fn normalize_http_origin(value: &str) -> Result<String, String> {
     let value = value.trim();
@@ -211,7 +427,7 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 
 #[cfg(test)]
 mod tray_icon_tests {
-    use super::{dim_tray_icon, normalize_http_origin};
+    use super::{dim_tray_icon, normalize_http_origin, validate_ai_provider_id};
     use tauri::image::Image;
 
     #[test]
@@ -230,6 +446,13 @@ mod tray_icon_tests {
         assert!(normalize_http_origin("ftp://chat.example.test").is_err());
         assert!(normalize_http_origin("https://user:secret@chat.example.test").is_err());
     }
+
+    #[test]
+    fn ai_keychain_rejects_unsafe_provider_ids() {
+        assert_eq!(validate_ai_provider_id("deepseek").unwrap(), "deepseek");
+        assert!(validate_ai_provider_id("").is_err());
+        assert!(validate_ai_provider_id("bad\nname").is_err());
+    }
 }
 
 fn main() {
@@ -247,9 +470,14 @@ fn main() {
             set_tray_icon_normal,
             set_tray_tooltip,
             show_main_window,
-            show_message_notification
+            show_message_notification,
+            ai_secret_set,
+            ai_secret_get,
+            ai_secret_delete,
+            codex_exec_once
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
+        .manage(AiKeychainLock(Mutex::new(())))
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
         .plugin(tauri_plugin_http::init())

@@ -39,6 +39,8 @@ import { usePrefs } from './prefs';
 import { useOnboarding } from './onboarding';
 import { humanError, toast } from './toast';
 import { useUI } from './ui';
+import { routeNotification, type NotificationAggregationInput } from '../lib/notificationAggregation';
+import { useNotificationAggregation } from './notificationAggregation';
 
 export interface Conversation {
   rid: string;
@@ -101,6 +103,7 @@ export type RightPanel =
   | { kind: 'info' }
   | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
+  | { kind: 'ai' }
   | { kind: `app:${string}`; props?: unknown }
   | null;
 
@@ -599,7 +602,8 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     }
   }
 
-  const me = useAuth.getState().user?.username;
+  const currentUser = useAuth.getState().user;
+  const me = currentUser?.username;
   const mentioned =
     !!me &&
     new RegExp(`@(${me.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}|all|here)\\b`).test(msg.msg ?? '');
@@ -624,6 +628,30 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
 
   const title = msg.u.name || msg.u.username;
   const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
+  const directMention = !!currentUser && !!msg.mentions?.some((mention) =>
+    mention._id === currentUser._id || mention.username === currentUser.username,
+  );
+  const broadcastMention = /@(all|here)\b/i.test(msg.msg ?? '');
+  const aggregation = useNotificationAggregation.getState();
+  const aggregationState = aggregation.state;
+  const candidate: NotificationAggregationInput = {
+    id: msg._id,
+    roomId: rid,
+    roomName: subscription.fname || subscription.name || state.rooms[rid]?.fname || state.rooms[rid]?.name || '会话',
+    senderName: title,
+    text: body,
+    timestamp: tsMs(msg.ts),
+    directMessage: !isGroupish,
+    directMention,
+    broadcastMention,
+    priority: /(^|\s|[\[【])P1(?=$|\s|[\]】:：])/i.test(body) ? 1 : undefined,
+  };
+  const phase = aggregationState?.metrics.activePhase;
+  if (phase) aggregation.recordCandidate(phase, candidate.timestamp);
+  if (aggregationState && routeNotification(candidate, aggregationState.config).mode === 'aggregate') {
+    aggregation.addAggregate(candidate);
+    return;
+  }
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
   void desktopNotify({
     title,
@@ -636,6 +664,8 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
       useUI.getState().setModule('messages');
       void useChat.getState().jumpToMessage(msg._id, rid);
     },
+  }).then((shown) => {
+    if (shown && phase) useNotificationAggregation.getState().recordPopup(phase, Date.now(), 'passthrough');
   }).catch(() => {});
 }
 

@@ -36,6 +36,9 @@ import {
   nextUnreadConversation,
 } from '../lib/conversationView';
 import ShortcutHelpDialog from '../components/ShortcutHelpDialog';
+import { useAuth } from '../stores/auth';
+import { useNotificationAggregation } from '../stores/notificationAggregation';
+import { desktopNotify } from '../lib/notify';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -55,6 +58,7 @@ export default function MainPage() {
   const switcher = useUI((s) => s.switcherOpen);
   const switcherCommandCenter = useUI((s) => s.switcherCommandCenter);
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
+  const userId = useAuth((s) => s.user?._id);
 
   const loadPrefs = usePrefs((s) => s.load);
   const unreadAlert = usePrefs((s) => s.prefs.unreadAlert);
@@ -81,6 +85,36 @@ export default function MainPage() {
     void init();
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
   }, [init, loadPrefs]);
+
+  useEffect(() => {
+    if (!userId) return;
+    useNotificationAggregation.getState().hydrate(userId);
+    const flush = () => {
+      const store = useNotificationAggregation.getState();
+      const summaries = store.flushDue(Date.now());
+      for (const summary of summaries) {
+        void desktopNotify({
+          title: `${summary.roomName} · ${summary.count} 条新消息`,
+          body: `${summary.latestSenderName}：${summary.latestText}`.slice(0, 120),
+          tag: `aggregate:${summary.roomId}`,
+          rid: summary.roomId,
+          mid: summary.latestMessageId,
+          onClick: () => {
+            window.focus();
+            useUI.getState().setModule('messages');
+            void useChat.getState().jumpToMessage(summary.latestMessageId, summary.roomId);
+          },
+        }).then((shown) => {
+          const current = useNotificationAggregation.getState();
+          const phase = current.state?.metrics.activePhase;
+          if (shown && phase) current.recordPopup(phase, Date.now(), 'aggregate');
+        }).catch(() => {});
+      }
+    };
+    flush();
+    const timer = window.setInterval(flush, 30_000);
+    return () => window.clearInterval(timer);
+  }, [userId]);
 
   // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
   useEffect(() => {

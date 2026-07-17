@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react';
 import { tsMs, type RcMessage, type RcRoom, type RcUser } from '@rcx/rc-client';
-import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search, SlidersHorizontal } from 'lucide-react';
+import { BriefcaseBusiness, CalendarDays, FileText, Hash, ListTodo, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { displayName, personName, useAliases } from '../stores/aliases';
@@ -40,6 +40,7 @@ import {
 } from '../lib/searchFilters';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
+import { getSemanticSearchIndex } from '../kernel/ai/semantic-runtime';
 
 type Tab = QuickSearchTab;
 type ResultTab = Exclude<Tab, 'all'>;
@@ -95,6 +96,7 @@ export default function QuickSwitcher({
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
   const fileIndex = useFileIndex((s) => s.index);
+  const loadedMessages = useChat((s) => s.messages);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'all');
   const [keyword, setKeyword] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -119,6 +121,10 @@ export default function QuickSwitcher({
   const [messageSettledKeyword, setMessageSettledKeyword] = useState('');
   const [contactSettledKeyword, setContactSettledKeyword] = useState('');
   const [messageSearchAllKeyword, setMessageSearchAllKeyword] = useState('');
+  const [semanticMode, setSemanticMode] = useState(false);
+  const [semanticMessages, setSemanticMessages] = useState<RcMessage[]>([]);
+  const [semanticSearching, setSemanticSearching] = useState(false);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchProviderRef = useRef<Promise<unknown> | null>(null);
@@ -175,8 +181,8 @@ export default function QuickSwitcher({
     fileType: fileTypeFilter,
   }), [fileTypeFilter, senderFilter, timeFilter]);
   const filteredMessages = useMemo(
-    () => filterMessageResults(messages, filters),
-    [filters, messages],
+    () => filterMessageResults(semanticMode ? semanticMessages : messages, filters),
+    [filters, messages, semanticMessages, semanticMode],
   );
   const shownMessages = useMemo(
     () => filteredMessages.slice(0, visibleMessageCount),
@@ -217,6 +223,61 @@ export default function QuickSwitcher({
   );
   const conversationRidsRef = useRef<string[]>([]);
   conversationRidsRef.current = messageSearchRids;
+  const effectiveMessageSearching = semanticMode ? semanticSearching : messageSearching;
+  const effectiveMessageError = semanticMode ? semanticError : messageError;
+  const effectiveMessageCount = semanticMode ? semanticMessages.length : messages.length;
+
+  useEffect(() => {
+    if (!semanticMode) return;
+    const query = keyword.trim();
+    if (!query || !myId) {
+      setSemanticMessages([]);
+      setSemanticError(null);
+      setSemanticSearching(false);
+      return;
+    }
+    let current = true;
+    const handle = setTimeout(() => {
+      setSemanticSearching(true);
+      setSemanticError(null);
+      const memberRoomIds = Object.keys(subscriptions).sort();
+      const scope = {
+        serverId: getServerBase() || location.origin,
+        userId: myId,
+        memberRoomIds,
+      };
+      const documents = memberRoomIds.flatMap((rid) =>
+        (loadedMessages[rid] ?? [])
+          .filter((message) => !!message.msg?.trim())
+          .map((message) => ({
+            id: message._id,
+            roomId: rid,
+            text: message.msg!,
+            revision: tsMs(message.ts),
+            payload: message,
+          })),
+      );
+      void getSemanticSearchIndex()
+        .synchronize(documents, scope)
+        .then(() => getSemanticSearchIndex().search<RcMessage>(query, scope, { limit: 50, minScore: 0.2 }))
+        .then((results) => {
+          if (current) setSemanticMessages(results.flatMap((result) => result.payload ? [result.payload] : []));
+        })
+        .catch((error) => {
+          if (current) {
+            setSemanticMessages([]);
+            setSemanticError(error instanceof Error ? error.message : String(error));
+          }
+        })
+        .finally(() => {
+          if (current) setSemanticSearching(false);
+        });
+    }, 300);
+    return () => {
+      current = false;
+      clearTimeout(handle);
+    };
+  }, [keyword, loadedMessages, myId, semanticMode, subscriptions]);
 
   const messageSearchBackend = () => ({
     provider: () => {
@@ -405,6 +466,7 @@ export default function QuickSwitcher({
       );
       return;
     }
+    if (semanticMode) return;
 
     const q = keyword.trim();
     const searchAllMessages = messageSearchAllKeyword === q;
@@ -693,6 +755,18 @@ export default function QuickSwitcher({
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
+          <button
+            title="使用 AI embedding 按语义搜索已加载消息"
+            onClick={() => {
+              setSemanticMode((enabled) => !enabled);
+              setTab('messages');
+            }}
+            className={`flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs transition ${
+              semanticMode ? 'bg-primary-light text-primary' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
+            }`}
+          >
+            <Sparkles size={13} />语义
+          </button>
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
         </div>
 
@@ -782,13 +856,15 @@ export default function QuickSwitcher({
         {!!keyword.trim() && (
           <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1/40 px-4 py-2 text-2xs text-ink-3">
             <span>
-              {messageSearchAllKeyword === keyword.trim()
+              {semanticMode
+                ? '语义搜索范围：本机已加载的成员会话消息'
+                : messageSearchAllKeyword === keyword.trim()
                 ? messageSearching
                   ? '正在搜索全部会话的消息…'
                   : '消息搜索范围：全部会话'
                 : `消息默认搜索本机和${activeRid ? '当前会话' : '最近会话'}`}
             </span>
-            {messageSearchAllKeyword !== keyword.trim() && (
+            {!semanticMode && messageSearchAllKeyword !== keyword.trim() && (
               <button
                 className="rounded px-2 py-1 font-medium text-primary hover:bg-primary-light"
                 onClick={requestFullMessageSearch}
@@ -927,12 +1003,14 @@ export default function QuickSwitcher({
 
           {tab === 'messages' && (
             <>
-              {messageSearching && (
-                <div className={messages.length > 0
+              {effectiveMessageSearching && (
+                <div className={effectiveMessageCount > 0
                   ? 'px-4 py-1.5 text-2xs text-ink-3'
                   : 'py-8 text-center text-sm text-ink-3'}
                 >
-                  {messages.length > 0
+                  {semanticMode
+                    ? '正在更新向量索引并进行语义检索…'
+                    : effectiveMessageCount > 0
                     ? messageSearchAllKeyword === keyword.trim()
                       ? '已显示本机和已完成会话的结果，正在继续搜索全部会话…'
                       : '已显示本机结果，正在补充当前会话…'
@@ -941,30 +1019,38 @@ export default function QuickSwitcher({
                       : '正在搜索当前会话…'}
                 </div>
               )}
-              {!messageSearching && messageError && (
-                <div className={messages.length > 0
+              {!effectiveMessageSearching && effectiveMessageError && (
+                <div className={effectiveMessageCount > 0
                   ? 'px-4 py-1.5 text-2xs text-warning'
                   : 'py-8 text-center text-sm text-danger'}
                 >
-                  {messages.length > 0 ? '已显示本机结果，部分远端历史暂时不可用' : messageError}
+                  {effectiveMessageCount > 0
+                    ? '已显示本机结果，部分历史暂时不可用'
+                    : effectiveMessageError}
                 </div>
               )}
-              {!messageSearching && !messageError && keyword.trim() && filteredMessages.length === 0 && (
+              {!effectiveMessageSearching && !effectiveMessageError && keyword.trim() && filteredMessages.length === 0 && (
                 <div className="py-8 text-center text-sm text-ink-3">
-                  {messages.length > 0 && activeFilterCount > 0
+                  {effectiveMessageCount > 0 && activeFilterCount > 0
                     ? '当前筛选条件下没有消息'
+                    : semanticMode
+                      ? '已加载消息中没有找到语义相近的内容'
                     : messageSearchAllKeyword === keyword.trim()
                       ? '全部会话中没有找到相关消息'
                       : '本机和当前会话中没有找到相关消息'}
                 </div>
               )}
-              {!messageSearching && !messageError && !keyword.trim() && (
-                <div className="py-8 text-center text-sm text-ink-3">输入关键词，先搜索本机和当前会话</div>
+              {!effectiveMessageSearching && !effectiveMessageError && !keyword.trim() && (
+                <div className="py-8 text-center text-sm text-ink-3">
+                  {semanticMode ? '输入自然语言，语义搜索本机已加载消息' : '输入关键词，先搜索本机和当前会话'}
+                </div>
               )}
-              {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
+              {!effectiveMessageSearching && !effectiveMessageError && keyword.trim() && effectiveMessageCount > 0 && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">
                   已显示 {shownMessages.length} 条
-                  {(shownMessages.length < filteredMessages.length || messageHasMore)
+                  {semanticMode
+                    ? '语义结果'
+                    : (shownMessages.length < filteredMessages.length || messageHasMore)
                     ? '，滚动到底继续加载'
                     : messageSearchAllKeyword === keyword.trim()
                       ? '，已加载全部匹配消息'

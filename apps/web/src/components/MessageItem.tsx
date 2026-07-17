@@ -28,6 +28,7 @@ import {
   Share2,
   SmilePlus,
   Star,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
@@ -57,6 +58,13 @@ import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
 import { useKernelContributions } from '../kernel/registry';
+import {
+  extractMessageAction,
+  toTodoPrefill,
+  toWorkItemPrefill,
+  type TodoPrefill,
+  type WorkItemPrefill,
+} from '../kernel/ai/features/message-extraction';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -497,6 +505,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
   const [createWi, setCreateWi] = useState(false);
+  const [aiExtracting, setAiExtracting] = useState(false);
+  const [aiTodo, setAiTodo] = useState<TodoPrefill | null>(null);
+  const [aiWorkItem, setAiWorkItem] = useState<WorkItemPrefill | null>(null);
 
   // 悬浮操作栏延迟出现：鼠标停留一段时间才显示，避免划过消息就闪一排按钮
   // （issue #18.4，默认 3 秒，设置里可调）。离开立即收起。
@@ -525,6 +536,31 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   );
 
   const displayName = message.u.name || message.u.username;
+  const extractWithAi = async (target: 'todo' | 'workitem') => {
+    if (aiExtracting) return;
+    const text = stripQuotePrefix(message.msg ?? '').trim();
+    if (!text) {
+      toast.error('这条消息没有可提取的文字');
+      return;
+    }
+    setAiExtracting(true);
+    try {
+      const draft = await extractMessageAction({
+        rid: message.rid,
+        mid: message._id,
+        roomName,
+        author: displayName,
+        text,
+        sentAt: new Date(tsMs(message.ts)).toISOString(),
+      });
+      if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
+      else setAiWorkItem(toWorkItemPrefill(draft));
+    } catch (error) {
+      toast.error(error, 'AI 提取失败');
+    } finally {
+      setAiExtracting(false);
+    }
+  };
   const time = fmtTime(tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(message.msg ?? '');
@@ -592,6 +628,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onClick: () => void toggleStar(message),
     },
     { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
+    {
+      label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
+      icon: aiExtracting ? Loader2 : Sparkles,
+      onClick: () => void extractWithAi('todo'),
+    },
+    {
+      label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
+      icon: aiExtracting ? Loader2 : Sparkles,
+      onClick: () => void extractWithAi('workitem'),
+    },
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,
@@ -887,6 +933,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           onClose={() => setTodoOpen(false)}
         />
       )}
+      {aiTodo && (
+        <TodoDialog
+          source={{
+            rid: aiTodo.rid,
+            mid: aiTodo.mid,
+            roomName: aiTodo.roomName,
+            excerpt: aiTodo.excerpt.slice(0, 200),
+            author: aiTodo.author,
+          }}
+          initialNote={aiTodo.note}
+          initialDue={aiTodo.due}
+          onClose={() => setAiTodo(null)}
+        />
+      )}
       {showCard && (
         <UserCard
           user={{ username: message.u.username, name: message.u.name }}
@@ -907,6 +967,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           defaultTitle={stripQuotePrefix(message.msg ?? '').slice(0, 200)}
           rid={message.rid}
           onClose={() => setCreateWi(false)}
+        />
+      )}
+      {aiWorkItem && (
+        <CreateWorkItemDialog
+          defaultTitle={aiWorkItem.title}
+          defaultDescription={aiWorkItem.description}
+          defaultType={aiWorkItem.type}
+          defaultTags={aiWorkItem.tags}
+          rid={message.rid}
+          onClose={() => setAiWorkItem(null)}
         />
       )}
     </div>

@@ -17,6 +17,7 @@ import {
   PanelLeft,
   Server,
   ShieldCheck,
+  Sparkles,
   Sun,
   Trash2,
   XCircle,
@@ -54,6 +55,9 @@ import {
 } from '../kernel/manifest';
 import { SENSITIVE_PERMISSIONS } from '../kernel/permission';
 import { ensureHttpOrigin, httpFetch } from '../lib/http';
+import AiSettings from '../components/AiSettings';
+import { useNotificationAggregation } from '../stores/notificationAggregation';
+import { attentionReduction } from '../lib/notificationAggregation';
 
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
@@ -68,6 +72,7 @@ type Section =
   | 'desktop'
   | 'shortcuts'
   | 'workbench'
+  | 'ai'
   | 'apps'
   | 'about';
 
@@ -80,6 +85,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'desktop', label: '桌面端', icon: Monitor },
   { key: 'shortcuts', label: '快捷键', icon: Keyboard },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
+  { key: 'ai', label: 'AI 管家', icon: Sparkles },
   { key: 'apps', label: '应用', icon: Blocks },
   { key: 'about', label: '关于', icon: Info },
 ];
@@ -743,12 +749,26 @@ function NotificationSection() {
   const markChecklist = useOnboarding((s) => s.markChecklist);
   const taskbarFlash = useUiPrefs((s) => s.taskbarFlash);
   const setTaskbarFlash = useUiPrefs((s) => s.setTaskbarFlash);
+  const userId = useAuth((s) => s.user?._id);
+  const aggregationState = useNotificationAggregation((s) => s.state);
+  const updateAggregation = useNotificationAggregation((s) => s.updateConfig);
+  const beginMeasurement = useNotificationAggregation((s) => s.beginMeasurement);
   // granted / default(未开启,可申请)。桌面端无法区分 denied,统一按可申请处理
   const [permission, setPermission] = useState<'granted' | 'default'>('default');
 
   useEffect(() => {
     void notifyPermissionGranted().then((ok) => setPermission(ok ? 'granted' : 'default'));
   }, []);
+
+  useEffect(() => {
+    if (userId) useNotificationAggregation.getState().hydrate(userId);
+  }, [userId]);
+
+  const today = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  })();
+  const reduction = aggregationState ? attentionReduction(aggregationState.metrics, today) : null;
 
   return (
     <>
@@ -791,6 +811,76 @@ function NotificationSection() {
           ]}
         />
       </Row>
+
+      {aggregationState && (
+        <>
+          <Row label="通知聚合" hint="普通消息按会话合并，紧急消息仍立即穿透" inline>
+            <Toggle
+              checked={aggregationState.config.enabled}
+              onChange={(enabled) => updateAggregation({ enabled })}
+            />
+          </Row>
+          <Row label="聚合窗口" hint="同一会话在窗口结束后只弹一条摘要">
+            <select
+              value={aggregationState.config.windowMinutes}
+              onChange={(event) => updateAggregation({ windowMinutes: Number(event.target.value) })}
+              className="h-8 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
+            >
+              {[1, 3, 5, 10, 15, 30].map((minutes) => (
+                <option key={minutes} value={minutes}>{minutes} 分钟</option>
+              ))}
+            </select>
+          </Row>
+          <Row label="紧急穿透" hint="这些消息不等待聚合，直接弹出">
+            <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-ink-2">
+              {([
+                ['directMentions', '@我'],
+                ['directMessages', '私聊'],
+                ['broadcastMentions', '@all / @here'],
+                ['priorityOne', 'P1'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={aggregationState.config.urgent[key]}
+                    onChange={(event) => updateAggregation({ urgent: { [key]: event.target.checked } })}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <input
+              value={aggregationState.config.urgent.keywords.join('；')}
+              onChange={(event) => updateAggregation({
+                urgent: { keywords: event.target.value.split(/[;；]/) },
+              })}
+              placeholder="紧急关键词，用分号分隔"
+              className="mt-2 h-8 w-full max-w-md rounded-md border border-line bg-surface-4 px-2 text-xs text-ink outline-none"
+            />
+          </Row>
+          <Row label="注意力效果" hint="至少记录 7 天基线和 14 天聚合使用期后判定是否下降 50%">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => beginMeasurement('baseline', today)}
+                className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                开始基线
+              </button>
+              <button
+                onClick={() => beginMeasurement('dogfood', today)}
+                className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                开始聚合验证
+              </button>
+              <span className="text-xs text-ink-3">
+                {reduction?.reductionRate == null
+                  ? `基线 ${reduction?.baselineDays ?? 0} 天 · 验证 ${reduction?.dogfoodDays ?? 0} 天`
+                  : `弹窗下降 ${Math.round(reduction.reductionRate * 100)}%${reduction.eligible ? (reduction.targetMet ? ' · 已达标' : ' · 未达标') : ' · 数据积累中'}`}
+              </span>
+            </div>
+          </Row>
+        </>
+      )}
 
       <Row label="提示音音量">
         <Slider
@@ -1608,6 +1698,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'desktop' && <DesktopSection />}
               {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
+              {section === 'ai' && <AiSettings />}
               {section === 'apps' && <AppsSection />}
               {section === 'about' && <AboutSection />}
             </>
