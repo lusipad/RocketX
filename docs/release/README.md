@@ -18,9 +18,15 @@ The `v1.0.0` tag workflow requires two JSON evidence files. Do not add them unti
 
 `v1.0.0-g4.json` uses gate `G4` and document `docs/app-development.md`. Each run must finish within 30 minutes and reference at least one retained log, recording, or observer note. Do not commit personal names, credentials, server URLs, or other private data.
 
+## Repository release controls
+
+The `npm-release` and `release` environments accept deployments from `main` only and require approval from `lusipad`. Self-review remains enabled because RocketX is currently a single-maintainer project; the approval still keeps publication separate from build completion.
+
+The active `Protect immutable v* release tags` ruleset prevents updates, force-pushes, and deletion after a `v*` tag is created. GitHub does not allow the GitHub Actions integration to be a ruleset bypass actor for this personal repository, so ref creation cannot be restricted to that integration without a separate release credential or GitHub App. Repository write access and the validated `Tag Version` workflow are therefore the creation boundary; moving the repository to an organization or installing a dedicated release App should add the `creation` rule with only that App as bypass actor.
+
 ## Release sequence
 
-1. Configure required reviewers for the `npm-release` and `release` GitHub environments, and protect the `v*` tag namespace so only the release path can create tags.
+1. Verify that the protected environments and immutable `v*` tag ruleset above are still active.
 2. Commit the dated changelog section, real README PNG/GIF, and the two evidence JSON files.
 3. Push `release/v1.0.0` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, existing tag, missing visual, or missing evidence.
 4. `Desktop Build` creates a draft Release, verifies every platform and updater signature, writes release notes from `CHANGELOG.md`, and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
