@@ -41,6 +41,20 @@ import { humanError, toast } from './toast';
 import { useUI } from './ui';
 import { routeNotification, type NotificationAggregationInput } from '../lib/notificationAggregation';
 import { useNotificationAggregation } from './notificationAggregation';
+import { isLanControlMessage } from '../lan/protocol';
+import {
+  handleLanControlMessage,
+  sendLanChat,
+  startLanRuntime,
+  type LanMessageEvent,
+} from '../lan/runtime';
+import {
+  decorateLanMessage,
+  flushLanOutbox,
+  hydrateLanOutbox,
+  recordLanIncoming,
+  recordLanOutgoing,
+} from '../lan/outbox';
 
 export interface Conversation {
   rid: string;
@@ -282,6 +296,8 @@ export function mergeMessageUpdate(current: RcMessage, incoming: RcMessage): RcM
 }
 
 function upsertMessage(list: RcMessage[], msg: RcMessage): RcMessage[] {
+  if (isLanControlMessage(msg.msg)) return list;
+  msg = decorateLanMessage(msg);
   const idx = list.findIndex((m) => m._id === msg._id);
   if (idx >= 0) {
     const next = list.slice();
@@ -291,8 +307,58 @@ function upsertMessage(list: RcMessage[], msg: RcMessage): RcMessage[] {
   return [...list, msg];
 }
 
+function messageTime(message: RcMessage): number {
+  return message.rocketxOriginalTs ?? tsMs(message.ts);
+}
+
+async function lanRecipientIds(rid: string): Promise<string[]> {
+  const state = useChat.getState();
+  const me = useAuth.getState().user?._id;
+  if (!me) return [];
+  const roomIds = state.rooms[rid]?.uids?.filter((id) => id !== me) ?? [];
+  if (roomIds.length > 0) return [...new Set(roomIds)];
+  const members = await state.loadMembers(rid);
+  return [...new Set(members.map((member) => member._id).filter((id) => id !== me))];
+}
+
+async function acceptLanMessage(event: LanMessageEvent): Promise<void> {
+  const state = useChat.getState();
+  if (!state.subscriptions[event.roomId]) return;
+  const members = await state.loadMembers(event.roomId);
+  const author = members.find((member) => member._id === event.fromUserId);
+  if (!author) return;
+  const message: RcMessage = {
+    _id: event.messageId,
+    rid: event.roomId,
+    msg: event.text,
+    ts: new Date(event.originalTs).toISOString(),
+    u: { _id: author._id, username: author.username, name: author.name },
+    rocketxOriginalTs: event.originalTs,
+    rocketxOffline: true,
+  };
+  await recordLanIncoming({ ...message, originalTs: event.originalTs });
+  const current = useChat.getState();
+  const next = upsertMessage(current.messages[event.roomId] ?? [], message).sort(
+    (left, right) => messageTime(left) - messageTime(right),
+  );
+  const room = current.rooms[event.roomId];
+  useChat.setState({
+    messages: { ...current.messages, [event.roomId]: next },
+    ...(room
+      ? {
+          rooms: {
+            ...current.rooms,
+            [event.roomId]: { ...room, lastMessage: message, lm: message.ts },
+          },
+        }
+      : {}),
+  });
+  notifyIfNeeded(message, event.roomId, current);
+}
+
 function messagePreview(msg: RcMessage | undefined): string {
   if (!msg) return '';
+  if (isLanControlMessage(msg.msg)) return '';
   const who = msg.u?.name || msg.u?.username || '';
   if (msg.t) return '[系统消息]';
   // 预览是纯文本，不走 markdown 渲染，所以 :smile: 得在这里换成表情
@@ -748,6 +814,17 @@ export const useChat = create<ChatState>((set, get) => ({
     const roomMap: Record<string, RcRoom> = {};
     for (const r of rooms) roomMap[r._id] = r;
     set({ subscriptions: subMap, rooms: roomMap, ready: true });
+    const offlineMessages = await hydrateLanOutbox();
+    if (offlineMessages.length > 0) {
+      const messages = { ...get().messages };
+      for (const message of offlineMessages) {
+        messages[message.rid] = upsertMessage(messages[message.rid] ?? [], message);
+      }
+      for (const rid of new Set(offlineMessages.map((message) => message.rid))) {
+        messages[rid]?.sort((left, right) => messageTime(left) - messageTime(right));
+      }
+      set({ messages });
+    }
 
     // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
     realtime.clearStreamHandlers();
@@ -768,7 +845,7 @@ export const useChat = create<ChatState>((set, get) => ({
           const latest = await rest.getHistory(rid, type, HISTORY_PAGE);
           let merged = [...(get().messages[rid] ?? [])];
           for (const m of latest) merged = upsertMessage(merged, m);
-          merged.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+          merged.sort((a, b) => messageTime(a) - messageTime(b));
           set({ messages: { ...get().messages, [rid]: merged } });
         }
       } catch {
@@ -778,6 +855,24 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // 断线/恢复给出可见提示（顶部横幅 + toast 各司其职：横幅表状态，toast 表变化）
     let offlineToastId: string | null = null;
+    let flushingOutbox = false;
+    const flushOfflineMessages = async () => {
+      if (flushingOutbox) return;
+      flushingOutbox = true;
+      try {
+        await flushLanOutbox((message) => {
+          const current = get();
+          set({
+            messages: {
+              ...current.messages,
+              [message.rid]: upsertMessage(current.messages[message.rid] ?? [], message),
+            },
+          });
+        });
+      } finally {
+        flushingOutbox = false;
+      }
+    };
     realtime.onStatus = (s) => {
       const prev = get().connection;
       set({ connection: s });
@@ -795,6 +890,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (s === 'connected' && prev === 'reconnecting') {
         void backfillAfterReconnect();
       }
+      if (s === 'connected') void flushOfflineMessages();
     };
     await realtime.connect();
     await realtime.login(auth.authToken);
@@ -804,6 +900,10 @@ export const useChat = create<ChatState>((set, get) => ({
     realtime.onStream('stream-room-messages', (_eventName, args) => {
       const msg = args[0] as RcMessage | undefined;
       if (!msg?._id || !msg.rid) return;
+      if (isLanControlMessage(msg.msg)) {
+        void handleLanControlMessage(msg);
+        return;
+      }
       const rid = msg.rid;
       const state = get();
       let nextList = upsertMessage(state.messages[rid] ?? [], msg);
@@ -920,6 +1020,9 @@ export const useChat = create<ChatState>((set, get) => ({
       .getPresences()
       .then((users) => get().seedUserStatus(users))
       .catch(() => {});
+    void startLanRuntime(acceptLanMessage).catch((error) => {
+      console.warn('[rcx] LAN 服务启动失败', error);
+    });
   },
 
   openRoom: async (rid) => {
@@ -981,7 +1084,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const existing = get().messages[rid] ?? [];
       let merged = history;
       for (const m of existing) merged = upsertMessage(merged, m);
-      merged.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+      merged.sort((a, b) => messageTime(a) - messageTime(b));
       set({
         messages: { ...get().messages, [rid]: merged },
         historyLoaded: { ...get().historyLoaded, [rid]: true },
@@ -1000,7 +1103,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const threadMessages = await rest.getThreadMessages(mid);
       let list = get().messages[rid] ?? [];
       for (const m of threadMessages) list = upsertMessage(list, m);
-      list.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+      list.sort((a, b) => messageTime(a) - messageTime(b));
       set({ messages: { ...get().messages, [rid]: list } });
     } catch {
       /* 线程功能被服务器禁用时静默降级 */
@@ -1024,7 +1127,7 @@ export const useChat = create<ChatState>((set, get) => ({
     );
     let merged = get().messages[rid] ?? [];
     for (const m of older) merged = upsertMessage(merged, m);
-    merged.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+    merged.sort((a, b) => messageTime(a) - messageTime(b));
     set({
       messages: { ...get().messages, [rid]: merged },
       hasMore: { ...get().hasMore, [rid]: older.length >= HISTORY_PAGE },
@@ -1101,6 +1204,70 @@ export const useChat = create<ChatState>((set, get) => ({
       useOnboarding.getState().markChecklist('sentMessage');
       scheduleReceiptRefresh(rid);
     } catch (err) {
+      // 8.6.1 对重复 _id 会只保留一条但返回 500；先按 id 回查，避免把已成功的消息
+      // 又转成 LAN 离线消息或失败态。
+      try {
+        const existing = await rest.getMessage(clientId);
+        if (existing.rid === rid) {
+          set({
+            messages: {
+              ...get().messages,
+              [rid]: upsertMessage(get().messages[rid] ?? [], existing),
+            },
+          });
+          useOnboarding.getState().markChecklist('sentMessage');
+          return;
+        }
+      } catch {
+        /* 服务端不可达或确实未落库，继续判断 LAN 降级 */
+      }
+
+      const canUseLan = !opts?.tmid && (!(err instanceof RcApiError) || err.status >= 500);
+      if (canUseLan) {
+        const recipients = await lanRecipientIds(rid).catch(() => []);
+        const originalTs = tsMs(temp.ts);
+        const deliveries = await Promise.allSettled(
+          recipients.map((userId) =>
+            sendLanChat(userId, {
+              messageId: clientId,
+              roomId: rid,
+              originalTs,
+              text: fullText,
+            }),
+          ),
+        );
+        if (deliveries.some((delivery) => delivery.status === 'fulfilled')) {
+          await recordLanOutgoing({ ...temp, originalTs });
+          const current = get().messages[rid] ?? [];
+          const offlineMessage: RcMessage = {
+            ...temp,
+            pending: false,
+            failed: false,
+            rocketxOriginalTs: originalTs,
+            rocketxOffline: true,
+          };
+          const room = get().rooms[rid];
+          set({
+            messages: {
+              ...get().messages,
+              [rid]: current.map((message) =>
+                message._id === clientId ? offlineMessage : message,
+              ),
+            },
+            ...(room
+              ? {
+                  rooms: {
+                    ...get().rooms,
+                    [rid]: { ...room, lastMessage: offlineMessage, lm: offlineMessage.ts },
+                  },
+                }
+              : {}),
+          });
+          toast.info('服务器不可达，消息已通过可信局域网投递');
+          useOnboarding.getState().markChecklist('sentMessage');
+          return;
+        }
+      }
       // 只对**仍是 pending** 的那条标失败：WS 回声可能已抢先把 temp 替换成真实消息
       //（同 _id、无 pending 字段），此时其实发送成功了，不能给它扣一顶失败的帽子。
       const cur = get().messages[rid] ?? [];
@@ -1788,7 +1955,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   forwardMessages: async (msgs, rids, merge) => {
     // 按时间正序转发，保证目标会话里顺序和原会话一致
-    const ordered = [...msgs].sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+    const ordered = [...msgs].sort((a, b) => messageTime(a) - messageTime(b));
     const names = rids.map(
       (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
     );

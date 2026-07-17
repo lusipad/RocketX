@@ -449,10 +449,22 @@ export class RcRestClient {
     msg?: string;
     attachments?: RcMessageAttachment[];
     tmid?: string;
+    customFields?: Record<string, unknown>;
   }): Promise<RcMessage> {
     const res = await this.request<{ message: RcMessage }>('POST', 'chat.sendMessage', {
       message,
     });
+    return res.message;
+  }
+
+  /** 按稳定消息 id 回查；离线回灌重试报错时用它确认服务端是否已经落库。 */
+  async getMessage(msgId: string): Promise<RcMessage> {
+    const res = await this.request<{ message: RcMessage }>(
+      'GET',
+      'chat.getMessage',
+      undefined,
+      { msgId },
+    );
     return res.message;
   }
 
@@ -795,6 +807,14 @@ export class RcRestClient {
     const key = /^[a-zA-Z0-9]{17}$/.test(usernameOrId) ? 'userId' : 'username';
     const res = await this.request<{ user: RcUser }>('GET', 'users.info', undefined, {
       [key]: usernameOrId,
+    });
+    return res.user;
+  }
+
+  /** 按用户 id 查资料；不依赖 Rocket.Chat 默认的 17 位 id 长度。 */
+  async getUserInfoById(userId: string): Promise<RcUser> {
+    const res = await this.request<{ user: RcUser }>('GET', 'users.info', undefined, {
+      userId,
     });
     return res.user;
   }

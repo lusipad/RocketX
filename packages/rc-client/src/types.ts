@@ -91,12 +91,18 @@ export interface RcMessage {
   pinned?: boolean;
   /** 标记（星标）了这条消息的用户 */
   starred?: { _id: string }[];
+  /** Rocket.Chat 可选消息自定义字段（需工作区显式启用并配置校验）。 */
+  customFields?: Record<string, unknown>;
   groupable?: boolean;
   /** ---- 以下为客户端本地字段（不来自服务器）---- */
   /** 发送中（乐观上屏，等待服务器确认） */
   pending?: boolean;
   /** 发送失败（可重试） */
   failed?: boolean;
+  /** LAN 断网消息的原始创建时间；服务器回灌后仍按此时间展示。 */
+  rocketxOriginalTs?: number;
+  /** 已经通过可信 LAN 投递，等待作者回灌 Rocket.Chat。 */
+  rocketxOffline?: boolean;
 }
 
 export interface RcRoom {

@@ -551,7 +551,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         roomName,
         author: displayName,
         text,
-        sentAt: new Date(tsMs(message.ts)).toISOString(),
+        sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
       });
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
@@ -561,7 +561,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       setAiExtracting(false);
     }
   };
-  const time = fmtTime(tsMs(message.ts));
+  const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(message.msg ?? '');
   const bareMedia =
@@ -854,6 +854,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           {/* 发送状态：发送中 / 失败可重试 */}
           {message.pending && (
             <Loader2 size={13} className="mb-1 shrink-0 animate-spin text-ink-3" />
+          )}
+          {message.rocketxOffline && !message.pending && !message.failed && (
+            <span
+              className="mb-0.5 shrink-0 text-2xs text-ink-3"
+              title="已通过可信局域网投递，等待 Rocket.Chat 恢复后回灌"
+            >
+              局域网 · 待回灌
+            </span>
           )}
           {message.failed && (
             <span className="mb-0.5 flex shrink-0 items-center gap-1">

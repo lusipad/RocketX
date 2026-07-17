@@ -17,6 +17,10 @@ import { useKernelContributions } from '../kernel/registry';
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
 
+function messageTime(message: RcMessage): number {
+  return message.rocketxOriginalTs ?? tsMs(message.ts);
+}
+
 export function shouldShowUnreadDivider({
   unreadMark,
   messageTs,
@@ -376,14 +380,14 @@ export default function MessageList({ rid }: { rid: string }) {
           )}
           {list.map((msg, i) => {
             const prev: RcMessage | undefined = list[i - 1];
-            const ms = tsMs(msg.ts);
-            const newDay = !prev || !sameDay(tsMs(prev.ts), ms);
+            const ms = messageTime(msg);
+            const newDay = !prev || !sameDay(messageTime(prev), ms);
 
             // 「以下为新消息」：上次已读之后的第一条消息前
             const isUnreadStart = shouldShowUnreadDivider({
               unreadMark,
               messageTs: ms,
-              previousMessageTs: prev ? tsMs(prev.ts) : undefined,
+              previousMessageTs: prev ? messageTime(prev) : undefined,
               hasMore,
             });
 
@@ -445,7 +449,7 @@ export default function MessageList({ rid }: { rid: string }) {
               !!prev &&
               !prev.t &&
               prev.u._id === msg.u._id &&
-              ms - tsMs(prev.ts) < GROUP_GAP_MS;
+              ms - messageTime(prev) < GROUP_GAP_MS;
 
             return (
               <div key={msg._id}>

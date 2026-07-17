@@ -3,6 +3,7 @@
 
 mod agent_bot;
 mod diagnostics;
+mod lan;
 mod mcp;
 mod proc;
 mod winauth;
@@ -497,13 +498,21 @@ fn main() {
             agent_bot::agent_bot_config_set,
             agent_bot::agent_bot_config_status,
             agent_bot::agent_bot_config_delete,
-            agent_bot::agent_bot_send
+            agent_bot::agent_bot_send,
+            lan::lan_identity_get,
+            lan::lan_service_start,
+            lan::lan_service_stop,
+            lan::lan_trust_replace,
+            lan::lan_peers,
+            lan::lan_send_chat
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(AiKeychainLock(Mutex::new(())))
         .manage(proc::CodexAppServerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
+        .manage(lan::LanKeychainLock::default())
+        .manage(lan::LanRuntimeState::default())
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
         // 都不需要服务端开启 API_Enable_CORS
         .plugin(tauri_plugin_http::init())
