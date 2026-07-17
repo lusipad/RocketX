@@ -1,5 +1,20 @@
 # 更新日志
 
+## v0.15.0 - 2026-07-17
+
+### 新增
+
+- 落地 M6 扩展内核：支持 12 类扩展点声明，首批打通导航模块、右侧面板、消息动作与渲染、斜杠命令、输入触发和实体链接。
+- 新增 `@rcx/app-sdk` 与 `@rcx/rcx-store`，提供 JSON-RPC Bridge 客户端、IndexedDB 应用分区存储、审计、向量和离线队列基础。
+- 应用设置页支持本地目录与 URL + SHA-256 安装、启停、敏感权限编辑和卸载；随仓库提供 Hello 与消息看板样例。
+- 接入 Tauri updater + process 插件、GitHub Releases 更新源、签名产物和更新后重启流程。
+
+### 安全
+
+- 主窗口 CSP 收紧，iframe 使用无同源权限的 `sandbox="allow-scripts"` 与独立 CSP，Bridge 改为一次性 `MessageChannel`。
+- 移除全盘文件和静态宽 HTTP 授权；宿主 HTTP 请求按精确 origin 动态授权，应用出网额外受 `netAllow` 白名单与权限闸门约束。
+- 远程应用不得申请 `agent:spawn` / `process:spawn`；所有能力调用均先鉴权并写入本地审计日志。
+
 ## v0.14.11 - 2026-07-17
 
 ### 新增

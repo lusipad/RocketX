@@ -10,10 +10,6 @@
     "core:image:allow-new",
     "opener:default",
     "opener:allow-open-url",
-    {
-      "identifier": "http:default",
-      "allow": [{ "url": "http://**:*" }, { "url": "https://**:*" }]
-    },
     "dialog:allow-save",
     "log:default",
     "notification:default",
@@ -23,10 +19,8 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "fs:allow-write-file",
-    {
-      "identifier": "fs:scope",
-      "allow": [{ "path": "**" }]
-    }
+    "updater:default",
+    "process:allow-restart",
+    "fs:allow-write-file"
   ]
 }

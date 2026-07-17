@@ -1,14 +1,8 @@
 import { create } from 'zustand';
 
-export type ModuleKey =
-  | 'messages'
-  | 'todos'
-  | 'contacts'
-  | 'calendar'
-  | 'workbench'
-  | 'settings';
+export type ModuleKey = string;
 
-/** 左侧视觉顺序、Alt+数字和 Alt+上下都只认这一份。 */
+/** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
   'messages',
   'todos',
@@ -17,6 +11,12 @@ export const MODULE_ORDER: ModuleKey[] = [
   'workbench',
   'settings',
 ];
+
+let moduleValidator = (module: ModuleKey) => MODULE_ORDER.includes(module);
+
+export function installModuleValidator(validator: (module: ModuleKey) => boolean): void {
+  moduleValidator = validator;
+}
 
 /** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
 export type WorkbenchTab = 'overview' | 'workitems' | 'prs' | 'builds' | `query:${string}`;
@@ -75,7 +75,9 @@ export const useUI = create<UIState>((set) => ({
   workItemStateFilter: '全部',
   prTab: 'review',
   buildsFailedOnly: false,
-  setModule: (m) => set({ module: m }),
+  setModule: (m) => {
+    if (moduleValidator(m)) set({ module: m });
+  },
   setConvFilter: (f) =>
     set({
       convFilter: f,

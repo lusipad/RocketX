@@ -1,0 +1,13 @@
+{
+  "id": "dev.rocketx.hello",
+  "version": "1.0.0",
+  "name": "Hello RocketX",
+  "publisher": "RocketX",
+  "runtime": "iframe",
+  "entry": "index.html",
+  "permissions": ["ui:notify"],
+  "contributes": {
+    "nav.module": [{ "id": "hello", "label": "Hello" }],
+    "composer.command": [{ "name": "hello", "desc": "打开 Hello RocketX" }]
+  }
+}

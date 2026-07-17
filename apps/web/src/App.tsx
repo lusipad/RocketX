@@ -9,6 +9,8 @@ import { useFileIndex } from './stores/fileIndex';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
 import DiagnosticBridge from './components/DiagnosticBridge';
+import UpdaterBridge from './components/UpdaterBridge';
+import Toaster from './components/Toaster';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -54,9 +56,11 @@ export default function App() {
   return (
     <>
       <DiagnosticBridge />
+      <UpdaterBridge />
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />
       {content}
+      <Toaster />
     </>
   );
 }

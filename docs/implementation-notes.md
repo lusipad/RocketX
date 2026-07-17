@@ -29,6 +29,38 @@
 
 ---
 
+# Implementation notes — M6 扩展内核与自动更新
+
+## Shipped vs planned
+
+已完成蓝图 M6 的 7 类首批扩展点、Manifest/安装/生命周期、三档权限闸门、iframe/worker 运行时、JSON-RPC Bridge、统一输入派发、IndexedDB 存储和 SDK v0。另按 T1 接入桌面自动更新与 GitHub Releases 签名产物。
+
+## Decisions
+
+- iframe Bridge 使用每次文档加载独立的 `MessageChannel`；iframe 自导航后不重建通道，防止窃取旧 `WindowProxy` 能力。
+- iframe 文档仅允许内联/data/blob 资源，`connect-src 'none'`；所有网络请求只能通过宿主能力总线并同时通过权限与 `netAllow` 校验。
+- Tauri HTTP 不再给主窗口静态宽权限，而是在宿主明确请求前按精确 origin 建立动态 ACL；子 iframe 因 remote context 与 Tauri ACL 不匹配而无法绕过 Bridge。
+- worker 只允许本机显式安装的可信应用，且屏蔽网络、IndexedDB、缓存、RTC 和嵌套 worker 入口；它是能力边界，不声称是密码学隔离。
+- native/mcp 进程形态和危险权限的每次审批卡片依蓝图留到 M8 `proc.rs`；M6 已预留 scope 并硬性禁止远程应用申请。
+
+## Verification
+
+- 真实 Tauri 窗口：动态 HTTP 授权后登录 Rocket.Chat 8.6.1；Hello 应用显示 Tauri ACL 阻断 iframe IPC，Bridge 通知成功。
+- Hello 导航与 `/hello` 补全可用；Kanban 可读当前会话并将现有消息转为卡片。URL 安装使用错误包哈希时被拒绝，更正后才安装。
+- `pnpm typecheck`、`pnpm build`、`pnpm test:pure` (219)、`pnpm test:regression` (174)、`pnpm smoke` (53)、`pnpm test:classify` (5)、`cargo check --locked`、`cargo test --locked` (4) 全部通过。
+- `tauri build --no-bundle` 完成 Windows Release 链接并生成 `target/release/rocketx.exe`。
+
+## Verification limits
+
+- 本地目录安装会触发 WebView2 的文件上传确认；本轮不替用户点击该高影响确认，目录解析/安装/卸载改由回归测试验证，真实窗口用 URL 安装路径验收。
+- updater 签名私钥仅保存在 GitHub Actions Secret；本地不保留私钥，完整安装包、`.sig` 与 `latest.json` 需由标签发布流水线验证。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — 受控消息搜索范围
 
 Plan: 当前任务中的“默认轻量搜索 + 显式搜索全部”实施计划。

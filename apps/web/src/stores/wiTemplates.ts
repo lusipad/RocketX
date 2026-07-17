@@ -205,7 +205,8 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
       if (!url) return;
       set({ loading: true, error: null });
       try {
-        const { httpFetch } = await import('../lib/http');
+        const { ensureHttpOrigin, httpFetch } = await import('../lib/http');
+        await ensureHttpOrigin(url);
         const res = await httpFetch(url, { method: 'GET' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Bell,
+  Blocks,
   Camera,
   CheckCircle2,
   FileDown,
+  FolderOpen,
   Info,
   Keyboard,
   LayoutGrid,
@@ -14,7 +16,9 @@ import {
   Palette,
   PanelLeft,
   Server,
+  ShieldCheck,
   Sun,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
@@ -42,6 +46,14 @@ import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
+import { appManager, useInstalledApps } from '../kernel/installed';
+import {
+  parseManifestJson,
+  type AppPermission,
+  type RcxAppManifest,
+} from '../kernel/manifest';
+import { SENSITIVE_PERMISSIONS } from '../kernel/permission';
+import { ensureHttpOrigin, httpFetch } from '../lib/http';
 
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
@@ -56,6 +68,7 @@ type Section =
   | 'desktop'
   | 'shortcuts'
   | 'workbench'
+  | 'apps'
   | 'about';
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
@@ -67,6 +80,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'desktop', label: '桌面端', icon: Monitor },
   { key: 'shortcuts', label: '快捷键', icon: Keyboard },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
+  { key: 'apps', label: '应用', icon: Blocks },
   { key: 'about', label: '关于', icon: Info },
 ];
 
@@ -1186,6 +1200,307 @@ function TemplateUrlSection() {
   );
 }
 
+const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
+  'chat:read': '读取当前会话',
+  'rooms:list': '读取会话列表',
+  'users:read': '读取成员',
+  'storage:local': '使用应用私有存储',
+  'ui:notify': '发送通知',
+  'chat:write': '代发消息',
+  'chat:history': '读取历史消息',
+  'files:read': '读取文件',
+  'files:write': '写入文件',
+  'net:fetch': '访问声明的网络地址',
+  'ai:invoke': '调用 AI',
+  'lan:discover': '发现局域网设备',
+  'lan:transfer': '局域网传输',
+  'agent:spawn': '启动 Agent（每次确认）',
+  'process:spawn': '启动本地进程（每次确认）',
+};
+
+function AppPermissionPicker({
+  manifest,
+  selected,
+  onChange,
+}: {
+  manifest: RcxAppManifest;
+  selected: AppPermission[];
+  onChange: (permissions: AppPermission[]) => void;
+}) {
+  const sensitive = manifest.permissions.filter((permission) =>
+    SENSITIVE_PERMISSIONS.includes(permission),
+  );
+  return (
+    <div className="mt-3 rounded-md border border-line bg-surface-2 p-3">
+      <div className="text-sm font-medium text-ink">
+        {manifest.name} <span className="text-xs font-normal text-ink-3">v{manifest.version}</span>
+      </div>
+      <div className="mt-1 text-xs text-ink-3">发布者：{manifest.publisher}</div>
+      {manifest.runtime === 'worker' && (
+        <div className="mt-2 text-xs text-warning">
+          Worker 应用仅允许从本地目录安装；请只安装你信任并审阅过的代码。
+        </div>
+      )}
+      <div className="mt-3 text-xs font-medium text-ink-2">安装时告知</div>
+      <div className="mt-1 text-xs text-ink-3">
+        {manifest.permissions
+          .filter((permission) => !SENSITIVE_PERMISSIONS.includes(permission))
+          .map((permission) => PERMISSION_LABELS[permission] ?? permission)
+          .join('、') || '无'}
+      </div>
+      {sensitive.length > 0 && (
+        <>
+          <div className="mt-3 text-xs font-medium text-ink-2">敏感权限（逐项勾选）</div>
+          <div className="mt-1 flex flex-col gap-1.5">
+            {sensitive.map((permission) => (
+              <label key={permission} className="flex items-center gap-2 text-xs text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(permission)}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selected, permission]
+                        : selected.filter((item) => item !== permission),
+                    )
+                  }
+                />
+                {PERMISSION_LABELS[permission] ?? permission}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AppsSection() {
+  const apps = useInstalledApps();
+  const directoryInput = useRef<HTMLInputElement>(null);
+  const [pending, setPending] = useState<
+    | { kind: 'directory'; manifest: RcxAppManifest; files: File[] }
+    | { kind: 'url'; manifest: RcxAppManifest; url: string; hash: string }
+    | null
+  >(null);
+  const [sensitiveGrants, setSensitiveGrants] = useState<AppPermission[]>([]);
+  const [manifestUrl, setManifestUrl] = useState('');
+  const [expectedHash, setExpectedHash] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [editingPermissions, setEditingPermissions] = useState<string | null>(null);
+  const [editedGrants, setEditedGrants] = useState<AppPermission[]>([]);
+
+  useEffect(() => {
+    directoryInput.current?.setAttribute('webkitdirectory', '');
+  }, []);
+
+  const chooseDirectory = async (files: File[]) => {
+    const manifestFile = files.find((file) => /(^|\/)rcx\.app\.json$/i.test(file.webkitRelativePath || file.name));
+    if (!manifestFile) {
+      toast.error('所选目录里没有 rcx.app.json');
+      return;
+    }
+    try {
+      setPending({ kind: 'directory', manifest: parseManifestJson(await manifestFile.text()), files });
+      setSensitiveGrants([]);
+    } catch (error) {
+      toast.error(error, '应用清单无效');
+    }
+  };
+
+  const inspectUrl = async () => {
+    try {
+      await ensureHttpOrigin(manifestUrl);
+      const response = await httpFetch(new URL(manifestUrl));
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setPending({ kind: 'url', manifest: parseManifestJson(await response.text()), url: manifestUrl, hash: expectedHash });
+      setSensitiveGrants([]);
+    } catch (error) {
+      toast.error(error, '读取远程应用清单失败');
+    }
+  };
+
+  const install = async () => {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      const app = pending.kind === 'directory'
+        ? await appManager().installDirectory(pending.files, { sensitiveGrants })
+        : await appManager().installUrl(pending.url, pending.hash, { sensitiveGrants });
+      toast.success(`已安装 ${app.manifest.name}`);
+      setPending(null);
+      setSensitiveGrants([]);
+      if (directoryInput.current) directoryInput.current.value = '';
+    } catch (error) {
+      toast.error(error, '安装失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <section>
+        <div className="text-sm font-medium text-ink">安装本地应用</div>
+        <div className="mt-1 text-xs text-ink-3">
+          选择包含 rcx.app.json 的目录。M6 本地 iframe 应用使用单文件 HTML 入口。
+        </div>
+        <input
+          ref={directoryInput}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => void chooseDirectory(Array.from(event.target.files ?? []))}
+        />
+        <button
+          onClick={() => directoryInput.current?.click()}
+          className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-line px-3 text-xs text-ink hover:bg-fill-hover"
+        >
+          <FolderOpen size={14} /> 选择目录
+        </button>
+      </section>
+
+      <section>
+        <div className="text-sm font-medium text-ink">从 URL 安装</div>
+        <div className="mt-1 text-xs text-ink-3">必须提供发布者给出的 SHA-256；不匹配时拒绝安装。</div>
+        <input
+          value={manifestUrl}
+          onChange={(event) => setManifestUrl(event.target.value)}
+          placeholder="https://example.com/rcx.app.json"
+          className={`${inputCls} mt-2`}
+        />
+        <input
+          value={expectedHash}
+          onChange={(event) => setExpectedHash(event.target.value.trim())}
+          placeholder="64 位 SHA-256"
+          className={`${inputCls} mt-2 font-mono text-xs`}
+        />
+        <button
+          onClick={() => void inspectUrl()}
+          disabled={!manifestUrl || !/^[a-f0-9]{64}$/i.test(expectedHash)}
+          className="mt-2 h-8 rounded-md border border-line px-3 text-xs text-ink hover:bg-fill-hover disabled:opacity-40"
+        >
+          检查清单
+        </button>
+      </section>
+
+      {pending && (
+        <section>
+          <AppPermissionPicker
+            manifest={pending.manifest}
+            selected={sensitiveGrants}
+            onChange={setSensitiveGrants}
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => void install()}
+              disabled={busy}
+              className="h-8 rounded-md bg-primary px-4 text-xs text-white disabled:opacity-50"
+            >
+              {busy ? '安装中…' : '安装'}
+            </button>
+            <button onClick={() => setPending(null)} className="h-8 rounded-md border border-line px-4 text-xs">
+              取消
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="text-sm font-medium text-ink">已安装应用</div>
+        {apps.length === 0 ? (
+          <div className="mt-2 text-xs text-ink-3">还没有安装应用。</div>
+        ) : (
+          <div className="mt-2 divide-y divide-line rounded-md border border-line bg-surface-2">
+            {apps.map((app) => {
+              const sensitive = app.manifest.permissions.filter((permission) =>
+                SENSITIVE_PERMISSIONS.includes(permission),
+              );
+              return (
+                <div key={app.manifest.id} className="p-3">
+                  <div className="flex items-center gap-3">
+                    <Blocks size={17} className="text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-ink">{app.manifest.name} · v{app.manifest.version}</div>
+                      <div className="truncate font-mono text-2xs text-ink-3" title={app.bundleHash}>
+                        SHA-256 {app.bundleHash}
+                      </div>
+                    </div>
+                    {sensitive.length > 0 && (
+                      <button
+                        title="权限"
+                        onClick={() => {
+                          setEditingPermissions(editingPermissions === app.manifest.id ? null : app.manifest.id);
+                          setEditedGrants(app.granted.filter((permission) => SENSITIVE_PERMISSIONS.includes(permission)));
+                        }}
+                        className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-primary"
+                      >
+                        <ShieldCheck size={14} />
+                      </button>
+                    )}
+                    <Toggle
+                      checked={app.enabled}
+                      onChange={(enabled) => void appManager().setEnabled(app.manifest.id, enabled)}
+                    />
+                    <button
+                      title="卸载"
+                      onClick={() => setRemoving(app.manifest.id)}
+                      className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-danger"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  {editingPermissions === app.manifest.id && (
+                    <div className="mt-3 border-t border-line pt-3">
+                      <AppPermissionPicker
+                        manifest={app.manifest}
+                        selected={editedGrants}
+                        onChange={setEditedGrants}
+                      />
+                      <button
+                        onClick={() => {
+                          void appManager()
+                            .setSensitiveGrants(app.manifest.id, editedGrants)
+                            .then(() => {
+                              toast.success('应用权限已更新');
+                              setEditingPermissions(null);
+                            })
+                            .catch((error) => toast.error(error, '权限更新失败'));
+                        }}
+                        className="mt-2 h-8 rounded-md bg-primary px-4 text-xs text-white"
+                      >
+                        保存权限
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {removing && (
+        <ConfirmDialog
+          title="卸载应用"
+          message="将移除应用及其私有数据，操作不可撤销。"
+          confirmLabel="卸载"
+          danger
+          onConfirm={() => {
+            void appManager()
+              .uninstall(removing)
+              .then(() => toast.success('应用已卸载'))
+              .catch((error) => toast.error(error, '卸载失败'));
+            setRemoving(null);
+          }}
+          onClose={() => setRemoving(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function AboutSection() {
   const [rcVersion, setRcVersion] = useState('查询中…');
 
@@ -1293,6 +1608,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'desktop' && <DesktopSection />}
               {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
+              {section === 'apps' && <AppsSection />}
               {section === 'about' && <AboutSection />}
             </>
           )}

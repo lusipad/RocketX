@@ -15,17 +15,10 @@ import {
 import { roomMembershipPolicy, useChat, type RightPanel } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
-import RoomInfoPanel from './RoomInfoPanel';
 import MessageList from './MessageList';
 import Composer from './Composer';
-import ThreadPanel from './ThreadPanel';
-import PinPanel from './PinPanel';
-import StarredPanel from './StarredPanel';
-import MembersPanel from './MembersPanel';
-import MentionsPanel from './MentionsPanel';
-import FilesPanel from './FilesPanel';
-import SearchPanel from './SearchPanel';
 import ContextMenu from './ContextMenu';
+import { useKernelContributions } from '../kernel/registry';
 
 function HeaderButton({
   icon: Icon,
@@ -64,6 +57,7 @@ export default function ChatArea({
 }) {
   const activeRid = useChat((s) => s.activeRid);
   const rightPanel = useChat((s) => s.rightPanel);
+  const registeredPanels = useKernelContributions('panel.right');
   const setPanel = useChat((s) => s.setPanel);
   const requestUpload = useChat((s) => s.requestUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
@@ -85,6 +79,9 @@ export default function ChatArea({
     : [];
   const [dragging, setDragging] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const ActivePanel = rightPanel
+    ? registeredPanels.find((candidate) => candidate.id === rightPanel.kind)?.render
+    : undefined;
 
   if (!activeRid) {
     return (
@@ -284,14 +281,7 @@ export default function ChatArea({
         )}
       </main>
 
-      {rightPanel?.kind === 'thread' && <ThreadPanel />}
-      {rightPanel?.kind === 'pins' && <PinPanel />}
-      {rightPanel?.kind === 'starred' && <StarredPanel />}
-      {rightPanel?.kind === 'members' && <MembersPanel />}
-      {rightPanel?.kind === 'search' && <SearchPanel />}
-      {rightPanel?.kind === 'info' && <RoomInfoPanel />}
-      {rightPanel?.kind === 'files' && <FilesPanel />}
-      {rightPanel?.kind === 'mentions' && <MentionsPanel />}
+      {ActivePanel && <ActivePanel />}
     </>
   );
 }

@@ -12,6 +12,7 @@ import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import { saveTextFile } from '../lib/exportText';
+import { useKernelContributions } from '../kernel/registry';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
@@ -45,6 +46,7 @@ export function initialMessageScrollTop({
 }
 
 export default function MessageList({ rid }: { rid: string }) {
+  const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
   useDayTick();
   const all = useChat((s) => s.messages[rid]);
@@ -400,6 +402,19 @@ export default function MessageList({ rid }: { rid: string }) {
                 <div className="h-px flex-1 bg-line" />
               </div>
             ) : null;
+
+            const extensionRenderer = extensionRenderers.find((renderer) =>
+              renderer.match({ message: msg }),
+            );
+            if (extensionRenderer) {
+              return (
+                <div key={msg._id}>
+                  {divider}
+                  {unreadDivider}
+                  {extensionRenderer.render({ message: msg })}
+                </div>
+              );
+            }
 
             // 建讨论：RC 在父频道留的是一张可点的卡片，不是一行灰字
             if (msg.t === 'discussion-created' && msg.drid) {

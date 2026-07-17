@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>消息看板</title>
+    <style>
+      * { box-sizing: border-box; } body { margin: 0; background: #f5f6f7; color: #1f2329; font: 14px system-ui; }
+      header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: white; border-bottom: 1px solid #dee0e3; }
+      h1 { margin: 0; font-size: 18px; } button { border: 0; border-radius: 7px; padding: 8px 12px; background: #3370ff; color: white; cursor: pointer; }
+      #cards { display: grid; gap: 10px; padding: 18px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+      article { padding: 14px; border: 1px solid #dee0e3; border-radius: 10px; background: white; } article p { white-space: pre-wrap; color: #4e5969; } small { color: #8f959e; }
+      .empty { padding: 48px; text-align: center; color: #8f959e; }
+    </style>
+  </head>
+  <body>
+    <header><h1>消息看板</h1><button id="capture">捕获当前会话最后一条消息</button></header>
+    <div id="cards"></div>
+    <script>
+      let nextId = 1;
+      const pending = new Map();
+      const call = (method, params) => new Promise((resolve, reject) => {
+        const id = nextId++;
+        pending.set(id, { resolve, reject });
+        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } });
+      });
+      window.__RCX_BRIDGE__.addEventListener('message', (event) => {
+        const message = event.data;
+        if (message?.jsonrpc !== '2.0') return;
+        if (message.id && pending.has(message.id)) {
+          const task = pending.get(message.id); pending.delete(message.id);
+          message.error ? task.reject(new Error(message.error.message)) : task.resolve(message.result);
+        }
+        if (message.method === 'rcx/event' && message.params?.event === 'message.action') {
+          void addCard(message.params.payload.message);
+        }
+      });
+      async function loadCards() { return (await call('storage.get', { key: 'cards' })) || []; }
+      async function saveCards(cards) { await call('storage.set', { key: 'cards', value: cards }); render(cards); }
+      async function addCard(message) {
+        if (!message?._id) return;
+        const cards = await loadCards();
+        if (!cards.some((card) => card.id === message._id)) cards.unshift({ id: message._id, text: message.msg || '[附件消息]', author: message.u?.name || message.u?.username || '' });
+        await saveCards(cards);
+      }
+      function render(cards) {
+        const root = document.querySelector('#cards');
+        root.innerHTML = cards.length ? cards.map((card) => `<article><small>${escapeHtml(card.author)}</small><p>${escapeHtml(card.text)}</p></article>`).join('') : '<div class="empty">从消息右键菜单选择“转成看板卡片”</div>';
+      }
+      function escapeHtml(value) { const node = document.createElement('span'); node.textContent = value || ''; return node.innerHTML; }
+      document.querySelector('#capture').addEventListener('click', async () => {
+        try { const current = await call('chat.current'); await addCard(current.messages.at(-1)); }
+        catch (error) { window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI', params: { kind: 'notify', props: { message: error.message, level: 'error' } } }); }
+      });
+      void loadCards().then(render);
+    </script>
+  </body>
+</html>

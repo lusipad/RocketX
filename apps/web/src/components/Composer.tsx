@@ -20,9 +20,10 @@ import {
   commandDesc,
   commandParams,
   filterCommands,
-  parseSlash,
   slashPrefix,
 } from '../lib/slash';
+import { composerCommands, dispatchInput } from '../kernel/dispatch';
+import { useKernelContributions } from '../kernel/registry';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
@@ -53,7 +54,12 @@ export default function Composer() {
   const prefsLoaded = usePrefs((s) => s.loaded);
 
   const runSlash = useChat((s) => s.runSlash);
-  const slashCommands = useChat((s) => s.slashCommands);
+  const serverSlashCommands = useChat((s) => s.slashCommands);
+  const localSlashCommands = useKernelContributions('composer.command');
+  const slashCommands = useMemo(
+    () => composerCommands(serverSlashCommands),
+    [localSlashCommands, serverSlashCommands],
+  );
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [picker, setPicker] = useState(false);
@@ -304,15 +310,11 @@ export default function Composer() {
     if (!value || !rid) return;
 
     // 斜杠命令走服务端执行，不能当文本发出去
-    const slash = parseSlash(value);
-    if (slash) {
+    const dispatched = await dispatchInput(value, { rid, runSlash, commands: slashCommands });
+    if (dispatched.handled) {
       // 认不出的命令 runSlash 会提示并拦下，输入框保留原文让用户改
-      const known = slashCommands.some(
-        (c) => c.command.toLowerCase() === slash.command,
-      );
-      if (known) clearInput();
+      if (dispatched.accepted) clearInput();
       else setSlashQuery(null);
-      await runSlash(slash.command, slash.params);
       return;
     }
 

@@ -3,6 +3,7 @@ import WorkItemLink from '../components/WorkItemLink';
 import AdoEntityLink from '../components/AdoEntityLink';
 import { adoWebBase, parseAdoUrl } from './ado';
 import Emoji from '../components/Emoji';
+import { kernelRegistry } from '../kernel/registry';
 
 /**
  * 轻量消息 Markdown 渲染（不引第三方库、不用 dangerouslySetInnerHTML）。
@@ -98,6 +99,12 @@ function renderInline(
     } else if (m[5]) {
       nodes.push(<em key={key}>{full.slice(1, -1)}</em>);
     } else if (m[6]) {
+      const extension = kernelRegistry.get('entity.link').find((candidate) => candidate.match(full));
+      if (extension) {
+        nodes.push(extension.render(full, key));
+        last = idx + full.length;
+        continue;
+      }
       // 粘贴的 ADO 工作项 URL（.../_workitems/edit/123）自动 unfurl 成悬停详情卡，
       // 复用 #工作项号 那套 WorkItemLink（issue #13）。必须属于当前配置的 ADO 集合
       // 才转卡片：href 是用 adoWebBase 重建的，也避免把别家 ADO 链接认成本服务器的。

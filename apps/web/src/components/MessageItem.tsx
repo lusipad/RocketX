@@ -56,6 +56,7 @@ import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
+import { useKernelContributions } from '../kernel/registry';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -271,6 +272,7 @@ function safeTitleHref(link: string): string | null {
 
 /** 附件卡片：ADO 集成等富文本消息载体 */
 function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: RcMessage }) {
+  const renderers = useKernelContributions('message.renderer');
   // 引用回复
   if (att.message_link) {
     return <QuoteCard att={att} />;
@@ -293,6 +295,10 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
       <FileAttachment att={att} name={message.file?.name} size={message.file?.size} />
     );
   }
+  const extensionRenderer = renderers.find((renderer) =>
+    renderer.match({ message, attachment: att }),
+  );
+  if (extensionRenderer) return extensionRenderer.render({ message, attachment: att });
   // 富文本卡片（ADO 事件等）
   return (
     <div
@@ -511,6 +517,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
 
   const inTodo = useTodos((s) => s.todos.some((t) => t.mid === message._id && !t.done));
   const setModule = useUI((s) => s.setModule);
+  const extensionActions = useKernelContributions('message.action');
+  const extensionRenderers = useKernelContributions('message.renderer');
+  const messageRenderer = extensionRenderers.find((renderer) => renderer.match({ message }));
   const roomName = useChat(
     (s) => s.subscriptions[message.rid]?.fname || s.subscriptions[message.rid]?.name || '会话',
   );
@@ -583,6 +592,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onClick: () => void toggleStar(message),
     },
     { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
+    ...extensionActions.map((action) => ({
+      label: action.label,
+      icon: action.icon,
+      onClick: () => void action.run({ message }),
+    })),
     ...(mine && message.msg
       ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
       : []),
@@ -746,6 +760,10 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               <EditBox message={message} onDone={() => setEditing(false)} />
             ) : (
               <>
+                {messageRenderer ? (
+                  messageRenderer.render({ message })
+                ) : (
+                  <>
                 {message.pinned && (
                   <span className="mr-1 inline-flex items-center text-primary" title="已置顶">
                     <Pin size={12} />
@@ -777,6 +795,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   .slice(0, 2)
                   .map((u, i) => <UrlPreviewCard key={i} url={u.url} meta={u.meta!} />)}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
+                  </>
+                )}
               </>
             )}
           </div>

@@ -1,0 +1,14 @@
+{
+  "id": "dev.rocketx.kanban",
+  "version": "1.0.0",
+  "name": "消息看板",
+  "publisher": "RocketX",
+  "runtime": "iframe",
+  "entry": "index.html",
+  "permissions": ["chat:read", "storage:local", "ui:notify"],
+  "contributes": {
+    "nav.module": [{ "id": "kanban", "label": "看板" }],
+    "composer.command": [{ "name": "kanban", "desc": "打开消息看板" }],
+    "message.action": [{ "id": "to-card", "label": "转成看板卡片" }]
+  }
+}
