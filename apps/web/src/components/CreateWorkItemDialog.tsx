@@ -16,10 +16,16 @@ import { useDialogBehavior } from './Dialog';
 
 export default function CreateWorkItemDialog({
   defaultTitle,
+  defaultDescription,
+  defaultType,
+  defaultTags,
   rid,
   onClose,
 }: {
   defaultTitle: string;
+  defaultDescription?: string;
+  defaultType?: string;
+  defaultTags?: string;
   rid?: string;
   onClose: () => void;
 }) {
@@ -29,8 +35,9 @@ export default function CreateWorkItemDialog({
 
   const [tplIdx, setTplIdx] = useState(0);
   const [title, setTitle] = useState(defaultTitle);
-  const [type, setType] = useState('Task');
-  const [tags, setTags] = useState('');
+  const [description, setDescription] = useState(defaultDescription ?? '');
+  const [type, setType] = useState(defaultType ?? 'Task');
+  const [tags, setTags] = useState(defaultTags ?? '');
   const [project, setProject] = useState('');
   const [projects, setProjects] = useState<string[]>([]);
   const [workItemTypes, setWorkItemTypes] = useState<string[]>([]);
@@ -89,7 +96,11 @@ export default function CreateWorkItemDialog({
         if (cancelled) return;
         setWorkItemTypes(names);
         setWorkItemHierarchy(hierarchy);
-        setType((current) => names.includes(current) ? current : preferredWorkItemType(names));
+        setType((current) => names.includes(current)
+          ? current
+          : defaultType && names.includes(defaultType)
+            ? defaultType
+            : preferredWorkItemType(names));
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -97,7 +108,7 @@ export default function CreateWorkItemDialog({
       }
     })();
     return () => { cancelled = true; };
-  }, [config, project]);
+  }, [config, defaultType, project]);
 
   useEffect(() => {
     setTplIdx((current) => current < compatibleTemplates.length ? current : 0);
@@ -121,6 +132,7 @@ export default function CreateWorkItemDialog({
       if (isSingle) {
         setProgress(`创建 ${type}…`);
         const wi = await directCreateWorkItem(cfg, project, type, title.trim(), {
+          description: description.trim() || undefined,
           tags: tags || undefined,
           iterationPath: iterationPath ?? undefined,
         });
@@ -250,6 +262,14 @@ export default function CreateWorkItemDialog({
             onChange={(e) => setTitle(e.target.value)}
             placeholder="标题"
             className="h-8 w-full rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
+          />
+
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="描述（可选）"
+            className="w-full resize-none rounded-md border border-line bg-surface-4 px-3 py-2 text-sm text-ink-2 outline-none focus:border-primary"
           />
 
           {/* 标签（级联模式给顶层打标签） */}

@@ -719,15 +719,35 @@ export class RcRestClient {
     return res.files ?? [];
   }
 
-  /** 本房间里 @ 到我的消息（「提及我的」面板） */
-  async getMentionedMessages(rid: string, count = 50): Promise<RcMessage[]> {
-    const res = await this.request<{ messages: RcMessage[] }>(
+  /** 本房间里 @ 到我的消息（「提及我的」面板）；保留分页元数据给全局收件箱。 */
+  async getMentionedMessagesPage(
+    rid: string,
+    offset = 0,
+    count = 50,
+  ): Promise<{ messages: RcMessage[]; count: number; offset: number; total: number }> {
+    const res = await this.request<{
+      messages: RcMessage[];
+      count?: number;
+      offset?: number;
+      total?: number;
+    }>(
       'GET',
       'chat.getMentionedMessages',
       undefined,
-      { roomId: rid, count },
+      { roomId: rid, offset, count, sort: JSON.stringify({ ts: -1 }) },
     );
-    return res.messages ?? [];
+    const messages = res.messages ?? [];
+    return {
+      messages,
+      count: res.count ?? messages.length,
+      offset: res.offset ?? offset,
+      total: res.total ?? offset + messages.length,
+    };
+  }
+
+  /** 兼容现有房间面板。 */
+  async getMentionedMessages(rid: string, count = 50): Promise<RcMessage[]> {
+    return (await this.getMentionedMessagesPage(rid, 0, count)).messages;
   }
 
   // ---- 个人资料 ----

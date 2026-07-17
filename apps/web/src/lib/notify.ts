@@ -44,12 +44,12 @@ export async function notifyPermissionGranted(): Promise<boolean> {
 }
 
 /** 弹一条桌面通知(已在调用方做完免打扰/仅@我等过滤) */
-export async function desktopNotify(opts: DesktopNotifyOptions): Promise<void> {
+export async function desktopNotify(opts: DesktopNotifyOptions): Promise<boolean> {
   if (isTauri) {
     const { isPermissionGranted, sendNotification } = await import(
       '@tauri-apps/plugin-notification'
     );
-    if (!(await isPermissionGranted())) return;
+    if (!(await isPermissionGranted())) return false;
     if (opts.rid && opts.mid && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)) {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('show_message_notification', {
@@ -58,12 +58,12 @@ export async function desktopNotify(opts: DesktopNotifyOptions): Promise<void> {
         rid: opts.rid,
         mid: opts.mid,
       });
-      return;
+      return true;
     }
     sendNotification({ title: opts.title, body: opts.body });
-    return;
+    return true;
   }
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
   const n = new Notification(opts.title, { body: opts.body, tag: opts.tag });
   if (opts.onClick) {
     n.onclick = () => {
@@ -71,4 +71,5 @@ export async function desktopNotify(opts: DesktopNotifyOptions): Promise<void> {
       n.close();
     };
   }
+  return true;
 }
