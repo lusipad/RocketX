@@ -2,6 +2,7 @@ import type { RcMessage } from '@rcx/rc-client';
 import { eventsForDate, isEventDone, type CalendarEvent } from '../stores/calendar';
 import { isOverdue, todayKey, type Todo } from '../stores/todos';
 import { adoDateToLocal, isWorkItemDone, type WorkItem } from '../stores/workbench';
+import type { IpmsgMessage } from '../ipmsg/store';
 
 interface TodayBase {
   key: string;
@@ -15,13 +16,15 @@ export type TodayItem =
   | (TodayBase & { kind: 'mention'; message: RcMessage; roomName: string })
   | (TodayBase & { kind: 'todo'; todo: Todo })
   | (TodayBase & { kind: 'event'; event: CalendarEvent; occurrenceDate: string })
-  | (TodayBase & { kind: 'workitem'; workItem: WorkItem });
+  | (TodayBase & { kind: 'workitem'; workItem: WorkItem })
+  | (TodayBase & { kind: 'ipmsg'; message: IpmsgMessage });
 
 export interface TodayInput {
   mentions: Array<{ message: RcMessage; roomName: string }>;
   todos: Todo[];
   events: CalendarEvent[];
   workItems: WorkItem[];
+  ipmsg?: IpmsgMessage[];
   scope: string;
   adoScope: string;
   processed?: ReadonlySet<string>;
@@ -44,6 +47,20 @@ export function buildTodayItems(input: TodayInput): TodayItem[] {
       processed: processed.has(key),
       message,
       roomName,
+    });
+  }
+
+  for (const message of input.ipmsg ?? []) {
+    if (message.direction !== 'incoming') continue;
+    const key = `ipmsg:${input.scope}:${message.id}`;
+    items.push({
+      key,
+      kind: 'ipmsg',
+      title: message.text || '（无文字消息）',
+      meta: `${message.senderName} · 未认证局域网协议`,
+      urgency: 1,
+      processed: processed.has(key),
+      message,
     });
   }
 

@@ -118,6 +118,7 @@ export const useAuth = create<AuthState>((set, get) => ({
   logout: async () => {
     realtime.close();
     await import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime()).catch(() => {});
+    await import('../ipmsg/store').then(({ stopIpmsgRuntime }) => stopIpmsgRuntime()).catch(() => {});
     saveAuth(null);
     try {
       await rest.logout();
@@ -154,6 +155,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     if (st.status !== 'authed' && st.status !== 'authing') return;
     realtime.close();
     void import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime());
+    void import('../ipmsg/store').then(({ stopIpmsgRuntime }) => stopIpmsgRuntime());
     saveAuth(null);
     set({ status: 'guest', user: null, error: '登录已失效，请重新登录' });
   },
