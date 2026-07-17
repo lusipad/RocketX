@@ -1,0 +1,83 @@
+name: Publish npm packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已通过发布门禁的标签（如 v1.0.0）'
+        required: true
+        default: 'v1.0.0'
+      confirmation:
+        description: '输入 publish v1.0.0 以确认不可撤销发布'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 核验并检出可信发布标签
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          git fetch origin main --tags
+          test "$(git cat-file -t "refs/tags/$INPUT_TAG")" = "tag"
+          release_sha="$(git rev-parse "refs/tags/$INPUT_TAG^{commit}")"
+          git merge-base --is-ancestor "$release_sha" origin/main
+          git checkout --detach "$release_sha"
+          echo "RELEASE_SHA=$release_sha" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - name: 安装固定发布工具链
+        run: |
+          npm install --global npm@11.12.0
+          pnpm install --frozen-lockfile
+
+      - name: 核验标签与发布确认
+        env:
+          INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          test "$INPUT_CONFIRMATION" = "publish $INPUT_TAG"
+          test "$(git describe --tags --exact-match)" = "$INPUT_TAG"
+          node scripts/verify-release.mjs --tag "$INPUT_TAG" --require-ready
+
+      - name: 依次发布 SDK 与 CLI
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          publish_package() {
+            directory="$1"
+            name="$(node -p "require('./$directory/package.json').name")"
+            version="$(node -p "require('./$directory/package.json').version")"
+            spec="$name@$version"
+            published="$(npm view "$spec" version 2>/dev/null || true)"
+            if [ "$published" = "$version" ]; then
+              git_head="$(npm view "$spec" gitHead 2>/dev/null || true)"
+              test "$git_head" = "$RELEASE_SHA"
+              echo "$spec already matches $RELEASE_SHA"
+              return
+            fi
+            (cd "$directory" && pnpm publish --access public --provenance --no-git-checks)
+            test "$(npm view "$spec" version)" = "$version"
+            test "$(npm view "$spec" gitHead)" = "$RELEASE_SHA"
+          }
+          publish_package packages/app-sdk
+          publish_package packages/create-rcx-app
