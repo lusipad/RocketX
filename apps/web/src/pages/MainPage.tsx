@@ -42,6 +42,10 @@ import {
   initialGroupFilterPanelState,
   nextGroupFilterPanelState,
 } from '../lib/groupFilterPanel';
+import {
+  COMPACT_CONVERSATION_WIDTH,
+  effectiveConversationWidth,
+} from '../lib/conversationPanelLayout';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -72,6 +76,9 @@ export default function MainPage() {
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [narrowGroupExpanded, setNarrowGroupExpanded] = useState(false);
   const [groupFilterPanelState, setGroupFilterPanelState] = useState(
+    initialGroupFilterPanelState,
+  );
+  const [conversationPanelState, setConversationPanelState] = useState(
     initialGroupFilterPanelState,
   );
   const [dragWidth, setDragWidth] = useState<number | null>(null);
@@ -144,19 +151,6 @@ export default function MainPage() {
   const narrowLayout = windowWidth < NARROW_LAYOUT_WIDTH;
   const userGroupCollapsed = narrowLayout ? !narrowGroupExpanded : savedGroupCollapsed;
   const groupCollapsed = groupFilterPanelState.panelCollapsed || userGroupCollapsed;
-
-  useEffect(() => {
-    const wasOpen = wasRightPanelOpen.current;
-    wasRightPanelOpen.current = rightPanelOpen;
-    if (!wasOpen && rightPanelOpen) {
-      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, {
-        type: 'panel-open',
-        groupCollapsed,
-      }));
-    } else if (wasOpen && !rightPanelOpen) {
-      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
-    }
-  }, [groupCollapsed, rightPanelOpen]);
   const maxConversationWidth = Math.min(
     MAX_CONVERSATION_WIDTH,
     Math.max(
@@ -168,10 +162,34 @@ export default function MainPage() {
         MIN_CHAT_WIDTH,
     ),
   );
-  const conversationWidth = Math.min(
-    dragWidth ?? savedConversationWidth,
+  const conversationWidth = effectiveConversationWidth(
+    savedConversationWidth,
+    conversationPanelState.panelCollapsed,
+    dragWidth,
     maxConversationWidth,
   );
+
+  useEffect(() => {
+    const wasOpen = wasRightPanelOpen.current;
+    wasRightPanelOpen.current = rightPanelOpen;
+    if (!wasOpen && rightPanelOpen) {
+      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, {
+        type: 'panel-open',
+        groupCollapsed,
+      }));
+      setConversationPanelState((state) => nextGroupFilterPanelState(state, {
+        type: 'panel-open',
+        groupCollapsed: conversationWidth <= COMPACT_CONVERSATION_WIDTH,
+      }));
+    } else if (wasOpen && !rightPanelOpen) {
+      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
+      setConversationPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
+    }
+  }, [conversationWidth, groupCollapsed, rightPanelOpen]);
+
+  const clearConversationPanelNarrowing = () => {
+    setConversationPanelState((state) => nextGroupFilterPanelState(state, { type: 'manual-change' }));
+  };
 
   const toggleGroupFilter = () => {
     const nextCollapsed = !groupCollapsed;
@@ -202,7 +220,10 @@ export default function MainPage() {
 
   const finishResize = () => {
     const start = resizeStart.current;
-    if (start?.moved) setConversationWidth(start.currentWidth);
+    if (start?.moved) {
+      setConversationWidth(start.currentWidth);
+      clearConversationPanelNarrowing();
+    }
     resizeStart.current = null;
     setDragWidth(null);
   };
@@ -342,7 +363,10 @@ export default function MainPage() {
             aria-valuenow={Math.round(conversationWidth)}
             tabIndex={0}
             title="拖动调整会话列表宽度，双击恢复默认"
-            onDoubleClick={resetConversationWidth}
+            onDoubleClick={() => {
+              clearConversationPanelNarrowing();
+              resetConversationWidth();
+            }}
             onPointerDown={onResizePointerDown}
             onPointerMove={onResizePointerMove}
             onPointerUp={finishResize}
@@ -351,9 +375,11 @@ export default function MainPage() {
               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
                 event.preventDefault();
                 const delta = event.key === 'ArrowLeft' ? -10 : 10;
+                clearConversationPanelNarrowing();
                 setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
               } else if (event.key === 'Home') {
                 event.preventDefault();
+                clearConversationPanelNarrowing();
                 resetConversationWidth();
               }
             }}
