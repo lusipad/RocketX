@@ -83,6 +83,31 @@ v0.18.0 已交付 mDNS + UDP 组播发现、Rocket.Chat 认证通道设备公钥
 
 ---
 
+# Implementation notes — M10 IPMSG 共存模式
+
+Plan: `docs/m10-implementation-plan.md`
+
+## Decisions
+
+- IPMSG peer 明确建模为未认证旧协议身份，不复用 M9 的 `LanPeer`、固定公钥或可信标记。
+- 固定端口 2425 绑定失败时保持关闭并返回错误；不换随机端口制造“已上线但旧客户端发现不到”的假状态。
+- 旧编码集中在 native codec：标准未声明 UTF-8 时用 CP932，飞秋 fixture 方言用 GBK。
+
+## Deviations
+
+- 真实飞秋二进制因 HTTP、无签名、公开 7/73 告警且当前宿主无 Defender/Sandbox 而不执行；按蓝图预设降级为官方 IP Messenger 真实验收，飞秋只做 fixture 兼容。
+
+## Surprises
+
+- IPMSG 的 NUL 有两种语义：成员报文中分隔 nickname/group，`FILEATTACHOPT` 消息中分隔正文/附件元数据；codec 必须结合 command 位解释，不能只按字节盲切。
+- 官方 IP Messenger 5.8.3 的 `ipcmd` 文件邀请把 32 位文件 ID 输出为十进制，而 `GETFILEDATA` 仍要求该数值的十六进制形式；真实客户端验收据此加入了窄范围兼容解析。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — 消息搜索无限滚动
 
 ## Shipped vs planned

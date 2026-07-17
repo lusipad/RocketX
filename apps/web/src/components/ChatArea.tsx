@@ -19,6 +19,8 @@ import MessageList from './MessageList';
 import Composer from './Composer';
 import ContextMenu from './ContextMenu';
 import { useKernelContributions } from '../kernel/registry';
+import { IPMSG_RID } from '../ipmsg/store';
+import IpmsgChatArea from './IpmsgChatArea';
 
 function HeaderButton({
   icon: Icon,
@@ -97,6 +99,8 @@ export default function ChatArea({
       </main>
     );
   }
+
+  if (activeRid === IPMSG_RID) return <IpmsgChatArea />;
 
   const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
   // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像顶上

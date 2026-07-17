@@ -60,6 +60,7 @@ import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
 import { lanOutboxCapability } from '../lan/outbox';
+import { useIpmsg } from '../ipmsg/store';
 
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
@@ -499,6 +500,12 @@ function DesktopSection() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
+  const ipmsgEnabled = useIpmsg((state) => state.enabled);
+  const ipmsgRunning = useIpmsg((state) => state.running);
+  const ipmsgPeers = useIpmsg((state) => state.peers.length);
+  const ipmsgError = useIpmsg((state) => state.error);
+  const setIpmsgEnabled = useIpmsg((state) => state.setEnabled);
+  const [changingIpmsg, setChangingIpmsg] = useState(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -626,6 +633,36 @@ function DesktopSection() {
               </div>
             </>
           )}
+        </div>
+      </Row>
+      <Row
+        label="IP Messenger 兼容模式"
+        hint="使用固定 UDP/TCP 2425；旧协议没有身份认证，与 Rocket.Chat 可信 LAN 完全隔离"
+        inline
+      >
+        <div className="flex min-w-0 flex-col items-end gap-1.5">
+          <Toggle
+            checked={isTauri && ipmsgEnabled}
+            disabled={!isTauri || changingIpmsg}
+            onChange={(next) => {
+              setChangingIpmsg(true);
+              void setIpmsgEnabled(next)
+                .then(() => toast.success(next ? '已开启 IP Messenger 兼容模式' : '已关闭 IP Messenger 兼容模式'))
+                .catch((err) => toast.error(err, 'IP Messenger 兼容模式启动失败'))
+                .finally(() => setChangingIpmsg(false));
+            }}
+          />
+          <div className={`max-w-md text-right text-xs ${ipmsgError ? 'text-danger' : 'text-ink-3'}`}>
+            {!isTauri
+              ? '仅桌面客户端支持'
+              : ipmsgError
+                ? ipmsgError
+                : ipmsgRunning
+                  ? `正在监听 2425 端口，发现 ${ipmsgPeers} 个联系人`
+                  : ipmsgEnabled
+                    ? '正在启动…'
+                    : '默认关闭；开启后侧栏出现独立兼容频道'}
+          </div>
         </div>
       </Row>
       <Row

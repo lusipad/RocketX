@@ -1,4 +1,4 @@
-import { CalendarDays, CheckCircle2, Circle, ExternalLink, Loader2, MessageSquare, RefreshCw, Sparkles, SquareCheckBig } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Circle, ExternalLink, Loader2, MessageSquare, Radio, RefreshCw, Sparkles, SquareCheckBig } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
@@ -16,12 +16,14 @@ import {
 } from '../kernel/ai/features/daily-review';
 import { renderMarkdown } from '../lib/markdown';
 import { toast } from '../stores/toast';
+import { IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
 const kindMeta = {
   mention: { label: '@我', icon: MessageSquare, color: 'text-primary' },
   todo: { label: '待办', icon: SquareCheckBig, color: 'text-warning' },
   event: { label: '日程', icon: CalendarDays, color: 'text-purple-500' },
   workitem: { label: '工作项', icon: ExternalLink, color: 'text-success' },
+  ipmsg: { label: '局域网', icon: Radio, color: 'text-warning' },
 } as const;
 
 export default function TodayPage() {
@@ -33,6 +35,7 @@ export default function TodayPage() {
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
   const refreshWorkbench = useWorkbench((state) => state.refresh);
   const mentions = useToday((state) => state.mentions);
+  const ipmsgMessages = useIpmsg((state) => state.messages);
   const processed = useToday((state) => state.processed);
   const loading = useToday((state) => state.loading);
   const warnings = useToday((state) => state.warnings);
@@ -55,8 +58,8 @@ export default function TodayPage() {
       : config.bridge ?? 'bridge'
     : 'unconfigured';
   const items = useMemo(
-    () => buildTodayItems({ mentions, todos, events, workItems, scope, adoScope, processed }),
-    [adoScope, events, mentions, processed, scope, todos, workItems],
+    () => buildTodayItems({ mentions, todos, events, workItems, ipmsg: ipmsgMessages, scope, adoScope, processed }),
+    [adoScope, events, ipmsgMessages, mentions, processed, scope, todos, workItems],
   );
   const completion = todayCompletion(items);
   const visible = showDone ? items : items.filter((item) => !item.processed);
@@ -86,6 +89,9 @@ export default function TodayPage() {
       calendar.setSelectedDate(item.occurrenceDate);
       calendar.setView('day');
       useUI.getState().setModule('calendar');
+    } else if (item.kind === 'ipmsg') {
+      useUI.getState().setModule('messages');
+      await useChat.getState().openRoom(IPMSG_RID);
     } else {
       await openExternal(item.workItem.webUrl);
     }
@@ -97,7 +103,7 @@ export default function TodayPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Sparkles size={20} className="text-primary" />今日</div>
-            <p className="mt-1 text-sm text-ink-3">@我、到期待办、今日日程和分配给我的工作项</p>
+            <p className="mt-1 text-sm text-ink-3">@我、局域网消息、到期待办、今日日程和分配给我的工作项</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
