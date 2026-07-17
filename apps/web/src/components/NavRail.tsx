@@ -39,11 +39,13 @@ const MODULE_META: Record<string, {
 
 const PRIMARY_MODULE_IDS = new Set(['messages', 'today', 'todos', 'calendar']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
-const AI_MODULE_IDS = new Set(['ai-assistant', 'codex']);
+const AI_MODULE_IDS = new Set(['ai-assistant']);
+const HIDDEN_MODULE_IDS = new Set(['codex']);
 const KNOWN_CORE_MODULE_IDS = new Set([
   ...PRIMARY_MODULE_IDS,
   ...WORK_MODULE_IDS,
   ...AI_MODULE_IDS,
+  'codex',
 ]);
 
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
@@ -64,12 +66,13 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       icon: module.icon ?? MODULE_META[module.id]?.icon ?? Blocks,
     })),
   ];
+  const visibleModules = modules.filter((module) => !HIDDEN_MODULE_IDS.has(module.key));
   const moduleGroups = [
-    modules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
-    modules.filter((module) => WORK_MODULE_IDS.has(module.key)),
-    modules.filter((module) => AI_MODULE_IDS.has(module.key)),
-    modules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
-    modules.filter((module) => module.owner !== 'core'),
+    visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => AI_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => module.owner !== 'core'),
   ].filter((group) => group.length > 0);
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);

@@ -240,11 +240,13 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('管家和 Codex 一级入口可独立打开', async ({ page }) => {
+test('管家提供执行间入口，Codex 不显示为侧栏一级入口', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
+  await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: /管家/ }).click();
   await expect(page.getByText('本地规则处理明确查询，模糊表达由 Codex 解析；写操作始终需要你确认。')).toBeVisible();
-  await page.getByRole('button', { name: /Codex/ }).click();
-  await expect(page.getByText('在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
+  await page.getByRole('button', { name: '执行间', exact: true }).click();
+  await expect(page.getByText('执行间', { exact: true })).toBeVisible();
+  await expect(page.getByText('管家的本地执行工房：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

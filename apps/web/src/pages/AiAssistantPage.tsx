@@ -318,8 +318,8 @@ export default function AiAssistantPage() {
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button onClick={() => useUI.getState().setModule('codex')} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
-              <TerminalSquare size={13} />聊天与本地工作
+            <button onClick={() => useUI.getState().setModule('codex')} title="执行间" aria-label="执行间" className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
+              <TerminalSquare size={13} />执行间
             </button>
             <div className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-3">
               {config ? 'ADO 已连接' : 'ADO 未配置'} · {getServerBase() ? 'Rocket.Chat 已连接' : '当前站点'}

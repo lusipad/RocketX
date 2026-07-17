@@ -65,7 +65,7 @@ const baseView = {
   sortBy: 'activity' as const,
 };
 
-test('模块快捷键顺序与左侧视觉顺序共用同一常量', () => {
+test('模块快捷键保留执行间直达顺序', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'today',
