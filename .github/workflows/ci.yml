@@ -36,6 +36,12 @@ jobs:
       - name: 回归测试（并发、分页与状态隔离）
         run: pnpm test:regression
 
+      - name: 安装 Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: UI 渲染冒烟（登录、消息、搜索与右键菜单）
+        run: pnpm test:ui
+
       - name: Agent Runner 隔离边界
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true

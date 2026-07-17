@@ -11,3 +11,5 @@ apps/desktop/src-tauri/gen/
 Thumbs.db
 .gstack/
 memory-trend.csv
+playwright-report/
+test-results/
