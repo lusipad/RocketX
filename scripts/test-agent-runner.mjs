@@ -31,8 +31,9 @@ function sandbox(profile, command) {
     '--workdir',
     '/workspace',
     '--read-only',
-    '--cap-drop',
-    'ALL',
+  );
+  if (!nestedDocker) args.push('--cap-drop', 'ALL');
+  args.push(
     '--security-opt',
     'no-new-privileges',
     '--security-opt',
