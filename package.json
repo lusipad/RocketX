@@ -12,6 +12,7 @@
     "spike:rc-offline-contract": "tsx scripts/spike-rc-offline-contract.ts",
     "test:pure": "tsx scripts/test-pure.ts",
     "test:regression": "pnpm --filter @rcx/app-sdk build && tsx --test scripts/regressions/*.test.ts",
+    "test:ui": "playwright test",
     "test:ecosystem": "node scripts/test-app-ecosystem.mjs",
     "codex:protocol:generate": "node scripts/codex-protocol.mjs --write",
     "codex:protocol:check": "node scripts/codex-protocol.mjs --check",
@@ -25,6 +26,7 @@
     "test:classify": "tsx scripts/test-classify.ts"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "emoji-toolkit": "^10.0.0",

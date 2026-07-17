@@ -10,6 +10,7 @@
 | 工作区类型 | `pnpm -r typecheck` 通过 |
 | 纯逻辑 | 219/219 |
 | 专项回归 | 254/254；新增覆盖 AI 助手白名单/回退、一级入口和 Codex 本地持久化/安全边界 |
+| UI 渲染冒烟 | Playwright Chromium 6/6；覆盖登录、发消息、切会话、全局搜索、右键菜单和 AI 助手/Codex 一级入口，已纳入 CI |
 | 真实 Rocket.Chat | smoke 53/53；classify 5/5 |
 | Codex | 0.144.4 协议生成树 671 文件一致；真实 app-server turn 返回 `RCX_M8_OK` |
 | Agent Runner | 固定版本、工作区读写边界、只读附件与凭据拒绝通过 |
