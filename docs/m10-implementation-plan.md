@@ -2,8 +2,7 @@
 
 状态：已按 v0.19.0 实现；验收证据见 [`m10-validation.md`](m10-validation.md)。
 
-日期：2026-07-17
-状态：实施中；前置证据见 [`m10-spike-b.md`](m10-spike-b.md)。
+日期：2026-07-17；前置证据见 [`m10-spike-b.md`](m10-spike-b.md)。
 
 ## 1. 最可能调整的决定
 
