@@ -39,6 +39,10 @@ import ShortcutHelpDialog from '../components/ShortcutHelpDialog';
 import { useAuth } from '../stores/auth';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { desktopNotify } from '../lib/notify';
+import {
+  initialGroupFilterPanelState,
+  nextGroupFilterPanelState,
+} from '../lib/groupFilterPanel';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -53,6 +57,7 @@ export default function MainPage() {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
+  const rightPanelOpen = useChat((s) => s.rightPanel !== null);
   const module = useUI((s) => s.module);
   const registeredModules = useKernelContributions('nav.module');
   const switcher = useUI((s) => s.switcherOpen);
@@ -67,6 +72,9 @@ export default function MainPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [narrowGroupExpanded, setNarrowGroupExpanded] = useState(false);
+  const [groupFilterPanelState, setGroupFilterPanelState] = useState(
+    initialGroupFilterPanelState,
+  );
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const resizeStart = useRef<{
     x: number;
@@ -80,6 +88,7 @@ export default function MainPage() {
   const resetConversationWidth = useImLayout((s) => s.resetConversationWidth);
   const setGroupCollapsed = useImLayout((s) => s.setGroupCollapsed);
   const ActiveModule = registeredModules.find((candidate) => candidate.id === module)?.render;
+  const wasRightPanelOpen = useRef(rightPanelOpen);
 
   useEffect(() => {
     void init();
@@ -134,7 +143,21 @@ export default function MainPage() {
   }, []);
 
   const narrowLayout = windowWidth < NARROW_LAYOUT_WIDTH;
-  const groupCollapsed = narrowLayout ? !narrowGroupExpanded : savedGroupCollapsed;
+  const userGroupCollapsed = narrowLayout ? !narrowGroupExpanded : savedGroupCollapsed;
+  const groupCollapsed = groupFilterPanelState.panelCollapsed || userGroupCollapsed;
+
+  useEffect(() => {
+    const wasOpen = wasRightPanelOpen.current;
+    wasRightPanelOpen.current = rightPanelOpen;
+    if (!wasOpen && rightPanelOpen) {
+      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, {
+        type: 'panel-open',
+        groupCollapsed,
+      }));
+    } else if (wasOpen && !rightPanelOpen) {
+      setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
+    }
+  }, [groupCollapsed, rightPanelOpen]);
   const maxConversationWidth = Math.min(
     MAX_CONVERSATION_WIDTH,
     Math.max(
@@ -152,8 +175,10 @@ export default function MainPage() {
   );
 
   const toggleGroupFilter = () => {
-    if (narrowLayout) setNarrowGroupExpanded((expanded) => !expanded);
-    else setGroupCollapsed(!savedGroupCollapsed);
+    const nextCollapsed = !groupCollapsed;
+    setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, { type: 'manual-change' }));
+    if (narrowLayout) setNarrowGroupExpanded(!nextCollapsed);
+    else setGroupCollapsed(nextCollapsed);
   };
 
   const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
