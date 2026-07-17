@@ -9,12 +9,13 @@
 | --- | --- |
 | 工作区类型 | `pnpm -r typecheck` 通过 |
 | 纯逻辑 | 219/219 |
-| 专项回归 | 248/248 |
+| 专项回归 | 254/254；新增覆盖 AI 助手白名单/回退、一级入口和 Codex 本地持久化/安全边界 |
 | 真实 Rocket.Chat | smoke 53/53；classify 5/5 |
 | Codex | 0.144.4 协议生成树 671 文件一致；真实 app-server turn 返回 `RCX_M8_OK` |
 | Agent Runner | 固定版本、工作区读写边界、只读附件与凭据拒绝通过 |
 | Rust | 30/30；官方 IP Messenger 真实互通用例按设计为显式环境测试，默认忽略 |
 | Web | TypeScript 与 Vite production build 通过 |
+| M7/M8 可见入口 | AI 助手支持搜索、只读查询和确认式工作项创建；Codex 支持选择本地目录并新建/恢复隔离会话 |
 | 应用生态 | SDK/CLI 0.20.0 tarball、临时项目安装、脚手架、validate、回环 dev 预览通过 |
 | Docker G3 代理 | `rocketx-m11-test` 首次拉取固定镜像、构建至三服务 healthy 约 164 秒；主页、健康端点、API 反代和登录均通过 |
 | Windows Release | v0.20.0 本地 Release `rocketx.exe`，15,874,560 bytes，FileVersion / ProductVersion 均为 0.20.0，SHA-256 `DFF55CAB89EE01BC76C32FF34B39191A0BCC1936725C521AF30542CCA9EE5208` |
