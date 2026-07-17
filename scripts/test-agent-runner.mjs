@@ -115,9 +115,15 @@ try {
   writeFileSync(contextFile, 'ROCKETX_CONTEXT_FILE\n');
   if (hostSandbox) chmodSync(contextFile, 0o444);
   writeFileSync(auth, '{"fixture":"AUTH_MUST_NOT_BE_READABLE"}\n');
-  const config = readFileSync(join(runnerDir, 'runner.config.toml'), 'utf8')
+  let config = readFileSync(join(runnerDir, 'runner.config.toml'), 'utf8')
     .replaceAll('/workspace', sandboxWorkspace)
     .replaceAll('/home/node/.codex/auth.json', sandboxAuth);
+  if (hostSandbox) {
+    config = config.replaceAll(
+      '":minimal" = "read"',
+      `${JSON.stringify(hostBin)} = "read"\n":minimal" = "read"`,
+    );
+  }
   writeFileSync(join(home, 'config.toml'), config);
 
   const buildArgs = ['build', '--quiet', '--tag', image];
@@ -175,6 +181,9 @@ try {
       `if cat ${sandboxWorkspace}/nested/credentials.json >/dev/null 2>&1; then exit 28; fi`,
       `if cat ${sandboxWorkspace}/nested/private.pem >/dev/null 2>&1; then exit 31; fi`,
       `if cat ${sandboxAuth} >/dev/null 2>&1; then exit 26; fi`,
+      ...(hostSandbox
+        ? [`if touch ${hostBin}/agent-write-probe >/dev/null 2>&1; then exit 32; fi`]
+        : []),
       'echo WRITE_PROFILE_OK',
     ].join('; '),
   );
