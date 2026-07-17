@@ -21,6 +21,11 @@ export function parseReleaseTag(tag) {
   return match.slice(1).join('.');
 }
 
+export function requiresMaturityEvidence(version) {
+  const major = Number.parseInt(version.split('.')[0] ?? '', 10);
+  return Number.isInteger(major) && major >= 1;
+}
+
 async function readJson(relativePath) {
   return JSON.parse(await readFile(path.join(repoRoot, relativePath), 'utf8'));
 }
@@ -108,7 +113,7 @@ export async function verifyRelease(tag, { requireReady = false } = {}) {
   const version = parseReleaseTag(tag);
   await verifyVersions(version);
   await releaseNotes(version);
-  if (requireReady) await verifyReadyEvidence(version);
+  if (requireReady && requiresMaturityEvidence(version)) await verifyReadyEvidence(version);
   return version;
 }
 

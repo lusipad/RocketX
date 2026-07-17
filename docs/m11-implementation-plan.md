@@ -1,7 +1,7 @@
 # M11 开源发布与应用生态 v0 实施计划
 
 蓝图：[`blueprint.md`](blueprint.md) §6
-目标版本：v1.0.0
+目标版本：v0.20.0（2026-07-17 用户决策：继续 0.x；未来 1.0 单独完成成熟度验收）
 
 ## 1. 最可能调整的决定
 
@@ -66,14 +66,14 @@ rcx-app dev [directory] [--port 4174]
 ### 1.5 发布动作分层
 
 1. PR/CI 验证 SDK tarball、CLI clean-room、三样板、协议生成树、Web/Rust 和桌面构建配置。
-2. 合并 `main` 后创建 `v1.0.0` 标签，复用现有三平台工作流生成草稿 Release。
+2. 合并 `main` 后创建 `v0.20.0` 标签，复用现有三平台工作流生成草稿 Release。
 3. 三平台产物存在且校验后才发布 GitHub Release；npm 发布仅在本机/CI 具有对应 scope 权限时执行。
 
 `@rcx/app-sdk` 与 `create-rcx-app` 在 npm registry 当前均为 404，但 404 不证明当前账号拥有
 `@rcx` scope。
 
 - **Confidence: high**
-- **What would flip it**：npm scope 无权或三平台签名材料缺失；GitHub v1.0 不因此伪装 npm 已发布，
+- **What would flip it**：npm scope 无权或三平台签名材料缺失；GitHub v0.20.0 不因此伪装 npm 已发布，
   Release notes 明确包的安装替代路径。
 
 ## 2. Assumptions
@@ -110,7 +110,7 @@ rcx-app dev [directory] [--port 4174]
 4. 新增 RocketX Web Dockerfile/静态服务，把固定版本服务加入 compose 与健康检查。
 5. 补齐英文 README、中文副本、CONTRIBUTING、SECURITY、第三方许可、兼容矩阵和应用开发教程。
 6. 重新生成 pinned Codex 协议树，将 `codex:protocol:check` 纳入 CI。
-7. 统一 v1.0.0 版本、CHANGELOG、Tauri/updater/Agent 协议口径，增强三平台 Release workflow。
+7. 统一 v0.20.0 版本、CHANGELOG、Tauri/updater/Agent 协议口径，增强三平台 Release workflow。
 8. 记录 clean-room G3/G4 代理耗时、三平台产物、哈希和仍需真人完成的证据。
 
 ## 5. Verification
@@ -123,9 +123,9 @@ rcx-app dev [directory] [--port 4174]
 - 安全：远程高危权限、路径穿越、缺 entry、未知权限、CSP 放宽尝试全部被拒绝。
 - 全门禁：typecheck、pure、regression、真实 RC smoke/classify、Agent Runner、Codex protocol、Rust、Web
   production、Windows release；PR CI 通过。
-- 发布：`v1.0.0` 三平台 workflow 成功，Release 至少含 Windows/macOS/Linux 产物与 SHA-256 清单；
+- 发布：`v0.20.0` 三平台 workflow 成功，Release 至少含 Windows/macOS/Linux 产物与 SHA-256 清单；
   npm 包仅在 registry 查询确认公开可见后标记完成。
-- 真人验收：两位外部开发者分别执行 G3/G4，均在 30 分钟内完成；证据未取得前不得把这一条写成通过。
+- 未来 1.0 真人验收：两位外部开发者分别执行 G3/G4，均在 30 分钟内完成；证据未取得前不得把 1.0 成熟度门禁写成通过，但不阻塞 v0.20.0。
 
 ## Handoff
 

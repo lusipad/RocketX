@@ -737,8 +737,8 @@ Plan: [`m11-implementation-plan.md`](m11-implementation-plan.md)
 
 SDK、CLI、三个正式样板、固定版本 Docker 栈与双语开源文档已按计划落地，manifest 契约只有
 SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Windows Release 均已通过；三平台
-安装包交给标签工作流最终验证。M11 实现已通过 PR #72 合并，但蓝图的外部 G3/G4 真人计时和 README
-真实截图/GIF 尚未取得，因此不得把 v1.0.0 标记为正式发布。
+安装包交给标签工作流最终验证。M11 实现已通过 PR #72 合并；2026-07-17 用户决定当前版本继续
+使用 0.x，因此本轮发布目标改为 v0.20.0，外部 G3/G4 真人计时和 README 真实截图/GIF 后置为未来 1.0 门禁。
 
 ## Decisions
 
@@ -746,11 +746,13 @@ SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Wind
 - `create-rcx-app` 单包暴露 `create-rcx-app` 与 `rcx-app` 两个命令；开发预览不放宽宿主 iframe CSP。
 - Web 的 `manifest.ts`/`types.ts` 使用指向 SDK `src` 的薄重导出，因为 Vite 6 不读取 TypeScript
   `paths`，而 fresh clone 尚无发布用 `dist`；这只改变开发期解析路径，契约实现仍只有 SDK 一份。
-- 标签合同要求严格 SemVer、最新 `main`、全仓版本一致、已定稿 CHANGELOG、真实 PNG/GIF 和两位
-  不同外部开发者证据；桌面工作流只准备草稿，npm 与 GitHub Release 分别显式批准。
+- 标签合同要求严格 SemVer、最新 `main`、全仓版本一致和已定稿 CHANGELOG；只有 major >= 1 才额外
+  要求真实 PNG/GIF 和两位不同外部开发者证据。桌面工作流只准备草稿，npm 与 GitHub Release 分别显式批准。
 
 ## Deviations
 
+- 原计划以 v1.0.0 交付 M11；用户明确要求继续 0.x，因此采用与 M10 v0.19.0 连续的 v0.20.0。
+  示例应用自己的 manifest `1.0.0` 不代表 RocketX 产品版本，保持不变。
 - 开发预览使用回环静态服务与 mock Bridge，而不是在 RocketX 沙箱内部热重载；这样不新增
   localhost 信任边界，也不放宽宿主 CSP。
 - npm 包已通过真实 tarball 与临时项目安装验证，但本机 `npm whoami` 返回 `ENEEDAUTH`；在

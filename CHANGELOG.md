@@ -1,6 +1,6 @@
 # 更新日志
 
-## v1.0.0 - 待发布
+## v0.20.0 - 2026-07-17
 
 ### 新增
 
@@ -11,10 +11,10 @@
 
 ### 发布工程
 
-- 统一仓库、Web、桌面、SDK、CLI 与桥接服务版本为 1.0.0，并把 Codex 0.144.4 的 671 个协议生成文件纳入 CI 一致性门禁。
+- 统一仓库、Web、桌面、SDK、CLI 与桥接服务版本为 0.20.0，并把 Codex 0.144.4 的 671 个协议生成文件纳入 CI 一致性门禁。
 - 三平台 Release 工作流先执行协议、类型、测试、应用生态和 Web 构建门禁，再核验 Windows、macOS、Linux 产物、Updater 元数据与签名，并生成可直接校验的 `SHA256SUMS.txt`。
-- 标签只能来自版本完全一致的最新 `main`，且必须已提交两位外部开发者的 30 分钟验收证据和真实 README PNG/GIF；桌面构建只准备草稿，npm 与 GitHub Release 均由受保护的独立工作流显式发布。
-- 本地 clean-room 应用生态、三服务 Docker、真实 Rocket.Chat、Codex app-server、Agent Runner、Rust 和 Windows Release 已通过；正式标签仍以外部开发者 G3/G4 真人计时及三平台 CI 为门禁。
+- 标签只能来自版本完全一致的最新 `main`；外部开发者 30 分钟验收与真实 README PNG/GIF 仅在进入 1.0 及以上时成为强制成熟度门禁。桌面构建只准备草稿，npm 与 GitHub Release 均由受保护的独立工作流显式发布。
+- 本地 clean-room 应用生态、三服务 Docker、真实 Rocket.Chat、Codex app-server、Agent Runner、Rust 和 Windows Release 已通过；v0.20.0 正式标签仍以三平台 CI 和 npm 包公开可见为发布门禁。
 
 ### 安全
 

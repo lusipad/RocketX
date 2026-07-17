@@ -184,7 +184,7 @@ function startServer() {
 
   async function initialize() {
     const result = await request('initialize', {
-      clientInfo: { name: 'rocketx', title: 'RocketX Runner Smoke', version: '1.0.0' },
+      clientInfo: { name: 'rocketx', title: 'RocketX Runner Smoke', version: '0.20.0' },
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,

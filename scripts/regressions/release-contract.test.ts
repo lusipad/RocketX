@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { parseReleaseTag, releaseNotes, verifyVersions } from '../verify-release.mjs';
+import {
+  parseReleaseTag,
+  releaseNotes,
+  requiresMaturityEvidence,
+  verifyVersions,
+} from '../verify-release.mjs';
 
 test('发布标签只接受严格 SemVer', () => {
   assert.equal(parseReleaseTag('v1.0.0'), '1.0.0');
@@ -10,14 +15,20 @@ test('发布标签只接受严格 SemVer', () => {
   }
 });
 
-test('仓库全部公开版本面与 v1.0.0 对齐', async () => {
-  await verifyVersions('1.0.0');
+test('仓库全部公开版本面与 v0.20.0 对齐', async () => {
+  await verifyVersions('0.20.0');
 });
 
-test('已发布版本可以从 CHANGELOG 提取用户向 Release notes', async () => {
-  const notes = await releaseNotes('0.15.0');
-  assert.match(notes, /^# RocketX v0\.15\.0/m);
-  assert.doesNotMatch(notes, /^## v0\.14/m);
+test('0.x 发布不冒充 1.0 成熟度门禁', () => {
+  assert.equal(requiresMaturityEvidence('0.20.0'), false);
+  assert.equal(requiresMaturityEvidence('1.0.0'), true);
+  assert.equal(requiresMaturityEvidence('2.3.4'), true);
+});
+
+test('待发布版本可以从 CHANGELOG 提取用户向 Release notes', async () => {
+  const notes = await releaseNotes('0.20.0');
+  assert.match(notes, /^# RocketX v0\.20\.0/m);
+  assert.doesNotMatch(notes, /^## v0\.15/m);
 });
 
 test('发布工作流先验证 main 上的注解标签再执行标签代码', async () => {
