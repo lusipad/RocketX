@@ -1,4 +1,33 @@
 import type { AiCapability, AiProviderLocality, AiRoute } from './provider';
+import { isTauri } from '../../lib/http';
+
+/**
+ * 管家大脑二选一（决策 11）：显式开关、不静默回退。
+ * codex = 桌面主路径（本机 codex app-server），api = AiBus Agent 循环（Web / 内网）。
+ * 独立于 AiSettings 存储，避免搅动 provider 校验链。
+ */
+export type ButlerBrain = 'codex' | 'api';
+
+const BUTLER_BRAIN_KEY = 'rcx-butler-brain-v1';
+
+export function defaultButlerBrain(): ButlerBrain {
+  return isTauri ? 'codex' : 'api';
+}
+
+export function getButlerBrain(): ButlerBrain {
+  try {
+    const raw = localStorage.getItem(BUTLER_BRAIN_KEY);
+    if (raw === 'codex' || raw === 'api') return raw;
+  } catch {
+    // localStorage 不可用时按平台默认
+  }
+  return defaultButlerBrain();
+}
+
+export function setButlerBrain(brain: ButlerBrain): void {
+  localStorage.setItem(BUTLER_BRAIN_KEY, brain);
+  window.dispatchEvent(new CustomEvent('rcx-butler-brain-changed'));
+}
 
 export interface AiProviderConfig {
   id: string;
