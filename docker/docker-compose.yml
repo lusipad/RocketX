@@ -1,48 +1,69 @@
-# 本地开发用 Rocket.Chat 服务（原版镜像，不做任何修改）
-# 启动：docker compose -f docker/docker-compose.yml up -d
-# 用 3300 端口以避开本机其他服务；开发管理员 admin / rcxdev123
+# Reproducible local/self-hosted stack: RocketX Web + Rocket.Chat + MongoDB.
+# Start: docker compose -f docker/docker-compose.yml up -d --build
+# Default development account: admin / rcxdev123 (change before non-local use).
 name: rcx-dev
+
 services:
+  rocketx:
+    image: rocketx/web:local
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      rocketchat:
+        condition: service_healthy
+    ports:
+      - "${ROCKETX_WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 6
+
   rocketchat:
-    # 版本固定到已验证矩阵（见 README「兼容性承诺」）；升级前先跑 pnpm smoke 复核
     image: registry.rocket.chat/rocketchat/rocket.chat:8.6.1
     restart: unless-stopped
     environment:
       MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
       MONGO_OPLOG_URL: mongodb://mongodb:27017/local?replicaSet=rs0
-      ROOT_URL: http://localhost:3300
+      ROOT_URL: ${ROCKETCHAT_ROOT_URL:-http://localhost:3300}
       PORT: 3000
       DEPLOY_METHOD: docker
-      # 以下仅供本地开发：自动创建管理员并跳过安装向导，生产环境请删除
-      ADMIN_USERNAME: admin
-      ADMIN_PASS: rcxdev123
-      ADMIN_EMAIL: admin@rcx.local
+      ADMIN_USERNAME: ${ROCKETCHAT_ADMIN_USERNAME:-admin}
+      ADMIN_PASS: ${ROCKETCHAT_ADMIN_PASSWORD:-rcxdev123}
+      ADMIN_EMAIL: ${ROCKETCHAT_ADMIN_EMAIL:-admin@rcx.local}
       OVERWRITE_SETTING_Show_Setup_Wizard: completed
-      # 允许中文群组/频道名（默认正则只放行英文数字）
       OVERWRITE_SETTING_UTF8_Channel_Names_Validation: '[0-9a-zA-Z-_.一-龥぀-ヿ]+'
-      # 消息搜索用正则（子串匹配）替代 Mongo 文本索引，中文搜索必需
       OVERWRITE_SETTING_Message_AlwaysSearchRegExp: 'true'
-      # 允许跨会话全局搜索消息
       'OVERWRITE_SETTING_Search.defaultProvider.GlobalSearchEnabled': 'true'
-      # 已读回执（注意：RC 企业版功能，社区版接口会拒绝，客户端自动降级不显示）
       OVERWRITE_SETTING_Message_Read_Receipt_Enabled: 'true'
       OVERWRITE_SETTING_Message_Read_Receipt_Store_Users: 'true'
-      # 桌面客户端（Tauri）直连 REST API 需要 CORS
       OVERWRITE_SETTING_API_Enable_CORS: 'true'
       OVERWRITE_SETTING_API_CORS_Origin: '*'
     depends_on:
       mongodb:
         condition: service_healthy
     ports:
-      - "3300:3000"
+      - "${ROCKETCHAT_PORT:-3300}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/info').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 30
 
   mongodb:
-    image: mongo:7.0
+    image: mongo:7.0.21
     restart: unless-stopped
     command: mongod --replSet rs0 --oplogSize 128 --bind_ip_all
     volumes:
       - mongodb_data:/data/db
-    # 健康检查顺带完成副本集初始化（Rocket.Chat 必须使用副本集）
     healthcheck:
       test: >
         mongosh --quiet --eval

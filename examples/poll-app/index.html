@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>会话投票</title>
+    <style>
+      * { box-sizing: border-box; } body { margin: 0; background: #f5f6f7; color: #1f2329; font: 14px system-ui; }
+      main { width: min(820px, calc(100% - 32px)); margin: 24px auto; display: grid; gap: 16px; }
+      section { padding: 18px; border: 1px solid #dee0e3; border-radius: 12px; background: white; }
+      h1, h2 { margin: 0 0 14px; } h1 { font-size: 20px; } h2 { font-size: 16px; }
+      label { display: grid; gap: 6px; margin-bottom: 12px; color: #646a73; }
+      input, textarea { width: 100%; border: 1px solid #c9cdd4; border-radius: 7px; padding: 9px 10px; font: inherit; }
+      button { border: 0; border-radius: 7px; padding: 8px 12px; background: #3370ff; color: white; cursor: pointer; }
+      button.secondary { background: #e8f0ff; color: #245bdb; } .poll { border-top: 1px solid #eef0f2; padding: 14px 0; }
+      .poll:first-child { border-top: 0; } .question { font-weight: 600; margin-bottom: 8px; }
+      .option { display: flex; align-items: center; gap: 8px; margin: 6px 0; } .option button { flex: 1; text-align: left; background: #f2f3f5; color: #1f2329; }
+      .count { min-width: 2em; text-align: right; color: #646a73; } .poll-actions { display: flex; gap: 8px; margin-top: 10px; }
+      .empty { color: #8f959e; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h1>会话投票</h1>
+        <label>问题<input id="question" maxlength="200" placeholder="午餐去哪里？"></label>
+        <label>选项（每行一个）<textarea id="options" rows="4" maxlength="1000" placeholder="食堂&#10;面馆&#10;轻食"></textarea></label>
+        <button id="create">创建投票</button>
+      </section>
+      <section><h2>本地投票</h2><div id="polls"></div></section>
+    </main>
+    <script>
+      let nextId = 1;
+      const pending = new Map();
+      const call = (method, params) => new Promise((resolve, reject) => {
+        const id = nextId++; pending.set(id, { resolve, reject });
+        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } });
+      });
+      const notify = (message, level = 'success') => window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI', params: { kind: 'notify', props: { message: String(message).slice(0, 500), level } } });
+      window.__RCX_BRIDGE__.addEventListener('message', (event) => {
+        const message = event.data; if (message?.jsonrpc !== '2.0' || !message.id || !pending.has(message.id)) return;
+        const task = pending.get(message.id); pending.delete(message.id); message.error ? task.reject(new Error(message.error.message)) : task.resolve(message.result);
+      });
+      async function loadPolls() { const value = await call('storage.get', { key: 'polls' }); return Array.isArray(value) ? value : []; }
+      async function savePolls(polls) { await call('storage.set', { key: 'polls', value: polls }); render(polls); }
+      function formatPoll(poll) { return [`📊 ${poll.question}`, ...poll.options.map((option, index) => `${index + 1}. ${option.text}（${option.votes} 票）`)].join('\n'); }
+      async function vote(pollId, optionIndex) {
+        const polls = await loadPolls(); const poll = polls.find((item) => item.id === pollId); if (!poll) return;
+        poll.options[optionIndex].votes += 1; await savePolls(polls);
+      }
+      async function publish(poll) {
+        try { const current = await call('chat.current'); if (!current?.rid) throw new Error('请先打开一个已加入的会话'); await call('chat.postMessage', { rid: current.rid, text: formatPoll(poll) }); notify('投票结果已发布到当前会话'); }
+        catch (error) { notify(error.message, 'error'); }
+      }
+      function render(polls) {
+        const root = document.querySelector('#polls'); root.replaceChildren();
+        if (!polls.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '还没有投票。'; root.append(empty); return; }
+        for (const poll of polls) {
+          const item = document.createElement('article'); item.className = 'poll';
+          const question = document.createElement('div'); question.className = 'question'; question.textContent = poll.question; item.append(question);
+          poll.options.forEach((option, index) => { const row = document.createElement('div'); row.className = 'option'; const button = document.createElement('button'); button.textContent = option.text; button.addEventListener('click', () => void vote(poll.id, index)); const count = document.createElement('span'); count.className = 'count'; count.textContent = String(option.votes); row.append(button, count); item.append(row); });
+          const actions = document.createElement('div'); actions.className = 'poll-actions'; const post = document.createElement('button'); post.className = 'secondary'; post.textContent = '发布当前结果'; post.addEventListener('click', () => void publish(poll)); actions.append(post); item.append(actions); root.append(item);
+        }
+      }
+      document.querySelector('#create').addEventListener('click', async () => {
+        const question = document.querySelector('#question').value.trim();
+        const options = [...new Set(document.querySelector('#options').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))];
+        if (!question || options.length < 2 || options.length > 10) return notify('请输入问题和 2–10 个不同选项', 'error');
+        const polls = await loadPolls(); polls.unshift({ id: `poll-${Date.now()}`, question, options: options.map((text) => ({ text, votes: 0 })) }); await savePolls(polls);
+        document.querySelector('#question').value = ''; document.querySelector('#options').value = '';
+      });
+      void loadPolls().then(render).catch((error) => notify(error.message, 'error'));
+    </script>
+  </body>
+</html>

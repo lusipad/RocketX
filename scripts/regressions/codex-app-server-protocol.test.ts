@@ -9,7 +9,7 @@ import {
 } from '../../apps/web/src/agent/protocol';
 
 test('Codex app-server 版本从初始化 userAgent 提取并严格锁定', () => {
-  const userAgent = `Codex Desktop/${CODEX_APP_SERVER_VERSION} (Windows; x86_64) dumb (rocketx; 0.19.0)`;
+  const userAgent = `Codex Desktop/${CODEX_APP_SERVER_VERSION} (Windows; x86_64) dumb (rocketx; 1.0.0)`;
   assert.equal(codexVersionFromUserAgent(userAgent), CODEX_APP_SERVER_VERSION);
   assert.doesNotThrow(() => assertCompatibleCodex(userAgent));
   assert.throws(() => assertCompatibleCodex('Codex Desktop/0.144.2 (Windows)'), /协议不兼容/);

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "@rcx/app-sdk": ["../app-sdk/src/index.ts"]
+    },
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

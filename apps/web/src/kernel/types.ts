@@ -1,23 +1,9 @@
 import type { ComponentType, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
+import type { ExtensionPoint } from '../../../../packages/app-sdk/src/index.js';
 
-export const EXTENSION_POINTS = [
-  'nav.module',
-  'panel.right',
-  'message.action',
-  'message.renderer',
-  'composer.command',
-  'composer.trigger',
-  'composer.action',
-  'entity.link',
-  'home.widget',
-  'room.tab',
-  'settings.page',
-  'background.task',
-] as const;
-
-export type ExtensionPoint = (typeof EXTENSION_POINTS)[number];
+export { EXTENSION_POINTS, type ExtensionPoint } from '../../../../packages/app-sdk/src/index.js';
 
 export interface NavModuleContribution {
   id: string;

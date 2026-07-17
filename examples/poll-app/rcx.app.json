@@ -1,0 +1,13 @@
+{
+  "id": "dev.rocketx.poll",
+  "version": "1.0.0",
+  "name": "会话投票",
+  "publisher": "RocketX",
+  "runtime": "iframe",
+  "entry": "index.html",
+  "permissions": ["chat:read", "chat:write", "storage:local", "ui:notify"],
+  "contributes": {
+    "nav.module": [{ "id": "poll", "label": "投票" }],
+    "composer.command": [{ "name": "poll", "desc": "创建并发布会话投票" }]
+  }
+}

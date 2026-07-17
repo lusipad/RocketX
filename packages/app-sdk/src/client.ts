@@ -7,7 +7,7 @@ import type {
   JsonRpcError,
   JsonRpcRequest,
   JsonRpcResponse,
-} from './types';
+} from './types.js';
 
 interface PendingRequest {
   resolve(value: unknown): void;

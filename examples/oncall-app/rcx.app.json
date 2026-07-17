@@ -1,0 +1,13 @@
+{
+  "id": "dev.rocketx.oncall",
+  "version": "1.0.0",
+  "name": "团队值班表",
+  "publisher": "RocketX",
+  "runtime": "iframe",
+  "entry": "index.html",
+  "permissions": ["rooms:list", "users:read", "chat:write", "storage:local", "ui:notify"],
+  "contributes": {
+    "nav.module": [{ "id": "oncall", "label": "值班表" }],
+    "composer.command": [{ "name": "oncall", "desc": "安排并发布团队值班" }]
+  }
+}

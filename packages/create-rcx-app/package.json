@@ -1,0 +1,51 @@
+{
+  "name": "create-rcx-app",
+  "version": "1.0.0",
+  "description": "Create, validate, and preview RocketX applications",
+  "type": "module",
+  "bin": {
+    "create-rcx-app": "./dist/create-cli.js",
+    "rcx-app": "./dist/rcx-cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-templates.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@rcx/app-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "rocketx",
+    "scaffold",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lusipad/RocketX.git",
+    "directory": "packages/create-rcx-app"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

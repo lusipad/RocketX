@@ -1,5 +1,25 @@
 # 更新日志
 
+## v1.0.0 - 待发布
+
+### 新增
+
+- 完成 M11 应用生态：`@rcx/app-sdk` 成为 manifest 与 Bridge 的公开类型契约，`create-rcx-app` / `rcx-app` 提供脚手架、校验和回环地址开发预览。
+- 官方样板扩展为看板、投票和值班表；全部只使用公开能力和最小权限，不依赖宿主私有 API。
+- 新增固定版本的一键 Web 自部署栈，包含 RocketX、Rocket.Chat 8.6.1 与 MongoDB 7.0.21，并提供同源 API、WebSocket、文件和头像反代。
+- 补齐英文主 README、中文入口、应用开发、兼容矩阵、贡献、安全与第三方许可文档。
+
+### 发布工程
+
+- 统一仓库、Web、桌面、SDK、CLI 与桥接服务版本为 1.0.0，并把 Codex 0.144.4 的 671 个协议生成文件纳入 CI 一致性门禁。
+- 三平台 Release 工作流先执行协议、类型、测试、应用生态和 Web 构建门禁，再核验 Windows、macOS、Linux 产物并生成 `SHA256SUMS.txt` 后发布。
+- 本地 clean-room 应用生态、三服务 Docker、真实 Rocket.Chat、Codex app-server、Agent Runner、Rust 和 Windows Release 已通过；正式标签仍以外部开发者 G3/G4 真人计时及三平台 CI 为门禁。
+
+### 安全
+
+- CLI 开发服务只绑定回环地址；应用 manifest、entry 路径和权限继续由 SDK 单一解析器校验，不为开发模式放宽宿主 CSP。
+- Compose 明确定位为本地/评估基线；生产部署仍必须配置 TLS、强凭据、网络收敛与备份恢复。
+
 ## v0.19.0 - 2026-07-17
 
 ### 新增
