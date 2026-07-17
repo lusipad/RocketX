@@ -21,6 +21,9 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 安装 Codex CLI
+        run: npm install --global @openai/codex@0.144.4
+
       - name: Codex 协议生成物
         run: pnpm codex:protocol:check
 
