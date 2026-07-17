@@ -36,6 +36,7 @@ import { ensureHttpOrigin } from '../lib/http';
 import { initializeAiRuntime } from './ai/runtime';
 import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
+import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -136,6 +137,36 @@ function registerCapabilities(): void {
       binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
     }
     return { type: blob.type, size: blob.size, base64: btoa(binary) };
+  });
+  capabilityBus.register('lan.peers', 'lan:discover', () =>
+    redactedLanPeers(currentLanPeers()),
+  );
+  capabilityBus.register('lan.send', 'lan:transfer', async (params) => {
+    const object = params as Record<string, unknown> | undefined;
+    const userId = stringParam(params, 'userId');
+    const roomId = stringParam(params, 'roomId');
+    const text = stringParam(params, 'text');
+    const chat = useChat.getState();
+    if (!roomId || !chat.subscriptions[roomId]) throw new Error('只能向已加入的会话发送 LAN 数据');
+    const memberIds = new Set([
+      ...(chat.rooms[roomId]?.uids ?? []),
+      ...(chat.members[roomId] ?? []).map((user) => user._id),
+    ]);
+    if (!userId || !memberIds.has(userId)) {
+      throw new Error('LAN 接收方必须是当前会话成员');
+    }
+    if (!text || text.length > 48 * 1024) throw new Error('LAN 数据为空或超过 48 KiB');
+    const messageId =
+      typeof object?.messageId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(object.messageId)
+        ? object.messageId
+        : crypto.randomUUID().replace(/-/g, '').slice(0, 17);
+    await sendLanChat(userId, {
+      messageId,
+      roomId,
+      originalTs: Date.now(),
+      text,
+    });
+    return { ok: true, messageId };
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>
     kernelStore.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),

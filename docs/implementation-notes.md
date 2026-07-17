@@ -48,6 +48,41 @@ Plan: `docs/m8-implementation-plan.md`
 
 ---
 
+# Implementation notes — M9 LAN P2P 与断网降级
+
+## Shipped vs planned
+
+v0.18.0 已交付 mDNS + UDP 组播发现、Rocket.Chat 认证通道设备公钥交换、Ed25519 双向挑战应答、可信 LAN 消息、IndexedDB 作者 outbox，以及原生四流文件传输。IPMSG 仍按蓝图留给 M10。
+
+## Decisions
+
+- 广播只做发现；信任只能来自已认证 Rocket.Chat 消息中固定的设备公钥。
+- 文件路径不经过 WebView IPC。桌面文件选择保留原生路径，Rust 分片读取并发送；P2P 不可用时才回到现有 Rocket.Chat 上传。
+- 回灌不提交服务器拒绝的历史 `ts`。customFields 可用时携带原始时间，不可用时只在参与原 LAN 会话的设备本地保留。
+- 群聊文件暂走 Rocket.Chat；只有可信单人会话自动直传，避免部分群成员 P2P 成功后再回退服务器造成重复附件。
+
+## Deviations
+
+- 本地 Rocket.Chat 的上传上限为 100 MiB，无法执行 5 GiB 服务端上传；验收记录为“P2P 57.643 秒完成、服务端配置拒绝”，未临时修改管理员设置。
+- 物理拔线由可重复的连接中断 + 持久化缺块故障注入替代，覆盖相同续传状态机且不影响用户机器网络。
+
+## Surprises
+
+- Windows 非阻塞监听器接受的连接会继承非阻塞状态；真实四流测试复现 `WSAEWOULDBLOCK`，所有连接现显式切回阻塞 I/O。
+- Rocket.Chat 8.6.1 对重复自定义 `_id` 保持单条历史，但第二次 REST 请求返回内部错误；回灌必须按 ID 回查，不能只看请求状态。
+
+## Verification
+
+- 5 GiB 四流回环：57.643 秒，约 88.8 MiB/s，最终 BLAKE3 一致。
+- RC 8.6.1：自定义 `_id` 幂等落库；历史 `ts` 被拒；customFields 未启用。
+- Rust 覆盖固定公钥握手、冒充/重放拒绝、路径穿越、损坏分片、缺块续传、离线聊天和真实多流 TCP。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — 消息搜索无限滚动
 
 ## Shipped vs planned
