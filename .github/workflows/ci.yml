@@ -32,6 +32,10 @@ jobs:
 
       - name: Agent Runner 隔离边界
         run: pnpm agent:runner:test
+        env:
+          # GitHub 托管机本身运行 Docker；仅测试容器需要放开外层嵌套限制，
+          # 实际路径权限仍由容器内 bubblewrap profile 逐项验证。
+          ROCKETX_RUNNER_TEST_NESTED_DOCKER: "1"
 
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build

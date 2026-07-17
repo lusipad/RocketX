@@ -11,6 +11,7 @@ const workspace = join(temporary, 'workspace');
 const home = join(temporary, 'codex-home');
 const attachments = join(temporary, 'attachments');
 const auth = join(temporary, 'auth.json');
+const nestedDocker = process.env.ROCKETX_RUNNER_TEST_NESTED_DOCKER === '1';
 
 function docker(args, options = {}) {
   return execFileSync('docker', args, { cwd: root, encoding: 'utf8', ...options });
@@ -21,9 +22,12 @@ function mount(source, target, readOnly = false) {
 }
 
 function sandbox(profile, command) {
-  return docker([
+  const args = [
     'run',
     '--rm',
+  ];
+  if (nestedDocker) args.push('--privileged');
+  args.push(
     '--workdir',
     '/workspace',
     '--read-only',
@@ -60,11 +64,13 @@ function sandbox(profile, command) {
     '/bin/sh',
     '-lc',
     command,
-  ]).trim();
+  );
+  return docker(args).trim();
 }
 
 try {
   mkdirSync(join(workspace, 'nested'), { recursive: true });
+  mkdirSync(join(workspace, '.rocketx-agent', 'attachments'), { recursive: true });
   mkdirSync(attachments, { recursive: true });
   mkdirSync(home, { recursive: true });
   writeFileSync(join(workspace, 'allowed.txt'), 'ROCKETX_ALLOWED_FILE\n');
