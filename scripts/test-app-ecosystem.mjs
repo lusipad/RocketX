@@ -52,13 +52,20 @@ try {
     const files = run('tar', ['-tf', tarball]).split(/\r?\n/);
     for (const file of expected) assert.ok(files.includes(file), `${path.basename(tarball)} is missing ${file}`);
     assert.ok(!files.some((file) => file.startsWith('package/src/')), `${path.basename(tarball)} leaked src/`);
+    assert.ok(!files.some((file) => file.endsWith('.map')), `${path.basename(tarball)} leaked source maps`);
   }
+
+  const packedCliManifest = JSON.parse(run('tar', ['-xOf', cliTarball, 'package/package.json']));
+  assert.equal(packedCliManifest.dependencies['@rcx/app-sdk'], '1.0.0');
 
   run(npm, ['init', '-y'], cleanRoom);
   run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', sdkTarball, cliTarball], cleanRoom);
   const generated = path.join(cleanRoom, 'first-app');
-  run(process.execPath, [path.join(cleanRoom, 'node_modules', 'create-rcx-app', 'dist', 'create-cli.js'), generated, '--template', 'hello'], cleanRoom);
-  run(process.execPath, [path.join(cleanRoom, 'node_modules', 'create-rcx-app', 'dist', 'rcx-cli.js'), 'validate', generated], cleanRoom);
+  const binDirectory = path.join(cleanRoom, 'node_modules', '.bin');
+  const createCommand = path.join(binDirectory, process.platform === 'win32' ? 'create-rcx-app.cmd' : 'create-rcx-app');
+  const rcxCommand = path.join(binDirectory, process.platform === 'win32' ? 'rcx-app.cmd' : 'rcx-app');
+  run(createCommand, [generated, '--template', 'hello'], cleanRoom);
+  run(rcxCommand, ['validate', generated], cleanRoom);
   const manifest = JSON.parse(await readFile(path.join(generated, 'rcx.app.json'), 'utf8'));
   assert.equal(manifest.id, 'dev.local.first-app');
 

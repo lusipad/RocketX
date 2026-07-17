@@ -1,0 +1,65 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已完成三平台构建和 npm 发布的标签'
+        required: true
+        default: 'v1.0.0'
+      confirmation:
+        description: '输入 publish v1.0.0 以公开 Release'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 核验并检出可信发布标签
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          git fetch origin main --tags
+          test "$(git cat-file -t "refs/tags/$INPUT_TAG")" = "tag"
+          release_sha="$(git rev-parse "refs/tags/$INPUT_TAG^{commit}")"
+          git merge-base --is-ancestor "$release_sha" origin/main
+          git checkout --detach "$release_sha"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: 核验发布合同、产物和 npm 包
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          test "$INPUT_CONFIRMATION" = "publish $INPUT_TAG"
+          test "$(git describe --tags --exact-match)" = "$INPUT_TAG"
+          node scripts/verify-release.mjs --tag "$INPUT_TAG" --require-ready
+          test "$(gh release view "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true"
+          mkdir release-assets
+          gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory release-assets
+          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+          version="$INPUT_TAG"
+          version="${version#v}"
+          test "$(npm view "@rcx/app-sdk@$version" version)" = "$version"
+          test "$(npm view "create-rcx-app@$version" version)" = "$version"
+
+      - name: 公开 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

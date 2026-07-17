@@ -7,7 +7,7 @@
     "rootDir": "src",
     "paths": {},
     "declaration": true,
-    "sourceMap": true,
+    "sourceMap": false,
     "noEmit": false,
     "isolatedModules": false
   }
