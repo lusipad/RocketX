@@ -84,7 +84,7 @@ export default function CodexPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><TerminalSquare size={20} className="text-primary" />Codex</div>
-            <p className="mt-1 text-sm text-ink-3">在指定本地目录中运行隔离的 Codex 会话；命令和文件修改仍需审批。</p>
+            <p className="mt-1 text-sm text-ink-3">在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。</p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-2">
             <span className={`h-2 w-2 rounded-full ${status === 'ready' ? 'bg-success' : status === 'running' || status === 'waiting-approval' ? 'bg-warning' : 'bg-ink-3'}`} />
@@ -105,7 +105,7 @@ export default function CodexPage() {
                 <FolderOpen size={14} className="shrink-0 text-primary" />
                 <span className="truncate">{workspaceRoot || '选择项目目录'}</span>
               </button>
-              <p className="mt-2 text-2xs leading-4 text-ink-3">目录会映射到隔离 Runner 的 /workspace，并按当前账号记住。</p>
+              <p className="mt-2 text-2xs leading-4 text-ink-3">该目录会直接作为本机 Codex 工作目录，并按当前账号记住。</p>
             </div>
 
             <div className="border-t border-line pt-4">
@@ -115,7 +115,7 @@ export default function CodexPage() {
                   <Shield size={12} />{sandboxMode === 'read-only' ? '只读' : '工作区可写'}
                 </button>
               </div>
-              <p className="mt-2 text-2xs leading-4 text-ink-3">写入模式也只能访问当前工作区，敏感文件与网络权限仍被拒绝。</p>
+              <p className="mt-2 text-2xs leading-4 text-ink-3">请只选择允许 Codex 读取的目录；网络默认关闭，写入模式仅允许当前工作区。</p>
             </div>
 
             <div className="space-y-2 border-t border-line pt-4">
@@ -136,7 +136,7 @@ export default function CodexPage() {
                 <div className="flex h-full min-h-72 flex-col items-center justify-center text-center">
                   <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={28} /></div>
                   <div className="mt-4 font-medium text-ink">{status === 'ready' ? 'Codex 已就绪' : '选择目录并启动本地会话'}</div>
-                  <div className="mt-1 max-w-md text-xs leading-5 text-ink-3">可以让 Codex 阅读代码、运行测试或修改当前目录；任何越界路径和敏感凭据访问都会被拒绝。</div>
+                  <div className="mt-1 max-w-md text-xs leading-5 text-ink-3">可以直接聊天，也可以让 Codex 阅读代码、运行测试或修改当前目录；只选择你允许它读取的工作目录。</div>
                 </div>
               ) : messages.map((message) => (
                 <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>

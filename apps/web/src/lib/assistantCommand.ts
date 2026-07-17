@@ -1,5 +1,6 @@
-import { getAiBus } from '../kernel/ai/runtime';
-import { asRecord, collectStructuredObject, optionalString, requiredString } from '../kernel/ai/features/structured-output';
+import { invoke } from '@tauri-apps/api/core';
+import { asRecord, optionalString, requiredString } from '../kernel/ai/features/structured-output';
+import { isTauri } from './http';
 
 export type AssistantCommand =
   | { type: 'search'; query: string }
@@ -49,7 +50,7 @@ function queryAfterVerb(text: string): string {
     .trim();
 }
 
-/** Provider 不可用时只识别显式、安全的本地意图，不执行任何写操作。 */
+/** 明确指令优先本地解析，不启动 Codex，也不执行任何写操作。 */
 export function fallbackAssistantCommand(text: string): AssistantCommand {
   const content = text.trim();
   const workItem = /(?:创建|新建).{0,8}工作项/u.exec(content);
@@ -80,25 +81,15 @@ export function fallbackAssistantCommand(text: string): AssistantCommand {
   return { type: 'search', query: queryAfterVerb(content) || content };
 }
 
+function hasExplicitLocalIntent(text: string): boolean {
+  return /搜索|查找|查询|查看|待办|日历|日程|工作项|构建|\b(?:pr|pull request)\b|拉取请求|合并请求/iu.test(
+    text,
+  );
+}
+
 export async function understandAssistantCommand(text: string): Promise<AssistantCommand> {
   const content = text.trim();
   if (!content) throw new Error('请输入要搜索或处理的内容');
-  const result = await collectStructuredObject(getAiBus(), 'agent', {
-    messages: [
-      {
-        role: 'system',
-        content: `你是 RocketX 的意图路由器。只输出 JSON，不回答问题本身。
-可用 type：search、list_todos、list_calendar、list_work_items、list_pull_requests、list_builds、create_work_item、help。
-search 用于跨消息、会话、联系人、待办、日历和工作项搜索，输出 {"type":"search","query":"关键词"}。
-创建 Azure DevOps 工作项输出 {"type":"create_work_item","title":"标题","description":"可选描述","workItemType":"可选类型"}。
-查询列表可带 query；查询失败构建时给 list_builds 增加 "failedOnly":true。
-无法判断时输出 {"type":"help"}。`,
-      },
-      { role: 'user', content },
-    ],
-    responseFormat: 'json',
-    thinking: 'disabled',
-    maxTokens: 400,
-  });
-  return parseAssistantCommand(result);
+  if (hasExplicitLocalIntent(content) || !isTauri) return fallbackAssistantCommand(content);
+  return parseAssistantCommand(await invoke<unknown>('codex_assistant_command', { text: content }));
 }

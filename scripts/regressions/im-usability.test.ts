@@ -69,12 +69,12 @@ test('模块快捷键顺序与左侧视觉顺序共用同一常量', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'today',
+    'codex',
     'ai-assistant',
     'todos',
     'calendar',
     'contacts',
     'workbench',
-    'codex',
     'settings',
   ]);
 });

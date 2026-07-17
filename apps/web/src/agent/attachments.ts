@@ -33,7 +33,13 @@ export function agentAttachmentServerPath(rawPath: string, serverBase = getServe
 
 export interface MaterializedAgentAttachments {
   paths: Record<string, string[]>;
+  roots: string[];
   warnings: string[];
+}
+
+interface AgentAttachmentRuntimePath {
+  path: string;
+  root: string;
 }
 
 export async function materializeAgentAttachments(
@@ -41,6 +47,7 @@ export async function materializeAgentAttachments(
   messages: readonly RcMessage[],
 ): Promise<MaterializedAgentAttachments> {
   const paths: Record<string, string[]> = {};
+  const roots = new Set<string>();
   const warnings: string[] = [];
   let totalBytes = 0;
   const sources = collectAgentAttachmentSources(messages).slice(0, MAX_ATTACHMENTS);
@@ -63,8 +70,9 @@ export async function materializeAgentAttachments(
       new DataView(request.buffer).setUint32(0, metadata.length, true);
       request.set(metadata, 4);
       request.set(bytes, 4 + metadata.length);
-      const runtimePath = await invoke<string>('codex_agent_attachment_write', request);
-      (paths[source.messageId] ??= []).push(runtimePath);
+      const runtime = await invoke<AgentAttachmentRuntimePath>('codex_agent_attachment_write', request);
+      (paths[source.messageId] ??= []).push(runtime.path);
+      roots.add(runtime.root);
       totalBytes += blob.size;
     } catch (error) {
       warnings.push(
@@ -72,5 +80,5 @@ export async function materializeAgentAttachments(
       );
     }
   }
-  return { paths, warnings };
+  return { paths, roots: [...roots], warnings };
 }

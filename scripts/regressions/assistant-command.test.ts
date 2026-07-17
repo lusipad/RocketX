@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { fallbackAssistantCommand, parseAssistantCommand } from '../../apps/web/src/lib/assistantCommand';
 
@@ -37,7 +38,7 @@ test('失败构建查询只能解析为布尔筛选', () => {
   });
 });
 
-test('DeepSeek 不可用时显式命令仍能安全回退', () => {
+test('不配置外部 Provider 时显式命令仍能安全回退', () => {
   assert.deepEqual(fallbackAssistantCommand('查询失败的构建'), {
     type: 'list_builds',
     failedOnly: true,
@@ -50,4 +51,15 @@ test('DeepSeek 不可用时显式命令仍能安全回退', () => {
     type: 'search',
     query: '发布失败',
   });
+});
+
+test('桌面端模糊意图默认交给 Codex exec，而不是 DeepSeek', async () => {
+  const [web, desktop] = await Promise.all([
+    readFile(new URL('../../apps/web/src/lib/assistantCommand.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(web, /invoke<unknown>\('codex_assistant_command'/);
+  assert.doesNotMatch(web, /getAiBus|collectStructuredObject/);
+  assert.match(desktop, /--output-schema/);
+  assert.match(desktop, /ASSISTANT_COMMAND_SCHEMA/);
 });

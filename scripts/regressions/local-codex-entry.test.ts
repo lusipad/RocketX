@@ -31,12 +31,12 @@ test('Codex 本地设置按账号保存，但不把对话和过程写入 localSt
   assert.equal(saved.includes('sensitive trace'), false);
 });
 
-test('Codex 入口固定使用隔离工作区和审批安全检查', async () => {
+test('Codex 入口直接使用所选本地目录和原生沙箱审批', async () => {
   const source = await readFile(new URL('../../apps/web/src/stores/localCodex.ts', import.meta.url), 'utf8');
-  assert.match(source, /const RUNNER_WORKSPACE = '\/workspace'/);
   assert.match(source, /new TauriCodexTransport\(state\.sessionId!, state\.workspaceRoot\)/);
-  assert.match(source, /runtimeWorkspaceRoots: \[RUNNER_WORKSPACE\]/);
-  assert.match(source, /validateApprovalPaths\(params, \[RUNNER_WORKSPACE\]\)/);
+  assert.match(source, /runtimeWorkspaceRoots: \[state\.workspaceRoot\]/);
+  assert.match(source, /sandbox: state\.sandboxMode/);
+  assert.match(source, /validateApprovalPaths\(params, \[get\(\)\.workspaceRoot\]\)/);
   assert.match(source, /commandRequestMentionsSensitivePath\(params\.command\)/);
   assert.match(source, /validatePermissionRequest\(/);
 });

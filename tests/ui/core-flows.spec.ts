@@ -243,8 +243,8 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
 test('AI 助手和 Codex 一级入口可独立打开', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('button', { name: /AI 助手/ }).click();
-  await expect(page.getByText('用自然语言搜索 RocketX 与 Azure DevOps；写操作始终需要你确认。')).toBeVisible();
+  await expect(page.getByText('本地规则处理明确查询，模糊表达由 Codex 解析；写操作始终需要你确认。')).toBeVisible();
   await page.getByRole('button', { name: /Codex/ }).click();
-  await expect(page.getByText('在指定本地目录中运行隔离的 Codex 会话；命令和文件修改仍需审批。')).toBeVisible();
+  await expect(page.getByText('在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

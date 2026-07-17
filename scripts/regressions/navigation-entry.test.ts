@@ -7,6 +7,6 @@ test('AI 助手和 Codex 是独立一级入口', async () => {
   const runtime = await readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
   assert.match(runtime, /\['ai-assistant', 'AI 助手', AiAssistantPage, Sparkles\]/);
   assert.match(runtime, /\['codex', 'Codex', CodexPage, TerminalSquare\]/);
-  assert.ok(MODULE_ORDER.indexOf('ai-assistant') > MODULE_ORDER.indexOf('today'));
-  assert.ok(MODULE_ORDER.indexOf('codex') > MODULE_ORDER.indexOf('workbench'));
+  assert.ok(MODULE_ORDER.indexOf('codex') > MODULE_ORDER.indexOf('today'));
+  assert.ok(MODULE_ORDER.indexOf('codex') < MODULE_ORDER.indexOf('ai-assistant'));
 });

@@ -121,7 +121,7 @@ rcx-app dev [directory] [--port 4174]
 - 三样板：manifest 通过同一 SDK parser；entry 存在；静态脚本不调用未声明 capability；目录安装回归通过。
 - clean-room G3：全新 compose project 构建并启动 RC + RocketX，健康检查通过，登录页可访问；计时并清理。
 - 安全：远程高危权限、路径穿越、缺 entry、未知权限、CSP 放宽尝试全部被拒绝。
-- 全门禁：typecheck、pure、regression、真实 RC smoke/classify、Agent Runner、Codex protocol、Rust、Web
+- 全门禁：typecheck、pure、regression、真实 RC smoke/classify、Codex 本机运行时、Codex protocol、Rust、Web
   production、Windows release；PR CI 通过。
 - 发布：`v0.20.0` 三平台 workflow 成功，Release 至少含 Windows/macOS/Linux 产物与 SHA-256 清单；
   npm 包仅在 registry 查询确认公开可见后标记完成。

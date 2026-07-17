@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Output, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -14,23 +14,17 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
-const CODEX_VERSION: &str = "0.144.4";
-const CODEX_RUNNER_IMAGE: &str = "rocketx/codex-runner:0.144.4";
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-const RUNNER_WORKSPACE: &str = "/workspace";
-const RUNNER_ATTACHMENTS: &str = "/workspace/.rocketx-agent/attachments";
-const RUNNER_AUTH_FILE: &str = "/home/node/.codex/auth.json";
-const RUNNER_CONFIG: &str = include_str!("../../agent-runner/runner.config.toml");
 
 #[derive(Clone)]
 struct ManagedCodex {
     process_id: String,
     session_id: String,
-    container_name: String,
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     attachments_dir: PathBuf,
+    workspace_root: String,
     version: String,
 }
 
@@ -45,7 +39,7 @@ pub struct CodexAppServerState {
 pub struct CodexProcessInfo {
     process_id: String,
     version: String,
-    runtime_workspace_root: &'static str,
+    runtime_workspace_root: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,15 +57,6 @@ struct CodexExitEvent {
     code: Option<i32>,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexRunnerStatus {
-    docker_available: bool,
-    image_ready: bool,
-    authenticated: bool,
-    version: Option<String>,
-}
-
 fn hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);
     #[cfg(windows)]
@@ -82,146 +67,26 @@ fn hidden_command(program: &str) -> Command {
     command
 }
 
-fn run_output(mut command: Command) -> Result<Output, String> {
-    command
+fn codex_cli_version() -> Result<String, String> {
+    let mut command = hidden_command("codex");
+    command.arg("--version");
+    let output = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|error| format!("Docker 不可用：{error}"))
-}
-
-fn successful_output(output: &Output) -> Option<String> {
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn codex_auth_file() -> Option<PathBuf> {
-    let direct = std::env::var_os("CODEX_HOME").map(PathBuf::from);
-    let base = direct.or_else(|| {
-        #[cfg(windows)]
-        let value = std::env::var_os("USERPROFILE");
-        #[cfg(not(windows))]
-        let value = std::env::var_os("HOME");
-        value.map(|path| PathBuf::from(path).join(".codex"))
-    })?;
-    let auth = base.join("auth.json");
-    auth.is_file().then_some(auth)
-}
-
-fn runner_status() -> CodexRunnerStatus {
-    let mut docker = hidden_command("docker");
-    docker.args(["version", "--format", "{{.Server.Version}}"]);
-    let docker_available = run_output(docker)
-        .ok()
-        .and_then(|output| successful_output(&output))
-        .is_some_and(|value| !value.is_empty());
-    if !docker_available {
-        return CodexRunnerStatus {
-            docker_available: false,
-            image_ready: false,
-            authenticated: codex_auth_file().is_some(),
-            version: None,
-        };
+        .map_err(|error| format!("Codex CLI 不可用，请先安装并登录：{error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "无法读取 Codex CLI 版本：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-
-    let mut inspect = hidden_command("docker");
-    inspect.args(["image", "inspect", CODEX_RUNNER_IMAGE]);
-    let image_exists = run_output(inspect)
-        .ok()
-        .is_some_and(|output| output.status.success());
-    let version = image_exists
-        .then(|| {
-            let mut probe = hidden_command("docker");
-            probe.args([
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                CODEX_RUNNER_IMAGE,
-                "--version",
-            ]);
-            run_output(probe)
-                .ok()
-                .and_then(|output| successful_output(&output))
-                .and_then(|value| value.strip_prefix("codex-cli ").map(ToOwned::to_owned))
-        })
-        .flatten();
-    let image_ready = version.as_deref() == Some(CODEX_VERSION);
-    CodexRunnerStatus {
-        docker_available,
-        image_ready,
-        authenticated: codex_auth_file().is_some(),
-        version,
-    }
-}
-
-fn runner_dockerfile(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let bundled = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("无法定位 RocketX 资源目录：{error}"))?
-        .join("agent-runner")
-        .join("Dockerfile");
-    if bundled.is_file() {
-        return Ok(bundled);
-    }
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("agent-runner")
-        .join("Dockerfile");
-    development
-        .is_file()
-        .then_some(development)
-        .ok_or_else(|| "找不到内置 Agent Runner Dockerfile".to_string())
-}
-
-#[tauri::command]
-pub fn codex_runner_status() -> CodexRunnerStatus {
-    runner_status()
-}
-
-#[tauri::command]
-pub async fn codex_runner_install(app: tauri::AppHandle) -> Result<CodexRunnerStatus, String> {
-    let dockerfile = runner_dockerfile(&app)?;
-    let context = dockerfile
-        .parent()
-        .ok_or_else(|| "Agent Runner 构建目录无效".to_string())?
-        .to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut build = hidden_command("docker");
-        build
-            .arg("build")
-            .args(["--tag", CODEX_RUNNER_IMAGE, "--file"])
-            .arg(&dockerfile)
-            .arg(context);
-        let output = run_output(build)?;
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "Agent Runner 构建失败：{}",
-                detail
-                    .lines()
-                    .rev()
-                    .take(8)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
-        }
-        let status = runner_status();
-        if status.image_ready {
-            Ok(status)
-        } else {
-            Err("Agent Runner 构建完成但镜像校验失败".to_string())
-        }
-    })
-    .await
-    .map_err(|error| format!("Agent Runner 构建任务失败：{error}"))?
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .strip_prefix("codex-cli ")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "Codex CLI 返回了无法识别的版本".to_string())
 }
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
@@ -245,7 +110,7 @@ fn canonical_directory(path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
-fn docker_host_path(path: &Path) -> String {
+fn host_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     #[cfg(windows)]
     {
@@ -259,41 +124,16 @@ fn docker_host_path(path: &Path) -> String {
     value.into_owned()
 }
 
-fn volume(path: &Path, target: &str, read_only: bool) -> String {
-    format!(
-        "{}:{target}{}",
-        docker_host_path(path),
-        if read_only { ":ro" } else { "" }
-    )
-}
-
-fn prepare_runtime_home(app: &tauri::AppHandle, session_id: &str) -> Result<PathBuf, String> {
+fn prepare_attachments_dir(app: &tauri::AppHandle, session_id: &str) -> Result<PathBuf, String> {
     let path = app
         .path()
         .app_cache_dir()
         .map_err(|error| format!("无法定位应用缓存目录：{error}"))?
         .join("agent-runtime")
         .join(session_id)
-        .join("codex-home");
-    std::fs::create_dir_all(&path).map_err(|error| format!("无法准备 Agent 会话目录：{error}"))?;
-    std::fs::write(path.join("config.toml"), RUNNER_CONFIG)
-        .map_err(|error| format!("无法写入 Agent 权限配置：{error}"))?;
-    Ok(path)
-}
-
-fn prepare_attachments_dir(runtime_home: &Path) -> Result<PathBuf, String> {
-    let path = runtime_home
-        .parent()
-        .ok_or_else(|| "Agent 会话目录无效".to_string())?
         .join("attachments");
     std::fs::create_dir_all(&path).map_err(|error| format!("无法准备 Agent 附件目录：{error}"))?;
     Ok(path)
-}
-
-fn cleanup_container(container_name: &str) {
-    let mut remove = hidden_command("docker");
-    remove.args(["rm", "--force", container_name]);
-    let _ = run_output(remove);
 }
 
 fn spawn_reader<R: std::io::Read + Send + 'static>(
@@ -321,7 +161,6 @@ fn monitor_child(
     app: tauri::AppHandle,
     state: Arc<Mutex<HashMap<String, ManagedCodex>>>,
     process_id: String,
-    container_name: String,
     child: Arc<Mutex<Child>>,
 ) {
     thread::spawn(move || loop {
@@ -331,12 +170,12 @@ fn monitor_child(
         };
         match status {
             Ok(Some(status)) => {
-                let owned = state
+                let process = state
                     .lock()
-                    .map(|mut processes| processes.remove(&process_id).is_some())
-                    .unwrap_or(false);
-                if owned {
-                    cleanup_container(&container_name);
+                    .ok()
+                    .and_then(|mut processes| processes.remove(&process_id));
+                if let Some(process) = process {
+                    let _ = std::fs::remove_dir_all(process.attachments_dir);
                 }
                 let _ = app.emit(
                     "codex-app-server-exit",
@@ -374,19 +213,10 @@ pub fn codex_app_server_start(
     workspace_root: String,
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
-    let status = runner_status();
-    if !status.docker_available {
-        return Err("共享 Agent 需要正在运行的 Docker Desktop".to_string());
-    }
-    if !status.image_ready {
-        return Err("隔离 Agent Runner 尚未安装，请先在 AI 设置中安装".to_string());
-    }
-    let auth_file =
-        codex_auth_file().ok_or_else(|| "Codex 尚未登录，请先执行 codex login".to_string())?;
     let workspace = canonical_directory(&workspace_root)?;
-    let runtime_home = prepare_runtime_home(&app, &session_id)?;
-    let attachments_dir = prepare_attachments_dir(&runtime_home)?;
-    let container_name = format!("rocketx-agent-{}", session_id.to_ascii_lowercase());
+    let workspace_root = host_path(&workspace);
+    let version = codex_cli_version()?;
+    let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
     let mut processes = state
         .processes
@@ -399,53 +229,20 @@ pub fn codex_app_server_start(
         return Ok(CodexProcessInfo {
             process_id: process.process_id.clone(),
             version: process.version.clone(),
-            runtime_workspace_root: RUNNER_WORKSPACE,
+            runtime_workspace_root: process.workspace_root.clone(),
         });
     }
-    cleanup_container(&container_name);
 
-    let mut command = hidden_command("docker");
+    let mut command = hidden_command("codex");
     command
-        .args(["run", "--rm", "--interactive", "--name"])
-        .arg(&container_name)
-        .args([
-            "--workdir",
-            RUNNER_WORKSPACE,
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--security-opt",
-            "seccomp=unconfined",
-            "--pids-limit",
-            "256",
-            "--memory",
-            "2g",
-            "--cpus",
-            "2",
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=256m",
-            "--tmpfs",
-            "/run:rw,noexec,nosuid,size=16m",
-            "--label",
-        ])
-        .arg(format!("com.lusipad.rocketx.session={session_id}"))
-        .arg("--volume")
-        .arg(volume(&workspace, RUNNER_WORKSPACE, false))
-        .arg("--volume")
-        .arg(volume(&attachments_dir, RUNNER_ATTACHMENTS, true))
-        .arg("--volume")
-        .arg(volume(&runtime_home, "/home/node/.codex", false))
-        .arg("--volume")
-        .arg(volume(&auth_file, RUNNER_AUTH_FILE, true))
-        .args([CODEX_RUNNER_IMAGE, "app-server", "--stdio"])
+        .args(["app-server", "--stdio"])
+        .current_dir(&workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|error| format!("无法启动隔离 Codex app-server：{error}"))?;
+        .map_err(|error| format!("无法在所选本地目录启动 Codex app-server：{error}"))?;
     let stdin = child
         .stdin
         .take()
@@ -467,28 +264,22 @@ pub fn codex_app_server_start(
     let managed = ManagedCodex {
         process_id: process_id.clone(),
         session_id,
-        container_name: container_name.clone(),
         child: Arc::clone(&child),
         stdin: Arc::new(Mutex::new(stdin)),
         attachments_dir,
-        version: CODEX_VERSION.to_string(),
+        workspace_root: workspace_root.clone(),
+        version: version.clone(),
     };
     processes.insert(process_id.clone(), managed);
     drop(processes);
 
     spawn_reader(app.clone(), process_id.clone(), "stdout", stdout);
     spawn_reader(app.clone(), process_id.clone(), "stderr", stderr);
-    monitor_child(
-        app,
-        Arc::clone(&state.processes),
-        process_id.clone(),
-        container_name,
-        child,
-    );
+    monitor_child(app, Arc::clone(&state.processes), process_id.clone(), child);
     Ok(CodexProcessInfo {
         process_id,
-        version: CODEX_VERSION.to_string(),
-        runtime_workspace_root: RUNNER_WORKSPACE,
+        version,
+        runtime_workspace_root: workspace_root,
     })
 }
 
@@ -535,6 +326,13 @@ struct AgentAttachmentMetadata {
     relative_path: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachmentRuntimePath {
+    path: String,
+    root: String,
+}
+
 fn decode_attachment_request(bytes: &[u8]) -> Result<(AgentAttachmentMetadata, &[u8]), String> {
     let metadata_size = bytes
         .get(..4)
@@ -554,7 +352,7 @@ fn decode_attachment_request(bytes: &[u8]) -> Result<(AgentAttachmentMetadata, &
 pub fn codex_agent_attachment_write(
     state: tauri::State<'_, CodexAppServerState>,
     request: tauri::ipc::Request<'_>,
-) -> Result<String, String> {
+) -> Result<AgentAttachmentRuntimePath, String> {
     let raw = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes,
         _ => return Err("Agent attachment request must be binary".to_string()),
@@ -582,10 +380,10 @@ pub fn codex_agent_attachment_write(
         .ok_or_else(|| "invalid Agent attachment path".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| format!("无法准备 Agent 附件目录：{error}"))?;
     std::fs::write(&target, bytes).map_err(|error| format!("无法写入 Agent 附件：{error}"))?;
-    Ok(format!(
-        "{RUNNER_ATTACHMENTS}/{}",
-        relative.to_string_lossy().replace('\\', "/")
-    ))
+    Ok(AgentAttachmentRuntimePath {
+        path: host_path(&target),
+        root: host_path(&attachments_dir),
+    })
 }
 
 #[tauri::command]
@@ -625,7 +423,6 @@ pub fn codex_app_server_stop(
         .map_err(|_| "Codex process registry is unavailable".to_string())?
         .remove(&process_id)
         .ok_or_else(|| "Codex app-server process is not active".to_string())?;
-    cleanup_container(&process.container_name);
     let mut child = process
         .child
         .lock()
@@ -669,7 +466,6 @@ pub fn shutdown(app: &tauri::AppHandle) {
         })
         .unwrap_or_default();
     for process in processes {
-        cleanup_container(&process.container_name);
         if let Ok(mut child) = process.child.lock() {
             let _ = child.kill();
             let _ = child.wait();
@@ -680,8 +476,8 @@ pub fn shutdown(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_attachment_request, docker_host_path, encode_message, safe_attachment_path,
-        validate_session_id, RUNNER_CONFIG,
+        decode_attachment_request, encode_message, host_path, safe_attachment_path,
+        validate_session_id,
     };
     use serde_json::json;
     use std::path::Path;
@@ -697,16 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn runner_profile_denies_credentials_and_nested_env_files() {
-        assert!(RUNNER_CONFIG.contains("\"/workspace/**/.env\" = \"deny\""));
-        assert!(RUNNER_CONFIG.contains("\"/workspace/**/credentials.json\" = \"deny\""));
-        assert!(RUNNER_CONFIG.contains("\"/home/node/.codex/auth.json\" = \"deny\""));
-        assert!(RUNNER_CONFIG.contains("[permissions.rocketx_read.filesystem]"));
-        assert!(RUNNER_CONFIG.contains("[permissions.rocketx_write.filesystem]"));
-    }
-
-    #[test]
-    fn session_ids_are_safe_for_container_names() {
+    fn session_ids_are_safe_for_runtime_directories() {
         assert!(validate_session_id("session-019f6d30-797a-7f63").is_ok());
         assert!(validate_session_id("../escape").is_err());
         assert!(validate_session_id("with space").is_err());
@@ -735,8 +522,8 @@ mod tests {
     }
 
     #[test]
-    fn docker_paths_do_not_keep_windows_extended_prefixes() {
-        let value = docker_host_path(Path::new(r"\\?\C:\work\repo"));
+    fn host_paths_do_not_keep_windows_extended_prefixes() {
+        let value = host_path(Path::new(r"\\?\C:\work\repo"));
         #[cfg(windows)]
         assert_eq!(value, r"C:\work\repo");
         #[cfg(not(windows))]
