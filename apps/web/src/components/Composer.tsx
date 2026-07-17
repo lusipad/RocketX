@@ -10,7 +10,7 @@ import {
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
-import { rest } from '../lib/client';
+import { isTauri, rest } from '../lib/client';
 import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
@@ -44,6 +44,7 @@ export default function Composer() {
   const loadMembers = useChat((s) => s.loadMembers);
   const inviteMembers = useChat((s) => s.inviteMembers);
   const requestUpload = useChat((s) => s.requestUpload);
+  const uploadNativeFiles = useChat((s) => s.uploadNativeFiles);
   const uploading = useChat((s) => s.uploading);
   const setDraft = useChat((s) => s.setDraft);
   const replyTo = useChat((s) => s.replyTo);
@@ -427,6 +428,26 @@ export default function Composer() {
     if (files.length > 0) requestUpload(files);
   };
 
+  const chooseNativeFiles = async (imagesOnly: boolean) => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+      multiple: true,
+      title: imagesOnly ? '选择图片' : '选择文件',
+      ...(imagesOnly
+        ? {
+            filters: [
+              {
+                name: '图片',
+                extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'],
+              },
+            ],
+          }
+        : {}),
+    });
+    const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : [];
+    if (paths.length > 0) await uploadNativeFiles(paths);
+  };
+
   const toolBtn =
     'flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink';
 
@@ -576,10 +597,22 @@ export default function Composer() {
             <Slash size={16} />
           </button>
         )}
-        <button title="发送图片" className={toolBtn} onClick={() => imageInputRef.current?.click()}>
+        <button
+          title="发送图片"
+          className={toolBtn}
+          onClick={() =>
+            isTauri ? void chooseNativeFiles(true) : imageInputRef.current?.click()
+          }
+        >
           <Image size={16} />
         </button>
-        <button title="发送文件" className={toolBtn} onClick={() => fileInputRef.current?.click()}>
+        <button
+          title="发送文件"
+          className={toolBtn}
+          onClick={() =>
+            isTauri ? void chooseNativeFiles(false) : fileInputRef.current?.click()
+          }
+        >
           <Paperclip size={16} />
         </button>
         {uploading > 0 && <span className="pl-1 text-xs text-ink-3">上传中（{uploading}）…</span>}

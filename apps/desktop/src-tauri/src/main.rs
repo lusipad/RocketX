@@ -504,7 +504,8 @@ fn main() {
             lan::lan_service_stop,
             lan::lan_trust_replace,
             lan::lan_peers,
-            lan::lan_send_chat
+            lan::lan_send_chat,
+            lan::lan_send_file
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(AiKeychainLock(Mutex::new(())))

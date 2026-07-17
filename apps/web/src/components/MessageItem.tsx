@@ -142,23 +142,30 @@ function FileAttachment({
   att,
   name: fileName,
   size,
+  localPath,
 }: {
   att: RcMessageAttachment;
   name?: string;
   size?: number;
+  localPath?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
   // 优先用 file.name（原始文件名），attachment.title 在旧数据里可能是编码过的
   const name = fileName ?? att.title ?? '文件';
   const path = att.title_link ?? '';
-  const previewable = canPreview(name);
+  const previewable = !localPath && canPreview(name);
 
   const download = async () => {
-    if (!path || busy) return;
+    if ((!path && !localPath) || busy) return;
     setBusy(true);
     try {
-      await saveFile(path, name);
+      if (localPath) {
+        const { openPath } = await import('@tauri-apps/plugin-opener');
+        await openPath(localPath);
+      } else {
+        await saveFile(path, name);
+      }
     } catch (err) {
       toast.error(err, '下载失败');
     } finally {
@@ -172,7 +179,7 @@ function FileAttachment({
         <button
           onClick={() => (previewable ? setPreview(true) : void download())}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
-          title={previewable ? '点击预览' : '点击下载'}
+          title={previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载'}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
             <FileIcon size={18} />
@@ -180,8 +187,13 @@ function FileAttachment({
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-ink">{name}</span>
             <span className="block text-xs text-ink-3">
-              {busy ? '下载中…' : `${fmtSize(size)}${previewable ? ' · 点击预览' : ''}`.trim() ||
-                (previewable ? '点击预览' : '点击下载')}
+              {busy
+                ? localPath
+                  ? '正在打开…'
+                  : '下载中…'
+                : `${fmtSize(size)}${
+                    previewable ? ' · 点击预览' : localPath ? ' · 局域网文件' : ''
+                  }`.trim() || (previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载')}
             </span>
           </span>
         </button>
@@ -189,7 +201,7 @@ function FileAttachment({
           onClick={() => void download()}
           disabled={busy}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
-          title="下载"
+          title={localPath ? '打开本地文件' : '下载'}
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={15} />}
         </button>
@@ -300,7 +312,12 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
   // 文件附件（上传的文件）
   if (att.title_link_download && att.title_link) {
     return (
-      <FileAttachment att={att} name={message.file?.name} size={message.file?.size} />
+      <FileAttachment
+        att={att}
+        name={message.file?.name}
+        size={message.file?.size}
+        localPath={message.rocketxLocalPath}
+      />
     );
   }
   const extensionRenderer = renderers.find((renderer) =>

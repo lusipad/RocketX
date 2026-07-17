@@ -103,6 +103,10 @@ export interface RcMessage {
   rocketxOriginalTs?: number;
   /** 已经通过可信 LAN 投递，等待作者回灌 Rocket.Chat。 */
   rocketxOffline?: boolean;
+  /** 已认证 LAN 文件在本机的绝对路径；只由桌面端原生接收器写入。 */
+  rocketxLocalPath?: string;
+  /** LAN 文件整文件 BLAKE3，用于去重与验收。 */
+  rocketxLanHash?: string;
 }
 
 export interface RcRoom {

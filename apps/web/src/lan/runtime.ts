@@ -37,6 +37,25 @@ export interface LanMessageEvent {
   text: string;
 }
 
+export interface LanFileEvent {
+  fromUserId: string;
+  fromDeviceId: string;
+  messageId: string;
+  roomId: string;
+  originalTs: number;
+  fileName: string;
+  size: number;
+  blake3: string;
+  localPath: string;
+}
+
+export interface LanFileReceipt {
+  messageId: string;
+  fileName: string;
+  size: number;
+  blake3: string;
+}
+
 interface LanServiceInfo {
   identity: LanIdentityInfo;
   port: number;
@@ -49,6 +68,7 @@ let trustedDevices: TrustedDevice[] = [];
 let peerCache: LanPeer[] = [];
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlistenMessage: UnlistenFn | null = null;
+let unlistenFile: UnlistenFn | null = null;
 const exchangeAttempts = new Map<string, number>();
 const repliedRooms = new Set<string>();
 
@@ -139,6 +159,7 @@ async function pollPeers(): Promise<void> {
 
 export async function startLanRuntime(
   onMessage: (event: LanMessageEvent) => void | Promise<void>,
+  onFile?: (event: LanFileEvent) => void | Promise<void>,
 ): Promise<void> {
   if (!isTauri) return;
   const user = useAuth.getState().user;
@@ -159,6 +180,11 @@ export async function startLanRuntime(
   unlistenMessage = await listen<LanMessageEvent>('rocketx://lan-message', ({ payload }) => {
     void onMessage(payload);
   });
+  if (onFile) {
+    unlistenFile = await listen<LanFileEvent>('rocketx://lan-file', ({ payload }) => {
+      void onFile(payload);
+    });
+  }
   await pollPeers();
   pollTimer = setInterval(() => void pollPeers(), 3_000);
 }
@@ -168,6 +194,8 @@ export async function stopLanRuntime(): Promise<void> {
   pollTimer = null;
   unlistenMessage?.();
   unlistenMessage = null;
+  unlistenFile?.();
+  unlistenFile = null;
   identity = null;
   peerCache = [];
   exchangeAttempts.clear();
@@ -191,6 +219,17 @@ export function currentLanPeers(): LanPeer[] {
   return peerCache.slice();
 }
 
+export function redactedLanPeers(peers: LanPeer[] = peerCache) {
+  return peers.map(({ userId, deviceId, deviceName, trusted, source, lastSeenMs }) => ({
+    userId,
+    deviceId,
+    deviceName,
+    trusted,
+    source,
+    lastSeenMs,
+  }));
+}
+
 export async function sendLanChat(
   userId: string,
   message: { messageId: string; roomId: string; originalTs: number; text: string },
@@ -203,5 +242,21 @@ export async function sendLanChat(
     roomId: message.roomId,
     originalTs: message.originalTs,
     text: message.text,
+  });
+}
+
+export async function sendLanFile(
+  userId: string,
+  path: string,
+  payload: { messageId: string; roomId: string; originalTs: number },
+): Promise<LanFileReceipt> {
+  if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
+  return invoke<LanFileReceipt>('lan_send_file', {
+    userId,
+    deviceId: null,
+    path,
+    messageId: payload.messageId,
+    roomId: payload.roomId,
+    originalTs: payload.originalTs,
   });
 }

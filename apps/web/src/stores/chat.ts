@@ -45,7 +45,9 @@ import { isLanControlMessage } from '../lan/protocol';
 import {
   handleLanControlMessage,
   sendLanChat,
+  sendLanFile,
   startLanRuntime,
+  type LanFileEvent,
   type LanMessageEvent,
 } from '../lan/runtime';
 import {
@@ -277,6 +279,7 @@ interface ChatState {
   confirmUpload: () => Promise<void>;
   cancelUpload: () => void;
   uploadFiles: (files: File[], tmid?: string) => Promise<void>;
+  uploadNativeFiles: (paths: string[], tmid?: string) => Promise<void>;
 }
 
 /**
@@ -354,6 +357,69 @@ async function acceptLanMessage(event: LanMessageEvent): Promise<void> {
       : {}),
   });
   notifyIfNeeded(message, event.roomId, current);
+}
+
+function localLanFileMessage(
+  event: Pick<
+    LanFileEvent,
+    'messageId' | 'roomId' | 'originalTs' | 'fileName' | 'size' | 'blake3' | 'localPath'
+  >,
+  author: Pick<RcUser, '_id' | 'username' | 'name'>,
+): RcMessage {
+  return {
+    _id: event.messageId,
+    rid: event.roomId,
+    msg: '',
+    ts: new Date(event.originalTs).toISOString(),
+    u: author,
+    file: {
+      _id: `lan-${event.blake3.slice(0, 24)}`,
+      name: event.fileName,
+      type: 'application/octet-stream',
+      size: event.size,
+    },
+    attachments: [
+      {
+        title: event.fileName,
+        title_link: 'rocketx-local://file',
+        title_link_download: true,
+      },
+    ],
+    rocketxOriginalTs: event.originalTs,
+    rocketxOffline: true,
+    rocketxLocalPath: event.localPath,
+    rocketxLanHash: event.blake3,
+  };
+}
+
+function insertLanFileMessage(message: RcMessage): void {
+  const current = useChat.getState();
+  const next = upsertMessage(current.messages[message.rid] ?? [], message).sort(
+    (left, right) => messageTime(left) - messageTime(right),
+  );
+  const room = current.rooms[message.rid];
+  useChat.setState({
+    messages: { ...current.messages, [message.rid]: next },
+    ...(room
+      ? {
+          rooms: {
+            ...current.rooms,
+            [message.rid]: { ...room, lastMessage: message, lm: message.ts },
+          },
+        }
+      : {}),
+  });
+}
+
+async function acceptLanFile(event: LanFileEvent): Promise<void> {
+  const state = useChat.getState();
+  if (!state.subscriptions[event.roomId]) return;
+  const members = await state.loadMembers(event.roomId);
+  const author = members.find((member) => member._id === event.fromUserId);
+  if (!author) return;
+  const message = localLanFileMessage(event, author);
+  insertLanFileMessage(message);
+  notifyIfNeeded(message, event.roomId, state);
 }
 
 function messagePreview(msg: RcMessage | undefined): string {
@@ -1020,7 +1086,7 @@ export const useChat = create<ChatState>((set, get) => ({
       .getPresences()
       .then((users) => get().seedUserStatus(users))
       .catch(() => {});
-    void startLanRuntime(acceptLanMessage).catch((error) => {
+    void startLanRuntime(acceptLanMessage, acceptLanFile).catch((error) => {
       console.warn('[rcx] LAN 服务启动失败', error);
     });
   },
@@ -2085,6 +2151,61 @@ export const useChat = create<ChatState>((set, get) => ({
       toast.update(id, {
         kind: 'error',
         message: humanError(err, `发送 ${label} 失败`),
+      });
+    }
+  },
+
+  uploadNativeFiles: async (paths, tmid) => {
+    const rid = get().activeRid;
+    const me = useAuth.getState().user;
+    if (!rid || !me || paths.length === 0) return;
+    const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
+    set({ uploading: get().uploading + paths.length });
+    try {
+      const { readFile } = await import('@tauri-apps/plugin-fs');
+      for (const path of paths) {
+        const fileName = path.split(/[\\/]/).pop() || 'file';
+        let sentOverLan = false;
+        if (!tmid) {
+          const recipients = await lanRecipientIds(rid).catch(() => []);
+          if (recipients.length === 1) {
+            const messageId = randomMessageId();
+            const originalTs = Date.now();
+            try {
+              const receipt = await sendLanFile(recipients[0], path, {
+                messageId,
+                roomId: rid,
+                originalTs,
+              });
+              insertLanFileMessage(
+                localLanFileMessage(
+                  {
+                    ...receipt,
+                    roomId: rid,
+                    originalTs,
+                    localPath: path,
+                  },
+                  me,
+                ),
+              );
+              sentOverLan = true;
+            } catch {
+              // 未发现可信单一对端、连接中断或校验失败时静默回退 Rocket.Chat。
+            }
+          }
+        }
+        if (!sentOverLan) {
+          const bytes = await readFile(path);
+          await rest.uploadMedia(rid, new Blob([bytes]), { tmid, fileName });
+        }
+        set({ uploading: Math.max(0, get().uploading - 1) });
+      }
+      toast.dismiss(id);
+    } catch (error) {
+      set({ uploading: 0 });
+      toast.update(id, {
+        kind: 'error',
+        message: humanError(error, '发送文件失败'),
       });
     }
   },
