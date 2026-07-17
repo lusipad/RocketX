@@ -15,6 +15,11 @@ export interface ButlerLine {
   text: string;
 }
 
+export interface ButlerRoomContext {
+  rid: string;
+  roomName: string;
+}
+
 export interface ButlerState {
   lines: ButlerLine[];
   activity: string | null;
@@ -22,7 +27,7 @@ export interface ButlerState {
   running: boolean;
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
-  ask: (text: string) => Promise<void>;
+  ask: (text: string, context?: ButlerRoomContext) => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   confirmRoutineDraft: () => void;
   dismissRoutineDraft: () => void;
@@ -95,7 +100,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   error: null,
   routineDraft: null,
 
-  ask: async (text) => {
+  ask: async (text, context) => {
     const content = text.trim();
     if (!content || get().running) return;
 
@@ -141,8 +146,13 @@ export const useButler = create<ButlerState>((set, get) => ({
     };
 
     try {
+      const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}${
+        context
+          ? `\n用户当前所在房间：${context.roomName}\n查询本房间消息时优先用 search_messages 的 roomName 参数限定范围`
+          : ''
+      }`;
       const result = await loopRunner({
-        messages: [{ role: 'system', content: `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}` }, ...history],
+        messages: [{ role: 'system', content: system }, ...history],
         tools: createButlerTools(),
         onEvent,
       });

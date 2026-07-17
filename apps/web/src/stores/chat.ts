@@ -123,6 +123,7 @@ export type RightPanel =
   | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
   | { kind: 'ai' }
+  | { kind: 'butler' }
   | { kind: 'agent'; tmid: string }
   | { kind: `app:${string}`; props?: unknown }
   | null;

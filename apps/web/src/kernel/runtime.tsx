@@ -25,6 +25,7 @@ import RoomInfoPanel from '../components/RoomInfoPanel';
 import FilesPanel from '../components/FilesPanel';
 import MentionsPanel from '../components/MentionsPanel';
 import SummaryPanel from '../components/SummaryPanel';
+import ButlerPanel from '../components/ButlerPanel';
 import { useAiAssistant } from '../stores/aiAssistant';
 import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
 import { AppManager, setActiveAppManager, type InstalledApp } from './installed';
@@ -40,6 +41,7 @@ import { initializeAiRuntime } from './ai/runtime';
 import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
+import { runButlerCommand } from './butler';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -424,6 +426,7 @@ function registerBuiltins(): void {
     ['files', FilesPanel],
     ['mentions', MentionsPanel],
     ['ai', SummaryPanel],
+    ['butler', ButlerPanel],
     ['agent', AgentPanel],
   ] as const;
   for (const [id, render] of panels) {
@@ -437,6 +440,13 @@ function registerBuiltins(): void {
       useChat.getState().setPanel({ kind: 'ai' });
       void useAiAssistant.getState().summarize(rid);
     },
+  });
+  kernelRegistry.register('core', 'composer.command', {
+    id: 'butler',
+    name: 'ai',
+    description: '召唤管家，可直接跟上问题',
+    params: '问题（可选）',
+    run: runButlerCommand,
   });
   kernelRegistry.register('core', 'composer.trigger', {
     id: 'codex',

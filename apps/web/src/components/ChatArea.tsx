@@ -1,6 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import {
   AtSign,
+  Bot,
   Files,
   Info,
   MessageCircle,
@@ -211,6 +212,12 @@ export default function ChatArea({
               label="搜索聊天记录"
               active={rightPanel?.kind === 'search'}
               onClick={() => togglePanel({ kind: 'search' })}
+            />
+            <HeaderButton
+              icon={Bot}
+              label="管家"
+              active={rightPanel?.kind === 'butler'}
+              onClick={() => togglePanel({ kind: 'butler' })}
             />
             <HeaderButton
               icon={MoreHorizontal}

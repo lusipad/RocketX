@@ -57,6 +57,29 @@ test('管家提示会带入可注入的本地当前时间', async () => {
   }
 });
 
+test('房间上下文只追加到本次 system 提示，不污染展示和历史', async () => {
+  resetStore();
+  const captured: AiMessage[][] = [];
+  const restore = setButlerLoopRunner(async (options) => {
+    captured.push(options.messages);
+    return { text: '收到。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('这周方案定了吗？', { rid: 'room-1', roomName: '产品讨论' });
+    await useButler.getState().ask('再确认一次。');
+
+    assert.match(captured[0][0].content, /用户当前所在房间：产品讨论/);
+    assert.match(captured[0][0].content, /search_messages 的 roomName 参数限定范围/);
+    assert.doesNotMatch(captured[1][0].content, /用户当前所在房间/);
+    assert.equal(captured[0][1].content, '这周方案定了吗？');
+    assert.equal(useButler.getState().history[0].content, '这周方案定了吗？');
+  } finally {
+    restore();
+    resetStore();
+  }
+});
+
 test('管家将流式内容和工具活动实时写入展示状态', async () => {
   resetStore();
   const snapshots: Array<{ text: string; activity: string | null }> = [];
