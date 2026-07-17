@@ -1,3 +1,20 @@
+export const EXTENSION_POINTS = [
+  'nav.module',
+  'panel.right',
+  'message.action',
+  'message.renderer',
+  'composer.command',
+  'composer.trigger',
+  'composer.action',
+  'entity.link',
+  'home.widget',
+  'room.tab',
+  'settings.page',
+  'background.task',
+] as const;
+
+export type ExtensionPoint = (typeof EXTENSION_POINTS)[number];
+
 export type JsonRpcId = string | number;
 
 export interface JsonRpcRequest {

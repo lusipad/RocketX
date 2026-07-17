@@ -1,0 +1,6 @@
+.git
+.omx
+**/node_modules
+**/dist
+**/target
+*.log

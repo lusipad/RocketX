@@ -21,6 +21,9 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: Codex 协议生成物
+        run: pnpm codex:protocol:check
+
       - name: 类型检查
         run: pnpm -r typecheck
 
@@ -41,3 +44,6 @@ jobs:
 
       - name: 构建 Web 客户端
         run: pnpm --filter @rcx/web build
+
+      - name: 应用 SDK、CLI 与 clean-room 脚手架
+        run: pnpm test:ecosystem

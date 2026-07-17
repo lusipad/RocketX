@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>团队值班表</title>
+    <style>
+      * { box-sizing: border-box; } body { margin: 0; background: #f5f6f7; color: #1f2329; font: 14px system-ui; }
+      main { width: min(920px, calc(100% - 32px)); margin: 24px auto; display: grid; gap: 16px; }
+      section { padding: 18px; border: 1px solid #dee0e3; border-radius: 12px; background: white; }
+      h1, h2 { margin: 0 0 14px; } h1 { font-size: 20px; } h2 { font-size: 16px; }
+      .form { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; align-items: end; }
+      label { display: grid; gap: 6px; color: #646a73; } input, select { width: 100%; border: 1px solid #c9cdd4; border-radius: 7px; padding: 9px; background: white; }
+      button { border: 0; border-radius: 7px; padding: 9px 12px; background: #3370ff; color: white; cursor: pointer; }
+      button.secondary { background: #e8f0ff; color: #245bdb; } table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 10px; border-bottom: 1px solid #eef0f2; text-align: left; } th { color: #646a73; font-weight: 500; }
+      .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; } .empty { color: #8f959e; text-align: center; }
+      .hint { color: #8f959e; font-size: 12px; margin-top: 10px; } @media (max-width: 720px) { .form { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h1>团队值班表</h1>
+        <div class="form">
+          <label>发布会话<select id="room"></select></label>
+          <label>值班成员<select id="user"></select></label>
+          <label>日期<input id="date" type="date"></label>
+          <label>班次<input id="shift" maxlength="80" value="全天"></label>
+          <button id="add">加入排班</button>
+        </div>
+        <p class="hint">成员来自当前打开会话；发布目标可选择任一已加入会话。</p>
+      </section>
+      <section>
+        <div class="toolbar"><h2>排班记录</h2><button id="publish" class="secondary">发布值班表</button></div>
+        <div id="schedule"></div>
+      </section>
+    </main>
+    <script>
+      let nextId = 1;
+      const pending = new Map();
+      const call = (method, params) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } }); });
+      const notify = (message, level = 'success') => window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI', params: { kind: 'notify', props: { message: String(message).slice(0, 500), level } } });
+      window.__RCX_BRIDGE__.addEventListener('message', (event) => { const message = event.data; if (message?.jsonrpc !== '2.0' || !message.id || !pending.has(message.id)) return; const task = pending.get(message.id); pending.delete(message.id); message.error ? task.reject(new Error(message.error.message)) : task.resolve(message.result); });
+      async function loadSchedule() { const value = await call('storage.get', { key: 'schedule' }); return Array.isArray(value) ? value : []; }
+      async function saveSchedule(schedule) { await call('storage.set', { key: 'schedule', value: schedule }); render(schedule); }
+      function appendOption(select, value, label) { const option = document.createElement('option'); option.value = value; option.textContent = label; select.append(option); }
+      async function initialize() {
+        const [rooms, users, schedule] = await Promise.all([call('rooms.list'), call('users.read'), loadSchedule()]);
+        const roomSelect = document.querySelector('#room'); const userSelect = document.querySelector('#user');
+        for (const room of Array.isArray(rooms) ? rooms : []) appendOption(roomSelect, room.rid, room.name || room.rid);
+        for (const user of Array.isArray(users) ? users : []) appendOption(userSelect, user._id, user.name || user.username || user._id);
+        if (!roomSelect.options.length) appendOption(roomSelect, '', '没有已加入会话');
+        if (!userSelect.options.length) appendOption(userSelect, '', '请先打开有成员的会话');
+        document.querySelector('#date').value = new Date().toISOString().slice(0, 10); render(schedule);
+      }
+      function render(schedule) {
+        const root = document.querySelector('#schedule'); root.replaceChildren();
+        if (!schedule.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '暂无排班'; root.append(empty); return; }
+        const table = document.createElement('table'); const head = document.createElement('thead'); const headRow = document.createElement('tr');
+        for (const label of ['日期', '班次', '成员']) { const cell = document.createElement('th'); cell.textContent = label; headRow.append(cell); } head.append(headRow); table.append(head);
+        const body = document.createElement('tbody'); for (const item of schedule) { const row = document.createElement('tr'); for (const value of [item.date, item.shift, item.userName]) { const cell = document.createElement('td'); cell.textContent = String(value || ''); row.append(cell); } body.append(row); } table.append(body); root.append(table);
+      }
+      document.querySelector('#add').addEventListener('click', async () => {
+        const room = document.querySelector('#room'); const user = document.querySelector('#user'); const date = document.querySelector('#date').value; const shift = document.querySelector('#shift').value.trim();
+        if (!room.value || !user.value || !date || !shift) return notify('请完整选择会话、成员、日期和班次', 'error');
+        const schedule = await loadSchedule(); schedule.push({ id: `shift-${Date.now()}`, roomId: room.value, roomName: room.selectedOptions[0].textContent, userId: user.value, userName: user.selectedOptions[0].textContent, date, shift }); schedule.sort((a, b) => a.date.localeCompare(b.date)); await saveSchedule(schedule);
+      });
+      document.querySelector('#publish').addEventListener('click', async () => {
+        try { const roomId = document.querySelector('#room').value; const schedule = (await loadSchedule()).filter((item) => item.roomId === roomId); if (!roomId || !schedule.length) throw new Error('当前发布会话还没有排班'); const lines = ['📅 团队值班表', ...schedule.map((item) => `${item.date} · ${item.shift} · ${item.userName}`)]; await call('chat.postMessage', { rid: roomId, text: lines.join('\n') }); notify('值班表已发布'); }
+        catch (error) { notify(error.message, 'error'); }
+      });
+      void initialize().catch((error) => notify(error.message, 'error'));
+    </script>
+  </body>
+</html>

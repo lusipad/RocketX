@@ -7,7 +7,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: v1.0 发布门禁
+        run: |
+          pnpm codex:protocol:check
+          pnpm -r typecheck
+          pnpm test:pure
+          pnpm test:regression
+          pnpm test:ecosystem
+          pnpm --filter @rcx/web build
+
   build:
+    needs: gate
     permissions:
       contents: write
     strategy:
@@ -81,3 +102,26 @@ jobs:
             apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
             apps/desktop/src-tauri/target/**/release/bundle/**/*.rpm
           if-no-files-found: warn
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 核验三平台产物并发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          assets="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          echo "$assets" | grep -Eiq '\.(msi|exe)$'
+          echo "$assets" | grep -Eiq '\.dmg$'
+          echo "$assets" | grep -Eiq '\.(AppImage|deb|rpm)$'
+          mkdir release-assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          find release-assets -maxdepth 1 -type f ! -name '*.sig' -printf '%f\n' | sort | while read -r file; do
+            sha256sum "release-assets/$file"
+          done > SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -726,3 +726,42 @@ Windows 消息通知现在保留原生通知句柄；用户点击通知正文后
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — M11 开源发布与应用生态 v0
+
+Plan: [`m11-implementation-plan.md`](m11-implementation-plan.md)
+
+## Shipped vs planned
+
+SDK、CLI、三个正式样板、固定版本 Docker 栈与双语开源文档已按计划落地，manifest 契约只有
+SDK 一份。clean-room 应用生态与三服务栈、完整代码门禁和 Windows Release 均已通过；三平台
+安装包交给标签工作流最终验证。M11 实现可合并，但蓝图的外部 G3/G4 真人计时和 README
+真实截图/GIF 尚未取得，因此不得把 v1.0.0 标记为正式发布。
+
+## Decisions
+
+- manifest 契约以 `@rcx/app-sdk` 为单一事实源，Web 内核与 CLI 只消费，不复制白名单。
+- `create-rcx-app` 单包暴露 `create-rcx-app` 与 `rcx-app` 两个命令；开发预览不放宽宿主 iframe CSP。
+- Web 的 `manifest.ts`/`types.ts` 使用指向 SDK `src` 的薄重导出，因为 Vite 6 不读取 TypeScript
+  `paths`，而 fresh clone 尚无发布用 `dist`；这只改变开发期解析路径，契约实现仍只有 SDK 一份。
+
+## Deviations
+
+- 开发预览使用回环静态服务与 mock Bridge，而不是在 RocketX 沙箱内部热重载；这样不新增
+  localhost 信任边界，也不放宽宿主 CSP。
+- npm 包已通过真实 tarball 与临时项目安装验证，但本机 `npm whoami` 返回 `ENEEDAUTH`；在
+  registry 账号和 `@rcx` scope 权限确认前不执行公开发布。
+
+## Surprises
+
+- Windows 从 Node 启动 `.cmd` 时，`cmd /s` 和对所有参数统一加引号会把引号传给 pnpm；
+  clean-room 启动器改为只引用确实需要引用的参数。
+- Codex 0.144.4 协议生成树有 671 个文件；旧树必须整体重新生成，不能只更新客户端版本常量。
+
+## Questions for review
+
+- npm registry 名称当前未占用，但本机账号是否拥有 `@rcx` scope 必须在发布动作前验证。
+- 蓝图要求的两位外部开发者 G3/G4 真人计时不能由自动 clean-room 代理结果替代。
+- 英文 README 的真实产品截图与 GIF 演示仍需从可用的 UI 自动化或人工录制流程取得。

@@ -5,24 +5,50 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>消息看板</title>
     <style>
-      * { box-sizing: border-box; } body { margin: 0; background: #f5f6f7; color: #1f2329; font: 14px system-ui; }
-      header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: white; border-bottom: 1px solid #dee0e3; }
-      h1 { margin: 0; font-size: 18px; } button { border: 0; border-radius: 7px; padding: 8px 12px; background: #3370ff; color: white; cursor: pointer; }
-      #cards { display: grid; gap: 10px; padding: 18px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-      article { padding: 14px; border: 1px solid #dee0e3; border-radius: 10px; background: white; } article p { white-space: pre-wrap; color: #4e5969; } small { color: #8f959e; }
-      .empty { padding: 48px; text-align: center; color: #8f959e; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f5f6f7; color: #1f2329; font: 14px system-ui; }
+      header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 16px 20px; background: white; border-bottom: 1px solid #dee0e3; }
+      h1, h2 { margin: 0; } h1 { font-size: 18px; } h2 { font-size: 15px; }
+      .actions { display: flex; gap: 8px; } input { min-width: 220px; border: 1px solid #c9cdd4; border-radius: 7px; padding: 8px 10px; }
+      button { border: 0; border-radius: 7px; padding: 8px 12px; background: #3370ff; color: white; cursor: pointer; }
+      button.secondary { background: #e8f0ff; color: #245bdb; } button.danger { background: transparent; color: #d4380d; padding: 4px; }
+      #board { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; padding: 18px; }
+      section { min-height: 220px; padding: 12px; border: 1px solid #dee0e3; border-radius: 12px; background: #eef0f2; }
+      .column-head { display: flex; justify-content: space-between; margin-bottom: 10px; color: #646a73; }
+      article { margin-bottom: 10px; padding: 12px; border: 1px solid #dee0e3; border-radius: 9px; background: white; }
+      article p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #4e5969; }
+      small { color: #8f959e; } .card-actions { display: flex; justify-content: space-between; align-items: center; }
+      select { border: 1px solid #c9cdd4; border-radius: 6px; padding: 4px; background: white; }
+      .empty { padding: 28px 8px; text-align: center; color: #8f959e; }
+      @media (max-width: 760px) { #board { grid-template-columns: 1fr; } input { min-width: 0; flex: 1; } }
     </style>
   </head>
   <body>
-    <header><h1>消息看板</h1><button id="capture">捕获当前会话最后一条消息</button></header>
-    <div id="cards"></div>
+    <header>
+      <h1>消息看板</h1>
+      <div class="actions">
+        <input id="title" maxlength="200" placeholder="新增一张卡片">
+        <button id="add">新增</button>
+        <button id="capture" class="secondary">捕获当前会话最后一条消息</button>
+      </div>
+    </header>
+    <main id="board"></main>
     <script>
+      const statuses = [
+        { id: 'todo', label: '待处理' },
+        { id: 'doing', label: '进行中' },
+        { id: 'done', label: '已完成' },
+      ];
       let nextId = 1;
       const pending = new Map();
       const call = (method, params) => new Promise((resolve, reject) => {
         const id = nextId++;
         pending.set(id, { resolve, reject });
         window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } });
+      });
+      const notify = (message, level = 'success') => window.__RCX_BRIDGE__.postMessage({
+        jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI',
+        params: { kind: 'notify', props: { message: String(message).slice(0, 500), level } },
       });
       window.__RCX_BRIDGE__.addEventListener('message', (event) => {
         const message = event.data;
@@ -32,27 +58,66 @@
           message.error ? task.reject(new Error(message.error.message)) : task.resolve(message.result);
         }
         if (message.method === 'rcx/event' && message.params?.event === 'message.action') {
-          void addCard(message.params.payload.message);
+          void addMessage(message.params.payload?.message);
         }
       });
-      async function loadCards() { return (await call('storage.get', { key: 'cards' })) || []; }
-      async function saveCards(cards) { await call('storage.set', { key: 'cards', value: cards }); render(cards); }
-      async function addCard(message) {
+      async function loadCards() {
+        const cards = await call('storage.get', { key: 'cards' });
+        return Array.isArray(cards) ? cards : [];
+      }
+      async function saveCards(cards) {
+        await call('storage.set', { key: 'cards', value: cards });
+        render(cards);
+      }
+      async function addMessage(message) {
         if (!message?._id) return;
         const cards = await loadCards();
-        if (!cards.some((card) => card.id === message._id)) cards.unshift({ id: message._id, text: message.msg || '[附件消息]', author: message.u?.name || message.u?.username || '' });
+        if (cards.some((card) => card.id === message._id)) return notify('这条消息已经在看板中', 'error');
+        cards.unshift({ id: message._id, text: message.msg || '[附件消息]', author: message.u?.name || message.u?.username || '', status: 'todo' });
         await saveCards(cards);
+        notify('消息已加入看板');
+      }
+      async function mutate(id, update) {
+        const cards = await loadCards();
+        const next = update === null ? cards.filter((card) => card.id !== id) : cards.map((card) => card.id === id ? { ...card, ...update } : card);
+        await saveCards(next);
       }
       function render(cards) {
-        const root = document.querySelector('#cards');
-        root.innerHTML = cards.length ? cards.map((card) => `<article><small>${escapeHtml(card.author)}</small><p>${escapeHtml(card.text)}</p></article>`).join('') : '<div class="empty">从消息右键菜单选择“转成看板卡片”</div>';
+        const board = document.querySelector('#board');
+        board.replaceChildren();
+        for (const status of statuses) {
+          const column = document.createElement('section');
+          const heading = document.createElement('div'); heading.className = 'column-head';
+          const title = document.createElement('h2'); title.textContent = status.label;
+          const count = document.createElement('span');
+          const matching = cards.filter((card) => card.status === status.id || (!card.status && status.id === 'todo'));
+          count.textContent = String(matching.length); heading.append(title, count); column.append(heading);
+          if (!matching.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无卡片'; column.append(empty); }
+          for (const card of matching) {
+            const item = document.createElement('article');
+            const author = document.createElement('small'); author.textContent = card.author || '手动创建';
+            const text = document.createElement('p'); text.textContent = String(card.text || '');
+            const actions = document.createElement('div'); actions.className = 'card-actions';
+            const select = document.createElement('select'); select.setAttribute('aria-label', '卡片状态');
+            for (const optionStatus of statuses) { const option = document.createElement('option'); option.value = optionStatus.id; option.textContent = optionStatus.label; option.selected = optionStatus.id === (card.status || 'todo'); select.append(option); }
+            select.addEventListener('change', () => void mutate(card.id, { status: select.value }));
+            const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = '删除'; remove.addEventListener('click', () => void mutate(card.id, null));
+            actions.append(select, remove); item.append(author, text, actions); column.append(item);
+          }
+          board.append(column);
+        }
       }
-      function escapeHtml(value) { const node = document.createElement('span'); node.textContent = value || ''; return node.innerHTML; }
-      document.querySelector('#capture').addEventListener('click', async () => {
-        try { const current = await call('chat.current'); await addCard(current.messages.at(-1)); }
-        catch (error) { window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id: nextId++, method: 'rcx/requestUI', params: { kind: 'notify', props: { message: error.message, level: 'error' } } }); }
+      document.querySelector('#add').addEventListener('click', async () => {
+        const input = document.querySelector('#title'); const text = input.value.trim();
+        if (!text) return notify('请输入卡片内容', 'error');
+        const cards = await loadCards(); cards.unshift({ id: `local-${Date.now()}`, text, author: '', status: 'todo' });
+        await saveCards(cards); input.value = '';
       });
-      void loadCards().then(render);
+      document.querySelector('#capture').addEventListener('click', async () => {
+        try { const current = await call('chat.current'); const message = current?.messages?.at(-1); if (!message) throw new Error('当前会话没有可捕获的消息'); await addMessage(message); }
+        catch (error) { notify(error.message, 'error'); }
+      });
+      void loadCards().then(render).catch((error) => notify(error.message, 'error'));
     </script>
   </body>
 </html>
