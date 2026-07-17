@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
 import CreateWorkItemDialog from '../components/CreateWorkItemDialog';
 import { fallbackAssistantCommand, isAssistantWorkCommand, type AssistantCommand } from '../lib/assistantCommand';
 import { getServerBase, openExternal, realtime, rest } from '../lib/client';
+import { renderMarkdown } from '../lib/markdown';
 import { mergeMessageSearchResults, searchLoadedMessages, searchMessagesGlobal } from '../lib/quickSearch';
 import { searchWork } from '../lib/workSearch';
 import { useAuth } from '../stores/auth';
@@ -331,7 +332,9 @@ export default function AiAssistantPage() {
           {lines.map((line) => (
             <div key={line.id} className={`flex gap-3 ${line.role === 'user' ? 'justify-end' : ''}`}>
               {line.role === 'assistant' ? <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={15} /></div> : null}
-              <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>{line.text}</div>
+              <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
+                {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+              </div>
             </div>
           ))}
           {butlerError ? <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div> : null}

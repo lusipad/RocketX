@@ -1,4 +1,4 @@
-import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, Circle, ExternalLink, Loader2, MessageSquare, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, X } from 'lucide-react';
+import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, Circle, ExternalLink, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
@@ -10,13 +10,7 @@ import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useRoutines } from '../stores/routines';
-import {
-  generateDailyReview,
-  renderDailyReviewMarkdown,
-  type DailyReviewPeriod,
-} from '../kernel/ai/features/daily-review';
 import { renderMarkdown } from '../lib/markdown';
-import { toast } from '../stores/toast';
 import { IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
 const kindMeta = {
@@ -45,6 +39,15 @@ function routineScheduleLabel(trigger: { time: string; days?: number[] }): strin
   return `${dayText} ${trigger.time}`;
 }
 
+function stripMarkdownInline(text: string): string {
+  return text
+    .replace(/^\s*\|?[-:]+(?:\|[-:]+)+\|?\s*$/gm, ' ')
+    .replace(/^\s*---+\s*$/gm, ' ')
+    .replace(/[#*_`|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function TodayPage() {
   const userId = useAuth((state) => state.user?._id ?? 'guest');
   const todos = useTodos((state) => state.todos);
@@ -69,8 +72,6 @@ export default function TodayPage() {
   const runRoutineNow = useRoutines((state) => state.runNow);
   const dismissCard = useRoutines((state) => state.dismissCard);
   const [showDone, setShowDone] = useState(false);
-  const [review, setReview] = useState<string | null>(null);
-  const [reviewing, setReviewing] = useState<DailyReviewPeriod | null>(null);
 
   useEffect(() => {
     void hydrate().then(refreshMentions);
@@ -93,18 +94,6 @@ export default function TodayPage() {
   );
   const completion = todayCompletion(items);
   const visible = showDone ? items : items.filter((item) => !item.processed);
-
-  const createReview = async (period: DailyReviewPeriod) => {
-    if (items.length === 0 || reviewing) return;
-    setReviewing(period);
-    try {
-      setReview(renderDailyReviewMarkdown(await generateDailyReview(period, items)));
-    } catch (error) {
-      toast.error(error, period === 'morning' ? '生成 AI 晨报失败' : '生成晚间回顾失败');
-    } finally {
-      setReviewing(null);
-    }
-  };
 
   const openItem = async (item: TodayItem) => {
     if (item.kind === 'mention') {
@@ -137,20 +126,6 @@ export default function TodayPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => void createReview('morning')}
-              disabled={!!reviewing || items.length === 0}
-              className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
-            >
-              {reviewing === 'morning' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}AI 晨报
-            </button>
-            <button
-              onClick={() => void createReview('evening')}
-              disabled={!!reviewing || items.length === 0}
-              className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-            >
-              {reviewing === 'evening' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}晚间回顾
-            </button>
-            <button
               onClick={() => void refreshMentions()}
               disabled={loading}
               className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
@@ -160,54 +135,58 @@ export default function TodayPage() {
           </div>
         </div>
 
-        {review && (
-          <div className="mt-5 rounded-lg border border-primary/20 bg-primary-light/40 px-5 py-4 text-sm leading-6 text-ink">
-            {renderMarkdown(review)}
-          </div>
-        )}
-
         <section className="mt-5 rounded-lg border border-line bg-surface p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-ink"><Bot size={17} className="text-primary" />管家</div>
-          <div className="mt-3 space-y-2">
-            {eventCards.map((card) => {
-              const meta = butlerEventMeta[card.kind];
-              const Icon = meta.icon;
-              return (
-                <div key={card.id} className="flex items-start gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5">
-                  <Icon size={17} className={`mt-0.5 shrink-0 ${meta.color}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-ink">{card.title}</div>
-                    <div className="mt-0.5 text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
+          {eventCards.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {eventCards.map((card) => {
+                const meta = butlerEventMeta[card.kind];
+                const Icon = meta.icon;
+                return (
+                  <div key={card.id} className="flex items-start gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+                    <Icon size={17} className={`mt-0.5 shrink-0 ${meta.color}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-ink">{card.title}</div>
+                      <div className="mt-0.5 text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
+                    </div>
+                    <button title="关闭" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
                   </div>
-                  <button title="关闭" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
-                </div>
-              );
-            })}
-            {eventCards.length === 0 ? <div className="rounded-lg border border-dashed border-line px-3 py-4 text-sm text-ink-3">管家会把定时报告和值得注意的事件放在这里</div> : null}
-          </div>
-          <div className="mt-4 space-y-2">
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="mt-3 space-y-2">
             {routines.map((routine) => {
               const latest = routine.runs[0];
               const running = runningIds.includes(routine.id);
-              const preview = latest?.text.slice(0, 200) ?? '';
+              const previewText = latest ? stripMarkdownInline(latest.text) : '';
+              const preview = previewText.slice(0, 200);
+              const status = latest
+                ? latest.status === 'ok'
+                  ? { label: '成功', dotClassName: 'bg-success' }
+                  : { label: '失败', dotClassName: 'bg-danger' }
+                : { label: '未运行', dotClassName: 'bg-ink-3' };
               return (
-                <div key={routine.id} className="rounded-lg border border-line bg-surface-2 px-3 py-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
-                      <input type="checkbox" checked={routine.enabled} onChange={(event) => setRoutineEnabled(routine.id, event.target.checked)} />
-                      {routine.name}
+                <div key={routine.id} className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+                      <input className="accent-primary" type="checkbox" checked={routine.enabled} onChange={(event) => setRoutineEnabled(routine.id, event.target.checked)} />
+                      <span className="truncate">{routine.name}</span>
                     </label>
-                    <span className="text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
-                    <button onClick={() => void runRoutineNow(routine.id)} disabled={running} className="ml-auto flex items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50">
-                      {running ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}立即运行
+                    <span className="shrink-0 text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
+                      <span className={`h-1.5 w-1.5 rounded-full ${status.dotClassName}`} />{status.label}
+                    </span>
+                    <button title="立即运行" aria-label={`立即运行${routine.name}`} onClick={() => void runRoutineNow(routine.id)} disabled={running} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50">
+                      {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
                     </button>
                   </div>
                   {latest ? (
                     <details className="mt-2 text-xs text-ink-3">
-                      <summary className="cursor-pointer list-none">{displayTime(latest.at)} · {latest.status === 'ok' ? '成功' : '失败'} · {preview}{latest.text.length > 200 ? '…' : ''}</summary>
-                      <div className="mt-2 whitespace-pre-wrap rounded bg-fill-1 p-2 text-ink-2">{latest.text}</div>
+                      <summary className="cursor-pointer list-none">{displayTime(latest.at)} · {latest.status === 'ok' ? '成功' : '失败'} · {preview}{previewText.length > 200 ? '…' : ''}</summary>
+                      <div className="mt-2 rounded bg-fill-1 p-2 text-sm leading-6 text-ink">{renderMarkdown(latest.text)}</div>
                     </details>
-                  ) : <div className="mt-2 text-xs text-ink-3">尚未运行</div>}
+                  ) : null}
                 </div>
               );
             })}

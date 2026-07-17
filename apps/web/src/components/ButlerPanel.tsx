@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { Bot, Loader2, SendHorizontal } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
+import { renderMarkdown } from '../lib/markdown';
 import PanelShell from './PanelShell';
 
 function roomName(
@@ -57,10 +58,10 @@ export default function ButlerPanel() {
                 <Bot size={14} />
               </div>
             ) : null}
-            <div className={`max-w-[84%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-6 ${
+            <div className={`max-w-[84%] rounded-xl px-3 py-2 text-sm leading-6 ${
               line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'
             }`}>
-              {line.text}
+              {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
             </div>
           </div>
         )) : <div className="py-10 text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>}

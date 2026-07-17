@@ -41,7 +41,7 @@ function withMemoryStorage(run: () => void): void {
 test('系统提示注入人设和技能索引，并按需注入记忆', () => {
   withMemoryStorage(() => {
     const initial = buildButlerSystemPrompt();
-    assert.match(initial, new RegExp(DEFAULT_PERSONA));
+    assert.ok(initial.startsWith(DEFAULT_PERSONA));
     assert.doesNotMatch(initial, /## 你记住的事实/);
     assert.match(initial, /## 可用技能/);
     assert.match(initial, /- morning-brief：/);
@@ -51,6 +51,11 @@ test('系统提示注入人设和技能索引，并按需注入记忆', () => {
     appendMemory('老李是李建国');
     assert.match(buildButlerSystemPrompt(), /## 你记住的事实\n- 老李是李建国/);
   });
+});
+
+test('默认人设约束管家使用渲染环境支持的输出格式', () => {
+  assert.match(DEFAULT_PERSONA, /不使用 markdown 表格/);
+  assert.match(DEFAULT_PERSONA, /粗体小标题/);
 });
 
 test('系统提示仅保留最近 30 条记忆，并从最旧项开始压缩到 4000 字符', () => {
@@ -91,7 +96,7 @@ test('人设可覆盖和复位，自定义技能可保存和删除', () => {
 
 test('load_skill 与 remember 使用可测试的纯档案逻辑', () => {
   withMemoryStorage(() => {
-    assert.match(loadButlerSkill('morning-brief'), /# 晨报/);
+    assert.match(loadButlerSkill('morning-brief'), /^晨报/);
     assert.match(loadButlerSkill('missing'), /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report/);
     assert.equal(rememberButlerFact('我偏好简短回复'), '已记住：我偏好简短回复');
     assert.equal(listMemory()[0]?.text, '我偏好简短回复');
