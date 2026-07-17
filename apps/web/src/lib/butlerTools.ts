@@ -1,6 +1,6 @@
 import { tsMs } from '@rcx/rc-client';
 import type { ButlerTool } from '../kernel/ai/agent-loop';
-import { loadButlerSkill, rememberButlerFact } from './butlerProfile';
+import { listSkills, loadButlerSkill, rememberButlerFact } from './butlerProfile';
 import { realtime, rest } from './client';
 import {
   mergeMessageSearchResults,
@@ -14,6 +14,23 @@ import { useTodos } from '../stores/todos';
 import { useWorkbench } from '../stores/workbench';
 
 const LIMIT = 20;
+
+export interface ButlerRoutineDraft {
+  name: string;
+  time: string;
+  days?: number[];
+  skillName: string;
+}
+
+let routineDraftHandler: ((draft: ButlerRoutineDraft) => void) | undefined;
+
+export function setRoutineDraftHandler(handler: (draft: ButlerRoutineDraft) => void): () => void {
+  const previous = routineDraftHandler;
+  routineDraftHandler = handler;
+  return () => {
+    routineDraftHandler = previous;
+  };
+}
 
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
@@ -217,6 +234,29 @@ function remember(args: Record<string, unknown>): string {
   return rememberButlerFact(optionalString(args, 'fact') ?? '');
 }
 
+function validTime(time: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(time);
+  return !!match && Number(match[1]) < 24 && Number(match[2]) < 60;
+}
+
+function draftRoutine(args: Record<string, unknown>): string {
+  const name = optionalString(args, 'name');
+  const time = optionalString(args, 'time');
+  const skillName = optionalString(args, 'skillName');
+  if (!name) return '例行事务名称不能为空。';
+  if (!time || !validTime(time)) return '时间格式无效，请使用 HH:mm。';
+  if (!skillName || !listSkills().some((skill) => skill.name === skillName)) {
+    return `未找到技能：${skillName ?? '（未填写）'}。`;
+  }
+  const days = args.days;
+  if (days !== undefined && (!Array.isArray(days) || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {
+    return '星期必须是 0 到 6 的数字数组。';
+  }
+  if (!routineDraftHandler) return '例行事务草案暂不可用，请稍后重试。';
+  routineDraftHandler({ name, time, days: days as number[] | undefined, skillName });
+  return '已生成例行事务草案，等待用户确认。';
+}
+
 const searchMessagesParameters: Record<string, unknown> = {
   type: 'object',
   properties: {
@@ -330,6 +370,22 @@ export function createButlerTools(): ButlerTool[] {
         additionalProperties: false,
       },
       execute: async (args) => remember(args),
+    },
+    {
+      name: 'draft_routine',
+      description: '用户要求定期、每天或每周做某事时调用；创建前必须由用户确认。只生成例行事务草案，不会直接创建或启用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '例行事务名称。' },
+          time: { type: 'string', description: '触发时间，HH:mm。' },
+          days: { type: 'array', items: { type: 'number' }, description: '星期数组，0 为周日到 6 为周六；省略表示每天。' },
+          skillName: { type: 'string', description: '要执行的已注册技能名称。' },
+        },
+        required: ['name', 'time', 'skillName'],
+        additionalProperties: false,
+      },
+      execute: async (args) => draftRoutine(args),
     },
   ];
 }

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AiMessage } from '../../apps/web/src/kernel/ai/provider';
-import { setButlerLoopRunner, useButler } from '../../apps/web/src/stores/butler';
+import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
+import { setButlerLoopRunner, setButlerNowProvider, useButler } from '../../apps/web/src/stores/butler';
+import { useRoutines } from '../../apps/web/src/stores/routines';
 
 function resetStore(): void {
   useButler.getState().reset();
@@ -34,6 +36,23 @@ test('管家连续提问会累积模型历史和展示行', async () => {
     ]);
   } finally {
     restore();
+    resetStore();
+  }
+});
+
+test('管家提示会带入可注入的本地当前时间', async () => {
+  resetStore();
+  const restoreNow = setButlerNowProvider(() => new Date(2026, 0, 5, 8, 30).getTime());
+  const restoreRunner = setButlerLoopRunner(async (options) => {
+    assert.match(options.messages[0].content, /当前时间：2026-01-05 08:30 周一$/);
+    return { text: '收到。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('现在几点？');
+  } finally {
+    restoreRunner();
+    restoreNow();
     resetStore();
   }
 });
@@ -146,4 +165,31 @@ test('裁剪历史时不会留下没有对应 assistant 工具调用的 tool 消
     restore();
     resetStore();
   }
+});
+
+test('draft_routine 只能落草案，确认后才创建并启用例行事务', async () => {
+  resetStore();
+  useRoutines.setState({ routines: [], eventCards: [], seenKeys: [], runningIds: [], hydrated: false });
+  const draftRoutine = createButlerTools().find((tool) => tool.name === 'draft_routine');
+  assert.ok(draftRoutine);
+
+  assert.match(await draftRoutine.execute({ name: '晨报', time: '8:30', skillName: 'morning-brief' }), /时间格式无效/);
+  assert.equal(useButler.getState().routineDraft, null);
+  assert.match(await draftRoutine.execute({ name: '晨报', time: '08:30', skillName: 'missing-skill' }), /未找到技能/);
+  assert.equal(useButler.getState().routineDraft, null);
+
+  assert.equal(
+    await draftRoutine.execute({ name: '每周周报', time: '18:30', days: [5], skillName: 'weekly-report' }),
+    '已生成例行事务草案，等待用户确认。',
+  );
+  assert.deepEqual(useButler.getState().routineDraft, { name: '每周周报', time: '18:30', days: [5], skillName: 'weekly-report' });
+  assert.equal(useRoutines.getState().routines.length, 0);
+
+  useButler.getState().confirmRoutineDraft();
+  const created = useRoutines.getState().routines[0];
+  assert.equal(created.name, '每周周报');
+  assert.equal(created.enabled, true);
+  assert.equal(created.skillName, 'weekly-report');
+  assert.equal(useButler.getState().routineDraft, null);
+  useRoutines.setState({ routines: [], eventCards: [], seenKeys: [], runningIds: [], hydrated: false });
 });

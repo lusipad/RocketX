@@ -6,6 +6,7 @@ import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { installModuleValidator, useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
+import { startRoutineScheduler } from '../stores/routines';
 import ContactsPage from '../pages/ContactsPage';
 import TodosPage from '../pages/TodosPage';
 import CalendarPage from '../pages/CalendarPage';
@@ -499,5 +500,6 @@ export function initializeKernel(): void {
   registerBridgeEvents();
   installedApps.setActivator(activateApp);
   bridgeHost.start();
+  startRoutineScheduler();
   void installedApps.hydrate().catch((error) => toast.error(error, '加载扩展应用失败'));
 }

@@ -22,6 +22,8 @@ const SKILLS_KEY = 'skills';
 const MEMORY_LIMIT = 30;
 const MEMORY_CHARACTER_LIMIT = 4000;
 
+export const BUTLER_PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
+
 export const DEFAULT_PERSONA = `你是 RocketX 管家，服务于 GTD 与注意力保护。
 
 默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时先用工具查询；出现多个候选时列出证据，请用户二选一。绝不编造数据。`;
@@ -190,6 +192,18 @@ export function loadButlerSkill(name: string): string {
 export function rememberButlerFact(fact: string): string {
   const entry = appendMemory(fact);
   return `已记住：${entry.text}`;
+}
+
+export function friendlyButlerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/unconfigured|尚未配置路由|Provider 不存在/iu.test(message)) return BUTLER_PROVIDER_ERROR;
+  return '管家暂时无法回答，请稍后重试。';
+}
+
+export function butlerCurrentTimeLine(now: number): string {
+  const date = new Date(now);
+  const weekday = '日一二三四五六'[date.getDay()];
+  return `当前时间：${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')} 周${weekday}`;
 }
 
 export function buildButlerSystemPrompt(): string {

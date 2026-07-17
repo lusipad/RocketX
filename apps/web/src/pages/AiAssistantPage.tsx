@@ -63,6 +63,11 @@ function includes(text: string, query?: string): boolean {
   return !query || text.toLocaleLowerCase().includes(query.toLocaleLowerCase());
 }
 
+function routineDaysLabel(days?: number[]): string {
+  if (!days?.length) return '每天';
+  return days.map((day) => `周${'日一二三四五六'[day] ?? day}`).join('、');
+}
+
 export default function AiAssistantPage() {
   const userId = useAuth((state) => state.user?._id);
   const username = useAuth((state) => state.user?.username);
@@ -83,6 +88,9 @@ export default function AiAssistantPage() {
   const butlerRunning = useButler((state) => state.running);
   const butlerError = useButler((state) => state.error);
   const askButler = useButler((state) => state.ask);
+  const routineDraft = useButler((state) => state.routineDraft);
+  const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
+  const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const [input, setInput] = useState('');
   const [quickRunning, setQuickRunning] = useState(false);
   const [results, setResults] = useState<AssistantResult[]>([]);
@@ -337,6 +345,18 @@ export default function AiAssistantPage() {
               <div className="mt-3 flex items-center justify-between gap-3">
                 <span className="text-xs text-ink-3">{draft.workItemType || '自动选择类型'} · 尚未创建</span>
                 <button onClick={() => setCreateDialog(true)} className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover">确认创建</button>
+              </div>
+            </div>
+          ) : null}
+
+          {routineDraft ? (
+            <div className="ml-10 rounded-lg border border-primary/30 bg-primary-light/40 p-4">
+              <div className="text-xs font-medium text-primary">例行事务草案</div>
+              <div className="mt-2 font-medium text-ink">{routineDraft.name}</div>
+              <div className="mt-1 text-sm text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button onClick={dismissRoutineDraft} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover">取消</button>
+                <button onClick={confirmRoutineDraft} className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover">确认启用</button>
               </div>
             </div>
           ) : null}

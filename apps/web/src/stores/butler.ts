@@ -1,11 +1,11 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage } from '../kernel/ai/provider';
-import { buildButlerSystemPrompt } from '../lib/butlerProfile';
-import { createButlerTools } from '../lib/butlerTools';
+import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
+import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
+import { useRoutines } from './routines';
 
 const HISTORY_LIMIT = 40;
-const PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
 
@@ -21,13 +21,18 @@ export interface ButlerState {
   history: AiMessage[];
   running: boolean;
   error: string | null;
+  routineDraft: ButlerRoutineDraft | null;
   ask: (text: string) => Promise<void>;
+  setRoutineDraft: (draft: ButlerRoutineDraft) => void;
+  confirmRoutineDraft: () => void;
+  dismissRoutineDraft: () => void;
   reset: () => void;
 }
 
 type ButlerLoopRunner = typeof runAgentLoop;
 
 let loopRunner: ButlerLoopRunner = runAgentLoop;
+let butlerNow = () => Date.now();
 
 const toolLabels: Record<string, string> = {
   search_messages: '搜索消息',
@@ -39,6 +44,7 @@ const toolLabels: Record<string, string> = {
   list_builds: '查询构建',
   load_skill: '加载技能',
   remember: '记录记忆',
+  draft_routine: '生成例行事务草案',
 };
 
 function line(role: ButlerLine['role'], text: string): ButlerLine {
@@ -52,12 +58,6 @@ function welcomeLines(): ButlerLine[] {
 function activityFor(event: AgentLoopEvent): string | null {
   if (event.type === 'tool-call') return `正在调用 ${toolLabels[event.toolCall.name] ?? event.toolCall.name}…`;
   return null;
-}
-
-function friendlyError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/unconfigured|尚未配置路由|Provider 不存在/iu.test(message)) return PROVIDER_ERROR;
-  return '管家暂时无法回答，请稍后重试。';
 }
 
 export function trimButlerHistory(history: AiMessage[]): AiMessage[] {
@@ -75,6 +75,14 @@ export function setButlerLoopRunner(runner: ButlerLoopRunner): () => void {
   };
 }
 
+export function setButlerNowProvider(provider: () => number): () => void {
+  const previous = butlerNow;
+  butlerNow = provider;
+  return () => {
+    butlerNow = previous;
+  };
+}
+
 export function appendButlerLine(role: ButlerLine['role'], text: string): void {
   useButler.setState((state) => ({ lines: [...state.lines, line(role, text)] }));
 }
@@ -85,6 +93,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   history: [],
   running: false,
   error: null,
+  routineDraft: null,
 
   ask: async (text) => {
     const content = text.trim();
@@ -133,7 +142,7 @@ export const useButler = create<ButlerState>((set, get) => ({
 
     try {
       const result = await loopRunner({
-        messages: [{ role: 'system', content: buildButlerSystemPrompt() }, ...history],
+        messages: [{ role: 'system', content: `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}` }, ...history],
         tools: createButlerTools(),
         onEvent,
       });
@@ -152,9 +161,29 @@ export const useButler = create<ButlerState>((set, get) => ({
         running: false,
       }));
     } catch (error) {
-      set({ activity: null, running: false, error: friendlyError(error) });
+      set({ activity: null, running: false, error: friendlyButlerError(error) });
     }
   },
+
+  setRoutineDraft: (routineDraft) => set({ routineDraft }),
+
+  confirmRoutineDraft: () => {
+    const draft = get().routineDraft;
+    if (!draft) return;
+    useRoutines.getState().addRoutine({
+      id: crypto.randomUUID(),
+      name: draft.name,
+      trigger: { kind: 'daily', time: draft.time, days: draft.days },
+      skillName: draft.skillName,
+      delivery: 'today',
+      enabled: true,
+      createdAt: butlerNow(),
+      runs: [],
+    });
+    set({ routineDraft: null });
+  },
+
+  dismissRoutineDraft: () => set({ routineDraft: null }),
 
   reset: () => set({
     lines: welcomeLines(),
@@ -162,5 +191,8 @@ export const useButler = create<ButlerState>((set, get) => ({
     history: [],
     running: false,
     error: null,
+    routineDraft: null,
   }),
 }));
+
+setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
