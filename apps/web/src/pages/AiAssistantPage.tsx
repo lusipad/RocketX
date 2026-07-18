@@ -1,5 +1,6 @@
-import { Bot, Loader2, Search, Send, TerminalSquare } from 'lucide-react';
+import { Bot, Loader2, Search, Send, Square, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import ButlerProcess from '../components/ButlerProcess';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -29,7 +30,9 @@ export default function AiAssistantPage() {
   const activity = useButler((state) => state.activity);
   const running = useButler((state) => state.running);
   const butlerError = useButler((state) => state.error);
+  const steps = useButler((state) => state.steps);
   const askButler = useButler((state) => state.ask);
+  const stopButler = useButler((state) => state.stop);
   const routineDraft = useButler((state) => state.routineDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
@@ -46,6 +49,7 @@ export default function AiAssistantPage() {
     activity,
     butlerError,
     routineDraft,
+    steps,
   ]);
 
   // 预取工作台数据，AI 的 list_work_items/list_pull_requests/list_builds 工具直接读它
@@ -89,6 +93,7 @@ export default function AiAssistantPage() {
               </div>
             </div>
           ))}
+          <ButlerProcess steps={steps} running={running} className="ml-10" />
           {butlerError ? <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div> : null}
           {activity ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />{activity}</div> : running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div> : null}
 
@@ -111,7 +116,17 @@ export default function AiAssistantPage() {
         <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="mt-3 flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
           <Search size={17} className="ml-2 text-ink-3" />
           <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
-          <button type="submit" disabled={running || !input.trim()} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
+          {running ? (
+            <button
+              type="button"
+              onClick={() => void stopButler()}
+              className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover"
+            >
+              <Square size={13} />停止
+            </button>
+          ) : (
+            <button type="submit" disabled={!input.trim()} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
+          )}
         </form>
       </div>
     </div>

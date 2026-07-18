@@ -30,6 +30,9 @@ export interface ButlerCodexAskOptions {
 interface TurnController {
   onNotification(method: string, params: unknown): void;
   interrupt(error: Error): void;
+  /** 用户主动停止：就地完成本轮，保留已生成的内容 */
+  stop(): void;
+  activeTurnId(): string | undefined;
   start(client: AppServerClient, input: string): Promise<string>;
 }
 
@@ -144,6 +147,15 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
       active = undefined;
       current.reject(error);
     },
+
+    stop: () => {
+      if (!active) return;
+      const current = active;
+      active = undefined;
+      current.resolve(current.text.trim());
+    },
+
+    activeTurnId: () => active?.turnId,
 
     start: async (client, input) => {
       if (active) throw new Error('AI 正在处理上一条消息');
@@ -384,6 +396,22 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
     if (residentStatus !== 'interrupted') residentStatus = residentThreadId ? 'ready' : 'idle';
     throw error;
   }
+}
+
+/**
+ * 停止 AI 页面当前正在进行的回答：先请求服务端中断本轮，再就地完成
+ * 本轮 Promise（保留已生成的部分内容）。没有进行中的轮次时是 no-op。
+ */
+export async function stopButlerCodexTurn(): Promise<void> {
+  const turn = residentTurn;
+  if (!turn) return;
+  const turnId = turn.activeTurnId();
+  if (residentClient && residentThreadId && turnId) {
+    await residentClient
+      .request('turn/interrupt', { threadId: residentThreadId, turnId })
+      .catch(() => undefined);
+  }
+  turn.stop();
 }
 
 export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): Promise<{ text: string }> {

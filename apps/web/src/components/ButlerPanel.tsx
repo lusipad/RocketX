@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, Loader2, SendHorizontal } from 'lucide-react';
+import { Bot, Loader2, SendHorizontal, Square } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
 import { renderMarkdown } from '../lib/markdown';
+import ButlerProcess from './ButlerProcess';
 import PanelShell from './PanelShell';
 
 function roomName(
@@ -28,7 +29,9 @@ export default function ButlerPanel() {
   const running = useButler((state) => state.running);
   const error = useButler((state) => state.error);
   const routineDraft = useButler((state) => state.routineDraft);
+  const steps = useButler((state) => state.steps);
   const ask = useButler((state) => state.ask);
+  const stop = useButler((state) => state.stop);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrate = useButler((state) => state.hydrate);
@@ -74,6 +77,7 @@ export default function ButlerPanel() {
           </div>
         )) : <div className="py-10 text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>}
 
+        <ButlerProcess steps={steps} running={running} className="mt-2" />
         {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
         {activity || running ? (
           <div className="mt-3 flex items-center gap-2 text-sm text-ink-3">
@@ -109,9 +113,20 @@ export default function ButlerPanel() {
             placeholder="问问这个房间的讨论…"
             className="max-h-28 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-ink-3"
           />
-          <button type="submit" disabled={running || !input.trim()} className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40">
-            <SendHorizontal size={14} />
-          </button>
+          {running ? (
+            <button
+              type="button"
+              title="停止回答"
+              onClick={() => void stop()}
+              className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded border border-line text-ink hover:bg-fill-hover"
+            >
+              <Square size={12} />
+            </button>
+          ) : (
+            <button type="submit" disabled={!input.trim()} className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40">
+              <SendHorizontal size={14} />
+            </button>
+          )}
         </div>
       </form>
     </PanelShell>

@@ -11,6 +11,7 @@ import {
   friendlyButlerCodexError,
   hydrateResidentCodexThread,
   residentCodexThreadSnapshot,
+  stopButlerCodexTurn,
 } from './butlerCodex';
 import { useRoutines } from './routines';
 
@@ -27,6 +28,14 @@ export interface ButlerLine {
   text: string;
 }
 
+/** 本轮的一个执行步骤（工具调用），给「过程」展示用 */
+export interface ButlerStep {
+  id: string;
+  label: string;
+  status: 'running' | 'done' | 'failed';
+  at: number;
+}
+
 export interface ButlerRoomContext {
   rid: string;
   roomName: string;
@@ -35,11 +44,15 @@ export interface ButlerRoomContext {
 export interface ButlerState {
   lines: ButlerLine[];
   activity: string | null;
+  /** 本轮（或上一轮）的执行步骤，新提问时清空 */
+  steps: ButlerStep[];
   history: AiMessage[];
   running: boolean;
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
   ask: (text: string, context?: ButlerRoomContext) => Promise<void>;
+  /** 停止当前回答：保留已生成内容，不当错误处理 */
+  stop: () => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   confirmRoutineDraft: () => void;
@@ -63,6 +76,8 @@ let butlerNow = () => Date.now();
 
 let persistScope = '';
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+/** 当前 API 大脑回合的中止控制器（Codex 大脑走 turn/interrupt） */
+let currentAbort: AbortController | undefined;
 
 interface ButlerAppData {
   get<T>(appId: string, key: string): Promise<T | undefined>;
@@ -190,6 +205,7 @@ export function appendButlerLine(role: ButlerLine['role'], text: string): void {
 export const useButler = create<ButlerState>((set, get) => ({
   lines: welcomeLines(),
   activity: null,
+  steps: [],
   history: [],
   running: false,
   error: null,
@@ -221,12 +237,15 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!content || get().running) return;
 
     const brain = getButlerBrain();
+    const abort = brain === 'api' ? new AbortController() : undefined;
+    currentAbort = abort;
     const history = brain === 'api'
       ? trimButlerHistory([...get().history, { role: 'user', content }])
       : get().history;
     set((state) => ({
       lines: [...state.lines, line('user', content)],
       activity: null,
+      steps: [],
       ...(brain === 'api' ? { history } : {}),
       running: true,
       error: null,
@@ -250,13 +269,21 @@ export const useButler = create<ButlerState>((set, get) => ({
       }
       if (event.type === 'tool-call') {
         toolCallNames.set(event.toolCall.id, event.toolCall.name);
-        set({ activity: activityFor(event) });
+        const label = toolLabels[event.toolCall.name] ?? event.toolCall.name;
+        set((state) => ({
+          activity: activityFor(event),
+          steps: [...state.steps, { id: event.toolCall.id, label, status: 'running' as const, at: butlerNow() }],
+        }));
         return;
       }
       if (event.type === 'tool-result') {
         const toolName = toolCallNames.get(event.toolCallId);
+        const failed = /^工具(?:调用|执行)失败/.test(event.content);
         set((state) => ({
           activity: null,
+          steps: state.steps.map((step) =>
+            step.id === event.toolCallId ? { ...step, status: failed ? 'failed' as const : 'done' as const } : step,
+          ),
           lines: toolName === 'remember'
             ? [...state.lines, line('assistant', `📌 ${event.content}`)]
             : state.lines,
@@ -293,6 +320,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       const result = await loopRunner({
         messages: [{ role: 'system', content: system }, ...history],
         tools: createButlerTools(),
+        signal: abort?.signal,
         onEvent,
       });
       const nextHistory = trimButlerHistory([
@@ -310,11 +338,29 @@ export const useButler = create<ButlerState>((set, get) => ({
         running: false,
       }));
     } catch (error) {
+      // 用户主动停止不是错误：保留已生成的内容，安静收尾
+      if (abort?.signal.aborted) {
+        set({ activity: null, running: false });
+        return;
+      }
       const message = brain === 'codex'
         ? `${friendlyButlerCodexError(error).replace(/[。.]$/, '')}。可在设置页切换为 API 大脑。`
         : friendlyButlerError(error);
       set({ activity: null, running: false, error: message });
+    } finally {
+      if (currentAbort === abort) currentAbort = undefined;
     }
+  },
+
+  stop: async () => {
+    if (!get().running) return;
+    if (getButlerBrain() === 'codex') {
+      // 服务端中断本轮并就地完成，ask 会沿正常路径收尾
+      await stopButlerCodexTurn();
+    } else {
+      currentAbort?.abort(new Error('已停止'));
+    }
+    set({ activity: null });
   },
 
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
@@ -340,6 +386,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   reset: () => set({
     lines: welcomeLines(),
     activity: null,
+    steps: [],
     history: [],
     running: false,
     error: null,
