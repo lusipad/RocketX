@@ -5,6 +5,7 @@ import { useUI } from '../stores/ui';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
+import { shortcutKeyOf } from '../lib/shortcutKey';
 import {
   clearTrayAttention,
   formatTrayTooltip,
@@ -297,7 +298,7 @@ export default function MainPage() {
 
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
+      const key = shortcutKeyOf(e);
       // Ctrl+K 快速切换会话
       if (mod && key === 'k' && !e.shiftKey) { e.preventDefault(); switcherTab.current = undefined; setSwitcher(!useUI.getState().switcherOpen); return; }
       // Ctrl+Shift+F 全局搜索消息
