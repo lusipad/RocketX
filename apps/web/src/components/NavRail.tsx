@@ -20,7 +20,7 @@ import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
-import { useKernelContributions } from '../kernel/registry';
+import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
 import { ConfirmDialog } from './Dialog';
@@ -37,6 +37,17 @@ const MODULE_META: Record<string, {
   workbench: { label: '工作台', icon: LayoutGrid },
 };
 
+const PRIMARY_MODULE_IDS = new Set(['messages', 'today', 'todos', 'calendar']);
+const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
+const AI_MODULE_IDS = new Set(['ai-assistant']);
+const HIDDEN_MODULE_IDS = new Set(['codex']);
+const KNOWN_CORE_MODULE_IDS = new Set([
+  ...PRIMARY_MODULE_IDS,
+  ...WORK_MODULE_IDS,
+  ...AI_MODULE_IDS,
+  'codex',
+]);
+
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
 export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
   const user = useAuth((s) => s.user);
@@ -47,13 +58,22 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const setSwitcherOpen = useUI((s) => s.setSwitcherOpen);
   const registeredModules = useKernelContributions('nav.module');
   const modules = [
-    { key: 'messages', ...MODULE_META.messages },
+    { key: 'messages', owner: 'core', ...MODULE_META.messages },
     ...registeredModules.map((module) => ({
       key: module.id,
+      owner: kernelRegistry.ownerOf('nav.module', module),
       label: module.label,
       icon: module.icon ?? MODULE_META[module.id]?.icon ?? Blocks,
     })),
   ];
+  const visibleModules = modules.filter((module) => !HIDDEN_MODULE_IDS.has(module.key));
+  const moduleGroups = [
+    visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => AI_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
+    visibleModules.filter((module) => module.owner !== 'core'),
+  ].filter((group) => group.length > 0);
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
@@ -181,54 +201,61 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
 
       {/* 模块列表 */}
       <div className="flex flex-1 flex-col gap-0.5">
-        {modules.map(({ key, label, icon: Icon }) => {
-          const isActive = key === active;
-          return (
-            <button
-              key={key}
-              onClick={() => setModule(key)}
-              className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
-                isActive
-                  ? 'bg-fill-active font-medium text-ink'
-                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
-              }`}
-            >
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-md ${
-                  isActive ? 'bg-primary text-white' : ''
-                }`}
-              >
-                <Icon size={isActive ? 15 : 17} />
-              </span>
-              {label}
-              {key === 'messages' &&
-                (unreadTotal > 0 ? (
-                  <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1.5 text-2xs font-medium text-white">
-                    {unreadTotal > 99 ? '99+' : unreadTotal}
-                  </span>
-                ) : hasAlert ? (
-                  <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
-                ) : null)}
-              {/* 日历：今日日程数 */}
-              {key === 'calendar' && todayEventCount > 0 && (
-                <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
-                  {todayEventCount}
-                </span>
-              )}
-              {/* 待办：有逾期就标红，否则灰色计数 */}
-              {key === 'todos' && todoOpen > 0 && (
-                <span
-                  className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-2xs font-medium ${
-                    todoOverdue > 0 ? 'bg-danger text-white' : 'bg-fill-active text-ink-2'
+        {moduleGroups.map((group, groupIndex) => (
+          <div
+            key={group[0].key}
+            className={groupIndex === 0 ? 'flex flex-col gap-0.5' : 'mt-2 flex flex-col gap-0.5 border-t border-line pt-2'}
+          >
+            {group.map(({ key, label, icon: Icon }) => {
+              const isActive = key === active;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setModule(key)}
+                  className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
+                    isActive
+                      ? 'bg-fill-active font-medium text-ink'
+                      : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
                   }`}
-                  title={todoOverdue > 0 ? `${todoOverdue} 条已逾期` : `${todoOpen} 条待办`}
                 >
-                  {todoOpen > 99 ? '99+' : todoOpen}
-                </span>
-              )}
-            </button>
-          );
-        })}
+                  <span
+                    className={`flex h-6 w-6 items-center justify-center rounded-md ${
+                      isActive ? 'bg-primary text-white' : ''
+                    }`}
+                  >
+                    <Icon size={isActive ? 15 : 17} />
+                  </span>
+                  {label}
+                  {key === 'messages' &&
+                    (unreadTotal > 0 ? (
+                      <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-danger px-1.5 text-2xs font-medium text-white">
+                        {unreadTotal > 99 ? '99+' : unreadTotal}
+                      </span>
+                    ) : hasAlert ? (
+                      <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
+                    ) : null)}
+                  {/* 日历：今日日程数 */}
+                  {key === 'calendar' && todayEventCount > 0 && (
+                    <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
+                      {todayEventCount}
+                    </span>
+                  )}
+                  {/* 待办：有逾期就标红，否则灰色计数 */}
+                  {key === 'todos' && todoOpen > 0 && (
+                    <span
+                      className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-2xs font-medium ${
+                        todoOverdue > 0 ? 'bg-danger text-white' : 'bg-fill-active text-ink-2'
+                      }`}
+                      title={todoOverdue > 0 ? `${todoOverdue} 条已逾期` : `${todoOpen} 条待办`}
+                    >
+                      {todoOpen > 99 ? '99+' : todoOpen}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       {/* 底部 */}

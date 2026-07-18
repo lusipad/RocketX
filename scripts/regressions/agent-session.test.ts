@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   SerialCommandQueue,
@@ -61,6 +62,18 @@ test('非宿主首次指挥需放行，仅宿主设备可放行和审批', () =>
   assert.equal(commandAccess(approved, 'member'), 'allowed');
   assert.doesNotThrow(() => assertHost(approved, { userId: 'host', deviceId: 'device-a' }, 1_000));
   assert.equal(commandAccess({ ...approved, access: 'host-only' }, 'another'), 'denied');
+});
+
+test('工作项 Discussion 默认允许房间成员提问，但宿主仍掌握执行审批', () => {
+  assert.equal(commandAccess(session({ tmid: 'room:discussion-128' }), 'member'), 'allowed');
+  assert.equal(commandAccess(session({ tmid: 'room:discussion-128', access: 'host-only' }), 'member'), 'denied');
+});
+
+test('共享 Agent 自动复用现有 Codex 模型和推理强度设置', () => {
+  const source = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
+  assert.match(source, /getButlerCodexSettings\(\)/);
+  assert.match(source, /codexSettings\.model \? \{ model: codexSettings\.model \}/);
+  assert.match(source, /codexSettings\.effort === 'default' \? \{\} : \{ effort: codexSettings\.effort \}/);
 });
 
 test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {

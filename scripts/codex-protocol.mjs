@@ -4,7 +4,6 @@ import { cp, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
-const expectedVersion = '0.144.4';
 const root = resolve(import.meta.dirname, '..');
 const generatedDir = resolve(root, 'apps/web/src/agent/protocol/generated');
 const mode = process.argv[2];
@@ -65,8 +64,9 @@ async function snapshot(dir) {
 }
 
 const versionOutput = runCodex(['--version']);
-if (versionOutput !== `codex-cli ${expectedVersion}`) {
-  throw new Error(`协议只能由 codex-cli ${expectedVersion} 生成，当前为 ${versionOutput || '未知版本'}`);
+const cliVersion = /^codex-cli (\S+)$/.exec(versionOutput)?.[1];
+if (!cliVersion) {
+  throw new Error(`无法识别 Codex CLI 版本：${versionOutput || '未知版本'}`);
 }
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'rocketx-codex-protocol-'));
@@ -81,16 +81,16 @@ try {
     }
     await rm(generatedDir, { recursive: true, force: true });
     await cp(tempGenerated, generatedDir, { recursive: true });
-    console.log(`已用 codex-cli ${expectedVersion} 生成 ${(await filesUnder(generatedDir)).length} 个协议文件。`);
+    console.log(`已用 codex-cli ${cliVersion} 生成 ${(await filesUnder(generatedDir)).length} 个协议文件。`);
   } else {
     if (!(await stat(generatedDir).catch(() => null))) throw new Error('协议生成物不存在，请先运行 codex:protocol:generate');
     const [expected, actual] = await Promise.all([snapshot(tempGenerated), snapshot(generatedDir)]);
     const paths = new Set([...expected.keys(), ...actual.keys()]);
     const changed = [...paths].filter((path) => expected.get(path) !== actual.get(path)).sort();
     if (changed.length > 0) {
-      throw new Error(`协议生成物与 codex-cli ${expectedVersion} 不一致：${changed.slice(0, 20).join(', ')}`);
+      throw new Error(`协议生成物与 codex-cli ${cliVersion} 不一致：${changed.slice(0, 20).join(', ')}`);
     }
-    console.log(`协议生成物与 codex-cli ${expectedVersion} 一致（${actual.size} 个文件）。`);
+    console.log(`协议生成物与 codex-cli ${cliVersion} 一致（${actual.size} 个文件）。`);
   }
 } finally {
   await rm(tempRoot, { recursive: true, force: true });

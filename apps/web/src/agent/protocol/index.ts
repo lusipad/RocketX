@@ -1,6 +1,6 @@
 export {
   CODEX_APP_SERVER_VERSION,
-  assertCompatibleCodex,
+  assertCodexHandshake,
   codexVersionFromUserAgent,
 } from './compatibility';
 export {

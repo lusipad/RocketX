@@ -27,6 +27,7 @@ import { useKernelContributions } from '../kernel/registry';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
+import { stripAgentSessionMarker } from '../agent/card';
 
 // @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
 const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
@@ -541,7 +542,7 @@ export default function Composer() {
           <Reply size={13} className="shrink-0 text-ink-3" />
           <span className="min-w-0 flex-1 truncate text-xs text-ink-2">
             回复 {replyTo.u.name || replyTo.u.username}：
-            {stripQuotePrefix(replyTo.msg) || '[卡片消息]'}
+            {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg)) || '[卡片消息]'}
           </span>
           <button
             onClick={() => setReplyTo(null)}

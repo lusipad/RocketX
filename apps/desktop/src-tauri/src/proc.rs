@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ffi::{OsStr, OsString},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -42,6 +43,15 @@ pub struct CodexProcessInfo {
     runtime_workspace_root: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeProbe {
+    ready: bool,
+    version: Option<String>,
+    executable_path: Option<String>,
+    reason: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexOutputEvent {
@@ -57,7 +67,7 @@ struct CodexExitEvent {
     code: Option<i32>,
 }
 
-fn hidden_command(program: &str) -> Command {
+fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
     #[cfg(windows)]
     {
@@ -67,8 +77,159 @@ fn hidden_command(program: &str) -> Command {
     command
 }
 
+#[derive(Clone)]
+struct ResolvedCodex {
+    program: PathBuf,
+    prefix_args: Vec<OsString>,
+    display_path: String,
+}
+
+impl ResolvedCodex {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.prefix_args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        command
+    }
+}
+
+#[cfg(windows)]
+fn find_program(name: &str) -> Option<PathBuf> {
+    let output = hidden_command("where.exe")
+        .arg(name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("Codex 路径不可用：{error}"))?;
+    if !canonical.is_file() {
+        return Err("Codex 路径不是文件".to_string());
+    }
+    let name = canonical
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name != "codex.exe" && name != "codex.cmd" && name != "codex" {
+        return Err("请选择 codex.exe 或 codex.cmd".to_string());
+    }
+    if name == "codex.cmd" {
+        let entry = canonical
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        if !entry.is_file() {
+            return Err("codex.cmd 缺少对应的 @openai/codex 安装文件".to_string());
+        }
+        let node = canonical
+            .parent()
+            .map(|parent| parent.join("node.exe"))
+            .filter(|candidate| candidate.is_file())
+            .or_else(|| find_program("node.exe"))
+            .ok_or_else(|| "未检测到 Node.js，无法运行 codex.cmd".to_string())?;
+        return Ok(ResolvedCodex {
+            program: node,
+            prefix_args: vec![entry.into_os_string()],
+            display_path: canonical.to_string_lossy().into_owned(),
+        });
+    }
+    Ok(ResolvedCodex {
+        program: canonical.clone(),
+        prefix_args: Vec::new(),
+        display_path: canonical.to_string_lossy().into_owned(),
+    })
+}
+
+#[cfg(windows)]
+fn standard_codex_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        paths.push(PathBuf::from(app_data).join("npm").join("codex.cmd"));
+    }
+    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+        paths.push(
+            PathBuf::from(user_profile)
+                .join("Codex")
+                .join("_internal")
+                .join("app")
+                .join("resources")
+                .join("codex.exe"),
+        );
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let local = PathBuf::from(local_app_data);
+        paths.push(
+            local
+                .join("Programs")
+                .join("Codex")
+                .join("resources")
+                .join("codex.exe"),
+        );
+        paths.push(local.join("Codex").join("resources").join("codex.exe"));
+        paths.push(local.join("Codex").join("codex.exe"));
+    }
+    paths
+}
+
+fn resolve_codex() -> Result<ResolvedCodex, String> {
+    #[cfg(windows)]
+    {
+        if let Some(path) = find_program("codex.cmd") {
+            if let Ok(resolved) = resolved_codex_path(&path) {
+                return Ok(resolved);
+            }
+        }
+        if let Some(path) = find_program("codex.exe") {
+            return resolved_codex_path(&path);
+        }
+        for path in standard_codex_paths() {
+            if path.is_file() {
+                if let Ok(resolved) = resolved_codex_path(&path) {
+                    return Ok(resolved);
+                }
+            }
+        }
+        return Err("未检测到可用的 Codex".to_string());
+    }
+
+    #[cfg(not(windows))]
+    Ok(ResolvedCodex {
+        program: PathBuf::from("codex"),
+        prefix_args: Vec::new(),
+        display_path: "codex".to_string(),
+    })
+}
+
+pub(crate) fn codex_command() -> Result<Command, String> {
+    Ok(resolve_codex()?.command())
+}
+
 fn codex_cli_version() -> Result<String, String> {
-    let mut command = hidden_command("codex");
+    let mut command = codex_command()?;
     command.arg("--version");
     let output = command
         .stdin(Stdio::null())
@@ -87,6 +248,74 @@ fn codex_cli_version() -> Result<String, String> {
         .strip_prefix("codex-cli ")
         .map(ToOwned::to_owned)
         .ok_or_else(|| "Codex CLI 返回了无法识别的版本".to_string())
+}
+
+fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
+    let mut command = codex_command()?;
+    let output = command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Codex 无法启动：{error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if detail.is_empty() {
+        format!("Codex {} 执行失败", args.join(" "))
+    } else {
+        detail
+    })
+}
+
+#[tauri::command]
+pub fn codex_runtime_probe() -> CodexRuntimeProbe {
+    let resolved = match resolve_codex() {
+        Ok(value) => value,
+        Err(reason) => {
+            return CodexRuntimeProbe {
+                ready: false,
+                version: None,
+                executable_path: None,
+                reason: Some(reason),
+            }
+        }
+    };
+    let version = match codex_cli_version() {
+        Ok(value) => value,
+        Err(reason) => {
+            return CodexRuntimeProbe {
+                ready: false,
+                version: None,
+                executable_path: Some(resolved.display_path),
+                reason: Some(reason),
+            }
+        }
+    };
+    if let Err(reason) = codex_command_succeeds(&["app-server", "--help"]) {
+        return CodexRuntimeProbe {
+            ready: false,
+            version: Some(version),
+            executable_path: Some(resolved.display_path),
+            reason: Some(format!("Codex 缺少 app-server 能力：{reason}")),
+        };
+    }
+    if let Err(reason) = codex_command_succeeds(&["login", "status"]) {
+        return CodexRuntimeProbe {
+            ready: false,
+            version: Some(version),
+            executable_path: Some(resolved.display_path),
+            reason: Some(format!("Codex 尚未登录：{reason}")),
+        };
+    }
+    CodexRuntimeProbe {
+        ready: true,
+        version: Some(version),
+        executable_path: Some(resolved.display_path),
+        reason: None,
+    }
 }
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
@@ -233,7 +462,7 @@ pub fn codex_app_server_start(
         });
     }
 
-    let mut command = hidden_command("codex");
+    let mut command = codex_command()?;
     command
         .args(["app-server", "--stdio"])
         .current_dir(&workspace)
@@ -453,6 +682,22 @@ pub fn codex_agent_workspace(app: tauri::AppHandle, session_id: String) -> Resul
     Ok(path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve Butler home directory: {error}"))?
+        .join("butler");
+    std::fs::create_dir_all(&path)
+        .map_err(|error| format!("failed to prepare Butler home directory: {error}"))?;
+    for directory in ["memory", "skills"] {
+        std::fs::create_dir_all(path.join(directory))
+            .map_err(|error| format!("failed to prepare Butler {directory} directory: {error}"))?;
+    }
+    Ok(host_path(&path))
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let processes = state
@@ -475,12 +720,16 @@ pub fn shutdown(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::ResolvedCodex;
     use super::{
         decode_attachment_request, encode_message, host_path, safe_attachment_path,
         validate_session_id,
     };
     use serde_json::json;
     use std::path::Path;
+    #[cfg(windows)]
+    use std::{ffi::OsString, path::PathBuf};
 
     #[test]
     fn app_server_transport_accepts_one_json_object_per_line() {
@@ -528,5 +777,30 @@ mod tests {
         assert_eq!(value, r"C:\work\repo");
         #[cfg(not(windows))]
         assert_eq!(value, r"\\?\C:\work\repo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolved_npm_codex_runs_the_official_node_entry_without_a_shell() {
+        use std::ffi::OsStr;
+
+        let resolved = ResolvedCodex {
+            program: PathBuf::from(r"C:\Program Files\nodejs\node.exe"),
+            prefix_args: vec![OsString::from(
+                r"C:\Users\test\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
+            )],
+            display_path: r"C:\Users\test\AppData\Roaming\npm\codex.cmd".to_string(),
+        };
+        let command = resolved.command();
+        assert_eq!(
+            command.get_program(),
+            OsStr::new(r"C:\Program Files\nodejs\node.exe")
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new(
+                r"C:\Users\test\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
+            )]
+        );
     }
 }

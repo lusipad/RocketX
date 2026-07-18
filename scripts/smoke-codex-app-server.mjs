@@ -3,7 +3,6 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const expectedVersion = '0.144.4';
 const root = resolve(import.meta.dirname, '..');
 
 function invocation() {
@@ -17,8 +16,9 @@ function invocation() {
 
 const cli = invocation();
 const version = spawnSync(cli.command, [...cli.args, '--version'], { encoding: 'utf8' });
-if (version.status !== 0 || version.stdout.trim() !== `codex-cli ${expectedVersion}`) {
-  throw new Error(`需要 codex-cli ${expectedVersion}，实际 ${version.stdout.trim() || '不可用'}`);
+const cliVersion = version.stdout.trim().match(/^codex-cli (\d+\.\d+\.\d+)$/)?.[1];
+if (version.status !== 0 || !cliVersion) {
+  throw new Error(`无法识别 Codex CLI 版本：${version.stdout.trim() || '不可用'}`);
 }
 
 const child = spawn(cli.command, [...cli.args, 'app-server', '--stdio'], {
@@ -76,7 +76,7 @@ createInterface({ input: child.stdout }).on('line', (line) => {
       console.error(`未收到预期回复：${answer}`);
       process.exitCode = 1;
     } else {
-      console.log(`Codex app-server ${expectedVersion} 真实 turn 通过：RCX_M8_OK`);
+      console.log(`Codex app-server ${cliVersion} 真实 turn 通过：RCX_M8_OK`);
     }
     child.kill();
   }
@@ -91,7 +91,8 @@ const initialized = await request('initialize', {
     optOutNotificationMethods: null,
   },
 });
-if (!initialized.userAgent.startsWith(`Codex Desktop/${expectedVersion}`)) {
+const initializedVersion = initialized.userAgent?.match(/^Codex Desktop\/(\d+\.\d+\.\d+)/)?.[1];
+if (initializedVersion !== cliVersion) {
   throw new Error(`初始化版本不匹配：${initialized.userAgent}`);
 }
 write({ method: 'initialized' });

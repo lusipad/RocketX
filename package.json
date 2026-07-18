@@ -17,6 +17,7 @@
     "codex:protocol:generate": "node scripts/codex-protocol.mjs --write",
     "codex:protocol:check": "node scripts/codex-protocol.mjs --check",
     "smoke:codex-app-server": "node scripts/smoke-codex-app-server.mjs",
+    "spike:butler-dynamic-tools": "node scripts/spike-butler-dynamic-tools.mjs",
     "measure:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-desktop-memory.ps1",
     "measure:memory:trend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-desktop-memory.ps1 -Samples 31 -IntervalSeconds 60 -MaxPrivateMB 350 -MaxGrowthMB 50 -CsvPath memory-trend.csv",
     "gen:emoji": "tsx scripts/gen-emoji.ts",

@@ -65,6 +65,7 @@ import {
   type TodoPrefill,
   type WorkItemPrefill,
 } from '../kernel/ai/features/message-extraction';
+import { parseAgentSessionCard, stripAgentSessionMarker } from '../agent/card';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -555,7 +556,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const displayName = message.u.name || message.u.username;
   const extractWithAi = async (target: 'todo' | 'workitem') => {
     if (aiExtracting) return;
-    const text = stripQuotePrefix(message.msg ?? '').trim();
+    const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim();
     if (!text) {
       toast.error('这条消息没有可提取的文字');
       return;
@@ -580,7 +581,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   };
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
-  const visibleText = stripQuotePrefix(message.msg ?? '');
+  const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const agentSessionCard = parseAgentSessionCard(message.msg ?? '');
   const bareMedia =
     !visibleText &&
     !message.pinned &&
@@ -660,7 +662,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       icon: action.icon,
       onClick: () => void action.run({ message }),
     })),
-    ...(mine && message.msg
+    ...(mine && message.msg && !agentSessionCard
       ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
       : []),
     ...(mine
@@ -846,7 +848,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     <ListTodo size={12} />
                   </button>
                 )}
-                {message.msg ? renderMarkdown(message.msg, myUsername) : null}
+                {visibleText ? renderMarkdown(visibleText, myUsername) : null}
                 {!message.msg && !message.attachments?.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
@@ -953,7 +955,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             mid: message._id,
             roomName,
             // 待办里存快照：原消息被删了也还看得懂当时是什么事
-            excerpt: stripQuotePrefix(message.msg ?? '').slice(0, 200) ||
+            excerpt: visibleText.slice(0, 200) ||
               (message.file?.name ? `[文件] ${message.file.name}` : '[图片/附件]'),
             author: displayName,
           }}
@@ -991,7 +993,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       )}
       {createWi && (
         <CreateWorkItemDialog
-          defaultTitle={stripQuotePrefix(message.msg ?? '').slice(0, 200)}
+          defaultTitle={visibleText.slice(0, 200)}
           rid={message.rid}
           onClose={() => setCreateWi(false)}
         />

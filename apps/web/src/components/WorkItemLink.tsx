@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ExternalLink, MessageSquare, SendHorizontal } from 'lucide-react';
+import { Check, ExternalLink, MessageSquare, MessageSquarePlus, SendHorizontal } from 'lucide-react';
 import {
   adoWebBase,
   commentWorkItem,
@@ -8,6 +8,7 @@ import {
   type AdoWorkItemInfo,
 } from '../lib/ado';
 import { isWorkItemDone, stateBadgeClass } from '../stores/workbench';
+import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 const TYPE_COLORS: Record<string, string> = {
   Bug: '#f54a45',
@@ -243,6 +244,7 @@ export default function WorkItemLink({
 }) {
   const [info, setInfo] = useState<AdoWorkItemInfo | null | 'loading'>('loading');
   const [showComment, setShowComment] = useState(false);
+  const [showDiscussion, setShowDiscussion] = useState(false);
   const webBase = adoWebBase();
 
   useEffect(() => {
@@ -322,6 +324,17 @@ export default function WorkItemLink({
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  setShowDiscussion(true);
+                }}
+                title="创建工作项讨论"
+                className="text-ink-3 transition hover:text-primary"
+              >
+                <MessageSquarePlus size={12} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setShowComment((v) => !v);
                 }}
                 title="快速评论"
@@ -370,6 +383,12 @@ export default function WorkItemLink({
           )}
         </span>
       </span>
+      {showDiscussion ? (
+        createPortal(
+          <CreateWorkItemDiscussionDialog item={info} onClose={() => setShowDiscussion(false)} />,
+          document.body,
+        )
+      ) : null}
     </span>
   );
 }

@@ -9,7 +9,10 @@ import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 import { CapabilityBus } from '../../apps/web/src/kernel/capabilities/bus';
 import { BridgeHost } from '../../apps/web/src/kernel/bridge';
 import { AppManager } from '../../apps/web/src/kernel/installed';
+import { runButlerCommand } from '../../apps/web/src/kernel/butler';
 import { createMemoryBackend, createRcxStore } from '../../packages/rcx-store/src/index';
+import { useButler } from '../../apps/web/src/stores/butler';
+import { useChat } from '../../apps/web/src/stores/chat';
 
 const manifest = {
   id: 'com.example.hello',
@@ -133,6 +136,60 @@ test('trigger 可显式放行，让话题指令先成为普通 Rocket.Chat 消�
   }
 });
 
+test('/ai 在统一派发器中打开管家并携带房间上下文，不会走服务端命令', async () => {
+  const originalChat = useChat.getState();
+  const originalAsk = useButler.getState().ask;
+  const asked: Array<{ text: string; context?: { rid: string; roomName: string } }> = [];
+  const cleanup = kernelRegistry.register('butler-command-test', 'composer.command', {
+    id: 'butler',
+    name: 'ai',
+    description: '打开 AI，可直接跟上问题',
+    run: runButlerCommand,
+  });
+  useChat.setState({
+    activeRid: 'room-1',
+    rightPanel: null,
+    subscriptions: { ...originalChat.subscriptions, 'room-1': { fname: '产品讨论' } as never },
+  });
+  useButler.setState({
+    ask: async (text, context) => {
+      asked.push({ text, context });
+    },
+  });
+
+  try {
+    const commands = composerCommands([]);
+    assert.equal(commands.find((command) => command.command === 'ai')?.description, '打开 AI，可直接跟上问题');
+    const serverCalls: string[] = [];
+    const runSlash = async (command: string, params: string, tmid?: string) => {
+      const local = kernelRegistry
+        .get('composer.command')
+        .find((candidate) => candidate.name === command);
+      if (local) await local.run({ rid: 'room-1', params, ...(tmid ? { tmid } : {}) });
+      else serverCalls.push(command);
+    };
+
+    const withQuestion = await dispatchInput('/ai 上周的方案在哪', { rid: 'room-1', runSlash, commands }, 'thread-1');
+    assert.deepEqual(withQuestion, { handled: true, accepted: true, command: 'ai' });
+    assert.deepEqual(useChat.getState().rightPanel, { kind: 'butler' });
+    assert.deepEqual(asked, [{ text: '上周的方案在哪', context: { rid: 'room-1', roomName: '产品讨论' } }]);
+    assert.deepEqual(serverCalls, []);
+
+    useChat.getState().setPanel(null);
+    await dispatchInput('/ai', { rid: 'room-1', runSlash, commands });
+    assert.deepEqual(useChat.getState().rightPanel, { kind: 'butler' });
+    assert.equal(asked.length, 1);
+  } finally {
+    cleanup();
+    useButler.setState({ ask: originalAsk });
+    useChat.setState({
+      activeRid: originalChat.activeRid,
+      rightPanel: originalChat.rightPanel,
+      subscriptions: originalChat.subscriptions,
+    });
+  }
+});
+
 test('能力总线在 handler 前执行权限判定', async () => {
   const gate = new PermissionGate();
   gate.setGrant({ appId: 'com.example.hello', granted: ['chat:read'] });
@@ -249,7 +306,7 @@ test('应用升级失败时恢复旧记录，卸载同时清理账号分区数�
 test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', async () => {
   const capability = JSON.parse(
     await readFile(new URL('../../apps/desktop/src-tauri/capabilities/default.json', import.meta.url), 'utf8'),
-  ) as { permissions: Array<string | { identifier?: string; allow?: Array<{ path?: string }> }> };
+  ) as { permissions: Array<string | { identifier?: string; allow?: unknown[] }> };
   const tauriConfig = JSON.parse(
     await readFile(new URL('../../apps/desktop/src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
   ) as {
@@ -260,7 +317,17 @@ test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', as
   const fsScope = capability.permissions.find(
     (permission) => typeof permission === 'object' && permission.identifier === 'fs:scope',
   );
-  assert.equal(fsScope, undefined);
+  assert.deepEqual(fsScope, { identifier: 'fs:scope', allow: ['$APPDATA/butler/**'] });
+  assert.ok(capability.permissions.includes('fs:allow-write-file'));
+  assert.ok(capability.permissions.includes('fs:allow-remove'));
+  assert.equal(
+    capability.permissions.some(
+      (permission) =>
+        typeof permission === 'object' &&
+        (permission.identifier === 'fs:allow-write-file' || permission.identifier === 'fs:allow-remove'),
+    ),
+    false,
+  );
   assert.equal(
     capability.permissions.some(
       (permission) =>

@@ -66,18 +66,19 @@ export function RadioGroup<T extends string>({
   onChange,
 }: {
   value: T;
-  options: { key: T; label: string; hint?: string }[];
+  options: { key: T; label: string; hint?: string; disabled?: boolean }[];
   onChange: (v: T) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {options.map(({ key, label, hint }) => {
+      {options.map(({ key, label, hint, disabled = false }) => {
         const active = value === key;
         return (
           <button
             key={key}
+            disabled={disabled}
             onClick={() => onChange(key)}
-            className={`min-w-24 rounded-lg border px-3 py-2 text-left transition ${
+            className={`min-w-24 rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
               active
                 ? 'border-primary bg-primary-light'
                 : 'border-line hover:border-ink-3 hover:bg-fill-hover'

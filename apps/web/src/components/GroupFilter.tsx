@@ -10,6 +10,7 @@ import {
   MessageSquareText,
   MessagesSquare,
   PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Pin,
   RefreshCw,
@@ -110,7 +111,13 @@ function FolderDialog({
 }
 
 /** 飞书式「分组」栏：系统过滤器 + 自定义分组 */
-export default function GroupFilter({ onCollapse }: { onCollapse: () => void }) {
+export default function GroupFilter({
+  collapsed,
+  onCollapse,
+}: {
+  collapsed: boolean;
+  onCollapse: () => void;
+}) {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const filter = useUI((s) => s.convFilter);
@@ -185,108 +192,194 @@ export default function GroupFilter({ onCollapse }: { onCollapse: () => void }) 
       active ? 'bg-fill-active font-medium text-ink' : 'text-ink-2 hover:bg-fill-hover'
     }`;
 
+  const compactBtnCls = (active: boolean) =>
+    `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition ${
+      active ? 'bg-fill-1 text-primary' : 'text-ink-2 hover:bg-fill-hover hover:text-primary'
+    }`;
+
+  const selectFilter = (key: ConvFilter) => {
+    setActiveFolder(null);
+    if (key === 'unread' && activeRid) {
+      const active = subscriptions[activeRid];
+      retainUnread(active && (active.unread > 0 || active.alert) ? activeRid : null);
+    }
+    setFilter(key);
+  };
+
+  // 窄条只给未读/@ 这类需要注意的数字留角标，会话总数不展示。
+  const compactCount = (count: number) =>
+    count > 0 ? (
+      <span
+        className="absolute -right-1 -top-1 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-[9px] leading-3 text-surface-4"
+      >
+        {count > 9 ? '9+' : count}
+      </span>
+    ) : null;
+
+  const renderFolderButton = (folder: (typeof folders)[number], compact: boolean) => {
+    const active = activeFolder === folder.id;
+    const isDragOver = dragOver === folder.id;
+    const count = folderCounts[folder.id];
+    const dragProps = {
+      onDragOver: (event: React.DragEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        setDragOver(folder.id);
+      },
+      onDragLeave: () => setDragOver(null),
+      onDrop: (event: React.DragEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        setDragOver(null);
+        const rid = event.dataTransfer.getData('text/rcx-rid');
+        if (rid) addRoom(folder.id, rid);
+      },
+    };
+
+    if (compact) {
+      return (
+        <button
+          key={folder.id}
+          onClick={() => setActiveFolder(folder.id)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenu({ x: event.clientX, y: event.clientY, id: folder.id });
+          }}
+          {...dragProps}
+          title={folder.name}
+          aria-label={`分组：${folder.name}`}
+          className={`${compactBtnCls(active)} ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
+        >
+          <FolderIcon size={16} />
+        </button>
+      );
+    }
+
+    return (
+      <button
+        key={folder.id}
+        onClick={() => setActiveFolder(folder.id)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY, id: folder.id });
+        }}
+        {...dragProps}
+        className={`${btnCls(active)} ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
+        title="把会话拖到这里加入分组；右键管理"
+      >
+        <FolderIcon size={14} className={active ? 'text-primary' : ''} />
+        <span className="min-w-0 truncate">{folder.name}</span>
+        {folder.rules?.length ? <Wand2 size={11} className="shrink-0 text-ink-3" /> : null}
+        {count > 0 && <span className="ml-auto text-2xs text-ink-3">{count}</span>}
+      </button>
+    );
+  };
+
   return (
-    <aside className="flex w-[150px] shrink-0 flex-col border-r border-line bg-surface-2 px-2 py-3">
-      <div className="flex items-center justify-between px-2 pb-2">
-        <span className="text-xs font-medium text-ink">分组</span>
-        <div className="flex items-center gap-0.5">
-          <button
-            title="收起分组栏"
-            onClick={onCollapse}
-            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          >
-            <PanelLeftClose size={13} />
-          </button>
-          <button
-            title="新建分组"
-            onClick={() => setDialog({ mode: 'create' })}
-            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          >
-            <FolderPlus size={13} />
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
-        {FILTERS.map(({ key, label, icon: Icon }) => {
-          const active = !activeFolder && key === filter;
-          const count = counts[key];
-          const highlight = (key === 'unread' || key === 'mentions') && count > 0;
-          return (
-            <button
-              key={key}
-              onClick={() => {
-                setActiveFolder(null);
-                if (key === 'unread' && activeRid) {
-                  const active = subscriptions[activeRid];
-                  retainUnread(active && (active.unread > 0 || active.alert) ? activeRid : null);
-                }
-                setFilter(key);
-              }}
-              className={btnCls(active)}
-            >
-              <Icon size={14} className={active ? 'text-primary' : ''} />
-              {label}
-              {count > 0 && (
-                <span
-                  className={`ml-auto text-2xs ${
-                    highlight ? 'font-medium text-danger' : 'text-ink-3'
-                  }`}
+    <aside className={`flex shrink-0 flex-col border-r border-line bg-surface-2 ${
+      collapsed ? 'w-12 min-h-0 p-2' : 'w-[150px] px-2 py-3'
+    }`}>
+      {collapsed ? (
+        <>
+          <div className="flex flex-col items-center gap-0.5">
+            {FILTERS.map(({ key, label, icon: Icon }) => {
+              const active = !activeFolder && key === filter;
+              const count = counts[key];
+              const highlight = key === 'unread' || key === 'mentions';
+              return (
+                <button
+                  key={key}
+                  onClick={() => selectFilter(key)}
+                  title={label}
+                  aria-label={`${label}${highlight && count > 0 ? `，${count} 个未读` : ''}`}
+                  className={compactBtnCls(active)}
                 >
-                  {count > 99 ? '99+' : count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+                  <Icon size={16} />
+                  {highlight ? compactCount(count) : null}
+                </button>
+              );
+            })}
+          </div>
 
-        {/* 自定义分组：可拖拽会话进来 */}
-        {folders.length > 0 && (
-          <div className="mt-2 px-2 pb-1 text-2xs text-ink-3">我的分组</div>
-        )}
-        {folders.map((f) => {
-          const active = activeFolder === f.id;
-          const isDragOver = dragOver === f.id;
-          return (
+          <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-line pt-2">
+            <div className="flex flex-col items-center gap-0.5">
+              {folders.map((folder) => renderFolderButton(folder, true))}
+            </div>
+          </div>
+
+          <div className="mt-auto flex flex-col items-center gap-1 border-t border-line pt-2">
             <button
-              key={f.id}
-              onClick={() => setActiveFolder(f.id)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, id: f.id });
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(f.id);
-              }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(null);
-                const rid = e.dataTransfer.getData('text/rcx-rid');
-                if (rid) addRoom(f.id, rid);
-              }}
-              className={`${btnCls(active)} ${
-                isDragOver ? 'ring-2 ring-primary ring-inset' : ''
-              }`}
-              title="把会话拖到这里加入分组；右键管理"
+              title="展开分组栏"
+              aria-label="展开分组栏"
+              onClick={onCollapse}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-primary"
             >
-              <FolderIcon size={14} className={active ? 'text-primary' : ''} />
-              <span className="min-w-0 truncate">{f.name}</span>
-              {f.rules?.length ? (
-                <Wand2 size={11} className="shrink-0 text-ink-3" />
-              ) : null}
-              {folderCounts[f.id] > 0 && (
-                <span className="ml-auto text-2xs text-ink-3">{folderCounts[f.id]}</span>
-              )}
+              <PanelLeftOpen size={16} />
             </button>
-          );
-        })}
+            <button
+              title="新建分组"
+              aria-label="新建分组"
+              onClick={() => setDialog({ mode: 'create' })}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            >
+              <FolderPlus size={16} />
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-between px-2 pb-2">
+            <span className="text-xs font-medium text-ink">分组</span>
+            <div className="flex items-center gap-0.5">
+              <button
+                title="收起分组栏"
+                aria-label="收起分组栏"
+                onClick={onCollapse}
+                className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+              >
+                <PanelLeftClose size={13} />
+              </button>
+              <button
+                title="新建分组"
+                aria-label="新建分组"
+                onClick={() => setDialog({ mode: 'create' })}
+                className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+              >
+                <FolderPlus size={13} />
+              </button>
+            </div>
+          </div>
 
-        {folders.length === 0 && (
-          <div className="mt-2 px-2 text-2xs text-ink-3">暂无自定义分组</div>
-        )}
-      </div>
+          <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
+            {FILTERS.map(({ key, label, icon: Icon }) => {
+              const active = !activeFolder && key === filter;
+              const count = counts[key];
+              const highlight = (key === 'unread' || key === 'mentions') && count > 0;
+              return (
+                <button key={key} onClick={() => selectFilter(key)} className={btnCls(active)}>
+                  <Icon size={14} className={active ? 'text-primary' : ''} />
+                  {label}
+                  {count > 0 && (
+                    <span className={`ml-auto text-2xs ${
+                      highlight ? 'font-medium text-danger' : 'text-ink-3'
+                    }`}>
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {/* 自定义分组：可拖拽会话进来 */}
+            {folders.length > 0 && (
+              <div className="mt-2 px-2 pb-1 text-2xs text-ink-3">我的分组</div>
+            )}
+            {folders.map((folder) => renderFolderButton(folder, false))}
+
+            {folders.length === 0 && (
+              <div className="mt-2 px-2 text-2xs text-ink-3">暂无自定义分组</div>
+            )}
+          </div>
+        </>
+      )}
 
       {dialog && (
         <FolderDialog

@@ -1,7 +1,9 @@
 import { create } from 'zustand';
-import type { RcMessage } from '@rcx/rc-client';
+import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, rest } from '../lib/client';
 import { collectMentionInbox, type MentionItem } from '../lib/mentionInbox';
+import { setButlerMentionProvider } from '../lib/butlerTools';
+import { stripAgentSessionMarker } from '../agent/card';
 import { kernelStore } from '../kernel/store';
 import { useAuth } from './auth';
 import { useChat } from './chat';
@@ -100,3 +102,16 @@ export const useToday = create<TodayState>((set, get) => ({
 export function mentionMessage(item: MentionItem): RcMessage {
   return item.message;
 }
+
+setButlerMentionProvider(() => {
+  const state = useToday.getState();
+  return state.mentions.map(({ message, roomName }) => ({
+    id: message._id,
+    rid: message.rid,
+    roomName,
+    sender: message.u.name || message.u.username,
+    ts: new Date(tsMs(message.ts)).toISOString(),
+    text: stripAgentSessionMarker(message.msg).slice(0, 200),
+    processed: state.processed.has(`rc:${currentScope()}:${message.rid}:${message._id}`),
+  }));
+});

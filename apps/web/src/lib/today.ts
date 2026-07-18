@@ -1,8 +1,17 @@
 import type { RcMessage } from '@rcx/rc-client';
 import { eventsForDate, isEventDone, type CalendarEvent } from '../stores/calendar';
 import { isOverdue, todayKey, type Todo } from '../stores/todos';
-import { adoDateToLocal, isWorkItemDone, type WorkItem } from '../stores/workbench';
+import {
+  adoDateToLocal,
+  isWorkItemDone,
+  myPrsOf,
+  reviewPrsOf,
+  type Build,
+  type PullRequest,
+  type WorkItem,
+} from '../stores/workbench';
 import type { IpmsgMessage } from '../ipmsg/store';
+import { stripAgentSessionMarker } from '../agent/card';
 
 interface TodayBase {
   key: string;
@@ -17,6 +26,8 @@ export type TodayItem =
   | (TodayBase & { kind: 'todo'; todo: Todo })
   | (TodayBase & { kind: 'event'; event: CalendarEvent; occurrenceDate: string })
   | (TodayBase & { kind: 'workitem'; workItem: WorkItem })
+  | (TodayBase & { kind: 'pr'; pullRequest: PullRequest; relation: 'review' | 'mine' })
+  | (TodayBase & { kind: 'build'; build: Build })
   | (TodayBase & { kind: 'ipmsg'; message: IpmsgMessage });
 
 export interface TodayInput {
@@ -24,6 +35,9 @@ export interface TodayInput {
   todos: Todo[];
   events: CalendarEvent[];
   workItems: WorkItem[];
+  pullRequests?: PullRequest[];
+  builds?: Build[];
+  adoAccount?: string;
   ipmsg?: IpmsgMessage[];
   scope: string;
   adoScope: string;
@@ -41,7 +55,7 @@ export function buildTodayItems(input: TodayInput): TodayItem[] {
     items.push({
       key,
       kind: 'mention',
-      title: message.msg || '（无文字消息）',
+      title: stripAgentSessionMarker(message.msg) || '（无文字消息）',
       meta: `${roomName} · ${message.u.name || message.u.username}`,
       urgency: 1,
       processed: processed.has(key),
@@ -105,6 +119,46 @@ export function buildTodayItems(input: TodayInput): TodayItem[] {
       urgency: due && due < today ? 0 : due === today ? 3 : 4,
       processed: processed.has(key),
       workItem,
+    });
+  }
+
+  const reviewPullRequests = reviewPrsOf(input.pullRequests ?? [], input.adoAccount ?? '');
+  const reviewIds = new Set(reviewPullRequests.map((pr) => pr.id));
+  const relevantPullRequests = new Map<number, PullRequest>();
+  for (const pullRequest of reviewPullRequests) {
+    relevantPullRequests.set(pullRequest.id, pullRequest);
+  }
+  for (const pullRequest of myPrsOf(input.pullRequests ?? [], input.adoAccount ?? '')) {
+    relevantPullRequests.set(pullRequest.id, pullRequest);
+  }
+  for (const pullRequest of relevantPullRequests.values()) {
+    const relation = reviewIds.has(pullRequest.id) ? 'review' : 'mine';
+    const key = `ado-pr:${input.adoScope}:${pullRequest.id}`;
+    items.push({
+      key,
+      kind: 'pr',
+      title: pullRequest.title,
+      meta: `#${pullRequest.id} · ${relation === 'review' ? '待我评审' : '我提的'} · ${pullRequest.repo}`,
+      urgency: relation === 'review' ? 1 : 3,
+      processed: processed.has(key),
+      pullRequest,
+      relation,
+    });
+  }
+
+  for (const build of input.builds ?? []) {
+    const failed = build.result.toLocaleLowerCase() === 'failed';
+    const running = build.status.toLocaleLowerCase() !== 'completed';
+    if (!failed && !running) continue;
+    const key = `ado-build:${input.adoScope}:${build.project}:${build.id}`;
+    items.push({
+      key,
+      kind: 'build',
+      title: `${build.definition} #${build.buildNumber}`,
+      meta: `${build.project} · ${failed ? '失败' : '进行中'}`,
+      urgency: failed ? 0 : 2,
+      processed: processed.has(key),
+      build,
     });
   }
 

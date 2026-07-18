@@ -88,7 +88,7 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'desktop', label: '桌面端', icon: Monitor },
   { key: 'shortcuts', label: '快捷键', icon: Keyboard },
   { key: 'workbench', label: '工作台', icon: LayoutGrid },
-  { key: 'ai', label: 'AI 管家', icon: Sparkles },
+  { key: 'ai', label: 'AI', icon: Sparkles },
   { key: 'apps', label: '应用', icon: Blocks },
   { key: 'about', label: '关于', icon: Info },
 ];

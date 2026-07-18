@@ -1,4 +1,5 @@
 import { tsMs, type RcMessage } from '@rcx/rc-client';
+import { stripAgentSessionMarker } from '../agent/card';
 
 export interface MessageSearchBackend {
   provider: () => Promise<unknown>;
@@ -127,7 +128,7 @@ export function searchLoadedMessages(
     if (!canSearchRoom(rid)) continue;
     for (const message of messages) {
       const text = [
-        message.msg,
+        stripAgentSessionMarker(message.msg),
         message.file?.name,
         attachmentSearchText(message.attachments),
       ]

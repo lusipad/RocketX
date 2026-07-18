@@ -1,9 +1,11 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { Bot, Check, ChevronLeft, FolderOpen, Play, Shield, Square, Users, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
+import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
+import { environmentIsBusy, proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
 import PanelShell from './PanelShell';
 
 function approvalSummary(method: string, params: unknown): string {
@@ -22,14 +24,32 @@ function approvalSummary(method: string, params: unknown): string {
 
 export default function AgentPanel() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string>();
+  const [autoHost, setAutoHost] = useState(false);
   const panel = useChat((state) => state.rightPanel);
   const tmid = panel?.kind === 'agent' ? panel.tmid : null;
   const setPanel = useChat((state) => state.setPanel);
   const rid = useChat((state) => state.activeRid);
   const session = useSharedAgent((state) => (tmid ? state.sessions[tmid] : undefined));
-  const traces = useSharedAgent((state) => (tmid ? state.traces[tmid] ?? [] : []));
-  const approvals = useSharedAgent((state) => state.approvals.filter((item) => item.tmid === tmid));
-  const members = useSharedAgent((state) => state.memberRequests.filter((item) => item.tmid === tmid));
+  const binding = useAgentEnvironments((state) => state.bindings.find((item) => item.sessionKey === tmid && item.status === 'active'));
+  const environments = useAgentEnvironments((state) => state.environments);
+  const bindings = useAgentEnvironments((state) => state.bindings);
+  const boundEnvironment = environments.find((item) => item.id === binding?.environmentId);
+  const defaultEnvironment = environments.find(
+    (environment) => environment.enabled && !environmentIsBusy(environment.id, bindings),
+  );
+  const selectedEnvironment = boundEnvironment ?? defaultEnvironment;
+  const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
+  const allApprovals = useSharedAgent((state) => state.approvals);
+  const allMemberRequests = useSharedAgent((state) => state.memberRequests);
+  const traces = sessionTraces ?? [];
+  const approvals = useMemo(
+    () => allApprovals.filter((item) => item.tmid === tmid),
+    [allApprovals, tmid],
+  );
+  const members = useMemo(
+    () => allMemberRequests.filter((item) => item.tmid === tmid),
+    [allMemberRequests, tmid],
+  );
   const error = useSharedAgent((state) => state.error);
   const start = useSharedAgent((state) => state.startSession);
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
@@ -39,7 +59,12 @@ export default function AgentPanel() {
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
 
+  useEffect(() => {
+    setAutoHost(!!rid && !!autoHostEnvironmentId(rid));
+  }, [rid, session?.environmentId]);
+
   if (!tmid || !rid) return null;
+  const roomSession = tmid.startsWith('room:');
 
   return (
     <PanelShell
@@ -64,9 +89,15 @@ export default function AgentPanel() {
             <Bot size={28} />
           </div>
           <div>
-            <div className="font-medium text-ink">在线程里启动 Codex</div>
+            <div className="font-medium text-ink">
+              {binding
+                ? `为工作项 #${binding.workItemId} 开启 AI 托管`
+                : roomSession
+                  ? '在当前会话开启 AI 托管'
+                  : '在当前话题开启 AI 托管'}
+            </div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              默认使用临时只读工作区。所有消息留在 Rocket.Chat，只有明确指令会触发回复。
+              AI 会从已有讨论继续理解上下文。默认只读，只有明确的 @ai 指令才会回复，写入仍需本机审批。
             </div>
           </div>
           <button
@@ -76,16 +107,26 @@ export default function AgentPanel() {
               })
             }
             className="flex max-w-full items-center gap-2 rounded-md border border-line px-3 py-2 text-xs text-ink-2 hover:bg-fill-hover"
-            title={workspaceRoot}
+            title={workspaceRoot ?? selectedEnvironment?.path}
           >
             <FolderOpen size={14} />
-            <span className="truncate">{workspaceRoot ?? '选择项目目录（可选）'}</span>
+            <span className="truncate">{workspaceRoot ?? selectedEnvironment?.name ?? '选择项目目录（可选）'}</span>
           </button>
           <button
-            onClick={() => void start(rid, tmid, workspaceRoot).catch(() => undefined)}
+            onClick={() => void start(rid, tmid, {
+              workspaceRoot: workspaceRoot ?? selectedEnvironment?.path,
+              replyTmid: tmid.startsWith('room:') ? undefined : tmid,
+              environmentId: workspaceRoot ? undefined : selectedEnvironment?.id,
+              environmentName: workspaceRoot ? undefined : selectedEnvironment?.name,
+              workItem: binding ? { id: binding.workItemId, project: binding.adoProject, title: binding.workItemTitle } : undefined,
+              proposedBranch: binding && selectedEnvironment
+                ? proposedAgentBranch(selectedEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
+                : undefined,
+              baseBranch: selectedEnvironment?.defaultBaseBranch,
+            }).catch(() => undefined)}
             className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
           >
-            <Play size={15} /> 启动 Agent
+            <Play size={15} /> 开启 AI 托管
           </button>
         </div>
       ) : (
@@ -132,6 +173,25 @@ export default function AgentPanel() {
             <div className="truncate text-xs text-ink-3" title={session.workspaceRoots[0]}>
               {session.workspaceRoots[0]}
             </div>
+            <label className="flex items-start gap-2 rounded-md bg-fill-1 px-2.5 py-2 text-xs text-ink-2">
+              <input
+                type="checkbox"
+                checked={autoHost}
+                disabled={!session.environmentId}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  setRoomAutoHosting(rid, enabled ? session.environmentId : undefined);
+                  setAutoHost(enabled);
+                }}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium text-ink">进入本房间时自动开启托管</span>
+                <span className="mt-0.5 block text-2xs text-ink-3">
+                  仅在这台设备生效；已有其他人托管时不会抢占。
+                </span>
+              </span>
+            </label>
             <div className="flex gap-2">
               {session.status === 'interrupted' ? (
                 <button

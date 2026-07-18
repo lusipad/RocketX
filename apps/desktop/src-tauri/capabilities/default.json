@@ -24,6 +24,11 @@
     "process:allow-restart",
     "fs:allow-read-file",
     "fs:allow-stat",
-    "fs:allow-write-file"
+    "fs:allow-write-file",
+    "fs:allow-remove",
+    {
+      "identifier": "fs:scope",
+      "allow": ["$APPDATA/butler/**"]
+    }
   ]
 }

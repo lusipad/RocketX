@@ -8,7 +8,7 @@ import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
 import type { TurnInterruptResponse } from './generated/v2/TurnInterruptResponse';
 import type { TurnStartParams } from './generated/v2/TurnStartParams';
 import type { TurnStartResponse } from './generated/v2/TurnStartResponse';
-import { CODEX_APP_SERVER_VERSION, assertCompatibleCodex } from './compatibility';
+import { assertCodexHandshake } from './compatibility';
 import { serverRequestPolicy } from './serverRequests';
 
 export interface CodexProcessInfo {
@@ -48,6 +48,7 @@ export interface AppServerClientOptions {
 }
 
 interface PendingRequest {
+  method: keyof ClientMethods;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -61,6 +62,26 @@ interface RpcResponse {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function assertClientResponse(method: keyof ClientMethods, value: unknown): void {
+  const response = isRecord(value) ? value : null;
+  if (!response) throw new Error(`Codex app-server ${method} 返回了非对象响应。`);
+  if (method === 'initialize') {
+    if (typeof response.userAgent !== 'string') {
+      throw new Error('Codex app-server initialize 响应缺少 userAgent。');
+    }
+    return;
+  }
+  if (method === 'thread/start' || method === 'thread/resume') {
+    if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
+      throw new Error(`Codex app-server ${method} 响应缺少 thread.id。`);
+    }
+    return;
+  }
+  if (method === 'turn/start' && (!isRecord(response.turn) || typeof response.turn.id !== 'string')) {
+    throw new Error('Codex app-server turn/start 响应缺少 turn.id。');
+  }
 }
 
 export class AppServerClient {
@@ -79,12 +100,6 @@ export class AppServerClient {
       onLine: (line) => this.receiveLine(line),
       onExit: (code) => this.interrupt(new Error(`Codex app-server 已退出${code === null ? '' : `（${code}）`}`)),
     });
-    if (process.version !== CODEX_APP_SERVER_VERSION) {
-      await this.transport.stop();
-      throw new Error(
-        `Codex CLI 版本不兼容：需要 ${CODEX_APP_SERVER_VERSION}，实际 ${process.version}。`,
-      );
-    }
     try {
       const initialized = await this.request('initialize', {
         clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.20.1' },
@@ -95,7 +110,7 @@ export class AppServerClient {
           optOutNotificationMethods: null,
         },
       });
-      assertCompatibleCodex(initialized.userAgent);
+      assertCodexHandshake(initialized.userAgent, process.version);
       await this.transport.write({ method: 'initialized' });
       this.started = true;
     } catch (error) {
@@ -116,7 +131,15 @@ export class AppServerClient {
         reject(new Error(`Codex app-server 请求超时：${method}`));
       }, timeoutMs);
       this.pending.set(id, {
-        resolve: (value) => resolve(value as ClientMethods[M]['result']),
+        method,
+        resolve: (value) => {
+          try {
+            assertClientResponse(method, value);
+            resolve(value as ClientMethods[M]['result']);
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        },
         reject,
         timer,
       });
@@ -170,6 +193,10 @@ export class AppServerClient {
     clearTimeout(pending.timer);
     this.pending.delete(response.id);
     if (response.error) {
+      if (response.error.code === -32601) {
+        pending.reject(new Error(`Codex app-server 不支持 RocketX 所需方法：${pending.method}。`));
+        return;
+      }
       pending.reject(
         new Error(
           `Codex app-server 请求失败${response.error.code === undefined ? '' : ` ${response.error.code}`}：${response.error.message ?? '未知错误'}`,

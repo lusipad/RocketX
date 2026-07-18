@@ -32,14 +32,18 @@ class FakeTransport implements CodexTransport {
   }
 }
 
-async function startClient(transport: FakeTransport, client = new AppServerClient(transport)) {
+async function startClient(
+  transport: FakeTransport,
+  client = new AppServerClient(transport),
+  userAgentVersion = CODEX_APP_SERVER_VERSION,
+) {
   const started = client.start();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(transport.writes[0].method, 'initialize');
   transport.line({
     id: transport.writes[0].id,
     result: {
-      userAgent: `Codex Desktop/${CODEX_APP_SERVER_VERSION} (Windows)`,
+      userAgent: `Codex Desktop/${userAgentVersion} (Windows)`,
       codexHome: 'C:/Users/test/.codex',
       platformFamily: 'windows',
       platformOs: 'windows',
@@ -49,14 +53,21 @@ async function startClient(transport: FakeTransport, client = new AppServerClien
   return client;
 }
 
-test('初始化严格校验 CLI 和 userAgent 版本后才发送 initialized', async () => {
+test('初始化按握手能力校验，不因协议内容相同的 CLI 补丁版本而拒绝', async () => {
   const transport = new FakeTransport();
   await startClient(transport);
   assert.deepEqual(transport.writes.map((message) => message.method), ['initialize', 'initialized']);
 
-  const incompatible = new FakeTransport('0.144.2');
-  await assert.rejects(() => new AppServerClient(incompatible).start(), /CLI 版本不兼容/);
-  assert.equal(incompatible.stopped, true);
+  const patchVersion = new FakeTransport('0.144.5');
+  await startClient(patchVersion, new AppServerClient(patchVersion), '0.144.5');
+  assert.equal(patchVersion.stopped, false);
+
+  const inconsistent = new FakeTransport('0.144.5');
+  await assert.rejects(
+    () => startClient(inconsistent, new AppServerClient(inconsistent), '0.144.4'),
+    /握手版本不一致/,
+  );
+  assert.equal(inconsistent.stopped, true);
 });
 
 test('兼容性检查接受已验证的 Linux Runner userAgent', () => {
@@ -75,6 +86,21 @@ test('客户端请求按 id 关联响应', async () => {
   const request = transport.writes.at(-1)!;
   transport.line({ id: request.id, result: {} });
   assert.deepEqual(await response, {});
+});
+
+test('只对实际调用的方法做响应结构与 method not found 能力校验', async () => {
+  const transport = new FakeTransport('0.144.5');
+  const client = await startClient(transport, new AppServerClient(transport), '0.144.5');
+
+  const invalid = client.request('thread/start', {});
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { thread: {} } });
+  await assert.rejects(() => invalid, /thread\/start.*thread\.id/);
+
+  const missing = client.request('thread/resume', { threadId: 'thread' });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, error: { code: -32601, message: 'Method not found' } });
+  await assert.rejects(() => missing, /不支持 RocketX 所需方法：thread\/resume/);
 });
 
 test('当前时间本地响应，未知和无 UI 的已知请求均安全拒绝', async () => {

@@ -58,6 +58,8 @@ import {
   recordLanOutgoing,
 } from '../lan/outbox';
 import { initializeIpmsgRuntime, IPMSG_RID, useIpmsg } from '../ipmsg/store';
+import { stripAgentSessionMarker } from '../agent/card';
+import { agentReplyNotificationTracker } from '../agent/replyNotification';
 
 export interface Conversation {
   rid: string;
@@ -123,6 +125,7 @@ export type RightPanel =
   | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
   | { kind: 'ai' }
+  | { kind: 'butler' }
   | { kind: 'agent'; tmid: string }
   | { kind: `app:${string}`; props?: unknown }
   | null;
@@ -443,7 +446,7 @@ function messagePreview(msg: RcMessage | undefined): string {
   const who = msg.u?.name || msg.u?.username || '';
   if (msg.t) return '[系统消息]';
   // 预览是纯文本，不走 markdown 渲染，所以 :smile: 得在这里换成表情
-  const text = emojify((msg.msg ?? '').replace(QUOTE_LINK_RE, ''));
+  const text = emojify(stripAgentSessionMarker(msg.msg ?? '').replace(QUOTE_LINK_RE, ''));
   if (text) return who ? `${who}: ${text}` : text;
   if (msg.file?.name) return who ? `${who}: [文件] ${msg.file.name}` : `[文件] ${msg.file.name}`;
   if (msg.attachments?.length) return who ? `${who}: [图片/附件]` : '[图片/附件]';
@@ -676,7 +679,7 @@ export function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
   return {
     message_link: `local-quote`,
     author_name: quoted.u.name || quoted.u.username,
-    text: stripQuotePrefix(quoted.msg) || quoted.attachments?.[0]?.title || '[卡片消息]',
+    text: stripQuotePrefix(stripAgentSessionMarker(quoted.msg)) || quoted.attachments?.[0]?.title || '[卡片消息]',
     ts: quoted.ts,
     ...(image
       ? {
@@ -702,6 +705,26 @@ declare global {
 // 已处理过通知的消息 id：__my_messages__ 全局流和房间订阅流可能各送一次同一条消息，
 // 不去重的话桌面通知会弹两遍（浏览器端有 tag 去重，Tauri 通知插件没有）
 const notifiedMids = new Set<string>();
+const locallySentMids = new Set<string>();
+
+function rememberLocalMessage(mid: string): void {
+  locallySentMids.add(mid);
+  if (locallySentMids.size <= 800) return;
+  for (const id of locallySentMids) {
+    locallySentMids.delete(id);
+    if (locallySentMids.size <= 400) break;
+  }
+}
+
+export function messageIsFromCurrentUser(
+  sender: Pick<RcMessage['u'], '_id' | 'username'>,
+  authUserId: string,
+  currentUser?: Pick<RcUser, '_id' | 'username'> | null,
+): boolean {
+  if (sender._id === authUserId || sender._id === currentUser?._id) return true;
+  return !!currentUser?.username &&
+    sender.username.toLocaleLowerCase() === currentUser.username.toLocaleLowerCase();
+}
 
 export function notificationAttentionPolicy(input: {
   subscribed: boolean;
@@ -738,7 +761,10 @@ export function conversationHasFocus(
 
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
-  if (!auth || msg.u._id === auth.userId || msg.t) return;
+  if (!auth || msg.t) return;
+  const currentUser = useAuth.getState().user;
+  const expectedAgentReply = agentReplyNotificationTracker.consume(rid, msg.msg ?? '');
+  if (locallySentMids.has(msg._id) || messageIsFromCurrentUser(msg.u, auth.userId, currentUser)) return;
   const subscription = state.subscriptions[rid];
   if (!subscription) return;
   if (notifiedMids.has(msg._id)) return;
@@ -749,8 +775,8 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
       if (notifiedMids.size <= 400) break;
     }
   }
+  if (expectedAgentReply) return;
 
-  const currentUser = useAuth.getState().user;
   const me = currentUser?.username;
   const mentioned =
     !!me &&
@@ -775,7 +801,7 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   if (!policy.showDesktopNotification) return;
 
   const title = msg.u.name || msg.u.username;
-  const body = msg.msg || (msg.attachments?.length ? '[卡片/文件]' : '');
+  const body = stripAgentSessionMarker(msg.msg) || (msg.attachments?.length ? '[卡片/文件]' : '');
   const directMention = !!currentUser && !!msg.mentions?.some((mention) =>
     mention._id === currentUser._id || mention.username === currentUser.username,
   );
@@ -1268,11 +1294,13 @@ export const useChat = create<ChatState>((set, get) => ({
     const fullText = opts?.quote
       ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + trimmed
       : trimmed;
+    const expectsAgentReply = agentReplyNotificationTracker.expect(rid, fullText);
 
     // 乐观上屏：秒回显，pending 状态等服务器确认。
     // _id 由客户端生成并随请求提交 —— WS 回声先到时同 id 被 upsert 合并，
     // 不会「同一条显示两遍」；504 但服务端已落库时重试同 id 也不会发出第二条。
     const clientId = randomMessageId();
+    rememberLocalMessage(clientId);
     const temp: RcMessage = {
       _id: clientId,
       rid,
@@ -1362,6 +1390,7 @@ export const useChat = create<ChatState>((set, get) => ({
           });
           toast.info('服务器不可达，消息已通过可信局域网投递');
           useOnboarding.getState().markChecklist('sentMessage');
+          if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
           return;
         }
       }
@@ -1381,6 +1410,7 @@ export const useChat = create<ChatState>((set, get) => ({
           ),
         },
       });
+      if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
       toast.show({
         kind: 'error',
         message: humanError(err, '消息发送失败'),
@@ -1426,6 +1456,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const failed = (get().messages[rid] ?? []).find((m) => m._id === tempId);
     // 只重发仍是失败态的：WS 回声若已把它替换成真实消息，说明其实发出去了
     if (!failed || !failed.failed) return;
+    rememberLocalMessage(tempId);
     set({
       messages: {
         ...get().messages,
@@ -1434,6 +1465,7 @@ export const useChat = create<ChatState>((set, get) => ({
         ),
       },
     });
+    const expectsAgentReply = agentReplyNotificationTracker.expect(rid, failed.msg);
     try {
       // 附件是本地展示用的，不随重发提交（引用信息已在消息文本前缀里）。
       // 沿用同一个 _id：上次其实已落库时（504 但服务端收到了），同 id 不会发出第二条。
@@ -1448,6 +1480,7 @@ export const useChat = create<ChatState>((set, get) => ({
       // 同 send()：回声已替换成真实消息（无 pending 字段）就不再标失败
       const cur = get().messages[rid] ?? [];
       if (!cur.some((m) => m._id === tempId && m.pending)) return;
+      if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
       set({
         messages: {
           ...get().messages,
@@ -2066,7 +2099,7 @@ export const useChat = create<ChatState>((set, get) => ({
           msg: `[聊天记录] 共 ${ordered.length} 条`,
           attachments: mergedForwardAttachments(
             ordered.map((m) => ({
-              text: stripQuotePrefix(m.msg || ''),
+              text: stripQuotePrefix(stripAgentSessionMarker(m.msg || '')),
               ts: m.ts,
               attachments: m.attachments,
             })),

@@ -10,9 +10,13 @@ import {
   nextUnreadConversation,
 } from '../../apps/web/src/lib/conversationView';
 import {
+  DEFAULT_BUTLER_PANEL_WIDTH,
   DEFAULT_CONVERSATION_WIDTH,
+  MAX_BUTLER_PANEL_WIDTH,
   MAX_CONVERSATION_WIDTH,
+  MIN_BUTLER_PANEL_WIDTH,
   MIN_CONVERSATION_WIDTH,
+  clampButlerPanelWidth,
   imLayoutStorageKey,
   parseImLayout,
 } from '../../apps/web/src/lib/imLayout';
@@ -65,16 +69,16 @@ const baseView = {
   sortBy: 'activity' as const,
 };
 
-test('模块快捷键顺序与左侧视觉顺序共用同一常量', () => {
+test('模块快捷键保留执行间直达顺序', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'today',
-    'codex',
-    'ai-assistant',
     'todos',
     'calendar',
-    'contacts',
     'workbench',
+    'contacts',
+    'ai-assistant',
+    'codex',
     'settings',
   ]);
 });
@@ -144,6 +148,7 @@ test('布局状态按服务器和账号隔离，非法宽度会安全收敛', ()
     imLayoutStorageKey('https://chat.example.com', 'a'),
   );
   assert.equal(parseImLayout(null).conversationWidth, DEFAULT_CONVERSATION_WIDTH);
+  assert.equal(parseImLayout(null).butlerPanelWidth, DEFAULT_BUTLER_PANEL_WIDTH);
   assert.equal(
     parseImLayout(JSON.stringify({ version: 1, conversationWidth: 10 })).conversationWidth,
     MIN_CONVERSATION_WIDTH,
@@ -151,6 +156,12 @@ test('布局状态按服务器和账号隔离，非法宽度会安全收敛', ()
   assert.equal(
     parseImLayout(JSON.stringify({ version: 1, conversationWidth: 999 })).conversationWidth,
     MAX_CONVERSATION_WIDTH,
+  );
+  assert.equal(clampButlerPanelWidth(10), MIN_BUTLER_PANEL_WIDTH);
+  assert.equal(clampButlerPanelWidth(999), MAX_BUTLER_PANEL_WIDTH);
+  assert.equal(
+    parseImLayout(JSON.stringify({ version: 1, butlerPanelWidth: 460 })).butlerPanelWidth,
+    460,
   );
 });
 
@@ -184,12 +195,23 @@ test('同一用户切换服务器时会重新载入布局和引导状态', async
     useImLayout.getState().hydrate('same-user');
     useOnboarding.getState().hydrate('same-user');
     assert.equal(useImLayout.getState().layout.conversationWidth, 310);
+    useImLayout.getState().setButlerPanelWidth(460);
+    assert.equal(
+      parseImLayout(storage.getItem(imLayoutStorageKey('https://chat-a.example.com', 'same-user')))
+        .butlerPanelWidth,
+      460,
+    );
     assert.equal(useOnboarding.getState().state?.ado, 'configured');
 
     storage.setItem('rcx-server', 'https://chat-b.example.com');
     storage.setItem(
       imLayoutStorageKey('https://chat-b.example.com', 'same-user'),
-      JSON.stringify({ version: 1, conversationWidth: 430, groupCollapsed: true }),
+      JSON.stringify({
+        version: 1,
+        conversationWidth: 430,
+        butlerPanelWidth: 520,
+        groupCollapsed: true,
+      }),
     );
     storage.setItem(
       onboardingStorageKey('https://chat-b.example.com', 'same-user'),
@@ -207,6 +229,7 @@ test('同一用户切换服务器时会重新载入布局和引导状态', async
     useImLayout.getState().hydrate('same-user');
     useOnboarding.getState().hydrate('same-user');
     assert.equal(useImLayout.getState().layout.conversationWidth, 430);
+    assert.equal(useImLayout.getState().layout.butlerPanelWidth, 520);
     assert.equal(useImLayout.getState().layout.groupCollapsed, true);
     assert.equal(useOnboarding.getState().state?.ado, 'skipped');
   } finally {

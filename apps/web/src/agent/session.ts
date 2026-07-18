@@ -26,7 +26,10 @@ export interface AgentSession {
   serverId: string;
   ownerUserId: string;
   rid: string;
+  /** 会话索引。消息线程使用真实 tmid；Discussion 顶层会话使用 `room:<rid>`。 */
   tmid: string;
+  /** 回复到消息线程时填写；Discussion 顶层会话留空。 */
+  replyTmid?: string;
   host: AgentHostLease;
   access: 'room-members' | 'host-only';
   approvedMemberIds: string[];
@@ -35,6 +38,15 @@ export interface AgentSession {
   leaseMessageId?: string;
   activeTurnId?: string;
   workspaceRoots: string[];
+  environmentId?: string;
+  environmentName?: string;
+  workItem?: {
+    id: number;
+    project?: string;
+    title: string;
+  };
+  proposedBranch?: string;
+  baseBranch?: string;
   sandboxMode: 'read-only' | 'workspace-write';
   updatedAt: number;
 }
@@ -70,6 +82,9 @@ export function commandAccess(session: AgentSession, userId: string): CommandAcc
   if (session.status === 'ended') return 'denied';
   if (userId === session.host.userId) return 'allowed';
   if (session.access === 'host-only') return 'denied';
+  // 工作项 Discussion 的默认协作语义是“房间成员可提问”。真正的命令、写文件和
+  // 增量权限仍由 app-server 逐项路由给宿主审批，不能把提问权等同于执行权。
+  if (session.tmid.startsWith('room:')) return 'allowed';
   return session.approvedMemberIds.includes(userId) ? 'allowed' : 'requires-host-approval';
 }
 

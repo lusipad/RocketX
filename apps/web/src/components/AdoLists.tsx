@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitPullRequest,
   Loader2,
+  MessageSquarePlus,
   MinusCircle,
   Search,
   XCircle,
@@ -24,6 +25,7 @@ import {
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
 import { useUI } from '../stores/ui';
+import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 export const TYPE_COLORS: Record<string, string> = {
   Bug: '#f54a45',
@@ -94,6 +96,7 @@ function ListHeader({
 export function WorkItemList({ items }: { items: WorkItem[] }) {
   const [keyword, setKeyword] = useState('');
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
+  const [discussionItem, setDiscussionItem] = useState<WorkItem | null>(null);
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
@@ -215,6 +218,15 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 </span>
                 <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
               </a>
+              <button
+                type="button"
+                onClick={() => setDiscussionItem(w)}
+                title={`为工作项 #${w.id} 创建讨论`}
+                aria-label={`为工作项 #${w.id} 创建讨论`}
+                className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+              >
+                <MessageSquarePlus size={15} />
+              </button>
             </div>
           );
         })}
@@ -222,6 +234,9 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
           <EmptyRow text={items.length ? '没有匹配的工作项' : '当前没有分配给你的未关闭工作项'} />
         )}
       </div>
+      {discussionItem ? (
+        <CreateWorkItemDiscussionDialog item={discussionItem} onClose={() => setDiscussionItem(null)} />
+      ) : null}
     </>
   );
 }

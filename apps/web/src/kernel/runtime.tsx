@@ -1,11 +1,12 @@
 import type { RcMessage } from '@rcx/rc-client';
-import { Blocks, Sparkles, TerminalSquare } from 'lucide-react';
+import { Blocks, Bot, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, rest } from '../lib/client';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { installModuleValidator, useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
+import { startRoutineScheduler } from '../stores/routines';
 import ContactsPage from '../pages/ContactsPage';
 import TodosPage from '../pages/TodosPage';
 import CalendarPage from '../pages/CalendarPage';
@@ -24,6 +25,7 @@ import RoomInfoPanel from '../components/RoomInfoPanel';
 import FilesPanel from '../components/FilesPanel';
 import MentionsPanel from '../components/MentionsPanel';
 import SummaryPanel from '../components/SummaryPanel';
+import ButlerPanel from '../components/ButlerPanel';
 import { useAiAssistant } from '../stores/aiAssistant';
 import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
 import { AppManager, setActiveAppManager, type InstalledApp } from './installed';
@@ -35,10 +37,12 @@ import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
+import { hydrateButlerArchive } from '../lib/butlerArchive';
 import { initializeAiRuntime } from './ai/runtime';
 import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
+import { runButlerCommand } from './butler';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -403,12 +407,12 @@ function activateApp(app: InstalledApp): () => void {
 function registerBuiltins(): void {
   const modules = [
     ['today', '今日', TodayPage, undefined],
-    ['codex', 'Codex', CodexPage, TerminalSquare],
-    ['ai-assistant', 'AI 助手', AiAssistantPage, Sparkles],
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
-    ['contacts', '通讯录', ContactsPage, undefined],
     ['workbench', '工作台', WorkbenchModule, undefined],
+    ['contacts', '通讯录', ContactsPage, undefined],
+    ['ai-assistant', 'AI', AiAssistantPage, Bot],
+    ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
@@ -423,6 +427,7 @@ function registerBuiltins(): void {
     ['files', FilesPanel],
     ['mentions', MentionsPanel],
     ['ai', SummaryPanel],
+    ['butler', ButlerPanel],
     ['agent', AgentPanel],
   ] as const;
   for (const [id, render] of panels) {
@@ -436,6 +441,13 @@ function registerBuiltins(): void {
       useChat.getState().setPanel({ kind: 'ai' });
       void useAiAssistant.getState().summarize(rid);
     },
+  });
+  kernelRegistry.register('core', 'composer.command', {
+    id: 'butler',
+    name: 'ai',
+    description: '打开 AI，可直接跟上问题',
+    params: '问题（可选）',
+    run: runButlerCommand,
   });
   kernelRegistry.register('core', 'composer.trigger', {
     id: 'codex',
@@ -499,5 +511,6 @@ export function initializeKernel(): void {
   registerBridgeEvents();
   installedApps.setActivator(activateApp);
   bridgeHost.start();
+  void hydrateButlerArchive().finally(startRoutineScheduler);
   void installedApps.hydrate().catch((error) => toast.error(error, '加载扩展应用失败'));
 }

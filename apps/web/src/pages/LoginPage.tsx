@@ -41,6 +41,8 @@ export default function LoginPage() {
     try {
       await probeRocketChat(trimmed);
     } catch (err) {
+      // 分类文案面向用户；原始错误进控制台，排查连接问题时不至于无迹可循
+      console.warn('[Login] 服务器探活失败', err);
       setServerError(loginFailureMessage(err));
       setChecking(false);
       return;

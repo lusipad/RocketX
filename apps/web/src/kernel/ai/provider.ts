@@ -5,6 +5,14 @@ export interface AiMessage {
   content: string;
   name?: string;
   toolCallId?: string;
+  toolCalls?: AiToolCall[];
+}
+
+export interface AiToolCall {
+  id: string;
+  name: string;
+  /** Provider 原样返回的 JSON 参数字符串。 */
+  arguments: string;
 }
 
 export interface AiTool {
@@ -25,6 +33,7 @@ export interface AiUsage {
 export interface AiChunk {
   content?: string;
   reasoning?: string;
+  toolCalls?: AiToolCall[];
   finishReason?: string;
   usage?: AiUsage;
 }
