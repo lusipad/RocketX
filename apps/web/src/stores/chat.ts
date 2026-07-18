@@ -24,7 +24,12 @@ import { findCommand } from '../lib/slash';
 import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
-import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
+import {
+  forwardFileName,
+  forwardableAttachments,
+  mergedForwardAttachments,
+  protectedFilePath,
+} from '../lib/forward';
 import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
 import {
   canApplyRetainedRoomResult,
@@ -626,6 +631,61 @@ function randomMessageId(): string {
   let s = '';
   for (let i = 0; i < 17; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
   return s;
+}
+
+/**
+ * 逐条转发一条消息到目标会话（issue #69）。
+ *
+ * 受保护文件跨房间引用会 403，此前只能留提示「请在原会话查看」。现在把文件
+ * 下载后重传到目标会话：原消息只有一个文件时文字作为它的说明，转发结果仍是
+ * 一条消息；多附件时先发文字和可复用附件，再逐个重传。单个文件下载或重传
+ * 失败时退回原来的元数据 + 提示，转发不整体失败。
+ */
+async function forwardSingleMessage(msg: RcMessage, rid: string): Promise<void> {
+  const attachments = msg.attachments ?? [];
+  const reupload = rid === msg.rid ? [] : attachments.filter((a) => protectedFilePath(a));
+  const text = stripQuotePrefix(msg.msg || '') || undefined;
+  if (reupload.length === 0) {
+    await rest.sendMessageRaw({
+      _id: randomMessageId(),
+      rid,
+      msg: text,
+      attachments: forwardableAttachments(attachments, rid === msg.rid),
+    });
+    return;
+  }
+
+  const others = forwardableAttachments(attachments.filter((a) => !reupload.includes(a)));
+  const singleFileOnly = reupload.length === 1 && others.length === 0;
+  if (!singleFileOnly && (text || others.length > 0)) {
+    await rest.sendMessageRaw({ _id: randomMessageId(), rid, msg: text, attachments: others });
+  }
+
+  const configuredLimit = await getPublicSetting('FileUpload_MaxFileSize').catch(() => 0);
+  const maxBytes =
+    typeof configuredLimit === 'number' && Number.isFinite(configuredLimit) ? configuredLimit : 0;
+  for (const attachment of reupload) {
+    try {
+      const blob = await rest.fetchFile(protectedFilePath(attachment)!);
+      if (maxBytes > 0 && blob.size > maxBytes) {
+        throw new RcApiError(
+          `文件超出服务器上传上限 ${Math.round(maxBytes / 1024 / 1024)} MiB`,
+          413,
+        );
+      }
+      await rest.uploadMedia(rid, blob, {
+        fileName: forwardFileName(attachment),
+        msg: singleFileOnly ? (text ?? '') : '',
+      });
+    } catch {
+      await rest.sendMessageRaw({
+        _id: randomMessageId(),
+        rid,
+        msg: singleFileOnly ? text : undefined,
+        attachments: forwardableAttachments([attachment]),
+      });
+    }
+  }
 }
 
 /** RC 用户状态的数字编码 → 语义字符串 */
@@ -2075,11 +2135,7 @@ export const useChat = create<ChatState>((set, get) => ({
       (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
     );
     for (const rid of rids) {
-      await rest.sendMessageRaw({
-        rid,
-        msg: stripQuotePrefix(msg.msg || '') || undefined,
-        attachments: forwardableAttachments(msg.attachments, rid === msg.rid),
-      });
+      await forwardSingleMessage(msg, rid);
     }
     toast.success(
       rids.length === 1 ? `已转发到「${names[0]}」` : `已转发到 ${rids.length} 个会话`,
@@ -2111,12 +2167,7 @@ export const useChat = create<ChatState>((set, get) => ({
         });
       } else {
         for (const m of ordered) {
-          await rest.sendMessageRaw({
-            _id: randomMessageId(),
-            rid,
-            msg: stripQuotePrefix(m.msg || '') || undefined,
-            attachments: forwardableAttachments(m.attachments, rid === m.rid),
-          });
+          await forwardSingleMessage(m, rid);
         }
       }
     }

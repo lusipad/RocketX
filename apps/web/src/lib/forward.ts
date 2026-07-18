@@ -35,6 +35,30 @@ function isProtectedRoomFile(url?: string): boolean {
 }
 
 /**
+ * 附件里指向原房间受保护文件的下载路径；不是受保护文件时返回 undefined。
+ * 图片优先取原图 image_url，其余文件取 title_link。
+ */
+export function protectedFilePath(attachment: RcMessageAttachment): string | undefined {
+  if (attachment.message_link) return undefined;
+  if (isProtectedRoomFile(attachment.image_url)) return attachment.image_url;
+  if (isProtectedRoomFile(attachment.title_link)) return attachment.title_link;
+  return undefined;
+}
+
+/** 重传受保护文件时的文件名：附件标题优先，退回 URL 最后一段，再退回「文件」。 */
+export function forwardFileName(attachment: RcMessageAttachment): string {
+  if (attachment.title) return attachment.title;
+  const path = protectedFilePath(attachment);
+  const segment = path?.split('?')[0].split('/').filter(Boolean).at(-1);
+  if (!segment) return '文件';
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
  * Rocket.Chat 的受保护文件仍归属于原房间。跨房间复制 URL 会让目标成员预览/下载
  * 403；保留附件元数据，但去掉不可访问的资源链接并明确提示去原会话查看。
  */
