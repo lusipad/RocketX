@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
 import { getServerBase } from '../lib/client';
 import { isTauri } from '../lib/http';
+import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
 import { useLocalCodex } from '../stores/localCodex';
 
@@ -60,6 +61,8 @@ export default function CodexPage() {
   const stop = useLocalCodex((state) => state.stop);
   const [input, setInput] = useState('');
   const [showTrace, setShowTrace] = useState(false);
+  // 打开页面/流式回复时停在最新消息；滚上去阅读时不跟随（issue #90 同类）
+  const { scrollRef, onScroll, stickToBottom } = useStickToBottom([messages, status, approvals]);
 
   useEffect(() => hydrate(`${getServerBase() || 'same-origin'}:${userId}`), [hydrate, userId]);
 
@@ -75,6 +78,7 @@ export default function CodexPage() {
     const text = input.trim();
     if (!text || status !== 'ready') return;
     setInput('');
+    stickToBottom.current = true; // 发送后总是回到最新
     await send(text).catch(() => setInput(text));
   };
 
@@ -131,7 +135,7 @@ export default function CodexPage() {
           </aside>
 
           <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl border border-line bg-surface shadow-sm">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+            <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
               {messages.length === 0 ? (
                 <div className="flex h-full min-h-72 flex-col items-center justify-center text-center">
                   <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={28} /></div>

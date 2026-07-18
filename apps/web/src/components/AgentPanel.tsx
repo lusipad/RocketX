@@ -3,6 +3,7 @@ import { Bot, Check, ChevronLeft, Copy, FolderOpen, Play, Shield, Square, Users,
 import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
+import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
@@ -59,6 +60,9 @@ export default function AgentPanel() {
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
+  // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
+  // 依赖用 store 里的原始引用，traces 的 `?? []` 每次渲染都是新数组
+  const { scrollRef, onScroll } = useStickToBottom([sessionTraces]);
 
   useEffect(() => {
     setAutoHost(!!rid && !!autoHostEnvironmentId(rid));
@@ -275,7 +279,7 @@ export default function AgentPanel() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-4">
             <div className="mb-2 text-xs font-medium text-ink-2">本地过程</div>
             {traces.length === 0 ? (
               <div className="py-8 text-center text-xs text-ink-3">等待话题中的 Agent 指令</div>
