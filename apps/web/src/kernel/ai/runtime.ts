@@ -32,7 +32,6 @@ function createProvider(config: AiProviderConfig): AiProvider {
     baseUrl: config.baseUrl,
     model: config.model,
     locality: config.locality,
-    embeddingModel: config.embeddingModel,
     getApiKey: () => getAiSecret(config.id),
     apiKeyHeader: config.kind === 'azure-openai' ? 'api-key' : 'authorization',
     fetch: aiFetch,

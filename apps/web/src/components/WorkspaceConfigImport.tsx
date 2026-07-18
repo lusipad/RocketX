@@ -98,7 +98,6 @@ function applySelectedFields(
         baseUrl: provider.baseUrl,
         model: provider.model,
         name: provider.name || existing?.name || provider.id,
-        embeddingModel: existing?.embeddingModel,
         locality: existing?.locality ?? 'external',
         // 密钥状态不动：配置文件里没有也不可能有 key
         hasSecret: existing?.hasSecret ?? false,

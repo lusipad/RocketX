@@ -54,16 +54,13 @@ export interface AiProvider {
   locality: AiProviderLocality;
   model?: string;
   origin?: string;
-  embeddingModel?: string;
   chat(request: AiChatRequest): AsyncIterable<AiChunk>;
-  embed?(texts: string[]): Promise<number[][]>;
 }
 
 export type AiCapability =
   | 'summary'
   | 'extraction'
   | 'daily-review'
-  | 'semantic-search'
   | 'text-tool'
   | 'agent';
 

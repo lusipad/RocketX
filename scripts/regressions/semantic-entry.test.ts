@@ -1,18 +1,28 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
+import { AI_CAPABILITIES } from '../../apps/web/src/kernel/ai/config';
 
-test('没有 embedding 模型时隐藏语义搜索入口，改给「问 AI」（issue #95）', () => {
-  // 可用性检测：语义搜索能力路由到带 embedding 模型的 Provider 才算可用
-  const runtime = readFileSync('apps/web/src/kernel/ai/semantic-runtime.ts', 'utf8');
-  assert.match(runtime, /export function semanticSearchAvailable\(\): boolean/);
-  assert.match(runtime, /describeEmbedding\('semantic-search'\)/);
+test('embedding 语义搜索已整体移除，「语义搜索」由问 AI 承担（issue #95）', () => {
+  // 向量索引与运行时不复存在，能力清单里没有语义搜索
+  assert.equal(existsSync('apps/web/src/kernel/ai/semantic-search.ts'), false);
+  assert.equal(existsSync('apps/web/src/kernel/ai/semantic-runtime.ts'), false);
+  assert.equal(AI_CAPABILITIES.some(({ id }) => (id as string) === 'semantic-search'), false);
 
+  // Provider 配置与总线不再有 embedding 概念
+  for (const path of [
+    'apps/web/src/kernel/ai/config.ts',
+    'apps/web/src/kernel/ai/provider.ts',
+    'apps/web/src/kernel/ai/bus.ts',
+    'apps/web/src/kernel/ai/openai-compatible.ts',
+    'apps/web/src/components/AiSettings.tsx',
+  ]) {
+    assert.doesNotMatch(readFileSync(path, 'utf8'), /embed/iu, path);
+  }
+
+  // 搜索框不再有向量语义模式，「问 AI」把查询交给 AI 大脑
   const switcher = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
-  // 语义按钮受可用性开关控制，不再无条件渲染
-  assert.match(switcher, /\{semanticAvailable && \(/);
-  assert.match(switcher, /semanticSearchAvailable\(\)/);
-  // 只有对话大模型的用户走「问 AI」：查询交给 AI 大脑调用工具回答
+  assert.doesNotMatch(switcher, /semanticMode|SemanticSearchIndex/);
   assert.match(switcher, /问 AI/);
   assert.match(switcher, /useButler\.getState\(\)\.ask\(query\)/);
   assert.match(switcher, /setModule\('ai-assistant'\)/);

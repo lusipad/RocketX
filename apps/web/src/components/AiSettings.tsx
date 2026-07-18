@@ -36,7 +36,6 @@ function newProvider(): AiProviderConfig {
     name: 'OpenAI-compatible',
     baseUrl: 'http://localhost:11434/v1',
     model: '',
-    embeddingModel: '',
     locality: 'local',
     hasSecret: false,
   };
@@ -231,7 +230,7 @@ export default function AiSettings() {
               <div>
                 <h2 className="text-sm font-semibold text-ink">模型 Provider</h2>
                 <p className="mt-0.5 text-xs leading-5 text-ink-3">
-                  供会话总结、晨报、翻译、语义搜索等能力使用；「AI 运行方式」选 API 时也作为
+                  供会话总结、晨报、翻译等能力使用；「AI 运行方式」选 API 时也作为
                   AI 大脑。桌面端密钥只保存到系统钥匙串。
                 </p>
               </div>
@@ -290,15 +289,6 @@ export default function AiSettings() {
                         value={provider.model}
                         onChange={(event) => updateProvider(provider.id, { model: event.target.value })}
                         placeholder="deepseek-v4-flash"
-                        className={`mt-1 ${inputCls}`}
-                      />
-                    </label>
-                    <label className="text-xs text-ink-3">
-                      Embedding 模型（可选）
-                      <input
-                        value={provider.embeddingModel ?? ''}
-                        onChange={(event) => updateProvider(provider.id, { embeddingModel: event.target.value })}
-                        placeholder="语义搜索用；DeepSeek 官方没有 embedding 模型"
                         className={`mt-1 ${inputCls}`}
                       />
                     </label>
