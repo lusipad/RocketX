@@ -162,7 +162,9 @@ function listTodos(args: Record<string, unknown>): string {
   return JSON.stringify(
     useTodos.getState().todos
       .filter((todo) => includeDone || !todo.done)
-      .filter((todo) => matches(`${todo.note ?? ''} ${todo.excerpt} ${todo.roomName} ${todo.author}`, query))
+      .filter((todo) =>
+        matches(`${todo.note ?? ''} ${todo.excerpt ?? ''} ${todo.roomName ?? ''} ${todo.author ?? ''}`, query),
+      )
       .slice(0, LIMIT)
       .map((todo) => ({
         id: todo.id,

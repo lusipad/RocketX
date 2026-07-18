@@ -4,20 +4,20 @@ import { create } from 'zustand';
  * 待办（TODO）。
  *
  * Rocket.Chat 只有「星标消息」，没有描述和截止日期，所以待办存在本机。
- * 每条待办都锚定一条消息（rid + mid），点开能跳回原始上下文——
- * 这正是「从聊天里捞出要做的事」的关键：脱离上下文的待办没人会去做。
+ * 从消息标记的待办锚定一条消息（rid + mid），点开能跳回原始上下文；
+ * 手动新建的待办（issue #64）没有来源消息，note 就是它的全部内容。
  */
 export interface Todo {
   id: string;
-  /** 来源消息 */
-  rid: string;
-  mid: string;
+  /** 来源消息；手动新建的待办没有 */
+  rid?: string;
+  mid?: string;
   /** 来源会话名与消息摘要，做成快照——原会话被隐藏了待办也还能看懂 */
-  roomName: string;
-  excerpt: string;
+  roomName?: string;
+  excerpt?: string;
   /** 消息作者 */
-  author: string;
-  /** 自己补充的说明 */
+  author?: string;
+  /** 自己补充的说明；手动待办的正文 */
   note?: string;
   /** 截止日期，YYYY-MM-DD */
   due?: string;

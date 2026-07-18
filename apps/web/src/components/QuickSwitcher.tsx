@@ -565,8 +565,14 @@ export default function QuickSwitcher({
 
   const pickWork = (result: WorkSearchResult) => {
     if (result.kind === 'todo') {
-      setModule('messages');
-      void openRoom(result.item.rid).then(() => jumpToMessage(result.item.mid, result.item.rid));
+      const { rid, mid } = result.item;
+      if (rid && mid) {
+        setModule('messages');
+        void openRoom(rid).then(() => jumpToMessage(mid, rid));
+      } else {
+        // 手动新建的待办没有来源消息，直接去待办模块
+        setModule('todos');
+      }
     } else if (result.kind === 'event') {
       const calendar = useCalendar.getState();
       calendar.setCursor(result.item.date);
@@ -640,12 +646,12 @@ export default function QuickSwitcher({
           section: 'work' as const,
           key: `${result.kind}:${result.item.id}`,
           title: result.kind === 'todo'
-            ? result.item.note || result.item.excerpt
+            ? result.item.note || result.item.excerpt || '（无文字内容）'
             : result.kind === 'event'
               ? result.item.title
               : `#${result.item.id} ${result.item.title}`,
           detail: result.kind === 'todo'
-            ? `待办 · ${result.item.roomName}`
+            ? result.item.roomName ? `待办 · ${result.item.roomName}` : '待办'
             : result.kind === 'event'
               ? `日程 · ${result.item.date}`
               : `工作项 · ${result.item.project} · ${result.item.state}`,
@@ -1236,12 +1242,12 @@ export default function QuickSwitcher({
                     ? <CalendarDays size={16} />
                     : <BriefcaseBusiness size={16} />;
                 const title = result.kind === 'todo'
-                  ? result.item.note || result.item.excerpt
+                  ? result.item.note || result.item.excerpt || '（无文字内容）'
                   : result.kind === 'event'
                     ? result.item.title
                     : `#${result.item.id} ${result.item.title}`;
                 const detail = result.kind === 'todo'
-                  ? `待办 · ${result.item.roomName}`
+                  ? result.item.roomName ? `待办 · ${result.item.roomName}` : '待办'
                   : result.kind === 'event'
                     ? `日程 · ${result.item.date}`
                     : `工作项 · ${result.item.project} · ${result.item.state}`;

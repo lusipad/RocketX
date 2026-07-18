@@ -519,8 +519,12 @@ export default function WorkbenchPage() {
     [todos, workItems, prs, builds, calendarEvents, account, today],
   );
 
-  /** 待办点击：回到它来自的那条消息，上下文才是最重要的 */
+  /** 待办点击：回到它来自的那条消息，上下文才是最重要的；手动待办没有来源，去待办模块 */
   const openTodoSource = async (todo: Todo) => {
+    if (!todo.rid || !todo.mid) {
+      setModule('todos');
+      return;
+    }
     setModule('messages');
     await openRoom(todo.rid);
     await jumpToMessage(todo.mid, todo.rid);
