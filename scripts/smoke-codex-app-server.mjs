@@ -83,7 +83,7 @@ createInterface({ input: child.stdout }).on('line', (line) => {
 });
 
 const initialized = await request('initialize', {
-  clientInfo: { name: 'rocketx-smoke', title: 'RocketX Smoke', version: '0.21.0' },
+  clientInfo: { name: 'rocketx-smoke', title: 'RocketX Smoke', version: '0.21.1' },
   capabilities: {
     experimentalApi: true,
     requestAttestation: false,

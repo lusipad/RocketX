@@ -20,7 +20,7 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
   assert.match(proc, /codex_command_succeeds\(&\["login", "status"\]\)/);
   assert.doesNotMatch(proc, /codex_runtime_login/);
   assert.match(proc, /args\(\["app-server", "--stdio"\]\)/);
-  assert.match(proc, /current_dir\(&workspace\)/);
+  assert.match(proc, /current_dir\(&workspace_root\)/);
   assert.doesNotMatch(proc, /CODEX_RUNNER_IMAGE|hidden_command\("docker"\)/);
   assert.doesNotMatch(localCodex, /RUNNER_WORKSPACE|rocketx_(?:read|write)/);
   assert.doesNotMatch(sharedAgent, /RUNNER_WORKSPACE|rocketx_(?:read|write)/);
