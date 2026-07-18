@@ -5,8 +5,8 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
-import type { ExternalAgentConfigImportCompletedNotification } from '../agent/protocol/generated/v2/ExternalAgentConfigImportCompletedNotification';
 import { writeAgentSessionFile } from '../agent/attachments';
+import { dispatchCodexImportCompleted, importSessionFileToCodex } from '../agent/codexImport';
 import { claudeSessionJsonl, type TransferLine } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
@@ -66,22 +66,6 @@ let residentStatus: 'idle' | 'ready' | 'running' | 'interrupted' = 'idle';
 let residentTools = new Map<string, ButlerTool>();
 let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
-
-/** 会话导入完成通知的等待者与提前到达缓冲（通知可能先于请求响应到达） */
-const importWaiters = new Map<string, (result: ExternalAgentConfigImportCompletedNotification) => void>();
-const completedImports = new Map<string, ExternalAgentConfigImportCompletedNotification>();
-
-function dispatchImportCompleted(params: unknown): void {
-  const payload = params as ExternalAgentConfigImportCompletedNotification;
-  if (typeof payload?.importId !== 'string') return;
-  const waiter = importWaiters.get(payload.importId);
-  if (waiter) {
-    importWaiters.delete(payload.importId);
-    waiter(payload);
-  } else {
-    completedImports.set(payload.importId, payload);
-  }
-}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -272,7 +256,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
       {
         onNotification: (method, params) => {
           if (method === 'externalAgentConfig/import/completed') {
-            dispatchImportCompleted(params);
+            dispatchCodexImportCompleted(params);
             return;
           }
           residentTurn?.onNotification(method, params);
@@ -447,43 +431,11 @@ export async function transferConversationToCodexApp(lines: readonly TransferLin
     `codex-transfer/conversation-${Date.now()}.jsonl`,
     jsonl,
   );
-  const response = await client.request('externalAgentConfig/import', {
-    migrationItems: [
-      {
-        itemType: 'SESSIONS',
-        description: 'Transfer RocketX AI conversation',
-        cwd: null,
-        details: {
-          plugins: [],
-          skills: [],
-          sessions: [{ path: file.path, cwd, title: rocketxThreadName('AI 对话') }],
-          mcpServers: [],
-          hooks: [],
-          subagents: [],
-          commands: [],
-        },
-      },
-    ],
+  await importSessionFileToCodex(client, {
+    path: file.path,
+    cwd,
+    title: rocketxThreadName('AI 对话'),
   });
-  const completed = completedImports.get(response.importId);
-  completedImports.delete(response.importId);
-  const result = completed ?? await new Promise<ExternalAgentConfigImportCompletedNotification>(
-    (resolve, reject) => {
-      const timer = setTimeout(() => {
-        importWaiters.delete(response.importId);
-        reject(new Error('Codex 导入超时，请稍后重试'));
-      }, 30_000);
-      importWaiters.set(response.importId, (payload) => {
-        clearTimeout(timer);
-        resolve(payload);
-      });
-    },
-  );
-  const sessions = result.itemTypeResults.find((item) => item.itemType === 'SESSIONS');
-  const failure = sessions?.failures[0];
-  if (!sessions || failure || sessions.successes.length === 0) {
-    throw new Error(failure?.message ?? 'Codex 未接受这份对话导入');
-  }
 }
 
 /**
