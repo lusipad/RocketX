@@ -1898,8 +1898,11 @@ export const useChat = create<ChatState>((set, get) => ({
       try {
         await rest.joinRoom(rid);
       } catch (err) {
-        // Rocket.Chat 旧版本没有 rooms.join；讨论加入由 DDP joinRoom 提供兼容路径。
-        if (!(err instanceof RcApiError) || err.status !== 404) throw err;
+        // Rocket.Chat 旧版本没有 rooms.join：服务端返回 404，部分部署（反代/网关）对
+        // 不支持的端点返回 405（issue #62）。两者都走 DDP joinRoom 兼容路径。
+        const missingEndpoint =
+          err instanceof RcApiError && (err.status === 404 || err.status === 405);
+        if (!missingEndpoint) throw err;
         await realtime.call('joinRoom', rid);
       }
       // 加入不一定推订阅变更，主动刷新并重新打开讨论。
