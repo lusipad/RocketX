@@ -5,6 +5,7 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
+import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import {
   codexBrainAvailability,
@@ -294,6 +295,10 @@ async function startResidentThread(now: number, prompt: string, promptHash: stri
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
   residentStatus = 'ready';
+  // 常驻线程也是原生 Codex 线程，起名后在 codex resume / Codex App 里可辨认
+  void client
+    .request('thread/name/set', { threadId: response.thread.id, name: rocketxThreadName('AI 大脑') })
+    .catch(() => undefined);
 }
 
 async function resumeResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {

@@ -2,6 +2,8 @@ import type { InitializeParams } from './generated/InitializeParams';
 import type { InitializeResponse } from './generated/InitializeResponse';
 import type { ThreadResumeParams } from './generated/v2/ThreadResumeParams';
 import type { ThreadResumeResponse } from './generated/v2/ThreadResumeResponse';
+import type { ThreadSetNameParams } from './generated/v2/ThreadSetNameParams';
+import type { ThreadSetNameResponse } from './generated/v2/ThreadSetNameResponse';
 import type { ThreadStartParams } from './generated/v2/ThreadStartParams';
 import type { ThreadStartResponse } from './generated/v2/ThreadStartResponse';
 import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
@@ -31,6 +33,7 @@ interface ClientMethods {
   initialize: { params: InitializeParams; result: InitializeResponse };
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
+  'thread/name/set': { params: ThreadSetNameParams; result: ThreadSetNameResponse };
   'turn/start': { params: TurnStartParams; result: TurnStartResponse };
   'turn/interrupt': { params: TurnInterruptParams; result: TurnInterruptResponse };
 }
