@@ -47,7 +47,7 @@ import {
 import { fmtConvTime } from '../lib/format';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
-import { useDialogBehavior } from '../components/Dialog';
+import { ConfirmDialog, useDialogBehavior } from '../components/Dialog';
 import { settleScopedResult } from '../lib/scopedResult';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
@@ -395,6 +395,39 @@ export default function WorkbenchPage() {
       return next;
     });
   }, []);
+
+  // 看板拖拽改状态：先确认再写 ADO（issue #82 二期）
+  const [pendingMove, setPendingMove] = useState<{
+    queryId: string;
+    item: WorkItem;
+    toState: string;
+  } | null>(null);
+  const applyMove = useCallback(async () => {
+    const move = pendingMove;
+    if (!move) return;
+    const cfg = useWorkbench.getState().config;
+    if (!cfg || cfg.mode !== 'direct' || !cfg.adoBase) return;
+    try {
+      const { directUpdateWorkItemState } = await import('../lib/adoDirect');
+      const updated = await directUpdateWorkItemState(
+        { adoBase: cfg.adoBase, pat: cfg.pat ?? '', auth: cfg.auth },
+        move.item.id,
+        move.toState,
+      );
+      updateQueryState((current) => ({
+        ...current,
+        cache: {
+          ...current.cache,
+          [move.queryId]: (current.cache[move.queryId] ?? []).map((w) =>
+            w.id === updated.id ? updated : w,
+          ),
+        },
+      }));
+      toast.success(`#${move.item.id} 已改为「${move.toState}」`);
+    } catch (err) {
+      toast.error(err, '改状态失败，流转可能不被过程模板允许');
+    }
+  }, [pendingMove, updateQueryState]);
 
   const queryConnectionScope = customQueryConnectionScope(config);
   const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
@@ -762,7 +795,12 @@ export default function WorkbenchPage() {
                 </button>
               </div>
             ) : (queryViews[activeQuery.id] ?? 'list') === 'board' ? (
-              <WorkItemBoard items={visibleQueryState.cache[activeQuery.id] ?? []} />
+              <WorkItemBoard
+                items={visibleQueryState.cache[activeQuery.id] ?? []}
+                onMove={(item, toState) =>
+                  setPendingMove({ queryId: activeQuery.id, item, toState })
+                }
+              />
             ) : (queryViews[activeQuery.id] ?? 'list') === 'wbs' ? (
               <WorkItemWbs items={visibleQueryState.cache[activeQuery.id] ?? []} />
             ) : (
@@ -997,6 +1035,16 @@ export default function WorkbenchPage() {
 
       {favDialog && (
         <FavoriteDialog existing={favDialog.existing} onClose={() => setFavDialog(null)} />
+      )}
+      {pendingMove && (
+        <ConfirmDialog
+          title="修改工作项状态"
+          danger={false}
+          message={`将把 #${pendingMove.item.id}「${pendingMove.item.title}」从「${pendingMove.item.state}」改为「${pendingMove.toState}」，改动直接写入 Azure DevOps。`}
+          confirmLabel="修改"
+          onConfirm={() => void applyMove()}
+          onClose={() => setPendingMove(null)}
+        />
       )}
       {queryDialog && (
         <QueryDialog

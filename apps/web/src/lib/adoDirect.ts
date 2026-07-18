@@ -534,6 +534,40 @@ export async function directCreateWorkItem(
   return mapWorkItem(cfg, result);
 }
 
+export interface UpdateWorkItemStateRequest {
+  path: string;
+  body: { op: string; path: string; value: string }[];
+  contentType: 'application/json-patch+json';
+}
+
+/** ADO 改状态的可测试请求契约（看板拖拽用，issue #82） */
+export function updateWorkItemStateRequest(id: number, state: string): UpdateWorkItemStateRequest {
+  const value = state.trim();
+  if (!Number.isInteger(id) || id <= 0) throw new Error('工作项编号无效');
+  if (!value) throw new Error('目标状态不能为空');
+  return {
+    path: `/_apis/wit/workitems/${id}?api-version=7.0`,
+    body: [{ op: 'add', path: '/fields/System.State', value }],
+    contentType: 'application/json-patch+json',
+  };
+}
+
+/**
+ * 改工作项状态。状态是否是该类型的合法值、流转是否被过程模板允许，
+ * 都由服务端裁决——非法流转 ADO 会 400，错误信息原样抛给调用方展示。
+ */
+export async function directUpdateWorkItemState(cfg: DirectConfig, id: number, state: string) {
+  const request = updateWorkItemStateRequest(id, state);
+  const result = await adoRequest<{ id: number; fields: Record<string, any> }>(
+    cfg,
+    'PATCH',
+    request.path,
+    request.body,
+    request.contentType,
+  );
+  return mapWorkItem(cfg, result);
+}
+
 export interface CascadeTemplateItem {
   type: string;
   title: string;

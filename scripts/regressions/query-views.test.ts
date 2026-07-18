@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 import { boardColumns, wbsStats, wbsSummary, workItemRisk } from '../../apps/web/src/lib/queryViews';
+import { updateWorkItemStateRequest } from '../../apps/web/src/lib/adoDirect';
 
 const TODAY = '2026-07-18';
 
@@ -84,6 +85,17 @@ test('WBS 子树汇总：进度和风险沿父子链向上累计', () => {
 
   const summary = wbsSummary(items, opts);
   assert.deepEqual(summary, { total: 5, done: 1, overdue: 1, stale: 0, unassigned: 1 });
+});
+
+test('看板拖拽改状态走 json-patch，只改 System.State 一个字段', () => {
+  const request = updateWorkItemStateRequest(123, '已解决');
+
+  assert.equal(request.path, '/_apis/wit/workitems/123?api-version=7.0');
+  assert.equal(request.contentType, 'application/json-patch+json');
+  assert.deepEqual(request.body, [{ op: 'add', path: '/fields/System.State', value: '已解决' }]);
+
+  assert.throws(() => updateWorkItemStateRequest(0, 'Active'), /编号无效/);
+  assert.throws(() => updateWorkItemStateRequest(123, '  '), /不能为空/);
 });
 
 test('脏数据里的父子环不会死循环', () => {

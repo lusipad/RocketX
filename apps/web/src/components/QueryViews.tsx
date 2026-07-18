@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type DragEvent } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import {
   adoDateToLocal,
@@ -30,18 +30,50 @@ function Empty() {
   return <div className="py-12 text-center text-sm text-ink-3">查询没有返回工作项</div>;
 }
 
-/** 看板：列 = 查询结果里真实出现的状态，卡片点击进 ADO */
-export function WorkItemBoard({ items }: { items: WorkItem[] }) {
+/**
+ * 看板：列 = 查询结果里真实出现的状态，卡片点击进 ADO。
+ * 传入 onMove 时卡片可拖到别的列改状态（是否合法流转由 ADO 服务端裁决）。
+ */
+export function WorkItemBoard({
+  items,
+  onMove,
+}: {
+  items: WorkItem[];
+  onMove?: (item: WorkItem, toState: string) => void;
+}) {
   const today = todayKey();
   const columns = useMemo(() => boardColumns(items, today), [items, today]);
+  const [dragOverState, setDragOverState] = useState<string | null>(null);
+  const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   if (items.length === 0) return <Empty />;
+
+  const dropHandlers = (state: string) =>
+    onMove
+      ? {
+          onDragOver: (e: DragEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            setDragOverState(state);
+          },
+          onDragLeave: () => setDragOverState((current) => (current === state ? null : current)),
+          onDrop: (e: DragEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            setDragOverState(null);
+            const id = Number(e.dataTransfer.getData('text/plain'));
+            const item = byId.get(id);
+            if (item && item.state !== state) onMove(item, state);
+          },
+        }
+      : {};
 
   return (
     <div className="flex flex-1 gap-3 overflow-x-auto pb-2">
       {columns.map((column) => (
         <div
           key={column.state}
-          className="flex max-h-full w-72 shrink-0 flex-col rounded-lg border border-line bg-fill-1"
+          {...dropHandlers(column.state)}
+          className={`flex max-h-full w-72 shrink-0 flex-col rounded-lg border bg-fill-1 transition ${
+            dragOverState === column.state ? 'border-primary bg-primary-light/40' : 'border-line'
+          }`}
         >
           <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
             <span className={`rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(column.state)}`}>
@@ -59,7 +91,11 @@ export function WorkItemBoard({ items }: { items: WorkItem[] }) {
                   href={w.webUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="block rounded-md border border-line bg-surface-4 px-3 py-2.5 transition hover:border-primary/50 hover:shadow-sm"
+                  draggable={!!onMove}
+                  onDragStart={(e) => e.dataTransfer.setData('text/plain', String(w.id))}
+                  className={`block rounded-md border border-line bg-surface-4 px-3 py-2.5 transition hover:border-primary/50 hover:shadow-sm ${
+                    onMove ? 'cursor-grab active:cursor-grabbing' : ''
+                  }`}
                 >
                   <div className="line-clamp-2 text-sm break-words text-ink">{w.title}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-ink-3">
