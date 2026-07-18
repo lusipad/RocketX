@@ -5,6 +5,9 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
+import type { ExternalAgentConfigImportCompletedNotification } from '../agent/protocol/generated/v2/ExternalAgentConfigImportCompletedNotification';
+import { writeAgentSessionFile } from '../agent/attachments';
+import { claudeSessionJsonl, type TransferLine } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import {
@@ -63,6 +66,22 @@ let residentStatus: 'idle' | 'ready' | 'running' | 'interrupted' = 'idle';
 let residentTools = new Map<string, ButlerTool>();
 let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
+
+/** 会话导入完成通知的等待者与提前到达缓冲（通知可能先于请求响应到达） */
+const importWaiters = new Map<string, (result: ExternalAgentConfigImportCompletedNotification) => void>();
+const completedImports = new Map<string, ExternalAgentConfigImportCompletedNotification>();
+
+function dispatchImportCompleted(params: unknown): void {
+  const payload = params as ExternalAgentConfigImportCompletedNotification;
+  if (typeof payload?.importId !== 'string') return;
+  const waiter = importWaiters.get(payload.importId);
+  if (waiter) {
+    importWaiters.delete(payload.importId);
+    waiter(payload);
+  } else {
+    completedImports.set(payload.importId, payload);
+  }
+}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -251,7 +270,13 @@ async function ensureResidentClient(): Promise<AppServerClient> {
     const next = new AppServerClient(
       transportFactory(residentSessionId, residentWorkspaceRoot),
       {
-        onNotification: (method, params) => residentTurn?.onNotification(method, params),
+        onNotification: (method, params) => {
+          if (method === 'externalAgentConfig/import/completed') {
+            dispatchImportCompleted(params);
+            return;
+          }
+          residentTurn?.onNotification(method, params);
+        },
         onServerRequest: (request) => respondDynamicToolCall(
           request,
           residentThreadId,
@@ -401,6 +426,64 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
 /** 新对话：停掉并丢弃常驻线程，下次提问从全新线程（全新上下文）开始 */
 export async function discardResidentCodexThread(): Promise<void> {
   await stopResident(true);
+}
+
+/**
+ * 把 AI 对话转移进 Codex：经官方外部 Agent 会话导入器
+ * （externalAgentConfig/import）生成一条 App 认可来源的原生线程。
+ * app-server 直接创建的线程 source 是 appServer，Codex App 的会话列表
+ * 默认只显示交互来源，所以要在 App 里可见只能走导入。返回的是快照
+ * 副本——RocketX 里的对话继续在原线程上，不会双写。
+ */
+export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<void> {
+  const availability = codexBrainAvailability();
+  if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+  const client = await ensureResidentClient();
+  const sessionId = residentSessionId!;
+  const cwd = residentWorkspaceRoot!;
+  const jsonl = claudeSessionJsonl(lines, { sessionId: crypto.randomUUID(), cwd, now: Date.now() });
+  const file = await writeAgentSessionFile(
+    sessionId,
+    `codex-transfer/conversation-${Date.now()}.jsonl`,
+    jsonl,
+  );
+  const response = await client.request('externalAgentConfig/import', {
+    migrationItems: [
+      {
+        itemType: 'SESSIONS',
+        description: 'Transfer RocketX AI conversation',
+        cwd: null,
+        details: {
+          plugins: [],
+          skills: [],
+          sessions: [{ path: file.path, cwd, title: rocketxThreadName('AI 对话') }],
+          mcpServers: [],
+          hooks: [],
+          subagents: [],
+          commands: [],
+        },
+      },
+    ],
+  });
+  const completed = completedImports.get(response.importId);
+  completedImports.delete(response.importId);
+  const result = completed ?? await new Promise<ExternalAgentConfigImportCompletedNotification>(
+    (resolve, reject) => {
+      const timer = setTimeout(() => {
+        importWaiters.delete(response.importId);
+        reject(new Error('Codex 导入超时，请稍后重试'));
+      }, 30_000);
+      importWaiters.set(response.importId, (payload) => {
+        clearTimeout(timer);
+        resolve(payload);
+      });
+    },
+  );
+  const sessions = result.itemTypeResults.find((item) => item.itemType === 'SESSIONS');
+  const failure = sessions?.failures[0];
+  if (!sessions || failure || sessions.successes.length === 0) {
+    throw new Error(failure?.message ?? 'Codex 未接受这份对话导入');
+  }
 }
 
 /**

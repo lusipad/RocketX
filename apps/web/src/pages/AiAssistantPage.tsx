@@ -1,10 +1,12 @@
-import { Bot, Loader2, MessageSquarePlus, Search, Send, Square, TerminalSquare } from 'lucide-react';
+import { Bot, Loader2, MessageSquarePlus, Search, Send, Share2, Square, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import ButlerProcess from '../components/ButlerProcess';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
+import { transferConversationToCodexApp } from '../stores/butlerCodex';
+import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useButler } from '../stores/butler';
@@ -39,6 +41,23 @@ export default function AiAssistantPage() {
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
   const [input, setInput] = useState('');
+  const [transferring, setTransferring] = useState(false);
+  const hasConversation = lines.some((item) => item.role === 'user');
+
+  /** 转移到 Codex：导入成 App 认可来源的线程（app-server 线程默认不进 App 列表） */
+  const transferToCodex = async () => {
+    setTransferring(true);
+    try {
+      await transferConversationToCodexApp(
+        lines.map(({ role, text }) => ({ role, text })),
+      );
+      toast.success('已转移到 Codex，可在 Codex App / CLI 的会话列表里继续');
+    } catch (error) {
+      toast.error(error, '转移到 Codex 失败');
+    } finally {
+      setTransferring(false);
+    }
+  };
 
   // 恢复本账号保存的对话记录（重启后不再从欢迎语开始）
   useEffect(() => {
@@ -76,6 +95,15 @@ export default function AiAssistantPage() {
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => void transferToCodex()}
+              disabled={running || transferring || !hasConversation}
+              title="把当前对话转移到 Codex，在 Codex App / CLI 的会话列表里继续"
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
+            >
+              {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}
+              转到 Codex
+            </button>
             <button
               onClick={() => void newConversation()}
               disabled={running}
