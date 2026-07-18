@@ -179,14 +179,20 @@ export default function AiAssistantPage() {
         })),
       ...workResults.map<AssistantResult>((result) => {
         if (result.kind === 'todo') {
+          const { rid, mid } = result.item;
           return {
             id: `todo:${result.item.id}`,
             kind: 'todo',
-            title: result.item.note || result.item.excerpt,
+            title: result.item.note || result.item.excerpt || '（无文字内容）',
             detail: `${result.item.done ? '已完成' : '未完成'}${result.item.due ? ` · ${result.item.due}` : ''}`,
             open: async () => {
-              useUI.getState().setModule('messages');
-              await useChat.getState().jumpToMessage(result.item.mid, result.item.rid);
+              if (rid && mid) {
+                useUI.getState().setModule('messages');
+                await useChat.getState().jumpToMessage(mid, rid);
+              } else {
+                // 手动新建的待办没有来源消息可跳
+                useUI.getState().setModule('todos');
+              }
             },
           };
         }
@@ -213,16 +219,22 @@ export default function AiAssistantPage() {
   const queryResults = (command: Exclude<AssistantCommand, { type: 'search' | 'create_work_item' | 'help' }>): AssistantResult[] => {
     if (command.type === 'list_todos') {
       return todos
-        .filter((todo) => !todo.done && includes(`${todo.note ?? ''} ${todo.excerpt} ${todo.roomName}`, command.query))
+        .filter((todo) =>
+          !todo.done && includes(`${todo.note ?? ''} ${todo.excerpt ?? ''} ${todo.roomName ?? ''}`, command.query),
+        )
         .slice(0, 30)
         .map((todo) => ({
           id: `todo:${todo.id}`,
           kind: 'todo',
-          title: todo.note || todo.excerpt,
-          detail: `${todo.roomName}${todo.due ? ` · ${todo.due}` : ''}`,
+          title: todo.note || todo.excerpt || '（无文字内容）',
+          detail: `${todo.roomName ?? '手动新建'}${todo.due ? ` · ${todo.due}` : ''}`,
           open: async () => {
-            useUI.getState().setModule('messages');
-            await useChat.getState().jumpToMessage(todo.mid, todo.rid);
+            if (todo.rid && todo.mid) {
+              useUI.getState().setModule('messages');
+              await useChat.getState().jumpToMessage(todo.mid, todo.rid);
+            } else {
+              useUI.getState().setModule('todos');
+            }
           },
         }));
     }

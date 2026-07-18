@@ -151,6 +151,53 @@ test('旧版服务端的讨论加入在 store 层回退 DDP joinRoom', async () 
   assert.deepEqual(opened, [discussion._id]);
 });
 
+test('rooms.join 返回 405 时同样回退 DDP joinRoom（issue #62）', async () => {
+  const realtimeCalls: Array<{ method: string; params: unknown[] }> = [];
+  const opened: string[] = [];
+  rest.joinRoom = async () => {
+    throw new RcApiError('Method Not Allowed', 405);
+  };
+  realtime.call = (async (method: string, ...params: unknown[]) => {
+    realtimeCalls.push({ method, params });
+    return true;
+  }) as typeof realtime.call;
+  rest.getSubscriptions = async () => [subscription()];
+  rest.getRooms = async () => [discussion];
+  useChat.setState({
+    subscriptions: {},
+    rooms: { [discussion._id]: discussion },
+    openRoom: async (rid) => {
+      opened.push(rid);
+    },
+  });
+
+  await useChat.getState().joinRoom(discussion._id);
+
+  assert.deepEqual(realtimeCalls, [{ method: 'joinRoom', params: [discussion._id] }]);
+  assert.equal(useChat.getState().subscriptions[discussion._id]?.rid, discussion._id);
+  assert.deepEqual(opened, [discussion._id]);
+});
+
+test('rooms.join 的 403 等权限错误不走 DDP 回退', async () => {
+  const realtimeCalls: string[] = [];
+  rest.joinRoom = async () => {
+    throw new RcApiError('Forbidden', 403);
+  };
+  realtime.call = (async (method: string) => {
+    realtimeCalls.push(method);
+    return true;
+  }) as typeof realtime.call;
+  useChat.setState({
+    subscriptions: {},
+    rooms: { [discussion._id]: discussion },
+  });
+
+  await useChat.getState().joinRoom(discussion._id);
+
+  assert.deepEqual(realtimeCalls, []);
+  assert.equal(useChat.getState().subscriptions[discussion._id], undefined);
+});
+
 test('服务端已有讨论订阅时刷新本地快照并在打开后清理未读', async () => {
   const historyCalls: Array<{ rid: string; type: string }> = [];
   const readCalls: string[] = [];

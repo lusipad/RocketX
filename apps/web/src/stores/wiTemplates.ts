@@ -81,6 +81,19 @@ function inferredHierarchy(availableTypes: string[]): string[] {
   });
 }
 
+const EPIC_LEVEL = new Set(['epic', 'initiative']);
+
+/**
+ * 一键创建从 Feature 层起步：Epic/Initiative 属于长周期规划，不该随手批量建（issue #65）。
+ * 砍掉顶层后不足两级时保留原层级，避免把级联退化成单项创建。
+ */
+function withoutEpicLevel(hierarchy: string[]): string[] {
+  let start = 0;
+  while (start < hierarchy.length && EPIC_LEVEL.has(hierarchy[start].toLocaleLowerCase())) start++;
+  const trimmed = hierarchy.slice(start);
+  return trimmed.length >= 2 ? trimmed : hierarchy;
+}
+
 function hierarchyTemplate(types: string[]): WiTemplate {
   const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
   const chain = taskAtEnd ? types.slice(0, -1) : types;
@@ -116,7 +129,9 @@ export function workItemTemplatesForTypes(
   const exactHierarchy = processHierarchy
     .map((type) => actualType(type, availableTypes))
     .filter((type): type is string => !!type);
-  const hierarchy = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
+  const hierarchy = withoutEpicLevel(
+    exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes),
+  );
   return hierarchy.length >= 2 ? [hierarchyTemplate(hierarchy), ...compatible] : compatible;
 }
 

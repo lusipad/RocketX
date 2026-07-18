@@ -168,8 +168,13 @@ export default function TodayPage() {
       useUI.getState().setModule('messages');
       await useChat.getState().jumpToMessage(item.message._id, item.message.rid);
     } else if (item.kind === 'todo') {
-      useUI.getState().setModule('messages');
-      await useChat.getState().jumpToMessage(item.todo.mid, item.todo.rid);
+      if (item.todo.rid && item.todo.mid) {
+        useUI.getState().setModule('messages');
+        await useChat.getState().jumpToMessage(item.todo.mid, item.todo.rid);
+      } else {
+        // 手动新建的待办没有来源消息可跳
+        useUI.getState().setModule('todos');
+      }
     } else if (item.kind === 'event') {
       const calendar = useCalendar.getState();
       calendar.setCursor(item.occurrenceDate);
