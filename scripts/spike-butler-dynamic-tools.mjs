@@ -181,7 +181,7 @@ async function main() {
     });
 
     const initialized = await request('initialize', {
-      clientInfo: { name: 'rocketx-spike-d', title: 'RocketX Spike D', version: '0.22.0' },
+      clientInfo: { name: 'rocketx-spike-d', title: 'RocketX Spike D', version: '0.23.0' },
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
