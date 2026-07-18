@@ -19,6 +19,12 @@ import {
   type ButlerBrainKind,
   type ButlerCodexSettings,
 } from '../lib/butlerBrain';
+import {
+  DEFAULT_PERSONA,
+  getPersona,
+  resetPersona,
+  setPersona,
+} from '../lib/butlerProfile';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
@@ -50,6 +56,8 @@ export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
   const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
+  const [persona, setPersonaState] = useState<string>(getPersona);
+  const [savedPersona, setSavedPersona] = useState<string>(getPersona);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -156,6 +164,27 @@ export default function AiSettings() {
     setButlerCodexState(next);
   };
 
+  const savePersona = () => {
+    const value = persona.trim();
+    if (!value || value === DEFAULT_PERSONA) {
+      // 清空或改回默认文本都视为恢复默认
+      resetPersona();
+      setPersonaState(DEFAULT_PERSONA);
+      setSavedPersona(DEFAULT_PERSONA);
+    } else {
+      setPersona(persona);
+      setSavedPersona(persona);
+    }
+    toast.success('AI 人设已保存，对下一次提问生效');
+  };
+
+  const restoreDefaultPersona = () => {
+    resetPersona();
+    setPersonaState(DEFAULT_PERSONA);
+    setSavedPersona(DEFAULT_PERSONA);
+    toast.success('已恢复默认人设');
+  };
+
   const codexAvailability = codexBrainAvailability();
 
   return (
@@ -184,6 +213,34 @@ export default function AiSettings() {
                 },
               ]}
             />
+          </Row>
+          <Row
+            label="人设"
+            hint="只影响聊天里的 AI（AI 页面、房间 AI 面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，Codex 大脑会自动换用新线程。"
+          >
+            <textarea
+              aria-label="AI 人设"
+              value={persona}
+              onChange={(event) => setPersonaState(event.target.value)}
+              rows={5}
+              className="w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none transition focus:border-primary"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={savePersona}
+                disabled={persona === savedPersona}
+                className="h-8 rounded-md bg-primary px-3 text-sm text-white hover:opacity-90 disabled:opacity-50"
+              >
+                保存人设
+              </button>
+              <button
+                onClick={restoreDefaultPersona}
+                disabled={persona === DEFAULT_PERSONA && savedPersona === DEFAULT_PERSONA}
+                className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+              >
+                恢复默认
+              </button>
+            </div>
           </Row>
           {butlerBrain === 'codex' && (
             <>

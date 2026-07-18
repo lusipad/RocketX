@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   DEFAULT_PERSONA,
@@ -76,6 +77,17 @@ test('系统提示仅保留最近 30 条记忆，并从最旧项开始压缩到 
     assert.doesNotMatch(compactedPrompt, /旧事实/);
     assert.match(compactedPrompt, /最新事实/);
   });
+});
+
+test('AI 设置页提供人设编辑入口，托管纪律不受人设影响', () => {
+  const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
+  assert.match(settings, /label="人设"/);
+  assert.match(settings, /savePersona/);
+  assert.match(settings, /restoreDefaultPersona/);
+  assert.match(settings, /AI 托管的编码代理和安全纪律不受影响/);
+  // 托管指令构造不引用管家人设
+  const context = readFileSync('apps/web/src/agent/context.ts', 'utf8');
+  assert.doesNotMatch(context, /getPersona|DEFAULT_PERSONA|buildButlerSystemPrompt/);
 });
 
 test('人设可覆盖和复位，自定义技能可保存和删除', () => {
