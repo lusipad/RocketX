@@ -502,11 +502,17 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
 
+  // 基础设置直接可见：运行方式在最上面（报错提示会引导用户来这里切换大脑）
+  await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
-  await expect(page.getByText('Provider', { exact: true })).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
   await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
   await page.getByText('高级 AI 设置', { exact: true }).click();
-  await expect(page.getByText('Provider', { exact: true })).toBeVisible();
+  // 高级设置按保存方式分组：Provider/路由归「保存 AI 配置」，外部集成即时生效
+  await expect(page.getByRole('heading', { name: '模型 Provider' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '按能力路由' })).toBeVisible();
+  await expect(page.getByText('保存上方 Provider 与能力路由', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
