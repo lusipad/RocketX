@@ -2255,12 +2255,22 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return;
+    // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
+    // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
     const id = toast.loading(`正在发送 ${label}…`);
     set({ uploading: get().uploading + files.length });
     try {
-      for (const file of files) {
-        await rest.uploadMedia(rid, file, { tmid });
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
+      for (const [index, file] of files.entries()) {
+        await rest.uploadMedia(rid, file, {
+          tmid,
+          ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+        });
         set({ uploading: get().uploading - 1 });
       }
       toast.dismiss(id);
@@ -2277,14 +2287,21 @@ export const useChat = create<ChatState>((set, get) => ({
     const rid = get().activeRid;
     const me = useAuth.getState().user;
     if (!rid || !me || paths.length === 0) return;
+    // 原生拖拽文件回复也要带引用（issue #91 同类）。挂着引用时不走局域网
+    // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
     set({ uploading: get().uploading + paths.length });
     try {
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
       const { readFile, stat } = await import('@tauri-apps/plugin-fs');
-      for (const path of paths) {
+      for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
-        if (!tmid) {
+        if (!tmid && !quoteMsg) {
           const recipients = await lanRecipientIds(rid).catch(() => []);
           if (recipients.length === 1) {
             const messageId = randomMessageId();
@@ -2330,7 +2347,11 @@ export const useChat = create<ChatState>((set, get) => ({
             );
           }
           const bytes = await readFile(path);
-          await rest.uploadMedia(rid, new Blob([bytes]), { tmid, fileName });
+          await rest.uploadMedia(rid, new Blob([bytes]), {
+            tmid,
+            fileName,
+            ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+          });
         }
         set({ uploading: Math.max(0, get().uploading - 1) });
       }

@@ -41,7 +41,8 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, LinkifiedText } from '../lib/markdown';
-import { assetUrl } from '../lib/client';
+import { assetUrl, rest } from '../lib/client';
+import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
@@ -591,7 +592,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(messagesToMarkdown([message]));
+      // 图片消息复制真实位图（issue #92）；失败时退回文本，至少不空手
+      const copiedImage = await copyMessageImage(message, (path) => rest.fetchFile(path)).catch(
+        (error) => {
+          toast.error(error, '图片复制失败，已改为复制文本');
+          return false;
+        },
+      );
+      if (!copiedImage) await navigator.clipboard.writeText(messagesToMarkdown([message]));
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch (err) {

@@ -19,7 +19,7 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
   assert.match(proc, /codex_command_succeeds\(&\["app-server", "--help"\]\)/);
   assert.match(proc, /codex_command_succeeds\(&\["login", "status"\]\)/);
   assert.doesNotMatch(proc, /codex_runtime_login/);
-  assert.match(proc, /args\(\["app-server", "--stdio"\]\)/);
+  assert.match(proc, /\.args\(&launch_args\)/);
   assert.match(proc, /current_dir\(&workspace_root\)/);
   assert.doesNotMatch(proc, /CODEX_RUNNER_IMAGE|hidden_command\("docker"\)/);
   assert.doesNotMatch(localCodex, /RUNNER_WORKSPACE|rocketx_(?:read|write)/);
@@ -27,6 +27,32 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
   assert.doesNotMatch(tauri, /agent-runner\/Dockerfile/);
   assert.doesNotMatch(ci, /agent:runner:test/);
   assert.doesNotMatch(pkg, /agent:runner:(?:build|test)/);
+});
+
+test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版传了会以退出码 2 退出）', async () => {
+  const proc = await readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8');
+  // 按 app-server --help 是否列出 --stdio 决定传不传
+  assert.match(proc, /fn app_server_args_for_help\(help: &str\)/);
+  assert.match(proc, /help\.contains\("--stdio"\)/);
+  assert.match(proc, /let launch_args = app_server_launch_args\(\)\?;/);
+  // 不能再无条件传 --stdio
+  assert.doesNotMatch(proc, /args\(\["app-server", "--stdio"\]\)/);
+});
+
+test('codex exec 的可选参数同样按 --help 探测，协议/安全参数不降级', async () => {
+  const [proc, main] = await Promise.all([
+    readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8'),
+    readFile(new URL('apps/desktop/src-tauri/src/main.rs', root), 'utf8'),
+  ]);
+  assert.match(proc, /fn exec_optional_args_for_help\(help: &str\)/);
+  for (const flag of ['--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '--color']) {
+    assert.match(proc, new RegExp(`help\\.contains\\("${flag}"\\)`, 'u'));
+  }
+  // --json/--sandbox read-only 是协议与安全必需，始终显式传
+  assert.match(main, /args\(\["exec", "--json", "--sandbox", "read-only"\]\)/);
+  assert.match(main, /codex_exec_optional_args\(\)\?/);
+  // 可选参数不能再写死在 main.rs
+  assert.doesNotMatch(main, /"--ephemeral"/);
 });
 
 test('会话只保留一个 AI 托管入口，并支持按房间自动开启', async () => {

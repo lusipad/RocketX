@@ -116,17 +116,10 @@ fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult,
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
     let mut command = proc::codex_command()?;
-    command.args([
-        "exec",
-        "--json",
-        "--sandbox",
-        "read-only",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-    ]);
+    // --json/--sandbox 是协议与安全必需；其余参数按当前 CLI 的 --help 探测，
+    // 避免新版移除参数后 clap 直接以退出码 2 拒绝（与 app-server --stdio 同款问题）
+    command.args(["exec", "--json", "--sandbox", "read-only"]);
+    command.args(proc::codex_exec_optional_args()?);
     command.arg("-C").arg(&cache_dir).arg("-");
     command
         .stdin(Stdio::piped())

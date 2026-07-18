@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { AppServerClient, TauriCodexTransport, type ServerRequestPolicy } from '../agent/protocol';
+import { rocketxThreadName, workspaceLabel } from '../agent/threadName';
 import {
   commandRequestMentionsSensitivePath,
   redactAgentOutput,
@@ -360,6 +361,13 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       });
       set({ threadId: response.thread.id, status: 'ready', error: null });
       persist(get());
+      // 原生线程起名，codex resume / Codex App 列表里可辨认；失败不影响会话
+      void appServer
+        .request('thread/name/set', {
+          threadId: response.thread.id,
+          name: rocketxThreadName('执行间', workspaceLabel(state.workspaceRoot)),
+        })
+        .catch(() => undefined);
       trace('status', `已启动 Codex ${response.thread.cliVersion}`);
     } catch (error) {
       await stopClient();
@@ -385,6 +393,13 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       });
       set({ threadId: response.thread.id, status: 'ready', error: null });
       persist(get());
+      // 旧线程也补上名字
+      void appServer
+        .request('thread/name/set', {
+          threadId: response.thread.id,
+          name: rocketxThreadName('执行间', workspaceLabel(state.workspaceRoot)),
+        })
+        .catch(() => undefined);
       trace('status', '已恢复 Codex 会话');
     } catch (error) {
       await stopClient();

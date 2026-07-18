@@ -21,6 +21,7 @@ import {
   selectAgentContextMessages,
 } from '../agent/context';
 import { materializeAgentAttachments } from '../agent/attachments';
+import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
 import {
   SerialCommandQueue,
@@ -211,6 +212,25 @@ function trace(tmid: string, kind: AgentTrace['kind'], text: string): void {
       ),
     },
   }));
+}
+
+/**
+ * 托管线程是原生 Codex 线程（落盘于 CODEX_HOME 会话库，可在 codex resume /
+ * Codex App 里继续），起名让它在列表里可辨认。失败不影响托管本身。
+ */
+function nameCodexThread(appServer: AppServerClient, session: AgentSession): void {
+  if (!session.codexThreadId) return;
+  const chat = useChat.getState();
+  const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
+  const detail = session.workItem
+    ? `#${session.workItem.id} ${session.workItem.title}`
+    : room?.fname || room?.name || session.environmentName;
+  void appServer
+    .request('thread/name/set', {
+      threadId: session.codexThreadId,
+      name: rocketxThreadName('托管', detail),
+    })
+    .catch(() => undefined);
 }
 
 function sessionForThread(threadId: string): AgentSession | undefined {
@@ -603,6 +623,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         updatedAt: Date.now(),
       };
       updateSession(session);
+      nameCodexThread(appServer, session);
       trace(tmid, 'status', `Agent 会话已启动，Codex ${response.thread.cliVersion}`);
       const leaseMessage = await rest.sendMessage(rid, renderAgentSessionCard(cardFor(session)), replyTmid(session));
       session = { ...session, leaseMessageId: leaseMessage._id, updatedAt: Date.now() };
@@ -798,12 +819,14 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       sandbox: resuming.sandboxMode,
       excludeTurns: true,
     });
-    updateSession({
+    const resumed: AgentSession = {
       ...resuming,
       codexThreadId: response.thread.id,
       status: 'ready',
       updatedAt: Date.now(),
-    });
+    };
+    updateSession(resumed);
+    nameCodexThread(appServer, resumed); // 旧线程也补上名字
     trace(tmid, 'status', '已恢复 Codex 会话');
     await updateLeaseCard(get().sessions[tmid]);
   },

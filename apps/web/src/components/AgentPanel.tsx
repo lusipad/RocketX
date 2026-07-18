@@ -1,8 +1,10 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { Bot, Check, ChevronLeft, FolderOpen, Play, Shield, Square, Users, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Copy, FolderOpen, Play, Shield, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
+import { useStickToBottom } from '../lib/stickToBottom';
+import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
 import { environmentIsBusy, proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
@@ -58,6 +60,9 @@ export default function AgentPanel() {
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
+  // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
+  // 依赖用 store 里的原始引用，traces 的 `?? []` 每次渲染都是新数组
+  const { scrollRef, onScroll } = useStickToBottom([sessionTraces]);
 
   useEffect(() => {
     setAutoHost(!!rid && !!autoHostEnvironmentId(rid));
@@ -170,6 +175,23 @@ export default function AgentPanel() {
                 {session.access === 'host-only' ? '仅自己' : '房间成员'}
               </button>
             </div>
+            {session.codexThreadId ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-ink-3">Codex 线程</span>
+                <button
+                  title={`复制 codex resume ${session.codexThreadId}，可在 Codex CLI / App 里继续该线程`}
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(`codex resume ${session.codexThreadId}`)
+                      .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，避免两端同时写同一线程'));
+                  }}
+                  className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
+                >
+                  <Copy size={12} />
+                  <span className="truncate">codex resume</span>
+                </button>
+              </div>
+            ) : null}
             <div className="truncate text-xs text-ink-3" title={session.workspaceRoots[0]}>
               {session.workspaceRoots[0]}
             </div>
@@ -257,7 +279,7 @@ export default function AgentPanel() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-4">
             <div className="mb-2 text-xs font-medium text-ink-2">本地过程</div>
             {traces.length === 0 ? (
               <div className="py-8 text-center text-xs text-ink-3">等待话题中的 Agent 指令</div>

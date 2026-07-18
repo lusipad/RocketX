@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { shouldRestoreDialogFocus } from '../lib/focus';
 
 const FOCUSABLE = [
   'a[href]',
@@ -62,7 +63,12 @@ export function useDialogBehavior(onClose: () => void, active = true) {
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKey, true);
-      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+      if (previousFocus?.isConnected) {
+        requestAnimationFrame(() => {
+          // 关闭后已有组件接管焦点（如选中会话后聚焦输入框）就不抢回（issue #87）
+          if (shouldRestoreDialogFocus(document.activeElement, document.body)) previousFocus.focus();
+        });
+      }
     };
   }, [active]);
 

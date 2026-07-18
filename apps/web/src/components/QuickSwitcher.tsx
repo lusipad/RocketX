@@ -39,6 +39,7 @@ import {
   type SearchResultFilters,
   type SearchTimeRange,
 } from '../lib/searchFilters';
+import { focusComposerInput } from '../lib/focus';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 import { getSemanticSearchIndex } from '../kernel/ai/semantic-runtime';
@@ -546,6 +547,16 @@ export default function QuickSwitcher({
     void openRoom(rid);
     setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
+    focusComposerInput(); // 选中会话后光标直接进输入框（issue #87）
+  };
+
+  /** 联系人结果：发起/打开直聊，光标进输入框直接可以打字（issue #87） */
+  const pickContact = (username: string) => {
+    void startDM(username).then(() => {
+      setModule('messages');
+      onClose();
+      focusComposerInput();
+    });
   };
 
   /** 消息结果：跳转到该消息并高亮 */
@@ -599,12 +610,7 @@ export default function QuickSwitcher({
             name: personName(aliases, user.username, user.name || user.username, nameFormat),
             username: user.username,
           },
-          action: () => {
-            void startDM(user.username).then(() => {
-              setModule('messages');
-              onClose();
-            });
-          },
+          action: () => pickContact(user.username),
         })),
         ...contacts.rooms.slice(0, Math.max(0, 3 - contactUsers.length)).map((room) => ({
           section: 'contacts' as const,
@@ -688,12 +694,7 @@ export default function QuickSwitcher({
             ? fileResults.map((result) => () => pickFile(result))
             : tab === 'contacts'
               ? [
-                  ...contactUsers.map((u) => () => {
-                    void startDM(u.username).then(() => {
-                      setModule('messages');
-                      onClose();
-                    });
-                  }),
+                  ...contactUsers.map((u) => () => pickContact(u.username)),
                   ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
                 ]
               : workResults.map((result) => () => pickWork(result));
@@ -709,6 +710,7 @@ export default function QuickSwitcher({
     setModule('messages');
     void openRoom(room._id);
     onClose();
+    focusComposerInput(); // 选中频道后同样把光标送进输入框（issue #87）
   };
 
   return (
@@ -1178,12 +1180,7 @@ export default function QuickSwitcher({
                 return (
                 <button
                   key={u._id}
-                  onClick={() => {
-                    void startDM(u.username).then(() => {
-                      setModule('messages');
-                      onClose();
-                    });
-                  }}
+                  onClick={() => pickContact(u.username)}
                   onMouseEnter={() => setIndex(i)}
                   className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
                     i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FileText, X } from 'lucide-react';
+import { FileText, Reply, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
+import { stripAgentSessionMarker } from '../agent/card';
+import { stripQuotePrefix } from '../lib/messageText';
 import { useDialogBehavior } from './Dialog';
 
 function fmtSize(bytes: number): string {
@@ -14,6 +16,7 @@ export default function UploadConfirm() {
   const pendingFiles = useChat((s) => s.pendingFiles);
   const confirmUpload = useChat((s) => s.confirmUpload);
   const cancelUpload = useChat((s) => s.cancelUpload);
+  const replyTo = useChat((s) => s.replyTo);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const [busy, setBusy] = useState(false);
   const name = sub?.fname || sub?.name || '当前会话';
@@ -73,6 +76,15 @@ export default function UploadConfirm() {
           </button>
         </header>
 
+        {replyTo && (
+          <div className="mx-5 mb-1 flex items-center gap-1.5 truncate rounded bg-fill-1 px-2.5 py-1.5 text-xs text-ink-3">
+            <Reply size={13} className="shrink-0" />
+            <span className="truncate">
+              将作为回复发送 · {replyTo.u.name || replyTo.u.username}：
+              {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg ?? '')) || '[卡片消息]'}
+            </span>
+          </div>
+        )}
         <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-5 py-2">
           {previews.map(({ file, url }, i) => (
             <div

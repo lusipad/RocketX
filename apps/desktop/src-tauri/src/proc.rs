@@ -333,6 +333,64 @@ fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
     })
 }
 
+/// 子命令的 --help 文本，用来探测当前 CLI 版本还认识哪些参数。
+/// 部分包装脚本把用法打到 stderr，两路都收。
+fn subcommand_help(subcommand: &str) -> Result<String, String> {
+    let mut command = codex_command()?;
+    let output = command
+        .args([subcommand, "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Codex 无法启动：{error}"))?;
+    Ok(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+/// 基线 0.144.4 的 app-server 需要显式 `--stdio`；后续版本把 stdio 设为默认
+/// 并移除了该参数，继续传会被 clap 拒绝并立刻以退出码 2 退出（表现为
+/// 「Codex app-server 已退出（2）」）。按 `--help` 是否列出该参数决定传不传。
+fn app_server_args_for_help(help: &str) -> Vec<&'static str> {
+    if help.contains("--stdio") {
+        vec!["app-server", "--stdio"]
+    } else {
+        vec!["app-server"]
+    }
+}
+
+fn app_server_launch_args() -> Result<Vec<&'static str>, String> {
+    Ok(app_server_args_for_help(&subcommand_help("app-server")?))
+}
+
+/// `codex exec` 的可选参数同样存在版本漂移：任何一个被新版移除都会让进程
+/// 以退出码 2 直接退出（与 app-server --stdio 同构）。按 `exec --help` 是否
+/// 列出决定传不传；`--json` 与 `--sandbox` 是协议/安全必需，不做降级——
+/// 真缺了就让错误明确暴露，绝不能悄悄放开沙箱跑。
+pub(crate) fn exec_optional_args_for_help(help: &str) -> Vec<&'static str> {
+    let mut args = Vec::new();
+    if help.contains("--ephemeral") {
+        args.push("--ephemeral");
+    }
+    if help.contains("--ignore-user-config") {
+        args.push("--ignore-user-config");
+    }
+    if help.contains("--skip-git-repo-check") {
+        args.push("--skip-git-repo-check");
+    }
+    if help.contains("--color") {
+        args.extend(["--color", "never"]);
+    }
+    args
+}
+
+pub(crate) fn codex_exec_optional_args() -> Result<Vec<&'static str>, String> {
+    Ok(exec_optional_args_for_help(&subcommand_help("exec")?))
+}
+
 #[tauri::command]
 pub fn codex_runtime_probe() -> CodexRuntimeProbe {
     let resolved = match resolve_codex() {
@@ -524,9 +582,10 @@ pub fn codex_app_server_start(
         });
     }
 
+    let launch_args = app_server_launch_args()?;
     let mut command = codex_command()?;
     command
-        .args(["app-server", "--stdio"])
+        .args(&launch_args)
         .current_dir(&workspace_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -785,8 +844,9 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        decode_attachment_request, encode_message, host_path, parse_codex_cli_version,
-        safe_attachment_path, validate_session_id,
+        app_server_args_for_help, decode_attachment_request, encode_message,
+        exec_optional_args_for_help, host_path, parse_codex_cli_version, safe_attachment_path,
+        validate_session_id,
     };
     use serde_json::json;
     use std::path::Path;
@@ -872,6 +932,35 @@ mod tests {
             parse_codex_cli_version("Node.js v22.17.0 is required", false).as_deref(),
             Some("22.17.0")
         );
+    }
+
+    #[test]
+    fn app_server_stdio_flag_follows_cli_help() {
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --stdio  Serve over stdio"),
+            vec!["app-server", "--stdio"],
+        );
+        // 新版 CLI 移除了 --stdio（stdio 已是默认），传了会以退出码 2 拒绝
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --listen <ADDR>"),
+            vec!["app-server"],
+        );
+    }
+
+    #[test]
+    fn exec_optional_flags_follow_cli_help() {
+        assert_eq!(
+            exec_optional_args_for_help(
+                "--ephemeral  --ignore-user-config  --skip-git-repo-check  --color <WHEN>",
+            ),
+            vec!["--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--color", "never"],
+        );
+        // 新版移除的参数不再传，避免 clap 以退出码 2 拒绝
+        assert_eq!(
+            exec_optional_args_for_help("Usage: codex exec [OPTIONS]\n  --skip-git-repo-check"),
+            vec!["--skip-git-repo-check"],
+        );
+        assert_eq!(exec_optional_args_for_help("Usage: codex exec"), Vec::<&str>::new());
     }
 
     #[test]

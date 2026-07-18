@@ -5,6 +5,7 @@ import { useUI } from '../stores/ui';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
+import { focusComposerInput } from '../lib/focus';
 import { shortcutKeyOf } from '../lib/shortcutKey';
 import {
   clearTrayAttention,
@@ -424,7 +425,7 @@ export default function MainPage() {
         }}
         onFocusComposer={() => {
           useUI.getState().setModule('messages');
-          setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-composer-input]')?.focus());
+          focusComposerInput();
         }}
       />
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
