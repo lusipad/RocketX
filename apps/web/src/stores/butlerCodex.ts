@@ -398,6 +398,11 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
   }
 }
 
+/** 新对话：停掉并丢弃常驻线程，下次提问从全新线程（全新上下文）开始 */
+export async function discardResidentCodexThread(): Promise<void> {
+  await stopResident(true);
+}
+
 /**
  * 停止 AI 页面当前正在进行的回答：先请求服务端中断本轮，再就地完成
  * 本轮 Promise（保留已生成的部分内容）。没有进行中的轮次时是 no-op。

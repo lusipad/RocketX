@@ -47,5 +47,6 @@ test('管家面板启用可拖动宽度，其他面板仍使用固定外壳', as
   ]);
   assert.match(panelShell, /resizable\?: boolean/);
   assert.match(panelShell, /aria-label="调整 AI 面板宽度"/);
-  assert.match(butlerPanel, /<PanelShell title="AI" resizable>/);
+  // 标题带「新对话」按钮后成为节点，但仍走可拖宽的 PanelShell
+  assert.match(butlerPanel, /<PanelShell\s+title=\{[\s\S]*?AI[\s\S]*?\}\s+resizable\s*>/);
 });

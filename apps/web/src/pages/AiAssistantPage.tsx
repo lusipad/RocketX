@@ -1,4 +1,4 @@
-import { Bot, Loader2, Search, Send, Square, TerminalSquare } from 'lucide-react';
+import { Bot, Loader2, MessageSquarePlus, Search, Send, Square, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import ButlerProcess from '../components/ButlerProcess';
 import { getServerBase } from '../lib/client';
@@ -33,6 +33,7 @@ export default function AiAssistantPage() {
   const steps = useButler((state) => state.steps);
   const askButler = useButler((state) => state.ask);
   const stopButler = useButler((state) => state.stop);
+  const newConversation = useButler((state) => state.newConversation);
   const routineDraft = useButler((state) => state.routineDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
@@ -75,6 +76,14 @@ export default function AiAssistantPage() {
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => void newConversation()}
+              disabled={running}
+              title="清空当前对话并开启全新上下文"
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
+            >
+              <MessageSquarePlus size={13} />新对话
+            </button>
             <button onClick={() => useUI.getState().setModule('codex')} title="执行间" aria-label="执行间" className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
               <TerminalSquare size={13} />执行间
             </button>

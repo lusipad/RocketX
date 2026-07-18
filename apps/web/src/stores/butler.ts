@@ -8,6 +8,7 @@ import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } fr
 import { useAuth } from './auth';
 import {
   askButlerCodex,
+  discardResidentCodexThread,
   friendlyButlerCodexError,
   hydrateResidentCodexThread,
   residentCodexThreadSnapshot,
@@ -18,6 +19,9 @@ import { useRoutines } from './routines';
 const HISTORY_LIMIT = 40;
 /** 持久化的展示行上限：超出裁旧，避免本地存储无限增长 */
 const LINES_LIMIT = 200;
+/** 过期不续：超过这个时长没有对话活动，恢复时只回看不续上下文，防止上下文腐烂 */
+const CONTEXT_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
+const STALE_HINT = '📌 距上次对话已久，已开启全新上下文；以上历史仅供回看。';
 const APP_ID = 'builtin:butler';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
@@ -53,6 +57,8 @@ export interface ButlerState {
   ask: (text: string, context?: ButlerRoomContext) => Promise<void>;
   /** 停止当前回答：保留已生成内容，不当错误处理 */
   stop: () => Promise<void>;
+  /** 新对话：清空对话与持久化记录，丢弃 Codex 常驻线程，从全新上下文开始 */
+  newConversation: () => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   confirmRoutineDraft: () => void;
@@ -65,6 +71,8 @@ interface PersistedButler {
   lines: ButlerLine[];
   history: AiMessage[];
   codexThread?: { threadId: string; promptHash: string };
+  /** 最后一次对话活动时间，恢复时判断上下文是否过期 */
+  lastAt?: number;
 }
 
 type ButlerLoopRunner = typeof runAgentLoop;
@@ -107,6 +115,7 @@ async function persistButler(): Promise<void> {
   await (await butlerAppData()).set<PersistedButler>(APP_ID, persistScope, {
     lines: lines.slice(-LINES_LIMIT),
     history,
+    lastAt: butlerNow(),
     ...(codexThread ? { codexThread } : {}),
   });
 }
@@ -223,11 +232,17 @@ export const useButler = create<ButlerState>((set, get) => ({
       .catch(() => undefined);
     // 首次注水时用户可能已经开始新对话，不覆盖；切换账号则总是切到该账号的记录
     if (firstHydrate && get().lines.some((line) => line.role === 'user')) return;
+    const storedLines = stored?.lines?.length ? stored.lines.slice(-LINES_LIMIT) : welcomeLines();
+    // 过期不续：久未对话时旧记录仅供回看，模型上下文从头开始，防止上下文腐烂
+    const fresh = stored?.lastAt != null && butlerNow() - stored.lastAt <= CONTEXT_FRESH_MS;
+    const hadConversation = storedLines.some((item) => item.role === 'user');
+    const staleHintNeeded =
+      !fresh && hadConversation && storedLines.at(-1)?.text !== STALE_HINT;
     set({
-      lines: stored?.lines?.length ? stored.lines.slice(-LINES_LIMIT) : welcomeLines(),
-      history: trimButlerHistory(stored?.history ?? []),
+      lines: staleHintNeeded ? [...storedLines, line('assistant', STALE_HINT)] : storedLines,
+      history: fresh ? trimButlerHistory(stored?.history ?? []) : [],
     });
-    if (stored?.codexThread) {
+    if (fresh && stored?.codexThread) {
       hydrateResidentCodexThread(stored.codexThread.threadId, stored.codexThread.promptHash);
     }
   },
@@ -361,6 +376,22 @@ export const useButler = create<ButlerState>((set, get) => ({
       currentAbort?.abort(new Error('已停止'));
     }
     set({ activity: null });
+  },
+
+  newConversation: async () => {
+    if (get().running) await get().stop();
+    await discardResidentCodexThread();
+    set({
+      lines: welcomeLines(),
+      activity: null,
+      steps: [],
+      history: [],
+      running: false,
+      error: null,
+      routineDraft: null,
+    });
+    // 立即把清空后的状态落盘，别让旧记录在下次启动时诈尸
+    await flushButlerPersist();
   },
 
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
