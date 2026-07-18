@@ -40,9 +40,10 @@ import {
   type SearchTimeRange,
 } from '../lib/searchFilters';
 import { focusComposerInput } from '../lib/focus';
+import { useButler } from '../stores/butler';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
-import { getSemanticSearchIndex } from '../kernel/ai/semantic-runtime';
+import { getSemanticSearchIndex, semanticSearchAvailable } from '../kernel/ai/semantic-runtime';
 
 type Tab = QuickSearchTab;
 type ResultTab = Exclude<Tab, 'all'>;
@@ -537,6 +538,17 @@ export default function QuickSwitcher({
   };
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
+  // 语义搜索需要 embedding 模型；只有对话大模型时隐藏入口，别让用户点出报错（issue #95）
+  const semanticAvailable = useMemo(() => semanticSearchAvailable(), []);
+
+  /** 只有大模型也能「语义搜索」：把问题交给 AI 大脑，用工具查证后回答 */
+  const askAiFromSearch = () => {
+    const query = keyword.trim();
+    if (!query) return;
+    onClose();
+    useUI.getState().setModule('ai-assistant');
+    void useButler.getState().ask(query);
+  };
 
   const pickConv = (rid: string) => {
     const conversation = conversations.find((item) => item.rid === rid);
@@ -764,18 +776,29 @@ export default function QuickSwitcher({
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
-          <button
-            title="使用 AI embedding 按语义搜索已加载消息"
-            onClick={() => {
-              setSemanticMode((enabled) => !enabled);
-              setTab('messages');
-            }}
-            className={`flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs transition ${
-              semanticMode ? 'bg-primary-light text-primary' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
-            }`}
-          >
-            <Sparkles size={13} />语义
-          </button>
+          {semanticAvailable && (
+            <button
+              title="使用 AI embedding 按语义搜索已加载消息"
+              onClick={() => {
+                setSemanticMode((enabled) => !enabled);
+                setTab('messages');
+              }}
+              className={`flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs transition ${
+                semanticMode ? 'bg-primary-light text-primary' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <Sparkles size={13} />语义
+            </button>
+          )}
+          {!!keyword.trim() && (
+            <button
+              title="把这个问题交给 AI 大脑，用大模型理解语义并调用搜索工具回答"
+              onClick={askAiFromSearch}
+              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
+            >
+              <Sparkles size={13} />问 AI
+            </button>
+          )}
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
         </div>
 
