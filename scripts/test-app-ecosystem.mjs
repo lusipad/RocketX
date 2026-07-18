@@ -56,7 +56,7 @@ try {
   }
 
   const packedCliManifest = JSON.parse(run('tar', ['-xOf', cliTarball, 'package/package.json']));
-  assert.equal(packedCliManifest.dependencies['@rcx/app-sdk'], '0.21.1');
+  assert.equal(packedCliManifest.dependencies['@rcx/app-sdk'], '0.22.0');
 
   run(npm, ['init', '-y'], cleanRoom);
   run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', sdkTarball, cliTarball], cleanRoom);
