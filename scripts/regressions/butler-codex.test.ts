@@ -5,6 +5,8 @@ import {
   type CodexTransport,
 } from '../../apps/web/src/agent/protocol';
 import {
+  setButlerBrainStorage,
+  setButlerCodexSettings,
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
 } from '../../apps/web/src/lib/butlerBrain';
@@ -113,12 +115,14 @@ function testRuntime(transports: FakeTransport[]) {
     return transport;
   });
   const restoreWorkspace = setButlerCodexWorkspaceResolver(async () => 'C:/RocketX/AppData/butler');
+  const restoreBrainStorage = setButlerBrainStorage(new MemoryStorage());
   const restorePlatform = setButlerBrainTauriProvider(() => true);
   setCodexBrainUnavailableReason(undefined);
   return async () => {
     await resetButlerCodexRuntime();
     setCodexBrainUnavailableReason(undefined);
     restorePlatform();
+    restoreBrainStorage();
     restoreWorkspace();
     restoreTransport();
   };
@@ -145,7 +149,7 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     assert.match(String(threadParams.baseInstructions), /当前时间：2026-01-05 08:30 周一/);
     assert.deepEqual(
       (threadParams.dynamicTools as Array<Record<string, unknown>>).map((tool) => tool.name),
-      ['search_messages', 'search_people_rooms', 'list_todos', 'list_calendar', 'list_work_items', 'list_pull_requests', 'list_builds', 'load_skill', 'remember', 'draft_routine'],
+      ['search_messages', 'list_mentions', 'search_people_rooms', 'list_todos', 'list_calendar', 'list_work_items', 'list_pull_requests', 'list_builds', 'recall_memory', 'load_skill', 'remember', 'draft_routine'],
     );
 
     const turnStart = await startTurn(transport);
@@ -157,6 +161,25 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
 
     assert.deepEqual(await asking, { text: '完成。' });
     assert.deepEqual(events, ['content']);
+  } finally {
+    await restore();
+  }
+});
+
+test('用户配置的 Codex 模型与推理强度进入管家线程', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    setButlerCodexSettings({ model: 'gpt-5.4', effort: 'high' });
+    const asking = askButlerCodex({ text: '总结今天' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const threadStart = await startThread(transport);
+    assert.equal((threadStart.params as Record<string, unknown>).model, 'gpt-5.4');
+    const turnStart = await startTurn(transport);
+    assert.equal((turnStart.params as Record<string, unknown>).effort, 'high');
+    await completeTurn(transport);
+    assert.deepEqual(await asking, { text: '完成。' });
   } finally {
     await restore();
   }
@@ -247,5 +270,34 @@ test('人设或记忆提示变化会停止旧线程，并在下一问前重建',
   } finally {
     restoreProfile();
     await restoreRuntime();
+  }
+});
+
+test('Codex 模型或推理强度变化会停止旧线程，并在下一问前重建', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const first = askButlerCodex({ text: '第一问' });
+    const firstTransport = await transportAt(transports, 0);
+    await initialize(firstTransport);
+    await startThread(firstTransport);
+    await startTurn(firstTransport);
+    await completeTurn(firstTransport);
+    await first;
+
+    setButlerCodexSettings({ model: 'gpt-5.4', effort: 'high' });
+    const second = askButlerCodex({ text: '第二问' });
+    assert.equal(firstTransport.stopped, true);
+    const secondTransport = await transportAt(transports, 1);
+    await initialize(secondTransport);
+    const threadStart = await startThread(secondTransport, 'configured-thread');
+    assert.equal((threadStart.params as Record<string, unknown>).model, 'gpt-5.4');
+    const turnStart = await startTurn(secondTransport, 'configured-turn');
+    assert.equal((turnStart.params as Record<string, unknown>).effort, 'high');
+    await completeTurn(secondTransport, 'configured-thread', 'configured-turn');
+    await second;
+    assert.equal(transports.length, 2);
+  } finally {
+    await restore();
   }
 });

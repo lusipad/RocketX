@@ -5,6 +5,23 @@ const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'on
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = 'http://127.0.0.1:4173';
 
+function agentCardMessage() {
+  const card = {
+    version: 1,
+    sessionId: 'session-agent-room',
+    tmid: 'room:discussion-agent',
+    hostUserId: ALICE._id,
+    hostUsername: ALICE.username,
+    hostDeviceId: 'device-alice',
+    leaseExpiresAt: Date.now() + 3_600_000,
+    environmentName: 'RocketChat X',
+    workItem: { id: 128, project: 'RocketChatX', title: 'Login failure' },
+    proposedBranch: 'ai/128-login-failure',
+    status: 'active',
+  };
+  return `🤖 **AI 工作项会话：#128 Login failure**\n主持人：@alice · 状态：运行中\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify(card))}-->`;
+}
+
 const subscriptions = [
   {
     _id: 'sub-general',
@@ -23,6 +40,18 @@ const subscriptions = [
     t: 'c',
     name: 'project-alpha',
     fname: 'Project Alpha',
+    open: true,
+    unread: 0,
+    alert: false,
+    ls: NOW,
+  },
+  {
+    _id: 'sub-discussion-agent',
+    rid: 'discussion-agent',
+    t: 'p',
+    prid: 'room-general',
+    name: '128-login-failure',
+    fname: '#128 Login failure',
     open: true,
     unread: 0,
     alert: false,
@@ -61,6 +90,22 @@ const rooms = [
       u: ALICE,
     },
   },
+  {
+    _id: 'discussion-agent',
+    t: 'p',
+    prid: 'room-general',
+    name: '128-login-failure',
+    fname: '#128 Login failure',
+    usersCount: 2,
+    lm: NOW,
+    lastMessage: {
+      _id: 'agent-lease-card',
+      rid: 'discussion-agent',
+      msg: agentCardMessage(),
+      ts: NOW,
+      u: ALICE,
+    },
+  },
 ];
 
 const histories: Record<string, unknown[]> = {
@@ -85,6 +130,15 @@ const histories: Record<string, unknown[]> = {
       _id: 'project-latest',
       rid: 'room-project',
       msg: 'Project plan updated',
+      ts: NOW,
+      u: ALICE,
+    },
+  ],
+  'discussion-agent': [
+    {
+      _id: 'agent-lease-card',
+      rid: 'discussion-agent',
+      msg: agentCardMessage(),
       ts: NOW,
       u: ALICE,
     },
@@ -128,7 +182,7 @@ async function installRocketChatMock(page: Page) {
     if (endpoint === 'channels.members') {
       return fulfillJson(route, { members: [ME, ALICE], total: 2 });
     }
-    if (endpoint === 'channels.history') {
+    if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
       return fulfillJson(route, { messages: histories[rid] ?? [] });
     }
@@ -137,6 +191,18 @@ async function installRocketChatMock(page: Page) {
       sentMessages.push(body.message);
       return fulfillJson(route, {
         message: { ...body.message, ts: new Date().toISOString(), u: ME },
+      });
+    }
+    if (endpoint === 'rooms.createDiscussion') {
+      return fulfillJson(route, {
+        discussion: {
+          _id: 'discussion-128',
+          t: 'p',
+          prid: 'room-general',
+          name: '128-login-failure',
+          fname: '#128 Login failure',
+          usersCount: 1,
+        },
       });
     }
     if (endpoint === 'chat.getMessage') return fulfillJson(route, { message: null }, 404);
@@ -240,13 +306,207 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('管家提供执行间入口，Codex 不显示为侧栏一级入口', async ({ page }) => {
+test('AI 提供执行间入口，Codex 不显示为侧栏一级入口', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: /管家/ }).click();
-  await expect(page.getByText('本地规则处理明确查询，模糊表达由 Codex 解析；写操作始终需要你确认。')).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: 'AI', exact: true }).click();
+  await expect(page.getByText('直接告诉我你想了解什么，我会先查证据再回答。')).toBeVisible();
   await page.getByRole('button', { name: '执行间', exact: true }).click();
   await expect(page.getByText('执行间', { exact: true })).toBeVisible();
-  await expect(page.getByText('管家的本地执行工房：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
+  await expect(page.getByText('AI 的本地执行区：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('工作项可创建绑定本地环境的原生讨论', async ({ page }, testInfo) => {
+  const workItem = {
+    id: 128,
+    title: 'Login failure',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+    webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
+  };
+  await page.route('http://bridge.test/api/ado/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/config')) return fulfillJson(route, { webBase: 'http://ado.example', account: 'tester' });
+    if (path.endsWith('/workitems')) return fulfillJson(route, { items: [workItem] });
+    if (path.endsWith('/pullrequests')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/builds')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/workitem/128')) return fulfillJson(route, { item: workItem });
+    if (path.endsWith('/workitem/128/comment')) return fulfillJson(route, { success: true });
+    return fulfillJson(route, { success: true });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({ mode: 'bridge', bridge: 'http://bridge.test', account: 'tester' }));
+    localStorage.setItem('rcx-ado-web', 'http://ado.example');
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: ['RocketChatX'],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { sentMessages, pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /我的工作项/ }).click();
+  await expect(page.getByText('Login failure', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '为工作项 #128 创建讨论' }).click();
+  const dialog = page.getByRole('dialog', { name: '为 #128 创建讨论' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('本地环境')).toHaveValue('environment-main');
+  await dialog.screenshot({ path: testInfo.outputPath('workitem-discussion-dialog.png') });
+  await dialog.getByRole('checkbox').first().uncheck();
+  await dialog.getByRole('button', { name: '创建讨论', exact: true }).click();
+  await expect.poll(() => sentMessages.some((message) => message.rid === 'discussion-128')).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('工作项 Discussion 在会话头部显著标明由谁的 AI 托管', async ({ page }, testInfo) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, '#128 Login failure').click();
+  const badge = page.getByLabel('@alice 的 AI 正在提供服务');
+  await expect(badge).toBeVisible();
+  await expect(badge).toContainText('@alice 的 AI');
+  await expect(page.getByText(/rocketx-agent/)).toHaveCount(0);
+  await page.locator('main').screenshot({ path: testInfo.outputPath('agent-presence-message.png') });
+  await page.locator('main > header').screenshot({ path: testInfo.outputPath('agent-presence-header.png') });
+  expect(pageErrors).toEqual([]);
+});
+
+test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(1);
+  await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
+  expect(pageErrors).toEqual([]);
+});
+
+test('本机托管时再次点击同一按钮会退出且不会打开错误面板', async ({ page }) => {
+  const { pageErrors } = await installRocketChatMock(page);
+  await page.goto('/');
+  await page.evaluate(async ({ server, me }) => {
+    const now = Date.now();
+    const deviceId = 'device-ui-local';
+    localStorage.setItem('rcx-server', server);
+    localStorage.setItem('rcx-auth', JSON.stringify({ authToken: 'test-token', userId: me._id }));
+    localStorage.setItem('rcx-owner', `${me._id}@${server}`);
+    localStorage.setItem('rcx-agent-device-id', deviceId);
+    localStorage.setItem(
+      `rcx-onboarding-v1:${encodeURIComponent(server)}:${me._id}`,
+      JSON.stringify({
+        version: 1,
+        ado: 'skipped',
+        checklist: {
+          startedConversation: true,
+          sentMessage: true,
+          notificationsEnabled: true,
+          dismissed: true,
+        },
+      }),
+    );
+    const session = {
+      sessionId: 'session-local-room',
+      serverId: server,
+      ownerUserId: me._id,
+      rid: 'room-general',
+      tmid: 'room:room-general',
+      host: {
+        userId: me._id,
+        deviceId,
+        heartbeatAt: now,
+        expiresAt: now + 90_000,
+      },
+      access: 'room-members',
+      approvedMemberIds: [],
+      status: 'ready',
+      workspaceRoots: ['D:\\Repos\\rocketchatx'],
+      sandboxMode: 'read-only',
+      updatedAt: now,
+    };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('rocketchatx', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const key = `${encodeURIComponent(server)}:${encodeURIComponent(me._id)}:${encodeURIComponent('room:room-general')}`;
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction('app-data', 'readwrite');
+      transaction.objectStore('app-data').put(session, ['builtin:shared-agent', key]);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  }, { server: SERVER, me: ME });
+  await page.reload();
+  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  await conversation(page, 'General').click();
+
+  const stopButton = page.getByRole('button', { name: '关闭 AI 托管' });
+  await expect(stopButton).toBeVisible();
+  await stopButton.click();
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toBeVisible();
+  await expect(page.getByText('共享 Agent')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: ['RocketChatX'],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();
+  await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
+  await expect(page.getByText('Provider', { exact: true })).not.toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
+  await page.getByText('高级 AI 设置', { exact: true }).click();
+  await expect(page.getByText('Provider', { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

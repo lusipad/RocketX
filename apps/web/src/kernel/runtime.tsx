@@ -37,6 +37,7 @@ import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
+import { hydrateButlerArchive } from '../lib/butlerArchive';
 import { initializeAiRuntime } from './ai/runtime';
 import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
@@ -410,7 +411,7 @@ function registerBuiltins(): void {
     ['calendar', '日历', CalendarPage, undefined],
     ['workbench', '工作台', WorkbenchModule, undefined],
     ['contacts', '通讯录', ContactsPage, undefined],
-    ['ai-assistant', '管家', AiAssistantPage, Bot],
+    ['ai-assistant', 'AI', AiAssistantPage, Bot],
     ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
@@ -444,7 +445,7 @@ function registerBuiltins(): void {
   kernelRegistry.register('core', 'composer.command', {
     id: 'butler',
     name: 'ai',
-    description: '召唤管家，可直接跟上问题',
+    description: '打开 AI，可直接跟上问题',
     params: '问题（可选）',
     run: runButlerCommand,
   });
@@ -510,6 +511,6 @@ export function initializeKernel(): void {
   registerBridgeEvents();
   installedApps.setActivator(activateApp);
   bridgeHost.start();
-  startRoutineScheduler();
+  void hydrateButlerArchive().finally(startRoutineScheduler);
   void installedApps.hydrate().catch((error) => toast.error(error, '加载扩展应用失败'));
 }

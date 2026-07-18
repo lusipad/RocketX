@@ -32,6 +32,7 @@ const SCOPED_KEYS = [
   'rcx-ado-web',
   'rcx-custom-queries',
   'rcx-wi-last-projects',
+  'rcx-agent-environments',
 ];
 
 /**

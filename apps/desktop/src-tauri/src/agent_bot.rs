@@ -41,6 +41,15 @@ fn server_matches(configured: &str, current: &str) -> bool {
     configured == current
 }
 
+fn chat_message_body(rid: String, tmid: Option<String>, text: String) -> Result<String, String> {
+    let mut message = json!({"rid": rid, "msg": text});
+    if let Some(tmid) = tmid {
+        message["tmid"] = json!(tmid);
+    }
+    serde_json::to_string(&json!({ "message": message }))
+        .map_err(|error| format!("failed to encode Agent bot message: {error}"))
+}
+
 fn load() -> Result<Option<AgentBotConfig>, String> {
     match entry()?.get_password() {
         Ok(value) => serde_json::from_str(&value)
@@ -117,14 +126,14 @@ pub fn agent_bot_config_delete(lock: tauri::State<'_, AgentBotLock>) -> Result<(
 pub async fn agent_bot_send(
     server_url: String,
     rid: String,
-    tmid: String,
+    tmid: Option<String>,
     text: String,
 ) -> Result<Option<Value>, String> {
     let server_url = server_url.trim().trim_end_matches('/').to_string();
     if !(server_url.starts_with("http://") || server_url.starts_with("https://"))
         || !valid_plain(&server_url, 2048)
         || !valid_plain(&rid, 512)
-        || !valid_plain(&tmid, 512)
+        || tmid.as_deref().is_some_and(|value| !valid_plain(value, 512))
         || text.is_empty()
         || text.len() > 100_000
     {
@@ -137,10 +146,7 @@ pub async fn agent_bot_send(
         if !server_matches(&config.server_url, &server_url) {
             return Err("Agent bot is configured for a different Rocket.Chat server".to_string());
         }
-        let body = serde_json::to_string(&json!({
-            "message": {"rid": rid, "tmid": tmid, "msg": text}
-        }))
-        .map_err(|error| format!("failed to encode Agent bot message: {error}"))?;
+        let body = chat_message_body(rid, tmid, text)?;
         let response = winauth::blocking_token_request(
             &format!("{}/api/v1/chat.sendMessage", config.server_url),
             "POST",
@@ -161,7 +167,7 @@ pub async fn agent_bot_send(
 
 #[cfg(test)]
 mod tests {
-    use super::server_matches;
+    use super::{chat_message_body, server_matches};
 
     #[test]
     fn bot_credentials_only_match_the_active_server() {
@@ -173,5 +179,13 @@ mod tests {
             "https://chat.example",
             "https://other.example"
         ));
+    }
+
+    #[test]
+    fn bot_can_send_to_a_room_or_a_message_thread() {
+        let room = chat_message_body("room".into(), None, "hello".into()).unwrap();
+        let thread = chat_message_body("room".into(), Some("root".into()), "hello".into()).unwrap();
+        assert!(!room.contains("tmid"));
+        assert!(thread.contains("\"tmid\":\"root\""));
     }
 }

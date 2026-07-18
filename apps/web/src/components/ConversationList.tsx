@@ -50,11 +50,13 @@ function ConversationItem({
   active,
   viewMode,
   showAvatar,
+  avatarOnly,
 }: {
   conv: Conversation;
   active: boolean;
   viewMode: 'extended' | 'medium' | 'condensed';
   showAvatar: boolean;
+  avatarOnly: boolean;
 }) {
   const openRoom = useChat((s) => s.openRoom);
   const scrollToLatest = useChat((s) => s.scrollToLatest);
@@ -138,9 +140,15 @@ function ConversationItem({
       : { label: '隐藏会话', icon: EyeOff, danger: true, onClick: () => void hideConv(conv) },
   ];
 
-  const avatarSize = viewMode === 'extended' ? 40 : viewMode === 'medium' ? 34 : 26;
+  const avatarSize = avatarOnly
+    ? 40
+    : viewMode === 'extended'
+      ? 40
+      : viewMode === 'medium'
+        ? 34
+        : 26;
   const showPreview = viewMode === 'extended';
-  const padY = viewMode === 'condensed' ? 'py-1' : 'py-2';
+  const padY = avatarOnly ? 'py-2' : viewMode === 'condensed' ? 'py-1' : 'py-2';
 
   return (
     <>
@@ -168,8 +176,17 @@ function ConversationItem({
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      title={isIpmsg ? '未认证的本地兼容频道' : '拖到左侧分组可归类；右键更多操作'}
-      className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 ${padY} text-left transition ${
+      aria-label={avatarOnly ? shownName : undefined}
+      title={
+        avatarOnly
+          ? shownName
+          : isIpmsg
+            ? '未认证的本地兼容频道'
+            : '拖到左侧分组可归类；右键更多操作'
+      }
+      className={`flex w-full cursor-pointer items-center rounded-lg ${
+        avatarOnly ? 'justify-center px-1' : 'gap-2.5 px-2.5'
+      } ${padY} text-left transition ${
         active ? 'bg-fill-active' : 'hover:bg-fill-hover'
       } ${dragging ? 'opacity-40 ring-1 ring-primary ring-inset' : ''}`}
     >
@@ -199,63 +216,68 @@ function ConversationItem({
           ) : null}
         </div>
       )}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-ink">
-            {conv.isTeam ? (
-              <Users size={12} className="shrink-0 text-ink-3" />
-            ) : conv.isMultiDM ? (
-              <UsersRound size={12} className="shrink-0 text-ink-3" />
-            ) : conv.type === 'p' ? (
-              <Lock size={12} className="shrink-0 text-ink-3" />
-            ) : conv.type === 'c' ? (
-              <Hash size={12} className="shrink-0 text-ink-3" />
-            ) : null}
-            <span className="truncate" title={currentAlias ? `原名：${conv.name}` : undefined}>
-              {shownName}
+      {!avatarOnly && (
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-ink">
+              {conv.isTeam ? (
+                <Users size={12} className="shrink-0 text-ink-3" />
+              ) : conv.isMultiDM ? (
+                <UsersRound size={12} className="shrink-0 text-ink-3" />
+              ) : conv.type === 'p' ? (
+                <Lock size={12} className="shrink-0 text-ink-3" />
+              ) : conv.type === 'c' ? (
+                <Hash size={12} className="shrink-0 text-ink-3" />
+              ) : null}
+              <span
+                className="truncate"
+                title={currentAlias ? `原名：${conv.name}` : undefined}
+              >
+                {shownName}
+              </span>
+              {conv.userMentions > 0 && (
+                <span
+                  className="shrink-0 rounded bg-danger px-1 text-2xs font-medium text-white"
+                  title="有人 @ 了你"
+                >
+                  @
+                </span>
+              )}
+              {conv.muted && <BellOff size={11} className="shrink-0 text-ink-3" />}
             </span>
-            {conv.userMentions > 0 && (
-              <span
-                className="shrink-0 rounded bg-danger px-1 text-2xs font-medium text-white"
-                title="有人 @ 了你"
-              >
-                @
-              </span>
-            )}
-            {conv.muted && <BellOff size={11} className="shrink-0 text-ink-3" />}
-          </span>
-          <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-3">
-            {conv.favorite && <Pin size={10} className="text-primary" />}
-            {viewMode !== 'condensed' && fmtConvTime(conv.lastTs)}
-            {/* 不显示头像时未读角标挪到右侧 */}
-            {!showAvatar && conv.unread > 0 && (
-              <span
-                className={`flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-2xs text-white ${
-                  conv.muted ? 'bg-ink-3' : 'bg-danger'
-                }`}
-              >
-                {conv.unread > 99 ? '99+' : conv.unread}
-              </span>
-            )}
-          </span>
-        </div>
-        {showPreview && (
-          <div
-            className={`mt-0.5 truncate text-xs ${
-              conv.unread > 0 || conv.alert ? 'text-ink-2' : 'text-ink-3'
-            }`}
-          >
-            {showDraft ? (
-              <>
-                <span className="text-danger">[草稿] </span>
-                {draft}
-              </>
-            ) : (
-              conv.lastPreview || ' '
-            )}
+            <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-3">
+              {conv.favorite && <Pin size={10} className="text-primary" />}
+              {viewMode !== 'condensed' && fmtConvTime(conv.lastTs)}
+              {/* 不显示头像时未读角标挪到右侧 */}
+              {!showAvatar && conv.unread > 0 && (
+                <span
+                  className={`flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-2xs text-white ${
+                    conv.muted ? 'bg-ink-3' : 'bg-danger'
+                  }`}
+                >
+                  {conv.unread > 99 ? '99+' : conv.unread}
+                </span>
+              )}
+            </span>
           </div>
-        )}
-      </div>
+          {showPreview && (
+            <div
+              className={`mt-0.5 truncate text-xs ${
+                conv.unread > 0 || conv.alert ? 'text-ink-2' : 'text-ink-3'
+              }`}
+            >
+              {showDraft ? (
+                <>
+                  <span className="text-danger">[草稿] </span>
+                  {draft}
+                </>
+              ) : (
+                conv.lastPreview || ' '
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </button>
       {/* 弹窗移到 button 外：React 事件沿组件树冒泡，放里面点弹窗任意处都会触发
           外层会话按钮的 onClick（切会话+标已读），还有 button 套 button 的非法嵌套（P1-15） */}
@@ -330,7 +352,13 @@ const NEW_ACTIONS: Partial<
   teams: { label: '创建团队', dialog: 'team', icon: Users },
 };
 
-export default function ConversationList({ width = 280 }: { width?: number }) {
+export default function ConversationList({
+  width = 280,
+  avatarOnly = false,
+}: {
+  width?: number;
+  avatarOnly?: boolean;
+}) {
   // 跨过零点后「昨天 / 周X」这类相对时间要跟着变
   useDayTick();
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
@@ -390,7 +418,7 @@ export default function ConversationList({ width = 280 }: { width?: number }) {
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   const viewMode = prefs.sidebarViewMode;
   const showAvatar = prefs.sidebarDisplayAvatar;
-  const showHeaders = !folder && filter === 'all' && (prefs.sidebarGroupByType);
+  const showHeaders = !avatarOnly && !folder && filter === 'all' && prefs.sidebarGroupByType;
   const title = folder ? folder.name : FILTER_TITLE[filter];
 
   /**
@@ -409,20 +437,22 @@ export default function ConversationList({ width = 280 }: { width?: number }) {
       style={{ width }}
       className="flex shrink-0 flex-col border-r border-line bg-surface-2"
     >
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <span className="text-[15px] font-semibold text-ink">{title}</span>
-        {newAction && (
-          <button
-            onClick={openNew}
-            title={newAction.label}
-            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          >
-            <Plus size={15} />
-          </button>
-        )}
-      </div>
+      {!avatarOnly && (
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <span className="text-[15px] font-semibold text-ink">{title}</span>
+          {newAction && (
+            <button
+              onClick={openNew}
+              title={newAction.label}
+              className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            >
+              <Plus size={15} />
+            </button>
+          )}
+        </div>
+      )}
       <div
-        className="flex-1 overflow-y-auto px-2 pb-2"
+        className={`flex-1 overflow-y-auto pb-2 ${avatarOnly ? 'px-1 pt-2' : 'px-2'}`}
         onContextMenu={(e) => {
           // 只处理空白处的右键；会话行自己有菜单，别抢它的
           if ((e.target as HTMLElement).closest('button')) return;
@@ -431,8 +461,8 @@ export default function ConversationList({ width = 280 }: { width?: number }) {
           setBgMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {!ready && <LoadingConversations />}
-        {ready && total === 0 && (
+        {!avatarOnly && !ready && <LoadingConversations />}
+        {!avatarOnly && ready && total === 0 && (
           <div className="p-4 text-center text-sm leading-relaxed text-ink-3">
             {folder ? (
               <>
@@ -493,10 +523,23 @@ export default function ConversationList({ width = 280 }: { width?: number }) {
                       }}
                       className={dropTarget === c.rid ? 'border-t-2 border-primary' : ''}
                     >
-                      <ConversationItem conv={c} active={c.rid === activeRid} viewMode={viewMode} showAvatar={showAvatar} />
+                      <ConversationItem
+                        conv={c}
+                        active={c.rid === activeRid}
+                        viewMode={viewMode}
+                        showAvatar={avatarOnly || showAvatar}
+                        avatarOnly={avatarOnly}
+                      />
                     </div>
                   ) : (
-                    <ConversationItem key={c.rid} conv={c} active={c.rid === activeRid} viewMode={viewMode} showAvatar={showAvatar} />
+                    <ConversationItem
+                      key={c.rid}
+                      conv={c}
+                      active={c.rid === activeRid}
+                      viewMode={viewMode}
+                      showAvatar={avatarOnly || showAvatar}
+                      avatarOnly={avatarOnly}
+                    />
                   ),
                 )}
             </div>

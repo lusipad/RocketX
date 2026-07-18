@@ -49,7 +49,7 @@ export default function ButlerPanel() {
   };
 
   return (
-    <PanelShell title="管家">
+    <PanelShell title="AI" resizable>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         {hasConversation ? lines.map((line) => (
           <div key={line.id} className={`mb-3 flex gap-2 ${line.role === 'user' ? 'justify-end' : ''}`}>

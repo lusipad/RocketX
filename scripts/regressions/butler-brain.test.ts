@@ -3,8 +3,10 @@ import test from 'node:test';
 import {
   codexBrainAvailability,
   getButlerBrain,
+  getButlerCodexSettings,
   setButlerBrain,
   setButlerBrainStorage,
+  setButlerCodexSettings,
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
   type ButlerBrainStorage,
@@ -35,6 +37,23 @@ test('管家大脑按平台给默认值，并持久化显式选择', () => {
     assert.equal(getButlerBrain(), 'api');
   } finally {
     restorePlatform();
+    restoreStorage();
+  }
+});
+
+test('Codex 模型和推理强度可配置，非法存储值安全回退', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerBrainStorage(storage);
+  try {
+    assert.deepEqual(getButlerCodexSettings(), { model: '', effort: 'medium' });
+    setButlerCodexSettings({ model: ' gpt-5.4 ', effort: 'high' });
+    assert.deepEqual(getButlerCodexSettings(), { model: 'gpt-5.4', effort: 'high' });
+    assert.equal(storage.get('rcx-butler-v1:codex-model'), 'gpt-5.4');
+    assert.equal(storage.get('rcx-butler-v1:codex-effort'), 'high');
+
+    storage.set('rcx-butler-v1:codex-effort', 'unsupported');
+    assert.deepEqual(getButlerCodexSettings(), { model: 'gpt-5.4', effort: 'medium' });
+  } finally {
     restoreStorage();
   }
 });

@@ -1,8 +1,17 @@
 import { isTauri } from './http';
 
 const BRAIN_KEY = 'rcx-butler-v1:brain';
+const CODEX_MODEL_KEY = 'rcx-butler-v1:codex-model';
+const CODEX_EFFORT_KEY = 'rcx-butler-v1:codex-effort';
 
 export type ButlerBrainKind = 'api' | 'codex';
+export const BUTLER_CODEX_EFFORTS = ['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+export type ButlerCodexEffort = (typeof BUTLER_CODEX_EFFORTS)[number];
+
+export interface ButlerCodexSettings {
+  model: string;
+  effort: ButlerCodexEffort;
+}
 
 export interface ButlerBrainStorage {
   get(key: string): string | null;
@@ -31,6 +40,18 @@ export function getButlerBrain(): ButlerBrainKind {
 
 export function setButlerBrain(brain: ButlerBrainKind): void {
   brainStorage.set(BRAIN_KEY, brain);
+}
+
+export function getButlerCodexSettings(): ButlerCodexSettings {
+  const model = brainStorage.get(CODEX_MODEL_KEY)?.trim() ?? '';
+  const savedEffort = brainStorage.get(CODEX_EFFORT_KEY);
+  const effort = BUTLER_CODEX_EFFORTS.find((value) => value === savedEffort) ?? 'medium';
+  return { model, effort };
+}
+
+export function setButlerCodexSettings(settings: ButlerCodexSettings): void {
+  brainStorage.set(CODEX_MODEL_KEY, settings.model.trim());
+  brainStorage.set(CODEX_EFFORT_KEY, settings.effort);
 }
 
 export function codexBrainAvailability(): { available: boolean; reason?: string } {

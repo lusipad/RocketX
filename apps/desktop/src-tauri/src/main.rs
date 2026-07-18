@@ -13,7 +13,7 @@ use std::{
     collections::HashSet,
     io::{Read, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::Mutex,
     thread,
     time::{Duration, Instant},
@@ -115,7 +115,7 @@ fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult,
     }
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
-    let mut command = Command::new("codex");
+    let mut command = proc::codex_command()?;
     command.args([
         "exec",
         "--json",
@@ -132,11 +132,6 @@ fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult,
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("Codex CLI is unavailable: {error}"))?;
@@ -485,6 +480,7 @@ fn main() {
             ai_secret_get,
             ai_secret_delete,
             codex_exec_once,
+            proc::codex_runtime_probe,
             proc::codex_app_server_start,
             proc::codex_app_server_write,
             proc::codex_app_server_stop,

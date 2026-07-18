@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import {
   AtSign,
   Bot,
@@ -14,6 +14,11 @@ import {
   Users,
 } from 'lucide-react';
 import { roomMembershipPolicy, useChat, type RightPanel } from '../stores/chat';
+import { useAuth } from '../stores/auth';
+import { useSharedAgent } from '../stores/sharedAgent';
+import { agentRoomSessionKey } from '../stores/agentEnvironments';
+import { toast } from '../stores/toast';
+import { autoHostEnvironmentId, startRoomAgentHosting } from '../lib/agentHosting';
 import { displayName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
 import MessageList from './MessageList';
@@ -65,6 +70,11 @@ export default function ChatArea({
   const requestUpload = useChat((s) => s.requestUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
+  const agentSessionKey = activeRid ? agentRoomSessionKey(activeRid) : '';
+  const localAgent = useSharedAgent((s) => (agentSessionKey ? s.sessions[agentSessionKey] : undefined));
+  const remoteAgent = useSharedAgent((s) => (agentSessionKey ? s.remoteCards[agentSessionKey] : undefined));
+  const endAgentSession = useSharedAgent((s) => s.endSession);
+  const me = useAuth((s) => s.user);
   const openRoom = useChat((s) => s.openRoom);
   const joinRoom = useChat((s) => s.joinRoom);
   const parentRoom = useChat((s) => {
@@ -81,10 +91,33 @@ export default function ChatArea({
         .map(([name]) => name)
     : [];
   const [dragging, setDragging] = useState(false);
+  const [hosting, setHosting] = useState(false);
+  const [stoppingHosting, setStoppingHosting] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const ActivePanel = rightPanel
     ? registeredPanels.find((candidate) => candidate.id === rightPanel.kind)?.render
     : undefined;
+
+  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
+
+  useEffect(() => {
+    if (!activeRid || activeRid === IPMSG_RID) return;
+    const sharedAgent = useSharedAgent.getState();
+    const sessionKey = agentRoomSessionKey(activeRid);
+    const local = sharedAgent.sessions[sessionKey];
+    const remote = sharedAgent.remoteCards[sessionKey];
+    if (local && local.status !== 'ended') return;
+    if (remote && remote.status !== 'ended' && remote.leaseExpiresAt > Date.now()) return;
+    const environmentId = autoHostEnvironmentId(activeRid);
+    if (!environmentId) return;
+    const chat = useChat.getState();
+    const currentRoom = chat.rooms[activeRid];
+    const currentSubscription = chat.subscriptions[activeRid];
+    const title = currentSubscription?.fname || currentSubscription?.name || currentRoom?.fname || currentRoom?.name || '会话';
+    void startRoomAgentHosting(activeRid, title, environmentId).catch((error) => {
+      toast.error(error, '自动开启 AI 托管失败');
+    });
+  }, [activeRid]);
 
   if (!activeRid) {
     return (
@@ -103,7 +136,6 @@ export default function ChatArea({
 
   if (activeRid === IPMSG_RID) return <IpmsgChatArea />;
 
-  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
   // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像顶上
   const dmSize = room?.uids?.length ?? room?.usersCount;
   const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
@@ -112,6 +144,35 @@ export default function ChatArea({
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
   const { requiresJoin, canCompose } = roomMembershipPolicy(!!sub, room);
+  const localAgentActive = localAgent && localAgent.status !== 'ended' ? localAgent : undefined;
+  const remoteAgentActive = remoteAgent && remoteAgent.status !== 'ended' && remoteAgent.leaseExpiresAt > Date.now()
+    ? remoteAgent
+    : undefined;
+  const agentPresence = localAgentActive
+    ? {
+        username: me?.username ?? localAgentActive.host.userId,
+        environmentName: localAgentActive.environmentName,
+        status: localAgentActive.status,
+      }
+    : remoteAgentActive
+      ? {
+          username: remoteAgentActive.hostUsername,
+          environmentName: remoteAgentActive.environmentName,
+          status: remoteAgentActive.status,
+        }
+      : undefined;
+  const agentStatus = agentPresence?.status === 'running'
+    ? '正在工作'
+    : agentPresence?.status === 'waiting-approval'
+      ? '等待审批'
+      : agentPresence?.status === 'starting'
+        ? '正在启动'
+        : agentPresence?.status === 'interrupted'
+          ? '已中断'
+          : agentPresence?.status === 'ready'
+            ? '待命'
+            : '正在提供服务';
+  const agentBusy = ['running', 'starting', 'waiting-approval', 'active'].includes(agentPresence?.status ?? '');
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
     setPanel(rightPanel?.kind === panel.kind ? null : panel);
@@ -123,6 +184,30 @@ export default function ChatArea({
     if (!canCompose) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) requestUpload(files);
+  };
+
+  const startHosting = async () => {
+    if (hosting) return;
+    setHosting(true);
+    try {
+      await startRoomAgentHosting(activeRid, rawName);
+    } catch (error) {
+      toast.error(error, '开启 AI 托管失败');
+    } finally {
+      setHosting(false);
+    }
+  };
+
+  const stopHosting = async () => {
+    if (!localAgentActive || stoppingHosting) return;
+    setStoppingHosting(true);
+    try {
+      await endAgentSession(agentSessionKey);
+    } catch (error) {
+      toast.error(error, '退出 AI 托管失败');
+    } finally {
+      setStoppingHosting(false);
+    }
   };
 
   return (
@@ -155,10 +240,10 @@ export default function ChatArea({
             />
           </button>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 onClick={() => togglePanel({ kind: 'info' })}
-                className="truncate text-[15px] font-semibold text-ink transition hover:text-primary"
+                className="min-w-0 truncate text-[15px] font-semibold text-ink transition hover:text-primary"
                 title="查看群信息"
               >
                 {name}
@@ -173,6 +258,43 @@ export default function ChatArea({
                 >
                   <Users size={13} />
                   {memberCount}
+                </button>
+              ) : null}
+              {!agentPresence ? (
+                <button
+                  aria-label="开启 AI 托管"
+                  title="让本机 AI 从当前会话继续提供服务"
+                  disabled={hosting}
+                  onClick={() => void startHosting()}
+                  className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-primary-light hover:text-primary"
+                >
+                  <Bot size={13} />
+                  {hosting ? '正在开启…' : 'AI 托管'}
+                </button>
+              ) : null}
+              {agentPresence ? (
+                <button
+                  aria-label={localAgentActive ? '关闭 AI 托管' : `@${agentPresence.username} 的 AI ${agentStatus}`}
+                  title={localAgentActive
+                    ? `点击退出 AI 托管 · ${stoppingHosting ? '正在关闭' : agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''}`
+                    : `@${agentPresence.username} 的 AI · ${agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''}`}
+                  disabled={!localAgentActive || stoppingHosting}
+                  onClick={() => void stopHosting()}
+                  className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface px-2.5 text-xs text-primary shadow-sm disabled:cursor-default"
+                >
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    {agentBusy ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-50" /> : null}
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${agentPresence.status === 'interrupted' ? 'bg-ink-3' : agentPresence.status === 'waiting-approval' ? 'bg-warning' : 'bg-primary'}`} />
+                  </span>
+                  <Bot size={13} className="shrink-0" />
+                  <span className="shrink-0 font-semibold">@{agentPresence.username} 的 AI</span>
+                  <span className="h-3 w-px shrink-0 bg-primary/25" />
+                  <span className="shrink-0 text-2xs font-medium">{stoppingHosting ? '正在关闭' : agentStatus}</span>
+                  {agentPresence.environmentName ? (
+                    <span className="hidden min-w-0 truncate border-l border-primary/20 pl-1.5 text-2xs text-ink-3 2xl:inline">
+                      {agentPresence.environmentName}
+                    </span>
+                  ) : null}
                 </button>
               ) : null}
             </div>
@@ -215,7 +337,7 @@ export default function ChatArea({
             />
             <HeaderButton
               icon={Bot}
-              label="管家"
+              label="AI"
               active={rightPanel?.kind === 'butler'}
               onClick={() => togglePanel({ kind: 'butler' })}
             />

@@ -1,4 +1,4 @@
-import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, Circle, ExternalLink, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, X } from 'lucide-react';
+import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, Circle, ExternalLink, GitPullRequest, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, Workflow, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
@@ -19,6 +19,8 @@ const kindMeta = {
   todo: { label: '待办', icon: SquareCheckBig, color: 'text-warning' },
   event: { label: '日程', icon: CalendarDays, color: 'text-purple-500' },
   workitem: { label: '工作项', icon: ExternalLink, color: 'text-success' },
+  pr: { label: 'PR', icon: GitPullRequest, color: 'text-primary' },
+  build: { label: '构建', icon: Workflow, color: 'text-danger' },
   ipmsg: { label: '局域网', icon: Radio, color: 'text-warning' },
 } as const;
 
@@ -104,9 +106,12 @@ export default function TodayPage() {
   const todos = useTodos((state) => state.todos);
   const events = useCalendar((state) => state.events);
   const workItems = useWorkbench((state) => state.workItems);
+  const pullRequests = useWorkbench((state) => state.prs);
+  const builds = useWorkbench((state) => state.builds);
   const config = useWorkbench((state) => state.config);
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
   const refreshWorkbench = useWorkbench((state) => state.refresh);
+  const workbenchLoading = useWorkbench((state) => state.loading);
   const mentions = useToday((state) => state.mentions);
   const ipmsgMessages = useIpmsg((state) => state.messages);
   const processed = useToday((state) => state.processed);
@@ -140,8 +145,20 @@ export default function TodayPage() {
       : config.bridge ?? 'bridge'
     : 'unconfigured';
   const items = useMemo(
-    () => buildTodayItems({ mentions, todos, events, workItems, ipmsg: ipmsgMessages, scope, adoScope, processed }),
-    [adoScope, events, ipmsgMessages, mentions, processed, scope, todos, workItems],
+    () => buildTodayItems({
+      mentions,
+      todos,
+      events,
+      workItems,
+      pullRequests,
+      builds,
+      adoAccount: config?.account,
+      ipmsg: ipmsgMessages,
+      scope,
+      adoScope,
+      processed,
+    }),
+    [adoScope, builds, config?.account, events, ipmsgMessages, mentions, processed, pullRequests, scope, todos, workItems],
   );
   const completion = todayCompletion(items);
   const visible = showDone ? items : items.filter((item) => !item.processed);
@@ -162,8 +179,12 @@ export default function TodayPage() {
     } else if (item.kind === 'ipmsg') {
       useUI.getState().setModule('messages');
       await useChat.getState().openRoom(IPMSG_RID);
-    } else {
+    } else if (item.kind === 'workitem') {
       await openExternal(item.workItem.webUrl);
+    } else if (item.kind === 'pr') {
+      await openExternal(item.pullRequest.webUrl);
+    } else {
+      await openExternal(item.build.webUrl);
     }
   };
 
@@ -173,21 +194,21 @@ export default function TodayPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Sparkles size={20} className="text-primary" />今日</div>
-            <p className="mt-1 text-sm text-ink-3">@我、局域网消息、到期待办、今日日程和分配给我的工作项</p>
+            <p className="mt-1 text-sm text-ink-3">@我、局域网消息、到期待办、今日日程、我的工作项、PR 和构建</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => void refreshMentions()}
-              disabled={loading}
+              onClick={() => void Promise.all([refreshMentions(), config ? refreshWorkbench() : Promise.resolve()])}
+              disabled={loading || workbenchLoading}
               className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
             >
-              {loading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}刷新
+              {loading || workbenchLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}刷新
             </button>
           </div>
         </div>
 
         <section className="mt-5 rounded-lg border border-line bg-surface p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-ink"><Bot size={17} className="text-primary" />管家</div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink"><Bot size={17} className="text-primary" />AI</div>
           {eventCards.length > 0 ? (
             <div className="mt-3 space-y-2">
               {eventCards.map((card) => {

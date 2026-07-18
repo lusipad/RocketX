@@ -1,4 +1,4 @@
-import { KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import {
   AI_CAPABILITIES,
@@ -9,11 +9,21 @@ import {
 } from '../kernel/ai/config';
 import { deleteAiSecret, setAiSecret } from '../kernel/ai/secrets';
 import { testAiProvider } from '../kernel/ai/runtime';
-import { codexBrainAvailability, getButlerBrain, setButlerBrain, type ButlerBrainKind } from '../lib/butlerBrain';
+import {
+  BUTLER_CODEX_EFFORTS,
+  codexBrainAvailability,
+  getButlerBrain,
+  getButlerCodexSettings,
+  setButlerBrain,
+  setButlerCodexSettings,
+  type ButlerBrainKind,
+  type ButlerCodexSettings,
+} from '../lib/butlerBrain';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
+import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
 import { RadioGroup, Row } from './SettingControls';
 
 const inputCls =
@@ -35,6 +45,7 @@ function newProvider(): AiProviderConfig {
 export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
   const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
+  const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -135,11 +146,29 @@ export default function AiSettings() {
     }
   };
 
+  const updateButlerCodex = (patch: Partial<ButlerCodexSettings>) => {
+    const next = { ...butlerCodex, ...patch };
+    setButlerCodexSettings(next);
+    setButlerCodexState(next);
+  };
+
   const codexAvailability = codexBrainAvailability();
 
   return (
     <div className="space-y-6">
-      <div className="rounded-lg border border-line bg-surface p-4 text-sm text-ink-2">
+      <LocalAgentEnvironmentsSettings />
+
+      <details className="group rounded-lg border border-line bg-surface">
+        <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-ink">高级 AI 设置</div>
+            <div className="mt-0.5 text-xs text-ink-3">模型、Provider、能力路由、自动化接口和专用 Bot</div>
+          </div>
+          <ChevronDown size={16} className="shrink-0 text-ink-3 transition-transform group-open:rotate-180" />
+        </summary>
+
+        <div className="space-y-6 border-t border-line p-4">
+      <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm text-ink-2">
         <div className="font-medium text-ink">模型调用与隐私</div>
         <p className="mt-1 leading-6">
           Codex 默认负责聊天、本地工作和 AI 助手的模糊意图解析，无需配置 DeepSeek。下方 Provider
@@ -148,7 +177,7 @@ export default function AiSettings() {
       </div>
 
       <section className="rounded-lg border border-line bg-surface px-4">
-        <Row label="管家大脑" hint="切换后立即对下一次管家提问生效；不会静默降级。">
+        <Row label="AI 运行方式" hint="切换后立即对下一次 AI 提问生效；不会静默降级。">
           <RadioGroup
             value={butlerBrain}
             onChange={(brain) => {
@@ -166,6 +195,31 @@ export default function AiSettings() {
             ]}
           />
         </Row>
+        {butlerBrain === 'codex' && (
+          <>
+            <Row label="Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
+              <input
+                aria-label="Codex 模型"
+                value={butlerCodex.model}
+                onChange={(event) => updateButlerCodex({ model: event.target.value })}
+                placeholder="例如 gpt-5.4"
+                className={`${inputCls} max-w-xs`}
+              />
+            </Row>
+            <Row label="推理强度" hint="模型不支持所选强度时，Codex 会返回明确错误。">
+              <select
+                aria-label="Codex 推理强度"
+                value={butlerCodex.effort}
+                onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
+                className={`${inputCls} max-w-xs`}
+              >
+                {BUTLER_CODEX_EFFORTS.map((effort) => (
+                  <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+                ))}
+              </select>
+            </Row>
+          </>
+        )}
       </section>
 
       <section>
@@ -336,6 +390,8 @@ export default function AiSettings() {
       >
         {busy === 'save' ? '保存中…' : '保存 AI 配置'}
       </button>
+        </div>
+      </details>
     </div>
   );
 }

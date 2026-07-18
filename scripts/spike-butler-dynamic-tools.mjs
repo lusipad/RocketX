@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const expectedVersion = '0.144.5';
 const root = resolve(import.meta.dirname, '..');
 const timeoutMs = 120_000;
 const dynamicToolName = 'list_todos_demo';
@@ -53,6 +52,7 @@ async function main() {
   let turnId = null;
   let answer = '';
   let failure = null;
+  let cliVersion = null;
   let stopping = false;
   let dynamicToolCall = {
     received: false,
@@ -68,8 +68,9 @@ async function main() {
     tempDir = await mkdtemp(join(tmpdir(), 'rocketx-butler-dynamic-tools-'));
     const cli = invocation();
     const version = spawnSync(cli.command, [...cli.args, '--version'], { encoding: 'utf8' });
-    if (version.status !== 0 || version.stdout.trim() !== `codex-cli ${expectedVersion}`) {
-      throw new Error(`需要 codex-cli ${expectedVersion}，实际 ${version.stdout.trim() || '不可用'}`);
+    cliVersion = version.stdout.trim().match(/^codex-cli (\d+\.\d+\.\d+)$/)?.[1] ?? null;
+    if (version.status !== 0 || !cliVersion) {
+      throw new Error(`无法识别 Codex CLI 版本：${version.stdout.trim() || '不可用'}`);
     }
 
     child = spawn(cli.command, [...cli.args, 'app-server', '--stdio'], {
@@ -189,7 +190,7 @@ async function main() {
       },
     });
     const initializedVersion = initialized.userAgent?.match(/\/(\d+\.\d+\.\d+)/)?.[1];
-    if (initializedVersion !== expectedVersion) {
+    if (initializedVersion !== cliVersion) {
       throw new Error(`初始化版本不匹配：${initialized.userAgent ?? '未知'}`);
     }
     write({ method: 'initialized' });
@@ -254,7 +255,7 @@ async function main() {
       {
         spike: 'butler-dynamic-tools',
         result: passed ? 'PASS' : 'FAIL',
-        expectedVersion,
+        cliVersion,
         threadId,
         turnId,
         checks,

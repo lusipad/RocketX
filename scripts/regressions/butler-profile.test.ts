@@ -9,6 +9,7 @@ import {
   listSkills,
   loadButlerSkill,
   rememberButlerFact,
+  recallButlerMemory,
   removeSkill,
   resetPersona,
   saveSkill,
@@ -56,6 +57,8 @@ test('系统提示注入人设和技能索引，并按需注入记忆', () => {
 test('默认人设约束管家使用渲染环境支持的输出格式', () => {
   assert.match(DEFAULT_PERSONA, /不使用 markdown 表格/);
   assert.match(DEFAULT_PERSONA, /粗体小标题/);
+  assert.match(DEFAULT_PERSONA, /偏好、纠错、别名、决定或承诺/);
+  assert.match(DEFAULT_PERSONA, /先调用 remember/);
 });
 
 test('系统提示仅保留最近 30 条记忆，并从最旧项开始压缩到 4000 字符', () => {
@@ -100,5 +103,8 @@ test('load_skill 与 remember 使用可测试的纯档案逻辑', () => {
     assert.match(loadButlerSkill('missing'), /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report/);
     assert.equal(rememberButlerFact('我偏好简短回复'), '已记住：我偏好简短回复');
     assert.equal(listMemory()[0]?.text, '我偏好简短回复');
+    rememberButlerFact('老李是李建国');
+    assert.deepEqual(recallButlerMemory('老李').map((entry) => entry.text), ['老李是李建国']);
+    assert.equal(rememberButlerFact('  '), '没有可记住的内容。');
   });
 });

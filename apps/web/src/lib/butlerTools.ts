@@ -1,6 +1,6 @@
 import { tsMs } from '@rcx/rc-client';
 import type { ButlerTool } from '../kernel/ai/agent-loop';
-import { listSkills, loadButlerSkill, rememberButlerFact } from './butlerProfile';
+import { listSkills, loadButlerSkill, recallButlerMemory, rememberButlerFact } from './butlerProfile';
 import { realtime, rest } from './client';
 import {
   mergeMessageSearchResults,
@@ -11,9 +11,11 @@ import { useAuth } from '../stores/auth';
 import { useCalendar } from '../stores/calendar';
 import { useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
-import { useWorkbench } from '../stores/workbench';
+import { myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
+import { stripAgentSessionMarker } from '../agent/card';
 
 const LIMIT = 20;
+const WORK_LIMIT = 100;
 
 export interface ButlerRoutineDraft {
   name: string;
@@ -23,6 +25,26 @@ export interface ButlerRoutineDraft {
 }
 
 let routineDraftHandler: ((draft: ButlerRoutineDraft) => void) | undefined;
+
+export interface ButlerMentionSnapshot {
+  id: string;
+  rid: string;
+  roomName: string;
+  sender: string;
+  ts: string;
+  text: string;
+  processed: boolean;
+}
+
+let mentionProvider: () => ButlerMentionSnapshot[] = () => [];
+
+export function setButlerMentionProvider(provider: () => ButlerMentionSnapshot[]): () => void {
+  const previous = mentionProvider;
+  mentionProvider = provider;
+  return () => {
+    mentionProvider = previous;
+  };
+}
 
 export function setRoutineDraftHandler(handler: (draft: ButlerRoutineDraft) => void): () => void {
   const previous = routineDraftHandler;
@@ -107,9 +129,13 @@ async function searchMessages(args: Record<string, unknown>): Promise<string> {
       roomName: roomNameFor(message.rid),
       sender: message.u.name || message.u.username,
       ts: new Date(tsMs(message.ts)).toISOString(),
-      text: message.msg.slice(0, 200),
+      text: stripAgentSessionMarker(message.msg).slice(0, 200),
     }));
   return JSON.stringify(rows);
+}
+
+function listMentions(): string {
+  return JSON.stringify(mentionProvider().slice(0, LIMIT));
 }
 
 async function searchPeopleAndRooms(args: Record<string, unknown>): Promise<string> {
@@ -174,7 +200,7 @@ function listWorkItems(args: Record<string, unknown>): string {
   return JSON.stringify(
     useWorkbench.getState().workItems
       .filter((item) => matches(`#${item.id} ${item.title} ${item.type} ${item.state} ${item.project}`, query))
-      .slice(0, LIMIT)
+      .slice(0, WORK_LIMIT)
       .map((item) => ({
         id: item.id,
         title: item.title,
@@ -182,6 +208,8 @@ function listWorkItems(args: Record<string, unknown>): string {
         state: item.state,
         project: item.project,
         assignedTo: item.assignedTo,
+        priority: item.priority,
+        dueDate: item.dueDate,
         changedDate: item.changedDate,
       })),
   );
@@ -189,10 +217,15 @@ function listWorkItems(args: Record<string, unknown>): string {
 
 function listPullRequests(args: Record<string, unknown>): string {
   const query = optionalString(args, 'query');
+  const workbench = useWorkbench.getState();
+  const account = workbench.config?.account ?? '';
+  const reviewIds = new Set(reviewPrsOf(workbench.prs, account).map((pr) => pr.id));
+  const mineIds = new Set(myPrsOf(workbench.prs, account).map((pr) => pr.id));
   return JSON.stringify(
-    useWorkbench.getState().prs
+    workbench.prs
+      .filter((pr) => reviewIds.has(pr.id) || mineIds.has(pr.id))
       .filter((pr) => matches(`#${pr.id} ${pr.title} ${pr.repo} ${pr.creator}`, query))
-      .slice(0, LIMIT)
+      .slice(0, WORK_LIMIT)
       .map((pr) => ({
         id: pr.id,
         title: pr.title,
@@ -201,6 +234,9 @@ function listPullRequests(args: Record<string, unknown>): string {
         sourceBranch: pr.sourceBranch,
         targetBranch: pr.targetBranch,
         createdDate: pr.createdDate,
+        relation: reviewIds.has(pr.id) && mineIds.has(pr.id)
+          ? 'both'
+          : reviewIds.has(pr.id) ? 'review' : 'mine',
       })),
   );
 }
@@ -212,7 +248,7 @@ function listBuilds(args: Record<string, unknown>): string {
     useWorkbench.getState().builds
       .filter((build) => !failedOnly || build.result.toLocaleLowerCase() === 'failed')
       .filter((build) => matches(`${build.buildNumber} ${build.definition} ${build.project} ${build.result}`, query))
-      .slice(0, LIMIT)
+      .slice(0, WORK_LIMIT)
       .map((build) => ({
         id: build.id,
         buildNumber: build.buildNumber,
@@ -232,6 +268,15 @@ function loadSkill(args: Record<string, unknown>): string {
 
 function remember(args: Record<string, unknown>): string {
   return rememberButlerFact(optionalString(args, 'fact') ?? '');
+}
+
+function recallMemory(args: Record<string, unknown>): string {
+  const query = optionalString(args, 'query') ?? '';
+  return JSON.stringify(recallButlerMemory(query).map((entry) => ({
+    id: entry.id,
+    text: entry.text,
+    at: new Date(entry.at).toISOString(),
+  })));
 }
 
 function validTime(time: string): boolean {
@@ -287,6 +332,12 @@ export function createButlerTools(): ButlerTool[] {
       execute: searchMessages,
     },
     {
+      name: 'list_mentions',
+      description: '列出当前「今日」收件箱中直接 @我 的消息及是否已处理；返回最多 20 条。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async () => listMentions(),
+    },
+    {
       name: 'search_people_rooms',
       description: '搜索 Rocket.Chat 中的用户和房间，query 为要匹配的姓名、用户名或房间名。',
       parameters: {
@@ -326,19 +377,19 @@ export function createButlerTools(): ButlerTool[] {
     },
     {
       name: 'list_work_items',
-      description: '列出已加载的 Azure DevOps 工作项，可按编号、标题、类型、状态或项目筛选。',
+      description: '列出已加载的 Azure DevOps 工作项，可按编号、标题、类型、状态或项目筛选；返回最多 100 条。',
       parameters: queryParameters('工作项编号、标题、类型、状态或项目关键词。'),
       execute: async (args) => listWorkItems(args),
     },
     {
       name: 'list_pull_requests',
-      description: '列出已加载的 Azure DevOps 拉取请求，可按编号、标题、仓库或创建者筛选。',
+      description: '列出已加载的待我评审或我提的 Azure DevOps 拉取请求，可按编号、标题、仓库或创建者筛选；返回最多 100 条。',
       parameters: queryParameters('拉取请求编号、标题、仓库或创建者关键词。'),
       execute: async (args) => listPullRequests(args),
     },
     {
       name: 'list_builds',
-      description: '列出已加载的 Azure DevOps 构建，可按关键词筛选，也可只看失败构建。',
+      description: '列出已加载的 Azure DevOps 构建，可按关键词筛选，也可只看失败构建；返回最多 100 条。',
       parameters: {
         type: 'object',
         properties: {
@@ -348,6 +399,16 @@ export function createButlerTools(): ButlerTool[] {
         additionalProperties: false,
       },
       execute: async (args) => listBuilds(args),
+    },
+    {
+      name: 'recall_memory',
+      description: '按关键词检索 AI 的全部长期记忆；用于近期提示未注入的偏好、纠错、别名、决定和承诺。',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: '要召回的事实关键词；省略时返回最近记忆。' } },
+        additionalProperties: false,
+      },
+      execute: async (args) => recallMemory(args),
     },
     {
       name: 'load_skill',

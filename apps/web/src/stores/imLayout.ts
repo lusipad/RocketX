@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { getServerBase } from '../lib/client';
 import {
+  DEFAULT_BUTLER_PANEL_WIDTH,
   DEFAULT_CONVERSATION_WIDTH,
+  clampButlerPanelWidth,
   clampConversationWidth,
   defaultImLayout,
   imLayoutStorageKey,
@@ -16,6 +18,8 @@ interface ImLayoutStore {
   hydrate: (userId: string) => void;
   setConversationWidth: (width: number) => void;
   resetConversationWidth: () => void;
+  setButlerPanelWidth: (width: number) => void;
+  resetButlerPanelWidth: () => void;
   setGroupCollapsed: (collapsed: boolean) => void;
 }
 
@@ -54,6 +58,15 @@ export const useImLayout = create<ImLayoutStore>((set, get) => ({
   },
 
   resetConversationWidth: () => get().setConversationWidth(DEFAULT_CONVERSATION_WIDTH),
+
+  setButlerPanelWidth: (width) => {
+    const { ownerId, ownerServer, layout } = get();
+    const next = { ...layout, butlerPanelWidth: clampButlerPanelWidth(width) };
+    if (ownerId && ownerServer !== null) persist(ownerServer, ownerId, next);
+    set({ layout: next });
+  },
+
+  resetButlerPanelWidth: () => get().setButlerPanelWidth(DEFAULT_BUTLER_PANEL_WIDTH),
 
   setGroupCollapsed: (groupCollapsed) => {
     const { ownerId, ownerServer, layout } = get();

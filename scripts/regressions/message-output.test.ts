@@ -36,6 +36,15 @@ test('多条消息输出按时间排序、保留富内容且不泄露发送人',
   assert.doesNotMatch(markdown, /张三|zhangsan|李四|lisi/);
 });
 
+test('复制和导出托管消息时不包含内部租约标记', () => {
+  const markdown = messagesToMarkdown([{
+    ...messages[0],
+    msg: '🤖 **AI 托管已开启**\n<!--rocketx-agent:%7B%22hostDeviceId%22%3A%22device%22%7D-->',
+  }]);
+  assert.match(markdown, /AI 托管已开启/);
+  assert.doesNotMatch(markdown, /rocketx-agent|hostDeviceId|%22/);
+});
+
 test('合并转发保留每条内容但不附带用户名', () => {
   const attachments = mergedForwardAttachments(
     messages.map((message) => ({

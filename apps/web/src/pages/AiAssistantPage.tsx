@@ -26,6 +26,7 @@ import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { appendButlerLine, useButler } from '../stores/butler';
+import { stripAgentSessionMarker } from '../agent/card';
 
 interface AssistantResult {
   id: string;
@@ -146,7 +147,7 @@ export default function AiAssistantPage() {
       ...foundMessages.map<AssistantResult>((message) => ({
         id: `message:${message._id}`,
         kind: 'message',
-        title: message.msg || '[附件消息]',
+        title: stripAgentSessionMarker(message.msg) || '[附件消息]',
         detail: `${message.u.name || message.u.username} · ${subscriptions[message.rid]?.fname || subscriptions[message.rid]?.name || message.rid}`,
         open: async () => {
           useUI.getState().setModule('messages');
@@ -314,7 +315,7 @@ export default function AiAssistantPage() {
       <div className="mx-auto flex min-h-full max-w-5xl flex-col px-8 py-7">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Bot size={20} className="text-primary" />管家</div>
+            <div className="flex items-center gap-2 text-xl font-semibold text-ink"><Bot size={20} className="text-primary" />AI</div>
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">

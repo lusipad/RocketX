@@ -84,7 +84,7 @@ export default function CodexPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xl font-semibold text-ink"><TerminalSquare size={20} className="text-primary" />执行间</div>
-            <p className="mt-1 text-sm text-ink-3">管家的本地执行工房：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。</p>
+            <p className="mt-1 text-sm text-ink-3">AI 的本地执行区：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。</p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-2">
             <span className={`h-2 w-2 rounded-full ${status === 'ready' ? 'bg-success' : status === 'running' || status === 'waiting-approval' ? 'bg-warning' : 'bg-ink-3'}`} />

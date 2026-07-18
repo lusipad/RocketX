@@ -1,6 +1,7 @@
 import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
 import { runAgentLoop } from '../kernel/ai/agent-loop';
+import { butlerArchiveStorage } from '../lib/butlerArchive';
 import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
 import { createButlerTools } from '../lib/butlerTools';
@@ -60,14 +61,7 @@ interface RoutineState {
   tick: (now?: number) => void;
 }
 
-const localStorageRoutines: ButlerProfileStorage = {
-  get: (key) => typeof window === 'undefined' ? null : window.localStorage.getItem(key),
-  set: (key, value) => {
-    if (typeof window !== 'undefined') window.localStorage.setItem(key, value);
-  },
-};
-
-let routineStorage: ButlerProfileStorage = localStorageRoutines;
+let routineStorage: ButlerProfileStorage = butlerArchiveStorage;
 let routineRunner: typeof runAgentLoop = runAgentLoop;
 let routineCodexRunner: typeof runButlerCodexEphemeral = runButlerCodexEphemeral;
 let routineNow = () => Date.now();

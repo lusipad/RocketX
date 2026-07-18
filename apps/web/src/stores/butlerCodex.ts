@@ -8,6 +8,7 @@ import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import {
   codexBrainAvailability,
+  getButlerCodexSettings,
   setCodexBrainUnavailableReason,
 } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerProfile';
@@ -144,7 +145,7 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
     },
 
     start: async (client, input) => {
-      if (active) throw new Error('管家 Codex 会话正在处理上一条消息');
+      if (active) throw new Error('AI 正在处理上一条消息');
       let resolveCompletion!: (text: string) => void;
       let rejectCompletion!: (error: Error) => void;
       const completed = new Promise<string>((resolve, reject) => {
@@ -154,13 +155,14 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
       const current: ActiveTurn = { text: '', resolve: resolveCompletion, reject: rejectCompletion };
       active = current;
       try {
+        const { effort } = getButlerCodexSettings();
         const response = await client.request('turn/start', {
           threadId,
           input: [{ type: 'text', text: input, text_elements: [] }],
           approvalPolicy: 'on-request',
           approvalsReviewer: 'user',
           sandboxPolicy: { type: 'readOnly', networkAccess: false },
-          effort: 'medium',
+          ...(effort === 'default' ? {} : { effort }),
         });
         current.turnId = response.turn.id;
         return await completed;
@@ -187,19 +189,19 @@ async function respondDynamicToolCall(
       request.method === 'item/permissions/requestApproval' ||
       request.method === 'execCommandApproval' ||
       request.method === 'applyPatchApproval') {
-      codexTrace('管家大脑无执行权限');
-      throw new Error('管家大脑无执行权限');
+      codexTrace('AI 无执行权限');
+      throw new Error('AI 无执行权限');
     }
-    throw new Error('管家大脑已拒绝非工具请求');
+    throw new Error('AI 已拒绝非工具请求');
   }
   const params = record(request.params);
-  if (!expectedThreadId || params.threadId !== expectedThreadId) throw new Error('动态工具请求不属于当前管家会话');
+  if (!expectedThreadId || params.threadId !== expectedThreadId) throw new Error('动态工具请求不属于当前 AI 会话');
   const name = typeof params.tool === 'string' ? params.tool : '';
   const tool = tools.get(name);
-  if (!tool) throw new Error(`未注册的管家工具：${name || '未知'}`);
+  if (!tool) throw new Error(`未注册的 AI 工具：${name || '未知'}`);
   // 无参工具允许缺省 arguments；出现时必须是对象。
   if (params.arguments != null && (Array.isArray(params.arguments) || typeof params.arguments !== 'object')) {
-    throw new Error('管家工具参数必须是对象');
+    throw new Error('AI 工具参数必须是对象');
   }
   const args = record(params.arguments);
   const callId = typeof params.callId === 'string' ? params.callId : crypto.randomUUID();
@@ -224,7 +226,7 @@ function onResidentInterrupted(error: Error): void {
   residentClientStart = undefined;
   residentStatus = 'interrupted';
   residentTurn?.interrupt(error);
-  codexTrace(`管家 Codex 会话已中断：${error.message}`);
+  codexTrace(`AI Codex 会话已中断：${error.message}`);
 }
 
 async function ensureResidentClient(): Promise<AppServerClient> {
@@ -277,9 +279,11 @@ async function stopResident(clearThread = true): Promise<void> {
 
 async function startResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
+  const { model } = getButlerCodexSettings();
   const tools = createButlerTools();
   residentTools = new Map(tools.map((tool) => [tool.name, tool]));
   const response = await client.request('thread/start', {
+    ...(model ? { model } : {}),
     cwd: residentWorkspaceRoot!,
     approvalPolicy: 'on-request',
     approvalsReviewer: 'user',
@@ -294,9 +298,11 @@ async function startResidentThread(now: number, prompt: string, promptHash: stri
 
 async function resumeResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
+  const { model } = getButlerCodexSettings();
   const tools = createButlerTools();
   residentTools = new Map(tools.map((tool) => [tool.name, tool]));
   const response = await client.request('thread/resume', {
+    ...(model ? { model } : {}),
     threadId: residentThreadId!,
     cwd: residentWorkspaceRoot!,
     approvalPolicy: 'on-request',
@@ -312,7 +318,8 @@ async function resumeResidentThread(now: number, prompt: string, promptHash: str
 
 async function ensureResidentThread(now: number): Promise<void> {
   const prompt = buildButlerSystemPrompt();
-  const promptHash = hash(prompt);
+  const settings = getButlerCodexSettings();
+  const promptHash = hash(`${prompt}\n\0${settings.model}\n\0${settings.effort}`);
   if (residentThreadId && residentPromptHash !== promptHash) await stopResident();
   if (!residentThreadId) {
     await startResidentThread(now, prompt, promptHash);
@@ -335,7 +342,7 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
   try {
     await ensureResidentThread(options.now ?? Date.now());
     const threadId = residentThreadId;
-    if (!threadId) throw new Error('管家 Codex 会话尚未创建');
+    if (!threadId) throw new Error('AI Codex 会话尚未创建');
     const controller = createTurnController(threadId, options.onEvent);
     residentTurn = controller;
     residentEvent = options.onEvent;
@@ -372,7 +379,9 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
   try {
     await client.start();
     const now = options.now ?? Date.now();
+    const { model } = getButlerCodexSettings();
     const response = await client.request('thread/start', {
+      ...(model ? { model } : {}),
       cwd: workspaceRoot,
       approvalPolicy: 'on-request',
       approvalsReviewer: 'user',

@@ -46,6 +46,7 @@ import {
   COMPACT_CONVERSATION_WIDTH,
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
+import { useCodexRuntime } from '../stores/codexRuntime';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -60,7 +61,9 @@ export default function MainPage() {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const activeRid = useChat((s) => s.activeRid);
-  const rightPanelOpen = useChat((s) => s.rightPanel !== null);
+  const rightPanel = useChat((s) => s.rightPanel);
+  const rightPanelOpen = rightPanel !== null;
+  const butlerPanelOpen = rightPanel?.kind === 'butler';
   const module = useUI((s) => s.module);
   const registeredModules = useKernelContributions('nav.module');
   const switcher = useUI((s) => s.switcherOpen);
@@ -99,6 +102,7 @@ export default function MainPage() {
   useEffect(() => {
     void init();
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
+    void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);
 
   useEffect(() => {
@@ -167,6 +171,7 @@ export default function MainPage() {
     conversationPanelState.panelCollapsed,
     dragWidth,
     maxConversationWidth,
+    butlerPanelOpen,
   );
 
   useEffect(() => {
@@ -353,41 +358,43 @@ export default function MainPage() {
       {module === 'messages' ? (
         <>
           <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
-          <ConversationList width={conversationWidth} />
-          <div
-            role="separator"
-            aria-label="调整会话列表宽度"
-            aria-orientation="vertical"
-            aria-valuemin={MIN_CONVERSATION_WIDTH}
-            aria-valuemax={maxConversationWidth}
-            aria-valuenow={Math.round(conversationWidth)}
-            tabIndex={0}
-            title="拖动调整会话列表宽度，双击恢复默认"
-            onDoubleClick={() => {
-              clearConversationPanelNarrowing();
-              resetConversationWidth();
-            }}
-            onPointerDown={onResizePointerDown}
-            onPointerMove={onResizePointerMove}
-            onPointerUp={finishResize}
-            onPointerCancel={finishResize}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-                event.preventDefault();
-                const delta = event.key === 'ArrowLeft' ? -10 : 10;
-                clearConversationPanelNarrowing();
-                setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
-              } else if (event.key === 'Home') {
-                event.preventDefault();
+          <ConversationList width={conversationWidth} avatarOnly={butlerPanelOpen} />
+          {!butlerPanelOpen && (
+            <div
+              role="separator"
+              aria-label="调整会话列表宽度"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CONVERSATION_WIDTH}
+              aria-valuemax={maxConversationWidth}
+              aria-valuenow={Math.round(conversationWidth)}
+              tabIndex={0}
+              title="拖动调整会话列表宽度，双击恢复默认"
+              onDoubleClick={() => {
                 clearConversationPanelNarrowing();
                 resetConversationWidth();
-              }
-            }}
-            style={{ touchAction: 'none' }}
-            className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
-          >
-            <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
-          </div>
+              }}
+              onPointerDown={onResizePointerDown}
+              onPointerMove={onResizePointerMove}
+              onPointerUp={finishResize}
+              onPointerCancel={finishResize}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  const delta = event.key === 'ArrowLeft' ? -10 : 10;
+                  clearConversationPanelNarrowing();
+                  setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
+                } else if (event.key === 'Home') {
+                  event.preventDefault();
+                  clearConversationPanelNarrowing();
+                  resetConversationWidth();
+                }
+              }}
+              style={{ touchAction: 'none' }}
+              className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
+            >
+              <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
+            </div>
+          )}
           <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
         </>
       ) : ActiveModule ? (

@@ -31,6 +31,7 @@ import { useCalendar } from '../stores/calendar';
 import { useWorkbench } from '../stores/workbench';
 import { useFileIndex } from '../stores/fileIndex';
 import { canSearchIndexedRoom, searchIndexedFiles, type IndexedFileResult } from '../lib/fileIndex';
+import { stripAgentSessionMarker } from '../agent/card';
 import {
   filterFileResults,
   filterMessageResults,
@@ -248,11 +249,11 @@ export default function QuickSwitcher({
       };
       const documents = memberRoomIds.flatMap((rid) =>
         (loadedMessages[rid] ?? [])
-          .filter((message) => !!message.msg?.trim())
+          .filter((message) => !!stripAgentSessionMarker(message.msg ?? '').trim())
           .map((message) => ({
             id: message._id,
             roomId: rid,
-            text: message.msg!,
+            text: stripAgentSessionMarker(message.msg ?? ''),
             revision: tsMs(message.ts),
             payload: message,
           })),
@@ -622,7 +623,7 @@ export default function QuickSwitcher({
         ...filteredMessages.slice(0, 3).map((message) => ({
           section: 'messages' as const,
           key: `message:${message._id}`,
-          title: message.msg || '无文字消息',
+          title: stripAgentSessionMarker(message.msg ?? '') || '无文字消息',
           detail: `${message.u.name || message.u.username} · ${roomName(message.rid)}`,
           avatar: { name: message.u.name || message.u.username, username: message.u.username },
           action: () => pickMessage(message),
@@ -1079,7 +1080,7 @@ export default function QuickSwitcher({
                       </span>
                     </span>
                     <span className="line-clamp-2 text-sm break-words text-ink-2">
-                      {highlightText(m.msg ?? '', keyword)}
+                      {highlightText(stripAgentSessionMarker(m.msg ?? ''), keyword)}
                     </span>
                   </span>
                 </button>

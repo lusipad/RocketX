@@ -45,12 +45,14 @@ let butlerNow = () => Date.now();
 
 const toolLabels: Record<string, string> = {
   search_messages: '搜索消息',
+  list_mentions: '查询 @我',
   search_people_rooms: '查询联系人和会话',
   list_todos: '查询待办',
   list_calendar: '查询日程',
   list_work_items: '查询工作项',
   list_pull_requests: '查询拉取请求',
   list_builds: '查询构建',
+  recall_memory: '召回记忆',
   load_skill: '加载技能',
   remember: '记录记忆',
   draft_routine: '生成例行事务草案',
@@ -61,7 +63,7 @@ function line(role: ButlerLine['role'], text: string): ButlerLine {
 }
 
 function welcomeLines(): ButlerLine[] {
-  return [line('assistant', '我是你的管家。消息、待办、日程、工作项都可以直接问我。')];
+  return [line('assistant', '我是你的 AI。消息、待办、日程、工作项都可以直接问我。')];
 }
 
 function activityFor(event: AgentLoopEvent): string | null {

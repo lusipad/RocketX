@@ -17,7 +17,7 @@ const inputCls =
 export default function AgentBotSettings() {
   const [status, setStatus] = useState<BotStatus>({ enabled: false });
   const [userId, setUserId] = useState('');
-  const [username, setUsername] = useState('codex');
+  const [username, setUsername] = useState('ai');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(true);
 
@@ -30,7 +30,7 @@ export default function AgentBotSettings() {
       .then((value) => {
         setStatus(value);
         setUserId(value.userId ?? '');
-        setUsername(value.username ?? 'codex');
+        setUsername(value.username ?? 'ai');
       })
       .catch((error) => toast.error(error, '读取 Agent Bot 配置失败'))
       .finally(() => setBusy(false));
@@ -87,7 +87,7 @@ export default function AgentBotSettings() {
               <input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
-                placeholder="Bot 用户名，如 codex"
+                placeholder="Bot 用户名，如 ai"
                 className={inputCls}
               />
               <input

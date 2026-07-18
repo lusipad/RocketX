@@ -1,5 +1,6 @@
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import { stripQuotePrefix } from './messageText';
+import { stripAgentSessionMarker } from '../agent/card';
 
 function escapeLabel(value: string): string {
   return value.replaceAll('[', '\\[').replaceAll(']', '\\]');
@@ -23,7 +24,7 @@ function attachmentMarkdown(attachment: RcMessageAttachment): string[] {
 
 export function messageToMarkdown(message: RcMessage): string {
   const lines = [
-    stripQuotePrefix(message.msg ?? '').trim(),
+    stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim(),
     ...(message.attachments ?? []).flatMap(attachmentMarkdown),
   ].filter(Boolean);
   return lines.join('\n\n') || '[空消息]';
