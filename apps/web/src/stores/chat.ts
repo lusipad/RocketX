@@ -2255,12 +2255,22 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return;
+    // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
+    // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
     const id = toast.loading(`正在发送 ${label}…`);
     set({ uploading: get().uploading + files.length });
     try {
-      for (const file of files) {
-        await rest.uploadMedia(rid, file, { tmid });
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
+      for (const [index, file] of files.entries()) {
+        await rest.uploadMedia(rid, file, {
+          tmid,
+          ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+        });
         set({ uploading: get().uploading - 1 });
       }
       toast.dismiss(id);
