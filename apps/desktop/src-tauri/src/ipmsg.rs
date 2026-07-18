@@ -17,6 +17,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 pub const IPMSG_PORT: u16 = 2425;
+const INTRANET_PORT: u16 = 9011;
 const MAX_DATAGRAM_BYTES: usize = 64 * 1024;
 const MAX_MESSAGE_BYTES: usize = 48 * 1024;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024 * 1024;
@@ -50,7 +51,7 @@ pub struct IpmsgRuntimeState(Mutex<Option<IpmsgRuntime>>);
 
 struct IpmsgRuntime {
     stop: Arc<AtomicBool>,
-    socket: Arc<UdpSocket>,
+    sockets: Vec<(u16, Arc<UdpSocket>)>,
     identity: Arc<IpmsgIdentity>,
     peers: SharedPeers,
     acks: SharedAcks,
@@ -76,6 +77,7 @@ type SharedIncoming = Arc<Mutex<HashMap<String, IncomingOffer>>>;
 struct PeerRecord {
     peer: IpmsgPeer,
     address: SocketAddr,
+    local_port: u16,
     command: u32,
     dialect: Dialect,
     last_seen: Instant,
@@ -107,6 +109,7 @@ struct IncomingOffer {
 enum Dialect {
     Standard,
     Feiq,
+    Intranet,
 }
 
 impl Dialect {
@@ -114,6 +117,7 @@ impl Dialect {
         match self {
             Self::Standard => "ipmsg",
             Self::Feiq => "feiq",
+            Self::Intranet => "intranet",
         }
     }
 }
@@ -245,7 +249,7 @@ fn decode(bytes: &[u8], dialect: Dialect, utf8: bool) -> Result<String, String> 
         return String::from_utf8(bytes.to_vec())
             .map_err(|_| "IPMSG packet contains invalid UTF-8".to_string());
     }
-    let encoding = if dialect == Dialect::Feiq {
+    let encoding = if matches!(dialect, Dialect::Feiq | Dialect::Intranet) {
         GBK
     } else {
         SHIFT_JIS
@@ -261,7 +265,7 @@ fn encode(value: &str, dialect: Dialect, utf8: bool) -> Result<Vec<u8>, String> 
     if utf8 {
         return Ok(value.as_bytes().to_vec());
     }
-    let encoding = if dialect == Dialect::Feiq {
+    let encoding = if matches!(dialect, Dialect::Feiq | Dialect::Intranet) {
         GBK
     } else {
         SHIFT_JIS
@@ -492,7 +496,7 @@ fn parse_file_offers(packet: &Packet, record: &PeerRecord) -> Vec<IncomingOffer>
         .collect()
 }
 
-fn peer_from_packet(packet: &Packet, address: SocketAddr) -> PeerRecord {
+fn peer_from_packet(packet: &Packet, address: SocketAddr, local_port: u16) -> PeerRecord {
     let nickname = if packet.extra.is_empty() {
         &packet.user
     } else {
@@ -526,6 +530,7 @@ fn peer_from_packet(packet: &Packet, address: SocketAddr) -> PeerRecord {
             last_seen_ms: now_ms(),
         },
         address,
+        local_port,
         command: packet.command,
         dialect: packet.dialect,
         last_seen: Instant::now(),
@@ -601,6 +606,7 @@ fn prune<T>(values: &mut HashMap<String, (Instant, T)>, ttl: Duration) {
 fn udp_loop(
     app: tauri::AppHandle,
     socket: UdpSocket,
+    local_port: u16,
     identity: Arc<IpmsgIdentity>,
     peers: SharedPeers,
     acks: SharedAcks,
@@ -648,7 +654,11 @@ fn udp_loop(
             mode,
             IPMSG_BR_ENTRY | IPMSG_ANSENTRY | IPMSG_BR_ABSENCE | IPMSG_SENDMSG
         ) {
-            let record = peer_from_packet(&packet, address);
+            let mut packet = packet;
+            if local_port == INTRANET_PORT && packet.dialect == Dialect::Standard {
+                packet.dialect = Dialect::Intranet;
+            }
+            let record = peer_from_packet(&packet, address, local_port);
             let peer = record.peer.clone();
             if let Ok(mut values) = peers.write() {
                 values.insert(peer.id.clone(), record.clone());
@@ -839,11 +849,19 @@ fn stop_runtime(current: Option<IpmsgRuntime>) {
         return;
     };
     let _ = announce(
-        &current.socket,
+        &current.sockets[0].1,
         &current.identity,
         IPMSG_BR_EXIT,
-        SocketAddr::from((Ipv4Addr::BROADCAST, IPMSG_PORT)),
+        SocketAddr::from((Ipv4Addr::BROADCAST, current.sockets[0].0)),
     );
+    for (port, socket) in current.sockets.iter().skip(1) {
+        let _ = announce(
+            socket,
+            &current.identity,
+            IPMSG_BR_EXIT,
+            SocketAddr::from((Ipv4Addr::BROADCAST, *port)),
+        );
+    }
     current.stop.store(true, Ordering::Relaxed);
     for thread in current.threads {
         let _ = thread.join();
@@ -877,26 +895,32 @@ pub fn ipmsg_start(
         .ok()
         .and_then(|value| value.parse::<Ipv4Addr>().ok())
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    let udp = UdpSocket::bind((bind_ip, IPMSG_PORT))
-        .map_err(|error| format!("IPMSG UDP 2425 is unavailable: {error}"))?;
-    udp.set_broadcast(true)
-        .and_then(|_| udp.set_read_timeout(Some(Duration::from_millis(500))))
-        .map_err(|error| format!("failed to configure IPMSG UDP socket: {error}"))?;
-    let listener = TcpListener::bind((bind_ip, IPMSG_PORT))
-        .map_err(|error| format!("IPMSG TCP 2425 is unavailable: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("failed to configure IPMSG TCP listener: {error}"))?;
-    let socket = Arc::new(udp);
+    let mut sockets: Vec<(u16, Arc<UdpSocket>)> = Vec::new();
+    let mut listeners: Vec<(u16, TcpListener)> = Vec::new();
+    for port in [IPMSG_PORT, INTRANET_PORT] {
+        let udp = UdpSocket::bind((bind_ip, port))
+            .map_err(|error| format!("IPMSG UDP {port} is unavailable: {error}"))?;
+        udp.set_broadcast(true)
+            .and_then(|_| udp.set_read_timeout(Some(Duration::from_millis(500))))
+            .map_err(|error| format!("failed to configure IPMSG UDP socket on {port}: {error}"))?;
+        let listener = TcpListener::bind((bind_ip, port))
+            .map_err(|error| format!("IPMSG TCP {port} is unavailable: {error}"))?;
+        listener.set_nonblocking(true).map_err(|error| {
+            format!("failed to configure IPMSG TCP listener on {port}: {error}")
+        })?;
+        sockets.push((port, Arc::new(udp)));
+        listeners.push((port, listener));
+    }
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let acks = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
     let outgoing = Arc::new(Mutex::new(HashMap::new()));
     let incoming = Arc::new(Mutex::new(HashMap::new()));
     let stop = Arc::new(AtomicBool::new(false));
-    let udp_thread = {
+    let mut threads = Vec::new();
+    for (port, socket) in &sockets {
         let receiver = socket
             .try_clone()
-            .map_err(|error| format!("failed to clone IPMSG UDP socket: {error}"))?;
+            .map_err(|error| format!("failed to clone IPMSG UDP socket on {port}: {error}"))?;
         let app = app.clone();
         let identity = identity.clone();
         let peers = peers.clone();
@@ -904,48 +928,53 @@ pub fn ipmsg_start(
         let outgoing = outgoing.clone();
         let incoming = incoming.clone();
         let stop = stop.clone();
-        thread::spawn(move || {
+        let local_port = *port;
+        threads.push(thread::spawn(move || {
             udp_loop(
-                app, receiver, identity, peers, acks, outgoing, incoming, stop,
+                app, receiver, local_port, identity, peers, acks, outgoing, incoming, stop,
             )
-        })
-    };
-    let tcp_thread = {
+        }));
+    }
+    for (_port, listener) in listeners {
         let outgoing = outgoing.clone();
         let stop = stop.clone();
-        thread::spawn(move || tcp_loop(listener, outgoing, stop))
-    };
+        threads.push(thread::spawn(move || tcp_loop(listener, outgoing, stop)));
+    }
     let runtime = IpmsgRuntime {
         stop,
-        socket: socket.clone(),
+        sockets: sockets.clone(),
         identity: identity.clone(),
         peers,
         acks,
         outgoing,
         incoming,
-        threads: vec![udp_thread, tcp_thread],
+        threads,
     };
     *state
         .0
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())? = Some(runtime);
-    if let Err(error) = announce(
-        &socket,
-        &identity,
-        IPMSG_BR_ENTRY,
-        SocketAddr::from((Ipv4Addr::BROADCAST, IPMSG_PORT)),
-    ) {
-        stop_runtime(take_runtime(&state)?);
-        return Err(error);
+    for (port, socket) in &sockets {
+        if let Err(error) = announce(
+            socket,
+            &identity,
+            IPMSG_BR_ENTRY,
+            SocketAddr::from((Ipv4Addr::BROADCAST, *port)),
+        ) {
+            stop_runtime(take_runtime(&state)?);
+            return Err(error);
+        }
     }
     if let Ok(value) = std::env::var("ROCKETX_IPMSG_PEER") {
         if let Ok(ip) = value.parse::<Ipv4Addr>() {
-            let _ = announce(
-                &socket,
-                &identity,
-                IPMSG_BR_ENTRY,
-                SocketAddr::from((ip, IPMSG_PORT)),
-            );
+            for (port, socket) in &sockets {
+                let _ = announce(
+                    socket,
+                    &identity,
+                    IPMSG_BR_ENTRY,
+                    SocketAddr::from((ip, *port)),
+                );
+            }
         }
     }
     Ok(IpmsgStatus {
@@ -1004,6 +1033,15 @@ pub fn ipmsg_peers(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<Vec<Ipm
     Ok(values)
 }
 
+fn udp_socket_for_peer(runtime: &IpmsgRuntime, peer: &PeerRecord) -> Arc<UdpSocket> {
+    runtime
+        .sockets
+        .iter()
+        .find(|(port, _)| *port == peer.local_port)
+        .map(|(_, socket)| socket.clone())
+        .unwrap_or_else(|| runtime.sockets[0].1.clone())
+}
+
 fn peer_snapshot(runtime: &IpmsgRuntime, peer_id: &str) -> Result<PeerRecord, String> {
     runtime
         .peers
@@ -1033,10 +1071,11 @@ pub async fn ipmsg_send_message(
         let runtime = runtime
             .as_ref()
             .ok_or_else(|| "IPMSG compatibility is disabled".to_string())?;
+        let peer = peer_snapshot(runtime, &peer_id)?;
         (
-            runtime.socket.clone(),
+            udp_socket_for_peer(runtime, &peer),
             runtime.identity.clone(),
-            peer_snapshot(runtime, &peer_id)?,
+            peer,
             runtime.acks.clone(),
         )
     };
@@ -1092,10 +1131,11 @@ pub async fn ipmsg_offer_file(
         let runtime = runtime
             .as_ref()
             .ok_or_else(|| "IPMSG compatibility is disabled".to_string())?;
+        let peer = peer_snapshot(runtime, &peer_id)?;
         (
-            runtime.socket.clone(),
+            udp_socket_for_peer(runtime, &peer),
             runtime.identity.clone(),
-            peer_snapshot(runtime, &peer_id)?,
+            peer,
             runtime.acks.clone(),
             runtime.outgoing.clone(),
         )
@@ -1404,7 +1444,7 @@ mod tests {
             attachment: b"1:report.txt:400:1:1:\x07".to_vec(),
             dialect: Dialect::Standard,
         };
-        let record = peer_from_packet(&base, address);
+        let record = peer_from_packet(&base, address, IPMSG_PORT);
         let offers = parse_file_offers(&base, &record);
         assert_eq!(offers.len(), 1);
         assert_eq!(offers[0].offer.file_name, "report.txt");
@@ -1539,7 +1579,9 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))
         );
         assert_eq!(
-            peer_from_packet(&answer, official_address).peer.dialect,
+            peer_from_packet(&answer, official_address, IPMSG_PORT)
+                .peer
+                .dialect,
             "ipmsg"
         );
         let list = std::process::Command::new(&ipcmd)
@@ -1631,7 +1673,7 @@ mod tests {
             .unwrap();
             socket.send_to(&ack, candidate_address).unwrap();
             if candidate.command & IPMSG_FILEATTACHOPT != 0 {
-                let record = peer_from_packet(&candidate, candidate_address);
+                let record = peer_from_packet(&candidate, candidate_address, IPMSG_PORT);
                 let candidate_offers = parse_file_offers(&candidate, &record);
                 if candidate_offers
                     .iter()

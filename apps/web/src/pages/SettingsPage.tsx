@@ -636,8 +636,8 @@ function DesktopSection() {
         </div>
       </Row>
       <Row
-        label="IP Messenger 兼容模式"
-        hint="使用固定 UDP/TCP 2425；旧协议没有身份认证，与 Rocket.Chat 可信 LAN 完全隔离"
+        label="内网通兼容模式"
+        hint="使用固定 UDP/TCP 2425 与内网通 9011；旧协议没有身份认证，与 Rocket.Chat 可信 LAN 完全隔离"
         inline
       >
         <div className="flex min-w-0 flex-col items-end gap-1.5">
@@ -647,8 +647,8 @@ function DesktopSection() {
             onChange={(next) => {
               setChangingIpmsg(true);
               void setIpmsgEnabled(next)
-                .then(() => toast.success(next ? '已开启 IP Messenger 兼容模式' : '已关闭 IP Messenger 兼容模式'))
-                .catch((err) => toast.error(err, 'IP Messenger 兼容模式启动失败'))
+                .then(() => toast.success(next ? '已开启内网通兼容模式' : '已关闭内网通兼容模式'))
+                .catch((err) => toast.error(err, '内网通兼容模式启动失败'))
                 .finally(() => setChangingIpmsg(false));
             }}
           />
@@ -658,10 +658,10 @@ function DesktopSection() {
               : ipmsgError
                 ? ipmsgError
                 : ipmsgRunning
-                  ? `正在监听 2425 端口，发现 ${ipmsgPeers} 个联系人`
+                  ? `正在监听 2425/9011 端口，发现 ${ipmsgPeers} 个联系人`
                   : ipmsgEnabled
                     ? '正在启动…'
-                    : '默认关闭；开启后侧栏出现独立兼容频道'}
+                    : '默认关闭；开启后侧栏出现独立内网通兼容频道'}
           </div>
         </div>
       </Row>

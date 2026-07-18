@@ -38,3 +38,8 @@ The active `Protect immutable v* release tags` ruleset prevents updates, force-p
 6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks evidence, artifacts, checksums, and both public npm versions before making the Release public and latest.
 
 Never delete and recreate a released npm version or rewrite an existing release tag.
+
+## Plugin bundle
+
+The desktop release workflow packages every directory under `plugins/` into `rocketx-plugins-<version>.zip` during the release gate and uploads that archive to the draft GitHub Release before checksums are generated. Users can download this archive, unzip it, and install any contained plugin with **Settings → Apps → Install local app** by selecting the plugin directory that contains `rcx.app.json`.
+

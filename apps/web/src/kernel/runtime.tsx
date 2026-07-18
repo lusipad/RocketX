@@ -43,6 +43,7 @@ import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
+import { useIpmsg } from '../ipmsg/store';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -173,6 +174,41 @@ function registerCapabilities(): void {
       text,
     });
     return { ok: true, messageId };
+  });
+  capabilityBus.register('ipmsg.peers', 'lan:discover', async () => {
+    const ipmsg = useIpmsg.getState();
+    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    await useIpmsg.getState().refreshPeers();
+    return useIpmsg.getState().peers.map(({ id, user, host, nickname, group, dialect, supportsUtf8, lastSeenMs }) => ({
+      id,
+      user,
+      host,
+      nickname,
+      group,
+      dialect,
+      supportsUtf8,
+      lastSeenMs,
+    }));
+  });
+  capabilityBus.register('ipmsg.send', 'lan:transfer', async (params) => {
+    const peerId = stringParam(params, 'peerId');
+    const text = stringParam(params, 'text');
+    if (!peerId) throw new Error('ipmsg.send 缺少 peerId');
+    const ipmsg = useIpmsg.getState();
+    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    ipmsg.selectPeer(peerId);
+    await useIpmsg.getState().sendMessage(text);
+    return { ok: true };
+  });
+  capabilityBus.register('ipmsg.offerFile', 'lan:transfer', async (params) => {
+    const peerId = stringParam(params, 'peerId');
+    const path = stringParam(params, 'path');
+    if (!peerId || !path) throw new Error('ipmsg.offerFile 缺少 peerId 或 path');
+    const ipmsg = useIpmsg.getState();
+    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    ipmsg.selectPeer(peerId);
+    await useIpmsg.getState().offerFile(path);
+    return { ok: true };
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>
     kernelStore.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),

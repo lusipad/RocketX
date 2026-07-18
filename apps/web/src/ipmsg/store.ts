@@ -17,7 +17,7 @@ export interface IpmsgPeer {
   group: string;
   ip: string;
   port: number;
-  dialect: 'ipmsg' | 'feiq';
+  dialect: 'ipmsg' | 'feiq' | 'intranet';
   supportsUtf8: boolean;
   lastSeenMs: number;
 }
@@ -114,7 +114,7 @@ function errorText(error: unknown): string {
 
 function currentPeer(state: Pick<IpmsgState, 'peers' | 'selectedPeerId'>): IpmsgPeer {
   const peer = state.peers.find((candidate) => candidate.id === state.selectedPeerId);
-  if (!peer) throw new Error('请先选择一个在线的 IP Messenger 联系人');
+  if (!peer) throw new Error('请先选择一个在线的内网通/IP Messenger 联系人');
   return peer;
 }
 
@@ -183,7 +183,7 @@ async function wireEvents(): Promise<void> {
 }
 
 async function startRuntime(): Promise<void> {
-  if (!isTauri) throw new Error('IP Messenger 兼容模式仅支持桌面客户端');
+  if (!isTauri) throw new Error('内网通/IP Messenger 兼容模式仅支持桌面客户端');
   const user = useAuth.getState().user;
   if (!user) return;
   if (pollTimer) clearInterval(pollTimer);

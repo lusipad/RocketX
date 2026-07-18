@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { readFile, stat } from 'node:fs/promises';
+import test from 'node:test';
+
+const PLUGINS = ['intranet-link'] as const;
+const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
+
+function capabilityContract(source: string): Map<string, string> {
+  return new Map(
+    [...source.matchAll(/capabilityBus\.register\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]/g)]
+      .map((match) => [match[1], match[2]]),
+  );
+}
+
+for (const plugin of PLUGINS) {
+  test(`官方插件 ${plugin} 的 manifest、入口和权限契约保持一致`, async () => {
+    const root = new URL(`../../plugins/${plugin}/`, import.meta.url);
+    const manifestText = await readFile(new URL('rcx.app.json', root), 'utf8');
+    const manifest = JSON.parse(manifestText) as { runtime?: unknown; entry?: unknown; permissions?: unknown };
+    assert.equal(manifest.runtime, 'iframe');
+    assert.equal(manifest.entry, 'index.html');
+    assert.ok(Array.isArray(manifest.permissions), `${plugin} 必须声明 permissions`);
+    await stat(new URL(String(manifest.entry), root));
+
+    const html = await readFile(new URL(String(manifest.entry), root), 'utf8');
+    assert.match(html, /<!doctype html>/i);
+    assert.doesNotMatch(html, /<script\b[^>]*\bsrc\s*=/i, '官方插件必须保持单文件且不能加载外部脚本');
+    assert.doesNotMatch(html, /\b(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)\b/, '动态内容必须通过安全 DOM API 写入');
+    for (const script of [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)]) {
+      assert.doesNotThrow(() => new Function(script[1]), `${plugin} 的内联脚本必须是合法 JavaScript`);
+    }
+
+    const methods = [...html.matchAll(/\bcall\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+    const methodPermissions = capabilityContract(await runtimeText);
+    for (const method of methods) {
+      const permission = methodPermissions.get(method);
+      assert.ok(permission, `${plugin} 调用了未知 capability: ${method}`);
+      assert.ok(manifest.permissions.includes(permission), `${plugin} 调用 ${method} 但未声明 ${permission}`);
+    }
+
+    if (html.includes("method: 'rcx/requestUI'") || html.includes('method: "rcx/requestUI"')) {
+      assert.ok(manifest.permissions.includes('ui:notify'), `${plugin} 请求宿主通知但未声明 ui:notify`);
+    }
+  });
+}

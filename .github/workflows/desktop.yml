@@ -46,6 +46,7 @@ jobs:
           pnpm test:pure
           pnpm test:regression
           pnpm test:ecosystem
+          pnpm package:plugins -- --out dist/plugins
           pnpm --filter @rcx/web build
 
   build:
@@ -145,7 +146,9 @@ jobs:
           test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true"
           mkdir release-assets
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          pnpm package:plugins -- --tag "$GITHUB_REF_NAME" --out release-assets
           node scripts/verify-release-assets.mjs --tag "$GITHUB_REF_NAME" --directory release-assets
+          gh release upload "$GITHUB_REF_NAME" release-assets/rocketx-plugins-${GITHUB_REF_NAME#v}.zip --repo "$GITHUB_REPOSITORY" --clobber
           cd release-assets
           find . -maxdepth 1 -type f ! -name '*.sig' ! -name 'SHA256SUMS.txt' -printf '%f\n' | sort | while read -r file; do
             sha256sum "$file"

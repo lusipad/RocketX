@@ -25,6 +25,7 @@ const required = [
   requireMatch('Linux DEB', new RegExp(`${versionPattern}.*\\.deb$`, 'i')),
   requireMatch('Linux RPM', new RegExp(`${versionPattern}.*\\.rpm$`, 'i')),
   requireMatch('updater metadata', /^latest\.json$/),
+  requireMatch('plugins bundle', new RegExp(`rocketx-plugins-${versionPattern}\\.zip$`, 'i')),
 ];
 
 for (const name of required) {

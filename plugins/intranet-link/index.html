@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>内网通</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; min-height: 100vh; background: #f5f7fb; color: #1f2329; font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { max-width: 860px; margin: 0 auto; padding: 28px; }
+      header { margin-bottom: 18px; }
+      h1 { margin: 0 0 8px; font-size: 26px; }
+      p { margin: 0; color: #646a73; line-height: 1.7; }
+      .grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; align-items: start; }
+      section { border: 1px solid #dee0e3; border-radius: 16px; background: #fff; box-shadow: 0 8px 30px #1f23290f; overflow: hidden; }
+      section h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid #eff0f2; font-size: 16px; }
+      .content { padding: 14px 16px; }
+      button, input, textarea { font: inherit; }
+      button { border: 0; border-radius: 9px; padding: 9px 12px; background: #3370ff; color: #fff; cursor: pointer; }
+      button.secondary { background: #eef3ff; color: #245bdb; }
+      button:disabled { cursor: not-allowed; opacity: .55; }
+      label { display: block; margin: 10px 0 6px; color: #343840; font-weight: 600; }
+      input, textarea { box-sizing: border-box; width: 100%; border: 1px solid #c9cdd4; border-radius: 9px; padding: 10px; background: #fff; color: #1f2329; }
+      textarea { min-height: 136px; resize: vertical; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+      li { border: 1px solid #eff0f2; border-radius: 12px; padding: 10px; }
+      .peer { display: grid; gap: 6px; }
+      .peer strong { font-size: 14px; }
+      .meta { color: #8f959e; font-size: 12px; word-break: break-all; }
+      .badge { display: inline-flex; width: max-content; border-radius: 999px; padding: 2px 8px; font-size: 12px; background: #e8f7ef; color: #1f8f4d; }
+      .badge.untrusted { background: #fff4e8; color: #b35f00; }
+      .status { margin-top: 12px; color: #646a73; min-height: 22px; }
+      @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } main { padding: 18px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>内网通</h1>
+        <p>作为独立 RocketX 应用运行，只通过 Bridge 访问 <code>ipmsg.peers</code>、<code>ipmsg.send</code> 与 <code>ipmsg.offerFile</code>。它不会接触旧协议 socket、IP、端口或握手材料。</p>
+      </header>
+      <div class="grid">
+        <section>
+          <h2>局域网设备</h2>
+          <div class="content">
+            <button class="secondary" id="refresh">刷新设备</button>
+            <p class="status" id="peer-status">尚未读取设备。</p>
+            <ul id="peers"></ul>
+          </div>
+        </section>
+        <section>
+          <h2>内网通聊天与文件</h2>
+          <div class="content">
+            <label for="peer-id">内网通 peerId</label>
+            <input id="peer-id" autocomplete="off" placeholder="从左侧联系人选择">
+            <label for="payload">文本负载</label>
+            <textarea id="payload" maxlength="49152">来自内网通插件的 P2P 测试消息</textarea>
+            <button id="send">发送聊天消息</button>
+            <label for="file-path">本机文件路径</label>
+            <input id="file-path" autocomplete="off" placeholder="桌面端选择/粘贴要发送的文件路径">
+            <button class="secondary" id="send-file">发送文件邀请</button>
+            <p class="status" id="send-status">仅桌面端且兼容模式可绑定 2425/9011 时可发送。</p>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      let nextId = 1;
+      const pending = new Map();
+      const peersList = document.querySelector('#peers');
+      const peerStatus = document.querySelector('#peer-status');
+      const sendStatus = document.querySelector('#send-status');
+      const peerIdInput = document.querySelector('#peer-id');
+      const filePathInput = document.querySelector('#file-path');
+      const payloadInput = document.querySelector('#payload');
+
+      window.__RCX_BRIDGE__.addEventListener('message', (event) => {
+        const message = event.data;
+        if (!message || message.jsonrpc !== '2.0' || message.id === undefined) return;
+        const request = pending.get(message.id);
+        if (!request) return;
+        pending.delete(message.id);
+        if (message.error) request.reject(new Error(message.error.message || 'Bridge 调用失败'));
+        else request.resolve(message.result);
+      });
+
+      function call(method, params) {
+        const id = nextId++;
+        const request = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } });
+        return request;
+      }
+
+      function notify(message, level) {
+        const id = nextId++;
+        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/requestUI', params: { kind: 'notify', props: { message, level } } });
+      }
+
+      function formatSeen(value) {
+        if (!Number.isFinite(value)) return '未知';
+        const seconds = Math.max(0, Math.round((Date.now() - value) / 1000));
+        return seconds < 60 ? `${seconds} 秒前` : `${Math.round(seconds / 60)} 分钟前`;
+      }
+
+      function renderPeers(peers) {
+        peersList.textContent = '';
+        if (!peers.length) {
+          peerStatus.textContent = '未发现内网通/飞鸽/飞秋联系人；请确认兼容模式开启、双方同网段且端口未被占用。';
+          return;
+        }
+        peerStatus.textContent = `发现 ${peers.length} 个内网通兼容联系人。`;
+        for (const peer of peers) {
+          const item = document.createElement('li');
+          item.className = 'peer';
+          const title = document.createElement('strong');
+          title.textContent = peer.nickname || peer.user || peer.id;
+          const badge = document.createElement('span');
+          badge.className = peer.trusted ? 'badge' : 'badge untrusted';
+          badge.textContent = peer.trusted ? '已信任' : '待信任';
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = `${peer.nickname || peer.user} · ${peer.host || peer.group || '-'} · ${peer.dialect || 'unknown'} · ${formatSeen(peer.lastSeenMs)}`;
+          const select = document.createElement('button');
+          select.className = 'secondary';
+          select.textContent = '选为接收方';
+          select.addEventListener('click', () => {
+            peerIdInput.value = peer.id || '';
+            sendStatus.textContent = `已选择 ${peer.nickname || peer.user || peer.id}；可以发送聊天消息或文件邀请。`;
+          });
+          item.append(title, badge, meta, select);
+          peersList.append(item);
+        }
+      }
+
+      async function refreshPeers() {
+        peerStatus.textContent = '正在读取局域网设备…';
+        try {
+          renderPeers(await call('ipmsg.peers'));
+        } catch (error) {
+          peerStatus.textContent = `读取失败：${error.message}`;
+        }
+      }
+
+      async function sendLan() {
+        const params = {
+          peerId: peerIdInput.value.trim(),
+          text: payloadInput.value,
+        };
+        sendStatus.textContent = '正在发送…';
+        try {
+          await call('ipmsg.send', params);
+          sendStatus.textContent = '聊天消息已发送';
+          notify('内网通聊天消息已发送', 'success');
+        } catch (error) {
+          sendStatus.textContent = `发送失败：${error.message}`;
+          notify(`内网通发送失败：${error.message}`, 'error');
+        }
+      }
+
+      async function sendFile() {
+        sendStatus.textContent = '正在发送文件邀请…';
+        try {
+          await call('ipmsg.offerFile', { peerId: peerIdInput.value.trim(), path: filePathInput.value.trim() });
+          sendStatus.textContent = '文件邀请已发送；对方接受后走 TCP P2P 拉取。';
+          notify('内网通文件邀请已发送', 'success');
+        } catch (error) {
+          sendStatus.textContent = `文件发送失败：${error.message}`;
+          notify(`内网通文件发送失败：${error.message}`, 'error');
+        }
+      }
+
+      document.querySelector('#refresh').addEventListener('click', refreshPeers);
+      document.querySelector('#send').addEventListener('click', sendLan);
+      document.querySelector('#send-file').addEventListener('click', sendFile);
+      refreshPeers();
+    </script>
+  </body>
+</html>
