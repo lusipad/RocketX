@@ -122,6 +122,9 @@ fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("Codex 路径不可用：{error}"))?;
+    // canonicalize 产生的 `\\?\` 扩展前缀会让 Node 无法加载作为入口脚本的
+    // codex.js，也不适合作为子进程工作目录，统一还原成常规主机路径。
+    let canonical = PathBuf::from(host_path(&canonical));
     if !canonical.is_file() {
         return Err("Codex 路径不是文件".to_string());
     }
@@ -228,6 +231,56 @@ pub(crate) fn codex_command() -> Result<Command, String> {
     Ok(resolve_codex()?.command())
 }
 
+fn version_token(token: &str) -> Option<&str> {
+    let token = token.strip_prefix('v').unwrap_or(token);
+    if !token
+        .chars()
+        .next()
+        .is_some_and(|value| value.is_ascii_digit())
+        || !token.contains('.')
+    {
+        return None;
+    }
+    token
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '+'))
+        .then_some(token)
+}
+
+fn parse_codex_cli_version(output: &str, require_codex_prefix: bool) -> Option<String> {
+    let mut fallback = None;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let Some((first, rest)) = tokens.split_first() else {
+            continue;
+        };
+        if first.eq_ignore_ascii_case("codex-cli") || first.eq_ignore_ascii_case("codex") {
+            if let Some(version) = rest.iter().copied().find_map(version_token) {
+                return Some(version.to_string());
+            }
+        }
+        if !require_codex_prefix && fallback.is_none() {
+            fallback = tokens
+                .iter()
+                .copied()
+                .find_map(version_token)
+                .map(ToOwned::to_owned);
+        }
+    }
+    fallback
+}
+
+fn output_preview(value: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let value = value.trim();
+    if value.chars().count() <= MAX_CHARS {
+        return value.to_string();
+    }
+    let mut preview: String = value.chars().take(MAX_CHARS).collect();
+    preview.push('…');
+    preview
+}
+
 fn codex_cli_version() -> Result<String, String> {
     let mut command = codex_command()?;
     command.arg("--version");
@@ -237,17 +290,27 @@ fn codex_cli_version() -> Result<String, String> {
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("Codex CLI 不可用，请先安装并登录：{error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "无法读取 Codex CLI 版本：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // 只要能读出版本号就放行：npm/pnpm 等包装脚本可能追加提示行、把版本打到
+    // stderr，甚至以非零码退出；可用性另由 app-server/login 探测把关。退出码
+    // 非零时只认带 codex 前缀的行，避免把报错里的其他版本号当成 Codex 版本。
+    let strict = !output.status.success();
+    if let Some(version) =
+        parse_codex_cli_version(&stdout, strict).or_else(|| parse_codex_cli_version(&stderr, true))
+    {
+        return Ok(version);
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .strip_prefix("codex-cli ")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "Codex CLI 返回了无法识别的版本".to_string())
+    let mut details = vec![match output.status.code() {
+        Some(code) => format!("退出码 {code}"),
+        None => "进程被信号终止".to_string(),
+    }];
+    for (label, value) in [("stderr", stderr.trim()), ("stdout", stdout.trim())] {
+        if !value.is_empty() {
+            details.push(format!("{label}：{}", output_preview(value)));
+        }
+    }
+    Err(format!("无法读取 Codex CLI 版本（{}）", details.join("；")))
 }
 
 fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
@@ -442,8 +505,7 @@ pub fn codex_app_server_start(
     workspace_root: String,
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
-    let workspace = canonical_directory(&workspace_root)?;
-    let workspace_root = host_path(&workspace);
+    let workspace_root = host_path(&canonical_directory(&workspace_root)?);
     let version = codex_cli_version()?;
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
@@ -465,7 +527,7 @@ pub fn codex_app_server_start(
     let mut command = codex_command()?;
     command
         .args(["app-server", "--stdio"])
-        .current_dir(&workspace)
+        .current_dir(&workspace_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -723,8 +785,8 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        decode_attachment_request, encode_message, host_path, safe_attachment_path,
-        validate_session_id,
+        decode_attachment_request, encode_message, host_path, parse_codex_cli_version,
+        safe_attachment_path, validate_session_id,
     };
     use serde_json::json;
     use std::path::Path;
@@ -768,6 +830,48 @@ mod tests {
         assert_eq!(decoded.relative_path, "message/build.log");
         assert_eq!(bytes, &[0, 1, 2, 255]);
         assert!(decode_attachment_request(&[0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn codex_version_parsing_accepts_official_and_wrapped_outputs() {
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 0.144.4\n", false).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("codex v0.150.2", false).as_deref(),
+            Some("0.150.2")
+        );
+        assert_eq!(
+            parse_codex_cli_version("npm warn deprecated something\ncodex-cli 0.144.4", false)
+                .as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("0.144.4", false).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(parse_codex_cli_version("", false), None);
+        assert_eq!(
+            parse_codex_cli_version("usage: codex [options]", false),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_version_parsing_in_strict_mode_only_trusts_codex_lines() {
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 0.144.4", true).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("Node.js v22.17.0 is required", true),
+            None
+        );
+        assert_eq!(
+            parse_codex_cli_version("Node.js v22.17.0 is required", false).as_deref(),
+            Some("22.17.0")
+        );
     }
 
     #[test]
