@@ -396,6 +396,38 @@ export default function WorkbenchPage() {
     });
   }, []);
 
+  const queryConnectionScope = customQueryConnectionScope(config);
+  const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
+  const customQueries = useMemo(
+    () => queriesForScope(allCustomQueries, queryConnectionScope, queryAdoBase),
+    [allCustomQueries, queryAdoBase, queryConnectionScope],
+  );
+
+  const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
+  const activeQuery = customQueries.find((q) => q.id === activeQueryId);
+  const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
+  const queryScope = `${queryConnectionScope}\0${configRevision}`;
+  const [queryState, setQueryState] = useState(() =>
+    createCustomQueryLoadState<WorkItem[]>(queryScope),
+  );
+  const queryStateRef = useRef(queryState);
+  const visibleQueryState = useMemo(
+    () =>
+      queryState.scope === queryScope
+        ? queryState
+        : createCustomQueryLoadState<WorkItem[]>(queryScope),
+    [queryScope, queryState],
+  );
+
+  const updateQueryState = useCallback(
+    (update: (current: typeof queryState) => typeof queryState) => {
+      const next = update(queryStateRef.current);
+      queryStateRef.current = next;
+      setQueryState(next);
+    },
+    [],
+  );
+
   // 看板拖拽改状态：先确认再写 ADO（issue #82 二期）
   const [pendingMove, setPendingMove] = useState<{
     queryId: string;
@@ -428,38 +460,6 @@ export default function WorkbenchPage() {
       toast.error(err, '改状态失败，流转可能不被过程模板允许');
     }
   }, [pendingMove, updateQueryState]);
-
-  const queryConnectionScope = customQueryConnectionScope(config);
-  const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
-  const customQueries = useMemo(
-    () => queriesForScope(allCustomQueries, queryConnectionScope, queryAdoBase),
-    [allCustomQueries, queryAdoBase, queryConnectionScope],
-  );
-
-  const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
-  const activeQuery = customQueries.find((q) => q.id === activeQueryId);
-  const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
-  const queryScope = `${queryConnectionScope}\0${configRevision}`;
-  const [queryState, setQueryState] = useState(() =>
-    createCustomQueryLoadState<WorkItem[]>(queryScope),
-  );
-  const queryStateRef = useRef(queryState);
-  const visibleQueryState = useMemo(
-    () =>
-      queryState.scope === queryScope
-        ? queryState
-        : createCustomQueryLoadState<WorkItem[]>(queryScope),
-    [queryScope, queryState],
-  );
-
-  const updateQueryState = useCallback(
-    (update: (current: typeof queryState) => typeof queryState) => {
-      const next = update(queryStateRef.current);
-      queryStateRef.current = next;
-      setQueryState(next);
-    },
-    [],
-  );
 
   useEffect(() => {
     if (queryConnectionScope && queryAdoBase) {

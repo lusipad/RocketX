@@ -47,6 +47,7 @@ import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
+import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -68,6 +69,7 @@ const APP_VERSION = __APP_VERSION__;
 
 type Section =
   | 'account'
+  | 'workspace'
   | 'appearance'
   | 'sidebar'
   | 'message'
@@ -81,6 +83,7 @@ type Section =
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与状态', icon: Server },
+  { key: 'workspace', label: '工作区', icon: FolderOpen },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
@@ -1768,6 +1771,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
           ) : (
             <>
               {section === 'account' && <AccountSection />}
+              {section === 'workspace' && <WorkspaceConfigSection />}
               {section === 'appearance' && <AppearanceSection />}
               {section === 'sidebar' && <SidebarSection />}
               {section === 'message' && <MessageSection />}
