@@ -1,5 +1,5 @@
 import { Bot, Loader2, Search, Send, TerminalSquare } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useUI } from '../stores/ui';
@@ -31,22 +31,37 @@ export default function AiAssistantPage() {
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const [input, setInput] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
 
   // 预取工作台数据，AI 的 list_work_items/list_pull_requests/list_builds 工具直接读它
   useEffect(() => {
     if (config && !lastRefresh) void refreshWorkbench();
   }, [config, lastRefresh, refreshWorkbench]);
 
+  // 打开页面和新内容到达时停在最新对话；用户滚上去阅读时不跟随（issue #90）
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element && stickToBottom.current) element.scrollTop = element.scrollHeight;
+  }, [lines, activity, butlerError, routineDraft]);
+
+  const handleScroll = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+  };
+
   /** 所有输入都交给 AI 大脑理解和回答，不做本地正则拆解（issue #89） */
   const submit = async (text = input) => {
     const value = text.trim();
     if (!value || running) return;
     setInput('');
+    stickToBottom.current = true; // 发送后总是回到最新
     await askButler(value);
   };
 
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto bg-surface-3">
+    <div ref={scrollRef} onScroll={handleScroll} className="min-w-0 flex-1 overflow-y-auto bg-surface-3">
       <div className="mx-auto flex min-h-full max-w-5xl flex-col px-8 py-7">
         <div className="flex items-start justify-between gap-4">
           <div>
