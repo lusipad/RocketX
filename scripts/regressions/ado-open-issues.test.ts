@@ -98,32 +98,38 @@ test('创建工作项使用真实类型名和 ADO JSON Patch 契约', async () =
   assert.equal(created.type, 'Product Backlog Item');
 });
 
-test('非 Agile 项目按服务器真实类型恢复层级模板', () => {
+test('非 Agile 项目按服务器真实类型恢复层级模板，且不含 Epic 顶层（issue #65）', () => {
   const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
   const cases = [
     {
       name: 'Basic',
       types: ['Epic', 'Issue', 'Task'],
       hierarchy: ['Epic', 'Issue', 'Task'],
-      expected: ['Epic', 'Issue', 'Task', 'Task'],
+      expected: ['Issue', 'Task', 'Task'],
     },
     {
       name: 'Scrum',
       types: ['Epic', 'Feature', 'Product Backlog Item', 'Task'],
       hierarchy: ['Epic', 'Feature', 'Product Backlog Item', 'Task'],
-      expected: ['Epic', 'Feature', 'Product Backlog Item', 'Task', 'Task'],
+      expected: ['Feature', 'Product Backlog Item', 'Task', 'Task'],
     },
     {
       name: 'CMMI',
       types: ['Epic', 'Feature', 'Requirement', 'Task'],
       hierarchy: ['Epic', 'Feature', 'Requirement', 'Task'],
-      expected: ['Epic', 'Feature', 'Requirement', 'Task', 'Task'],
+      expected: ['Feature', 'Requirement', 'Task', 'Task'],
     },
     {
       name: '自定义',
       types: ['Initiative', 'Capability', 'Story', 'Task'],
       hierarchy: ['Initiative', 'Capability', 'Story', 'Task'],
-      expected: ['Initiative', 'Capability', 'Story', 'Task', 'Task'],
+      expected: ['Capability', 'Story', 'Task', 'Task'],
+    },
+    {
+      name: '只有 Epic 和 Task 时保留原层级，级联不能退化成单项',
+      types: ['Epic', 'Task'],
+      hierarchy: ['Epic', 'Task'],
+      expected: ['Epic', 'Task', 'Task'],
     },
   ];
 
