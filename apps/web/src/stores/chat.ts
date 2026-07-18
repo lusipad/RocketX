@@ -2287,14 +2287,21 @@ export const useChat = create<ChatState>((set, get) => ({
     const rid = get().activeRid;
     const me = useAuth.getState().user;
     if (!rid || !me || paths.length === 0) return;
+    // 原生拖拽文件回复也要带引用（issue #91 同类）。挂着引用时不走局域网
+    // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
     set({ uploading: get().uploading + paths.length });
     try {
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
       const { readFile, stat } = await import('@tauri-apps/plugin-fs');
-      for (const path of paths) {
+      for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
-        if (!tmid) {
+        if (!tmid && !quoteMsg) {
           const recipients = await lanRecipientIds(rid).catch(() => []);
           if (recipients.length === 1) {
             const messageId = randomMessageId();
@@ -2340,7 +2347,11 @@ export const useChat = create<ChatState>((set, get) => ({
             );
           }
           const bytes = await readFile(path);
-          await rest.uploadMedia(rid, new Blob([bytes]), { tmid, fileName });
+          await rest.uploadMedia(rid, new Blob([bytes]), {
+            tmid,
+            fileName,
+            ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+          });
         }
         set({ uploading: Math.max(0, get().uploading - 1) });
       }
