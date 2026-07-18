@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Bot, Loader2, SendHorizontal } from 'lucide-react';
+import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
 import { renderMarkdown } from '../lib/markdown';
@@ -30,9 +31,16 @@ export default function ButlerPanel() {
   const ask = useButler((state) => state.ask);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
+  const hydrate = useButler((state) => state.hydrate);
+  const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasConversation = lines.some((line) => line.role === 'user');
+
+  // 恢复本账号保存的对话记录（与 AI 页面共用同一份）
+  useEffect(() => {
+    if (userId) void hydrate();
+  }, [hydrate, userId]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;

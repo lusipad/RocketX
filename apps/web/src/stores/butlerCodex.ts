@@ -321,6 +321,25 @@ async function resumeResidentThread(now: number, prompt: string, promptHash: str
   residentStatus = 'ready';
 }
 
+/**
+ * 重启后接续上一次的常驻线程：标记为 interrupted，下次提问会走既有的
+ * thread/resume 路径把上下文从 Codex 会话库里恢复回来；resume 失败时
+ * 原有兜底会自动开新线程。本次运行已有活线程时不覆盖。
+ */
+export function hydrateResidentCodexThread(threadId: string, promptHash: string): void {
+  if (residentThreadId || !threadId || !promptHash) return;
+  residentThreadId = threadId;
+  residentPromptHash = promptHash;
+  residentStatus = 'interrupted';
+}
+
+/** 当前常驻线程快照，供对话持久化一并保存 */
+export function residentCodexThreadSnapshot(): { threadId: string; promptHash: string } | undefined {
+  return residentThreadId && residentPromptHash
+    ? { threadId: residentThreadId, promptHash: residentPromptHash }
+    : undefined;
+}
+
 async function ensureResidentThread(now: number): Promise<void> {
   const prompt = buildButlerSystemPrompt();
   const settings = getButlerCodexSettings();

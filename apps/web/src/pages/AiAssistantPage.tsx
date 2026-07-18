@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useButler } from '../stores/butler';
@@ -20,6 +21,7 @@ function routineDaysLabel(days?: number[]): string {
 }
 
 export default function AiAssistantPage() {
+  const userId = useAuth((state) => state.user?._id);
   const config = useWorkbench((state) => state.config);
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
   const refreshWorkbench = useWorkbench((state) => state.refresh);
@@ -31,7 +33,13 @@ export default function AiAssistantPage() {
   const routineDraft = useButler((state) => state.routineDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
+  const hydrateButler = useButler((state) => state.hydrate);
   const [input, setInput] = useState('');
+
+  // 恢复本账号保存的对话记录（重启后不再从欢迎语开始）
+  useEffect(() => {
+    if (userId) void hydrateButler();
+  }, [hydrateButler, userId]);
   // 打开页面和新内容到达时停在最新对话；用户滚上去阅读时不跟随（issue #90）
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     lines,

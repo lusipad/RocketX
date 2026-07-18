@@ -1,13 +1,23 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage } from '../kernel/ai/provider';
+import { getServerBase } from '../lib/client';
 import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
 import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
-import { askButlerCodex, friendlyButlerCodexError } from './butlerCodex';
+import { useAuth } from './auth';
+import {
+  askButlerCodex,
+  friendlyButlerCodexError,
+  hydrateResidentCodexThread,
+  residentCodexThreadSnapshot,
+} from './butlerCodex';
 import { useRoutines } from './routines';
 
 const HISTORY_LIMIT = 40;
+/** 持久化的展示行上限：超出裁旧，避免本地存储无限增长 */
+const LINES_LIMIT = 200;
+const APP_ID = 'builtin:butler';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
 
@@ -30,10 +40,18 @@ export interface ButlerState {
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
   ask: (text: string, context?: ButlerRoomContext) => Promise<void>;
+  hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   confirmRoutineDraft: () => void;
   dismissRoutineDraft: () => void;
   reset: () => void;
+}
+
+/** 按 服务器+账号 隔离保存的对话记录（issue：AI 页面对话重启即丢） */
+interface PersistedButler {
+  lines: ButlerLine[];
+  history: AiMessage[];
+  codexThread?: { threadId: string; promptHash: string };
 }
 
 type ButlerLoopRunner = typeof runAgentLoop;
@@ -42,6 +60,69 @@ type ButlerCodexRunner = typeof askButlerCodex;
 let loopRunner: ButlerLoopRunner = runAgentLoop;
 let codexRunner: ButlerCodexRunner = askButlerCodex;
 let butlerNow = () => Date.now();
+
+let persistScope = '';
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+interface ButlerAppData {
+  get<T>(appId: string, key: string): Promise<T | undefined>;
+  set<T>(appId: string, key: string, value: T): Promise<void>;
+}
+
+let appDataOverride: ButlerAppData | null = null;
+
+async function butlerAppData(): Promise<ButlerAppData> {
+  if (appDataOverride) return appDataOverride;
+  return (await import('../kernel/store')).kernelStore.appData;
+}
+
+/** 测试用：注入内存版持久化后端（kernelStore 依赖 IndexedDB） */
+export function setButlerPersistence(store: ButlerAppData): () => void {
+  const previous = appDataOverride;
+  appDataOverride = store;
+  return () => {
+    appDataOverride = previous;
+  };
+}
+
+async function persistButler(): Promise<void> {
+  if (!persistScope) return;
+  const { lines, history } = useButler.getState();
+  const codexThread = residentCodexThreadSnapshot();
+  await (await butlerAppData()).set<PersistedButler>(APP_ID, persistScope, {
+    lines: lines.slice(-LINES_LIMIT),
+    history,
+    ...(codexThread ? { codexThread } : {}),
+  });
+}
+
+/** 对话变更后防抖落盘；未 hydrate（不知道账号范围）前不写 */
+function schedulePersist(): void {
+  if (!persistScope) return;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistButler().catch(() => undefined);
+  }, 500);
+}
+
+/** 测试用：立即落盘，绕过防抖 */
+export async function flushButlerPersist(): Promise<void> {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  await persistButler();
+}
+
+/** 测试用：清除已记录的持久化范围，模拟应用重启 */
+export function resetButlerPersistenceForTests(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistScope = '';
+}
 
 const toolLabels: Record<string, string> = {
   search_messages: '搜索消息',
@@ -113,6 +194,27 @@ export const useButler = create<ButlerState>((set, get) => ({
   running: false,
   error: null,
   routineDraft: null,
+
+  hydrate: async () => {
+    const user = useAuth.getState().user;
+    if (!user) return;
+    const scope = `${getServerBase() || 'same-origin'}:${user._id}`;
+    if (persistScope === scope) return;
+    const firstHydrate = persistScope === '';
+    persistScope = scope;
+    const stored = await (await butlerAppData())
+      .get<PersistedButler>(APP_ID, scope)
+      .catch(() => undefined);
+    // 首次注水时用户可能已经开始新对话，不覆盖；切换账号则总是切到该账号的记录
+    if (firstHydrate && get().lines.some((line) => line.role === 'user')) return;
+    set({
+      lines: stored?.lines?.length ? stored.lines.slice(-LINES_LIMIT) : welcomeLines(),
+      history: trimButlerHistory(stored?.history ?? []),
+    });
+    if (stored?.codexThread) {
+      hydrateResidentCodexThread(stored.codexThread.threadId, stored.codexThread.promptHash);
+    }
+  },
 
   ask: async (text, context) => {
     const content = text.trim();
@@ -246,3 +348,9 @@ export const useButler = create<ButlerState>((set, get) => ({
 }));
 
 setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
+
+// 对话行或模型历史变化即防抖落盘；reset 会把欢迎语落盘，等价于清空记录
+useButler.subscribe((state, previous) => {
+  if (state.lines === previous.lines && state.history === previous.history) return;
+  schedulePersist();
+});
