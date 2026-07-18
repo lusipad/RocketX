@@ -1,5 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { Bot, Check, ChevronLeft, Copy, FolderOpen, Play, Shield, Square, Users, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Shield, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
@@ -60,6 +60,8 @@ export default function AgentPanel() {
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
+  const transferToCodexApp = useSharedAgent((state) => state.transferToCodexApp);
+  const [transferring, setTransferring] = useState(false);
   // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
   // 依赖用 store 里的原始引用，traces 的 `?? []` 每次渲染都是新数组
   const { scrollRef, onScroll } = useStickToBottom([sessionTraces]);
@@ -178,18 +180,35 @@ export default function AgentPanel() {
             {session.codexThreadId ? (
               <div className="flex items-center justify-between gap-3">
                 <span className="text-ink-3">Codex 线程</span>
-                <button
-                  title={`复制 codex resume ${session.codexThreadId}，可在 Codex CLI / App 里继续该线程`}
-                  onClick={() => {
-                    void navigator.clipboard
-                      .writeText(`codex resume ${session.codexThreadId}`)
-                      .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，避免两端同时写同一线程'));
-                  }}
-                  className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
-                >
-                  <Copy size={12} />
-                  <span className="truncate">codex resume</span>
-                </button>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <button
+                    title={`复制 codex resume ${session.codexThreadId}，可在 Codex CLI 里继续该线程`}
+                    onClick={() => {
+                      void navigator.clipboard
+                        .writeText(`codex resume ${session.codexThreadId}`)
+                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，避免两端同时写同一线程'));
+                    }}
+                    className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
+                  >
+                    <Copy size={12} />
+                    <span className="truncate">codex resume</span>
+                  </button>
+                  <button
+                    title="把托管对话转移到 Codex（快照副本），在 Codex App / CLI 的会话列表里可见"
+                    disabled={transferring || session.status === 'running'}
+                    onClick={() => {
+                      setTransferring(true);
+                      void transferToCodexApp(tmid)
+                        .then(() => toast.success('已转移到 Codex，可在 App / CLI 会话列表继续'))
+                        .catch((error) => toast.error(error, '转移到 Codex 失败'))
+                        .finally(() => setTransferring(false));
+                    }}
+                    className="flex shrink-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+                  >
+                    {transferring ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
+                    转到 App
+                  </button>
+                </div>
               </div>
             ) : null}
             <div className="truncate text-xs text-ink-3" title={session.workspaceRoots[0]}>

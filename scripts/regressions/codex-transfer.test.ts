@@ -67,4 +67,13 @@ test('转移走官方 externalAgentConfig/import（与 codex-plugin-cc 同款机
   const page = readFileSync('apps/web/src/pages/AiAssistantPage.tsx', 'utf8');
   assert.match(page, /transferConversationToCodexApp/);
   assert.match(page, /转到 Codex/);
+
+  // 群托管同样可转移：会话消息装载 + 导入 + 面板入口
+  const shared = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
+  assert.match(shared, /transferToCodexApp/);
+  assert.match(shared, /sessionConversationMessages/);
+  assert.match(shared, /importSessionFileToCodex/);
+  assert.match(shared, /dispatchCodexImportCompleted/);
+  const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
+  assert.match(panel, /转到 App/);
 });

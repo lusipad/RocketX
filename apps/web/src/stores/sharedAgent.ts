@@ -10,6 +10,7 @@ import {
   agentSessionCardMatchesMessage,
   parseAgentSessionCard,
   renderAgentSessionCard,
+  stripAgentSessionMarker,
   type AgentSessionCard,
 } from '../agent/card';
 import {
@@ -20,7 +21,9 @@ import {
   quoteMessageIds,
   selectAgentContextMessages,
 } from '../agent/context';
-import { materializeAgentAttachments } from '../agent/attachments';
+import { materializeAgentAttachments, writeAgentSessionFile } from '../agent/attachments';
+import { dispatchCodexImportCompleted, importSessionFileToCodex } from '../agent/codexImport';
+import { agentConversationLines, claudeSessionJsonl } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
 import {
@@ -121,6 +124,8 @@ interface SharedAgentState {
   setAccess: (tmid: string, access: AgentSession['access']) => Promise<void>;
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
+  /** 把托管对话转移进 Codex（导入成 App 认可来源的线程快照副本） */
+  transferToCodexApp: (tmid: string) => Promise<void>;
 }
 
 const queues = new Map<string, SerialCommandQueue>();
@@ -297,6 +302,10 @@ async function onServerRequest(request: {
 }
 
 function onNotification(method: string, paramsValue: unknown): void {
+  if (method === 'externalAgentConfig/import/completed') {
+    dispatchCodexImportCompleted(paramsValue);
+    return;
+  }
   const params = recordParams(paramsValue);
   const threadId = typeof params.threadId === 'string' ? params.threadId : '';
   const session = sessionForThread(threadId);
@@ -455,6 +464,35 @@ async function loadContextMessages(session: AgentSession, command: RcMessage): P
     }
   }
   return [...messages.values()];
+}
+
+/** 托管会话的完整对话：房间托管取房间近 100 条，话题托管取话题消息（缓存兜底） */
+async function sessionConversationMessages(session: AgentSession): Promise<RcMessage[]> {
+  const cached = useChat.getState().messages[session.rid] ?? [];
+  const root = replyTmid(session);
+  if (!root) {
+    const messages = new Map(cached.map((message) => [message._id, message]));
+    const type = useChat.getState().subscriptions[session.rid]?.t ?? useChat.getState().rooms[session.rid]?.t ?? 'p';
+    try {
+      for (const message of await rest.getHistory(session.rid, type, 100)) messages.set(message._id, message);
+    } catch {
+      /* 拉取失败时用本机缓存兜底 */
+    }
+    return [...messages.values()]
+      .filter((message) => message.rid === session.rid)
+      .sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
+  }
+  const messages = new Map(
+    cached
+      .filter((message) => message._id === root || message.tmid === root)
+      .map((message) => [message._id, message]),
+  );
+  try {
+    for (const message of await rest.getThreadMessages(root, 100)) messages.set(message._id, message);
+  } catch {
+    /* 拉取失败时用本机缓存兜底 */
+  }
+  return [...messages.values()].sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
 }
 
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
@@ -829,6 +867,48 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     nameCodexThread(appServer, resumed); // 旧线程也补上名字
     trace(tmid, 'status', '已恢复 Codex 会话');
     await updateLeaseCard(get().sessions[tmid]);
+  },
+
+  transferToCodexApp: async (tmid) => {
+    const session = get().sessions[tmid];
+    if (!session || session.status === 'ended') throw new Error('托管会话未在运行');
+    const messages = await sessionConversationMessages(session);
+    const lines = agentConversationLines(
+      messages
+        .filter((message) => !message.pending && !message.failed && !parseAgentSessionCard(message.msg))
+        .map((message) => {
+          const raw = stripAgentSessionMarker(message.msg ?? '').trim();
+          const assistant = raw.startsWith('🤖');
+          return {
+            // 「🤖 Codex」前缀行只是署名，去掉；单行的状态类消息保留原文
+            text: assistant ? raw.replace(/^🤖[^\n]*\n?/u, '').trim() || raw : raw,
+            author: message.u.name || message.u.username,
+            assistant,
+          };
+        }),
+    );
+    const chat = useChat.getState();
+    const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
+    const detail = session.workItem
+      ? `#${session.workItem.id} ${session.workItem.title}`
+      : room?.fname || room?.name || session.environmentName;
+    const client = await ensureClient(session);
+    const jsonl = claudeSessionJsonl(lines, {
+      sessionId: crypto.randomUUID(),
+      cwd: session.workspaceRoots[0],
+      now: Date.now(),
+    });
+    const file = await writeAgentSessionFile(
+      session.sessionId,
+      `codex-transfer/hosting-${Date.now()}.jsonl`,
+      jsonl,
+    );
+    await importSessionFileToCodex(client, {
+      path: file.path,
+      cwd: session.workspaceRoots[0],
+      title: rocketxThreadName('托管对话', detail),
+    });
+    trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
   },
 
   endSession: async (tmid) => {
