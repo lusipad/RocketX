@@ -333,6 +333,34 @@ fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
     })
 }
 
+/// 基线 0.144.4 的 app-server 需要显式 `--stdio`；后续版本把 stdio 设为默认
+/// 并移除了该参数，继续传会被 clap 拒绝并立刻以退出码 2 退出（表现为
+/// 「Codex app-server 已退出（2）」）。按 `--help` 是否列出该参数决定传不传。
+fn app_server_args_for_help(help: &str) -> Vec<&'static str> {
+    if help.contains("--stdio") {
+        vec!["app-server", "--stdio"]
+    } else {
+        vec!["app-server"]
+    }
+}
+
+fn app_server_launch_args() -> Result<Vec<&'static str>, String> {
+    let mut command = codex_command()?;
+    let output = command
+        .args(["app-server", "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Codex 无法启动：{error}"))?;
+    let help = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(app_server_args_for_help(&help))
+}
+
 #[tauri::command]
 pub fn codex_runtime_probe() -> CodexRuntimeProbe {
     let resolved = match resolve_codex() {
@@ -524,9 +552,10 @@ pub fn codex_app_server_start(
         });
     }
 
+    let launch_args = app_server_launch_args()?;
     let mut command = codex_command()?;
     command
-        .args(["app-server", "--stdio"])
+        .args(&launch_args)
         .current_dir(&workspace_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -785,8 +814,8 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        decode_attachment_request, encode_message, host_path, parse_codex_cli_version,
-        safe_attachment_path, validate_session_id,
+        app_server_args_for_help, decode_attachment_request, encode_message, host_path,
+        parse_codex_cli_version, safe_attachment_path, validate_session_id,
     };
     use serde_json::json;
     use std::path::Path;
@@ -871,6 +900,19 @@ mod tests {
         assert_eq!(
             parse_codex_cli_version("Node.js v22.17.0 is required", false).as_deref(),
             Some("22.17.0")
+        );
+    }
+
+    #[test]
+    fn app_server_stdio_flag_follows_cli_help() {
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --stdio  Serve over stdio"),
+            vec!["app-server", "--stdio"],
+        );
+        // 新版 CLI 移除了 --stdio（stdio 已是默认），传了会以退出码 2 拒绝
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --listen <ADDR>"),
+            vec!["app-server"],
         );
     }
 
