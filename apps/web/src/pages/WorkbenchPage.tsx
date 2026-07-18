@@ -8,17 +8,20 @@ import {
   CircleDot,
   ExternalLink,
   GitPullRequest,
+  ListTree,
   Pencil,
   Plus,
   RefreshCw,
   Search,
   Settings,
+  SquareKanban,
   Trash2,
   Wrench,
   XCircle,
 } from 'lucide-react';
 import { myPrsOf, reviewPrsOf, useWorkbench, type WorkItem } from '../stores/workbench';
 import { BuildList, PullRequestList, WorkItemList } from '../components/AdoLists';
+import { WorkItemBoard, WorkItemWbs } from '../components/QueryViews';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
@@ -49,6 +52,17 @@ import { settleScopedResult } from '../lib/scopedResult';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
 type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
+
+/** 自定义查询结果的展示方式（issue #82/#83）：查询定范围，视图定看法 */
+type QueryViewMode = 'list' | 'board' | 'wbs';
+
+const QUERY_VIEWS_KEY = 'rcx-query-views-v1';
+
+const QUERY_VIEW_OPTIONS: { key: QueryViewMode; label: string; icon: typeof LayoutList }[] = [
+  { key: 'list', label: '列表', icon: LayoutList },
+  { key: 'board', label: '看板', icon: SquareKanban },
+  { key: 'wbs', label: 'WBS', icon: ListTree },
+];
 
 /**
  * 待处理队列的一行。
@@ -362,6 +376,26 @@ export default function WorkbenchPage() {
   const claimLegacyQueries = useCustomQueries((s) => s.claimLegacy);
   const [queryDialog, setQueryDialog] = useState(false);
 
+  // 每个查询记住自己的视图（列表/看板/WBS）——同一个查询通常固定一种看法（issue #82/#83）
+  const [queryViews, setQueryViews] = useState<Record<string, QueryViewMode>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(QUERY_VIEWS_KEY) ?? '{}') as Record<string, QueryViewMode>;
+    } catch {
+      return {};
+    }
+  });
+  const setQueryView = useCallback((queryId: string, view: QueryViewMode) => {
+    setQueryViews((current) => {
+      const next = { ...current, [queryId]: view };
+      try {
+        localStorage.setItem(QUERY_VIEWS_KEY, JSON.stringify(next));
+      } catch {
+        /* 存储满时只影响下次默认视图 */
+      }
+      return next;
+    });
+  }, []);
+
   const queryConnectionScope = customQueryConnectionScope(config);
   const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
   const customQueries = useMemo(
@@ -659,6 +693,26 @@ export default function WorkbenchPage() {
             </span>
             {activeQuery ? (
               <div className="flex items-center gap-2">
+                <div className="flex h-8 items-center rounded-md border border-line p-0.5">
+                  {QUERY_VIEW_OPTIONS.map(({ key, label, icon: Icon }) => {
+                    const active = (queryViews[activeQuery.id] ?? 'list') === key;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setQueryView(activeQuery.id, key)}
+                        className={`flex h-7 items-center gap-1 rounded px-2.5 text-xs transition ${
+                          active
+                            ? 'bg-primary-light text-primary'
+                            : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
+                        }`}
+                        title={`${label}视图`}
+                      >
+                        <Icon size={13} />
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <button
                   onClick={() => void fetchQuery(activeQuery, true)}
                   disabled={visibleQueryState.loading[activeQuery.id] !== undefined}
@@ -707,6 +761,10 @@ export default function WorkbenchPage() {
                   重试
                 </button>
               </div>
+            ) : (queryViews[activeQuery.id] ?? 'list') === 'board' ? (
+              <WorkItemBoard items={visibleQueryState.cache[activeQuery.id] ?? []} />
+            ) : (queryViews[activeQuery.id] ?? 'list') === 'wbs' ? (
+              <WorkItemWbs items={visibleQueryState.cache[activeQuery.id] ?? []} />
             ) : (
               <WorkItemList items={visibleQueryState.cache[activeQuery.id] ?? []} />
             )
