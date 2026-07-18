@@ -6,7 +6,6 @@ export interface AiProviderConfig {
   name: string;
   baseUrl: string;
   model: string;
-  embeddingModel?: string;
   locality: AiProviderLocality;
   hasSecret: boolean;
 }
@@ -20,7 +19,6 @@ export const AI_CAPABILITIES: Array<{ id: AiCapability; label: string }> = [
   { id: 'summary', label: '会话总结' },
   { id: 'extraction', label: '待办 / 工作项提取' },
   { id: 'daily-review', label: '晨报 / 晚间回顾' },
-  { id: 'semantic-search', label: '语义搜索' },
   { id: 'text-tool', label: '翻译 / 润色' },
   { id: 'agent', label: 'Agent' },
 ];

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
 import { shouldExpandRun } from '../lib/butlerReport';
+import type { ButlerEventCard } from '../lib/butlerWatchers';
 import { useAuth } from '../stores/auth';
 import { useCalendar } from '../stores/calendar';
 import { useChat } from '../stores/chat';
@@ -45,18 +46,14 @@ function routineScheduleLabel(trigger: { time: string; days?: number[] }): strin
 interface RoutineReportCardProps {
   routine: Routine;
   running: boolean;
-  onSetEnabled: (id: string, enabled: boolean) => void;
   onRunNow: (id: string) => Promise<void>;
 }
 
-function RoutineReportCard({ routine, running, onSetEnabled, onRunNow }: RoutineReportCardProps) {
+/** 晨报卡：以报告内容为主体——今天的报告默认展开，没生成给一键生成，失败给重试 */
+function RoutineReportCard({ routine, running, onRunNow }: RoutineReportCardProps) {
   const latest = routine.runs[0];
   const [expanded, setExpanded] = useState(() => shouldExpandRun(latest, Date.now()));
-  const status = latest
-    ? latest.status === 'ok'
-      ? { label: '成功', dotClassName: 'bg-success' }
-      : { label: '失败', dotClassName: 'bg-danger' }
-    : { label: '未运行', dotClassName: 'bg-ink-3' };
+  const freshToday = shouldExpandRun(latest, Date.now());
 
   const handleRunNow = async () => {
     await onRunNow(routine.id);
@@ -66,16 +63,21 @@ function RoutineReportCard({ routine, running, onSetEnabled, onRunNow }: Routine
   return (
     <div className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-3">
-        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm font-medium text-ink">
-          <input className="accent-primary" type="checkbox" checked={routine.enabled} onChange={(event) => onSetEnabled(routine.id, event.target.checked)} />
-          <span className="truncate">{routine.name}</span>
-        </label>
-        <span className="shrink-0 text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
-        <span className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
-          <span className={`h-1.5 w-1.5 rounded-full ${status.dotClassName}`} />
-          {latest ? `${displayTime(latest.at)} · ${status.label}` : status.label}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{routine.name}</span>
+        <span className="shrink-0 text-xs text-ink-3">
+          {latest
+            ? latest.status === 'error'
+              ? `${displayTime(latest.at)} 生成失败`
+              : `${displayTime(latest.at)} 生成${freshToday ? '' : '（非今日）'}`
+            : '今天还没生成'}
         </span>
-        <button title="立即运行" aria-label={`立即运行${routine.name}`} onClick={() => void handleRunNow()} disabled={running} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50">
+        <button
+          title={latest?.status === 'error' ? '重试' : latest ? '重新生成' : '立即生成'}
+          aria-label={`立即生成${routine.name}`}
+          onClick={() => void handleRunNow()}
+          disabled={running}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50"
+        >
           {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
         </button>
         {latest ? (
@@ -163,6 +165,17 @@ export default function TodayPage() {
   const completion = todayCompletion(items);
   const visible = showDone ? items : items.filter((item) => !item.processed);
 
+  /** 规则提醒点击跳到对应模块（卡片本身只有摘要，没有深链数据） */
+  const openEventCard = (card: ButlerEventCard) => {
+    const ui = useUI.getState();
+    if (card.kind === 'mention-stale') {
+      ui.setModule('messages');
+      return;
+    }
+    ui.setWorkbenchTab(card.kind === 'build-failed' ? 'builds' : 'workitems');
+    ui.setModule('workbench');
+  };
+
   const openItem = async (item: TodayItem) => {
     if (item.kind === 'mention') {
       useUI.getState().setModule('messages');
@@ -212,37 +225,58 @@ export default function TodayPage() {
           </div>
         </div>
 
+        {/* AI 晨报：只放 AI 生成的报告；规则提醒在下方「提醒」组，不顶 AI 的帽子 */}
         <section className="mt-5 rounded-lg border border-line bg-surface p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-ink"><Bot size={17} className="text-primary" />AI</div>
-          {eventCards.length > 0 ? (
-            <div className="mt-3 space-y-2">
-              {eventCards.map((card) => {
-                const meta = butlerEventMeta[card.kind];
-                const Icon = meta.icon;
-                return (
-                  <div key={card.id} className="flex items-start gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5">
-                    <Icon size={17} className={`mt-0.5 shrink-0 ${meta.color}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-ink">{card.title}</div>
-                      <div className="mt-0.5 text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
-                    </div>
-                    <button title="关闭" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
-                  </div>
-                );
-              })}
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink"><Bot size={17} className="text-primary" />AI 晨报</div>
+          {routines.length === 0 ? (
+            <div className="mt-3 rounded-lg border border-dashed border-line px-4 py-5 text-center text-sm text-ink-3">
+              还没有例行晨报。到 AI 页面说一句「每天 9 点给我一份晨报」，确认草案后 AI 会按时生成。
+              <button
+                onClick={() => useUI.getState().setModule('ai-assistant')}
+                className="ml-2 font-medium text-primary hover:underline"
+              >
+                去创建
+              </button>
             </div>
-          ) : null}
-          <div className="mt-3 space-y-2">
-            {routines.map((routine) => (
-              <RoutineReportCard
-                key={routine.id}
-                routine={routine}
-                running={runningIds.includes(routine.id)}
-                onSetEnabled={setRoutineEnabled}
-                onRunNow={runRoutineNow}
-              />
-            ))}
-          </div>
+          ) : (
+            <>
+              <div className="mt-3 space-y-2">
+                {routines.filter((routine) => routine.enabled).map((routine) => (
+                  <RoutineReportCard
+                    key={routine.id}
+                    routine={routine}
+                    running={runningIds.includes(routine.id)}
+                    onRunNow={runRoutineNow}
+                  />
+                ))}
+                {routines.every((routine) => !routine.enabled) && (
+                  <div className="rounded-lg border border-dashed border-line px-4 py-4 text-center text-xs text-ink-3">
+                    所有例行事务都已停用，在下方「管理」里开启。
+                  </div>
+                )}
+              </div>
+              <details className="group mt-3 rounded-md border border-line">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink-2">
+                  管理例行事务
+                  <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="divide-y divide-line border-t border-line">
+                  {routines.map((routine) => (
+                    <label key={routine.id} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink">
+                      <input
+                        className="accent-primary"
+                        type="checkbox"
+                        checked={routine.enabled}
+                        onChange={(event) => setRoutineEnabled(routine.id, event.target.checked)}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{routine.name}</span>
+                      <span className="shrink-0 text-xs text-ink-3">{routineScheduleLabel(routine.trigger)}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
+            </>
+          )}
         </section>
 
         <div className="mt-5 rounded-lg border border-line bg-surface p-4">
@@ -258,6 +292,29 @@ export default function TodayPage() {
         {warnings.length > 0 && (
           <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-4 py-3 text-xs text-warning">
             部分会话同步失败：{warnings.join('；')}
+          </div>
+        )}
+
+        {/* 规则提醒：构建失败/@我超时/新分配等「新变化」，通知性质，可关闭，不计入处理进度 */}
+        {eventCards.length > 0 && (
+          <div className="mt-5">
+            <h2 className="text-sm font-semibold text-ink">提醒</h2>
+            <div className="mt-2 space-y-2">
+              {eventCards.map((card) => {
+                const meta = butlerEventMeta[card.kind];
+                const Icon = meta.icon;
+                return (
+                  <div key={card.id} className="flex items-center gap-3 rounded-lg border border-line bg-surface px-4 py-3">
+                    <Icon size={18} className={`shrink-0 ${meta.color}`} />
+                    <button onClick={() => openEventCard(card)} className="min-w-0 flex-1 text-left">
+                      <div className="truncate text-sm font-medium text-ink">{card.title}</div>
+                      <div className="mt-0.5 truncate text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
+                    </button>
+                    <button title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

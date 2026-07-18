@@ -1,8 +1,12 @@
-import { Bot, Loader2, Search, Send, TerminalSquare } from 'lucide-react';
+import { Bot, Loader2, MessageSquarePlus, Search, Send, Share2, Square, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import ButlerProcess from '../components/ButlerProcess';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { useAuth } from '../stores/auth';
+import { transferConversationToCodexApp } from '../stores/butlerCodex';
+import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useButler } from '../stores/butler';
@@ -20,6 +24,7 @@ function routineDaysLabel(days?: number[]): string {
 }
 
 export default function AiAssistantPage() {
+  const userId = useAuth((state) => state.user?._id);
   const config = useWorkbench((state) => state.config);
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
   const refreshWorkbench = useWorkbench((state) => state.refresh);
@@ -27,17 +32,44 @@ export default function AiAssistantPage() {
   const activity = useButler((state) => state.activity);
   const running = useButler((state) => state.running);
   const butlerError = useButler((state) => state.error);
+  const steps = useButler((state) => state.steps);
   const askButler = useButler((state) => state.ask);
+  const stopButler = useButler((state) => state.stop);
+  const newConversation = useButler((state) => state.newConversation);
   const routineDraft = useButler((state) => state.routineDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
+  const hydrateButler = useButler((state) => state.hydrate);
   const [input, setInput] = useState('');
+  const [transferring, setTransferring] = useState(false);
+  const hasConversation = lines.some((item) => item.role === 'user');
+
+  /** 转移到 Codex：导入成 App 认可来源的线程（app-server 线程默认不进 App 列表） */
+  const transferToCodex = async () => {
+    setTransferring(true);
+    try {
+      await transferConversationToCodexApp(
+        lines.map(({ role, text }) => ({ role, text })),
+      );
+      toast.success('已转移到 Codex，可在 Codex App / CLI 的会话列表里继续');
+    } catch (error) {
+      toast.error(error, '转移到 Codex 失败');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
+  // 恢复本账号保存的对话记录（重启后不再从欢迎语开始）
+  useEffect(() => {
+    if (userId) void hydrateButler();
+  }, [hydrateButler, userId]);
   // 打开页面和新内容到达时停在最新对话；用户滚上去阅读时不跟随（issue #90）
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     lines,
     activity,
     butlerError,
     routineDraft,
+    steps,
   ]);
 
   // 预取工作台数据，AI 的 list_work_items/list_pull_requests/list_builds 工具直接读它
@@ -63,6 +95,23 @@ export default function AiAssistantPage() {
             <p className="mt-1 text-sm text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => void transferToCodex()}
+              disabled={running || transferring || !hasConversation}
+              title="把当前对话转移到 Codex，在 Codex App / CLI 的会话列表里继续"
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
+            >
+              {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}
+              转到 Codex
+            </button>
+            <button
+              onClick={() => void newConversation()}
+              disabled={running}
+              title="清空当前对话并开启全新上下文"
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
+            >
+              <MessageSquarePlus size={13} />新对话
+            </button>
             <button onClick={() => useUI.getState().setModule('codex')} title="执行间" aria-label="执行间" className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover">
               <TerminalSquare size={13} />执行间
             </button>
@@ -81,6 +130,7 @@ export default function AiAssistantPage() {
               </div>
             </div>
           ))}
+          <ButlerProcess steps={steps} running={running} className="ml-10" />
           {butlerError ? <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div> : null}
           {activity ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />{activity}</div> : running ? <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div> : null}
 
@@ -103,7 +153,17 @@ export default function AiAssistantPage() {
         <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="mt-3 flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
           <Search size={17} className="ml-2 text-ink-3" />
           <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
-          <button type="submit" disabled={running || !input.trim()} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
+          {running ? (
+            <button
+              type="button"
+              onClick={() => void stopButler()}
+              className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover"
+            >
+              <Square size={13} />停止
+            </button>
+          ) : (
+            <button type="submit" disabled={!input.trim()} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
+          )}
         </form>
       </div>
     </div>

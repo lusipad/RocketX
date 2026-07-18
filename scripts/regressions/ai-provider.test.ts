@@ -67,14 +67,14 @@ test('DeepSeek V4 走 OpenAI-compatible 流并解析跨分片 reasoning、正文
   ]);
 });
 
-test('DeepSeek 未配置 embedding 模型时不伪造其不存在的 embeddings 能力', async () => {
+test('Provider 不暴露 embedding 能力（向量语义搜索已整体移除，issue #95）', () => {
   const provider = new OpenAiCompatibleProvider({
     id: 'deepseek',
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-v4-flash',
     locality: 'external',
   });
-  await assert.rejects(() => provider.embed(['hello']), /未配置 embedding 模型/);
+  assert.equal('embed' in provider, false);
 });
 
 test('Azure OpenAI v1 使用 api-key 且保留部署名作为 model', async () => {

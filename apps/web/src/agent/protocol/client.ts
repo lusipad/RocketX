@@ -1,3 +1,5 @@
+import type { ExternalAgentConfigImportParams } from './generated/v2/ExternalAgentConfigImportParams';
+import type { ExternalAgentConfigImportResponse } from './generated/v2/ExternalAgentConfigImportResponse';
 import type { InitializeParams } from './generated/InitializeParams';
 import type { InitializeResponse } from './generated/InitializeResponse';
 import type { ThreadResumeParams } from './generated/v2/ThreadResumeParams';
@@ -34,6 +36,10 @@ interface ClientMethods {
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
   'thread/name/set': { params: ThreadSetNameParams; result: ThreadSetNameResponse };
+  'externalAgentConfig/import': {
+    params: ExternalAgentConfigImportParams;
+    result: ExternalAgentConfigImportResponse;
+  };
   'turn/start': { params: TurnStartParams; result: TurnStartResponse };
   'turn/interrupt': { params: TurnInterruptParams; result: TurnInterruptResponse };
 }
@@ -105,7 +111,7 @@ export class AppServerClient {
     });
     try {
       const initialized = await this.request('initialize', {
-        clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.22.0' },
+        clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.23.0' },
         capabilities: {
           experimentalApi: true,
           requestAttestation: false,
