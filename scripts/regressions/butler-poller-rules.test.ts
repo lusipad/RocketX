@@ -152,9 +152,11 @@ test('晚间 18 点前不触发，18 点后当天只触发一次', async () => {
   const runs: string[] = [];
   const storage = new MemoryStorage();
   const runtime = triggerRuntime(storage, runs);
-  assert.equal(await maybeEveningRound(new Date('2026-07-19T17:59:00+08:00'), runtime), false);
-  assert.equal(await maybeEveningRound(new Date('2026-07-19T18:01:00+08:00'), runtime), true);
-  assert.equal(await maybeEveningRound(new Date('2026-07-19T20:00:00+08:00'), runtime), false);
+  // 晚间阈值是「本地 18 点」:用本地时间分量构造,任何时区的跑者语义一致
+  // (CI 是 UTC,+08:00 字面量在那边 getHours() 是 9/10,曾让本地全绿、CI 全红)
+  assert.equal(await maybeEveningRound(new Date(2026, 6, 19, 17, 59), runtime), false);
+  assert.equal(await maybeEveningRound(new Date(2026, 6, 19, 18, 1), runtime), true);
+  assert.equal(await maybeEveningRound(new Date(2026, 6, 19, 20, 0), runtime), false);
   assert.equal(runs.length, 1);
 });
 
