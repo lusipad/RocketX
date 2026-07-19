@@ -609,13 +609,20 @@ async function main() {
     assert(!history.some((m) => m._id === tmp._id), '消息未删除');
   });
   await check('隐藏并恢复会话', async () => {
-    await rest.hideRoom(dmId, 'd');
     let subscriptions = await rest.getSubscriptions();
+    if (subscriptions.find((sub) => sub.rid === dmId)?.open === false) {
+      await rest.openRoom(dmId, 'd');
+    }
+    await rest.hideRoom(dmId, 'd');
+    subscriptions = await rest.getSubscriptions();
     assert(subscriptions.find((sub) => sub.rid === dmId)?.open === false, '会话未标记为隐藏');
     await rest.openRoom(dmId, 'd');
     subscriptions = await rest.getSubscriptions();
     assert(subscriptions.find((sub) => sub.rid === dmId)?.open !== false, '会话未恢复');
-    await rest.hideRoom(dmId, 'd');
+    await rest.hideRoom(dmId, 'd').catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes('already closed')) throw err;
+    });
   });
   await check('删除测试期间建的房间', async () => {
     // hideRoom 只是从自己列表里隐掉，房间还在服务器上 —— 必须真删

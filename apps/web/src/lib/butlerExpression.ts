@@ -42,12 +42,16 @@ const TITLE_TEMPLATES: Record<string, Record<ToneVariant, (c: AlertContext) => s
       : `${c.name} 今天该交了`,
   },
   'iteration-pressure': {
-    formal: (c) => `迭代${c.dueRelation === 'today' ? '今天' : '明天'}结束，${c.count} 项未完成`,
-    casual: (c) => `迭代${c.dueRelation === 'today' ? '今天' : '明天'}就截止了，还剩 ${c.count} 项没搞定`,
+    formal: (c) => `迭代${
+      c.daysLeft === 0 ? '今天' : c.daysLeft === 1 ? '明天' : `${c.daysLeft} 天后`
+    }结束，${c.count} 项未完成`,
+    casual: (c) => `迭代${
+      c.daysLeft === 0 ? '今天' : c.daysLeft === 1 ? '明天' : `${c.daysLeft} 天后`
+    }就截止了，还剩 ${c.count} 项没搞定`,
   },
   'new-high-priority': {
-    formal: (c) => `高优先级工作项：${c.name}`,
-    casual: (c) => `来了个 P1：${c.name}`,
+    formal: (c) => `P${c.priority ?? 1} 工作项：${c.name}`,
+    casual: (c) => `来了个 P${c.priority ?? 1}：${c.name}`,
   },
   'build-failed': {
     formal: (c) => `构建失败：${c.name}`,

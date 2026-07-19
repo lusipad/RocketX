@@ -25,10 +25,11 @@ export interface ButlerAlert {
 
 export interface AlertContext {
   name?: string;
-  dueRelation?: 'today' | 'tomorrow' | 'overdue';
+  dueRelation?: 'today' | 'tomorrow' | 'overdue' | 'later';
   daysLeft?: number;
   count?: number;
   hours?: number;
+  priority?: number;
   subjectType?: 'commitment' | 'todo' | 'workitem';
 }
 
@@ -52,6 +53,8 @@ export interface RuleInput {
   adoAccount: string;
   /** 当前迭代结束日期 YYYY-MM-DD，null = 无迭代信息 */
   iterationEndDate: string | null;
+  /** 上次轮询完成时间；null 表示首次启动，不做增量提醒 */
+  lastPollAt?: number | null;
   /** 上一轮已经触发过的 alert id（用于去重） */
   seenAlertIds: ReadonlySet<string>;
   now?: number;
@@ -130,7 +133,7 @@ export function evaluateRules(input: RuleInput): ButlerAlert[] {
       if (myIncomplete.length > 0) {
         const id = `iteration-pressure:${input.iterationEndDate}`;
         if (!input.seenAlertIds.has(id)) {
-          const when = daysLeft === 0 ? '今天' : '明天';
+          const when = daysLeft === 0 ? '今天' : daysLeft === 1 ? '明天' : `${daysLeft} 天后`;
           alerts.push({
             id,
             level: daysLeft === 0 ? 'immediate' : 'coffee',
@@ -141,27 +144,35 @@ export function evaluateRules(input: RuleInput): ButlerAlert[] {
               .map((wi) => `#${wi.id} ${wi.title}`)
               .join('、'),
             at: now,
-            ctx: { count: myIncomplete.length, daysLeft, dueRelation: daysLeft === 0 ? 'today' : 'tomorrow' },
+            ctx: {
+              count: myIncomplete.length,
+              daysLeft,
+              dueRelation: daysLeft === 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : 'later',
+            },
           });
         }
       }
     }
   }
 
-  // 3. 新高优先级工作项（Priority 1）
+  // 3. 新高优先级工作项（Created/Changed 在上次轮询后，Priority <= 2）
   for (const wi of input.workItems) {
     if (isWorkItemDone(wi.state)) continue;
-    if ((wi.priority ?? 4) > 1) continue;
-    const id = `high-priority:${wi.id}`;
+    const priority = wi.priority ?? 4;
+    if (priority > 2) continue;
+    if (input.lastPollAt == null || !wi.changedDate) continue;
+    const changedMs = new Date(wi.changedDate).getTime();
+    if (!Number.isFinite(changedMs) || changedMs <= input.lastPollAt) continue;
+    const id = `high-priority:${wi.id}:${wi.changedDate}`;
     if (input.seenAlertIds.has(id)) continue;
     alerts.push({
       id,
-      level: 'immediate',
+      level: priority <= 1 ? 'immediate' : 'coffee',
       kind: 'new-high-priority',
       title: `高优先级工作项：#${wi.id} ${wi.title}`,
-      detail: `P1 · ${wi.project} · ${wi.state}`,
+      detail: `P${priority} · ${wi.project} · ${wi.state}`,
       at: now,
-      ctx: { name: `#${wi.id} ${wi.title}` },
+      ctx: { name: `#${wi.id} ${wi.title}`, priority, subjectType: 'workitem' },
     });
   }
 

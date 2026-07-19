@@ -58,7 +58,7 @@ interface NativeTodo {
 }
 
 type NewTodo = Omit<Todo, 'id' | 'done' | 'createdAt'>;
-type TodoUpdate = Partial<Pick<Todo, 'note' | 'due'>>;
+type TodoUpdate = Partial<Pick<Todo, 'note' | 'due' | 'committedTo' | 'waitingFor'>>;
 
 const KEY = 'rcx-todos';
 const pendingAdds = new Set<string>();
@@ -136,6 +136,8 @@ function toNativePatch(patch: TodoUpdate): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   if ('note' in patch) result.note = patch.note ?? null;
   if ('due' in patch) result.due = patch.due ?? null;
+  if ('committedTo' in patch) result.committedTo = patch.committedTo ?? null;
+  if ('waitingFor' in patch) result.waitingFor = patch.waitingFor ?? null;
   return result;
 }
 

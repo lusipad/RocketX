@@ -44,6 +44,8 @@ export default function TodoDialog({
 
   const [note, setNote] = useState(existing?.note ?? initialNote ?? '');
   const [due, setDue] = useState(existing?.due ?? initialDue ?? '');
+  const [committedTo, setCommittedTo] = useState(existing?.committedTo ?? '');
+  const [waitingFor, setWaitingFor] = useState(existing?.waitingFor ?? '');
 
   const excerpt = existing?.excerpt ?? source?.excerpt ?? '';
   const roomName = existing?.roomName ?? source?.roomName ?? '';
@@ -57,14 +59,32 @@ export default function TodoDialog({
 
   const submit = () => {
     if (!canSubmit) return;
+    const nextCommittedTo = committedTo.trim() || undefined;
+    const nextWaitingFor = nextCommittedTo ? undefined : waitingFor.trim() || undefined;
     if (existing) {
-      update(existing.id, { note: note.trim() || undefined, due: due || undefined });
+      update(existing.id, {
+        note: note.trim() || undefined,
+        due: due || undefined,
+        committedTo: nextCommittedTo,
+        waitingFor: nextWaitingFor,
+      });
       toast.success('待办已更新');
     } else if (source) {
-      add({ ...source, note: note.trim() || undefined, due: due || undefined });
+      add({
+        ...source,
+        note: note.trim() || undefined,
+        due: due || undefined,
+        committedTo: nextCommittedTo,
+        waitingFor: nextWaitingFor,
+      });
       toast.success('已加入待办', { label: '查看', onClick: () => setModule('todos') });
     } else {
-      add({ note: note.trim(), due: due || undefined });
+      add({
+        note: note.trim(),
+        due: due || undefined,
+        committedTo: nextCommittedTo,
+        waitingFor: nextWaitingFor,
+      });
       toast.success('已加入待办');
     }
     onClose();
@@ -120,6 +140,34 @@ export default function TodoDialog({
             placeholder="要做什么？例如「周五前给出排期」"
             className="w-full resize-none rounded-md border border-line px-2.5 py-1.5 text-sm outline-none transition focus:border-primary"
           />
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs text-ink-3">我答应给谁（可选）</label>
+            <input
+              value={committedTo}
+              onChange={(e) => {
+                setCommittedTo(e.target.value);
+                if (e.target.value.trim()) setWaitingFor('');
+              }}
+              placeholder="例如：张三"
+              className="h-8 w-full rounded-md border border-line px-2.5 text-sm outline-none transition focus:border-primary"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-ink-3">我在等谁（可选）</label>
+            <input
+              value={waitingFor}
+              onChange={(e) => {
+                setWaitingFor(e.target.value);
+                if (e.target.value.trim()) setCommittedTo('');
+              }}
+              placeholder="例如：李四"
+              className="h-8 w-full rounded-md border border-line px-2.5 text-sm outline-none transition focus:border-primary"
+            />
+          </div>
         </div>
 
         <div>
