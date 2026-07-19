@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.24.1"
+version = "0.24.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -5331,7 +5331,7 @@ dependencies = [
 
 [[package]]
 name = "tray-icon"
-version = "0.24.1"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65ba1e5f6b9ef9fd87e21b9c6f351554dbd717960089168fcfdef854686961dc"
 dependencies = [
