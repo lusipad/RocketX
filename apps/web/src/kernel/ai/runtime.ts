@@ -1,7 +1,7 @@
 import type { RcxStore } from '@rcx/rcx-store';
 import { ensureHttpOrigin, httpFetch } from '../../lib/http';
 import { AiBus } from './bus';
-import { loadAiSettings, type AiProviderConfig } from './config';
+import { AI_CAPABILITIES, loadAiSettings, type AiProviderConfig } from './config';
 import { OpenAiCompatibleProvider } from './openai-compatible';
 import { AnthropicProvider } from './anthropic';
 import { getAiSecret } from './secrets';
@@ -43,8 +43,8 @@ export function reloadAiRuntime(): AiBus {
   const next = new AiBus((entry) => store?.audit.append(entry).then(() => {}));
   const settings = loadAiSettings();
   for (const provider of settings.providers) next.register(createProvider(provider));
-  for (const [capability, route] of Object.entries(settings.routes)) {
-    next.setRoute(capability as keyof typeof settings.routes, route);
+  for (const { id } of AI_CAPABILITIES) {
+    next.setRoute(id, settings.routes[id]);
   }
   bus = next;
   return next;

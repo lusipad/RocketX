@@ -1,4 +1,4 @@
-import { AlertTriangle, AtSign, Bot, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, Circle, ExternalLink, GitPullRequest, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, UserRoundPlus, Workflow, X } from 'lucide-react';
+import { AtSign, Bot, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, Circle, ExternalLink, GitPullRequest, Loader2, MessageSquare, Play, Radio, RefreshCw, Sparkles, SquareCheckBig, Workflow, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { buildTodayItems, todayCompletion, type TodayItem } from '../lib/today';
 import { getServerBase, openExternal } from '../lib/client';
@@ -26,9 +26,7 @@ const kindMeta = {
 } as const;
 
 const butlerEventMeta = {
-  'build-failed': { icon: AlertTriangle, color: 'text-danger' },
   'mention-stale': { icon: AtSign, color: 'text-primary' },
-  'workitem-assigned': { icon: UserRoundPlus, color: 'text-success' },
 } as const;
 
 function displayTime(at: number): string {
@@ -166,14 +164,8 @@ export default function TodayPage() {
   const visible = showDone ? items : items.filter((item) => !item.processed);
 
   /** 规则提醒点击跳到对应模块（卡片本身只有摘要，没有深链数据） */
-  const openEventCard = (card: ButlerEventCard) => {
-    const ui = useUI.getState();
-    if (card.kind === 'mention-stale') {
-      ui.setModule('messages');
-      return;
-    }
-    ui.setWorkbenchTab(card.kind === 'build-failed' ? 'builds' : 'workitems');
-    ui.setModule('workbench');
+  const openEventCard = (_card: ButlerEventCard) => {
+    useUI.getState().setModule('messages');
   };
 
   const openItem = async (item: TodayItem) => {

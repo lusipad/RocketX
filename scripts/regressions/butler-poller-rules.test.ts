@@ -1,143 +1,108 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { expressAlerts } from '../../apps/web/src/lib/butlerExpression';
-import { evaluateRules, type ButlerAlert } from '../../apps/web/src/lib/butlerRules';
+import { resolveIterationProject } from '../../apps/web/src/lib/butlerPoller';
+import { evaluateRules } from '../../apps/web/src/lib/butlerRules';
+import type { Todo } from '../../apps/web/src/stores/todos';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 
-class MemoryStorage {
-  private readonly store = new Map<string, string>();
-
-  getItem(key: string): string | null {
-    return this.store.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string): void {
-    this.store.set(key, value);
-  }
-
-  removeItem(key: string): void {
-    this.store.delete(key);
-  }
-
-  clear(): void {
-    this.store.clear();
-  }
-}
-
-const localStorageMock = new MemoryStorage();
-(globalThis as { localStorage?: MemoryStorage }).localStorage = localStorageMock;
-
-function makeWorkItem(id: number, priority: number, changedDate: string, project = 'Alpha'): WorkItem {
+function todo(overrides: Partial<Todo>): Todo {
   return {
-    id,
-    title: `工作项 ${id}`,
-    type: '任务',
-    state: '活动',
-    priority,
-    project,
-    changedDate,
-    webUrl: `https://ado.example/workitems/${id}`,
-  };
-}
-
-function baseAlertsInput(overrides: Partial<Parameters<typeof evaluateRules>[0]> = {}) {
-  return {
-    todos: [],
-    workItems: [],
-    pullRequests: [],
-    builds: [],
-    adoAccount: '',
-    iterationEndDate: null,
-    seenAlertIds: new Set<string>(),
-    now: Date.parse('2026-07-19T12:00:00+08:00'),
+    id: 't1',
+    title: '提交发布说明',
+    done: false,
+    createdAt: 1,
     ...overrides,
   };
 }
 
-test('首次启动只建立基线，不提醒历史存量 P1/P2', () => {
-  const alerts = evaluateRules(baseAlertsInput({
-    workItems: [
-      makeWorkItem(1, 1, '2026-07-18T10:00:00Z'),
-      makeWorkItem(2, 2, '2026-07-18T11:00:00Z'),
-    ],
-    lastPollAt: null,
-  }));
+function baseInput(todos: Todo[] = []) {
+  return {
+    todos,
+    seenAlertIds: new Set<string>(),
+    now: Date.parse('2026-07-19T12:00:00+08:00'),
+  };
+}
 
-  assert.equal(alerts.filter((alert) => alert.kind === 'new-high-priority').length, 0);
+test('承诺今天到期只产出 immediate 安全网通知', () => {
+  const alerts = evaluateRules(baseInput([
+    todo({ due: '2026-07-19', committedTo: '发布组' }),
+  ]));
+
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].kind, 'commitment-due');
+  assert.equal(alerts[0].level, 'immediate');
+  assert.match(alerts[0].detail, /发布组/);
 });
 
-test('增量高优先级提醒区分 P1/P2，且 2 天后迭代文案准确', () => {
-  const alerts = evaluateRules(baseAlertsInput({
-    workItems: [
-      makeWorkItem(11, 1, '2026-07-19T01:00:00Z'),
-      makeWorkItem(12, 2, '2026-07-19T02:00:00Z'),
-      { ...makeWorkItem(13, 3, '2026-07-19T03:00:00Z'), title: '不会提醒的 P3' },
-    ],
-    iterationEndDate: '2026-07-21',
+test('承诺逾期只产出 immediate 安全网通知', () => {
+  const alerts = evaluateRules(baseInput([
+    todo({ due: '2026-07-18', waitingFor: 'Alice' }),
+  ]));
+
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].kind, 'commitment-overdue');
+  assert.equal(alerts[0].level, 'immediate');
+});
+
+test('承诺明天到期不再提前提醒', () => {
+  assert.deepEqual(evaluateRules(baseInput([
+    todo({ due: '2026-07-20', committedTo: '发布组' }),
+  ])), []);
+});
+
+test('普通待办逾期和已完成承诺都不走安全网', () => {
+  assert.deepEqual(evaluateRules(baseInput([
+    todo({ id: 'ordinary', due: '2026-07-18' }),
+    todo({ id: 'done', due: '2026-07-19', committedTo: '发布组', done: true }),
+  ])), []);
+});
+
+test('构建失败、新高优和工作项只改标签都不再产生规则提醒', () => {
+  const legacyFacts = {
+    ...baseInput(),
+    builds: [{ id: 1, definition: 'CI', project: 'Alpha', result: 'failed' }],
+    workItems: [{
+      id: 9,
+      title: '只改标签',
+      state: 'Active',
+      priority: 1,
+      assignedTo: 'me',
+      changedDate: '2026-07-19T03:00:00Z',
+      tags: ['new-label'],
+    }],
     lastPollAt: Date.parse('2026-07-19T00:00:00Z'),
-  }));
+  };
 
-  const p1 = alerts.find((alert) => alert.id.startsWith('high-priority:11:'));
-  const p2 = alerts.find((alert) => alert.id.startsWith('high-priority:12:'));
-  const iteration = alerts.find((alert) => alert.kind === 'iteration-pressure');
-
-  assert.ok(p1);
-  assert.ok(p2);
-  assert.equal(p1.level, 'immediate');
-  assert.equal(p2.level, 'coffee');
-  assert.equal(p2.detail, 'P2 · Alpha · 活动');
-  assert.equal(p2.ctx?.priority, 2);
-  assert.match(iteration?.title ?? '', /2 天后结束/);
+  assert.deepEqual(evaluateRules(legacyFacts), []);
 });
 
-test('P2 的随意语气文案不能伪装成 P1', () => {
-  localStorageMock.clear();
-  localStorageMock.setItem('rcx-butler-personality', JSON.stringify({
-    verbosity: 2,
-    depth: 3,
-    tone: 5,
-    urgency: 2,
-  }));
-  const [styled] = expressAlerts([
-    {
-      id: 'high-priority:12:2026-07-19T02:00:00Z',
-      level: 'coffee',
-      kind: 'new-high-priority',
-      title: '高优先级工作项：#12 工作项 12',
-      detail: 'P2 · Alpha · 活动',
-      at: Date.now(),
-      ctx: { name: '#12 工作项 12', priority: 2, subjectType: 'workitem' },
-    } satisfies ButlerAlert,
-  ]);
-
-  assert.match(styled.title, /P2/);
-  assert.doesNotMatch(styled.title, /P1/);
+test('已经通知过的承诺不会重复派发', () => {
+  const input = baseInput([todo({ due: '2026-07-19', committedTo: '发布组' })]);
+  const [first] = evaluateRules(input);
+  assert.ok(first);
+  assert.deepEqual(evaluateRules({ ...input, seenAlertIds: new Set([first.id]) }), []);
 });
 
-test('迭代项目只在唯一项目时才解析', async () => {
-  const { resolveIterationProject } = await import('../../apps/web/src/lib/butlerPoller');
+function workItem(id: number, project: string, state = 'Active'): WorkItem {
+  return {
+    id,
+    title: `工作项 ${id}`,
+    type: 'Task',
+    state,
+    project,
+    webUrl: `https://example.test/${id}`,
+  };
+}
 
+test('迭代项目只在未完成工作项唯一归属一个项目时可解析', () => {
   assert.equal(resolveIterationProject([]), null);
+  assert.equal(resolveIterationProject([workItem(1, 'Alpha')]), 'Alpha');
   assert.equal(resolveIterationProject([
-    makeWorkItem(21, 1, '2026-07-19T01:00:00Z', 'Alpha'),
-    makeWorkItem(22, 2, '2026-07-19T02:00:00Z', 'Alpha'),
+    workItem(1, 'Alpha'),
+    workItem(2, 'Beta', 'Closed'),
   ]), 'Alpha');
   assert.equal(resolveIterationProject([
-    makeWorkItem(23, 1, '2026-07-19T01:00:00Z', 'Alpha'),
-    makeWorkItem(24, 2, '2026-07-19T02:00:00Z', 'Beta'),
+    workItem(1, 'Alpha'),
+    workItem(2, 'Beta'),
   ]), null);
-});
-
-test('活跃视图只保留已被轮询确认过的高优先级事件', async () => {
-  const { filterActiveAlertsForView } = await import('../../apps/web/src/lib/butlerPoller');
-  const alerts = evaluateRules(baseAlertsInput({
-    workItems: [makeWorkItem(31, 2, '2026-07-19T02:00:00Z')],
-    lastPollAt: 0,
-  }));
-
-  assert.equal(filterActiveAlertsForView(alerts, new Set()).length, 0);
-  assert.deepEqual(
-    filterActiveAlertsForView(alerts, new Set(alerts.map((alert) => alert.id))).map((alert) => alert.id),
-    alerts.map((alert) => alert.id),
-  );
 });

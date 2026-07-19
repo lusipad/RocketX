@@ -7,21 +7,16 @@
 
 import {
   evaluateRules,
-  isWorkItemDone,
   type ButlerAlert,
-  type ButlerAlertLevel,
-  type RuleInput,
 } from './butlerRules';
 
-export type { ButlerAlert, ButlerAlertLevel };
-import { useWorkbench, type WorkItem } from '../stores/workbench';
+import { isWorkItemDone, useWorkbench, type WorkItem } from '../stores/workbench';
 import { useTodos } from '../stores/todos';
 import { loadWorkbenchConfig } from './ado';
 import { isTauri } from './http';
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 分钟
 const SEEN_ALERTS_KEY = 'rcx-butler-seen-alerts';
-const LAST_POLL_AT_KEY = 'rcx-butler-last-poll-at';
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -29,7 +24,6 @@ let generation = 0;
 
 // 已通知过的 alert id（持久化到 localStorage，防止重启后重复通知）
 let seenAlertIds: Set<string> = loadSeenAlerts();
-let lastPollAt = loadLastPollAt();
 
 function loadSeenAlerts(): Set<string> {
   try {
@@ -48,26 +42,6 @@ function persistSeenAlerts(): void {
   } catch { /* 满了就不存 */ }
 }
 
-function loadLastPollAt(): number | null {
-  try {
-    const raw = localStorage.getItem(LAST_POLL_AT_KEY);
-    if (!raw) return null;
-    const value = Number(raw);
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistLastPollAt(): void {
-  try {
-    if (lastPollAt === null) localStorage.removeItem(LAST_POLL_AT_KEY);
-    else localStorage.setItem(LAST_POLL_AT_KEY, String(lastPollAt));
-  } catch {
-    /* 满了就不存 */
-  }
-}
-
 // ─── 迭代日期获取 ───
 
 export function resolveIterationProject(workItems: WorkItem[]): string | null {
@@ -80,7 +54,7 @@ export function resolveIterationProject(workItems: WorkItem[]): string | null {
   return projects.length === 1 ? projects[0] : null;
 }
 
-async function fetchIterationEndDate(workItems: WorkItem[]): Promise<string | null> {
+export async function fetchIterationEndDate(workItems: WorkItem[]): Promise<string | null> {
   const config = loadWorkbenchConfig();
   if (!config || config.mode !== 'direct' || !config.adoBase) return null;
 
@@ -150,52 +124,29 @@ async function dispatchNotification(alert: ButlerAlert): Promise<void> {
   }
 }
 
-export function filterActiveAlertsForView(
-  alerts: ButlerAlert[],
-  persistedSeenAlertIds: ReadonlySet<string>,
-): ButlerAlert[] {
-  return alerts.filter(
-    (alert) => alert.kind !== 'new-high-priority' || persistedSeenAlertIds.has(alert.id),
-  );
-}
-
 // ─── 轮询核心 ───
 
 async function pollOnce(): Promise<ButlerAlert[]> {
   if (running) return [];
   running = true;
   const gen = generation;
-  const previousPollAt = lastPollAt;
-  const pollStartedAt = Date.now();
 
   try {
     // 1. 刷新 ADO 数据
     await useWorkbench.getState().refresh();
 
     // 2. 收集规则输入（在最后一个 await 之后读 store，避免过期快照）
-    const { workItems, prs: pullRequests, builds, config } = useWorkbench.getState();
     const { todos } = useTodos.getState();
-    const adoAccount = config?.account ?? '';
-    const iterationEndDate = await fetchIterationEndDate(workItems);
 
     // 已停止——丢弃本轮结果
     if (gen !== generation) return [];
 
-    const input: RuleInput = {
+    const alerts = evaluateRules({
       todos,
-      workItems,
-      pullRequests,
-      builds,
-      adoAccount,
-      iterationEndDate,
-      lastPollAt: previousPollAt,
       seenAlertIds,
-    };
+    });
 
-    // 3. 运行规则引擎
-    const alerts = evaluateRules(input);
-
-    // 4. 派发通知（只对 immediate 级别且未被作废）
+    // 3. 派发通知（安全网只会产出 immediate）
     if (gen !== generation) return [];
     const newAlerts = alerts.filter((a) => !seenAlertIds.has(a.id));
     for (const alert of newAlerts) {
@@ -205,10 +156,8 @@ async function pollOnce(): Promise<ButlerAlert[]> {
       seenAlertIds.add(alert.id);
     }
 
-    // 5. 持久化已见与基线
+    // 4. 持久化已见记录
     if (newAlerts.length > 0) persistSeenAlerts();
-    lastPollAt = pollStartedAt;
-    persistLastPollAt();
 
     return alerts;
   } finally {
@@ -231,31 +180,4 @@ export function stopButlerPoller(): void {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-}
-
-export function isPollerRunning(): boolean {
-  return pollTimer !== null;
-}
-
-/** 手动触发一次轮询并返回本轮活跃集合（用于用户点"刷新"） */
-export async function pollNow(): Promise<ButlerAlert[]> {
-  await pollOnce();
-  return getActiveAlerts();
-}
-
-/** 获取当前所有活跃 alert——用于咖啡时间视图 */
-export async function getActiveAlerts(): Promise<ButlerAlert[]> {
-  const { workItems, prs: pullRequests, builds, config } = useWorkbench.getState();
-  const { todos } = useTodos.getState();
-  const iterationEndDate = await fetchIterationEndDate(workItems);
-  return filterActiveAlertsForView(evaluateRules({
-    todos,
-    workItems,
-    pullRequests,
-    builds,
-    adoAccount: config?.account ?? '',
-    iterationEndDate,
-    lastPollAt: 0,
-    seenAlertIds: new Set(), // 视图里要展示本轮活跃事实，不按历史已见过滤
-  }), seenAlertIds);
 }
