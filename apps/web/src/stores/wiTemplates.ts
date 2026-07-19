@@ -94,9 +94,48 @@ function withoutEpicLevel(hierarchy: string[]): string[] {
   return trimmed.length >= 2 ? trimmed : hierarchy;
 }
 
-function hierarchyTemplate(types: string[]): WiTemplate {
+/**
+ * 层级工作项的四种形态（issue：层级可配置）。两个独立开关的组合：
+ * 含不含 Feature 层（故事层以上） × 末级 Task 拆不拆【开发】/【测试】。
+ */
+export type HierarchyLayout = 'feature-split' | 'feature-single' | 'story-split' | 'story-single';
+
+export const HIERARCHY_LAYOUT_OPTIONS: { value: HierarchyLayout; label: string }[] = [
+  { value: 'feature-split', label: '完整层级 · 拆开发/测试（默认）' },
+  { value: 'feature-single', label: '完整层级 · 单个 Task' },
+  { value: 'story-split', label: '仅故事层 · 拆开发/测试' },
+  { value: 'story-single', label: '仅故事层 · 单个 Task' },
+];
+
+const LAYOUT_KEY = 'rcx-wi-hierarchy-layout';
+
+export function loadHierarchyLayout(): HierarchyLayout {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    return HIERARCHY_LAYOUT_OPTIONS.some((option) => option.value === saved)
+      ? (saved as HierarchyLayout)
+      : 'feature-split';
+  } catch {
+    return 'feature-split';
+  }
+}
+
+export function saveHierarchyLayout(layout: HierarchyLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, layout);
+  } catch {
+    /* 存储不可用时只影响下次默认选择 */
+  }
+}
+
+function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-split'): WiTemplate {
   const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
-  const chain = taskAtEnd ? types.slice(0, -1) : types;
+  // 「仅故事层」= 只留 故事层+Task 两级；过程模板没有末级 Task 时该开关无意义,保持完整层级
+  const storyOnly = (layout === 'story-split' || layout === 'story-single') && taskAtEnd;
+  const effective = storyOnly ? types.slice(-2) : types;
+  const split = layout === 'feature-split' || layout === 'story-split';
+
+  const chain = taskAtEnd ? effective.slice(0, -1) : effective;
   const items: CascadeTemplateItem[] = chain.map((type, index) => ({
     type,
     title: '{title}',
@@ -104,27 +143,45 @@ function hierarchyTemplate(types: string[]): WiTemplate {
   }));
   if (taskAtEnd) {
     const parent = items.length - 1;
-    items.push(
-      { type: types.at(-1)!, title: '【开发】{title}', parent },
-      { type: types.at(-1)!, title: '【测试】{title}', parent },
-    );
+    const task = effective.at(-1)!;
+    if (split) {
+      items.push(
+        { type: task, title: '【开发】{title}', parent },
+        { type: task, title: '【测试】{title}', parent },
+      );
+    } else {
+      items.push({ type: task, title: '{title}', parent });
+    }
   }
   return { name: '层级工作项', items };
 }
 
+/** 结构预览:「Feature → User Story → 【开发】Task + 【测试】Task」 */
+export function hierarchyPreview(template: WiTemplate): string {
+  const chain = template.items.filter((item) => !item.title.startsWith('【'));
+  const tasks = template.items.filter((item) => item.title.startsWith('【'));
+  const chainText = chain.map((item) => item.type).join(' → ');
+  if (tasks.length === 0) return chainText;
+  const taskText = tasks
+    .map((item) => `${item.title.replace('{title}', '')}${item.type}`)
+    .join(' + ');
+  return `${chainText} → ${taskText}`;
+}
+
 /**
  * 返回项目真正可创建的模板，并把固定模板类型替换为服务器返回的精确名称。
- * 当 Agile 专用内置模板不适配时，按过程配置生成 Basic/Scrum/CMMI/自定义层级入口。
+ * 「层级工作项」按过程配置生成（Basic/Scrum/CMMI/自定义都认），形态由
+ * layout 四选一决定，始终排第一位；远程自定义模板跟在后面。
  */
 export function workItemTemplatesForTypes(
   templates: WiTemplate[],
   availableTypes: string[],
   processHierarchy: string[] = [],
+  layout: HierarchyLayout = 'feature-split',
 ): WiTemplate[] {
   const compatible = templates
     .filter((template) => templateSupportsTypes(template, availableTypes))
     .map((template) => resolveTemplateTypes(template, availableTypes));
-  if (compatible.some((template) => template.items.length > 1)) return compatible;
 
   const exactHierarchy = processHierarchy
     .map((type) => actualType(type, availableTypes))
@@ -132,7 +189,9 @@ export function workItemTemplatesForTypes(
   const hierarchy = withoutEpicLevel(
     exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes),
   );
-  return hierarchy.length >= 2 ? [hierarchyTemplate(hierarchy), ...compatible] : compatible;
+  return hierarchy.length >= 2
+    ? [hierarchyTemplate(hierarchy, layout), ...compatible]
+    : compatible;
 }
 
 /** 优先保持常见的 Task；过程模板没有 Task 时退到第一个真实可用类型。 */
@@ -140,24 +199,9 @@ export function preferredWorkItemType(availableTypes: string[]): string {
   return availableTypes.find((type) => type.toLocaleLowerCase() === 'task') ?? availableTypes[0] ?? '';
 }
 
+// 「Feature 全套」「UserStory + Tasks」两个死级联已被可配置的「层级工作项」
+// 取代(四种形态,见 HierarchyLayout);内置只留单项创建,自定义级联走远程模板。
 const BUILTIN: WiTemplate[] = [
-  {
-    name: 'Feature 全套',
-    items: [
-      { type: 'Feature', title: '{title}' },
-      { type: 'User Story', title: '{title}', parent: 0 },
-      { type: 'Task', title: '【开发】{title}', parent: 1 },
-      { type: 'Task', title: '【测试】{title}', parent: 1 },
-    ],
-  },
-  {
-    name: 'UserStory + Tasks',
-    items: [
-      { type: 'User Story', title: '{title}' },
-      { type: 'Task', title: '【开发】{title}', parent: 0 },
-      { type: 'Task', title: '【测试】{title}', parent: 0 },
-    ],
-  },
   {
     name: '单个工作项',
     items: [{ type: '{type}', title: '{title}' }],
