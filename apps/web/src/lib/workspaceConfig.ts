@@ -27,6 +27,22 @@ export interface WorkspaceConfig {
   };
   workItemTemplates?: { url: string };
   ai?: { providers: WorkspaceAiProvider[] };
+  /** 更新源（issue #106）：github 走原生通道；http/dir 需要 location */
+  update?: {
+    source: 'github' | 'http' | 'dir';
+    location?: string;
+  };
+  /** 工作项相关团队默认值 */
+  workItems?: {
+    /** 层级工作项形态(六选一,见 stores/wiTemplates 的 HierarchyLayout) */
+    hierarchyLayout?:
+      | 'epic-split'
+      | 'epic-single'
+      | 'feature-split'
+      | 'feature-single'
+      | 'story-split'
+      | 'story-single';
+  };
 }
 
 function normalizeUrl(value: unknown, label: string): string {
@@ -130,7 +146,38 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
       }),
     };
   }
+  if (raw.update !== undefined) {
+    if (!raw.update || typeof raw.update !== 'object') throw new Error('update 必须是对象');
+    const source = oneOf(raw.update.source, ['github', 'http', 'dir'] as const, 'update.source');
+    const update: WorkspaceConfig['update'] = { source };
+    if (source === 'http') {
+      update.location = normalizeUrl(raw.update.location, 'update.location');
+    } else if (source === 'dir') {
+      if (typeof raw.update.location !== 'string' || !raw.update.location.trim()) {
+        throw new Error('update.location 在共享目录模式下必须是非空路径');
+      }
+      update.location = raw.update.location.trim();
+    }
+    config.update = update;
+  }
+  if (raw.workItems !== undefined) {
+    if (!raw.workItems || typeof raw.workItems !== 'object') throw new Error('workItems 必须是对象');
+    const workItems: WorkspaceConfig['workItems'] = {};
+    if (raw.workItems.hierarchyLayout !== undefined) {
+      workItems.hierarchyLayout = oneOf(
+        raw.workItems.hierarchyLayout,
+        ['epic-split', 'epic-single', 'feature-split', 'feature-single', 'story-split', 'story-single'] as const,
+        'workItems.hierarchyLayout',
+      );
+    }
+    config.workItems = workItems;
+  }
   return config;
+}
+
+/** 更新源的比对口径：kind 与 location 任一变化都算变化 */
+export function updateSourceFingerprint(source: { kind: string; location: string }): string {
+  return `${source.kind}|${source.location.trim()}`;
 }
 
 /** 配置展开成的一个可勾选字段 */
@@ -158,6 +205,10 @@ export interface WorkspaceCurrentValues {
   templatesUrl?: string;
   /** 现有 AI Provider 的比对串，键为 provider id */
   aiProviders?: Record<string, string>;
+  /** 更新源比对串（updateSourceFingerprint 口径） */
+  updateSource?: string;
+  /** 层级工作项当前形态 */
+  hierarchyLayout?: string;
 }
 
 /** AI Provider 的比对口径：kind、地址、模型任一变化都算变化；name 和密钥不参与 */
@@ -224,6 +275,28 @@ export function planWorkspaceFields(
       ),
     );
   }
+  if (config.update) {
+    fields.push(
+      field(
+        'update.source',
+        '更新源',
+        updateSourceFingerprint({ kind: config.update.source, location: config.update.location ?? '' }),
+        current.updateSource ?? '',
+        lastApplied,
+      ),
+    );
+  }
+  if (config.workItems?.hierarchyLayout) {
+    fields.push(
+      field(
+        'workItems.hierarchyLayout',
+        '层级工作项形态',
+        config.workItems.hierarchyLayout,
+        current.hierarchyLayout ?? '',
+        lastApplied,
+      ),
+    );
+  }
   return fields;
 }
 
@@ -233,6 +306,30 @@ export interface WorkspaceSource {
   name?: string;
   importedAt: number;
   applied: Record<string, string>;
+  /** 跟随团队配置更新（URL 来源默认开;false = 用户显式关掉） */
+  follow?: boolean;
+  /** 上次自动检查时间(节流用) */
+  lastCheckedAt?: number;
+}
+
+const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 该不该做一次自动同步检查:有 URL 来源、没被显式关掉、距上次检查满一天。
+ * 纯函数,时钟注入,回归可测。
+ */
+export function shouldCheckWorkspaceSync(
+  source: WorkspaceSource | null,
+  now = Date.now(),
+): boolean {
+  if (!source?.url) return false;
+  if (source.follow === false) return false;
+  return now - (source.lastCheckedAt ?? 0) >= SYNC_INTERVAL_MS;
+}
+
+/** 本次同步值得提醒的变化:会被默认勾选的字段(排除本地一致与用户覆盖) */
+export function pendingWorkspaceFields(fields: WorkspaceField[]): WorkspaceField[] {
+  return fields.filter((item) => item.selected);
 }
 
 const SOURCE_KEY = 'rcx-workspace-source';

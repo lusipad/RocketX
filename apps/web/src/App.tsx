@@ -11,6 +11,7 @@ import NotificationNavigationBridge from './components/NotificationNavigationBri
 import ButlerPollerBridge from './components/ButlerPollerBridge';
 import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
+import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
 
 export default function App() {
@@ -59,6 +60,7 @@ export default function App() {
       <ButlerPollerBridge />
       <DiagnosticBridge />
       <UpdaterBridge />
+      <WorkspaceSyncBridge />
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />
       {content}

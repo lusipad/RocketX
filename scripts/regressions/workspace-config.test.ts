@@ -4,7 +4,10 @@ import {
   aiProviderFingerprint,
   mergeAppliedFields,
   parseWorkspaceConfig,
+  pendingWorkspaceFields,
   planWorkspaceFields,
+  shouldCheckWorkspaceSync,
+  updateSourceFingerprint,
 } from '../../apps/web/src/lib/workspaceConfig';
 
 const FULL_CONFIG = JSON.stringify({
@@ -135,6 +138,104 @@ test('AI Provider 按指纹比对，webUrl 缺省时回退 ado.url', () => {
 
   assert.equal(byKey.get('ai.provider.deepseek')?.unchanged, true);
   assert.equal(byKey.get('ado.webUrl')?.incoming, 'http://ado.example.com/tfs/DefaultCollection');
+});
+
+test('新字段解析:更新源三模式与层级形态,非法值整体拒绝', () => {
+  const parsed = parseWorkspaceConfig(JSON.stringify({
+    version: 1,
+    update: { source: 'dir', location: '\\\\server\\share\\rocketx' },
+    workItems: { hierarchyLayout: 'story-single' },
+  }));
+  assert.deepEqual(parsed.update, { source: 'dir', location: '\\\\server\\share\\rocketx' });
+  assert.equal(parsed.workItems?.hierarchyLayout, 'story-single');
+
+  // github 不需要 location;http 必须是合法 URL;dir 必须非空
+  assert.deepEqual(
+    parseWorkspaceConfig(JSON.stringify({ version: 1, update: { source: 'github' } })).update,
+    { source: 'github' },
+  );
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, update: { source: 'http', location: 'not a url' } })),
+    /update\.location/,
+  );
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, update: { source: 'dir', location: ' ' } })),
+    /非空路径/,
+  );
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, update: { source: 'pip' } })),
+    /update\.source/,
+  );
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, workItems: { hierarchyLayout: 'all' } })),
+    /hierarchyLayout/,
+  );
+});
+
+test('新字段进字段计划:更新源与层级形态参与覆盖判定', () => {
+  const config = parseWorkspaceConfig(JSON.stringify({
+    version: 1,
+    update: { source: 'dir', location: '\\\\srv\\rocketx' },
+    workItems: { hierarchyLayout: 'feature-single' },
+  }));
+  const fields = planWorkspaceFields(
+    config,
+    {
+      updateSource: updateSourceFingerprint({ kind: 'github', location: '' }),
+      hierarchyLayout: 'feature-split',
+    },
+    {},
+  );
+  const byKey = new Map(fields.map((field) => [field.key, field]));
+  // 本地是默认值但没有应用记录 → 视为用户配的,默认保留(提醒但不勾选)
+  assert.equal(byKey.get('update.source')?.overridden, true);
+  assert.equal(byKey.get('workItems.hierarchyLayout')?.overridden, true);
+
+  // 有应用记录且与本地一致 → 上次就是配置写的,这次默认勾选跟随
+  const followed = planWorkspaceFields(
+    config,
+    {
+      updateSource: updateSourceFingerprint({ kind: 'github', location: '' }),
+      hierarchyLayout: 'feature-split',
+    },
+    { 'update.source': 'github|', 'workItems.hierarchyLayout': 'feature-split' },
+  );
+  const followedByKey = new Map(followed.map((field) => [field.key, field]));
+  assert.equal(followedByKey.get('update.source')?.selected, true);
+  assert.equal(followedByKey.get('workItems.hierarchyLayout')?.selected, true);
+});
+
+test('跟随更新判定:URL 来源默认开、显式关掉不查、24 小时节流', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const base = { name: 'x', importedAt: 1, applied: {} };
+  assert.equal(shouldCheckWorkspaceSync(null, day), false);
+  assert.equal(shouldCheckWorkspaceSync({ ...base }, day), false);
+  assert.equal(shouldCheckWorkspaceSync({ ...base, url: 'https://cfg' }, day), true);
+  assert.equal(shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', follow: false }, day), false);
+  assert.equal(
+    shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', lastCheckedAt: day - 1000 }, day),
+    false,
+  );
+  assert.equal(
+    shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', lastCheckedAt: 0 }, day),
+    true,
+  );
+});
+
+test('值得提醒的变化 = 会被默认勾选的字段', () => {
+  const fields = planWorkspaceFields(
+    parseWorkspaceConfig(JSON.stringify({ version: 1, rocketChat: { url: 'https://chat.new' } })),
+    { serverUrl: 'https://chat.old' },
+    { 'server.url': 'https://chat.old' },
+  );
+  assert.equal(pendingWorkspaceFields(fields).length, 1);
+
+  const noise = planWorkspaceFields(
+    parseWorkspaceConfig(JSON.stringify({ version: 1, rocketChat: { url: 'https://chat.old' } })),
+    { serverUrl: 'https://chat.old' },
+    {},
+  );
+  assert.equal(pendingWorkspaceFields(noise).length, 0);
 });
 
 test('应用记录合并：只记录本次应用的字段，未勾选字段保留旧记录', () => {

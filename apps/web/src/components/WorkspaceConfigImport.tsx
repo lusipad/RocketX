@@ -7,6 +7,8 @@ import { ADO_WEB_KEY, adoWebBase, loadWorkbenchConfig } from '../lib/ado';
 import { useWorkbench } from '../stores/workbench';
 import { useWiTemplates } from '../stores/wiTemplates';
 import { loadAiSettings, saveAiSettings, type AiProviderConfig } from '../kernel/ai/config';
+import { loadUpdateSource, saveUpdateSource } from '../lib/updateSource';
+import { loadHierarchyLayout, saveHierarchyLayout } from '../stores/wiTemplates';
 import {
   aiProviderFingerprint,
   loadWorkspaceSource,
@@ -14,6 +16,7 @@ import {
   parseWorkspaceConfig,
   planWorkspaceFields,
   saveWorkspaceSource,
+  updateSourceFingerprint,
   type WorkspaceConfig,
   type WorkspaceCurrentValues,
   type WorkspaceField,
@@ -25,7 +28,7 @@ import {
  * 其余字段跟随配置。凭据（PAT / AI key）不在配置文件里，也永远不会被这里改动。
  */
 
-function collectCurrentValues(): WorkspaceCurrentValues {
+export function collectCurrentValues(): WorkspaceCurrentValues {
   const workbench = loadWorkbenchConfig();
   const ai = loadAiSettings();
   return {
@@ -38,6 +41,8 @@ function collectCurrentValues(): WorkspaceCurrentValues {
     aiProviders: Object.fromEntries(
       ai.providers.map((provider) => [provider.id, aiProviderFingerprint(provider)]),
     ),
+    updateSource: updateSourceFingerprint(loadUpdateSource()),
+    hierarchyLayout: loadHierarchyLayout(),
   };
 }
 
@@ -83,6 +88,14 @@ function applySelectedFields(
 
   if (selected.has('templates.url') && config.workItemTemplates) {
     useWiTemplates.getState().setUrl(config.workItemTemplates.url);
+  }
+
+  if (selected.has('update.source') && config.update) {
+    saveUpdateSource({ kind: config.update.source, location: config.update.location ?? '' });
+  }
+
+  if (selected.has('workItems.hierarchyLayout') && config.workItems?.hierarchyLayout) {
+    saveHierarchyLayout(config.workItems.hierarchyLayout);
   }
 
   const pickedProviders = (config.ai?.providers ?? []).filter((provider) =>
@@ -167,7 +180,7 @@ function FieldRow({
   );
 }
 
-function ImportPreviewDialog({
+export function ImportPreviewDialog({
   config,
   sourceUrl,
   onApplied,
@@ -299,6 +312,21 @@ export function WorkspaceConfigSection() {
             {new Date(source.importedAt).toLocaleString()}
           </div>
           {source.url && <div className="mt-0.5 truncate font-mono text-2xs text-ink-3">{source.url}</div>}
+          {source.url && (
+            <label className="mt-2 flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={source.follow !== false}
+                onChange={(e) => {
+                  const next = { ...source, follow: e.target.checked };
+                  saveWorkspaceSource(next);
+                  setSource(next);
+                }}
+                className="accent-[var(--color-primary,#3370ff)]"
+              />
+              <span>每天自动检查团队配置更新,有变化时提醒(不会静默改你的配置)</span>
+            </label>
+          )}
         </div>
       )}
 
