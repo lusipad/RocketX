@@ -819,6 +819,86 @@ pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
     Ok(host_path(&path))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDirManifest {
+    manifest: String,
+    installer_path: Option<String>,
+}
+
+/// 共享目录更新源（issue #106）：webview 读不了 UNC/本地任意路径，
+/// 由这里读 latest.json，并按清单里 Windows 平台条目的文件名在同目录
+/// 找安装包。目录是用户自己在设置页填的更新源，只读不写。
+#[tauri::command]
+pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, String> {
+    let base = std::path::PathBuf::from(dir.trim());
+    if !base.is_absolute() {
+        return Err("更新目录必须是绝对路径（本地盘符或 \\\\server\\share 形式）".to_string());
+    }
+    let manifest_path = base.join("latest.json");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", manifest_path.display()))?;
+
+    // 从清单 Windows 条目的 url 里取文件名，在同目录里找真实安装包
+    let installer_path = serde_json::from_str::<serde_json::Value>(&manifest)
+        .ok()
+        .and_then(|value| {
+            let platforms = value.get("platforms")?;
+            let url = platforms
+                .get("windows-x86_64")
+                .or_else(|| platforms.get("windows-x86_64-msi"))?
+                .get("url")?
+                .as_str()?
+                .to_string();
+            let file_name = url.rsplit(['/', '\\']).next()?.to_string();
+            // updater 产物是 .nsis.zip/.msi.zip 这类压缩层，共享目录直发时
+            // 通常放的是解开后的安装包，两种名字都认
+            let candidates = [
+                file_name.clone(),
+                file_name.trim_end_matches(".zip").to_string(),
+            ];
+            candidates.iter().find_map(|name| {
+                let path = base.join(name);
+                path.is_file().then(|| path.to_string_lossy().into_owned())
+            })
+        });
+
+    Ok(UpdateDirManifest {
+        manifest,
+        installer_path,
+    })
+}
+
+/// 只运行更新目录里解析出来的安装包：后缀白名单 + 存在性校验。
+/// 共享目录本身是用户自己配置的可信源，这里不做签名校验（原生
+/// updater 通道才有签名，走目录直发的以目录访问控制为信任边界）。
+#[tauri::command]
+pub async fn launch_update_installer(path: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path.trim());
+    let extension = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if extension != "exe" && extension != "msi" {
+        return Err("只支持运行 .exe / .msi 安装包".to_string());
+    }
+    if !target.is_file() {
+        return Err(format!("安装包不存在：{}", target.display()));
+    }
+    let result = if extension == "msi" {
+        std::process::Command::new("msiexec")
+            .arg("/i")
+            .arg(&target)
+            .spawn()
+    } else {
+        std::process::Command::new(&target).spawn()
+    };
+    result
+        .map(|_| ())
+        .map_err(|error| format!("无法启动安装包：{error}"))
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let processes = state
