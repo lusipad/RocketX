@@ -6,12 +6,10 @@ import {
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
 import {
-  cleanupCodexTransferSession,
-  dispatchCodexImportCompleted,
-  importSessionFileToCodex,
-  writeCodexTransferSession,
-} from '../agent/codexImport';
-import { claudeSessionJsonl, type TransferLine } from '../agent/codexTransfer';
+  startNamedCodexThreadWithTranscript,
+  transferTranscript,
+  type TransferLine,
+} from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import {
@@ -259,10 +257,6 @@ async function ensureResidentClient(): Promise<AppServerClient> {
       transportFactory(residentSessionId, residentWorkspaceRoot),
       {
         onNotification: (method, params) => {
-          if (method === 'externalAgentConfig/import/completed') {
-            dispatchCodexImportCompleted(params);
-            return;
-          }
           residentTurn?.onNotification(method, params);
         },
         onServerRequest: (request) => respondDynamicToolCall(
@@ -417,30 +411,24 @@ export async function discardResidentCodexThread(): Promise<void> {
 }
 
 /**
- * 把管家对话转移进 Codex：经官方外部 Agent 会话导入器
- * （externalAgentConfig/import）生成一条 App 认可来源的原生线程。
- * app-server 直接创建的线程 source 是 appServer，Codex App 的会话列表
- * 默认只显示交互来源，所以要在 App 里可见只能走导入。返回的是快照
- * 副本——RocketX 里的对话继续在原线程上，不会双写。
+ * 把对话记录送进一条新的原生 Codex 线程——codex-companion 同款机制：
+ * thread/start + thread/name/set + 记录作为首轮输入(issue #105)。
+ * 早期版本走外部会话导入器,但 codex 0.144.x 的导入器只认
+ * ~/.claude/projects 布局、且原生线程本就在 App/CLI 列表可见,
+ * 导入这条弯路整体退役。快照副本语义不变:RocketX 里的对话
+ * 继续在原线程上,不会双写。
  */
 export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<void> {
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
   const client = await ensureResidentClient();
-  const cwd = residentWorkspaceRoot!;
-  // 文件名必须是会话 UUID 且落在 Claude Code 标准会话根下,否则导入器判 session_missing(issue #99)
-  const sessionUuid = crypto.randomUUID();
-  const jsonl = claudeSessionJsonl(lines, { sessionId: sessionUuid, cwd, now: Date.now() });
-  const path = await writeCodexTransferSession(sessionUuid, jsonl);
-  try {
-    await importSessionFileToCodex(client, {
-      path,
-      cwd,
-      title: rocketxThreadName('管家对话'),
-    });
-  } finally {
-    void cleanupCodexTransferSession(sessionUuid);
-  }
+  const { model } = getButlerCodexSettings();
+  await startNamedCodexThreadWithTranscript(client, {
+    cwd: residentWorkspaceRoot!,
+    name: rocketxThreadName('管家对话'),
+    transcript: transferTranscript('管家对话', lines),
+    model: model || undefined,
+  });
 }
 
 /**

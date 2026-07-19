@@ -1,3 +1,5 @@
+import type { AppServerClient } from './protocol';
+
 /** 待转移的对话行（结构化定义，避免依赖 butler store 造成环） */
 export interface TransferLine {
   role: 'user' | 'assistant';
@@ -28,40 +30,63 @@ export function agentConversationLines(
 }
 
 /**
- * 把 AI 对话导出成 Codex 外部 Agent 会话导入器认可的 JSONL
- * （externalAgentConfig/import 按导入 Claude Code 历史的规则解析）。
- * 每行一条消息：user 的 content 是字符串，assistant 是文本块数组，
- * uuid 链式串联；📌 标记行与开场白等首个用户消息之前的行不导出。
+ * 把对话渲染成转移线程的首轮输入。转移走的是 companion 同款机制——
+ * 原生 thread/start + thread/name/set，对话记录作为首条消息进线程，
+ * 在 Codex App / CLI 的会话列表里直接可见、可接续（issue #105）。
+ * 📌 记忆标记行与首个用户消息之前的开场白不转移。
  */
-export function claudeSessionJsonl(
+/**
+ * companion 同款的转移线程创建:thread/start + thread/name/set +
+ * 记录作为首轮输入。老 CLI 没有 thread/name/set 时照 companion 的
+ * 做法忽略(名字丢了线程仍可用);只要一句确认,用最低推理档,
+ * 不等模型说完——turn 受理那一刻线程已带着完整记录进了会话列表。
+ */
+export async function startNamedCodexThreadWithTranscript(
+  client: AppServerClient,
+  options: { cwd: string; name: string; transcript: string; model?: string },
+): Promise<void> {
+  const response = await client.request('thread/start', {
+    ...(options.model ? { model: options.model } : {}),
+    cwd: options.cwd,
+    approvalPolicy: 'on-request',
+    approvalsReviewer: 'user',
+    sandbox: 'read-only',
+  });
+  const threadId = response.thread.id;
+  try {
+    await client.request('thread/name/set', { threadId, name: options.name });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/unknown (variant|method)/i.test(message)) throw error;
+  }
+  await client.request('turn/start', {
+    threadId,
+    input: [{ type: 'text', text: options.transcript, text_elements: [] }],
+    approvalPolicy: 'on-request',
+    approvalsReviewer: 'user',
+    sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    effort: 'minimal',
+  });
+}
+
+export function transferTranscript(
+  kind: string,
   lines: readonly TransferLine[],
-  options: { sessionId: string; cwd: string; now: number },
 ): string {
   const firstUser = lines.findIndex((item) => item.role === 'user');
   const usable = (firstUser === -1 ? [] : lines.slice(firstUser)).filter(
     (item) => !!item.text.trim() && !item.text.startsWith('📌'),
   );
   if (usable.length === 0) throw new Error('还没有可转移的对话内容');
-  const startAt = options.now - usable.length * 1000;
-  let parentUuid: string | null = null;
-  const rows = usable.map((item, index) => {
-    const uuid = crypto.randomUUID();
-    const row = JSON.stringify({
-      type: item.role,
-      uuid,
-      parentUuid,
-      sessionId: options.sessionId,
-      timestamp: new Date(startAt + index * 1000).toISOString(),
-      cwd: options.cwd,
-      userType: 'external',
-      isSidechain: false,
-      message:
-        item.role === 'user'
-          ? { role: 'user', content: item.text }
-          : { role: 'assistant', content: [{ type: 'text', text: item.text }] },
-    });
-    parentUuid = uuid;
-    return row;
-  });
-  return `${rows.join('\n')}\n`;
+  const body = usable
+    .map((item) => `${item.role === 'user' ? '【用户】' : '【助手】'}\n${item.text}`)
+    .join('\n\n');
+  return [
+    `以下是从 RocketX 转移过来的${kind}完整记录，请作为上下文接续：`,
+    '',
+    body,
+    '',
+    '———',
+    '请只回复一句话确认已接收，不要开始任何任务；等待用户在这个会话里继续。',
+  ].join('\n');
 }
