@@ -12,6 +12,7 @@ import {
 } from '../stores/workbench';
 import type { IpmsgMessage } from '../ipmsg/store';
 import { stripAgentSessionMarker } from '../agent/card';
+import { latestBuildsByDefinitionProject } from './butlerBuilds';
 
 interface TodayBase {
   key: string;
@@ -146,7 +147,7 @@ export function buildTodayItems(input: TodayInput): TodayItem[] {
     });
   }
 
-  for (const build of input.builds ?? []) {
+  for (const build of latestBuildsByDefinitionProject(input.builds ?? [])) {
     const failed = build.result.toLocaleLowerCase() === 'failed';
     const running = build.status.toLocaleLowerCase() !== 'completed';
     if (!failed && !running) continue;

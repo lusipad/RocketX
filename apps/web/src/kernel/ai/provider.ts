@@ -61,6 +61,7 @@ export type AiCapability =
   | 'summary'
   | 'extraction'
   | 'daily-review'
+  | 'butler-rounds'
   | 'text-tool'
   | 'agent';
 

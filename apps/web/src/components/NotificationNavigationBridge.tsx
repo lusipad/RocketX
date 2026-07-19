@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { isTauri } from '../lib/http';
 import {
   NOTIFICATION_OPEN_ROOM_EVENT,
+  notificationDestination,
   notificationTarget,
 } from '../lib/notificationNavigation';
 import { useAuth } from '../stores/auth';
@@ -19,7 +20,12 @@ export default function NotificationNavigationBridge() {
       .then(({ listen }) =>
         listen<unknown>(NOTIFICATION_OPEN_ROOM_EVENT, ({ payload }) => {
           const target = notificationTarget(payload);
-          if (!target || useAuth.getState().status !== 'authed' || !useChat.getState().ready) return;
+          if (!target || useAuth.getState().status !== 'authed') return;
+          if (notificationDestination(target) === 'butler-view') {
+            useUI.getState().setModule('butler-view');
+            return;
+          }
+          if (!useChat.getState().ready) return;
           useUI.getState().setModule('messages');
           void useChat
             .getState()

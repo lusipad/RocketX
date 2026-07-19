@@ -6,10 +6,8 @@ import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
 import { createButlerTools } from '../lib/butlerTools';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
-import { useAuth } from './auth';
 import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
 import { useChat } from './chat';
-import { useWorkbench } from './workbench';
 
 const ROUTINES_KEY = 'rcx-butler-v1:routines';
 const WATCHER_KEYS_KEY = 'rcx-butler-v1:routine-seen';
@@ -186,10 +184,7 @@ function persist(routines: Routine[], eventCards: ButlerEventCard[], seenKeys: s
 
 function watcherSnapshot(seenKeys: string[]): ButlerWatcherSnapshot {
   const chat = useChat.getState();
-  const user = useAuth.getState().user;
   return {
-    builds: useWorkbench.getState().builds,
-    workItems: useWorkbench.getState().workItems,
     subscriptions: Object.values(chat.subscriptions).map((subscription) => {
       const room = chat.rooms[subscription.rid];
       return {
@@ -199,7 +194,6 @@ function watcherSnapshot(seenKeys: string[]): ButlerWatcherSnapshot {
         lastMessageAt: Math.max(tsMs(room?.lm), tsMs(room?.lastMessage?.ts)),
       };
     }),
-    user: user ? { username: user.username, name: user.name } : undefined,
     seenKeys,
   };
 }
@@ -224,8 +218,11 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     const seen = readJson(WATCHER_KEYS_KEY);
     const routines = ensureBuiltins(stored.filter(isRoutine), routineNow());
     const seenKeys = Array.isArray(seen) ? seen.filter((key): key is string => typeof key === 'string') : [];
-    set({ routines, eventCards: cards.slice(0, EVENT_CARD_LIMIT), seenKeys, hydrated: true });
-    persist(routines, cards.slice(0, EVENT_CARD_LIMIT), seenKeys);
+    const activeCards = cards
+      .filter((card) => card.kind === 'mention-stale')
+      .slice(0, EVENT_CARD_LIMIT);
+    set({ routines, eventCards: activeCards, seenKeys, hydrated: true });
+    persist(routines, activeCards, seenKeys);
   },
 
   setEnabled: (id, enabled) => {
@@ -301,10 +298,11 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   tick: (now = routineNow()) => {
     const watched = checkWatchers(watcherSnapshot(get().seenKeys), now);
-    if (watched.length > 0) {
+    const retainedCards = get().eventCards.filter((card) => card.kind === 'mention-stale');
+    if (watched.length > 0 || retainedCards.length !== get().eventCards.length) {
       const eventCards = [
         ...watched.map(({ dedupeKey: _dedupeKey, ...card }) => card),
-        ...get().eventCards,
+        ...retainedCards,
       ].slice(0, EVENT_CARD_LIMIT);
       const seenKeys = [...new Set([...get().seenKeys, ...watched.map((card) => card.dedupeKey)])];
       set({ eventCards, seenKeys });

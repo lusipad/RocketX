@@ -26,11 +26,6 @@ import {
   setPersona,
 } from '../lib/butlerProfile';
 import {
-  loadCoffeeConfig,
-  saveCoffeeConfig,
-  type CoffeeTimeConfig,
-} from '../lib/coffeeTime';
-import {
   AXIS_META,
   DEFAULT_AXES,
   loadPersonality,
@@ -42,7 +37,7 @@ import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
-import { RadioGroup, Row, Slider, Toggle } from './SettingControls';
+import { RadioGroup, Row, Slider } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -70,7 +65,6 @@ export default function AiSettings() {
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
   const [persona, setPersonaState] = useState<string>(getPersona);
   const [savedPersona, setSavedPersona] = useState<string>(getPersona);
-  const [coffee, setCoffee] = useState<CoffeeTimeConfig>(loadCoffeeConfig);
   const [personality, setPersonalityState] = useState<PersonalityAxes>(loadPersonality);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
@@ -280,69 +274,6 @@ export default function AiSettings() {
                 </select>
               </Row>
             </>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">咖啡时间</h2>
-        <div className="rounded-lg border border-line bg-surface px-4">
-          <Row label="启用" hint="到设定时间自动切到管家视图，汇总需要关注的事项。错过了下次打开客户端也会补上。" inline>
-            <Toggle
-              checked={coffee.enabled}
-              onChange={(enabled) => {
-                const next = { ...coffee, enabled };
-                setCoffee(next);
-                saveCoffeeConfig(next);
-              }}
-            />
-          </Row>
-          {coffee.enabled && (
-            <Row label="触发时间" hint="每天到这些时间点推送咖啡时间，可增减">
-              <div className="flex flex-wrap items-center gap-2">
-                {coffee.times.map((time, index) => (
-                  <div key={index} className="flex items-center gap-1">
-                    <input
-                      type="time"
-                      value={time}
-                      onChange={(event) => {
-                        const times = [...coffee.times];
-                        times[index] = event.target.value;
-                        times.sort();
-                        const next = { ...coffee, times };
-                        setCoffee(next);
-                        saveCoffeeConfig(next);
-                      }}
-                      className={`${inputCls} w-[8rem]`}
-                    />
-                    {coffee.times.length > 1 && (
-                      <button
-                        title="移除此时间点"
-                        onClick={() => {
-                          const times = coffee.times.filter((_, i) => i !== index);
-                          const next = { ...coffee, times };
-                          setCoffee(next);
-                          saveCoffeeConfig(next);
-                        }}
-                        className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-danger"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button
-                  onClick={() => {
-                    const next = { ...coffee, times: [...coffee.times, '12:00'].sort() };
-                    setCoffee(next);
-                    saveCoffeeConfig(next);
-                  }}
-                  className="flex h-9 items-center gap-1 rounded-md border border-line px-2.5 text-sm text-ink-2 hover:bg-fill-hover"
-                >
-                  <Plus size={14} /> 添加
-                </button>
-              </div>
-            </Row>
           )}
         </div>
       </section>
