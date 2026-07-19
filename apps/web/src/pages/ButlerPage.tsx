@@ -10,8 +10,11 @@ import { ledgerFromTodos, type LedgerEntry } from '../lib/butlerLedger';
 import {
   runButlerRoundsNow,
   runDailyButlerRoundsIfNeeded,
+  muteButlerRoundsItem,
   useButlerRoundsRunner,
 } from '../lib/butlerRoundsRunner';
+import { listMutes, removeMute } from '../lib/butlerMutes';
+import { acceptButlerProposal } from '../lib/butlerProposalActions';
 import { useButler } from '../stores/butler';
 import { toast } from '../stores/toast';
 import { dueLabel, todayKey, useTodos } from '../stores/todos';
@@ -67,15 +70,10 @@ function LedgerColumn({
   );
 }
 
-function proposalTodoId(ref: string): string | null {
-  if (ref.startsWith('todo:')) return ref.slice('todo:'.length);
-  if (ref.startsWith('ledger:')) return ref.slice('ledger:'.length);
-  return null;
-}
-
 export default function ButlerPage() {
   const [input, setInput] = useState('');
   const [hiddenProposals, setHiddenProposals] = useState<Set<string>>(() => new Set());
+  const [mutes, setMutes] = useState(() => listMutes());
   const todos = useTodos((state) => state.todos);
   const lastRoundsAt = useButlerRoundsRunner((state) => state.lastRoundsAt);
   const lastResult = useButlerRoundsRunner((state) => state.lastResult);
@@ -109,20 +107,28 @@ export default function ButlerPage() {
     setHiddenProposals((current) => new Set(current).add(key));
   }
 
-  function acceptProposal(kind: 'add-commitment' | 'close-wait' | 'schedule-today', ref: string, key: string): void {
-    if (kind === 'close-wait') {
-      const todoId = proposalTodoId(ref);
-      const todo = todoId ? useTodos.getState().todos.find((item) => item.id === todoId) : undefined;
-      if (todo && !todo.done) {
-        useTodos.getState().toggle(todo.id);
-        toast.success('已销账');
-      } else {
-        toast.info('这项已经处理过了');
-      }
-    } else {
-      toast.success('已记下');
+  function acceptProposal(
+    proposal: NonNullable<typeof result>['proposals'][number],
+    key: string,
+  ): void {
+    let who: string | undefined;
+    if (proposal.kind === 'add-commitment' && !proposal.who) {
+      who = window.prompt('这件事答应给谁？')?.trim();
+      if (!who) return;
     }
+    const outcome = acceptButlerProposal(proposal, { today, who });
+    if (outcome === 'needs-who') return;
+    if (outcome === 'missing-ref') toast.info('这项已经找不到了');
+    else if (outcome === 'already-applied') toast.info('这项已经处理过了');
+    else if (proposal.kind === 'close-wait') toast.success('已销账');
+    else toast.success('已入账');
     hideProposal(key);
+  }
+
+  function muteItem(title: string): void {
+    if (!muteButlerRoundsItem(title)) return;
+    setMutes(listMutes());
+    toast.success('已记住：这类少提');
   }
 
   function submitQuestion(event: FormEvent<HTMLFormElement>): void {
@@ -192,6 +198,13 @@ export default function ButlerPage() {
                                 {item.suggestedAction}
                               </button>
                             )}
+                            <button
+                              type="button"
+                              onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
+                              className="ml-2 mt-3 px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
+                            >
+                              少来这种
+                            </button>
                           </div>
                         </div>
                       </article>
@@ -211,7 +224,7 @@ export default function ButlerPage() {
                       <div className="mt-3 flex gap-2">
                         <button
                           type="button"
-                          onClick={() => acceptProposal(proposal.kind, proposal.ref, key)}
+                          onClick={() => acceptProposal(proposal, key)}
                           className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
                         >
                           {proposal.kind === 'close-wait' ? '销账' : '入账'}
@@ -254,6 +267,9 @@ export default function ButlerPage() {
               <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
             </summary>
             <div className="border-t border-line px-4 py-3">
+              {lastResult?.triggerReason && (
+                <p className="mb-3 text-xs text-ink-3">这次主动来看：{lastResult.triggerReason}</p>
+              )}
               {result?.suppressed.length ? (
                 <div className="flex flex-col gap-2">
                   {result.suppressed.map((item, index) => (
@@ -265,6 +281,29 @@ export default function ButlerPage() {
                 </div>
               ) : (
                 <p className="py-2 text-center text-sm text-ink-3">这次没有压下的内容。</p>
+              )}
+              {mutes.length > 0 && (
+                <section className="mt-4 border-t border-line pt-3">
+                  <h3 className="text-xs font-medium text-ink-2">我记着少提的（{mutes.length}）</h3>
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {mutes.map((mute) => (
+                      <div key={mute.id} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="min-w-0 flex-1 truncate text-ink-3">{mute.text}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            removeMute(mute.id);
+                            setMutes(listMutes());
+                            toast.success('已删掉这条');
+                          }}
+                          className="shrink-0 px-1.5 py-1 text-ink-3 hover:text-ink"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               )}
             </div>
           </details>

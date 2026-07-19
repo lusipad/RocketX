@@ -2,14 +2,22 @@ import { create } from 'zustand';
 import {
   isRoundsResult,
   serializeButlerRoundsInput,
+  suppressMutedRoundItems,
   type RoundsInput,
   type RoundsResult,
 } from '../kernel/ai/features/butler-rounds';
 import { useTodos, todayKey } from '../stores/todos';
 import { useWorkbench } from '../stores/workbench';
 import { ledgerFromTodos } from './butlerLedger';
+import { addMute, listMutes, type ButlerMute } from './butlerMutes';
 import { fetchIterationEndDate } from './butlerPoller';
 import { runRoundsWithBrain } from './butlerRoundsBrain';
+import {
+  createVisibilityRoundHandler,
+  maybeEveningRound,
+  maybeWakeRound,
+  type ButlerRoundTriggerRuntime,
+} from './butlerRoundsTriggers';
 
 const LAST_ROUNDS_AT_KEY = 'rcx-butler-v1:rounds-last-at';
 const LAST_RESULT_KEY = 'rcx-butler-v1:rounds-last-result';
@@ -19,6 +27,7 @@ export interface StoredRoundsResult {
   generatedAt: string;
   checkedCount: number;
   refTitles: Record<string, string>;
+  triggerReason?: string;
 }
 
 interface ButlerRoundsRunnerState {
@@ -48,6 +57,9 @@ function loadLastResult(): StoredRoundsResult | null {
       typeof parsed.refTitles !== 'object' ||
       Array.isArray(parsed.refTitles) ||
       Object.values(parsed.refTitles).some((title) => typeof title !== 'string')
+      || (parsed.triggerReason !== undefined && (
+        typeof parsed.triggerReason !== 'string' || !parsed.triggerReason.trim()
+      ))
     ) return null;
     return parsed;
   } catch {
@@ -113,6 +125,7 @@ export async function collectButlerRoundsInput(now = new Date()): Promise<Rounds
     iterationEndDate: await fetchIterationEndDate(workItems),
     localTime: localIsoTimestamp(now),
     lastRoundsAt: useButlerRoundsRunner.getState().lastRoundsAt,
+    mutes: listMutes(),
   };
 }
 
@@ -136,7 +149,7 @@ function resultDisplaySnapshot(input: RoundsInput): Pick<StoredRoundsResult, 'ch
   };
 }
 
-export function runButlerRoundsNow(now = new Date()): Promise<void> {
+export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Promise<void> {
   if (activeRun) return activeRun;
   const task = (async () => {
     useButlerRoundsRunner.setState({ running: true, error: null });
@@ -146,6 +159,7 @@ export function runButlerRoundsNow(now = new Date()): Promise<void> {
       const stored = {
         result,
         generatedAt: now.toISOString(),
+        ...(triggerReason ? { triggerReason } : {}),
         ...resultDisplaySnapshot(input),
       } satisfies StoredRoundsResult;
       persistResult(stored);
@@ -165,6 +179,63 @@ export function runButlerRoundsNow(now = new Date()): Promise<void> {
     activeRun = null;
   });
   return activeRun;
+}
+
+export function muteButlerRoundsItem(title: string): ButlerMute | null {
+  const mute = addMute(title);
+  if (!mute) return null;
+  const current = useButlerRoundsRunner.getState().lastResult;
+  if (!current) return mute;
+  const result = suppressMutedRoundItems(current.result, current.refTitles, listMutes());
+  if (result === current.result) return mute;
+  const stored = { ...current, result };
+  persistResult(stored);
+  useButlerRoundsRunner.setState({ lastResult: stored });
+  return mute;
+}
+
+function triggerStorage(): Storage | undefined {
+  return browserStorage();
+}
+
+function triggerRuntime(storage: Storage): ButlerRoundTriggerRuntime {
+  return {
+    storage,
+    getState: () => {
+      const state = useButlerRoundsRunner.getState();
+      return { running: state.running, lastRoundsAt: state.lastRoundsAt };
+    },
+    run: (now, reason) => runButlerRoundsNow(now, reason),
+  };
+}
+
+export function maybeEveningButlerRound(now = new Date()): Promise<boolean> {
+  const storage = triggerStorage();
+  return storage ? maybeEveningRound(now, triggerRuntime(storage)) : Promise.resolve(false);
+}
+
+export function maybeWakeButlerRound(reason: string, now = new Date()): Promise<boolean> {
+  const storage = triggerStorage();
+  return storage ? maybeWakeRound(reason, now, triggerRuntime(storage)) : Promise.resolve(false);
+}
+
+let visibilityCleanup: (() => void) | null = null;
+
+export function startButlerRoundsTriggers(): void {
+  if (visibilityCleanup || typeof document === 'undefined') return;
+  const storage = triggerStorage();
+  if (!storage) return;
+  const handleVisibility = createVisibilityRoundHandler(triggerRuntime(storage));
+  const listener = () => void handleVisibility(document.visibilityState, new Date());
+  document.addEventListener('visibilitychange', listener);
+  visibilityCleanup = () => {
+    document.removeEventListener('visibilitychange', listener);
+    visibilityCleanup = null;
+  };
+}
+
+export function stopButlerRoundsTriggers(): void {
+  visibilityCleanup?.();
 }
 
 export function runDailyButlerRoundsIfNeeded(now = new Date()): Promise<void> {

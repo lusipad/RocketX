@@ -13,6 +13,7 @@ import {
 import { isWorkItemDone, useWorkbench, type WorkItem } from '../stores/workbench';
 import { useTodos } from '../stores/todos';
 import { loadWorkbenchConfig } from './ado';
+import { evaluatePollerWake } from './butlerRoundsTriggers';
 import { isTauri } from './http';
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 分钟
@@ -137,9 +138,14 @@ async function pollOnce(): Promise<ButlerAlert[]> {
 
     // 2. 收集规则输入（在最后一个 await 之后读 store，避免过期快照）
     const { todos } = useTodos.getState();
+    const { workItems, builds } = useWorkbench.getState();
 
     // 已停止——丢弃本轮结果
     if (gen !== generation) return [];
+
+    const wakeReason = typeof localStorage === 'undefined'
+      ? null
+      : evaluatePollerWake(workItems, builds, localStorage);
 
     const alerts = evaluateRules({
       todos,
@@ -158,6 +164,11 @@ async function pollOnce(): Promise<ButlerAlert[]> {
 
     // 4. 持久化已见记录
     if (newAlerts.length > 0) persistSeenAlerts();
+
+    if (gen !== generation) return alerts;
+    const { maybeEveningButlerRound, maybeWakeButlerRound } = await import('./butlerRoundsRunner');
+    const woke = wakeReason ? await maybeWakeButlerRound(wakeReason) : false;
+    if (!woke) await maybeEveningButlerRound();
 
     return alerts;
   } finally {
