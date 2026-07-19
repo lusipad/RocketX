@@ -23,12 +23,10 @@ import {
 } from '../agent/context';
 import { materializeAgentAttachments } from '../agent/attachments';
 import {
-  cleanupCodexTransferSession,
-  dispatchCodexImportCompleted,
-  importSessionFileToCodex,
-  writeCodexTransferSession,
-} from '../agent/codexImport';
-import { agentConversationLines, claudeSessionJsonl } from '../agent/codexTransfer';
+  agentConversationLines,
+  startNamedCodexThreadWithTranscript,
+  transferTranscript,
+} from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
 import {
@@ -307,10 +305,6 @@ async function onServerRequest(request: {
 }
 
 function onNotification(method: string, paramsValue: unknown): void {
-  if (method === 'externalAgentConfig/import/completed') {
-    dispatchCodexImportCompleted(paramsValue);
-    return;
-  }
   const params = recordParams(paramsValue);
   const threadId = typeof params.threadId === 'string' ? params.threadId : '';
   const session = sessionForThread(threadId);
@@ -898,23 +892,12 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       ? `#${session.workItem.id} ${session.workItem.title}`
       : room?.fname || room?.name || session.environmentName;
     const client = await ensureClient(session);
-    // 文件名必须是会话 UUID 且落在 Claude Code 标准会话根下,否则导入器判 session_missing(issue #99)
-    const sessionUuid = crypto.randomUUID();
-    const jsonl = claudeSessionJsonl(lines, {
-      sessionId: sessionUuid,
+    // companion 同款:原生线程 + 命名 + 记录作首轮输入,App/CLI 列表直接可见(issue #105)
+    await startNamedCodexThreadWithTranscript(client, {
       cwd: session.workspaceRoots[0],
-      now: Date.now(),
+      name: rocketxThreadName('托管对话', detail),
+      transcript: transferTranscript('托管对话', lines),
     });
-    const path = await writeCodexTransferSession(sessionUuid, jsonl);
-    try {
-      await importSessionFileToCodex(client, {
-        path,
-        cwd: session.workspaceRoots[0],
-        title: rocketxThreadName('托管对话', detail),
-      });
-    } finally {
-      void cleanupCodexTransferSession(sessionUuid);
-    }
     trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
   },
 
