@@ -1,6 +1,11 @@
 import type { RoundsProposal } from '../kernel/ai/features/butler-rounds';
 import { todayKey, useTodos, type Todo } from '../stores/todos';
 import { useWorkbench, type WorkItem } from '../stores/workbench';
+import {
+  markProposalHandled,
+  type ButlerProposalHandledStorage,
+  type RecentSentMessage,
+} from './butlerOutbox';
 
 type NewTodo = Omit<Todo, 'id' | 'done' | 'createdAt'>;
 type TodoUpdate = Partial<Pick<Todo, 'note' | 'due' | 'committedTo' | 'waitingFor'>>;
@@ -17,6 +22,8 @@ export interface ButlerProposalContext {
   who?: string;
   todoState?: ButlerProposalTodoState;
   workItems?: readonly WorkItem[];
+  messageRefs?: Readonly<Record<string, RecentSentMessage>>;
+  handledStorage?: ButlerProposalHandledStorage;
 }
 
 export type ButlerProposalResult = 'applied' | 'already-applied' | 'needs-who' | 'missing-ref';
@@ -33,6 +40,31 @@ export function acceptButlerProposal(
   const today = context.today ?? todayKey();
 
   if (proposal.kind === 'add-commitment') {
+    const messageId = refId(proposal.ref, 'msg:');
+    if (messageId) {
+      const message = context.messageRefs?.[proposal.ref];
+      if (!message || message.ref !== proposal.ref) return 'missing-ref';
+      const who = (proposal.who ?? context.who)?.trim();
+      if (!who) return 'needs-who';
+      if (todoState.todos.some((item) => item.mid === messageId)) {
+        markProposalHandled(proposal.ref, context.handledStorage);
+        return 'already-applied';
+      }
+      todoState.add({
+        source: 'message',
+        title: message.text,
+        rid: message.rid,
+        mid: messageId,
+        roomName: message.roomName,
+        excerpt: message.text,
+        note: proposal.reason || message.text,
+        committedTo: who,
+        ...(proposal.due ? { due: proposal.due } : {}),
+      });
+      markProposalHandled(proposal.ref, context.handledStorage);
+      return 'applied';
+    }
+
     const id = refId(proposal.ref, 'todo:');
     const todo = id ? todoState.todos.find((item) => item.id === id) : undefined;
     if (!todo) return 'missing-ref';
@@ -78,4 +110,11 @@ export function acceptButlerProposal(
   if (todo.done) return 'already-applied';
   todoState.toggle(todo.id);
   return 'applied';
+}
+
+export function dismissButlerProposal(
+  proposal: RoundsProposal,
+  storage?: ButlerProposalHandledStorage,
+): void {
+  markProposalHandled(proposal.ref, storage);
 }

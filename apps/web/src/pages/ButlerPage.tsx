@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Bell,
   ChevronDown,
@@ -14,11 +14,17 @@ import {
   runButlerRoundsNow,
   runDailyButlerRoundsIfNeeded,
   muteButlerRoundsItem,
+  snoozeButlerRoundsItem,
   useButlerRoundsRunner,
+  visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
 import { listMutes, removeMute } from '../lib/butlerMutes';
-import { acceptButlerProposal } from '../lib/butlerProposalActions';
+import { acceptButlerProposal, dismissButlerProposal } from '../lib/butlerProposalActions';
+import { turnButlerBriefItemIntoTodo } from '../lib/butlerBriefActions';
+import { runDraftWithBrain } from '../lib/butlerRoundsBrain';
+import { isProposalHandled } from '../lib/butlerOutbox';
 import { useButler } from '../stores/butler';
+import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { dueLabel, todayKey, useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
@@ -28,6 +34,21 @@ function lookedAtLabel(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '我看过一圈';
   return `我 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')} 看了一圈`;
+}
+
+function canTurnIntoTodo(ref: string): boolean {
+  return /^(?:wi|pr|build|msg):/.test(ref);
+}
+
+function sentMessageLabel(at: string, roomName: string, generatedAt?: string): string {
+  const then = new Date(at).getTime();
+  const now = generatedAt ? new Date(generatedAt).getTime() : Date.now();
+  const days = Number.isFinite(then) && Number.isFinite(now)
+    ? Math.max(0, Math.floor((now - then) / 86_400_000))
+    : 0;
+  return days === 0
+    ? `这是你今天在「${roomName}」说的`
+    : `这是你 ${days} 天前在「${roomName}」说的`;
 }
 
 function ledgerDue(entry: LedgerEntry, today: string): { label: string; color: string } {
@@ -77,9 +98,14 @@ export default function ButlerPage() {
   const [input, setInput] = useState('');
   const [hiddenProposals, setHiddenProposals] = useState<Set<string>>(() => new Set());
   const [mutes, setMutes] = useState(() => listMutes());
+  const [draftingRef, setDraftingRef] = useState<string | null>(null);
+  const [draftCard, setDraftCard] = useState<{ ref: string; text: string; rid?: string } | null>(null);
+  const draftTextRef = useRef<HTMLTextAreaElement>(null);
   const conversationOpen = useUI((state) => state.butlerConversationOpen);
   const openConversation = useUI((state) => state.openButlerConversation);
   const closeConversation = useUI((state) => state.closeButlerConversation);
+  const setModule = useUI((state) => state.setModule);
+  const openRoom = useChat((state) => state.openRoom);
   const todos = useTodos((state) => state.todos);
   const lastRoundsAt = useButlerRoundsRunner((state) => state.lastRoundsAt);
   const lastResult = useButlerRoundsRunner((state) => state.lastResult);
@@ -92,6 +118,7 @@ export default function ButlerPage() {
 
   useEffect(() => {
     setHiddenProposals(new Set());
+    setDraftCard(null);
   }, [lastResult?.generatedAt]);
 
   const today = todayKey();
@@ -102,6 +129,11 @@ export default function ButlerPage() {
   );
   const waits = useMemo(() => ledger.filter((entry) => entry.kind === 'wait'), [ledger]);
   const result = lastResult?.result;
+  const visibleItems = useMemo(() => visibleButlerRoundItems(lastResult), [lastResult]);
+  const visibleProposals = useMemo(
+    () => result?.proposals.filter((proposal) => !isProposalHandled(proposal.ref)) ?? [],
+    [result],
+  );
 
   const refTitles = useMemo(
     () => new Map(Object.entries(lastResult?.refTitles ?? {})),
@@ -122,7 +154,11 @@ export default function ButlerPage() {
       who = window.prompt('这件事答应给谁？')?.trim();
       if (!who) return;
     }
-    const outcome = acceptButlerProposal(proposal, { today, who });
+    const outcome = acceptButlerProposal(proposal, {
+      today,
+      who,
+      messageRefs: lastResult?.refMessages,
+    });
     if (outcome === 'needs-who') return;
     if (outcome === 'missing-ref') toast.info('这项已经找不到了');
     else if (outcome === 'already-applied') toast.info('这项已经处理过了');
@@ -135,6 +171,53 @@ export default function ButlerPage() {
     if (!muteButlerRoundsItem(title)) return;
     setMutes(listMutes());
     toast.success('已记住：这类少提');
+  }
+
+  function turnIntoTodo(ref: string): void {
+    const outcome = turnButlerBriefItemIntoTodo(ref, refTitles.get(ref) ?? '相关事项', {
+      message: lastResult?.refMessages?.[ref],
+    });
+    if (outcome === 'already-exists') toast.info('已在待办池');
+    else if (outcome === 'created') toast.success('已转到待办池');
+    else toast.info('这条暂时不能转任务');
+  }
+
+  async function draftReply(item: NonNullable<typeof result>['items'][number]): Promise<void> {
+    const who = lastResult?.refPeople?.[item.ref];
+    if (!who || draftingRef) return;
+    setDraftingRef(item.ref);
+    try {
+      const draft = await runDraftWithBrain({
+        subject: refTitles.get(item.ref) ?? '相关事项',
+        who,
+        context: lastResult?.refMessages?.[item.ref]?.text
+          ?? [item.why, item.suggestedAction].filter(Boolean).join('；'),
+      });
+      setDraftCard({ ref: item.ref, text: draft.draft, rid: lastResult?.refRids?.[item.ref] });
+    } catch (error) {
+      toast.error(error, '这次没拟成，请稍后再试');
+    } finally {
+      setDraftingRef(null);
+    }
+  }
+
+  async function copyDraft(): Promise<void> {
+    if (!draftCard) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(draftCard.text);
+      toast.success('草稿已复制');
+    } catch {
+      draftTextRef.current?.focus();
+      draftTextRef.current?.select();
+      toast.info('已选中草稿，请按 Ctrl+C 复制');
+    }
+  }
+
+  async function goToDraftConversation(): Promise<void> {
+    if (!draftCard?.rid) return;
+    setModule('messages');
+    await openRoom(draftCard.rid);
   }
 
   function submitQuestion(event: FormEvent<HTMLFormElement>): void {
@@ -188,9 +271,9 @@ export default function ButlerPage() {
                   <p className="mt-1.5 text-sm leading-6 text-ink-2">{result.summary}</p>
                 </div>
 
-                {result.items.length > 0 ? (
+                {visibleItems.length > 0 ? (
                   <div className="mt-4 flex flex-col gap-3">
-                    {result.items.map((item, index) => (
+                    {visibleItems.map((item, index) => (
                       <article key={`${item.ref}:${index}`} className="rounded-lg border border-line bg-surface-2 p-4">
                         <div className="flex items-start gap-3">
                           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-white">
@@ -200,21 +283,76 @@ export default function ButlerPage() {
                             <h3 className="text-sm font-semibold text-ink">{refTitles.get(item.ref) ?? '相关事项'}</h3>
                             <p className="mt-1 text-xs leading-5 text-ink-2">为什么找你：{item.why}</p>
                             {item.suggestedAction && (
+                              <p className="mt-2 text-xs leading-5 text-ink-2">建议：{item.suggestedAction}</p>
+                            )}
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              {canTurnIntoTodo(item.ref) && (
+                                <button
+                                  type="button"
+                                  onClick={() => turnIntoTodo(item.ref)}
+                                  className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
+                                >
+                                  转任务
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => toast.info('这一步还需要你手动完成')}
-                                className="mt-3 rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
+                                onClick={() => {
+                                  if (snoozeButlerRoundsItem(item.ref)) toast.info('这轮先放一放');
+                                }}
+                                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
                               >
-                                {item.suggestedAction}
+                                稍后
                               </button>
+                              {lastResult?.refPeople?.[item.ref] && (
+                                <button
+                                  type="button"
+                                  onClick={() => void draftReply(item)}
+                                  disabled={draftingRef !== null}
+                                  className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover disabled:opacity-50"
+                                >
+                                  {draftingRef === item.ref && <Loader2 size={12} className="animate-spin" />}
+                                  帮我拟一句
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
+                                className="px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
+                              >
+                                少来这种
+                              </button>
+                            </div>
+                            {draftCard?.ref === item.ref && (
+                              <div className="mt-3 rounded-lg border border-primary/25 bg-surface p-3">
+                                <div className="text-xs font-medium text-ink-2">给你的草稿</div>
+                                <textarea
+                                  ref={draftTextRef}
+                                  readOnly
+                                  value={draftCard.text}
+                                  aria-label="拟好的消息草稿"
+                                  className="mt-2 min-h-16 w-full resize-none rounded-md border border-line bg-surface-2 px-3 py-2 text-sm leading-6 text-ink outline-none"
+                                />
+                                <div className="mt-2 flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => void copyDraft()}
+                                    className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
+                                  >
+                                    复制
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void goToDraftConversation()}
+                                    disabled={!draftCard.rid}
+                                    title={draftCard.rid ? undefined : '这条没有关联会话'}
+                                    className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover disabled:opacity-50"
+                                  >
+                                    去会话
+                                  </button>
+                                </div>
+                              </div>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
-                              className="ml-2 mt-3 px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
-                            >
-                              少来这种
-                            </button>
                           </div>
                         </div>
                       </article>
@@ -224,12 +362,22 @@ export default function ButlerPage() {
                   <p className="py-6 text-center text-sm text-ink-3">这轮没有必须找你的事。</p>
                 )}
 
-                {result.proposals.map((proposal, index) => {
+                {visibleProposals.map((proposal, index) => {
                   const key = `${proposal.kind}:${proposal.ref}:${index}`;
                   if (hiddenProposals.has(key)) return null;
+                  const sentMessage = lastResult?.refMessages?.[proposal.ref];
                   return (
                     <div key={key} className="mt-3 rounded-lg border border-primary/25 bg-primary-light/20 p-4">
-                      <div className="text-sm font-medium text-ink">{refTitles.get(proposal.ref) ?? '相关事项'}</div>
+                      <div className="text-sm font-medium text-ink">
+                        {sentMessage
+                          ? sentMessageLabel(sentMessage.at, sentMessage.roomName, lastResult?.generatedAt)
+                          : (refTitles.get(proposal.ref) ?? '相关事项')}
+                      </div>
+                      {sentMessage && (
+                        <blockquote className="mt-2 rounded-r border-l-2 border-primary/35 bg-surface/70 px-3 py-2 text-xs leading-5 text-ink-2">
+                          {sentMessage.text}
+                        </blockquote>
+                      )}
                       <p className="mt-1 text-xs leading-5 text-ink-2">{proposal.reason}</p>
                       <div className="mt-3 flex gap-2">
                         <button
@@ -242,6 +390,7 @@ export default function ButlerPage() {
                         <button
                           type="button"
                           onClick={() => {
+                            dismissButlerProposal(proposal);
                             hideProposal(key);
                             toast.info('这次先不管');
                           }}
@@ -272,7 +421,7 @@ export default function ButlerPage() {
           <details className="group rounded-xl border border-line bg-surface">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
               <span>
-                工作日志 · 看了 {checkedCount} 项，上面说了 {result?.items.length ?? 0} 条，压下 {result?.suppressed.length ?? 0} 条
+                工作日志 · 看了 {checkedCount} 项，上面说了 {visibleItems.length} 条，压下 {result?.suppressed.length ?? 0} 条
               </span>
               <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
             </summary>
