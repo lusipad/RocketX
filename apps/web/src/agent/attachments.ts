@@ -42,21 +42,6 @@ interface AgentAttachmentRuntimePath {
   root: string;
 }
 
-/** 把文本内容写进指定 Agent 会话的附件目录，返回主机绝对路径（会话需在运行中） */
-export async function writeAgentSessionFile(
-  sessionId: string,
-  relativePath: string,
-  content: string,
-): Promise<AgentAttachmentRuntimePath> {
-  const metadata = new TextEncoder().encode(JSON.stringify({ sessionId, relativePath }));
-  const bytes = new TextEncoder().encode(content);
-  const request = new Uint8Array(4 + metadata.length + bytes.length);
-  new DataView(request.buffer).setUint32(0, metadata.length, true);
-  request.set(metadata, 4);
-  request.set(bytes, 4 + metadata.length);
-  return invoke<AgentAttachmentRuntimePath>('codex_agent_attachment_write', request);
-}
-
 export async function materializeAgentAttachments(
   sessionId: string,
   messages: readonly RcMessage[],

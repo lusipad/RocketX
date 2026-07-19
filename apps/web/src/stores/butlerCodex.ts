@@ -5,8 +5,12 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
-import { writeAgentSessionFile } from '../agent/attachments';
-import { dispatchCodexImportCompleted, importSessionFileToCodex } from '../agent/codexImport';
+import {
+  cleanupCodexTransferSession,
+  dispatchCodexImportCompleted,
+  importSessionFileToCodex,
+  writeCodexTransferSession,
+} from '../agent/codexImport';
 import { claudeSessionJsonl, type TransferLine } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
@@ -423,19 +427,20 @@ export async function transferConversationToCodexApp(lines: readonly TransferLin
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
   const client = await ensureResidentClient();
-  const sessionId = residentSessionId!;
   const cwd = residentWorkspaceRoot!;
-  const jsonl = claudeSessionJsonl(lines, { sessionId: crypto.randomUUID(), cwd, now: Date.now() });
-  const file = await writeAgentSessionFile(
-    sessionId,
-    `codex-transfer/conversation-${Date.now()}.jsonl`,
-    jsonl,
-  );
-  await importSessionFileToCodex(client, {
-    path: file.path,
-    cwd,
-    title: rocketxThreadName('管家对话'),
-  });
+  // 文件名必须是会话 UUID 且落在 Claude Code 标准会话根下,否则导入器判 session_missing(issue #99)
+  const sessionUuid = crypto.randomUUID();
+  const jsonl = claudeSessionJsonl(lines, { sessionId: sessionUuid, cwd, now: Date.now() });
+  const path = await writeCodexTransferSession(sessionUuid, jsonl);
+  try {
+    await importSessionFileToCodex(client, {
+      path,
+      cwd,
+      title: rocketxThreadName('管家对话'),
+    });
+  } finally {
+    void cleanupCodexTransferSession(sessionUuid);
+  }
 }
 
 /**

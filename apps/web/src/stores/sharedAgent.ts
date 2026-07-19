@@ -21,8 +21,13 @@ import {
   quoteMessageIds,
   selectAgentContextMessages,
 } from '../agent/context';
-import { materializeAgentAttachments, writeAgentSessionFile } from '../agent/attachments';
-import { dispatchCodexImportCompleted, importSessionFileToCodex } from '../agent/codexImport';
+import { materializeAgentAttachments } from '../agent/attachments';
+import {
+  cleanupCodexTransferSession,
+  dispatchCodexImportCompleted,
+  importSessionFileToCodex,
+  writeCodexTransferSession,
+} from '../agent/codexImport';
 import { agentConversationLines, claudeSessionJsonl } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
@@ -893,21 +898,23 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       ? `#${session.workItem.id} ${session.workItem.title}`
       : room?.fname || room?.name || session.environmentName;
     const client = await ensureClient(session);
+    // 文件名必须是会话 UUID 且落在 Claude Code 标准会话根下,否则导入器判 session_missing(issue #99)
+    const sessionUuid = crypto.randomUUID();
     const jsonl = claudeSessionJsonl(lines, {
-      sessionId: crypto.randomUUID(),
+      sessionId: sessionUuid,
       cwd: session.workspaceRoots[0],
       now: Date.now(),
     });
-    const file = await writeAgentSessionFile(
-      session.sessionId,
-      `codex-transfer/hosting-${Date.now()}.jsonl`,
-      jsonl,
-    );
-    await importSessionFileToCodex(client, {
-      path: file.path,
-      cwd: session.workspaceRoots[0],
-      title: rocketxThreadName('托管对话', detail),
-    });
+    const path = await writeCodexTransferSession(sessionUuid, jsonl);
+    try {
+      await importSessionFileToCodex(client, {
+        path,
+        cwd: session.workspaceRoots[0],
+        title: rocketxThreadName('托管对话', detail),
+      });
+    } finally {
+      void cleanupCodexTransferSession(sessionUuid);
+    }
     trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
   },
 

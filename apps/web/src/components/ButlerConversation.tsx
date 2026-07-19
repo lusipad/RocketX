@@ -146,19 +146,33 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
 
       <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto min-h-full w-full max-w-5xl space-y-3 rounded-xl border border-line bg-surface p-5 shadow-sm">
-          {lines.map((line) => (
-            <div key={line.id} className={`flex gap-3 ${line.role === 'user' ? 'justify-end' : ''}`}>
-              {line.role === 'assistant' ? (
-                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary">
-                  <Bot size={15} />
+          {/* 过程显示在它产出的那条回答上方(issue #99):
+              最后一行是 assistant 时,步骤插在它前面——先看做了什么,再看结论 */}
+          {(() => {
+            const splitAt =
+              lines.length > 0 && lines[lines.length - 1].role === 'assistant'
+                ? lines.length - 1
+                : lines.length;
+            const renderLine = (line: (typeof lines)[number]) => (
+              <div key={line.id} className={`flex gap-3 ${line.role === 'user' ? 'justify-end' : ''}`}>
+                {line.role === 'assistant' ? (
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary">
+                    <Bot size={15} />
+                  </div>
+                ) : null}
+                <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
+                  {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
                 </div>
-              ) : null}
-              <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
-                {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
               </div>
-            </div>
-          ))}
-          <ButlerProcess steps={steps} running={running} className="ml-10" />
+            );
+            return (
+              <>
+                {lines.slice(0, splitAt).map(renderLine)}
+                <ButlerProcess steps={steps} running={running} className="ml-10" />
+                {lines.slice(splitAt).map(renderLine)}
+              </>
+            );
+          })()}
           {butlerError ? (
             <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div>
           ) : null}

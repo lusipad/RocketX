@@ -819,6 +819,64 @@ pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
     Ok(host_path(&path))
 }
 
+/// 转移会话文件的落点。codex 的外部会话导入器只探测 Claude Code 标准会话根
+/// （~/.claude/projects/…）下的 JSONL，任意路径一律判 session_missing（issue #99）——
+/// 所以路径完全由本端拼装：前端只提供 UUID 与内容，不接受任意路径，防目录穿越。
+fn transfer_session_path(
+    app: &tauri::AppHandle,
+    session_uuid: &str,
+) -> Result<std::path::PathBuf, String> {
+    if session_uuid.len() != 36
+        || !session_uuid
+            .chars()
+            .all(|value| value.is_ascii_hexdigit() || value == '-')
+    {
+        return Err("invalid transfer session id".to_string());
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("failed to resolve home directory: {error}"))?;
+    Ok(home
+        .join(".claude")
+        .join("projects")
+        .join("rocketx-transfers")
+        .join(format!("{session_uuid}.jsonl")))
+}
+
+#[tauri::command]
+pub async fn codex_transfer_session_write(
+    app: tauri::AppHandle,
+    session_uuid: String,
+    content: String,
+) -> Result<String, String> {
+    if content.len() > MAX_ATTACHMENT_BYTES {
+        return Err("转移内容超过大小上限".to_string());
+    }
+    let path = transfer_session_path(&app, &session_uuid)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "invalid transfer path".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("无法准备转移目录：{error}"))?;
+    std::fs::write(&path, content).map_err(|error| format!("无法写入转移会话：{error}"))?;
+    Ok(host_path(&path))
+}
+
+/// 导入完成后清走源文件：这些 JSONL 若留在 ~/.claude/projects 下，
+/// 会出现在 Claude Code 自己的会话列表里造成困扰。
+#[tauri::command]
+pub async fn codex_transfer_session_cleanup(
+    app: tauri::AppHandle,
+    session_uuid: String,
+) -> Result<(), String> {
+    let path = transfer_session_path(&app, &session_uuid)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法清理转移会话：{error}")),
+    }
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let processes = state

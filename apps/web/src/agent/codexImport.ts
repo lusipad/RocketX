@@ -19,6 +19,26 @@ export function dispatchCodexImportCompleted(params: unknown): void {
 }
 
 /**
+ * 转移会话写进 Claude Code 标准会话根（~/.claude/projects/rocketx-transfers/）。
+ * codex 的外部会话导入器只探测该布局，写在应用自己的附件目录会被判
+ * session_missing——这正是「转到 Codex 无效」的根因（issue #99）。
+ * 路径由 Rust 端拼装，这里只传 UUID 与内容。
+ */
+export async function writeCodexTransferSession(
+  sessionUuid: string,
+  content: string,
+): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('codex_transfer_session_write', { sessionUuid, content });
+}
+
+/** 导入完成后清走源文件，避免它出现在 Claude Code 自己的会话列表里 */
+export async function cleanupCodexTransferSession(sessionUuid: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('codex_transfer_session_cleanup', { sessionUuid }).catch(() => undefined);
+}
+
+/**
  * 把已写盘的会话 JSONL 经官方外部 Agent 导入器导入 Codex，生成一条
  * App 认可来源的原生线程（app-server 直接创建的线程 source 是
  * appServer，Codex App 的会话列表默认只显示交互来源）。
