@@ -95,14 +95,24 @@ function withoutEpicLevel(hierarchy: string[]): string[] {
 }
 
 /**
- * 层级工作项的四种形态（issue：层级可配置）。两个独立开关的组合：
- * 含不含 Feature 层（故事层以上） × 末级 Task 拆不拆【开发】/【测试】。
+ * 层级工作项的形态（issue：层级可配置）。两个独立维度的组合：
+ * 起点层级（Epic 全链 / Feature 起 / 仅故事层） × 末级 Task 拆不拆【开发】/【测试】。
+ * 默认从 Feature 起（issue #65：Epic 属长周期规划，不该默认随手批量建——
+ * 但作为显式选择保留 Epic 全链形态）。
  */
-export type HierarchyLayout = 'feature-split' | 'feature-single' | 'story-split' | 'story-single';
+export type HierarchyLayout =
+  | 'epic-split'
+  | 'epic-single'
+  | 'feature-split'
+  | 'feature-single'
+  | 'story-split'
+  | 'story-single';
 
 export const HIERARCHY_LAYOUT_OPTIONS: { value: HierarchyLayout; label: string }[] = [
-  { value: 'feature-split', label: '完整层级 · 拆开发/测试（默认）' },
-  { value: 'feature-single', label: '完整层级 · 单个 Task' },
+  { value: 'epic-split', label: '完整到 Epic · 拆开发/测试' },
+  { value: 'epic-single', label: '完整到 Epic · 单个 Task' },
+  { value: 'feature-split', label: '从 Feature 起 · 拆开发/测试（默认）' },
+  { value: 'feature-single', label: '从 Feature 起 · 单个 Task' },
   { value: 'story-split', label: '仅故事层 · 拆开发/测试' },
   { value: 'story-single', label: '仅故事层 · 单个 Task' },
 ];
@@ -131,9 +141,9 @@ export function saveHierarchyLayout(layout: HierarchyLayout): void {
 function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-split'): WiTemplate {
   const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
   // 「仅故事层」= 只留 故事层+Task 两级；过程模板没有末级 Task 时该开关无意义,保持完整层级
-  const storyOnly = (layout === 'story-split' || layout === 'story-single') && taskAtEnd;
+  const storyOnly = layout.startsWith('story') && taskAtEnd;
   const effective = storyOnly ? types.slice(-2) : types;
-  const split = layout === 'feature-split' || layout === 'story-split';
+  const split = layout.endsWith('split');
 
   const chain = taskAtEnd ? effective.slice(0, -1) : effective;
   const items: CascadeTemplateItem[] = chain.map((type, index) => ({
@@ -186,9 +196,9 @@ export function workItemTemplatesForTypes(
   const exactHierarchy = processHierarchy
     .map((type) => actualType(type, availableTypes))
     .filter((type): type is string => !!type);
-  const hierarchy = withoutEpicLevel(
-    exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes),
-  );
+  const full = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
+  // Epic 全链形态保留顶层；其余形态沿 issue #65 砍掉 Epic/Initiative
+  const hierarchy = layout.startsWith('epic') ? full : withoutEpicLevel(full);
   return hierarchy.length >= 2
     ? [hierarchyTemplate(hierarchy, layout), ...compatible]
     : compatible;

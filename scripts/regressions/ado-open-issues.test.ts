@@ -203,6 +203,45 @@ test('层级工作项四种形态:含不含 Feature 层 × 拆不拆开发测试
   assert.deepEqual(noTask[0]?.items.map((entry) => entry.type), ['Feature', 'User Story']);
 });
 
+test('Epic 全链形态保留顶层,其余形态维持 issue #65 的砍层默认', () => {
+  const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
+  const types = ['Epic', 'Feature', 'User Story', 'Task'];
+  const hierarchy = ['Epic', 'Feature', 'User Story', 'Task'];
+
+  const [epicSplit] = workItemTemplatesForTypes(templates, types, hierarchy, 'epic-split');
+  assert.deepEqual(
+    epicSplit?.items.map((entry) => entry.type),
+    ['Epic', 'Feature', 'User Story', 'Task', 'Task'],
+  );
+  assert.equal(
+    hierarchyPreview(epicSplit!),
+    'Epic → Feature → User Story → 【开发】Task + 【测试】Task',
+  );
+
+  const [epicSingle] = workItemTemplatesForTypes(templates, types, hierarchy, 'epic-single');
+  assert.deepEqual(
+    epicSingle?.items.map((entry) => entry.type),
+    ['Epic', 'Feature', 'User Story', 'Task'],
+  );
+  assert.equal(hierarchyPreview(epicSingle!), 'Epic → Feature → User Story → Task');
+
+  // 过程里没有 Epic 类型时,Epic 形态自然退化为从现有顶层起,不报错不造类型
+  const [noEpic] = workItemTemplatesForTypes(
+    templates,
+    ['Feature', 'User Story', 'Task'],
+    ['Feature', 'User Story', 'Task'],
+    'epic-split',
+  );
+  assert.deepEqual(noEpic?.items.map((entry) => entry.type), ['Feature', 'User Story', 'Task', 'Task']);
+
+  // 默认形态回归锚:feature-split 仍然砍 Epic(#65 语义不回退)
+  const [featureDefault] = workItemTemplatesForTypes(templates, types, hierarchy, 'feature-split');
+  assert.deepEqual(
+    featureDefault?.items.map((entry) => entry.type),
+    ['Feature', 'User Story', 'Task', 'Task'],
+  );
+});
+
 test('过程层级读取使用 Server 2022 API 并保留真实类型名', async () => {
   let requested = '';
   globalThis.fetch = (async (input: RequestInfo | URL) => {
