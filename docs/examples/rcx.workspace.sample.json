@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "name": "示例团队工作区(复制后改成自己的地址)",
+  "rocketChat": { "url": "https://chat.example.com" },
+  "ado": {
+    "url": "http://ado.example.com/tfs/DefaultCollection",
+    "mode": "direct",
+    "auth": "ntlm",
+    "webUrl": "http://ado.example.com/tfs/DefaultCollection"
+  },
+  "workItemTemplates": {
+    "url": "https://git.example.com/team/rocketx-config/raw/main/wi-templates.json"
+  },
+  "ai": {
+    "providers": [
+      {
+        "id": "team-default",
+        "kind": "openai-compatible",
+        "baseUrl": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "name": "团队默认模型"
+      }
+    ]
+  },
+  "update": {
+    "source": "dir",
+    "location": "\\\\fileserver\\share\\rocketx"
+  },
+  "workItems": {
+    "hierarchyLayout": "feature-split"
+  }
+}
