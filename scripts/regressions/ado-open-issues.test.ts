@@ -12,10 +12,12 @@ import {
 } from '../../apps/web/src/lib/adoDirect';
 import { fetchPullRequest, parseAdoUrl } from '../../apps/web/src/lib/ado';
 import {
+  hierarchyPreview,
   loadLastWorkItemProject,
   preferredWorkItemProject,
   saveLastWorkItemProject,
   workItemTemplatesForTypes,
+  type HierarchyLayout,
 } from '../../apps/web/src/stores/wiTemplates';
 import { pullRequestReviewSummary } from '../../apps/web/src/components/AdoEntityLink';
 import { AdoClient } from '../../services/ado-bridge/src/ado';
@@ -144,6 +146,63 @@ test('非 Agile 项目按服务器真实类型恢复层级模板，且不含 Epi
   }
 });
 
+test('层级工作项四种形态:含不含 Feature 层 × 拆不拆开发测试(用户配置)', () => {
+  const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
+  const types = ['Epic', 'Feature', 'User Story', 'Task'];
+  const hierarchy = ['Epic', 'Feature', 'User Story', 'Task'];
+
+  const cases: { layout: HierarchyLayout; expected: string[]; preview: string }[] = [
+    {
+      layout: 'feature-split',
+      expected: ['Feature', 'User Story', 'Task', 'Task'],
+      preview: 'Feature → User Story → 【开发】Task + 【测试】Task',
+    },
+    {
+      layout: 'feature-single',
+      expected: ['Feature', 'User Story', 'Task'],
+      preview: 'Feature → User Story → Task',
+    },
+    {
+      layout: 'story-split',
+      expected: ['User Story', 'Task', 'Task'],
+      preview: 'User Story → 【开发】Task + 【测试】Task',
+    },
+    {
+      layout: 'story-single',
+      expected: ['User Story', 'Task'],
+      preview: 'User Story → Task',
+    },
+  ];
+
+  for (const item of cases) {
+    const [auto] = workItemTemplatesForTypes(templates, types, hierarchy, item.layout);
+    assert.equal(auto?.name, '层级工作项', item.layout);
+    assert.deepEqual(auto?.items.map((entry) => entry.type), item.expected, item.layout);
+    assert.equal(hierarchyPreview(auto!), item.preview, item.layout);
+    // 单 Task 形态标题不带前缀,拆分形态两条都带
+    const tasks = auto!.items.filter((entry) => entry.type === 'Task');
+    if (item.layout.endsWith('split')) {
+      assert.deepEqual(tasks.map((entry) => entry.title), ['【开发】{title}', '【测试】{title}'], item.layout);
+    } else {
+      assert.deepEqual(tasks.map((entry) => entry.title), ['{title}'], item.layout);
+    }
+    // 父子链完整:每一项(除根)都挂在前一层
+    for (const [index, entry] of auto!.items.entries()) {
+      if (index === 0) assert.equal(entry.parent, undefined, item.layout);
+      else assert.ok(entry.parent !== undefined && entry.parent < index, item.layout);
+    }
+  }
+
+  // 过程模板末级不是 Task 时,「仅故事层」退回完整层级(开关无意义不硬砍)
+  const noTask = workItemTemplatesForTypes(
+    templates,
+    ['Feature', 'User Story'],
+    ['Feature', 'User Story'],
+    'story-split',
+  );
+  assert.deepEqual(noTask[0]?.items.map((entry) => entry.type), ['Feature', 'User Story']);
+});
+
 test('过程层级读取使用 Server 2022 API 并保留真实类型名', async () => {
   let requested = '';
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -179,7 +238,9 @@ test('固定模板创建时保留服务器返回的精确类型名', () => {
     }],
     ['FEATURE', 'USER STORY', 'TASK'],
   );
-  assert.deepEqual(resolved[0]?.items.map((item) => item.type), ['FEATURE', 'USER STORY', 'TASK']);
+  // 「层级工作项」恒排第一,自定义固定模板跟在后面——按名取再断言类型名精确保留
+  const fixed = resolved.find((template) => template.name === 'Feature 全套');
+  assert.deepEqual(fixed?.items.map((item) => item.type), ['FEATURE', 'USER STORY', 'TASK']);
 });
 
 test('创建工作项优先恢复上次项目，再回退配置默认值和首项', () => {
