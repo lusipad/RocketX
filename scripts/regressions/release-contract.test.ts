@@ -10,8 +10,11 @@ import {
 } from '../verify-release.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
-const rootManifest = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8'));
-const CURRENT_VERSION: string = rootManifest.version;
+
+async function currentVersion(): Promise<string> {
+  const manifest = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8'));
+  return manifest.version;
+}
 
 test('发布标签只接受严格 SemVer', () => {
   assert.equal(parseReleaseTag('v1.0.0'), '1.0.0');
@@ -20,19 +23,22 @@ test('发布标签只接受严格 SemVer', () => {
   }
 });
 
-test(`仓库全部公开版本面与 v${CURRENT_VERSION} 对齐`, async () => {
-  await verifyVersions(CURRENT_VERSION);
+test('仓库全部公开版本面与当前版本对齐', async () => {
+  const version = await currentVersion();
+  await verifyVersions(version);
 });
 
-test('0.x 发布不冒充 1.0 成熟度门禁', () => {
-  assert.equal(requiresMaturityEvidence(CURRENT_VERSION), false);
+test('0.x 发布不冒充 1.0 成熟度门禁', async () => {
+  const version = await currentVersion();
+  assert.equal(requiresMaturityEvidence(version), false);
   assert.equal(requiresMaturityEvidence('1.0.0'), true);
   assert.equal(requiresMaturityEvidence('2.3.4'), true);
 });
 
 test('待发布版本可以从 CHANGELOG 提取用户向 Release notes', async () => {
-  const notes = await releaseNotes(CURRENT_VERSION);
-  const versionEscaped = CURRENT_VERSION.replaceAll('.', '\\.');
+  const version = await currentVersion();
+  const notes = await releaseNotes(version);
+  const versionEscaped = version.replaceAll('.', '\\.');
   assert.match(notes, new RegExp(`^# RocketX v${versionEscaped}`, 'm'));
   assert.doesNotMatch(notes, /^## v0\.15/m);
 });
