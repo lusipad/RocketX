@@ -9,7 +9,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 ```text
 ┌──────────────────────────────────────────┐
 │ RocketX Web / Desktop                    │
-│ Messages · Today · AI Assistant · Tasks · Codex │
+│ Messages · Butler · Tasks · Calendar · Workbench │
 └──────────────┬───────────────────────────┘
                │ public REST + WebSocket APIs
         ┌──────▼──────┐       ┌──────────────────┐
@@ -70,7 +70,7 @@ Desktop development:
 pnpm --filter @rcx/desktop dev
 ```
 
-After signing in, open **Codex** from the primary navigation to chat or work directly in a chosen local project directory. **AI Assistant** searches messages and work data, queries Azure DevOps work items, pull requests, and builds, and prepares work-item drafts; explicit requests run locally while ambiguous intent uses `codex exec`. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers under **Settings → AI Steward** are optional enhancements for summaries, reviews, and text features; API keys remain in the operating-system credential store.
+After signing in, open **Butler** to search messages and work data, query Azure DevOps work items, pull requests, and builds, prepare work-item drafts, or run recurring reviews. On desktop, Butler can use a local Codex CLI as its brain, and Butler or shared-agent conversations can be transferred into the native Codex App / CLI thread list with their context intact. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers under **Settings → AI** remain optional; API keys stay in the operating-system credential store.
 
 ## Verify changes
 
