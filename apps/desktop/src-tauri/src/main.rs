@@ -487,6 +487,8 @@ fn main() {
             proc::codex_app_server_stop,
             proc::codex_agent_workspace,
             proc::butler_home_dir,
+            proc::read_update_manifest_dir,
+            proc::launch_update_installer,
             proc::codex_agent_attachment_write,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
