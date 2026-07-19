@@ -224,7 +224,7 @@ export default function AiSettings() {
           </Row>
           <Row
             label="人设"
-            hint="只影响聊天里的 AI（AI 页面、房间 AI 面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，Codex 大脑会自动换用新线程。"
+            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，Codex 大脑会自动换用新线程。"
           >
             <textarea
               aria-label="AI 人设"

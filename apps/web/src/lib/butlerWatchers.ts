@@ -31,7 +31,7 @@ function localDate(now: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-/** 从已有 store 快照中找出值得放到「今日」的事项；不发送系统通知。 */
+/** 从已有 store 快照中找出值得放到管家桌面的事项；不发送系统通知。 */
 export function checkWatchers(snapshot: ButlerWatcherSnapshot, now: number): ButlerWatcherEvent[] {
   const cards: ButlerWatcherEvent[] = [];
 

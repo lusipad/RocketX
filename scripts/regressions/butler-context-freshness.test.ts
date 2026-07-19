@@ -116,9 +116,9 @@ test('「新对话」清空对话与持久化，从全新上下文开始', async
   }
 });
 
-test('两个 AI 入口都有「新对话」按钮', () => {
+test('两个管家对话表面都有「新对话」按钮', () => {
   for (const path of [
-    'apps/web/src/pages/AiAssistantPage.tsx',
+    'apps/web/src/components/ButlerConversation.tsx',
     'apps/web/src/components/ButlerPanel.tsx',
   ]) {
     const source = readFileSync(path, 'utf8');

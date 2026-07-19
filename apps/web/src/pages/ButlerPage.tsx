@@ -3,9 +3,12 @@ import {
   Bell,
   ChevronDown,
   Loader2,
+  MessageCircle,
   RefreshCw,
   Send,
 } from 'lucide-react';
+import ButlerConversation from '../components/ButlerConversation';
+import ButlerRoutines from '../components/ButlerRoutines';
 import { ledgerFromTodos, type LedgerEntry } from '../lib/butlerLedger';
 import {
   runButlerRoundsNow,
@@ -74,6 +77,9 @@ export default function ButlerPage() {
   const [input, setInput] = useState('');
   const [hiddenProposals, setHiddenProposals] = useState<Set<string>>(() => new Set());
   const [mutes, setMutes] = useState(() => listMutes());
+  const conversationOpen = useUI((state) => state.butlerConversationOpen);
+  const openConversation = useUI((state) => state.openButlerConversation);
+  const closeConversation = useUI((state) => state.closeButlerConversation);
   const todos = useTodos((state) => state.todos);
   const lastRoundsAt = useButlerRoundsRunner((state) => state.lastRoundsAt);
   const lastResult = useButlerRoundsRunner((state) => state.lastResult);
@@ -136,8 +142,12 @@ export default function ButlerPage() {
     const text = input.trim();
     if (!text) return;
     setInput('');
-    useUI.getState().setModule('ai-assistant');
+    openConversation();
     void useButler.getState().ask(text);
+  }
+
+  if (conversationOpen) {
+    return <ButlerConversation onCollapse={closeConversation} />;
   }
 
   return (
@@ -307,28 +317,39 @@ export default function ButlerPage() {
               )}
             </div>
           </details>
+
+          <ButlerRoutines />
         </div>
       </main>
 
-      <form onSubmit={submitQuestion} className="shrink-0 border-t border-line bg-surface px-6 py-3">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 focus-within:border-primary/50">
-          <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="问管家一句……"
-            aria-label="问管家"
-            className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
-          />
+      <div className="shrink-0 border-t border-line bg-surface px-6 py-3">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-2">
           <button
-            type="submit"
-            disabled={!input.trim()}
-            aria-label="发送"
-            className="rounded-md bg-primary p-2 text-white hover:bg-primary-hover disabled:opacity-40"
+            type="button"
+            onClick={openConversation}
+            className="flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink-2 hover:bg-fill-hover hover:text-ink"
           >
-            <Send size={15} />
+            <MessageCircle size={14} />展开对话
           </button>
+          <form onSubmit={submitQuestion} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 focus-within:border-primary/50">
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="问管家一句……"
+              aria-label="问管家"
+              className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
+            />
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              aria-label="发送"
+              className="rounded-md bg-primary p-2 text-white hover:bg-primary-hover disabled:opacity-40"
+            >
+              <Send size={15} />
+            </button>
+          </form>
         </div>
-      </form>
+      </div>
     </div>
   );
 }

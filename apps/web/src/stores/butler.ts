@@ -66,7 +66,7 @@ export interface ButlerState {
   reset: () => void;
 }
 
-/** 按 服务器+账号 隔离保存的对话记录（issue：AI 页面对话重启即丢） */
+/** 按服务器+账号隔离保存的管家对话记录。 */
 interface PersistedButler {
   lines: ButlerLine[];
   history: AiMessage[];
@@ -168,7 +168,7 @@ function line(role: ButlerLine['role'], text: string): ButlerLine {
 }
 
 function welcomeLines(): ButlerLine[] {
-  return [line('assistant', '我是你的 AI。消息、待办、日程、工作项都可以直接问我。')];
+  return [line('assistant', '我是你的管家。消息、待办、日程、工作项都可以直接问我。')];
 }
 
 function activityFor(event: AgentLoopEvent): string | null {

@@ -41,7 +41,7 @@ export default function ButlerPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasConversation = lines.some((line) => line.role === 'user');
 
-  // 恢复本账号保存的对话记录（与 AI 页面共用同一份）
+  // 恢复本账号保存的对话记录（与管家桌面对话共用同一份）
   useEffect(() => {
     if (userId) void hydrate();
   }, [hydrate, userId]);
