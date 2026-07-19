@@ -413,7 +413,7 @@ export async function discardResidentCodexThread(): Promise<void> {
 }
 
 /**
- * 把 AI 对话转移进 Codex：经官方外部 Agent 会话导入器
+ * 把管家对话转移进 Codex：经官方外部 Agent 会话导入器
  * （externalAgentConfig/import）生成一条 App 认可来源的原生线程。
  * app-server 直接创建的线程 source 是 appServer，Codex App 的会话列表
  * 默认只显示交互来源，所以要在 App 里可见只能走导入。返回的是快照
@@ -434,12 +434,12 @@ export async function transferConversationToCodexApp(lines: readonly TransferLin
   await importSessionFileToCodex(client, {
     path: file.path,
     cwd,
-    title: rocketxThreadName('AI 对话'),
+    title: rocketxThreadName('管家对话'),
   });
 }
 
 /**
- * 停止 AI 页面当前正在进行的回答：先请求服务端中断本轮，再就地完成
+ * 停止管家当前正在进行的回答：先请求服务端中断本轮，再就地完成
  * 本轮 Promise（保留已生成的部分内容）。没有进行中的轮次时是 no-op。
  */
 export async function stopButlerCodexTurn(): Promise<void> {

@@ -335,7 +335,7 @@ export function createButlerTools(): ButlerTool[] {
     },
     {
       name: 'list_mentions',
-      description: '列出当前「今日」收件箱中直接 @我 的消息及是否已处理；返回最多 20 条。',
+      description: '列出当前 @我 收件箱中的消息及是否已处理；返回最多 20 条。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       execute: async () => listMentions(),
     },

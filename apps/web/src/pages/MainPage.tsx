@@ -49,6 +49,7 @@ import {
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
 import { useCodexRuntime } from '../stores/codexRuntime';
+import { useToday } from '../stores/today';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -102,7 +103,7 @@ export default function MainPage() {
   const wasRightPanelOpen = useRef(rightPanelOpen);
 
   useEffect(() => {
-    void init();
+    void init().then(() => useToday.getState().refreshMentions());
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
     void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);

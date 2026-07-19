@@ -87,9 +87,9 @@ test('Codex 常驻线程随对话一并保存，重启后走 resume 接续', () 
 
   const butlerCodex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
   assert.match(butlerCodex, /residentStatus = 'interrupted';/);
-  // 两个入口都要触发恢复
+  // 两个管家对话表面都要触发恢复
   for (const page of [
-    'apps/web/src/pages/AiAssistantPage.tsx',
+    'apps/web/src/components/ButlerConversation.tsx',
     'apps/web/src/components/ButlerPanel.tsx',
   ]) {
     assert.match(readFileSync(page, 'utf8'), /hydrate/u);

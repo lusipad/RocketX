@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  BUTLER_ROUNDS_SYSTEM_PROMPT,
   isRoundsResult,
   latestBuildsByDefinitionProject,
   runButlerRounds,
@@ -9,6 +10,13 @@ import {
 import type { AiChatRequest, AiChunk } from '../../apps/web/src/kernel/ai/provider';
 import type { AiChatGateway } from '../../apps/web/src/kernel/ai/features/structured-output';
 import { ledgerFromTodos } from '../../apps/web/src/lib/butlerLedger';
+import {
+  addMute,
+  listMutes,
+  matchesMute,
+  removeMute,
+} from '../../apps/web/src/lib/butlerMutes';
+import { acceptButlerProposal } from '../../apps/web/src/lib/butlerProposalActions';
 import {
   codexEphemeralGateway,
   runRoundsWithBrain,
@@ -93,6 +101,7 @@ function input(overrides: Partial<RoundsInput> = {}): RoundsInput {
     iterationEndDate: null,
     localTime: '2026-07-19T12:00:00+08:00',
     lastRoundsAt: null,
+    mutes: [],
     ...overrides,
   };
 }
@@ -159,6 +168,150 @@ test('给不出具体动作的条目会进入工作日志', async () => {
   assert.deepEqual(result.suppressed, [{ ref: 'todo:t1', reason: '目前只需要观察' }]);
 });
 
+test('提议 who/due 合法通过，缺省保持兼容，非法日期让整轮失败', async () => {
+  const proposal = {
+    kind: 'add-commitment',
+    ref: 'todo:t1',
+    reason: '这是你答应发布组的事',
+    who: '发布组',
+    due: '2026-07-20',
+  };
+  const accepted = await runButlerRounds(input(), gateway([{
+    content: JSON.stringify({
+      headline: '有一项承诺要记下',
+      summary: '补上对象和日期后更不容易漏。',
+      items: [],
+      proposals: [proposal],
+      suppressed: [],
+    }),
+    finishReason: 'stop',
+  }]));
+  assert.deepEqual(accepted.proposals[0], proposal);
+
+  const compatible = await runButlerRounds(input(), gateway([{
+    content: JSON.stringify({
+      headline: '有一项承诺要记下',
+      summary: '旧格式仍然有效。',
+      items: [],
+      proposals: [{ kind: 'add-commitment', ref: 'todo:t1', reason: '需要补记承诺' }],
+      suppressed: [],
+    }),
+    finishReason: 'stop',
+  }]));
+  assert.equal(compatible.proposals[0].who, undefined);
+  assert.equal(compatible.proposals[0].due, undefined);
+
+  await assert.rejects(() => runButlerRounds(input(), gateway([{
+    content: JSON.stringify({
+      headline: '日期不合法',
+      summary: '整轮都不能采用。',
+      items: [],
+      proposals: [{ ...proposal, due: '2026-02-30' }],
+      suppressed: [],
+    }),
+    finishReason: 'stop',
+  }])), /due 不是有效日期/);
+});
+
+test('静音按双向包含命中，并由代码把简报条目降入工作日志', async () => {
+  const storage = new MemoryStorage();
+  const mute = addMute('  发布说明  ', storage, 1);
+  assert.ok(mute);
+  assert.equal(matchesMute('提交发布说明', listMutes(storage)), true);
+  assert.equal(matchesMute('说明', listMutes(storage)), true);
+  assert.equal(matchesMute('构建失败', listMutes(storage)), false);
+
+  let mutedHints: string[] = [];
+  const result = await runButlerRounds(input({ mutes: listMutes(storage) }), gateway([{
+    content: resultJson([{ ref: 'todo:t1', why: '今天到期', suggestedAction: '确认交付' }]),
+    finishReason: 'stop',
+  }], (request) => {
+    mutedHints = (JSON.parse(request.messages[1].content) as { mutedHints: string[] }).mutedHints;
+  }));
+  assert.deepEqual(mutedHints, ['发布说明']);
+  assert.deepEqual(result.items, []);
+  assert.deepEqual(result.suppressed, [{ ref: 'todo:t1', reason: '你说过少提这类' }]);
+
+  removeMute(mute.id, storage);
+  const afterRemoval = await runButlerRounds(input({ mutes: listMutes(storage) }), gateway([{
+    content: resultJson([{ ref: 'todo:t1', why: '今天到期', suggestedAction: '确认交付' }]),
+    finishReason: 'stop',
+  }]));
+  assert.equal(afterRemoval.items.length, 1);
+});
+
+test('静音最多保留 50 条，超出时裁掉最旧条目', () => {
+  const storage = new MemoryStorage();
+  for (let index = 0; index < 51; index++) addMute(`条目 ${index}`, storage, index);
+  const mutes = listMutes(storage);
+  assert.equal(mutes.length, 50);
+  assert.equal(mutes[0].text, '条目 1');
+  assert.equal(mutes[49].text, '条目 50');
+});
+
+test('提议入账会更新承诺、安排今日、创建 ADO 待办并完成等待', () => {
+  const todos: Todo[] = [
+    { id: 'commitment', title: '发发布说明', done: false, createdAt: 1 },
+    { id: 'today', title: '今天处理', done: false, createdAt: 2 },
+    { id: 'wait', title: '等回复', waitingFor: 'Alice', done: false, createdAt: 3 },
+  ];
+  const added: Array<Omit<Todo, 'id' | 'done' | 'createdAt'>> = [];
+  const state = {
+    todos,
+    add(todo: Omit<Todo, 'id' | 'done' | 'createdAt'>) {
+      added.push(todo);
+      return 'new';
+    },
+    update(id: string, patch: Partial<Pick<Todo, 'note' | 'due' | 'committedTo' | 'waitingFor'>>) {
+      const todo = todos.find((item) => item.id === id);
+      if (todo) Object.assign(todo, patch);
+    },
+    toggle(id: string) {
+      const todo = todos.find((item) => item.id === id);
+      if (todo) todo.done = !todo.done;
+    },
+  };
+  const common = {
+    today: '2026-07-19',
+    todoState: state,
+    workItems: [{
+      id: 42,
+      title: '修复发布流水线',
+      type: 'Task',
+      state: 'Active',
+      project: 'Alpha',
+      webUrl: 'https://example.test/42',
+    }],
+  };
+
+  assert.equal(acceptButlerProposal({
+    kind: 'add-commitment', ref: 'todo:commitment', reason: '补记', who: '发布组', due: '2026-07-20',
+  }, common), 'applied');
+  assert.equal(todos[0].committedTo, '发布组');
+  assert.equal(todos[0].due, '2026-07-20');
+
+  assert.equal(acceptButlerProposal({
+    kind: 'schedule-today', ref: 'todo:today', reason: '今天处理',
+  }, common), 'applied');
+  assert.equal(todos[1].due, '2026-07-19');
+
+  assert.equal(acceptButlerProposal({
+    kind: 'schedule-today', ref: 'wi:42', reason: '今天处理',
+  }, common), 'applied');
+  assert.deepEqual(added[0], {
+    source: 'ado',
+    title: '修复发布流水线',
+    adoWorkItemId: 42,
+    adoProject: 'Alpha',
+    due: '2026-07-19',
+  });
+
+  assert.equal(acceptButlerProposal({
+    kind: 'close-wait', ref: 'ledger:wait', reason: '已经回复',
+  }, common), 'applied');
+  assert.equal(todos[2].done, true);
+});
+
 function build(overrides: Partial<Build>): Build {
   return {
     id: 1,
@@ -189,6 +342,32 @@ test('同一流水线失败后成功时快照只保留后来的成功', async ()
     serializedBuilds = (JSON.parse(request.messages[1].content) as { builds: Array<{ result: string }> }).builds;
   }));
   assert.deepEqual(serializedBuilds.map((item) => item.result), ['succeeded']);
+});
+
+test('新指派判断所需的 ADO 待办关联和指派人会进入快照', async () => {
+  let snapshot: {
+    todos: Array<{ adoWorkItemId?: number; adoProject?: string }>;
+    workItems: Array<{ assignedTo?: string }>;
+  } | undefined;
+  const todo = input().todos[0];
+  await runButlerRounds(input({
+    todos: [{ ...todo, adoWorkItemId: 42, adoProject: 'Alpha' }],
+    workItems: [{
+      id: 42,
+      title: '修复发布流水线',
+      type: 'Task',
+      state: 'Active',
+      project: 'Alpha',
+      assignedTo: 'Alice',
+      webUrl: 'https://example.test/42',
+    }],
+  }), gateway([{ content: resultJson(), finishReason: 'stop' }], (request) => {
+    snapshot = JSON.parse(request.messages[1].content) as typeof snapshot;
+  }));
+  assert.equal(snapshot?.todos[0].adoWorkItemId, 42);
+  assert.equal(snapshot?.todos[0].adoProject, 'Alpha');
+  assert.equal(snapshot?.workItems[0].assignedTo, 'Alice');
+  assert.match(BUTLER_ROUNDS_SYSTEM_PROMPT, /schedule-today.*wi:<id>/);
 });
 
 test('有效 finishTime 不会被缺失时间的历史条目覆盖', () => {

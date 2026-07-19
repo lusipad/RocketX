@@ -85,6 +85,41 @@ test('hydrate 使用可注入存储并补齐默认停用的内置例行事务', 
   }
 });
 
+test('桌面管理可切换例行事务并持久化', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore([routine()]);
+
+  try {
+    useRoutines.getState().setEnabled('routine-1', false);
+    assert.equal(useRoutines.getState().routines[0].enabled, false);
+    const saved = JSON.parse(storage.get('rcx-butler-v1:routines') ?? '{}') as { routines?: Routine[] };
+    assert.equal(saved.routines?.[0]?.enabled, false);
+  } finally {
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
+test('桌面关闭提醒后从事件卡与持久化中一并移除', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore([routine()]);
+  useRoutines.setState({
+    eventCards: [{ id: 'event:mention:r1', kind: 'mention-stale', title: '@我未回应', detail: '仍有一条', at: MONDAY_0830 }],
+  });
+
+  try {
+    useRoutines.getState().dismissCard('event:mention:r1');
+    assert.deepEqual(useRoutines.getState().eventCards, []);
+    const saved = JSON.parse(storage.get('rcx-butler-v1:routines') ?? '{}') as { eventCards?: unknown[] };
+    assert.deepEqual(saved.eventCards, []);
+  } finally {
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
 test('dueRoutines 只在匹配日期到点后触发一次', () => {
   const daily = routine();
   assert.equal(dueRoutines([daily], MONDAY_0829).length, 0);

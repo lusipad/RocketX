@@ -6,7 +6,7 @@ import { agentConversationLines, claudeSessionJsonl } from '../../apps/web/src/a
 test('对话导出为导入器认可的 JSONL：uuid 链式串联，用户/助手消息形态正确', () => {
   const jsonl = claudeSessionJsonl(
     [
-      { role: 'assistant', text: '我是你的 AI。' },
+      { role: 'assistant', text: '我是你的管家。' },
       { role: 'user', text: '第一问' },
       { role: 'assistant', text: '📌 已记录记忆' },
       { role: 'assistant', text: '第一答' },
@@ -64,7 +64,7 @@ test('转移走官方 externalAgentConfig/import（与 codex-plugin-cc 同款机
   assert.match(codex, /externalAgentConfig\/import\/completed/);
   assert.match(codex, /dispatchCodexImportCompleted/);
 
-  const page = readFileSync('apps/web/src/pages/AiAssistantPage.tsx', 'utf8');
+  const page = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   assert.match(page, /transferConversationToCodexApp/);
   assert.match(page, /转到 Codex/);
 

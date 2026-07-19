@@ -917,7 +917,7 @@ export default function WorkbenchPage() {
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
                   <Calendar size={15} className="text-primary" />
-                  <span className="text-sm font-semibold text-ink">今日日程</span>
+                  <span className="text-sm font-semibold text-ink">今天日程</span>
                 </div>
                 <button
                   onClick={() => setModule('calendar')}

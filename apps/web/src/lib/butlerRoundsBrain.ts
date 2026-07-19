@@ -3,6 +3,11 @@ import {
   type RoundsInput,
   type RoundsResult,
 } from '../kernel/ai/features/butler-rounds';
+import {
+  runButlerDraft,
+  type ButlerDraftInput,
+  type ButlerDraftResult,
+} from '../kernel/ai/features/butler-draft';
 import type { AiChatGateway } from '../kernel/ai/features/structured-output';
 import { getAiBus } from '../kernel/ai/runtime';
 import { runButlerCodexEphemeral } from '../stores/butlerCodex';
@@ -30,15 +35,23 @@ export function codexEphemeralGateway(): AiChatGateway {
   };
 }
 
-export async function runRoundsWithBrain(input: RoundsInput): Promise<RoundsResult> {
+function selectedButlerGateway(): AiChatGateway {
   if (getButlerBrain() === 'codex') {
     const availability = codexBrainAvailability();
     if (!availability.available) {
       throw new Error(`${availability.reason ?? 'Codex 大脑暂不可用'}，可在设置中切换为 API 大脑`);
     }
-    return runButlerRounds(input, codexEphemeralGateway());
+    return codexEphemeralGateway();
   }
-  return runButlerRounds(input, getAiBus());
+  return getAiBus();
+}
+
+export async function runRoundsWithBrain(input: RoundsInput): Promise<RoundsResult> {
+  return runButlerRounds(input, selectedButlerGateway());
+}
+
+export async function runDraftWithBrain(input: ButlerDraftInput): Promise<ButlerDraftResult> {
+  return runButlerDraft(input, selectedButlerGateway());
 }
 
 export function setButlerRoundsCodexRunner(runner: ButlerRoundsCodexRunner): () => void {
