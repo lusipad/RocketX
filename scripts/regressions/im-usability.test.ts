@@ -73,6 +73,7 @@ test('模块快捷键保留执行间直达顺序', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'today',
+    'butler-view',
     'todos',
     'calendar',
     'workbench',
