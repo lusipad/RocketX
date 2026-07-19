@@ -25,12 +25,24 @@ import {
   resetPersona,
   setPersona,
 } from '../lib/butlerProfile';
+import {
+  loadCoffeeConfig,
+  saveCoffeeConfig,
+  type CoffeeTimeConfig,
+} from '../lib/coffeeTime';
+import {
+  AXIS_META,
+  DEFAULT_AXES,
+  loadPersonality,
+  savePersonality,
+  type PersonalityAxes,
+} from '../lib/butlerPersonality';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
-import { RadioGroup, Row } from './SettingControls';
+import { RadioGroup, Row, Slider, Toggle } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -58,6 +70,8 @@ export default function AiSettings() {
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
   const [persona, setPersonaState] = useState<string>(getPersona);
   const [savedPersona, setSavedPersona] = useState<string>(getPersona);
+  const [coffee, setCoffee] = useState<CoffeeTimeConfig>(loadCoffeeConfig);
+  const [personality, setPersonalityState] = useState<PersonalityAxes>(loadPersonality);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -267,6 +281,111 @@ export default function AiSettings() {
               </Row>
             </>
           )}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">咖啡时间</h2>
+        <div className="rounded-lg border border-line bg-surface px-4">
+          <Row label="启用" hint="到设定时间自动切到管家视图，汇总需要关注的事项。错过了下次打开客户端也会补上。" inline>
+            <Toggle
+              checked={coffee.enabled}
+              onChange={(enabled) => {
+                const next = { ...coffee, enabled };
+                setCoffee(next);
+                saveCoffeeConfig(next);
+              }}
+            />
+          </Row>
+          {coffee.enabled && (
+            <Row label="触发时间" hint="每天到这些时间点推送咖啡时间，可增减">
+              <div className="flex flex-wrap items-center gap-2">
+                {coffee.times.map((time, index) => (
+                  <div key={index} className="flex items-center gap-1">
+                    <input
+                      type="time"
+                      value={time}
+                      onChange={(event) => {
+                        const times = [...coffee.times];
+                        times[index] = event.target.value;
+                        times.sort();
+                        const next = { ...coffee, times };
+                        setCoffee(next);
+                        saveCoffeeConfig(next);
+                      }}
+                      className={`${inputCls} w-[8rem]`}
+                    />
+                    {coffee.times.length > 1 && (
+                      <button
+                        title="移除此时间点"
+                        onClick={() => {
+                          const times = coffee.times.filter((_, i) => i !== index);
+                          const next = { ...coffee, times };
+                          setCoffee(next);
+                          saveCoffeeConfig(next);
+                        }}
+                        className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-danger"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  onClick={() => {
+                    const next = { ...coffee, times: [...coffee.times, '12:00'].sort() };
+                    setCoffee(next);
+                    saveCoffeeConfig(next);
+                  }}
+                  className="flex h-9 items-center gap-1 rounded-md border border-line px-2.5 text-sm text-ink-2 hover:bg-fill-hover"
+                >
+                  <Plus size={14} /> 添加
+                </button>
+              </div>
+            </Row>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">管家性格</h2>
+        <p className="mb-2 text-xs text-ink-3">四条轴的组合覆盖从"极简效率"到"温和关怀"的跨度，影响管家的表达方式。</p>
+        <div className="rounded-lg border border-line bg-surface px-4">
+          {AXIS_META.map((axis) => (
+            <Row
+              key={axis.key}
+              label={axis.label}
+              hint={`${axis.low} ← → ${axis.high}`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-16 text-right text-xs text-ink-3">{axis.low}</span>
+                <Slider
+                  value={personality[axis.key]}
+                  onChange={(v) => {
+                    const next = { ...personality, [axis.key]: v };
+                    setPersonalityState(next);
+                    savePersonality(next);
+                  }}
+                  min={1}
+                  max={5}
+                />
+                <span className="w-16 text-xs text-ink-3">{axis.high}</span>
+              </div>
+            </Row>
+          ))}
+          <Row label="" hint="">
+            <button
+              onClick={() => {
+                setPersonalityState(DEFAULT_AXES);
+                savePersonality(DEFAULT_AXES);
+                toast.success('已恢复默认性格（克制、预判、不越界）');
+              }}
+              disabled={JSON.stringify(personality) === JSON.stringify(DEFAULT_AXES)}
+              className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+            >
+              恢复默认
+            </button>
+          </Row>
         </div>
       </section>
 

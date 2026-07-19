@@ -6,6 +6,7 @@ export type ModuleKey = string;
 export const MODULE_ORDER: ModuleKey[] = [
   'messages',
   'today',
+  'butler-view',
   'todos',
   'calendar',
   'workbench',

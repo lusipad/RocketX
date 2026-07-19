@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_bot;
+mod butler_db;
 mod diagnostics;
 mod ipmsg;
 mod lan;
@@ -473,6 +474,13 @@ fn main() {
             ai_secret_get,
             ai_secret_delete,
             codex_exec_once,
+            butler_db::butler_todo_add,
+            butler_db::butler_todo_update,
+            butler_db::butler_todo_delete,
+            butler_db::butler_todo_get,
+            butler_db::butler_todo_list,
+            butler_db::butler_todo_overdue,
+            butler_db::butler_todo_migrate_from_json,
             proc::codex_runtime_probe,
             proc::codex_app_server_start,
             proc::codex_app_server_write,
@@ -547,6 +555,14 @@ fn main() {
             None,
         ))
         .setup(|app| {
+            // 管家待办池 SQLite
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| std::io::Error::other(format!("无法获取应用数据目录：{error}")))?;
+            let db = butler_db::init_db(data_dir).map_err(std::io::Error::other)?;
+            app.manage(db);
+
             // 系统托盘：显示 / 退出（issue #3）
             let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

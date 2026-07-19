@@ -405,7 +405,7 @@ export default function MainPage() {
         <SettingsPage />
       )}
       {(connection === 'reconnecting' || connection === 'connecting') && (
-        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-1.5 text-xs text-white shadow-lg">
+        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-fill-active px-4 py-1.5 text-xs text-ink shadow-lg">
           连接中，消息推送可能延迟…
         </div>
       )}
