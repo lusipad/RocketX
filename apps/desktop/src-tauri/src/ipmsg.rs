@@ -27,6 +27,7 @@ const DEDUP_TTL: Duration = Duration::from_secs(10 * 60);
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const ACK_TIMEOUT: Duration = Duration::from_millis(900);
 const ACK_ATTEMPTS: usize = 5;
+const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
 
 const IPMSG_BR_ENTRY: u32 = 0x0000_0001;
 const IPMSG_BR_EXIT: u32 = 0x0000_0002;
@@ -589,6 +590,89 @@ fn announce(
     send_packet(socket, address, &packet)
 }
 
+fn directed_broadcast(ip: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    let mask = u32::from(mask);
+    if mask == 0 || mask == u32::MAX {
+        return None;
+    }
+    Some(Ipv4Addr::from(u32::from(ip) | !mask))
+}
+
+#[cfg(windows)]
+fn interface_broadcasts() -> Vec<Ipv4Addr> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetIpAddrTable, MIB_IPADDRROW_XP, MIB_IPADDRTABLE,
+    };
+
+    let mut size = 0_u32;
+    unsafe {
+        GetIpAddrTable(None, &mut size, false);
+    }
+    if size == 0 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0_u32; (size as usize).div_ceil(std::mem::size_of::<u32>())];
+    let table = buffer.as_mut_ptr().cast::<MIB_IPADDRTABLE>();
+    if unsafe { GetIpAddrTable(Some(table), &mut size, false) } != 0 {
+        return Vec::new();
+    }
+    let rows: &[MIB_IPADDRROW_XP] = unsafe {
+        let first = std::ptr::addr_of!((*table).table).cast::<MIB_IPADDRROW_XP>();
+        std::slice::from_raw_parts(first, (*table).dwNumEntries as usize)
+    };
+    rows.iter()
+        .filter_map(|row| {
+            directed_broadcast(
+                Ipv4Addr::from(row.dwAddr.to_ne_bytes()),
+                Ipv4Addr::from(row.dwMask.to_ne_bytes()),
+            )
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn interface_broadcasts() -> Vec<Ipv4Addr> {
+    Vec::new()
+}
+
+fn discovery_addresses(port: u16) -> Vec<SocketAddr> {
+    let mut addresses = interface_broadcasts()
+        .into_iter()
+        .map(|ip| SocketAddr::from((ip, port)))
+        .collect::<Vec<_>>();
+    addresses.push(SocketAddr::from((Ipv4Addr::BROADCAST, port)));
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses
+}
+
+fn announce_sockets(
+    sockets: &[(u16, Arc<UdpSocket>)],
+    identity: &IpmsgIdentity,
+    command: u32,
+) -> Result<(), String> {
+    let mut sent = false;
+    let mut last_error = None;
+    for (port, socket) in sockets {
+        for address in discovery_addresses(*port) {
+            match announce(socket, identity, command, address) {
+                Ok(()) => sent = true,
+                Err(error) => last_error = Some(error),
+            }
+        }
+    }
+    if sent {
+        Ok(())
+    } else {
+        Err(last_error.unwrap_or_else(|| "no IPMSG broadcast address is available".to_string()))
+    }
+}
+
 fn ack_key(address: SocketAddr, packet_no: &str) -> String {
     format!("{}:{packet_no}", address.ip())
 }
@@ -869,20 +953,7 @@ fn stop_runtime(current: Option<IpmsgRuntime>) {
     let Some(current) = current else {
         return;
     };
-    let _ = announce(
-        &current.sockets[0].1,
-        &current.identity,
-        IPMSG_BR_EXIT,
-        SocketAddr::from((Ipv4Addr::BROADCAST, current.sockets[0].0)),
-    );
-    for (port, socket) in current.sockets.iter().skip(1) {
-        let _ = announce(
-            socket,
-            &current.identity,
-            IPMSG_BR_EXIT,
-            SocketAddr::from((Ipv4Addr::BROADCAST, *port)),
-        );
-    }
+    let _ = announce_sockets(&current.sockets, &current.identity, IPMSG_BR_EXIT);
     current.stop.store(true, Ordering::Relaxed);
     for thread in current.threads {
         let _ = thread.join();
@@ -982,6 +1053,23 @@ pub fn ipmsg_start(
             tcp_loop(listener, port, outgoing, stop)
         }));
     }
+    {
+        let periodic_sockets = sockets.clone();
+        let announce_identity = identity.clone();
+        let announce_stop = stop.clone();
+        threads.push(thread::spawn(move || {
+            while !announce_stop.load(Ordering::Relaxed) {
+                let started = Instant::now();
+                while started.elapsed() < ANNOUNCE_INTERVAL {
+                    if announce_stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                }
+                let _ = announce_sockets(&periodic_sockets, &announce_identity, IPMSG_BR_ENTRY);
+            }
+        }));
+    }
     let runtime = IpmsgRuntime {
         stop,
         sockets: sockets.clone(),
@@ -996,16 +1084,9 @@ pub fn ipmsg_start(
         .0
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())? = Some(runtime);
-    for (port, socket) in &sockets {
-        if let Err(error) = announce(
-            socket,
-            &identity,
-            IPMSG_BR_ENTRY,
-            SocketAddr::from((Ipv4Addr::BROADCAST, *port)),
-        ) {
-            stop_runtime(take_runtime(&state)?);
-            return Err(error);
-        }
+    if let Err(error) = announce_sockets(&sockets, &identity, IPMSG_BR_ENTRY) {
+        stop_runtime(take_runtime(&state)?);
+        return Err(error);
     }
     if let Ok(value) = std::env::var("ROCKETX_IPMSG_PEER") {
         if let Ok(ip) = value.parse::<Ipv4Addr>() {
@@ -1495,6 +1576,21 @@ mod tests {
         assert_eq!(parsed.user, "内网用户");
         assert_eq!(parsed.host, "研发电脑");
         assert_eq!(parsed.extra, "中文互通消息");
+    }
+
+    #[test]
+    fn directed_broadcast_uses_each_interface_mask() {
+        assert_eq!(
+            directed_broadcast(
+                Ipv4Addr::new(192, 168, 42, 17),
+                Ipv4Addr::new(255, 255, 255, 0),
+            ),
+            Some(Ipv4Addr::new(192, 168, 42, 255)),
+        );
+        assert_eq!(
+            directed_broadcast(Ipv4Addr::LOCALHOST, Ipv4Addr::new(255, 0, 0, 0)),
+            None,
+        );
     }
 
     #[test]

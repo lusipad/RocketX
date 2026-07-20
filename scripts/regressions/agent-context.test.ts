@@ -5,6 +5,7 @@ import { agentAttachmentServerPath } from '../../apps/web/src/agent/attachments'
 import {
   agentInstruction,
   agentMessageInstruction,
+  agentTurnInput,
   buildAgentDeveloperInstructions,
   buildAgentContext,
   collectAgentAttachmentSources,
@@ -12,6 +13,7 @@ import {
   selectAgentContextMessages,
   workItemIdFromRoomTitle,
 } from '../../apps/web/src/agent/context';
+import { agentRoomSessionKey, resolveAgentSessionKey } from '../../apps/web/src/stores/agentEnvironments';
 
 function message(id: string, msg: string, tmid?: string): RcMessage {
   return {
@@ -52,6 +54,16 @@ test('@ai 默认要求结构化 mention，已绑定 Discussion 接受字面量�
   assert.equal(agentMessageInstruction({ ...valid, msg: '请 @ai 分析 #128' }), null);
   assert.equal(agentMessageInstruction({ ...valid, editedAt: '2026-07-17T00:01:00.000Z' }), null);
   assert.equal(agentMessageInstruction({ ...valid, u: { _id: 'bot', username: 'ai' } }), null);
+});
+
+test('引用消息带有其它 tmid 时仍回到当前房间已存在的 Agent 会话（issue #130）', () => {
+  const roomSession = agentRoomSessionKey('room');
+  const sessions = new Set([roomSession]);
+
+  assert.equal(resolveAgentSessionKey('room', 'quoted-thread', sessions), roomSession);
+  assert.equal(resolveAgentSessionKey('room', roomSession, sessions), roomSession);
+  assert.equal(resolveAgentSessionKey('room', 'agent-discussion', new Set(['agent-discussion'])), 'agent-discussion');
+  assert.equal(resolveAgentSessionKey('room', 'new-discussion', new Set()), 'new-discussion');
 });
 
 test('房间级 Agent 中途开启后会带入前序讨论，不混入其他房间', () => {
@@ -119,6 +131,28 @@ test('引用指令带入被引用消息的整条线程、参与者和附件路�
   assert.match(context, /\/workspace\/\.rocketx-agent\/attachments\/log\.txt/);
 });
 
+test('AI 托管把已落盘图片作为 Codex localImage 输入（issue #133）', () => {
+  const imageMessage: RcMessage = {
+    ...message('screen', '@ai 看这张图'),
+    file: { _id: 'image', name: 'screen.png', type: 'image/png' },
+    attachments: [
+      { title: 'screen.png', image_url: '/file-upload/image/thumb.png', title_link: '/file-upload/image/screen.png' },
+    ],
+  };
+  assert.deepEqual(collectAgentAttachmentSources([imageMessage]), [
+    {
+      messageId: 'screen',
+      name: 'screen.png',
+      path: '/file-upload/image/screen.png',
+      image: true,
+    },
+  ]);
+  assert.deepEqual(agentTurnInput('结合图片回答', ['C:\\cache\\screen.png']), [
+    { type: 'text', text: '结合图片回答', text_elements: [] },
+    { type: 'localImage', path: 'C:\\cache\\screen.png' },
+  ]);
+});
+
 test('收集可下载附件和当前 ADO 工作项元数据', () => {
   const withAttachment: RcMessage = {
     ...message('file-message', '参见 https://ado.example/tfs/DefaultCollection/Project/_workitems/edit/42'),
@@ -132,7 +166,12 @@ test('收集可下载附件和当前 ADO 工作项元数据', () => {
     ],
   };
   assert.deepEqual(collectAgentAttachmentSources([withAttachment]), [
-    { messageId: 'file-message', name: 'failure.log', path: '/file-upload/file/failure.log' },
+    {
+      messageId: 'file-message',
+      name: 'failure.log',
+      path: '/file-upload/file/failure.log',
+      image: false,
+    },
   ]);
   assert.equal(
     agentAttachmentServerPath('/file-upload/file/failure.log', 'https://chat.example'),

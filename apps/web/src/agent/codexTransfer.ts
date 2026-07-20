@@ -1,4 +1,5 @@
 import type { AppServerClient } from './protocol';
+import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '../lib/http';
 
 /** 待转移的对话行（结构化定义，避免依赖 butler store 造成环） */
@@ -26,8 +27,7 @@ export async function openCodexThread(
   const url = codexThreadDeepLink(threadId);
   try {
     if (isTauri) {
-      const { openUrl } = await import('@tauri-apps/plugin-opener');
-      await openUrl(url);
+      await invoke('open_external_url', { url });
     } else {
       window.location.assign(url);
     }

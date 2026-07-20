@@ -6,7 +6,7 @@ Plan: 当前 Codex 任务中的验收计划
 
 已完成：用户可以配置多个真实本地目录，从 ADO 工作项创建 Rocket.Chat 原生 Discussion，并为每个活动讨论独占绑定一个目录。Discussion 使用房间级共享 Agent；原版 Rocket.Chat 成员以结构化 `@ai` 提问，本机宿主负责代码上下文、命令执行和审批。首次获准修改前，Agent 必须检查脏目录并创建计划分支。
 
-第二轮打磨取消了额外约定：已绑定 Discussion 接受开头的字面量 `@ai`，不再依赖客户端生成结构化 mention；共享 Agent 把环境的基础分支传给 Codex。Discussion 的前序房间消息会作为不可信上下文完整带入。自 v0.25.4 起，AI 托管改用独立的 Codex 模型和推理强度设置。
+第二轮打磨取消了额外约定：已绑定 Discussion 接受开头的字面量 `@ai`，不再依赖客户端生成结构化 mention；共享 Agent 把环境的基础分支传给 Codex。Discussion 的前序房间消息会作为不可信上下文完整带入。自 v0.25.4 起，AI 托管改用独立的 Codex 模型和推理强度设置。v0.25.6 起，引用回复会优先回到当前房间已有会话，图片附件会落入会话隔离缓存并以 Codex `localImage` 输入提交。
 
 ## Decisions
 

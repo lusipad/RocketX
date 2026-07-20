@@ -59,7 +59,8 @@ pnpm dev
 生成工作项草案或运行例行复盘；所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
 本机 Codex CLI，也可把管家或群托管对话转进 Codex App / CLI 的原生线程列表继续处理。
 管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；DeepSeek 等 Provider
-与密钥也在这里配置，密钥只进入操作系统凭据库。
+与密钥也在这里配置，密钥只进入操作系统凭据库。托管会话中被 `@ai` 请求引用到的图片会
+下载到会话隔离缓存，并作为图片输入交给 Codex。
 
 ## 测试
 
@@ -73,9 +74,9 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 441 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 459 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 18 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片与待办链接
+pnpm test:ui        # 19 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片与待办链接
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 

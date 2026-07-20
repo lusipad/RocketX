@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.25.5"
+version = "0.25.6"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -47,6 +47,7 @@ zeroize = "1"
 notify-rust = "4.18"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
   "Win32_Networking_WinHttp",
 ] }
 

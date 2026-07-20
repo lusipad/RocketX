@@ -10,6 +10,7 @@
 import { RcRestClient, RcRealtimeClient, tsMs, type RcMessage } from '../packages/rc-client/src/index';
 import { mergedForwardAttachments } from '../apps/web/src/lib/forward';
 import { findQuoteImage } from '../apps/web/src/lib/messageQuote';
+import { quoteMessagePrefix } from '../apps/web/src/lib/messageText';
 
 const BASE = process.env.RC_BASE_URL ?? 'http://localhost:3300';
 const USER = process.env.RC_USER ?? 'admin';
@@ -169,7 +170,7 @@ async function main() {
     const link = `${BASE}/channel/冒烟测试-${stamp}?msg=${firstId}`;
     const quoted = await rest.sendMessageRaw({
       rid: channelId,
-      msg: `[ ](${link}) 这是引用回复`,
+      msg: `${quoteMessagePrefix(link)}这是引用回复`,
     });
     const history = await rest.getHistory(channelId, 'c', 3);
     const msg = history.find((m) => m._id === quoted._id);
@@ -286,7 +287,7 @@ async function main() {
     const link = `${BASE}/channel/冒烟测试-${stamp}?msg=${image!._id}`;
     const quoted = await rest.sendMessageRaw({
       rid: channelId,
-      msg: `[ ](${link}) 引用图片`,
+      msg: `${quoteMessagePrefix(link)}引用图片`,
     });
     const refreshed = await rest.getHistory(channelId, 'c', 5);
     const attachment = refreshed.find((message) => message._id === quoted._id)?.attachments?.[0];

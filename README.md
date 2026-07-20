@@ -70,7 +70,7 @@ Desktop development:
 pnpm --filter @rcx/desktop dev
 ```
 
-After signing in, open **Butler** to search messages and work data, query Azure DevOps work items, pull requests, and builds, prepare work-item drafts, or run recurring reviews. On desktop, Butler can use a local Codex CLI as its brain, and Butler or shared-agent conversations can be transferred into the native Codex App / CLI thread list with their context intact. Butler and AI Hosting have independent Codex model and reasoning-effort settings under **Settings → AI**. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers remain optional; API keys stay in the operating-system credential store.
+After signing in, open **Butler** to search messages and work data, query Azure DevOps work items, pull requests, and builds, prepare work-item drafts, or run recurring reviews. On desktop, Butler can use a local Codex CLI as its brain, and Butler or shared-agent conversations can be transferred into the native Codex App / CLI thread list with their context intact. Butler and AI Hosting have independent Codex model and reasoning-effort settings under **Settings → AI**. Images referenced by an `@ai` request in a hosted conversation are downloaded into an isolated session cache and passed to Codex as image input. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers remain optional; API keys stay in the operating-system credential store.
 
 ## Verify changes
 

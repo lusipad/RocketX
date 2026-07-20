@@ -163,14 +163,17 @@ function listTodos(args: Record<string, unknown>): string {
     useTodos.getState().todos
       .filter((todo) => includeDone || !todo.done)
       .filter((todo) =>
-        matches(`${todo.note ?? ''} ${todo.excerpt ?? ''} ${todo.roomName ?? ''} ${todo.author ?? ''}`, query),
+        matches(
+          `${todo.note ?? ''} ${todo.excerpt ?? ''} ${todo.title ?? ''} ${todo.roomName ?? ''} ${todo.author ?? ''}`,
+          query,
+        ),
       )
       .slice(0, LIMIT)
       .map((todo) => ({
         id: todo.id,
         roomName: todo.roomName,
         author: todo.author,
-        text: todo.note || todo.excerpt,
+        text: todo.note || todo.excerpt || todo.title,
         due: todo.due,
         done: todo.done,
       })),

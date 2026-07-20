@@ -101,6 +101,21 @@ export function agentRoomSessionKey(rid: string): string {
   return `room:${rid}`;
 }
 
+/**
+ * 引用回复可能携带被引用话题的 tmid；只有该话题本身有 Agent 会话时才应优先使用它，
+ * 否则继续投递到当前房间已存在的会话。
+ */
+export function resolveAgentSessionKey(
+  rid: string,
+  tmid: string | undefined,
+  sessionKeys: ReadonlySet<string>,
+): string {
+  if (tmid && sessionKeys.has(tmid)) return tmid;
+  const roomKey = agentRoomSessionKey(rid);
+  if (sessionKeys.has(roomKey)) return roomKey;
+  return tmid ?? roomKey;
+}
+
 export function proposedAgentBranch(prefix: string, workItemId: number, title: string): string {
   const slug = title
     .normalize('NFKD')
