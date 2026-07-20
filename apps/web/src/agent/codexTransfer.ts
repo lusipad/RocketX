@@ -1,6 +1,9 @@
-import type { AppServerClient } from './protocol';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '../lib/http';
+
+const MAX_EXTERNAL_URL_LENGTH = 8192;
+
+export type CodexHandoffResult = 'opened' | 'opened-with-copy' | 'copied' | 'unavailable';
 
 /** 待转移的对话行（结构化定义，避免依赖 butler store 造成环） */
 export interface TransferLine {
@@ -15,30 +18,55 @@ export interface AgentTransferMessage {
   assistant: boolean;
 }
 
-export function codexThreadDeepLink(threadId: string): string {
-  const id = threadId.trim();
-  if (!/^[A-Za-z0-9_-]{1,256}$/.test(id)) throw new Error('Codex threadId 无效');
-  return `codex://threads/${encodeURIComponent(id)}`;
+export function codexNewThreadDeepLink(prompt: string, path: string): string {
+  const query = new URLSearchParams();
+  if (prompt) query.set('prompt', prompt);
+  if (path.trim()) query.set('path', path.trim());
+  if ([...query].length === 0) throw new Error('Codex 新对话缺少上下文和工作区');
+  return `codex://threads/new?${query.toString()}`;
 }
 
-export async function openCodexThread(
-  threadId: string,
-): Promise<'opened' | 'copied' | 'unavailable'> {
-  const url = codexThreadDeepLink(threadId);
+async function openCodexUrl(url: string): Promise<void> {
+  if (isTauri) {
+    await invoke('open_external_url', { url });
+  } else {
+    window.location.assign(url);
+  }
+}
+
+async function copyCodexPrompt(prompt: string): Promise<boolean> {
   try {
-    if (isTauri) {
-      await invoke('open_external_url', { url });
-    } else {
-      window.location.assign(url);
+    await navigator.clipboard.writeText(prompt);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 使用 Codex App 官方 deep link 打开由 App 自己拥有的新对话。
+ * deep link 只预填输入框，不替用户发送；过长记录完整复制到剪贴板，
+ * 同时打开正确工作区，避免 URL 上限导致静默截断。
+ */
+export async function openCodexNewThread(
+  prompt: string,
+  path: string,
+): Promise<CodexHandoffResult> {
+  const url = codexNewThreadDeepLink(prompt, path);
+  if (url.length > MAX_EXTERNAL_URL_LENGTH) {
+    if (!(await copyCodexPrompt(prompt))) return 'unavailable';
+    try {
+      await openCodexUrl(codexNewThreadDeepLink('', path));
+      return 'opened-with-copy';
+    } catch {
+      return 'copied';
     }
+  }
+  try {
+    await openCodexUrl(url);
     return 'opened';
   } catch {
-    try {
-      await navigator.clipboard.writeText(`codex resume ${threadId}`);
-      return 'copied';
-    } catch {
-      return 'unavailable';
-    }
+    return (await copyCodexPrompt(prompt)) ? 'copied' : 'unavailable';
   }
 }
 
@@ -56,47 +84,6 @@ export function agentConversationLines(
         ? { role: 'assistant' as const, text: message.text }
         : { role: 'user' as const, text: `${message.author}：${message.text}` },
     );
-}
-
-/**
- * 把对话渲染成转移线程的首轮输入。转移走的是 companion 同款机制——
- * 原生 thread/start + thread/name/set，对话记录作为首条消息进线程，
- * 在 Codex App / CLI 的会话列表里直接可见、可接续（issue #105）。
- * 📌 记忆标记行与首个用户消息之前的开场白不转移。
- */
-/**
- * companion 同款的转移线程创建:thread/start + thread/name/set +
- * 记录作为首轮输入。老 CLI 没有 thread/name/set 时照 companion 的
- * 做法忽略(名字丢了线程仍可用);只要一句确认,用最低推理档,
- * 不等模型说完——turn 受理那一刻线程已带着完整记录进了会话列表。
- */
-export async function startNamedCodexThreadWithTranscript(
-  client: AppServerClient,
-  options: { cwd: string; name: string; transcript: string; model?: string },
-): Promise<string> {
-  const response = await client.request('thread/start', {
-    ...(options.model ? { model: options.model } : {}),
-    cwd: options.cwd,
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
-    sandbox: 'read-only',
-  });
-  const threadId = response.thread.id;
-  try {
-    await client.request('thread/name/set', { threadId, name: options.name });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/unknown (variant|method)/i.test(message)) throw error;
-  }
-  await client.request('turn/start', {
-    threadId,
-    input: [{ type: 'text', text: options.transcript, text_elements: [] }],
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
-    sandboxPolicy: { type: 'readOnly', networkAccess: false },
-    effort: 'minimal',
-  });
-  return threadId;
 }
 
 export function transferTranscript(
@@ -117,6 +104,6 @@ export function transferTranscript(
     body,
     '',
     '———',
-    '请只回复一句话确认已接收，不要开始任何任务；等待用户在这个会话里继续。',
+    '请接续以上上下文：如果最后一个用户请求包含尚未完成的明确任务，直接继续执行；否则简要确认已接收并等待用户下一步。',
   ].join('\n');
 }

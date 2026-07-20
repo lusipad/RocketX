@@ -25,8 +25,9 @@ import {
 import { materializeAgentAttachments } from '../agent/attachments';
 import {
   agentConversationLines,
-  startNamedCodexThreadWithTranscript,
+  openCodexNewThread,
   transferTranscript,
+  type CodexHandoffResult,
 } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
@@ -128,8 +129,8 @@ interface SharedAgentState {
   setAccess: (tmid: string, access: AgentSession['access']) => Promise<void>;
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
-  /** 把托管对话转移进 Codex（导入成 App 认可来源的线程快照副本） */
-  transferToCodexApp: (tmid: string) => Promise<string>;
+  /** 把托管对话作为新对话草稿交给 Codex App */
+  transferToCodexApp: (tmid: string) => Promise<CodexHandoffResult>;
 }
 
 const queues = new Map<string, SerialCommandQueue>();
@@ -888,20 +889,18 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
           };
         }),
     );
-    const chat = useChat.getState();
-    const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
-    const detail = session.workItem
-      ? `#${session.workItem.id} ${session.workItem.title}`
-      : room?.fname || room?.name || session.environmentName;
-    const client = await ensureClient(session);
-    // companion 同款:原生线程 + 命名 + 记录作首轮输入,App/CLI 列表直接可见(issue #105)
-    const threadId = await startNamedCodexThreadWithTranscript(client, {
-      cwd: session.workspaceRoots[0],
-      name: rocketxThreadName('托管对话', detail),
-      transcript: transferTranscript('托管对话', lines),
-    });
-    trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
-    return threadId;
+    const result = await openCodexNewThread(
+      transferTranscript('托管对话', lines),
+      session.workspaceRoots[0],
+    );
+    if (result === 'opened' || result === 'opened-with-copy') {
+      trace(tmid, 'status', '已在 Codex App 打开新对话，等待确认后发送');
+    } else if (result === 'copied') {
+      trace(tmid, 'status', 'Codex App 打开失败，完整记录已复制');
+    } else {
+      trace(tmid, 'error', '无法打开 Codex App，也无法复制完整记录');
+    }
+    return result;
   },
 
   endSession: async (tmid) => {

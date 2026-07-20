@@ -10,7 +10,6 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { openCodexThread } from '../agent/codexTransfer';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -58,16 +57,16 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const transferToCodex = async () => {
     setTransferring(true);
     try {
-      const threadId = await transferConversationToCodexApp(
+      const result = await transferConversationToCodexApp(
         lines.map(({ role, text }) => ({ role, text })),
       );
-      const result = await openCodexThread(threadId);
+      if (result === 'unavailable') throw new Error('无法打开 Codex App，也无法复制对话记录');
       toast.success(
         result === 'opened'
-          ? '已转移并打开 Codex App'
-          : result === 'copied'
-            ? '已转移；App 打开失败，codex resume 命令已复制'
-            : `已转移；请运行 codex resume ${threadId} 继续`,
+          ? '已打开 Codex App，完整记录已填入，请确认后发送'
+          : result === 'opened-with-copy'
+            ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
+            : 'Codex App 打开失败，完整记录已复制',
       );
     } catch (error) {
       toast.error(error, '转移到 Codex 失败');
@@ -114,7 +113,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             type="button"
             onClick={() => void transferToCodex()}
             disabled={running || transferring || !hasConversation}
-            title="把当前对话转移到 Codex，在 Codex App / CLI 的会话列表里继续"
+            title="在 Codex App 打开新对话并带入当前完整记录"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
           >
             {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}

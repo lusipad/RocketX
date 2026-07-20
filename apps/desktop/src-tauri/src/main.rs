@@ -50,17 +50,38 @@ fn validate_external_url(url: &str) -> Result<&str, String> {
     }
     if parsed.scheme() == "codex"
         && parsed.host_str() == Some("threads")
-        && parsed.query().is_none()
         && parsed.fragment().is_none()
     {
         let thread_id = parsed.path().strip_prefix('/').unwrap_or_default();
-        if !thread_id.is_empty()
+        if parsed.query().is_none()
+            && !thread_id.is_empty()
             && thread_id.len() <= 256
             && thread_id.chars().all(|character| {
                 character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
             })
         {
             return Ok(url);
+        }
+        if thread_id == "new" {
+            let mut prompt = false;
+            let mut path = false;
+            for (key, value) in parsed.query_pairs() {
+                match key.as_ref() {
+                    "prompt" if !prompt && !value.is_empty() => prompt = true,
+                    "path"
+                        if !path
+                            && value.len() <= 2048
+                            && !value.chars().any(char::is_control)
+                            && std::path::Path::new(value.as_ref()).is_absolute() =>
+                    {
+                        path = true;
+                    }
+                    _ => return Err("unsupported external URL".to_string()),
+                }
+            }
+            if prompt || path {
+                return Ok(url);
+            }
         }
     }
     Err("unsupported external URL".to_string())
@@ -497,7 +518,14 @@ mod tray_icon_tests {
             validate_external_url("codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d").unwrap(),
             "codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d"
         );
+        assert!(validate_external_url(
+            "codex://threads/new?prompt=%E7%BB%A7%E7%BB%AD%E5%A4%84%E7%90%86&path=D%3A%5CRepos%5Crocketchatx"
+        )
+        .is_ok());
         assert!(validate_external_url("codex://threads/").is_err());
+        assert!(validate_external_url("codex://threads/new?prompt=").is_err());
+        assert!(validate_external_url("codex://threads/new?path=relative").is_err());
+        assert!(validate_external_url("codex://threads/new?prompt=ok&unsafe=1").is_err());
         assert!(validate_external_url("codex://settings").is_err());
         assert!(validate_external_url("javascript:alert(1)").is_err());
         assert!(validate_external_url("https://example.com/\nheader").is_err());

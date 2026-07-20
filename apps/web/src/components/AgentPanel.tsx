@@ -1,7 +1,6 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Shield, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { openCodexThread } from '../agent/codexTransfer';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -195,19 +194,21 @@ export default function AgentPanel() {
                     <span className="truncate">codex resume</span>
                   </button>
                   <button
-                    title="把托管对话转移到 Codex（快照副本），在 Codex App / CLI 的会话列表里可见"
+                    title="在 Codex App 打开新对话并带入托管记录"
                     disabled={transferring || session.status === 'running'}
                     onClick={() => {
                       setTransferring(true);
                       void transferToCodexApp(tmid)
-                        .then(async (threadId) => {
-                          const result = await openCodexThread(threadId);
+                        .then((result) => {
+                          if (result === 'unavailable') {
+                            throw new Error('无法打开 Codex App，也无法复制对话记录');
+                          }
                           toast.success(
                             result === 'opened'
-                              ? '已转移并打开 Codex App'
-                              : result === 'copied'
-                                ? '已转移；App 打开失败，codex resume 命令已复制'
-                                : `已转移；请运行 codex resume ${threadId} 继续`,
+                              ? '已打开 Codex App，完整记录已填入，请确认后发送'
+                              : result === 'opened-with-copy'
+                                ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
+                                : 'Codex App 打开失败，完整记录已复制',
                           );
                         })
                         .catch((error) => toast.error(error, '转移到 Codex 失败'))
