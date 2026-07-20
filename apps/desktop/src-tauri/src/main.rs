@@ -518,10 +518,12 @@ mod tray_icon_tests {
             validate_external_url("codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d").unwrap(),
             "codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d"
         );
-        assert!(validate_external_url(
-            "codex://threads/new?prompt=%E7%BB%A7%E7%BB%AD%E5%A4%84%E7%90%86&path=D%3A%5CRepos%5Crocketchatx"
-        )
-        .is_ok());
+        let mut new_thread_url = tauri::Url::parse("codex://threads/new").unwrap();
+        new_thread_url
+            .query_pairs_mut()
+            .append_pair("prompt", "继续处理")
+            .append_pair("path", std::env::temp_dir().to_string_lossy().as_ref());
+        assert!(validate_external_url(new_thread_url.as_str()).is_ok());
         assert!(validate_external_url("codex://threads/").is_err());
         assert!(validate_external_url("codex://threads/new?prompt=").is_err());
         assert!(validate_external_url("codex://threads/new?path=relative").is_err());
