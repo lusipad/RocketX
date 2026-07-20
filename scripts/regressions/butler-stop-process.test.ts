@@ -30,6 +30,34 @@ test('工具调用记录为过程步骤，成功/失败状态可见', async () =
   }
 });
 
+test('当前工作面只进入模型上下文，工具来源附着到回答', async () => {
+  useButler.getState().reset();
+  let systemPrompt = '';
+  const restore = setButlerLoopRunner(async (options) => {
+    systemPrompt = String(options.messages[0]?.content ?? '');
+    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'source-1', name: 'search_messages', arguments: '{}' } });
+    options.onEvent?.({
+      type: 'tool-result',
+      toolCallId: 'source-1',
+      content: JSON.stringify([{ _id: 'm1', rid: 'r1', roomName: '发布群', sender: '张三', text: '构建失败了' }]),
+    });
+    return { text: '查到一条相关消息。', messages: options.messages };
+  });
+  try {
+    await useButler.getState().ask('怎么回事', {
+      kind: 'room',
+      label: '发布群',
+      detail: '当前 Rocket.Chat 房间',
+      sources: [{ kind: 'room', id: 'r1', rid: 'r1', label: '发布群' }],
+    });
+    assert.match(systemPrompt, /用户当前工作面：发布群/);
+    assert.equal(useButler.getState().lines.some((line) => line.role === 'user' && line.text.includes('用户当前工作面')), false);
+    assert.deepEqual(useButler.getState().lines.at(-1)?.sources?.map((source) => source.id), ['r1', 'm1']);
+  } finally {
+    restore();
+  }
+});
+
 test('停止回答保留已生成内容，不当错误处理', async () => {
   useButler.getState().reset();
   const restore = setButlerLoopRunner(async (options) => {

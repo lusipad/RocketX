@@ -3,8 +3,21 @@ import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage } from '../kernel/ai/provider';
 import { getServerBase } from '../lib/client';
 import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
+import {
+  butlerContextPrompt,
+  extractButlerSources,
+  mergeButlerSources,
+  type ButlerSource,
+  type ButlerSurfaceContext,
+} from '../lib/butlerContext';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
 import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
+import {
+  auditButlerAction,
+  createButlerActionDraft,
+  type ButlerActionDraft,
+  type ButlerActionKind,
+} from '../lib/butlerActions';
 import { useAuth } from './auth';
 import {
   askButlerCodex,
@@ -30,6 +43,7 @@ export interface ButlerLine {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  sources?: ButlerSource[];
 }
 
 /** 本轮的一个执行步骤（工具调用），给「过程」展示用 */
@@ -45,6 +59,8 @@ export interface ButlerRoomContext {
   roomName: string;
 }
 
+export type ButlerAskContext = ButlerRoomContext | ButlerSurfaceContext;
+
 export interface ButlerState {
   lines: ButlerLine[];
   activity: string | null;
@@ -54,7 +70,14 @@ export interface ButlerState {
   running: boolean;
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
-  ask: (text: string, context?: ButlerRoomContext) => Promise<void>;
+  context: ButlerSurfaceContext | null;
+  actionDraft: ButlerActionDraft | null;
+  ask: (text: string, context?: ButlerAskContext) => Promise<void>;
+  setContext: (context: ButlerSurfaceContext | null) => void;
+  proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
+  updateAction: (patch: Partial<Pick<ButlerActionDraft, 'title' | 'text' | 'rid' | 'committedTo' | 'due'>>) => void;
+  dismissAction: () => void;
+  completeAction: (message: string) => void;
   /** 停止当前回答：保留已生成内容，不当错误处理 */
   stop: () => Promise<void>;
   /** 新对话：清空对话与持久化记录，丢弃 Codex 常驻线程，从全新上下文开始 */
@@ -167,6 +190,16 @@ function line(role: ButlerLine['role'], text: string): ButlerLine {
   return { id: crypto.randomUUID(), role, text };
 }
 
+function normalizeContext(context: ButlerAskContext): ButlerSurfaceContext {
+  if ('kind' in context) return context;
+  return {
+    kind: 'room',
+    label: context.roomName,
+    detail: '当前 Rocket.Chat 房间',
+    sources: [{ kind: 'room', id: context.rid, rid: context.rid, label: context.roomName }],
+  };
+}
+
 function welcomeLines(): ButlerLine[] {
   return [line('assistant', '我是你的管家。消息、待办、日程、工作项都可以直接问我。')];
 }
@@ -219,6 +252,8 @@ export const useButler = create<ButlerState>((set, get) => ({
   running: false,
   error: null,
   routineDraft: null,
+  context: null,
+  actionDraft: null,
 
   hydrate: async () => {
     const user = useAuth.getState().user;
@@ -251,6 +286,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const content = text.trim();
     if (!content || get().running) return;
 
+    const turnContext = context ? normalizeContext(context) : get().context;
     const brain = getButlerBrain();
     const abort = brain === 'api' ? new AbortController() : undefined;
     currentAbort = abort;
@@ -264,9 +300,11 @@ export const useButler = create<ButlerState>((set, get) => ({
       ...(brain === 'api' ? { history } : {}),
       running: true,
       error: null,
+      ...(context && 'kind' in context ? { context: turnContext } : {}),
     }));
 
     let assistantLineId: string | undefined;
+    let turnSources = turnContext?.sources ?? [];
     const toolCallNames = new Map<string, string>();
     const onEvent = (event: AgentLoopEvent) => {
       if (event.type === 'content') {
@@ -277,7 +315,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           return {
             lines: current
               ? state.lines.map((item) => item.id === id ? { ...item, text: `${item.text}${event.content}` } : item)
-              : [...state.lines, { id, role: 'assistant', text: event.content }],
+              : [...state.lines, { id, role: 'assistant', text: event.content, ...(turnSources.length ? { sources: turnSources } : {}) }],
           };
         });
         return;
@@ -293,6 +331,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       }
       if (event.type === 'tool-result') {
         const toolName = toolCallNames.get(event.toolCallId);
+        turnSources = mergeButlerSources(turnSources, extractButlerSources(toolName, event.content));
         const failed = /^工具(?:调用|执行)失败/.test(event.content);
         set((state) => ({
           activity: null,
@@ -301,7 +340,11 @@ export const useButler = create<ButlerState>((set, get) => ({
           ),
           lines: toolName === 'remember'
             ? [...state.lines, line('assistant', `📌 ${event.content}`)]
-            : state.lines,
+            : assistantLineId
+              ? state.lines.map((item) => item.id === assistantLineId
+                ? { ...item, ...(turnSources.length ? { sources: turnSources } : {}) }
+                : item)
+              : state.lines,
         }));
       }
     };
@@ -312,15 +355,15 @@ export const useButler = create<ButlerState>((set, get) => ({
         if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
         const result = await codexRunner({
           text: content,
-          context,
+          context: turnContext ?? undefined,
           now: butlerNow(),
           onEvent,
         });
         set((state) => ({
           lines: result.text
             ? assistantLineId
-              ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text } : item)
-              : [...state.lines, line('assistant', result.text)]
+              ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text, ...(turnSources.length ? { sources: turnSources } : {}) } : item)
+              : [...state.lines, { ...line('assistant', result.text), ...(turnSources.length ? { sources: turnSources } : {}) }]
             : state.lines,
           activity: null,
           running: false,
@@ -328,8 +371,8 @@ export const useButler = create<ButlerState>((set, get) => ({
         return;
       }
       const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}${
-        context
-          ? `\n用户当前所在房间：${context.roomName}\n查询本房间消息时优先用 search_messages 的 roomName 参数限定范围`
+        turnContext
+          ? `\n${butlerContextPrompt(turnContext)}`
           : ''
       }`;
       const result = await loopRunner({
@@ -345,8 +388,8 @@ export const useButler = create<ButlerState>((set, get) => ({
       set((state) => ({
         lines: result.text
           ? assistantLineId
-            ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text } : item)
-            : [...state.lines, line('assistant', result.text)]
+            ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text, ...(turnSources.length ? { sources: turnSources } : {}) } : item)
+            : [...state.lines, { ...line('assistant', result.text), ...(turnSources.length ? { sources: turnSources } : {}) }]
           : state.lines,
         activity: null,
         history: nextHistory,
@@ -367,6 +410,41 @@ export const useButler = create<ButlerState>((set, get) => ({
     }
   },
 
+  setContext: (context) => set({ context }),
+
+  proposeAction: (kind, sourceLineId) => {
+    const source = get().lines.find((item) => item.id === sourceLineId && item.role === 'assistant');
+    if (!source) return;
+    const previous = get().actionDraft;
+    if (previous) void auditButlerAction(previous.kind, 'cancelled', previous).catch(() => undefined);
+    const actionDraft = createButlerActionDraft(kind, source, get().context);
+    set({ actionDraft });
+    void auditButlerAction(kind, 'proposed', actionDraft).catch(() => undefined);
+  },
+
+  updateAction: (patch) => set((state) => ({
+    actionDraft: state.actionDraft ? { ...state.actionDraft, ...patch } : null,
+  })),
+
+  dismissAction: () => {
+    const draft = get().actionDraft;
+    if (!draft) return;
+    set({ actionDraft: null });
+    void auditButlerAction(draft.kind, 'cancelled', draft).catch(() => undefined);
+  },
+
+  completeAction: (message) => {
+    const draft = get().actionDraft;
+    if (!draft) return;
+    set((state) => ({
+      actionDraft: null,
+      lines: [...state.lines, {
+        ...line('assistant', `✅ ${message}`),
+        ...(draft.sources.length ? { sources: draft.sources } : {}),
+      }],
+    }));
+  },
+
   stop: async () => {
     if (!get().running) return;
     if (getButlerBrain() === 'codex') {
@@ -380,6 +458,10 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   newConversation: async () => {
     if (get().running) await get().stop();
+    const actionDraft = get().actionDraft;
+    if (actionDraft) {
+      await auditButlerAction(actionDraft.kind, 'cancelled', actionDraft).catch(() => undefined);
+    }
     await discardResidentCodexThread();
     set({
       lines: welcomeLines(),
@@ -389,6 +471,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       running: false,
       error: null,
       routineDraft: null,
+      actionDraft: null,
     });
     // 立即把清空后的状态落盘，别让旧记录在下次启动时诈尸
     await flushButlerPersist();
@@ -422,6 +505,8 @@ export const useButler = create<ButlerState>((set, get) => ({
     running: false,
     error: null,
     routineDraft: null,
+    context: null,
+    actionDraft: null,
   }),
 }));
 

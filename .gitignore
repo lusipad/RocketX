@@ -10,6 +10,8 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 .gstack/
+.omx/
+implementation-notes.md
 memory-trend.csv
 playwright-report/
 test-results/

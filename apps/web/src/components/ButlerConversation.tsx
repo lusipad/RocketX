@@ -10,7 +10,6 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { openCodexThread } from '../agent/codexTransfer';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -21,6 +20,8 @@ import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
+import ButlerSources from './ButlerSources';
+import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 
 const QUICK_PROMPTS = [
   '搜索最近关于发布失败的消息',
@@ -51,6 +52,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
+  const context = useButler((state) => state.context);
   const [input, setInput] = useState('');
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
@@ -58,16 +60,16 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const transferToCodex = async () => {
     setTransferring(true);
     try {
-      const threadId = await transferConversationToCodexApp(
+      const result = await transferConversationToCodexApp(
         lines.map(({ role, text }) => ({ role, text })),
       );
-      const result = await openCodexThread(threadId);
+      if (result === 'unavailable') throw new Error('无法打开 Codex App，也无法复制对话记录');
       toast.success(
         result === 'opened'
-          ? '已转移并打开 Codex App'
-          : result === 'copied'
-            ? '已转移；App 打开失败，codex resume 命令已复制'
-            : `已转移；请运行 codex resume ${threadId} 继续`,
+          ? '已打开 Codex App，完整记录已填入，请确认后发送'
+          : result === 'opened-with-copy'
+            ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
+            : 'Codex App 打开失败，完整记录已复制',
       );
     } catch (error) {
       toast.error(error, '转移到 Codex 失败');
@@ -108,13 +110,14 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             <Bot size={20} className="text-primary" />管家
           </h1>
           <p className="mt-1 text-xs text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
+          {context ? <div className="mt-2 inline-flex rounded-full bg-primary-light px-2.5 py-1 text-xs text-primary">当前工作面：{context.label}</div> : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => void transferToCodex()}
             disabled={running || transferring || !hasConversation}
-            title="把当前对话转移到 Codex，在 Codex App / CLI 的会话列表里继续"
+            title="在 Codex App 打开新对话并带入当前完整记录"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
           >
             {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}
@@ -170,6 +173,8 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
                 ) : null}
                 <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
                   {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+                  {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+                  <ButlerMessageActions line={line} disabled={running} />
                 </div>
               </div>
             );
@@ -201,6 +206,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               </div>
             </div>
           ) : null}
+          <div className="ml-10"><ButlerActionCard /></div>
         </div>
       </main>
 

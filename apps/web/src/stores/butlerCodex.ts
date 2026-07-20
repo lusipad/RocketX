@@ -6,8 +6,9 @@ import {
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
 import {
-  startNamedCodexThreadWithTranscript,
+  openCodexNewThread,
   transferTranscript,
+  type CodexHandoffResult,
   type TransferLine,
 } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
@@ -18,6 +19,7 @@ import {
   setCodexBrainUnavailableReason,
 } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerProfile';
+import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import { createButlerTools } from '../lib/butlerTools';
 
 export interface ButlerCodexRoomContext {
@@ -27,7 +29,7 @@ export interface ButlerCodexRoomContext {
 
 export interface ButlerCodexAskOptions {
   text: string;
-  context?: ButlerCodexRoomContext;
+  context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   now?: number;
   onEvent?: (event: AgentLoopEvent) => void;
 }
@@ -118,9 +120,12 @@ export function friendlyButlerCodexError(error: unknown): string {
   return 'Codex 大脑暂时无法回答，请稍后重试。';
 }
 
-function roomPrefixedInput(text: string, context?: ButlerCodexRoomContext): string {
+function roomPrefixedInput(text: string, context?: ButlerSurfaceContext | ButlerCodexRoomContext): string {
   if (!context) return text;
-  return `（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+  if (!('kind' in context)) {
+    return `（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+  }
+  return `（${butlerContextPrompt(context)}）\n\n${text}`;
 }
 
 function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {
@@ -411,24 +416,15 @@ export async function discardResidentCodexThread(): Promise<void> {
 }
 
 /**
- * 把对话记录送进一条新的原生 Codex 线程——codex-companion 同款机制：
- * thread/start + thread/name/set + 记录作为首轮输入(issue #105)。
- * 早期版本走外部会话导入器,但 codex 0.144.x 的导入器只认
- * ~/.claude/projects 布局、且原生线程本就在 App/CLI 列表可见,
- * 导入这条弯路整体退役。快照副本语义不变:RocketX 里的对话
- * 继续在原线程上,不会双写。
+ * 用官方 deep link 在 Codex App 打开新对话，把完整记录预填到输入框。
+ * App 自己创建并拥有线程，避免独立 app-server 生成“列表可见但不可续”的
+ * 孤儿线程(issue #105)。快照副本语义不变:RocketX 里的对话继续在原线程上。
  */
-export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<string> {
-  const availability = codexBrainAvailability();
-  if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
-  const client = await ensureResidentClient();
-  const { model } = getButlerCodexSettings();
-  return startNamedCodexThreadWithTranscript(client, {
-    cwd: residentWorkspaceRoot!,
-    name: rocketxThreadName('管家对话'),
-    transcript: transferTranscript('管家对话', lines),
-    model: model || undefined,
-  });
+export async function transferConversationToCodexApp(
+  lines: readonly TransferLine[],
+): Promise<CodexHandoffResult> {
+  const workspaceRoot = residentWorkspaceRoot ?? await workspaceResolver();
+  return openCodexNewThread(transferTranscript('管家对话', lines), workspaceRoot);
 }
 
 /**

@@ -10,10 +10,15 @@ export interface InstalledApp {
   granted: AppPermission[];
   enabled: boolean;
   official: boolean;
-  source: { kind: 'directory' | 'url'; location: string };
+  source: { kind: 'bundled' | 'directory' | 'url'; location: string };
   entryContent: string;
   bundleHash: string;
   installedAt: number;
+}
+
+export interface BundledAppPackage {
+  manifestText: string;
+  entryContent: string;
 }
 
 export interface InstallOptions {
@@ -28,7 +33,7 @@ const SENSITIVE = new Set<AppPermission>(SENSITIVE_PERMISSIONS);
 const DANGEROUS = new Set<AppPermission>(DANGEROUS_PERMISSIONS);
 
 const OFFICIAL_APP_IDENTITY_HASHES = new Map([
-  ['dev.rocketx.intranet-link', '98dc662f07da5db6590abeae71e32007911f718646bb56fd80e73b0e5b872c8a'],
+  ['dev.rocketx.intranet-link', '2126f490c59575754f655e47d13f65f6bf9c5f6696fe2f9f69d265b913e618ff'],
 ]);
 
 function officialIdentity(manifest: RcxAppManifest, identityHash: string): boolean {
@@ -138,12 +143,42 @@ export class AppManager {
     for (const app of this.apps.values()) this.activate(app);
   }
 
-  async hydrate(): Promise<void> {
+  async hydrate(bundledApps: readonly BundledAppPackage[] = []): Promise<void> {
     const records = await this.store.apps.list<InstalledApp>();
     for (const { value } of records) {
       this.apps.set(value.manifest.id, value);
-      this.activate(value);
     }
+    for (const bundled of bundledApps) {
+      const manifest = parseManifestJson(bundled.manifestText);
+      validateRuntime(manifest, 'bundled');
+      const identityHash = await officialIdentityHash(bundled.manifestText, bundled.entryContent);
+      if (!officialIdentity(manifest, identityHash)) {
+        throw new Error(`内置应用 ${manifest.id} 必须使用 RocketX 官方身份`);
+      }
+      const previous = this.apps.get(manifest.id);
+      const next: InstalledApp = {
+        manifest,
+        granted: previous?.granted ?? grantsFor(
+          manifest,
+          manifest.permissions.filter((permission) => SENSITIVE.has(permission)),
+        ),
+        enabled: previous?.enabled ?? (manifest.enabledByDefault !== false),
+        official: true,
+        source: { kind: 'bundled', location: 'RocketX' },
+        entryContent: bundled.entryContent,
+        bundleHash: identityHash,
+        installedAt: previous?.installedAt ?? Date.now(),
+      };
+      if (
+        !previous ||
+        previous.bundleHash !== next.bundleHash ||
+        previous.source.kind !== 'bundled'
+      ) {
+        await this.store.apps.set(manifest.id, next);
+      }
+      this.apps.set(manifest.id, next);
+    }
+    for (const app of this.apps.values()) this.activate(app);
     this.loaded = true;
     this.changed();
   }
@@ -244,7 +279,9 @@ export class AppManager {
   }
 
   async uninstall(appId: string): Promise<void> {
-    if (!this.apps.has(appId)) return;
+    const app = this.apps.get(appId);
+    if (!app) return;
+    if (app.source.kind === 'bundled') throw new Error('内置应用不能卸载，请将它停用');
     await this.deactivate(appId);
     this.apps.delete(appId);
     await Promise.all([

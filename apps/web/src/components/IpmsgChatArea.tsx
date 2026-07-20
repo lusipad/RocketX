@@ -120,7 +120,7 @@ export default function IpmsgChatArea() {
           value={selectedPeerId ?? ''}
           onChange={(event) => selectPeer(event.target.value)}
           disabled={!running || peers.length === 0}
-          className="h-8 max-w-64 rounded-md border border-line bg-surface px-2 text-sm text-ink disabled:opacity-50"
+          className="ipmsg-peer-select h-8 max-w-64 rounded-md border border-line bg-surface px-2 text-sm text-ink disabled:opacity-50"
         >
           <option value="">{peers.length ? '选择联系人' : '没有在线联系人'}</option>
           {peers.map((peer) => (

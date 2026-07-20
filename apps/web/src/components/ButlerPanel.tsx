@@ -5,6 +5,8 @@ import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
 import { renderMarkdown } from '../lib/markdown';
 import ButlerProcess from './ButlerProcess';
+import ButlerSources from './ButlerSources';
+import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import PanelShell from './PanelShell';
 
 function roomName(
@@ -89,6 +91,8 @@ export default function ButlerPanel() {
               line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'
             }`}>
               {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+              {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+              <ButlerMessageActions line={line} disabled={running} />
             </div>
           </div>
         )) : <div className="py-10 text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>}
@@ -112,6 +116,7 @@ export default function ButlerPanel() {
             </div>
           </div>
         ) : null}
+        <div className="mt-3"><ButlerActionCard /></div>
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="shrink-0 border-t border-line p-3">

@@ -1556,6 +1556,7 @@ function AppsSection() {
         ) : (
           <div className="mt-2 divide-y divide-line rounded-md border border-line bg-surface-2">
             {apps.map((app) => {
+              const bundled = app.source.kind === 'bundled';
               const sensitive = app.manifest.permissions.filter((permission) =>
                 SENSITIVE_PERMISSIONS.includes(permission),
               );
@@ -1564,12 +1565,15 @@ function AppsSection() {
                   <div className="flex items-center gap-3">
                     <Blocks size={17} className="text-primary" />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-ink">{app.manifest.name} · v{app.manifest.version}</div>
+                      <div className="truncate text-sm text-ink">
+                        {app.manifest.name} · v{app.manifest.version}
+                        {bundled && <span className="ml-2 text-2xs text-primary">内置 · 默认关闭</span>}
+                      </div>
                       <div className="truncate font-mono text-2xs text-ink-3" title={app.bundleHash}>
                         SHA-256 {app.bundleHash}
                       </div>
                     </div>
-                    {sensitive.length > 0 && (
+                    {!bundled && sensitive.length > 0 && (
                       <button
                         title="权限"
                         onClick={() => {
@@ -1585,13 +1589,15 @@ function AppsSection() {
                       checked={app.enabled}
                       onChange={(enabled) => void appManager().setEnabled(app.manifest.id, enabled)}
                     />
-                    <button
-                      title="卸载"
-                      onClick={() => setRemoving(app.manifest.id)}
-                      className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-danger"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {!bundled && (
+                      <button
+                        title="卸载"
+                        onClick={() => setRemoving(app.manifest.id)}
+                        className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-danger"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                   {editingPermissions === app.manifest.id && (
                     <div className="mt-3 border-t border-line pt-3">

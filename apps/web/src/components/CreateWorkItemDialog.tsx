@@ -25,6 +25,7 @@ export default function CreateWorkItemDialog({
   defaultType,
   defaultTags,
   rid,
+  onCreated,
   onClose,
 }: {
   defaultTitle: string;
@@ -32,6 +33,7 @@ export default function CreateWorkItemDialog({
   defaultType?: string;
   defaultTags?: string;
   rid?: string;
+  onCreated?: (created: { id: number; type: string; title: string; webUrl: string }[]) => void;
   onClose: () => void;
 }) {
   const config = useWorkbench((s) => s.config);
@@ -177,6 +179,7 @@ export default function CreateWorkItemDialog({
         ? `已创建 ${top.type} #${top.id}`
         : `已创建 ${created.length} 个工作项（#${created.map((w) => w.id).join(', #')}）`;
       toast.success(summary);
+      onCreated?.(created);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

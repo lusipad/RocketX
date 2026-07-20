@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 
 const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
@@ -688,7 +689,7 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   expect(pageErrors).toEqual([]);
 });
 
-test('内网通插件可保存 IP 范围并明确同时应用 9011 与 2425', async ({ page }) => {
+test('内网通插件可保存本机名称和 IP 范围并立即应用', async ({ page }) => {
   const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
   const bridgeBootstrap = `<script>
     window.__bridgeCalls = [];
@@ -697,7 +698,15 @@ test('内网通插件可保存 IP 范围并明确同时应用 9011 与 2425', as
       window.__bridgeCalls.push(message);
       const method = message.params?.method;
       let result = null;
-      if (method === 'ipmsg.discovery.get') {
+      if (method === 'ipmsg.identity.get') {
+        result = { displayName: '', effectiveDisplayName: 'Admin' };
+      } else if (method === 'ipmsg.identity.set') {
+        result = {
+          ok: true,
+          displayName: message.params.params.displayName.trim(),
+          effectiveDisplayName: message.params.params.displayName.trim() || 'Admin',
+        };
+      } else if (method === 'ipmsg.discovery.get') {
         result = { discoveryRanges: '192.168.20.0/30', discoveryTargetCount: 2 };
       } else if (method === 'ipmsg.discovery.set') {
         result = {
@@ -716,13 +725,98 @@ test('内网通插件可保存 IP 范围并明确同时应用 9011 与 2425', as
   </script>`;
   await page.setContent(pluginHtml.replace('<script>', `${bridgeBootstrap}<script>`));
 
+  await expect(page.getByLabel('本机显示名称')).toHaveValue('');
+  await expect(page.getByText('当前跟随 RocketX 账号昵称：“Admin”。')).toBeVisible();
+  await page.getByLabel('本机显示名称').fill('开发机');
+  await page.getByRole('button', { name: '保存并立即生效' }).click();
+  await expect(page.getByText('已保存并以“开发机”重新广播。')).toBeVisible();
   await expect(page.getByLabel('目标 IPv4 范围')).toHaveValue('192.168.20.0/30');
   await page.getByLabel('目标 IPv4 范围').fill('10.20.30.10-10.20.30.12');
   await page.getByRole('button', { name: '保存并应用' }).click();
   await expect(page.getByText('已应用 3 个目标，同时覆盖 9011 与 2425。')).toBeVisible();
-  const configured = await page.evaluate(() => (
-    (window as unknown as { __bridgeCalls: Array<{ params?: { method?: string; params?: unknown } }> })
-      .__bridgeCalls.find((call) => call.params?.method === 'ipmsg.discovery.set')?.params?.params
-  ));
-  expect(configured).toEqual({ discoveryRanges: '10.20.30.10-10.20.30.12' });
+  const configured = await page.evaluate(() => {
+    const calls = (window as unknown as {
+      __bridgeCalls: Array<{ params?: { method?: string; params?: unknown } }>;
+    }).__bridgeCalls;
+    return {
+      identity: calls.find((call) => call.params?.method === 'ipmsg.identity.set')?.params?.params,
+      discovery: calls.find((call) => call.params?.method === 'ipmsg.discovery.set')?.params?.params,
+    };
+  });
+  expect(configured).toEqual({
+    identity: { displayName: '开发机' },
+    discovery: { discoveryRanges: '10.20.30.10-10.20.30.12' },
+  });
+});
+
+test('内网通插件通过真实 iframe sandbox Bridge 保存范围并刷新设备', async ({ page }) => {
+  const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
+  const srcDoc = sandboxDocument({
+    id: 'dev.rocketx.intranet-link',
+    name: '内网通',
+    version: '1.2.0',
+    publisher: 'RocketX',
+    runtime: 'iframe',
+    entry: 'index.html',
+    permissions: ['lan:discover'],
+  }, pluginHtml);
+
+  await page.setContent('<main></main>');
+  await page.evaluate((html) => {
+    const iframe = document.createElement('iframe');
+    iframe.title = '内网通';
+    iframe.sandbox.add('allow-scripts');
+    let activePort: MessagePort | undefined;
+    const connect = () => {
+      activePort?.close();
+      const channel = new MessageChannel();
+      activePort = channel.port1;
+      channel.port1.addEventListener('message', (event) => {
+        const request = event.data;
+        const method = request.params?.method;
+        let result = null;
+        if (method === 'ipmsg.identity.get') {
+          result = { displayName: 'WSL 节点', effectiveDisplayName: 'WSL 节点' };
+        } else if (method === 'ipmsg.discovery.get') {
+          result = { discoveryRanges: '192.168.20.0/30', discoveryTargetCount: 2 };
+        } else if (method === 'ipmsg.discovery.set') {
+          result = {
+            discoveryRanges: request.params.params.discoveryRanges.trim(),
+            discoveryTargetCount: 3,
+          };
+        } else if (method === 'ipmsg.peers') {
+          result = [{
+            id: 'peer-1',
+            user: 'tester',
+            host: 'wsl-peer',
+            nickname: 'WSL 测试节点',
+            dialect: 'ipmsg',
+            lastSeenMs: Date.now(),
+          }];
+        }
+        channel.port1.postMessage({ jsonrpc: '2.0', id: request.id, result });
+      });
+      channel.port1.start();
+      iframe.contentWindow?.postMessage(
+        { jsonrpc: '2.0', method: 'rcx/connect' },
+        '*',
+        [channel.port2],
+      );
+    };
+    (window as typeof window & { __reconnectBridge?: () => void }).__reconnectBridge = connect;
+    iframe.addEventListener('load', connect);
+    document.querySelector('main')!.append(iframe);
+    iframe.srcdoc = html;
+  }, srcDoc);
+
+  const app = page.frameLocator('iframe[title="内网通"]');
+  await expect(app.getByLabel('本机显示名称')).toHaveValue('WSL 节点');
+  await expect(app.getByLabel('目标 IPv4 范围')).toHaveValue('192.168.20.0/30');
+  await expect(app.getByText('发现 1 个内网通兼容联系人。')).toBeVisible();
+  await page.evaluate(() => {
+    (window as typeof window & { __reconnectBridge?: () => void }).__reconnectBridge?.();
+  });
+  await app.getByLabel('目标 IPv4 范围').fill('10.20.30.10-10.20.30.12');
+  await app.getByRole('button', { name: '保存并应用' }).click();
+  await expect(app.getByText('已应用 3 个目标，同时覆盖 9011 与 2425。')).toBeVisible();
 });
