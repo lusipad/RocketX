@@ -15,5 +15,6 @@
 3. 选择 **Install local app**。
 4. 选择本目录。
 5. 确认 `lan:discover`、`lan:transfer`、`ui:notify` 权限后安装。
+6. 安装后插件默认禁用；需要使用时在 Apps 中启用，禁用或卸载会停止 2425/9011 监听并移除兼容频道。
 
 旧协议 peer 始终是未认证 legacy peer，不复用 M9 可信 LAN 身份。

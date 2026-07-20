@@ -5,8 +5,9 @@ import { getServerBase, isTauri } from '../lib/client';
 import { useAuth } from '../stores/auth';
 
 export const IPMSG_RID = 'local:ipmsg';
+export const INTRANET_LINK_APP_ID = 'dev.rocketx.intranet-link';
 
-const APP_ID = 'system:ipmsg';
+const APP_ID = INTRANET_LINK_APP_ID;
 const MAX_MESSAGES = 500;
 
 export interface IpmsgPeer {
@@ -105,6 +106,21 @@ interface IpmsgState {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlisteners: UnlistenFn[] = [];
+let runtimeTransition: Promise<void> = Promise.resolve();
+
+function transitionRuntime(enabled: boolean): Promise<void> {
+  const transition = runtimeTransition.then(async () => {
+    if (useIpmsg.getState().enabled !== enabled) return;
+    if (enabled && useIpmsg.getState().running) return;
+    if (!enabled) {
+      await stopIpmsgRuntime();
+      return;
+    }
+    await startRuntime();
+  });
+  runtimeTransition = transition.catch(() => {});
+  return transition;
+}
 
 function scope(): string {
   return `${encodeURIComponent(getServerBase() || 'same-origin')}:${useAuth.getState().user?._id ?? 'guest'}`;
@@ -224,9 +240,10 @@ export async function stopIpmsgRuntime(): Promise<void> {
 
 export async function initializeIpmsgRuntime(): Promise<void> {
   await useIpmsg.getState().hydrate();
-  if (!useIpmsg.getState().enabled) return;
+  const { appManager } = await import('../kernel/installed');
+  if (!appManager().get(APP_ID)?.enabled || !useIpmsg.getState().enabled) return;
   try {
-    await startRuntime();
+    await transitionRuntime(true);
   } catch (error) {
     useIpmsg.setState({ running: false, error: errorText(error) });
   }
@@ -262,13 +279,25 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
 
   setEnabled: async (enabled) => {
     set({ enabled, error: null });
-    await persist();
     if (!enabled) {
-      await stopIpmsgRuntime();
+      let persistenceError: unknown;
+      try {
+        await persist();
+      } catch (error) {
+        persistenceError = error;
+      }
+      try {
+        await transitionRuntime(false);
+      } catch (error) {
+        set({ running: false, error: errorText(error) });
+        throw error;
+      }
+      if (persistenceError) throw persistenceError;
       return;
     }
+    await persist();
     try {
-      await startRuntime();
+      await transitionRuntime(true);
     } catch (error) {
       set({ running: false, error: errorText(error) });
       throw error;

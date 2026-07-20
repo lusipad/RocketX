@@ -39,6 +39,7 @@ export interface RcxAppManifest {
   version: string;
   name: string;
   icon?: string;
+  enabledByDefault?: boolean;
   publisher: string;
   runtime: AppRuntime;
   entry: string | { command: string; args?: string[]; env?: Record<string, string> };
@@ -100,6 +101,9 @@ export function parseManifest(value: unknown): RcxAppManifest {
     if (!PERMISSION_SET.has(permission)) throw new Error(`未知权限: ${permission}`);
   }
   if (new Set(permissions).size !== permissions.length) throw new Error('permissions 不能重复');
+  if (raw.enabledByDefault !== undefined && typeof raw.enabledByDefault !== 'boolean') {
+    throw new Error('enabledByDefault 必须是布尔值');
+  }
 
   const netAllow = Array.isArray(raw.netAllow)
     ? raw.netAllow.map((origin) => normalizeOrigin(requireString(origin, 'netAllow[]')))
@@ -151,6 +155,7 @@ export function parseManifest(value: unknown): RcxAppManifest {
         },
     permissions,
     ...(typeof raw.icon === 'string' ? { icon: raw.icon } : {}),
+    ...(typeof raw.enabledByDefault === 'boolean' ? { enabledByDefault: raw.enabledByDefault } : {}),
     ...(netAllow ? { netAllow } : {}),
     ...(contributes ? { contributes } : {}),
   };

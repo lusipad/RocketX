@@ -42,7 +42,7 @@ import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
-import { useIpmsg } from '../ipmsg/store';
+import { INTRANET_LINK_APP_ID, IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -73,6 +73,10 @@ function stringParam(params: unknown, key: string, fallback = ''): string {
 
 function plainMessage(message: RcMessage): RcMessage {
   return structuredClone(message);
+}
+
+function requireIntranetLink(appId: string): void {
+  if (appId !== INTRANET_LINK_APP_ID) throw new Error('旧协议能力仅供内网通官方插件使用');
 }
 
 function registerCapabilities(): void {
@@ -174,9 +178,10 @@ function registerCapabilities(): void {
     });
     return { ok: true, messageId };
   });
-  capabilityBus.register('ipmsg.peers', 'lan:discover', async () => {
+  capabilityBus.register('ipmsg.peers', 'lan:discover', async (_params, context) => {
+    requireIntranetLink(context.appId);
     const ipmsg = useIpmsg.getState();
-    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    if (!ipmsg.running) await ipmsg.setEnabled(true);
     await useIpmsg.getState().refreshPeers();
     return useIpmsg.getState().peers.map(({ id, user, host, nickname, group, dialect, supportsUtf8, lastSeenMs }) => ({
       id,
@@ -189,21 +194,23 @@ function registerCapabilities(): void {
       lastSeenMs,
     }));
   });
-  capabilityBus.register('ipmsg.send', 'lan:transfer', async (params) => {
+  capabilityBus.register('ipmsg.send', 'lan:transfer', async (params, context) => {
+    requireIntranetLink(context.appId);
     const peerId = stringParam(params, 'peerId');
     const text = stringParam(params, 'text');
     if (!peerId) throw new Error('ipmsg.send 缺少 peerId');
     const ipmsg = useIpmsg.getState();
-    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    if (!ipmsg.running) await ipmsg.setEnabled(true);
     ipmsg.selectPeer(peerId);
     await useIpmsg.getState().sendMessage(text);
     return { ok: true };
   });
-  capabilityBus.register('ipmsg.offerFile', 'lan:transfer', async (params) => {
+  capabilityBus.register('ipmsg.offerFile', 'lan:transfer', async (params, context) => {
+    requireIntranetLink(context.appId);
     const peerId = stringParam(params, 'peerId');
     if (!peerId) throw new Error('ipmsg.offerFile 缺少 peerId');
     const ipmsg = useIpmsg.getState();
-    if (!ipmsg.enabled) await ipmsg.setEnabled(true);
+    if (!ipmsg.running) await ipmsg.setEnabled(true);
     ipmsg.selectPeer(peerId);
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({
@@ -302,9 +309,15 @@ function emitAfterOpen(appId: string, event: string, payload: unknown): void {
   bridgeHost.emit(appId, event, payload);
 }
 
-function activateApp(app: InstalledApp): () => void {
+function activateApp(app: InstalledApp): () => void | Promise<void> {
   permissionGate.setGrant({ appId: app.manifest.id, granted: app.granted });
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => void | Promise<void>> = [];
+  const ownsIpmsgRuntime = app.manifest.id === INTRANET_LINK_APP_ID;
+  if (ownsIpmsgRuntime) {
+    void useIpmsg.getState().setEnabled(true).catch((error) => {
+      toast.error(error, '内网通插件启动失败');
+    });
+  }
   if (app.manifest.runtime === 'worker') {
     const worker = createSandboxedWorker(app.entryContent, app.manifest.id);
     cleanups.push(bridgeHost.registerWorker(app.manifest.id, app.manifest, worker));
@@ -434,14 +447,20 @@ function activateApp(app: InstalledApp): () => void {
       }
     }
   }
-  return () => {
-    for (const cleanup of cleanups.reverse()) cleanup();
+  return async () => {
+    for (const cleanup of cleanups.reverse()) await cleanup();
     bridgeHost.clearApp(app.manifest.id);
     permissionGate.revokeApp(app.manifest.id);
     const module = useUI.getState().module;
     if (module.startsWith(`app:${app.manifest.id}:`)) useUI.getState().setModule('messages');
     const panel = useChat.getState().rightPanel;
     if (panel?.kind.startsWith(`app:${app.manifest.id}:`)) useChat.getState().setPanel(null);
+    if (ownsIpmsgRuntime) {
+      await useIpmsg.getState().setEnabled(false).catch((error) => {
+        console.warn('[rcx] 内网通插件状态清理失败', error);
+      });
+      if (useChat.getState().activeRid === IPMSG_RID) useChat.setState({ activeRid: null });
+    }
   };
 }
 

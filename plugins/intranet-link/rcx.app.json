@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "name": "内网通",
   "publisher": "RocketX",
+  "enabledByDefault": false,
   "runtime": "iframe",
   "entry": "index.html",
   "permissions": ["lan:discover", "lan:transfer", "ui:notify"],

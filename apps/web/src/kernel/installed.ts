@@ -19,7 +19,8 @@ export interface InstallOptions {
   sensitiveGrants?: AppPermission[];
 }
 
-type AppActivator = (app: InstalledApp) => void | (() => void);
+type AppCleanup = () => void | Promise<void>;
+type AppActivator = (app: InstalledApp) => void | AppCleanup;
 
 const BASIC = new Set<AppPermission>(BASIC_PERMISSIONS);
 const SENSITIVE = new Set<AppPermission>(SENSITIVE_PERMISSIONS);
@@ -82,7 +83,7 @@ function validateRuntime(manifest: RcxAppManifest, source: InstalledApp['source'
 
 export class AppManager {
   private apps = new Map<string, InstalledApp>();
-  private cleanups = new Map<string, () => void>();
+  private cleanups = new Map<string, AppCleanup>();
   private listeners = new Set<() => void>();
   private version = 0;
   private loaded = false;
@@ -151,7 +152,7 @@ export class AppManager {
     return this.save({
       manifest,
       granted: grantsFor(manifest, options.sensitiveGrants),
-      enabled: true,
+      enabled: this.apps.get(manifest.id)?.enabled ?? (manifest.enabledByDefault !== false),
       source: { kind: 'directory', location: manifestPath.slice(0, -'rcx.app.json'.length) || '.' },
       entryContent,
       bundleHash: await sha256(hashParts),
@@ -186,7 +187,7 @@ export class AppManager {
     return this.save({
       manifest: { ...manifest, entry: entryUrl.href },
       granted: grantsFor(manifest, options.sensitiveGrants),
-      enabled: true,
+      enabled: this.apps.get(manifest.id)?.enabled ?? (manifest.enabledByDefault !== false),
       source: { kind: 'url', location: url.href },
       entryContent,
       bundleHash,
@@ -200,8 +201,7 @@ export class AppManager {
     const next = { ...app, enabled };
     await this.store.apps.set(appId, next);
     this.apps.set(appId, next);
-    this.cleanups.get(appId)?.();
-    this.cleanups.delete(appId);
+    await this.deactivate(appId);
     this.activate(next);
     this.changed();
   }
@@ -212,16 +212,14 @@ export class AppManager {
     const next = { ...app, granted: grantsFor(app.manifest, selected) };
     await this.store.apps.set(appId, next);
     this.apps.set(appId, next);
-    this.cleanups.get(appId)?.();
-    this.cleanups.delete(appId);
+    await this.deactivate(appId);
     this.activate(next);
     this.changed();
   }
 
   async uninstall(appId: string): Promise<void> {
     if (!this.apps.has(appId)) return;
-    this.cleanups.get(appId)?.();
-    this.cleanups.delete(appId);
+    await this.deactivate(appId);
     this.apps.delete(appId);
     await Promise.all([
       this.store.apps.delete(appId),
@@ -232,8 +230,7 @@ export class AppManager {
 
   private async save(app: InstalledApp): Promise<InstalledApp> {
     const previous = this.apps.get(app.manifest.id);
-    this.cleanups.get(app.manifest.id)?.();
-    this.cleanups.delete(app.manifest.id);
+    await this.deactivate(app.manifest.id);
     try {
       await this.store.apps.set(app.manifest.id, app);
       this.apps.set(app.manifest.id, app);
@@ -257,6 +254,12 @@ export class AppManager {
     if (!app.enabled || !this.activator) return;
     const cleanup = this.activator(app);
     if (cleanup) this.cleanups.set(app.manifest.id, cleanup);
+  }
+
+  private async deactivate(appId: string): Promise<void> {
+    const cleanup = this.cleanups.get(appId);
+    this.cleanups.delete(appId);
+    await cleanup?.();
   }
 
   private changed(): void {

@@ -57,6 +57,7 @@ function FileCard({ message }: { message: IpmsgMessage }) {
 
 export default function IpmsgChatArea() {
   const running = useIpmsg((state) => state.running);
+  const intranetAvailable = useIpmsg((state) => state.intranetAvailable);
   const error = useIpmsg((state) => state.error);
   const peers = useIpmsg((state) => state.peers);
   const selectedPeerId = useIpmsg((state) => state.selectedPeerId);
@@ -107,7 +108,11 @@ export default function IpmsgChatArea() {
           <div className="min-w-0">
             <div className="text-[15px] font-semibold text-ink">内网通兼容频道</div>
             <div className="truncate text-xs text-ink-3">
-              {running ? `${peers.length} 个在线联系人 · 未认证旧协议` : error || '内网通兼容模式未启动'}
+              {running
+                ? intranetAvailable
+                  ? `${peers.length} 个在线联系人 · 正在监听 2425/9011 · 未认证旧协议`
+                  : `${peers.length} 个在线联系人 · 正在监听 2425；9011 被占用，内网通兼容不可用`
+                : error || '内网通兼容模式未启动'}
             </div>
           </div>
         </div>
