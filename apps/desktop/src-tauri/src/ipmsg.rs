@@ -154,6 +154,7 @@ pub struct IpmsgStatus {
     enabled: bool,
     port: u16,
     peer_count: usize,
+    intranet_available: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -896,6 +897,39 @@ fn take_runtime(state: &IpmsgRuntimeState) -> Result<Option<IpmsgRuntime>, Strin
         .map(|mut runtime| runtime.take())
 }
 
+fn bind_compatibility_ports(
+    bind_ip: Ipv4Addr,
+) -> Result<(Vec<(u16, Arc<UdpSocket>)>, Vec<(u16, TcpListener)>), String> {
+    let mut sockets = Vec::new();
+    let mut listeners = Vec::new();
+    for port in [IPMSG_PORT, INTRANET_PORT] {
+        let bound = (|| {
+            let udp = UdpSocket::bind((bind_ip, port))
+                .map_err(|error| format!("IPMSG UDP {port} is unavailable: {error}"))?;
+            udp.set_broadcast(true)
+                .and_then(|_| udp.set_read_timeout(Some(Duration::from_millis(500))))
+                .map_err(|error| {
+                    format!("failed to configure IPMSG UDP socket on {port}: {error}")
+                })?;
+            let listener = TcpListener::bind((bind_ip, port))
+                .map_err(|error| format!("IPMSG TCP {port} is unavailable: {error}"))?;
+            listener.set_nonblocking(true).map_err(|error| {
+                format!("failed to configure IPMSG TCP listener on {port}: {error}")
+            })?;
+            Ok::<_, String>((Arc::new(udp), listener))
+        })();
+        match bound {
+            Ok((socket, listener)) => {
+                sockets.push((port, socket));
+                listeners.push((port, listener));
+            }
+            Err(_) if port == INTRANET_PORT => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((sockets, listeners))
+}
+
 #[tauri::command]
 pub fn ipmsg_start(
     app: tauri::AppHandle,
@@ -915,22 +949,8 @@ pub fn ipmsg_start(
         .ok()
         .and_then(|value| value.parse::<Ipv4Addr>().ok())
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    let mut sockets: Vec<(u16, Arc<UdpSocket>)> = Vec::new();
-    let mut listeners: Vec<(u16, TcpListener)> = Vec::new();
-    for port in [IPMSG_PORT, INTRANET_PORT] {
-        let udp = UdpSocket::bind((bind_ip, port))
-            .map_err(|error| format!("IPMSG UDP {port} is unavailable: {error}"))?;
-        udp.set_broadcast(true)
-            .and_then(|_| udp.set_read_timeout(Some(Duration::from_millis(500))))
-            .map_err(|error| format!("failed to configure IPMSG UDP socket on {port}: {error}"))?;
-        let listener = TcpListener::bind((bind_ip, port))
-            .map_err(|error| format!("IPMSG TCP {port} is unavailable: {error}"))?;
-        listener.set_nonblocking(true).map_err(|error| {
-            format!("failed to configure IPMSG TCP listener on {port}: {error}")
-        })?;
-        sockets.push((port, Arc::new(udp)));
-        listeners.push((port, listener));
-    }
+    let (sockets, listeners) = bind_compatibility_ports(bind_ip)?;
+    let intranet_available = sockets.iter().any(|(port, _)| *port == INTRANET_PORT);
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let acks = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
     let outgoing = Arc::new(Mutex::new(HashMap::new()));
@@ -1003,6 +1023,7 @@ pub fn ipmsg_start(
         enabled: true,
         port: IPMSG_PORT,
         peer_count: 0,
+        intranet_available,
     })
 }
 
@@ -1023,6 +1044,7 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
             enabled: false,
             port: IPMSG_PORT,
             peer_count: 0,
+            intranet_available: false,
         });
     };
     let peer_count = runtime.peers.read().map(|peers| peers.len()).unwrap_or(0);
@@ -1030,6 +1052,10 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
         enabled: true,
         port: IPMSG_PORT,
         peer_count,
+        intranet_available: runtime
+            .sockets
+            .iter()
+            .any(|(port, _)| *port == INTRANET_PORT),
     })
 }
 
@@ -1520,6 +1546,20 @@ mod tests {
 
         assert_eq!(parsed.dialect, Dialect::Intranet);
         assert_eq!(parsed.extra, "RocketX 本机 9011 互通验证");
+    }
+
+    #[test]
+    #[ignore = "explicit fixed-port integration test"]
+    fn occupied_intranet_port_keeps_ipmsg_listener_available() {
+        let _blocked_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
+        let _blocked_tcp = TcpListener::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
+
+        let (sockets, listeners) = bind_compatibility_ports(Ipv4Addr::LOCALHOST).unwrap();
+        let socket_ports = sockets.iter().map(|(port, _)| *port).collect::<Vec<_>>();
+        let listener_ports = listeners.iter().map(|(port, _)| *port).collect::<Vec<_>>();
+
+        assert_eq!(socket_ports, vec![IPMSG_PORT]);
+        assert_eq!(listener_ports, vec![IPMSG_PORT]);
     }
 
     #[test]

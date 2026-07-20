@@ -514,6 +514,7 @@ function DesktopSection() {
   const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
   const ipmsgEnabled = useIpmsg((state) => state.enabled);
   const ipmsgRunning = useIpmsg((state) => state.running);
+  const ipmsgIntranetAvailable = useIpmsg((state) => state.intranetAvailable);
   const ipmsgPeers = useIpmsg((state) => state.peers.length);
   const ipmsgError = useIpmsg((state) => state.error);
   const setIpmsgEnabled = useIpmsg((state) => state.setEnabled);
@@ -649,7 +650,7 @@ function DesktopSection() {
       </Row>
       <Row
         label="内网通兼容模式"
-        hint="使用固定 UDP/TCP 2425 与内网通 9011；旧协议没有身份认证，与 Rocket.Chat 可信 LAN 完全隔离"
+        hint="固定监听 UDP/TCP 2425，并在可用时监听内网通 9011；旧协议没有身份认证，与 Rocket.Chat 可信 LAN 完全隔离"
         inline
       >
         <div className="flex min-w-0 flex-col items-end gap-1.5">
@@ -670,7 +671,9 @@ function DesktopSection() {
               : ipmsgError
                 ? ipmsgError
                 : ipmsgRunning
-                  ? `正在监听 2425/9011 端口，发现 ${ipmsgPeers} 个联系人`
+                  ? ipmsgIntranetAvailable
+                    ? `正在监听 2425/9011 端口，发现 ${ipmsgPeers} 个联系人`
+                    : `正在监听 2425 端口，发现 ${ipmsgPeers} 个联系人；9011 被占用，内网通兼容不可用`
                   : ipmsgEnabled
                     ? '正在启动…'
                     : '默认关闭；开启后侧栏出现独立内网通兼容频道'}

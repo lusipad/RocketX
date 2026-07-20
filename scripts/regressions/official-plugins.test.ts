@@ -4,6 +4,9 @@ import test from 'node:test';
 
 const PLUGINS = ['intranet-link'] as const;
 const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
+const ipmsgBackendText = readFile(new URL('../../apps/desktop/src-tauri/src/ipmsg.rs', import.meta.url), 'utf8');
+const ipmsgStoreText = readFile(new URL('../../apps/web/src/ipmsg/store.ts', import.meta.url), 'utf8');
+const settingsText = readFile(new URL('../../apps/web/src/pages/SettingsPage.tsx', import.meta.url), 'utf8');
 
 function capabilityContract(source: string): Map<string, string> {
   return new Map(
@@ -55,4 +58,10 @@ test('内网通文件邀请必须由宿主选择文件，不能接受插件提�
   assert.doesNotMatch(html, /file-path|\bpath\s*:/, '插件不能提交任意本地文件路径');
   assert.doesNotMatch(offerFileHandler, /stringParam\(params, 'path'\)/, '宿主不能信任插件提供的 path');
   assert.match(offerFileHandler, /@tauri-apps\/plugin-dialog/, '宿主必须通过原生文件选择器获得路径');
+});
+
+test('9011 被占用时保留 2425 兼容模式并向界面暴露降级状态', async () => {
+  assert.match(await ipmsgBackendText, /intranet_available/);
+  assert.match(await ipmsgStoreText, /intranetAvailable: status\.intranetAvailable/);
+  assert.match(await settingsText, /9011 被占用，内网通兼容不可用/);
 });

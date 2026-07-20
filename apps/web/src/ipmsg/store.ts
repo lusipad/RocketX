@@ -41,6 +41,7 @@ interface IpmsgStatus {
   enabled: boolean;
   port: number;
   peerCount: number;
+  intranetAvailable: boolean;
 }
 
 interface IpmsgPeerEvent {
@@ -86,6 +87,7 @@ interface IpmsgState {
   enabled: boolean;
   running: boolean;
   port: number;
+  intranetAvailable: boolean;
   error: string | null;
   peers: IpmsgPeer[];
   selectedPeerId: string | null;
@@ -201,7 +203,12 @@ async function startRuntime(): Promise<void> {
     unlisteners = [];
     throw error;
   }
-  useIpmsg.setState({ running: status.enabled, port: status.port, error: null });
+  useIpmsg.setState({
+    running: status.enabled,
+    port: status.port,
+    intranetAvailable: status.intranetAvailable,
+    error: null,
+  });
   await useIpmsg.getState().refreshPeers();
   pollTimer = setInterval(() => void useIpmsg.getState().refreshPeers(), 3_000);
 }
@@ -212,7 +219,7 @@ export async function stopIpmsgRuntime(): Promise<void> {
   for (const unlisten of unlisteners) unlisten();
   unlisteners = [];
   if (isTauri) await invoke('ipmsg_stop').catch(() => {});
-  useIpmsg.setState({ running: false, peers: [], selectedPeerId: null });
+  useIpmsg.setState({ running: false, intranetAvailable: false, peers: [], selectedPeerId: null });
 }
 
 export async function initializeIpmsgRuntime(): Promise<void> {
@@ -230,6 +237,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
   enabled: false,
   running: false,
   port: 2425,
+  intranetAvailable: false,
   error: null,
   peers: [],
   selectedPeerId: null,
