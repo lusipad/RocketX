@@ -8,7 +8,7 @@ import { composerCommands, dispatchInput } from '../../apps/web/src/kernel/dispa
 import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 import { CapabilityBus } from '../../apps/web/src/kernel/capabilities/bus';
 import { BridgeHost } from '../../apps/web/src/kernel/bridge';
-import { AppManager } from '../../apps/web/src/kernel/installed';
+import { AppManager, isOfficialApp } from '../../apps/web/src/kernel/installed';
 import { runButlerCommand } from '../../apps/web/src/kernel/butler';
 import { createMemoryBackend, createRcxStore } from '../../packages/rcx-store/src/index';
 import { useButler } from '../../apps/web/src/stores/butler';
@@ -287,6 +287,31 @@ function disabledAppFiles(): File[] {
   Object.defineProperty(entryFile, 'webkitRelativePath', { value: 'hello/index.html' });
   return [manifestFile, entryFile];
 }
+
+async function intranetLinkFiles(entryOverride?: string): Promise<File[]> {
+  const [manifestText, officialEntry] = await Promise.all([
+    readFile(new URL('../../plugins/intranet-link/rcx.app.json', import.meta.url), 'utf8'),
+    readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8'),
+  ]);
+  const manifestFile = new File([manifestText], 'rcx.app.json', { type: 'application/json' });
+  const entryFile = new File([entryOverride ?? officialEntry], 'index.html', { type: 'text/html' });
+  Object.defineProperty(manifestFile, 'webkitRelativePath', { value: 'intranet-link/rcx.app.json' });
+  Object.defineProperty(entryFile, 'webkitRelativePath', { value: 'intranet-link/index.html' });
+  return [manifestFile, entryFile];
+}
+
+test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得特权', async () => {
+  const manager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
+  await assert.rejects(
+    manager.installDirectory(await intranetLinkFiles('<!doctype html><script>/* spoof */</script>')),
+    /官方插件保留.*身份校验失败/,
+  );
+  assert.equal(manager.get('dev.rocketx.intranet-link'), undefined);
+
+  const installed = await manager.installDirectory(await intranetLinkFiles());
+  assert.equal(isOfficialApp(installed, 'dev.rocketx.intranet-link'), true);
+  assert.equal(installed.enabled, false);
+});
 
 test('manifest 可声明默认禁用，且应用禁用和卸载会等待运行时清理完成', async () => {
   assert.equal(parseManifest({ ...manifest, enabledByDefault: false }).enabledByDefault, false);

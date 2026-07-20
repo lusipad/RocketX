@@ -27,7 +27,7 @@ import SummaryPanel from '../components/SummaryPanel';
 import ButlerPanel from '../components/ButlerPanel';
 import { useAiAssistant } from '../stores/aiAssistant';
 import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
-import { AppManager, setActiveAppManager, type InstalledApp } from './installed';
+import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
 import { BridgeHost } from './bridge';
@@ -76,7 +76,10 @@ function plainMessage(message: RcMessage): RcMessage {
 }
 
 function requireIntranetLink(appId: string): void {
-  if (appId !== INTRANET_LINK_APP_ID) throw new Error('旧协议能力仅供内网通官方插件使用');
+  const app = installedApps.get(appId);
+  if (!app || !isOfficialApp(app, INTRANET_LINK_APP_ID)) {
+    throw new Error('旧协议能力仅供身份校验通过的内网通官方插件使用');
+  }
 }
 
 function registerCapabilities(): void {
@@ -312,7 +315,7 @@ function emitAfterOpen(appId: string, event: string, payload: unknown): void {
 function activateApp(app: InstalledApp): () => void | Promise<void> {
   permissionGate.setGrant({ appId: app.manifest.id, granted: app.granted });
   const cleanups: Array<() => void | Promise<void>> = [];
-  const ownsIpmsgRuntime = app.manifest.id === INTRANET_LINK_APP_ID;
+  const ownsIpmsgRuntime = isOfficialApp(app, INTRANET_LINK_APP_ID);
   if (ownsIpmsgRuntime) {
     void useIpmsg.getState().setEnabled(true).catch((error) => {
       toast.error(error, '内网通插件启动失败');

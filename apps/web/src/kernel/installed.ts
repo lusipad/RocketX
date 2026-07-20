@@ -9,6 +9,7 @@ export interface InstalledApp {
   manifest: RcxAppManifest;
   granted: AppPermission[];
   enabled: boolean;
+  official: boolean;
   source: { kind: 'directory' | 'url'; location: string };
   entryContent: string;
   bundleHash: string;
@@ -25,6 +26,28 @@ type AppActivator = (app: InstalledApp) => void | AppCleanup;
 const BASIC = new Set<AppPermission>(BASIC_PERMISSIONS);
 const SENSITIVE = new Set<AppPermission>(SENSITIVE_PERMISSIONS);
 const DANGEROUS = new Set<AppPermission>(DANGEROUS_PERMISSIONS);
+
+const OFFICIAL_APP_IDENTITY_HASHES = new Map([
+  ['dev.rocketx.intranet-link', '4f24dc86e526a884fdcea84d51168abfe87f57e36f2a01a0d88e9da210fc4f72'],
+]);
+
+function officialIdentity(manifest: RcxAppManifest, identityHash: string): boolean {
+  const expected = OFFICIAL_APP_IDENTITY_HASHES.get(manifest.id);
+  if (!expected) return false;
+  if (identityHash.toLowerCase() !== expected) {
+    throw new Error(`应用 ID ${manifest.id} 由 RocketX 官方插件保留，当前包身份校验失败`);
+  }
+  return true;
+}
+
+export function isOfficialApp(app: InstalledApp, appId: string): boolean {
+  return app.manifest.id === appId && app.official === true;
+}
+
+async function officialIdentityHash(manifestText: string, entryContent: string): Promise<string> {
+  const canonical = (value: string) => value.replaceAll('\r\n', '\n');
+  return sha256([canonical(manifestText), '\n', canonical(entryContent)]);
+}
 
 function normalizePath(path: string): string {
   const parts: string[] = [];
@@ -142,6 +165,7 @@ export class AppManager {
     );
     if (!entryFile) throw new Error(`找不到 entry: ${manifest.entry}`);
     const entryContent = await entryFile.text();
+    const official = officialIdentity(manifest, await officialIdentityHash(manifestText, entryContent));
     const sorted = [...files].sort((left, right) =>
       (left.webkitRelativePath || left.name).localeCompare(right.webkitRelativePath || right.name),
     );
@@ -153,6 +177,7 @@ export class AppManager {
       manifest,
       granted: grantsFor(manifest, options.sensitiveGrants),
       enabled: this.apps.get(manifest.id)?.enabled ?? (manifest.enabledByDefault !== false),
+      official,
       source: { kind: 'directory', location: manifestPath.slice(0, -'rcx.app.json'.length) || '.' },
       entryContent,
       bundleHash: await sha256(hashParts),
@@ -188,6 +213,7 @@ export class AppManager {
       manifest: { ...manifest, entry: entryUrl.href },
       granted: grantsFor(manifest, options.sensitiveGrants),
       enabled: this.apps.get(manifest.id)?.enabled ?? (manifest.enabledByDefault !== false),
+      official: officialIdentity(manifest, await officialIdentityHash(manifestText, entryContent)),
       source: { kind: 'url', location: url.href },
       entryContent,
       bundleHash,
