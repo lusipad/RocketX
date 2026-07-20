@@ -43,6 +43,7 @@ interface IpmsgStatus {
   port: number;
   peerCount: number;
   intranetAvailable: boolean;
+  discoveryTargetCount: number;
 }
 
 interface IpmsgPeerEvent {
@@ -79,6 +80,7 @@ interface IpmsgFileReceipt {
 
 interface PersistedIpmsgState {
   enabled: boolean;
+  discoveryRanges?: string;
   selectedPeerId: string | null;
   messages: IpmsgMessage[];
 }
@@ -89,6 +91,8 @@ interface IpmsgState {
   running: boolean;
   port: number;
   intranetAvailable: boolean;
+  discoveryRanges: string;
+  discoveryTargetCount: number;
   error: string | null;
   peers: IpmsgPeer[];
   selectedPeerId: string | null;
@@ -96,6 +100,7 @@ interface IpmsgState {
   unread: number;
   hydrate: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
+  setDiscoveryRanges: (value: string) => Promise<number>;
   selectPeer: (peerId: string) => void;
   refreshPeers: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
@@ -141,10 +146,11 @@ function trimMessages(messages: IpmsgMessage[]): IpmsgMessage[] {
 }
 
 async function persist(): Promise<void> {
-  const { enabled, selectedPeerId, messages } = useIpmsg.getState();
+  const { enabled, discoveryRanges, selectedPeerId, messages } = useIpmsg.getState();
   const { kernelStore } = await import('../kernel/store');
   await kernelStore.appData.set(APP_ID, scope(), {
     enabled,
+    discoveryRanges,
     selectedPeerId,
     messages: trimMessages(messages),
   } satisfies PersistedIpmsgState);
@@ -213,6 +219,7 @@ async function startRuntime(): Promise<void> {
       userName: user.username,
       nickname: user.name || user.username,
       group: 'RocketX',
+      discoveryRanges: useIpmsg.getState().discoveryRanges,
     });
   } catch (error) {
     for (const unlisten of unlisteners) unlisten();
@@ -223,6 +230,7 @@ async function startRuntime(): Promise<void> {
     running: status.enabled,
     port: status.port,
     intranetAvailable: status.intranetAvailable,
+    discoveryTargetCount: status.discoveryTargetCount,
     error: null,
   });
   await useIpmsg.getState().refreshPeers();
@@ -235,7 +243,13 @@ export async function stopIpmsgRuntime(): Promise<void> {
   for (const unlisten of unlisteners) unlisten();
   unlisteners = [];
   if (isTauri) await invoke('ipmsg_stop').catch(() => {});
-  useIpmsg.setState({ running: false, intranetAvailable: false, peers: [], selectedPeerId: null });
+  useIpmsg.setState({
+    running: false,
+    intranetAvailable: false,
+    discoveryTargetCount: 0,
+    peers: [],
+    selectedPeerId: null,
+  });
 }
 
 export async function initializeIpmsgRuntime(): Promise<void> {
@@ -255,6 +269,8 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
   running: false,
   port: 2425,
   intranetAvailable: false,
+  discoveryRanges: '',
+  discoveryTargetCount: 0,
   error: null,
   peers: [],
   selectedPeerId: null,
@@ -268,6 +284,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
     set({
       hydrated: true,
       enabled: saved?.enabled ?? false,
+      discoveryRanges: saved?.discoveryRanges ?? '',
       selectedPeerId: saved?.selectedPeerId ?? null,
       messages: (saved?.messages ?? []).map((message) =>
         message.offerId && !message.localPath
@@ -300,6 +317,32 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
       await transitionRuntime(true);
     } catch (error) {
       set({ running: false, error: errorText(error) });
+      throw error;
+    }
+  },
+
+  setDiscoveryRanges: async (value) => {
+    if (!isTauri) throw new Error('内网通/IP Messenger 兼容模式仅支持桌面客户端');
+    const discoveryRanges = value.trim();
+    const discoveryTargetCount = await invoke<number>('ipmsg_validate_discovery_ranges', {
+      discoveryRanges,
+    });
+    const previous = get().discoveryRanges;
+    const previousTargetCount = get().discoveryTargetCount;
+    const wasRunning = get().running;
+    set({ discoveryRanges, discoveryTargetCount, error: null });
+    try {
+      await persist();
+      if (wasRunning) await startRuntime();
+      return discoveryTargetCount;
+    } catch (error) {
+      set({
+        discoveryRanges: previous,
+        discoveryTargetCount: previousTargetCount,
+        error: errorText(error),
+      });
+      await persist();
+      if (wasRunning) await startRuntime();
       throw error;
     }
   },

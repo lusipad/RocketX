@@ -28,7 +28,7 @@ const SENSITIVE = new Set<AppPermission>(SENSITIVE_PERMISSIONS);
 const DANGEROUS = new Set<AppPermission>(DANGEROUS_PERMISSIONS);
 
 const OFFICIAL_APP_IDENTITY_HASHES = new Map([
-  ['dev.rocketx.intranet-link', '4f24dc86e526a884fdcea84d51168abfe87f57e36f2a01a0d88e9da210fc4f72'],
+  ['dev.rocketx.intranet-link', '98dc662f07da5db6590abeae71e32007911f718646bb56fd80e73b0e5b872c8a'],
 ]);
 
 function officialIdentity(manifest: RcxAppManifest, identityHash: string): boolean {

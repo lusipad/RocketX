@@ -62,6 +62,8 @@ pnpm dev
 与密钥也在这里配置，密钥只进入操作系统凭据库。托管会话中被 `@ai` 请求引用到的图片会
 下载到会话隔离缓存，并作为图片输入交给 Codex。
 
+随发布包提供的「内网通」官方插件默认关闭，可随时禁用或卸载。启用后可为跨网段发现配置单个 IPv4、CIDR 或起止范围，同一范围会同时覆盖内网通 `9011` 与 IP Messenger `2425`；该旧协议兼容能力不等同于 RocketX 的认证 LAN 通道。
+
 ## 测试
 
 界面上手点测不出来的东西（Vite HMR 会让 store 模块分叉，浏览器里断言状态不可靠），
@@ -74,9 +76,9 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 459 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 460 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 19 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片与待办链接
+pnpm test:ui        # 20 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与内网通范围配置
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 

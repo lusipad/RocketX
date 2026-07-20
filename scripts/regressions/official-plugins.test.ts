@@ -91,3 +91,16 @@ test('9011 被占用时保留 2425 兼容模式并向界面暴露降级状态', 
   const chatArea = await readFile(new URL('../../apps/web/src/components/IpmsgChatArea.tsx', import.meta.url), 'utf8');
   assert.match(chatArea, /9011 被占用，内网通兼容不可用/);
 });
+
+test('可配置发现范围由宿主校验、持久化并同时覆盖 9011 与 2425', async () => {
+  const html = await readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8');
+  assert.match(html, /ipmsg\.discovery\.get/);
+  assert.match(html, /ipmsg\.discovery\.set/);
+  assert.match(html, /9011 与 IP Messenger 2425/);
+  assert.match(await runtimeText, /capabilityBus\.register\('ipmsg\.discovery\.set', 'lan:discover'/);
+  assert.match(await ipmsgStoreText, /ipmsg_validate_discovery_ranges/);
+  assert.match(await ipmsgStoreText, /discoveryRanges/);
+  assert.match(await ipmsgBackendText, /MAX_DISCOVERY_TARGETS: usize = 1024/);
+  assert.match(await ipmsgBackendText, /discovery_addresses\(IPMSG_PORT, &\[target\]\)/);
+  assert.match(await ipmsgBackendText, /discovery_addresses\(INTRANET_PORT, &\[target\]\)/);
+});
