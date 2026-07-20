@@ -6,7 +6,7 @@ Plan: 当前 Codex 任务中的验收计划
 
 已完成：用户可以配置多个真实本地目录，从 ADO 工作项创建 Rocket.Chat 原生 Discussion，并为每个活动讨论独占绑定一个目录。Discussion 使用房间级共享 Agent；原版 Rocket.Chat 成员以结构化 `@ai` 提问，本机宿主负责代码上下文、命令执行和审批。首次获准修改前，Agent 必须检查脏目录并创建计划分支。
 
-第二轮打磨取消了额外约定：已绑定 Discussion 接受开头的字面量 `@ai`，不再依赖客户端生成结构化 mention；共享 Agent 自动复用现有 Codex 模型和推理强度，并把环境的基础分支传给 Codex。Discussion 的前序房间消息会作为不可信上下文完整带入。
+第二轮打磨取消了额外约定：已绑定 Discussion 接受开头的字面量 `@ai`，不再依赖客户端生成结构化 mention；共享 Agent 把环境的基础分支传给 Codex。Discussion 的前序房间消息会作为不可信上下文完整带入。自 v0.25.4 起，AI 托管改用独立的 Codex 模型和推理强度设置。
 
 ## Decisions
 
@@ -16,7 +16,7 @@ Plan: 当前 Codex 任务中的验收计划
 - 同一工作项只保留一个活动讨论，同一本地环境只允许一个活动写入讨论；结束 Agent 会释放绑定。
 - 创建讨论时可选将原生 Discussion 链接写回 ADO；真实目录不会写入 Rocket.Chat 或 ADO。
 - `apps/web/src/agent/context.ts`: 线程会话继续按线程选上下文，工作项 Discussion 则使用同一房间最近消息，避免再次要求成员引用或复述讨论。
-- `apps/web/src/stores/sharedAgent.ts`: 模型与推理强度直接复用现有 Codex 设置，不为共享 Agent增加第二套配置。
+- `apps/web/src/stores/sharedAgent.ts`: 模型与推理强度读取 AI 托管专用设置；升级时仅首次继承既有管家设置，之后互不影响。
 - `apps/web/src/components/ChatArea.tsx`: 活动房间头部直接展示“谁的 AI + 当前状态”；本机读取完整运行状态，其他客户端读取公开租约卡，不新增状态协议。
 - `apps/web/src/components/AiSettings.tsx`: AI 配置默认只突出代码目录；模型、Provider、能力路由、自动化接口和专用 Bot 统一折叠到高级设置。单个目录的项目映射与分支细节也按需展开。
 - `apps/web/src/components/ChatArea.tsx`: 每个普通会话只保留一个“AI 托管”入口，可在讨论进行到一半时直接开启，不再要求先进入消息话题。标题包含 `#工作项编号` 时自动加载 ADO 工作项并注入目标、约束和验收提示；无法识别时仍按普通会话托管。

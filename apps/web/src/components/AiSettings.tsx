@@ -20,6 +20,10 @@ import {
   type ButlerCodexSettings,
 } from '../lib/butlerBrain';
 import {
+  getAgentHostingCodexSettings,
+  setAgentHostingCodexSettings,
+} from '../lib/agentHostingSettings';
+import {
   DEFAULT_PERSONA,
   getPersona,
   resetPersona,
@@ -63,6 +67,7 @@ export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
   const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
+  const [hostingCodex, setHostingCodexState] = useState<ButlerCodexSettings>(getAgentHostingCodexSettings);
   const [persona, setPersonaState] = useState<string>(getPersona);
   const [savedPersona, setSavedPersona] = useState<string>(getPersona);
   const [personality, setPersonalityState] = useState<PersonalityAxes>(loadPersonality);
@@ -172,6 +177,12 @@ export default function AiSettings() {
     setButlerCodexState(next);
   };
 
+  const updateHostingCodex = (patch: Partial<ButlerCodexSettings>) => {
+    const next = { ...hostingCodex, ...patch };
+    setAgentHostingCodexSettings(next);
+    setHostingCodexState(next);
+  };
+
   const savePersona = () => {
     const value = persona.trim();
     if (!value || value === DEFAULT_PERSONA) {
@@ -200,7 +211,7 @@ export default function AiSettings() {
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行方式</h2>
         <div className="rounded-lg border border-line bg-surface px-4">
-          <Row label="AI 大脑" hint="切换后立即对下一次 AI 提问生效；不会静默降级。">
+          <Row label="AI 管家大脑" hint="切换后立即对下一次管家提问生效；不会静默降级。">
             <RadioGroup
               value={butlerBrain}
               onChange={(brain) => {
@@ -252,18 +263,18 @@ export default function AiSettings() {
           </Row>
           {butlerBrain === 'codex' && (
             <>
-              <Row label="Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
+              <Row label="管家 Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
                 <input
-                  aria-label="Codex 模型"
+                  aria-label="管家 Codex 模型"
                   value={butlerCodex.model}
                   onChange={(event) => updateButlerCodex({ model: event.target.value })}
                   placeholder="例如 gpt-5.4"
                   className={`${inputCls} max-w-xs`}
                 />
               </Row>
-              <Row label="推理强度" hint="模型不支持所选强度时，Codex 会返回明确错误。">
+              <Row label="管家推理强度" hint="只影响 AI 管家；模型不支持时 Codex 会返回明确错误。">
                 <select
-                  aria-label="Codex 推理强度"
+                  aria-label="管家 Codex 推理强度"
                   value={butlerCodex.effort}
                   onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
                   className={`${inputCls} max-w-xs`}
@@ -275,6 +286,27 @@ export default function AiSettings() {
               </Row>
             </>
           )}
+          <Row label="AI 托管 Codex 模型" hint="只影响聊天中的 AI 托管；留空时跟随 Codex CLI 默认模型。">
+            <input
+              aria-label="AI 托管 Codex 模型"
+              value={hostingCodex.model}
+              onChange={(event) => updateHostingCodex({ model: event.target.value })}
+              placeholder="例如 gpt-5.4"
+              className={`${inputCls} max-w-xs`}
+            />
+          </Row>
+          <Row label="AI 托管推理强度" hint="与管家独立，修改后对托管会话的下一次执行生效。">
+            <select
+              aria-label="AI 托管 Codex 推理强度"
+              value={hostingCodex.effort}
+              onChange={(event) => updateHostingCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
+              className={`${inputCls} max-w-xs`}
+            >
+              {BUTLER_CODEX_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+              ))}
+            </select>
+          </Row>
         </div>
       </section>
 

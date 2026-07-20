@@ -286,7 +286,7 @@ export default function WorkItemLink({
       );
     }
     return (
-      <span className="my-1 inline-block w-full max-w-sm align-middle">
+      <span className="my-1 inline-block min-w-0 w-full max-w-sm align-middle">
         <span className="flex animate-pulse flex-col rounded-lg border border-line bg-fill-1">
           <span className="block h-1 rounded-t-lg bg-line" />
           <span className="px-3 pt-1.5 pb-2">
@@ -302,8 +302,8 @@ export default function WorkItemLink({
   const done = isWorkItemDone(info.state);
 
   return (
-    <span className="my-1 inline-block max-w-sm align-middle">
-      <span className="flex flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
+    <span className="my-1 inline-block min-w-0 w-full max-w-sm align-middle">
+      <span className="flex min-w-0 flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
         {/* 顶部：类型色条 */}
         <span
           className="block h-1 rounded-t-lg"
@@ -318,8 +318,8 @@ export default function WorkItemLink({
             />
             <span>{info.type} #{id}</span>
             <span className="mx-0.5">·</span>
-            <span>{info.project}</span>
-            <span className="ml-auto flex items-center gap-1">
+            <span className="min-w-0 truncate">{info.project}</span>
+            <span className="ml-auto flex shrink-0 items-center gap-1">
               <button
                 onClick={(e) => {
                   e.preventDefault();
@@ -359,7 +359,7 @@ export default function WorkItemLink({
             href={info.webUrl}
             target="_blank"
             rel="noreferrer"
-            className={`mt-1 block text-sm leading-snug font-medium no-underline hover:underline ${
+            className={`mt-1 block break-words text-sm leading-snug font-medium no-underline hover:underline ${
               done ? 'text-ink-3 line-through' : 'text-ink'
             }`}
           >

@@ -17,6 +17,7 @@ import { emojify } from '../lib/emoji';
 import { useDayTick } from '../lib/format';
 import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
+import { LinkifiedText } from '../lib/markdown';
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
@@ -65,12 +66,12 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
             todo.done ? 'text-ink-3 line-through' : 'font-medium text-ink'
           }`}
         >
-          {todo.note || emojify(todo.excerpt ?? '') || '（无文字内容）'}
+          <LinkifiedText text={todo.note || todo.excerpt || '（无文字内容）'} renderPlain={emojify} />
         </div>
 
         {todo.note && hasSource && (
           <div className="mt-1 line-clamp-2 rounded-r border-l-2 border-line bg-fill-1 px-2 py-1 text-xs break-words text-ink-3">
-            {emojify(todo.excerpt ?? '') || '（无文字内容）'}
+            <LinkifiedText text={todo.excerpt ?? '（无文字内容）'} renderPlain={emojify} />
           </div>
         )}
 

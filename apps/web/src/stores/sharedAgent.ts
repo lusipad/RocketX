@@ -45,7 +45,7 @@ import { listAgentSessions, saveAgentSession } from '../agent/sessionStore';
 import { useWorkbench } from './workbench';
 import { useLocalCodex } from './localCodex';
 import { agentRoomSessionKey, useAgentEnvironments } from './agentEnvironments';
-import { getButlerCodexSettings } from '../lib/butlerBrain';
+import { getAgentHostingCodexSettings } from '../lib/agentHostingSettings';
 import {
   assertAllowedWorkspacePath,
   commandRequestMentionsSensitivePath,
@@ -497,7 +497,7 @@ async function sessionConversationMessages(session: AgentSession): Promise<RcMes
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
   const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
   const appServer = await ensureClient(current);
-  const codexSettings = getButlerCodexSettings();
+  const codexSettings = getAgentHostingCodexSettings();
   const messages = await loadContextMessages(current, message);
   const selectedMessages = replyTmid(current)
     ? selectAgentContextMessages(message, messages)
@@ -642,7 +642,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       };
       updateSession(session);
       const appServer = await ensureClient(session);
-      const codexSettings = getButlerCodexSettings();
+      const codexSettings = getAgentHostingCodexSettings();
       const response = await appServer.request('thread/start', {
         ...(codexSettings.model ? { model: codexSettings.model } : {}),
         cwd: root,
@@ -845,7 +845,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const resuming = enterResumeState(leased, host, now);
     updateSession(resuming);
     const appServer = await ensureClient(resuming);
-    const { model } = getButlerCodexSettings();
+    const { model } = getAgentHostingCodexSettings();
     const response = await appServer.request('thread/resume', {
       ...(model ? { model } : {}),
       threadId: resuming.codexThreadId!,

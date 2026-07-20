@@ -58,7 +58,8 @@ pnpm dev
 登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询 ADO 工作项/PR/构建、
 生成工作项草案或运行例行复盘；所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
 本机 Codex CLI，也可把管家或群托管对话转进 Codex App / CLI 的原生线程列表继续处理。
-DeepSeek 等 Provider 与密钥在「设置 → AI」配置，密钥只进入操作系统凭据库。
+管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；DeepSeek 等 Provider
+与密钥也在这里配置，密钥只进入操作系统凭据库。
 
 ## 测试
 
@@ -72,8 +73,10 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 433 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 441 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
+pnpm test:ui        # 18 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片与待办链接
+pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
 # M9 两套独立设备身份的四流 TCP、续传与 BLAKE3；5 GiB 实测见 docs/m9-validation.md
@@ -88,11 +91,11 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 `smoke` 会做真的写操作（踢人、禁言、归档、改昵称、传头像），**跑完全部还原**：
 改的名字改回去、头像 `resetAvatar`、建的房间删掉。
 
-改动 rc-client 或服务端设置后跑一次 `pnpm smoke`。`test:pure` 与
-`test:regression` 已接入 CI。
+改动 rc-client 或服务端设置后跑一次 `pnpm smoke`。`test:pure`、`test:regression`、
+`test:ui` 与 `test:ecosystem` 已接入 CI。
 
-> **这些跑绿了不代表界面是好的。** 它们只打 API 和纯函数，测不到渲染 —— 有次成员
-> 面板一打开就白屏，50 项冒烟照样全绿。动过 UI 就得真在浏览器里点一遍。
+> **自动测试跑绿不代表所有界面都是好的。** `test:ui` 覆盖核心浏览器流程，但没覆盖到的
+> 交互仍需真正在浏览器或桌面端点一遍。
 
 ## 桌面客户端
 

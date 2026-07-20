@@ -1,6 +1,6 @@
 {
   "name": "@rcx/rc-client",
-  "version": "0.25.3",
+  "version": "0.25.4",
   "private": true,
   "type": "module",
   "exports": {
