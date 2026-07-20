@@ -72,10 +72,15 @@ await writeFile(
   `${JSON.stringify({ version, packagedAt: new Date(0).toISOString(), plugins: packaged }, null, 2)}\n`,
 );
 
-const result = spawnSync('zip', ['-X', '-r', zipPath, path.basename(packageRoot)], {
+const archiveCommand = process.platform === 'win32' ? 'tar.exe' : 'zip';
+const archiveArgs = process.platform === 'win32'
+  ? ['-a', '-c', '-f', zipPath, path.basename(packageRoot)]
+  : ['-X', '-r', zipPath, path.basename(packageRoot)];
+const result = spawnSync(archiveCommand, archiveArgs, {
   cwd: outputDir,
   stdio: 'inherit',
 });
+if (result.error) fail(`zip failed to start: ${result.error.message}`);
 if (result.status !== 0) fail(`zip failed with exit code ${result.status}`);
 const metadata = await stat(zipPath);
 if (!metadata.isFile() || metadata.size < 1_000) fail(`${zipName} is empty or unexpectedly small`);

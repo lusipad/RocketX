@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'node:zlib';
 
 test('发布插件包包含可本地安装的内网通插件', async () => {
@@ -12,7 +13,7 @@ test('发布插件包包含可本地安装的内网通插件', async () => {
     const result = spawnSync(
       process.execPath,
       ['scripts/package-plugins.mjs', '--tag', 'v0.20.1', '--out', temp],
-      { cwd: path.resolve(new URL('../..', import.meta.url).pathname), encoding: 'utf8' },
+      { cwd: fileURLToPath(new URL('../..', import.meta.url)), encoding: 'utf8' },
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const zipPath = path.join(temp, 'rocketx-plugins-0.20.1.zip');

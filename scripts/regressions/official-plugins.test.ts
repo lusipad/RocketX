@@ -43,3 +43,16 @@ for (const plugin of PLUGINS) {
     }
   });
 }
+
+test('内网通文件邀请必须由宿主选择文件，不能接受插件提供的本地路径', async () => {
+  const html = await readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8');
+  const runtime = await runtimeText;
+  const offerFileHandler = runtime.match(
+    /capabilityBus\.register\('ipmsg\.offerFile'[\s\S]*?capabilityBus\.register\('storage\.get'/,
+  )?.[0];
+
+  assert.ok(offerFileHandler, '必须注册 ipmsg.offerFile capability');
+  assert.doesNotMatch(html, /file-path|\bpath\s*:/, '插件不能提交任意本地文件路径');
+  assert.doesNotMatch(offerFileHandler, /stringParam\(params, 'path'\)/, '宿主不能信任插件提供的 path');
+  assert.match(offerFileHandler, /@tauri-apps\/plugin-dialog/, '宿主必须通过原生文件选择器获得路径');
+});

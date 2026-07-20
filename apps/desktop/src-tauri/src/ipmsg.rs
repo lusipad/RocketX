@@ -124,7 +124,6 @@ impl Dialect {
 
 #[derive(Clone, Debug)]
 struct Packet {
-    version: String,
     packet_no: String,
     user: String,
     host: String,
@@ -292,7 +291,7 @@ fn colon_positions(bytes: &[u8]) -> Option<[usize; 5]> {
     None
 }
 
-fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
+fn parse_packet_with_dialect(bytes: &[u8], fallback_dialect: Dialect) -> Result<Packet, String> {
     if bytes.is_empty() || bytes.len() > MAX_DATAGRAM_BYTES {
         return Err("IPMSG packet has an invalid length".to_string());
     }
@@ -311,7 +310,7 @@ fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
     let dialect = if version.starts_with("1_lbt") {
         Dialect::Feiq
     } else {
-        Dialect::Standard
+        fallback_dialect
     };
     let utf8 = command & IPMSG_UTF8OPT != 0;
     let packet_no = std::str::from_utf8(&bytes[positions[0] + 1..positions[1]])
@@ -335,7 +334,6 @@ fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
     };
     let extra = decode(extra_bytes, dialect, utf8)?;
     Ok(Packet {
-        version,
         packet_no,
         user,
         host,
@@ -344,6 +342,18 @@ fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
         attachment,
         dialect,
     })
+}
+
+fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
+    parse_packet_with_dialect(bytes, Dialect::Standard)
+}
+
+fn parse_packet_for_port(bytes: &[u8], local_port: u16) -> Result<Packet, String> {
+    if local_port == INTRANET_PORT {
+        parse_packet_with_dialect(bytes, Dialect::Intranet)
+    } else {
+        parse_packet(bytes)
+    }
 }
 
 fn packet_version(dialect: Dialect) -> &'static str {
@@ -629,7 +639,7 @@ fn udp_loop(
             }
             Err(_) => break,
         };
-        let Ok(packet) = parse_packet(&buffer[..length]) else {
+        let Ok(packet) = parse_packet_for_port(&buffer[..length], local_port) else {
             continue;
         };
         let mode = packet.command & COMMAND_MASK;
@@ -654,10 +664,6 @@ fn udp_loop(
             mode,
             IPMSG_BR_ENTRY | IPMSG_ANSENTRY | IPMSG_BR_ABSENCE | IPMSG_SENDMSG
         ) {
-            let mut packet = packet;
-            if local_port == INTRANET_PORT && packet.dialect == Dialect::Standard {
-                packet.dialect = Dialect::Intranet;
-            }
             let record = peer_from_packet(&packet, address, local_port);
             let peer = record.peer.clone();
             if let Ok(mut values) = peers.write() {
@@ -755,7 +761,7 @@ fn udp_loop(
     }
 }
 
-fn read_tcp_packet(stream: &mut TcpStream) -> Result<Packet, String> {
+fn read_tcp_packet(stream: &mut TcpStream, local_port: u16) -> Result<Packet, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .and_then(|_| stream.set_write_timeout(Some(IO_TIMEOUT)))
@@ -764,15 +770,16 @@ fn read_tcp_packet(stream: &mut TcpStream) -> Result<Packet, String> {
     let length = stream
         .read(&mut buffer)
         .map_err(|error| format!("failed to read IPMSG file request: {error}"))?;
-    parse_packet(&buffer[..length])
+    parse_packet_for_port(&buffer[..length], local_port)
 }
 
 fn handle_tcp_connection(
     mut stream: TcpStream,
     address: SocketAddr,
+    local_port: u16,
     outgoing: SharedOutgoing,
 ) -> Result<(), String> {
-    let packet = read_tcp_packet(&mut stream)?;
+    let packet = read_tcp_packet(&mut stream, local_port)?;
     if packet.command & COMMAND_MASK != IPMSG_GETFILEDATA {
         return Err("IPMSG TCP command is unsupported".to_string());
     }
@@ -827,13 +834,18 @@ fn handle_tcp_connection(
     Ok(())
 }
 
-fn tcp_loop(listener: TcpListener, outgoing: SharedOutgoing, stop: Arc<AtomicBool>) {
+fn tcp_loop(
+    listener: TcpListener,
+    local_port: u16,
+    outgoing: SharedOutgoing,
+    stop: Arc<AtomicBool>,
+) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, address)) => {
                 let outgoing = outgoing.clone();
                 thread::spawn(move || {
-                    let _ = handle_tcp_connection(stream, address, outgoing);
+                    let _ = handle_tcp_connection(stream, address, local_port, outgoing);
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -935,10 +947,12 @@ pub fn ipmsg_start(
             )
         }));
     }
-    for (_port, listener) in listeners {
+    for (port, listener) in listeners {
         let outgoing = outgoing.clone();
         let stop = stop.clone();
-        threads.push(thread::spawn(move || tcp_loop(listener, outgoing, stop)));
+        threads.push(thread::spawn(move || {
+            tcp_loop(listener, port, outgoing, stop)
+        }));
     }
     let runtime = IpmsgRuntime {
         stop,
@@ -1408,7 +1422,6 @@ mod tests {
         )
         .unwrap();
         let parsed = parse_packet(&packet).unwrap();
-        assert_eq!(parsed.version, "1");
         assert_eq!(parsed.packet_no, "123");
         assert_eq!(parsed.command & COMMAND_MASK, IPMSG_SENDMSG);
         assert_eq!(parsed.extra, "你好，IP Messenger");
@@ -1425,6 +1438,59 @@ mod tests {
     }
 
     #[test]
+    fn intranet_port_decodes_gbk_before_exposing_packet_fields() {
+        let intranet_identity = IpmsgIdentity {
+            user: "内网用户".to_string(),
+            host: "研发电脑".to_string(),
+            nickname: "内网通".to_string(),
+            group: "研发组".to_string(),
+        };
+        let packet = build_packet(
+            &intranet_identity,
+            Dialect::Intranet,
+            "456",
+            IPMSG_SENDMSG | IPMSG_SENDCHECKOPT,
+            "中文互通消息",
+            None,
+        )
+        .unwrap();
+
+        let parsed = parse_packet_for_port(&packet, INTRANET_PORT).unwrap();
+
+        assert_eq!(parsed.dialect, Dialect::Intranet);
+        assert_eq!(parsed.user, "内网用户");
+        assert_eq!(parsed.host, "研发电脑");
+        assert_eq!(parsed.extra, "中文互通消息");
+    }
+
+    #[test]
+    #[ignore = "explicit loopback integration test"]
+    fn intranet_gbk_message_round_trips_over_udp_loopback() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
+        receiver.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let packet = build_packet(
+            &identity(),
+            Dialect::Intranet,
+            "789",
+            IPMSG_SENDMSG | IPMSG_SENDCHECKOPT,
+            "RocketX 本机 9011 互通验证",
+            None,
+        )
+        .unwrap();
+
+        sender
+            .send_to(&packet, receiver.local_addr().unwrap())
+            .unwrap();
+        let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
+        let (length, _) = receiver.recv_from(&mut buffer).unwrap();
+        let parsed = parse_packet_for_port(&buffer[..length], INTRANET_PORT).unwrap();
+
+        assert_eq!(parsed.dialect, Dialect::Intranet);
+        assert_eq!(parsed.extra, "RocketX 本机 9011 互通验证");
+    }
+
+    #[test]
     fn packet_rejects_truncation_invalid_number_and_oversize() {
         assert!(parse_packet(b"1:2:user").is_err());
         assert!(parse_packet(b"1:nope:user:host:32:hello").is_err());
@@ -1435,7 +1501,6 @@ mod tests {
     fn file_offer_parses_regular_file_and_rejects_traversal() {
         let address = SocketAddr::from(([127, 0, 0, 2], IPMSG_PORT));
         let base = Packet {
-            version: "1".to_string(),
             packet_no: "123".to_string(),
             user: "alice".to_string(),
             host: "desktop".to_string(),
@@ -1517,7 +1582,7 @@ mod tests {
         let server_offers = outgoing.clone();
         let server = thread::spawn(move || {
             let (stream, peer) = listener.accept().unwrap();
-            handle_tcp_connection(stream, peer, server_offers).unwrap();
+            handle_tcp_connection(stream, peer, IPMSG_PORT, server_offers).unwrap();
         });
         let mut client = TcpStream::connect(address).unwrap();
         let request = build_packet(

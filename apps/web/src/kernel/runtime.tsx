@@ -201,12 +201,18 @@ function registerCapabilities(): void {
   });
   capabilityBus.register('ipmsg.offerFile', 'lan:transfer', async (params) => {
     const peerId = stringParam(params, 'peerId');
-    const path = stringParam(params, 'path');
-    if (!peerId || !path) throw new Error('ipmsg.offerFile 缺少 peerId 或 path');
+    if (!peerId) throw new Error('ipmsg.offerFile 缺少 peerId');
     const ipmsg = useIpmsg.getState();
     if (!ipmsg.enabled) await ipmsg.setEnabled(true);
     ipmsg.selectPeer(peerId);
-    await useIpmsg.getState().offerFile(path);
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+      title: '选择要发送的文件',
+      multiple: false,
+      directory: false,
+    });
+    if (typeof selected !== 'string') return { ok: false, cancelled: true };
+    await useIpmsg.getState().offerFile(selected);
     return { ok: true };
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>

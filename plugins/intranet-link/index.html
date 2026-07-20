@@ -56,9 +56,7 @@
             <label for="payload">文本负载</label>
             <textarea id="payload" maxlength="49152">来自内网通插件的 P2P 测试消息</textarea>
             <button id="send">发送聊天消息</button>
-            <label for="file-path">本机文件路径</label>
-            <input id="file-path" autocomplete="off" placeholder="桌面端选择/粘贴要发送的文件路径">
-            <button class="secondary" id="send-file">发送文件邀请</button>
+            <button class="secondary" id="send-file">选择文件并发送邀请</button>
             <p class="status" id="send-status">仅桌面端且兼容模式可绑定 2425/9011 时可发送。</p>
           </div>
         </section>
@@ -71,7 +69,6 @@
       const peerStatus = document.querySelector('#peer-status');
       const sendStatus = document.querySelector('#send-status');
       const peerIdInput = document.querySelector('#peer-id');
-      const filePathInput = document.querySelector('#file-path');
       const payloadInput = document.querySelector('#payload');
 
       window.__RCX_BRIDGE__.addEventListener('message', (event) => {
@@ -160,7 +157,11 @@
       async function sendFile() {
         sendStatus.textContent = '正在发送文件邀请…';
         try {
-          await call('ipmsg.offerFile', { peerId: peerIdInput.value.trim(), path: filePathInput.value.trim() });
+          const result = await call('ipmsg.offerFile', { peerId: peerIdInput.value.trim() });
+          if (result.cancelled) {
+            sendStatus.textContent = '已取消选择文件。';
+            return;
+          }
           sendStatus.textContent = '文件邀请已发送；对方接受后走 TCP P2P 拉取。';
           notify('内网通文件邀请已发送', 'success');
         } catch (error) {
