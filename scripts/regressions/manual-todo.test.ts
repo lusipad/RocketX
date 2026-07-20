@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { useTodos } from '../../apps/web/src/stores/todos';
 import { searchWork } from '../../apps/web/src/lib/workSearch';
+import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
 
 test.afterEach(() => {
   useTodos.setState({ todos: [] });
@@ -45,6 +46,17 @@ test('工作搜索能按 note 命中手动待办，缺失的来源字段不产�
 
   assert.equal(searchWork('季度汇报', manual, [], []).length, 1);
   assert.equal(searchWork('undefined', manual, [], []).length, 0);
+});
+
+test('管家工具能搜索并读出只有 title 的入账待办（issue #119）', async () => {
+  useTodos.getState().add({ title: '季度发布对账' });
+  const listTodos = createButlerTools().find((tool) => tool.name === 'list_todos');
+  assert.ok(listTodos);
+
+  const result = JSON.parse(await listTodos.execute({ query: '季度发布' })) as Array<{
+    text?: string;
+  }>;
+  assert.deepEqual(result.map((todo) => todo.text), ['季度发布对账']);
 });
 
 test('待办可持久保存、编辑并清空承诺对象字段', () => {
