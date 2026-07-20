@@ -348,9 +348,17 @@ fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
     parse_packet_with_dialect(bytes, Dialect::Standard)
 }
 
+fn dialect_for_port(port: u16) -> Dialect {
+    if port == INTRANET_PORT {
+        Dialect::Intranet
+    } else {
+        Dialect::Standard
+    }
+}
+
 fn parse_packet_for_port(bytes: &[u8], local_port: u16) -> Result<Packet, String> {
     if local_port == INTRANET_PORT {
-        parse_packet_with_dialect(bytes, Dialect::Intranet)
+        parse_packet_with_dialect(bytes, dialect_for_port(local_port))
     } else {
         parse_packet(bytes)
     }
@@ -571,7 +579,7 @@ fn announce(
     let packet_no = next_packet_no();
     let packet = build_packet(
         identity,
-        Dialect::Standard,
+        dialect_for_port(address.port()),
         &packet_no,
         command | IPMSG_CAPUTF8OPT | IPMSG_FILEATTACHOPT,
         &entry_extra(identity),
@@ -1469,8 +1477,33 @@ mod tests {
         let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
         receiver.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
         let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let intranet_identity = IpmsgIdentity {
+            user: "内网用户".to_string(),
+            host: "研发电脑".to_string(),
+            nickname: "RocketX 内网通".to_string(),
+            group: "研发组".to_string(),
+        };
+
+        announce(
+            &sender,
+            &intranet_identity,
+            IPMSG_BR_ENTRY,
+            receiver.local_addr().unwrap(),
+        )
+        .unwrap();
+        let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
+        let (length, address) = receiver.recv_from(&mut buffer).unwrap();
+        let discovery = parse_packet_for_port(&buffer[..length], INTRANET_PORT).unwrap();
+        let discovered_peer = peer_from_packet(&discovery, address, INTRANET_PORT);
+
+        assert_eq!(discovery.dialect, Dialect::Intranet);
+        assert_eq!(discovery.user, "内网用户");
+        assert_eq!(discovery.host, "研发电脑");
+        assert_eq!(discovered_peer.peer.nickname, "RocketX 内网通");
+        assert_eq!(discovered_peer.peer.group, "研发组");
+
         let packet = build_packet(
-            &identity(),
+            &intranet_identity,
             Dialect::Intranet,
             "789",
             IPMSG_SENDMSG | IPMSG_SENDCHECKOPT,
@@ -1482,7 +1515,6 @@ mod tests {
         sender
             .send_to(&packet, receiver.local_addr().unwrap())
             .unwrap();
-        let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
         let (length, _) = receiver.recv_from(&mut buffer).unwrap();
         let parsed = parse_packet_for_port(&buffer[..length], INTRANET_PORT).unwrap();
 
