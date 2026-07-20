@@ -1,5 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
-import { Blocks, Bot, TerminalSquare } from 'lucide-react';
+import { Bell, Blocks, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, rest } from '../lib/client';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
@@ -12,8 +12,7 @@ import TodosPage from '../pages/TodosPage';
 import CalendarPage from '../pages/CalendarPage';
 import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
-import TodayPage from '../pages/TodayPage';
-import AiAssistantPage from '../pages/AiAssistantPage';
+import ButlerPage from '../pages/ButlerPage';
 import CodexPage from '../pages/CodexPage';
 import ThreadPanel from '../components/ThreadPanel';
 import AgentPanel from '../components/AgentPanel';
@@ -442,12 +441,11 @@ function activateApp(app: InstalledApp): () => void {
 
 function registerBuiltins(): void {
   const modules = [
-    ['today', '今日', TodayPage, undefined],
+    ['butler-view', '管家', ButlerPage, Bell],
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
     ['workbench', '工作台', WorkbenchModule, undefined],
     ['contacts', '通讯录', ContactsPage, undefined],
-    ['ai-assistant', 'AI', AiAssistantPage, Bot],
     ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {

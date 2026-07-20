@@ -14,3 +14,7 @@ export function notificationTarget(payload: unknown): { rid: string; mid: string
   const { rid, mid } = payload as { rid?: unknown; mid?: unknown };
   return validId(rid) && validId(mid) ? { rid, mid } : null;
 }
+
+export function notificationDestination(target: { rid: string }): 'butler-view' | 'messages' {
+  return target.rid === 'butler' ? 'butler-view' : 'messages';
+}

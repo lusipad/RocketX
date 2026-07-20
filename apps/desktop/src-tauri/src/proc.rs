@@ -122,6 +122,9 @@ fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("Codex 路径不可用：{error}"))?;
+    // canonicalize 产生的 `\\?\` 扩展前缀会让 Node 无法加载作为入口脚本的
+    // codex.js，也不适合作为子进程工作目录，统一还原成常规主机路径。
+    let canonical = PathBuf::from(host_path(&canonical));
     if !canonical.is_file() {
         return Err("Codex 路径不是文件".to_string());
     }
@@ -228,6 +231,56 @@ pub(crate) fn codex_command() -> Result<Command, String> {
     Ok(resolve_codex()?.command())
 }
 
+fn version_token(token: &str) -> Option<&str> {
+    let token = token.strip_prefix('v').unwrap_or(token);
+    if !token
+        .chars()
+        .next()
+        .is_some_and(|value| value.is_ascii_digit())
+        || !token.contains('.')
+    {
+        return None;
+    }
+    token
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '+'))
+        .then_some(token)
+}
+
+fn parse_codex_cli_version(output: &str, require_codex_prefix: bool) -> Option<String> {
+    let mut fallback = None;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let Some((first, rest)) = tokens.split_first() else {
+            continue;
+        };
+        if first.eq_ignore_ascii_case("codex-cli") || first.eq_ignore_ascii_case("codex") {
+            if let Some(version) = rest.iter().copied().find_map(version_token) {
+                return Some(version.to_string());
+            }
+        }
+        if !require_codex_prefix && fallback.is_none() {
+            fallback = tokens
+                .iter()
+                .copied()
+                .find_map(version_token)
+                .map(ToOwned::to_owned);
+        }
+    }
+    fallback
+}
+
+fn output_preview(value: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let value = value.trim();
+    if value.chars().count() <= MAX_CHARS {
+        return value.to_string();
+    }
+    let mut preview: String = value.chars().take(MAX_CHARS).collect();
+    preview.push('…');
+    preview
+}
+
 fn codex_cli_version() -> Result<String, String> {
     let mut command = codex_command()?;
     command.arg("--version");
@@ -237,17 +290,27 @@ fn codex_cli_version() -> Result<String, String> {
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("Codex CLI 不可用，请先安装并登录：{error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "无法读取 Codex CLI 版本：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // 只要能读出版本号就放行：npm/pnpm 等包装脚本可能追加提示行、把版本打到
+    // stderr，甚至以非零码退出；可用性另由 app-server/login 探测把关。退出码
+    // 非零时只认带 codex 前缀的行，避免把报错里的其他版本号当成 Codex 版本。
+    let strict = !output.status.success();
+    if let Some(version) =
+        parse_codex_cli_version(&stdout, strict).or_else(|| parse_codex_cli_version(&stderr, true))
+    {
+        return Ok(version);
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .strip_prefix("codex-cli ")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "Codex CLI 返回了无法识别的版本".to_string())
+    let mut details = vec![match output.status.code() {
+        Some(code) => format!("退出码 {code}"),
+        None => "进程被信号终止".to_string(),
+    }];
+    for (label, value) in [("stderr", stderr.trim()), ("stdout", stdout.trim())] {
+        if !value.is_empty() {
+            details.push(format!("{label}：{}", output_preview(value)));
+        }
+    }
+    Err(format!("无法读取 Codex CLI 版本（{}）", details.join("；")))
 }
 
 fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
@@ -268,6 +331,64 @@ fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
     } else {
         detail
     })
+}
+
+/// 子命令的 --help 文本，用来探测当前 CLI 版本还认识哪些参数。
+/// 部分包装脚本把用法打到 stderr，两路都收。
+fn subcommand_help(subcommand: &str) -> Result<String, String> {
+    let mut command = codex_command()?;
+    let output = command
+        .args([subcommand, "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Codex 无法启动：{error}"))?;
+    Ok(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+/// 基线 0.144.4 的 app-server 需要显式 `--stdio`；后续版本把 stdio 设为默认
+/// 并移除了该参数，继续传会被 clap 拒绝并立刻以退出码 2 退出（表现为
+/// 「Codex app-server 已退出（2）」）。按 `--help` 是否列出该参数决定传不传。
+fn app_server_args_for_help(help: &str) -> Vec<&'static str> {
+    if help.contains("--stdio") {
+        vec!["app-server", "--stdio"]
+    } else {
+        vec!["app-server"]
+    }
+}
+
+fn app_server_launch_args() -> Result<Vec<&'static str>, String> {
+    Ok(app_server_args_for_help(&subcommand_help("app-server")?))
+}
+
+/// `codex exec` 的可选参数同样存在版本漂移：任何一个被新版移除都会让进程
+/// 以退出码 2 直接退出（与 app-server --stdio 同构）。按 `exec --help` 是否
+/// 列出决定传不传；`--json` 与 `--sandbox` 是协议/安全必需，不做降级——
+/// 真缺了就让错误明确暴露，绝不能悄悄放开沙箱跑。
+pub(crate) fn exec_optional_args_for_help(help: &str) -> Vec<&'static str> {
+    let mut args = Vec::new();
+    if help.contains("--ephemeral") {
+        args.push("--ephemeral");
+    }
+    if help.contains("--ignore-user-config") {
+        args.push("--ignore-user-config");
+    }
+    if help.contains("--skip-git-repo-check") {
+        args.push("--skip-git-repo-check");
+    }
+    if help.contains("--color") {
+        args.extend(["--color", "never"]);
+    }
+    args
+}
+
+pub(crate) fn codex_exec_optional_args() -> Result<Vec<&'static str>, String> {
+    Ok(exec_optional_args_for_help(&subcommand_help("exec")?))
 }
 
 #[tauri::command]
@@ -442,8 +563,7 @@ pub fn codex_app_server_start(
     workspace_root: String,
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
-    let workspace = canonical_directory(&workspace_root)?;
-    let workspace_root = host_path(&workspace);
+    let workspace_root = host_path(&canonical_directory(&workspace_root)?);
     let version = codex_cli_version()?;
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
@@ -462,10 +582,11 @@ pub fn codex_app_server_start(
         });
     }
 
+    let launch_args = app_server_launch_args()?;
     let mut command = codex_command()?;
     command
-        .args(["app-server", "--stdio"])
-        .current_dir(&workspace)
+        .args(&launch_args)
+        .current_dir(&workspace_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -698,6 +819,86 @@ pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
     Ok(host_path(&path))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDirManifest {
+    manifest: String,
+    installer_path: Option<String>,
+}
+
+/// 共享目录更新源（issue #106）：webview 读不了 UNC/本地任意路径，
+/// 由这里读 latest.json，并按清单里 Windows 平台条目的文件名在同目录
+/// 找安装包。目录是用户自己在设置页填的更新源，只读不写。
+#[tauri::command]
+pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, String> {
+    let base = std::path::PathBuf::from(dir.trim());
+    if !base.is_absolute() {
+        return Err("更新目录必须是绝对路径（本地盘符或 \\\\server\\share 形式）".to_string());
+    }
+    let manifest_path = base.join("latest.json");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", manifest_path.display()))?;
+
+    // 从清单 Windows 条目的 url 里取文件名，在同目录里找真实安装包
+    let installer_path = serde_json::from_str::<serde_json::Value>(&manifest)
+        .ok()
+        .and_then(|value| {
+            let platforms = value.get("platforms")?;
+            let url = platforms
+                .get("windows-x86_64")
+                .or_else(|| platforms.get("windows-x86_64-msi"))?
+                .get("url")?
+                .as_str()?
+                .to_string();
+            let file_name = url.rsplit(['/', '\\']).next()?.to_string();
+            // updater 产物是 .nsis.zip/.msi.zip 这类压缩层，共享目录直发时
+            // 通常放的是解开后的安装包，两种名字都认
+            let candidates = [
+                file_name.clone(),
+                file_name.trim_end_matches(".zip").to_string(),
+            ];
+            candidates.iter().find_map(|name| {
+                let path = base.join(name);
+                path.is_file().then(|| path.to_string_lossy().into_owned())
+            })
+        });
+
+    Ok(UpdateDirManifest {
+        manifest,
+        installer_path,
+    })
+}
+
+/// 只运行更新目录里解析出来的安装包：后缀白名单 + 存在性校验。
+/// 共享目录本身是用户自己配置的可信源，这里不做签名校验（原生
+/// updater 通道才有签名，走目录直发的以目录访问控制为信任边界）。
+#[tauri::command]
+pub async fn launch_update_installer(path: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path.trim());
+    let extension = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if extension != "exe" && extension != "msi" {
+        return Err("只支持运行 .exe / .msi 安装包".to_string());
+    }
+    if !target.is_file() {
+        return Err(format!("安装包不存在：{}", target.display()));
+    }
+    let result = if extension == "msi" {
+        std::process::Command::new("msiexec")
+            .arg("/i")
+            .arg(&target)
+            .spawn()
+    } else {
+        std::process::Command::new(&target).spawn()
+    };
+    result
+        .map(|_| ())
+        .map_err(|error| format!("无法启动安装包：{error}"))
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let processes = state
@@ -723,7 +924,8 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        decode_attachment_request, encode_message, host_path, safe_attachment_path,
+        app_server_args_for_help, decode_attachment_request, encode_message,
+        exec_optional_args_for_help, host_path, parse_codex_cli_version, safe_attachment_path,
         validate_session_id,
     };
     use serde_json::json;
@@ -768,6 +970,77 @@ mod tests {
         assert_eq!(decoded.relative_path, "message/build.log");
         assert_eq!(bytes, &[0, 1, 2, 255]);
         assert!(decode_attachment_request(&[0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn codex_version_parsing_accepts_official_and_wrapped_outputs() {
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 0.144.4\n", false).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("codex v0.150.2", false).as_deref(),
+            Some("0.150.2")
+        );
+        assert_eq!(
+            parse_codex_cli_version("npm warn deprecated something\ncodex-cli 0.144.4", false)
+                .as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("0.144.4", false).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(parse_codex_cli_version("", false), None);
+        assert_eq!(
+            parse_codex_cli_version("usage: codex [options]", false),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_version_parsing_in_strict_mode_only_trusts_codex_lines() {
+        assert_eq!(
+            parse_codex_cli_version("codex-cli 0.144.4", true).as_deref(),
+            Some("0.144.4")
+        );
+        assert_eq!(
+            parse_codex_cli_version("Node.js v22.17.0 is required", true),
+            None
+        );
+        assert_eq!(
+            parse_codex_cli_version("Node.js v22.17.0 is required", false).as_deref(),
+            Some("22.17.0")
+        );
+    }
+
+    #[test]
+    fn app_server_stdio_flag_follows_cli_help() {
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --stdio  Serve over stdio"),
+            vec!["app-server", "--stdio"],
+        );
+        // 新版 CLI 移除了 --stdio（stdio 已是默认），传了会以退出码 2 拒绝
+        assert_eq!(
+            app_server_args_for_help("Usage: codex app-server [OPTIONS]\n      --listen <ADDR>"),
+            vec!["app-server"],
+        );
+    }
+
+    #[test]
+    fn exec_optional_flags_follow_cli_help() {
+        assert_eq!(
+            exec_optional_args_for_help(
+                "--ephemeral  --ignore-user-config  --skip-git-repo-check  --color <WHEN>",
+            ),
+            vec!["--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--color", "never"],
+        );
+        // 新版移除的参数不再传，避免 clap 以退出码 2 拒绝
+        assert_eq!(
+            exec_optional_args_for_help("Usage: codex exec [OPTIONS]\n  --skip-git-repo-check"),
+            vec!["--skip-git-repo-check"],
+        );
+        assert_eq!(exec_optional_args_for_help("Usage: codex exec"), Vec::<&str>::new());
     }
 
     #[test]

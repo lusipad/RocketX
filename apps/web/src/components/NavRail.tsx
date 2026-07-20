@@ -37,14 +37,12 @@ const MODULE_META: Record<string, {
   workbench: { label: '工作台', icon: LayoutGrid },
 };
 
-const PRIMARY_MODULE_IDS = new Set(['messages', 'today', 'todos', 'calendar']);
+const PRIMARY_MODULE_IDS = new Set(['messages', 'butler-view', 'todos', 'calendar']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
-const AI_MODULE_IDS = new Set(['ai-assistant']);
 const HIDDEN_MODULE_IDS = new Set(['codex']);
 const KNOWN_CORE_MODULE_IDS = new Set([
   ...PRIMARY_MODULE_IDS,
   ...WORK_MODULE_IDS,
-  ...AI_MODULE_IDS,
   'codex',
 ]);
 
@@ -70,7 +68,6 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const moduleGroups = [
     visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
     visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
-    visibleModules.filter((module) => AI_MODULE_IDS.has(module.key)),
     visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
     visibleModules.filter((module) => module.owner !== 'core'),
   ].filter((group) => group.length > 0);
@@ -234,7 +231,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     ) : hasAlert ? (
                       <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                     ) : null)}
-                  {/* 日历：今日日程数 */}
+                  {/* 日历：今天日程数 */}
                   {key === 'calendar' && todayEventCount > 0 && (
                     <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
                       {todayEventCount}

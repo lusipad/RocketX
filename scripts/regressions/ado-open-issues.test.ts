@@ -12,10 +12,12 @@ import {
 } from '../../apps/web/src/lib/adoDirect';
 import { fetchPullRequest, parseAdoUrl } from '../../apps/web/src/lib/ado';
 import {
+  hierarchyPreview,
   loadLastWorkItemProject,
   preferredWorkItemProject,
   saveLastWorkItemProject,
   workItemTemplatesForTypes,
+  type HierarchyLayout,
 } from '../../apps/web/src/stores/wiTemplates';
 import { pullRequestReviewSummary } from '../../apps/web/src/components/AdoEntityLink';
 import { AdoClient } from '../../services/ado-bridge/src/ado';
@@ -98,32 +100,38 @@ test('创建工作项使用真实类型名和 ADO JSON Patch 契约', async () =
   assert.equal(created.type, 'Product Backlog Item');
 });
 
-test('非 Agile 项目按服务器真实类型恢复层级模板', () => {
+test('非 Agile 项目按服务器真实类型恢复层级模板，且不含 Epic 顶层（issue #65）', () => {
   const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
   const cases = [
     {
       name: 'Basic',
       types: ['Epic', 'Issue', 'Task'],
       hierarchy: ['Epic', 'Issue', 'Task'],
-      expected: ['Epic', 'Issue', 'Task', 'Task'],
+      expected: ['Issue', 'Task', 'Task'],
     },
     {
       name: 'Scrum',
       types: ['Epic', 'Feature', 'Product Backlog Item', 'Task'],
       hierarchy: ['Epic', 'Feature', 'Product Backlog Item', 'Task'],
-      expected: ['Epic', 'Feature', 'Product Backlog Item', 'Task', 'Task'],
+      expected: ['Feature', 'Product Backlog Item', 'Task', 'Task'],
     },
     {
       name: 'CMMI',
       types: ['Epic', 'Feature', 'Requirement', 'Task'],
       hierarchy: ['Epic', 'Feature', 'Requirement', 'Task'],
-      expected: ['Epic', 'Feature', 'Requirement', 'Task', 'Task'],
+      expected: ['Feature', 'Requirement', 'Task', 'Task'],
     },
     {
       name: '自定义',
       types: ['Initiative', 'Capability', 'Story', 'Task'],
       hierarchy: ['Initiative', 'Capability', 'Story', 'Task'],
-      expected: ['Initiative', 'Capability', 'Story', 'Task', 'Task'],
+      expected: ['Capability', 'Story', 'Task', 'Task'],
+    },
+    {
+      name: '只有 Epic 和 Task 时保留原层级，级联不能退化成单项',
+      types: ['Epic', 'Task'],
+      hierarchy: ['Epic', 'Task'],
+      expected: ['Epic', 'Task', 'Task'],
     },
   ];
 
@@ -136,6 +144,102 @@ test('非 Agile 项目按服务器真实类型恢复层级模板', () => {
       `${item.name} 不得回退到项目不存在的硬编码类型`,
     );
   }
+});
+
+test('层级工作项四种形态:含不含 Feature 层 × 拆不拆开发测试(用户配置)', () => {
+  const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
+  const types = ['Epic', 'Feature', 'User Story', 'Task'];
+  const hierarchy = ['Epic', 'Feature', 'User Story', 'Task'];
+
+  const cases: { layout: HierarchyLayout; expected: string[]; preview: string }[] = [
+    {
+      layout: 'feature-split',
+      expected: ['Feature', 'User Story', 'Task', 'Task'],
+      preview: 'Feature → User Story → 【开发】Task + 【测试】Task',
+    },
+    {
+      layout: 'feature-single',
+      expected: ['Feature', 'User Story', 'Task'],
+      preview: 'Feature → User Story → Task',
+    },
+    {
+      layout: 'story-split',
+      expected: ['User Story', 'Task', 'Task'],
+      preview: 'User Story → 【开发】Task + 【测试】Task',
+    },
+    {
+      layout: 'story-single',
+      expected: ['User Story', 'Task'],
+      preview: 'User Story → Task',
+    },
+  ];
+
+  for (const item of cases) {
+    const [auto] = workItemTemplatesForTypes(templates, types, hierarchy, item.layout);
+    assert.equal(auto?.name, '层级工作项', item.layout);
+    assert.deepEqual(auto?.items.map((entry) => entry.type), item.expected, item.layout);
+    assert.equal(hierarchyPreview(auto!), item.preview, item.layout);
+    // 单 Task 形态标题不带前缀,拆分形态两条都带
+    const tasks = auto!.items.filter((entry) => entry.type === 'Task');
+    if (item.layout.endsWith('split')) {
+      assert.deepEqual(tasks.map((entry) => entry.title), ['【开发】{title}', '【测试】{title}'], item.layout);
+    } else {
+      assert.deepEqual(tasks.map((entry) => entry.title), ['{title}'], item.layout);
+    }
+    // 父子链完整:每一项(除根)都挂在前一层
+    for (const [index, entry] of auto!.items.entries()) {
+      if (index === 0) assert.equal(entry.parent, undefined, item.layout);
+      else assert.ok(entry.parent !== undefined && entry.parent < index, item.layout);
+    }
+  }
+
+  // 过程模板末级不是 Task 时,「仅故事层」退回完整层级(开关无意义不硬砍)
+  const noTask = workItemTemplatesForTypes(
+    templates,
+    ['Feature', 'User Story'],
+    ['Feature', 'User Story'],
+    'story-split',
+  );
+  assert.deepEqual(noTask[0]?.items.map((entry) => entry.type), ['Feature', 'User Story']);
+});
+
+test('Epic 全链形态保留顶层,其余形态维持 issue #65 的砍层默认', () => {
+  const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
+  const types = ['Epic', 'Feature', 'User Story', 'Task'];
+  const hierarchy = ['Epic', 'Feature', 'User Story', 'Task'];
+
+  const [epicSplit] = workItemTemplatesForTypes(templates, types, hierarchy, 'epic-split');
+  assert.deepEqual(
+    epicSplit?.items.map((entry) => entry.type),
+    ['Epic', 'Feature', 'User Story', 'Task', 'Task'],
+  );
+  assert.equal(
+    hierarchyPreview(epicSplit!),
+    'Epic → Feature → User Story → 【开发】Task + 【测试】Task',
+  );
+
+  const [epicSingle] = workItemTemplatesForTypes(templates, types, hierarchy, 'epic-single');
+  assert.deepEqual(
+    epicSingle?.items.map((entry) => entry.type),
+    ['Epic', 'Feature', 'User Story', 'Task'],
+  );
+  assert.equal(hierarchyPreview(epicSingle!), 'Epic → Feature → User Story → Task');
+
+  // 过程里没有 Epic 类型时,Epic 形态自然退化为从现有顶层起,不报错不造类型
+  const [noEpic] = workItemTemplatesForTypes(
+    templates,
+    ['Feature', 'User Story', 'Task'],
+    ['Feature', 'User Story', 'Task'],
+    'epic-split',
+  );
+  assert.deepEqual(noEpic?.items.map((entry) => entry.type), ['Feature', 'User Story', 'Task', 'Task']);
+
+  // 默认形态回归锚:feature-split 仍然砍 Epic(#65 语义不回退)
+  const [featureDefault] = workItemTemplatesForTypes(templates, types, hierarchy, 'feature-split');
+  assert.deepEqual(
+    featureDefault?.items.map((entry) => entry.type),
+    ['Feature', 'User Story', 'Task', 'Task'],
+  );
 });
 
 test('过程层级读取使用 Server 2022 API 并保留真实类型名', async () => {
@@ -173,7 +277,9 @@ test('固定模板创建时保留服务器返回的精确类型名', () => {
     }],
     ['FEATURE', 'USER STORY', 'TASK'],
   );
-  assert.deepEqual(resolved[0]?.items.map((item) => item.type), ['FEATURE', 'USER STORY', 'TASK']);
+  // 「层级工作项」恒排第一,自定义固定模板跟在后面——按名取再断言类型名精确保留
+  const fixed = resolved.find((template) => template.name === 'Feature 全套');
+  assert.deepEqual(fixed?.items.map((item) => item.type), ['FEATURE', 'USER STORY', 'TASK']);
 });
 
 test('创建工作项优先恢复上次项目，再回退配置默认值和首项', () => {

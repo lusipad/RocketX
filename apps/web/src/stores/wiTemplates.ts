@@ -81,9 +81,71 @@ function inferredHierarchy(availableTypes: string[]): string[] {
   });
 }
 
-function hierarchyTemplate(types: string[]): WiTemplate {
+const EPIC_LEVEL = new Set(['epic', 'initiative']);
+
+/**
+ * 一键创建从 Feature 层起步：Epic/Initiative 属于长周期规划，不该随手批量建（issue #65）。
+ * 砍掉顶层后不足两级时保留原层级，避免把级联退化成单项创建。
+ */
+function withoutEpicLevel(hierarchy: string[]): string[] {
+  let start = 0;
+  while (start < hierarchy.length && EPIC_LEVEL.has(hierarchy[start].toLocaleLowerCase())) start++;
+  const trimmed = hierarchy.slice(start);
+  return trimmed.length >= 2 ? trimmed : hierarchy;
+}
+
+/**
+ * 层级工作项的形态（issue：层级可配置）。两个独立维度的组合：
+ * 起点层级（Epic 全链 / Feature 起 / 仅故事层） × 末级 Task 拆不拆【开发】/【测试】。
+ * 默认从 Feature 起（issue #65：Epic 属长周期规划，不该默认随手批量建——
+ * 但作为显式选择保留 Epic 全链形态）。
+ */
+export type HierarchyLayout =
+  | 'epic-split'
+  | 'epic-single'
+  | 'feature-split'
+  | 'feature-single'
+  | 'story-split'
+  | 'story-single';
+
+export const HIERARCHY_LAYOUT_OPTIONS: { value: HierarchyLayout; label: string }[] = [
+  { value: 'epic-split', label: '完整到 Epic · 拆开发/测试' },
+  { value: 'epic-single', label: '完整到 Epic · 单个 Task' },
+  { value: 'feature-split', label: '从 Feature 起 · 拆开发/测试（默认）' },
+  { value: 'feature-single', label: '从 Feature 起 · 单个 Task' },
+  { value: 'story-split', label: '仅故事层 · 拆开发/测试' },
+  { value: 'story-single', label: '仅故事层 · 单个 Task' },
+];
+
+const LAYOUT_KEY = 'rcx-wi-hierarchy-layout';
+
+export function loadHierarchyLayout(): HierarchyLayout {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    return HIERARCHY_LAYOUT_OPTIONS.some((option) => option.value === saved)
+      ? (saved as HierarchyLayout)
+      : 'feature-split';
+  } catch {
+    return 'feature-split';
+  }
+}
+
+export function saveHierarchyLayout(layout: HierarchyLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, layout);
+  } catch {
+    /* 存储不可用时只影响下次默认选择 */
+  }
+}
+
+function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-split'): WiTemplate {
   const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
-  const chain = taskAtEnd ? types.slice(0, -1) : types;
+  // 「仅故事层」= 只留 故事层+Task 两级；过程模板没有末级 Task 时该开关无意义,保持完整层级
+  const storyOnly = layout.startsWith('story') && taskAtEnd;
+  const effective = storyOnly ? types.slice(-2) : types;
+  const split = layout.endsWith('split');
+
+  const chain = taskAtEnd ? effective.slice(0, -1) : effective;
   const items: CascadeTemplateItem[] = chain.map((type, index) => ({
     type,
     title: '{title}',
@@ -91,33 +153,55 @@ function hierarchyTemplate(types: string[]): WiTemplate {
   }));
   if (taskAtEnd) {
     const parent = items.length - 1;
-    items.push(
-      { type: types.at(-1)!, title: '【开发】{title}', parent },
-      { type: types.at(-1)!, title: '【测试】{title}', parent },
-    );
+    const task = effective.at(-1)!;
+    if (split) {
+      items.push(
+        { type: task, title: '【开发】{title}', parent },
+        { type: task, title: '【测试】{title}', parent },
+      );
+    } else {
+      items.push({ type: task, title: '{title}', parent });
+    }
   }
   return { name: '层级工作项', items };
 }
 
+/** 结构预览:「Feature → User Story → 【开发】Task + 【测试】Task」 */
+export function hierarchyPreview(template: WiTemplate): string {
+  const chain = template.items.filter((item) => !item.title.startsWith('【'));
+  const tasks = template.items.filter((item) => item.title.startsWith('【'));
+  const chainText = chain.map((item) => item.type).join(' → ');
+  if (tasks.length === 0) return chainText;
+  const taskText = tasks
+    .map((item) => `${item.title.replace('{title}', '')}${item.type}`)
+    .join(' + ');
+  return `${chainText} → ${taskText}`;
+}
+
 /**
  * 返回项目真正可创建的模板，并把固定模板类型替换为服务器返回的精确名称。
- * 当 Agile 专用内置模板不适配时，按过程配置生成 Basic/Scrum/CMMI/自定义层级入口。
+ * 「层级工作项」按过程配置生成（Basic/Scrum/CMMI/自定义都认），形态由
+ * layout 四选一决定，始终排第一位；远程自定义模板跟在后面。
  */
 export function workItemTemplatesForTypes(
   templates: WiTemplate[],
   availableTypes: string[],
   processHierarchy: string[] = [],
+  layout: HierarchyLayout = 'feature-split',
 ): WiTemplate[] {
   const compatible = templates
     .filter((template) => templateSupportsTypes(template, availableTypes))
     .map((template) => resolveTemplateTypes(template, availableTypes));
-  if (compatible.some((template) => template.items.length > 1)) return compatible;
 
   const exactHierarchy = processHierarchy
     .map((type) => actualType(type, availableTypes))
     .filter((type): type is string => !!type);
-  const hierarchy = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
-  return hierarchy.length >= 2 ? [hierarchyTemplate(hierarchy), ...compatible] : compatible;
+  const full = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
+  // Epic 全链形态保留顶层；其余形态沿 issue #65 砍掉 Epic/Initiative
+  const hierarchy = layout.startsWith('epic') ? full : withoutEpicLevel(full);
+  return hierarchy.length >= 2
+    ? [hierarchyTemplate(hierarchy, layout), ...compatible]
+    : compatible;
 }
 
 /** 优先保持常见的 Task；过程模板没有 Task 时退到第一个真实可用类型。 */
@@ -125,24 +209,9 @@ export function preferredWorkItemType(availableTypes: string[]): string {
   return availableTypes.find((type) => type.toLocaleLowerCase() === 'task') ?? availableTypes[0] ?? '';
 }
 
+// 「Feature 全套」「UserStory + Tasks」两个死级联已被可配置的「层级工作项」
+// 取代(四种形态,见 HierarchyLayout);内置只留单项创建,自定义级联走远程模板。
 const BUILTIN: WiTemplate[] = [
-  {
-    name: 'Feature 全套',
-    items: [
-      { type: 'Feature', title: '{title}' },
-      { type: 'User Story', title: '{title}', parent: 0 },
-      { type: 'Task', title: '【开发】{title}', parent: 1 },
-      { type: 'Task', title: '【测试】{title}', parent: 1 },
-    ],
-  },
-  {
-    name: 'UserStory + Tasks',
-    items: [
-      { type: 'User Story', title: '{title}' },
-      { type: 'Task', title: '【开发】{title}', parent: 0 },
-      { type: 'Task', title: '【测试】{title}', parent: 0 },
-    ],
-  },
   {
     name: '单个工作项',
     items: [{ type: '{type}', title: '{title}' }],

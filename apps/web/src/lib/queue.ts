@@ -9,6 +9,7 @@ import {
   type PullRequest,
   type WorkItem,
 } from '../stores/workbench';
+import { latestBuildsByDefinitionProject } from './butlerBuilds';
 
 /**
  * 工作台首页的「待处理队列」。
@@ -148,7 +149,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
     });
   }
 
-  for (const b of input.builds) {
+  for (const b of latestBuildsByDefinitionProject(input.builds)) {
     if (b.result !== 'failed') continue;
     items.push({
       key: `build-${b.project}-${b.id}`,

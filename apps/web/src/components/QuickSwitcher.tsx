@@ -39,9 +39,10 @@ import {
   type SearchResultFilters,
   type SearchTimeRange,
 } from '../lib/searchFilters';
+import { focusComposerInput } from '../lib/focus';
+import { useButler } from '../stores/butler';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
-import { getSemanticSearchIndex } from '../kernel/ai/semantic-runtime';
 
 type Tab = QuickSearchTab;
 type ResultTab = Exclude<Tab, 'all'>;
@@ -89,6 +90,7 @@ export default function QuickSwitcher({
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
+  const openButlerConversation = useUI((s) => s.openButlerConversation);
   const setConvFilter = useUI((s) => s.setConvFilter);
   const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
@@ -97,7 +99,6 @@ export default function QuickSwitcher({
   const events = useCalendar((s) => s.events);
   const workItems = useWorkbench((s) => s.workItems);
   const fileIndex = useFileIndex((s) => s.index);
-  const loadedMessages = useChat((s) => s.messages);
   const [tab, setTab] = useState<Tab>(initialTab ?? 'all');
   const [keyword, setKeyword] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -122,10 +123,6 @@ export default function QuickSwitcher({
   const [messageSettledKeyword, setMessageSettledKeyword] = useState('');
   const [contactSettledKeyword, setContactSettledKeyword] = useState('');
   const [messageSearchAllKeyword, setMessageSearchAllKeyword] = useState('');
-  const [semanticMode, setSemanticMode] = useState(false);
-  const [semanticMessages, setSemanticMessages] = useState<RcMessage[]>([]);
-  const [semanticSearching, setSemanticSearching] = useState(false);
-  const [semanticError, setSemanticError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchProviderRef = useRef<Promise<unknown> | null>(null);
@@ -182,8 +179,8 @@ export default function QuickSwitcher({
     fileType: fileTypeFilter,
   }), [fileTypeFilter, senderFilter, timeFilter]);
   const filteredMessages = useMemo(
-    () => filterMessageResults(semanticMode ? semanticMessages : messages, filters),
-    [filters, messages, semanticMessages, semanticMode],
+    () => filterMessageResults(messages, filters),
+    [filters, messages],
   );
   const shownMessages = useMemo(
     () => filteredMessages.slice(0, visibleMessageCount),
@@ -224,61 +221,6 @@ export default function QuickSwitcher({
   );
   const conversationRidsRef = useRef<string[]>([]);
   conversationRidsRef.current = messageSearchRids;
-  const effectiveMessageSearching = semanticMode ? semanticSearching : messageSearching;
-  const effectiveMessageError = semanticMode ? semanticError : messageError;
-  const effectiveMessageCount = semanticMode ? semanticMessages.length : messages.length;
-
-  useEffect(() => {
-    if (!semanticMode) return;
-    const query = keyword.trim();
-    if (!query || !myId) {
-      setSemanticMessages([]);
-      setSemanticError(null);
-      setSemanticSearching(false);
-      return;
-    }
-    let current = true;
-    const handle = setTimeout(() => {
-      setSemanticSearching(true);
-      setSemanticError(null);
-      const memberRoomIds = Object.keys(subscriptions).sort();
-      const scope = {
-        serverId: getServerBase() || location.origin,
-        userId: myId,
-        memberRoomIds,
-      };
-      const documents = memberRoomIds.flatMap((rid) =>
-        (loadedMessages[rid] ?? [])
-          .filter((message) => !!stripAgentSessionMarker(message.msg ?? '').trim())
-          .map((message) => ({
-            id: message._id,
-            roomId: rid,
-            text: stripAgentSessionMarker(message.msg ?? ''),
-            revision: tsMs(message.ts),
-            payload: message,
-          })),
-      );
-      void getSemanticSearchIndex()
-        .synchronize(documents, scope)
-        .then(() => getSemanticSearchIndex().search<RcMessage>(query, scope, { limit: 50, minScore: 0.2 }))
-        .then((results) => {
-          if (current) setSemanticMessages(results.flatMap((result) => result.payload ? [result.payload] : []));
-        })
-        .catch((error) => {
-          if (current) {
-            setSemanticMessages([]);
-            setSemanticError(error instanceof Error ? error.message : String(error));
-          }
-        })
-        .finally(() => {
-          if (current) setSemanticSearching(false);
-        });
-    }, 300);
-    return () => {
-      current = false;
-      clearTimeout(handle);
-    };
-  }, [keyword, loadedMessages, myId, semanticMode, subscriptions]);
 
   const messageSearchBackend = () => ({
     provider: () => {
@@ -467,7 +409,6 @@ export default function QuickSwitcher({
       );
       return;
     }
-    if (semanticMode) return;
 
     const q = keyword.trim();
     const searchAllMessages = messageSearchAllKeyword === q;
@@ -537,6 +478,15 @@ export default function QuickSwitcher({
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
+  /** 语义提问交给管家：由大脑理解问题并调用搜索工具回答（issue #95） */
+  const askButlerFromSearch = () => {
+    const query = keyword.trim();
+    if (!query) return;
+    onClose();
+    openButlerConversation();
+    void useButler.getState().ask(query);
+  };
+
   const pickConv = (rid: string) => {
     const conversation = conversations.find((item) => item.rid === rid);
     if (commandCenter && conversation && (conversation.unread > 0 || conversation.alert)) {
@@ -546,6 +496,16 @@ export default function QuickSwitcher({
     void openRoom(rid);
     setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
+    focusComposerInput(); // 选中会话后光标直接进输入框（issue #87）
+  };
+
+  /** 联系人结果：发起/打开直聊，光标进输入框直接可以打字（issue #87） */
+  const pickContact = (username: string) => {
+    void startDM(username).then(() => {
+      setModule('messages');
+      onClose();
+      focusComposerInput();
+    });
   };
 
   /** 消息结果：跳转到该消息并高亮 */
@@ -565,8 +525,14 @@ export default function QuickSwitcher({
 
   const pickWork = (result: WorkSearchResult) => {
     if (result.kind === 'todo') {
-      setModule('messages');
-      void openRoom(result.item.rid).then(() => jumpToMessage(result.item.mid, result.item.rid));
+      const { rid, mid } = result.item;
+      if (rid && mid) {
+        setModule('messages');
+        void openRoom(rid).then(() => jumpToMessage(mid, rid));
+      } else {
+        // 手动新建的待办没有来源消息，直接去待办模块
+        setModule('todos');
+      }
     } else if (result.kind === 'event') {
       const calendar = useCalendar.getState();
       calendar.setCursor(result.item.date);
@@ -593,12 +559,7 @@ export default function QuickSwitcher({
             name: personName(aliases, user.username, user.name || user.username, nameFormat),
             username: user.username,
           },
-          action: () => {
-            void startDM(user.username).then(() => {
-              setModule('messages');
-              onClose();
-            });
-          },
+          action: () => pickContact(user.username),
         })),
         ...contacts.rooms.slice(0, Math.max(0, 3 - contactUsers.length)).map((room) => ({
           section: 'contacts' as const,
@@ -640,12 +601,12 @@ export default function QuickSwitcher({
           section: 'work' as const,
           key: `${result.kind}:${result.item.id}`,
           title: result.kind === 'todo'
-            ? result.item.note || result.item.excerpt
+            ? result.item.note || result.item.excerpt || '（无文字内容）'
             : result.kind === 'event'
               ? result.item.title
               : `#${result.item.id} ${result.item.title}`,
           detail: result.kind === 'todo'
-            ? `待办 · ${result.item.roomName}`
+            ? result.item.roomName ? `待办 · ${result.item.roomName}` : '待办'
             : result.kind === 'event'
               ? `日程 · ${result.item.date}`
               : `工作项 · ${result.item.project} · ${result.item.state}`,
@@ -682,12 +643,7 @@ export default function QuickSwitcher({
             ? fileResults.map((result) => () => pickFile(result))
             : tab === 'contacts'
               ? [
-                  ...contactUsers.map((u) => () => {
-                    void startDM(u.username).then(() => {
-                      setModule('messages');
-                      onClose();
-                    });
-                  }),
+                  ...contactUsers.map((u) => () => pickContact(u.username)),
                   ...contacts.rooms.map((r) => () => void openSpotlightRoom(r)),
                 ]
               : workResults.map((result) => () => pickWork(result));
@@ -703,6 +659,7 @@ export default function QuickSwitcher({
     setModule('messages');
     void openRoom(room._id);
     onClose();
+    focusComposerInput(); // 选中频道后同样把光标送进输入框（issue #87）
   };
 
   return (
@@ -756,18 +713,15 @@ export default function QuickSwitcher({
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
-          <button
-            title="使用 AI embedding 按语义搜索已加载消息"
-            onClick={() => {
-              setSemanticMode((enabled) => !enabled);
-              setTab('messages');
-            }}
-            className={`flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs transition ${
-              semanticMode ? 'bg-primary-light text-primary' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
-            }`}
-          >
-            <Sparkles size={13} />语义
-          </button>
+          {!!keyword.trim() && (
+            <button
+              title="把这个问题交给管家，由我查找相关信息后回答"
+              onClick={askButlerFromSearch}
+              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
+            >
+              <Sparkles size={13} />问管家
+            </button>
+          )}
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
         </div>
 
@@ -857,15 +811,13 @@ export default function QuickSwitcher({
         {!!keyword.trim() && (
           <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1/40 px-4 py-2 text-2xs text-ink-3">
             <span>
-              {semanticMode
-                ? '语义搜索范围：本机已加载的成员会话消息'
-                : messageSearchAllKeyword === keyword.trim()
+              {messageSearchAllKeyword === keyword.trim()
                 ? messageSearching
                   ? '正在搜索全部会话的消息…'
                   : '消息搜索范围：全部会话'
                 : `消息默认搜索本机和${activeRid ? '当前会话' : '最近会话'}`}
             </span>
-            {!semanticMode && messageSearchAllKeyword !== keyword.trim() && (
+            {messageSearchAllKeyword !== keyword.trim() && (
               <button
                 className="rounded px-2 py-1 font-medium text-primary hover:bg-primary-light"
                 onClick={requestFullMessageSearch}
@@ -1004,14 +956,12 @@ export default function QuickSwitcher({
 
           {tab === 'messages' && (
             <>
-              {effectiveMessageSearching && (
-                <div className={effectiveMessageCount > 0
+              {messageSearching && (
+                <div className={messages.length > 0
                   ? 'px-4 py-1.5 text-2xs text-ink-3'
                   : 'py-8 text-center text-sm text-ink-3'}
                 >
-                  {semanticMode
-                    ? '正在更新向量索引并进行语义检索…'
-                    : effectiveMessageCount > 0
+                  {messages.length > 0
                     ? messageSearchAllKeyword === keyword.trim()
                       ? '已显示本机和已完成会话的结果，正在继续搜索全部会话…'
                       : '已显示本机结果，正在补充当前会话…'
@@ -1020,38 +970,34 @@ export default function QuickSwitcher({
                       : '正在搜索当前会话…'}
                 </div>
               )}
-              {!effectiveMessageSearching && effectiveMessageError && (
-                <div className={effectiveMessageCount > 0
+              {!messageSearching && messageError && (
+                <div className={messages.length > 0
                   ? 'px-4 py-1.5 text-2xs text-warning'
                   : 'py-8 text-center text-sm text-danger'}
                 >
-                  {effectiveMessageCount > 0
+                  {messages.length > 0
                     ? '已显示本机结果，部分历史暂时不可用'
-                    : effectiveMessageError}
+                    : messageError}
                 </div>
               )}
-              {!effectiveMessageSearching && !effectiveMessageError && keyword.trim() && filteredMessages.length === 0 && (
+              {!messageSearching && !messageError && keyword.trim() && filteredMessages.length === 0 && (
                 <div className="py-8 text-center text-sm text-ink-3">
-                  {effectiveMessageCount > 0 && activeFilterCount > 0
+                  {messages.length > 0 && activeFilterCount > 0
                     ? '当前筛选条件下没有消息'
-                    : semanticMode
-                      ? '已加载消息中没有找到语义相近的内容'
                     : messageSearchAllKeyword === keyword.trim()
                       ? '全部会话中没有找到相关消息'
                       : '本机和当前会话中没有找到相关消息'}
                 </div>
               )}
-              {!effectiveMessageSearching && !effectiveMessageError && !keyword.trim() && (
+              {!messageSearching && !messageError && !keyword.trim() && (
                 <div className="py-8 text-center text-sm text-ink-3">
-                  {semanticMode ? '输入自然语言，语义搜索本机已加载消息' : '输入关键词，先搜索本机和当前会话'}
+                  输入关键词，先搜索本机和当前会话
                 </div>
               )}
-              {!effectiveMessageSearching && !effectiveMessageError && keyword.trim() && effectiveMessageCount > 0 && (
+              {!messageSearching && !messageError && keyword.trim() && messages.length > 0 && (
                 <div className="px-4 py-1.5 text-2xs text-ink-3">
                   已显示 {shownMessages.length} 条
-                  {semanticMode
-                    ? '语义结果'
-                    : (shownMessages.length < filteredMessages.length || messageHasMore)
+                  {(shownMessages.length < filteredMessages.length || messageHasMore)
                     ? '，滚动到底继续加载'
                     : messageSearchAllKeyword === keyword.trim()
                       ? '，已加载全部匹配消息'
@@ -1172,12 +1118,7 @@ export default function QuickSwitcher({
                 return (
                 <button
                   key={u._id}
-                  onClick={() => {
-                    void startDM(u.username).then(() => {
-                      setModule('messages');
-                      onClose();
-                    });
-                  }}
+                  onClick={() => pickContact(u.username)}
                   onMouseEnter={() => setIndex(i)}
                   className={`flex w-full items-center gap-3 px-4 py-2 text-left ${
                     i === index ? 'bg-primary-light' : 'hover:bg-fill-hover'
@@ -1236,12 +1177,12 @@ export default function QuickSwitcher({
                     ? <CalendarDays size={16} />
                     : <BriefcaseBusiness size={16} />;
                 const title = result.kind === 'todo'
-                  ? result.item.note || result.item.excerpt
+                  ? result.item.note || result.item.excerpt || '（无文字内容）'
                   : result.kind === 'event'
                     ? result.item.title
                     : `#${result.item.id} ${result.item.title}`;
                 const detail = result.kind === 'todo'
-                  ? `待办 · ${result.item.roomName}`
+                  ? result.item.roomName ? `待办 · ${result.item.roomName}` : '待办'
                   : result.kind === 'event'
                     ? `日程 · ${result.item.date}`
                     : `工作项 · ${result.item.project} · ${result.item.state}`;

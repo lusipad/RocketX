@@ -5,6 +5,7 @@ import {
   Circle,
   ListTodo,
   Pencil,
+  Plus,
   Trash2,
   CornerUpRight,
 } from 'lucide-react';
@@ -16,6 +17,7 @@ import { emojify } from '../lib/emoji';
 import { useDayTick } from '../lib/format';
 import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
+import { LinkifiedText } from '../lib/markdown';
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
@@ -33,8 +35,11 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const setModule = useUI((s) => s.setModule);
   const overdue = isOverdue(todo);
+  // 手动新建的待办没有来源消息，跳转和来源行都不展示
+  const hasSource = !!(todo.rid && todo.mid);
 
   const jump = async () => {
+    if (!todo.rid || !todo.mid) return;
     setModule('messages');
     await openRoom(todo.rid);
     await jumpToMessage(todo.mid, todo.rid);
@@ -61,19 +66,21 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
             todo.done ? 'text-ink-3 line-through' : 'font-medium text-ink'
           }`}
         >
-          {todo.note || emojify(todo.excerpt) || '（无文字内容）'}
+          <LinkifiedText text={todo.note || todo.excerpt || '（无文字内容）'} renderPlain={emojify} />
         </div>
 
-        {todo.note && (
+        {todo.note && hasSource && (
           <div className="mt-1 line-clamp-2 rounded-r border-l-2 border-line bg-fill-1 px-2 py-1 text-xs break-words text-ink-3">
-            {emojify(todo.excerpt) || '（无文字内容）'}
+            <LinkifiedText text={todo.excerpt ?? '（无文字内容）'} renderPlain={emojify} />
           </div>
         )}
 
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-ink-3">
-          <span className="truncate">
-            {todo.roomName} · {todo.author}
-          </span>
+          {hasSource && (
+            <span className="truncate">
+              {todo.roomName} · {todo.author}
+            </span>
+          )}
           {todo.due && (
             <span
               className={`rounded px-1.5 py-0.5 ${
@@ -91,13 +98,15 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
-        <button
-          onClick={() => void jump()}
-          className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          title="跳到原消息"
-        >
-          <CornerUpRight size={14} />
-        </button>
+        {hasSource && (
+          <button
+            onClick={() => void jump()}
+            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            title="跳到原消息"
+          >
+            <CornerUpRight size={14} />
+          </button>
+        )}
         <button
           onClick={() => onEdit(todo)}
           className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
@@ -128,6 +137,7 @@ export default function TodosPage() {
   const clearDone = useTodos((s) => s.clearDone);
   const [tab, setTab] = useState<Tab>('open');
   const [editing, setEditing] = useState<Todo | null>(null);
+  const [creating, setCreating] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const counts = useMemo(() => {
@@ -192,14 +202,23 @@ export default function TodosPage() {
           <span className="text-sm text-ink-2">
             {TABS.find((t) => t.key === tab)?.label} · {list.length} 项
           </span>
-          {tab === 'done' && list.length > 0 && (
+          <div className="flex items-center gap-3">
+            {tab === 'done' && list.length > 0 && (
+              <button
+                onClick={() => setConfirmClear(true)}
+                className="text-xs text-ink-3 transition hover:text-danger"
+              >
+                清空已完成
+              </button>
+            )}
             <button
-              onClick={() => setConfirmClear(true)}
-              className="text-xs text-ink-3 transition hover:text-danger"
+              onClick={() => setCreating(true)}
+              className="flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
             >
-              清空已完成
+              <Plus size={15} />
+              新建待办
             </button>
-          )}
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
@@ -215,6 +234,7 @@ export default function TodosPage() {
               <div className="max-w-xs text-xs leading-relaxed text-ink-3">
                 在任意聊天消息上点右键，选「标记为待办」，就能把它捞到这里，
                 还能补充说明和截止日期。点待办可以跳回原消息。
+                也可以点右上角「新建待办」直接记一条。
               </div>
             </div>
           )}
@@ -222,6 +242,7 @@ export default function TodosPage() {
       </main>
 
       {editing && <TodoDialog existing={editing} onClose={() => setEditing(null)} />}
+      {creating && <TodoDialog onClose={() => setCreating(false)} />}
       {confirmClear && (
         <ConfirmDialog
           title="清空已完成"

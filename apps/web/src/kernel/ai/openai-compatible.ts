@@ -13,7 +13,6 @@ export interface OpenAiCompatibleConfig {
   baseUrl: string;
   model: string;
   locality: AiProviderLocality;
-  embeddingModel?: string;
   getApiKey?: () => Promise<string | undefined>;
   apiKeyHeader?: 'authorization' | 'api-key';
   fetch?: typeof fetch;
@@ -147,7 +146,6 @@ export class OpenAiCompatibleProvider implements AiProvider {
   readonly locality: AiProviderLocality;
   readonly model: string;
   readonly origin: string;
-  readonly embeddingModel?: string;
   private readonly config: OpenAiCompatibleConfig;
 
   constructor(config: OpenAiCompatibleConfig) {
@@ -159,7 +157,6 @@ export class OpenAiCompatibleProvider implements AiProvider {
     this.locality = config.locality;
     this.model = config.model;
     this.origin = url.origin;
-    this.embeddingModel = config.embeddingModel;
     this.config = config;
   }
 
@@ -192,30 +189,5 @@ export class OpenAiCompatibleProvider implements AiProvider {
     );
     if (!response.ok) throw new Error(await errorMessage(response));
     yield* parseSse(response, !!request.tools?.length);
-  }
-
-  async embed(texts: string[]): Promise<number[][]> {
-    if (!this.config.embeddingModel) throw new Error(`Provider ${this.id} 未配置 embedding 模型`);
-    const apiKey = await this.config.getApiKey?.();
-    const headers = new Headers({ 'Content-Type': 'application/json' });
-    if (apiKey) {
-      if (this.config.apiKeyHeader === 'api-key') headers.set('api-key', apiKey);
-      else headers.set('Authorization', `Bearer ${apiKey}`);
-    }
-    const response = await (this.config.fetch ?? fetch)(
-      endpoint(this.config.baseUrl, '/embeddings'),
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model: this.config.embeddingModel, input: texts }),
-      },
-    );
-    if (!response.ok) throw new Error(await errorMessage(response));
-    const payload = (await response.json()) as { data?: Array<{ index: number; embedding: number[] }> };
-    const rows = [...(payload.data ?? [])].sort((left, right) => left.index - right.index);
-    if (rows.length !== texts.length || rows.some((row) => !Array.isArray(row.embedding))) {
-      throw new Error('embedding 响应数量与请求不一致');
-    }
-    return rows.map((row) => row.embedding);
   }
 }

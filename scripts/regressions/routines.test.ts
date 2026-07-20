@@ -58,7 +58,13 @@ class MemoryStorage {
 
 test('hydrate 使用可注入存储并补齐默认停用的内置例行事务', () => {
   const storage = new MemoryStorage();
-  storage.set('rcx-butler-v1:routines', JSON.stringify({ routines: [routine({ id: 'saved' })], eventCards: [] }));
+  storage.set('rcx-butler-v1:routines', JSON.stringify({
+    routines: [routine({ id: 'saved' })],
+    eventCards: [
+      { id: 'event:build:1', kind: 'build-failed', title: '旧构建失败', detail: '已被成功覆盖', at: 1 },
+      { id: 'event:workitem:2', kind: 'workitem-assigned', title: '旧指派提醒', detail: '改由提议处理', at: 1 },
+    ],
+  }));
   const restoreStorage = setRoutineStorage(storage);
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   resetRoutineStore();
@@ -71,8 +77,44 @@ test('hydrate 使用可注入存储并补齐默认停用的内置例行事务', 
       routines.filter((item) => item.id.startsWith('builtin-')).map(({ name, enabled }) => ({ name, enabled })),
       [{ name: '晨报', enabled: false }, { name: '晚间回顾', enabled: false }],
     );
+    assert.deepEqual(useRoutines.getState().eventCards, []);
   } finally {
     restoreNow();
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
+test('桌面管理可切换例行事务并持久化', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore([routine()]);
+
+  try {
+    useRoutines.getState().setEnabled('routine-1', false);
+    assert.equal(useRoutines.getState().routines[0].enabled, false);
+    const saved = JSON.parse(storage.get('rcx-butler-v1:routines') ?? '{}') as { routines?: Routine[] };
+    assert.equal(saved.routines?.[0]?.enabled, false);
+  } finally {
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
+test('桌面关闭提醒后从事件卡与持久化中一并移除', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore([routine()]);
+  useRoutines.setState({
+    eventCards: [{ id: 'event:mention:r1', kind: 'mention-stale', title: '@我未回应', detail: '仍有一条', at: MONDAY_0830 }],
+  });
+
+  try {
+    useRoutines.getState().dismissCard('event:mention:r1');
+    assert.deepEqual(useRoutines.getState().eventCards, []);
+    const saved = JSON.parse(storage.get('rcx-butler-v1:routines') ?? '{}') as { eventCards?: unknown[] };
+    assert.deepEqual(saved.eventCards, []);
+  } finally {
     restoreStorage();
     resetRoutineStore();
   }
@@ -166,18 +208,19 @@ test('选择 Codex 大脑时，runNow 使用独立的 ephemeral runner', async (
   }
 });
 
-test('checkWatchers 覆盖三类事件、持久去重和两小时阈值', () => {
+test('checkWatchers 只保留未回应 @我，构建与新指派不再生成提醒', () => {
   const now = new Date(2026, 0, 5, 12, 0).getTime();
   const snapshot = {
-    builds: [{ id: 7, definition: 'Web', buildNumber: '20260105.1', result: 'failed', project: 'RocketX' }],
+    builds: [
+      { id: 7, definition: 'Web', buildNumber: '20260105.1', result: 'failed', project: 'RocketX' },
+      { id: 8, definition: 'Web', buildNumber: '20260105.2', result: 'succeeded', project: 'RocketX' },
+    ],
     workItems: [{ id: 42, title: '修复登录', assignedTo: 'DOMAIN\\alice', project: 'RocketX' }],
     subscriptions: [{ rid: 'room-1', name: '发布群', userMentions: 2, lastMessageAt: now - 3 * 60 * 60 * 1000 }],
     user: { username: 'alice', name: 'Alice Zhang' },
   };
   const cards = checkWatchers(snapshot, now);
-  assert.equal(cards.length, 3);
-  assert.ok(cards.some((card) => card.title === '构建失败：Web · 20260105.1'));
-  assert.ok(cards.some((card) => card.title === '新指派工作项：#42 修复登录'));
+  assert.equal(cards.length, 1);
   assert.ok(cards.some((card) => card.title === '@我未回应：发布群（3小时前）'));
   assert.equal(checkWatchers({ ...snapshot, seenKeys: cards.map((card) => card.dedupeKey) }, now).length, 0);
   assert.equal(checkWatchers({ ...snapshot, subscriptions: [{ rid: 'room-1', name: '发布群', userMentions: 2, lastMessageAt: now - 119 * 60 * 1000 }] }, now)

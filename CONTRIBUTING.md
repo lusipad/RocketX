@@ -42,6 +42,7 @@ Run the checks relevant to your change. A normal TypeScript change should includ
 pnpm typecheck
 pnpm test:pure
 pnpm test:regression
+pnpm test:ui
 ```
 
 Changes to Rocket.Chat API behavior should also run the real-server checks:
@@ -65,7 +66,7 @@ docker compose -f docker/docker-compose.yml config --quiet
 docker compose -f docker/docker-compose.yml build rocketx
 ```
 
-UI changes need a real browser or desktop interaction pass in addition to automated tests. Record the path tested and the result in the pull request.
+UI changes should extend `pnpm test:ui` when the behavior is automatable, then add a real browser or desktop interaction pass for surfaces the suite does not cover. Record the path tested and the result in the pull request.
 
 ## Pull requests and commits
 

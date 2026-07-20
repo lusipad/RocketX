@@ -11,7 +11,7 @@ Plan: `docs/m8-implementation-plan.md`
 ## Decisions
 
 - 协议基线锁定为 `codex-cli 0.144.4`；生成类型与真实 stdio 握手均以同一二进制验证。
-- Rust 只负责在用户选择的本地目录启动每会话一个 `codex app-server --stdio`、转发 JSONL 并回收进程；TypeScript 负责协议语义、会话和审批。
+- Rust 只负责在用户选择的本地目录启动每会话一个 `codex app-server`、转发 JSONL 并回收进程；TypeScript 负责协议语义、会话和审批。`--stdio` 按 `app-server --help` 是否列出决定传不传：基线 0.144.4 需要显式传，后续版本把 stdio 设为默认并移除了该参数，写死会让进程以退出码 2 直接退出。
 - 独立 Codex 与共享 Agent 都使用真实本地工作目录；共享 Agent 的临时附件位于应用缓存，并作为额外运行时根传给 Codex。
 - 当前 11 类 server-initiated request 必须显式处理，未知请求安全拒绝。
 - 上下文包包含当前话题、被引用消息的整条已加载线程、参与者和消息中关联的 ADO 工作项；站内代码、日志、图片附件限量写入应用缓存并只读挂载，不写入用户项目。

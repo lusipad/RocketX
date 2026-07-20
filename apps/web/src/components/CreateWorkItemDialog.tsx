@@ -2,12 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useWorkbench } from '../stores/workbench';
 import {
+  HIERARCHY_LAYOUT_OPTIONS,
+  hierarchyPreview,
+  loadHierarchyLayout,
   loadLastWorkItemProject,
   preferredWorkItemProject,
   preferredWorkItemType,
+  saveHierarchyLayout,
   saveLastWorkItemProject,
   workItemTemplatesForTypes,
   useWiTemplates,
+  type HierarchyLayout,
 } from '../stores/wiTemplates';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
@@ -34,6 +39,7 @@ export default function CreateWorkItemDialog({
   const defaultProject = useWiTemplates((s) => s.defaultProject);
 
   const [tplIdx, setTplIdx] = useState(0);
+  const [hierarchyLayout, setHierarchyLayout] = useState<HierarchyLayout>(() => loadHierarchyLayout());
   const [title, setTitle] = useState(defaultTitle);
   const [description, setDescription] = useState(defaultDescription ?? '');
   const [type, setType] = useState(defaultType ?? 'Task');
@@ -53,11 +59,12 @@ export default function CreateWorkItemDialog({
   const dialogRef = useDialogBehavior(requestClose);
 
   const compatibleTemplates = useMemo(
-    () => workItemTemplatesForTypes(templates, workItemTypes, workItemHierarchy),
-    [templates, workItemTypes, workItemHierarchy],
+    () => workItemTemplatesForTypes(templates, workItemTypes, workItemHierarchy, hierarchyLayout),
+    [templates, workItemTypes, workItemHierarchy, hierarchyLayout],
   );
   const tpl = compatibleTemplates[tplIdx];
   const isSingle = tpl?.items.length === 1 && tpl.items[0].type === '{type}';
+  const isHierarchy = tpl?.name === '层级工作项';
 
   useEffect(() => {
     if (!config?.adoBase || config.mode !== 'direct') return;
@@ -231,6 +238,28 @@ export default function CreateWorkItemDialog({
               <span className="text-xs text-danger">当前项目没有兼容的工作项模板</span>
             )}
           </div>
+
+          {/* 层级形态四选一(选择即记住,下次默认) + 结构预览 */}
+          {isHierarchy && (
+            <div className="flex flex-col gap-1">
+              <select
+                value={hierarchyLayout}
+                onChange={(e) => {
+                  const next = e.target.value as HierarchyLayout;
+                  setHierarchyLayout(next);
+                  saveHierarchyLayout(next);
+                }}
+                className="h-8 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
+              >
+                {HIERARCHY_LAYOUT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              {tpl && (
+                <div className="text-xs text-ink-3">{hierarchyPreview(tpl)}</div>
+              )}
+            </div>
+          )}
 
           {/* 项目 + 类型（单个模式显示类型选择） */}
           <div className="flex gap-2">

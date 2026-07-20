@@ -5,6 +5,8 @@ import { useUI } from '../stores/ui';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
+import { focusComposerInput } from '../lib/focus';
+import { shortcutKeyOf } from '../lib/shortcutKey';
 import {
   clearTrayAttention,
   formatTrayTooltip,
@@ -47,6 +49,7 @@ import {
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
 import { useCodexRuntime } from '../stores/codexRuntime';
+import { useToday } from '../stores/today';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -100,7 +103,7 @@ export default function MainPage() {
   const wasRightPanelOpen = useRef(rightPanelOpen);
 
   useEffect(() => {
-    void init();
+    void init().then(() => useToday.getState().refreshMentions());
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
     void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);
@@ -297,7 +300,7 @@ export default function MainPage() {
 
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
+      const key = shortcutKeyOf(e);
       // Ctrl+K 快速切换会话
       if (mod && key === 'k' && !e.shiftKey) { e.preventDefault(); switcherTab.current = undefined; setSwitcher(!useUI.getState().switcherOpen); return; }
       // Ctrl+Shift+F 全局搜索消息
@@ -403,7 +406,7 @@ export default function MainPage() {
         <SettingsPage />
       )}
       {(connection === 'reconnecting' || connection === 'connecting') && (
-        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-1.5 text-xs text-white shadow-lg">
+        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-fill-active px-4 py-1.5 text-xs text-ink shadow-lg">
           连接中，消息推送可能延迟…
         </div>
       )}
@@ -423,7 +426,7 @@ export default function MainPage() {
         }}
         onFocusComposer={() => {
           useUI.getState().setModule('messages');
-          setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-composer-input]')?.focus());
+          focusComposerInput();
         }}
       />
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}

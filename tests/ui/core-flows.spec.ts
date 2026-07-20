@@ -154,6 +154,7 @@ async function installRocketChatMock(page: Page) {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
+  await page.route('**/avatar/**', (route) => route.fulfill({ status: 204 }));
   await page.route('**/api/info', (route) => fulfillJson(route, { version: '8.6.1' }));
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -223,7 +224,10 @@ async function installRocketChatMock(page: Page) {
   return { sentMessages, pageErrors };
 }
 
-async function bootAuthenticated(page: Page) {
+async function bootAuthenticated(
+  page: Page,
+  options: { expectMessages?: boolean } = {},
+) {
   const state = await installRocketChatMock(page);
   await page.addInitScript(({ server, userId }) => {
     localStorage.setItem('rcx-server', server);
@@ -242,9 +246,14 @@ async function bootAuthenticated(page: Page) {
         },
       }),
     );
-  }, { server: SERVER, userId: ME._id });
+  }, {
+    server: SERVER,
+    userId: ME._id,
+  });
   await page.goto('/');
-  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  if (options.expectMessages !== false) {
+    await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  }
   return state;
 }
 
@@ -262,6 +271,20 @@ test('登录后进入主界面', async ({ page }) => {
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '连接 Azure DevOps' })).toBeVisible();
   await page.getByRole('button', { name: '暂时跳过' }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('打开管家页后可返回消息', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await expect(page.getByRole('navigation').getByRole('button', { name: '今日', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByRole('heading', { name: '管家', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '再看一圈' })).toBeVisible();
+  await expect(page.getByText('例行事务', { exact: true })).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
@@ -275,6 +298,22 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('收起分组栏后不产生水平滚动（issue #114）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-folders', JSON.stringify(Array.from({ length: 20 }, (_, index) => ({
+      id: `folder-${index}`,
+      name: `非常长的分组名称-${index}`,
+      rids: [],
+    }))));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '收起分组栏' }).click();
+  const aside = page.getByRole('button', { name: '展开分组栏' }).locator('xpath=ancestor::aside');
+  await expect(aside).toBeVisible();
+  await expect.poll(() => aside.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
 test('发送消息会乐观上屏并提交一次', async ({ page }) => {
   const { sentMessages, pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -283,6 +322,105 @@ test('发送消息会乐观上屏并提交一次', async ({ page }) => {
   await expect(page.getByText('UI smoke message', { exact: true })).toBeVisible();
   await expect.poll(() => sentMessages.length).toBe(1);
   expect(sentMessages[0]?.msg).toBe('UI smoke message');
+  expect(pageErrors).toEqual([]);
+});
+
+test('消息待办可记录承诺对象并显示在管家里', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByText('Welcome to General', { exact: true }).click({ button: 'right' });
+  await page.getByRole('button', { name: '标记为待办' }).click();
+  const committedTo = page.getByPlaceholder('例如：张三');
+  const waitingFor = page.getByPlaceholder('例如：李四');
+  await committedTo.fill('张三');
+  await waitingFor.fill('李四');
+  await expect(committedTo).toHaveValue('');
+  await committedTo.fill('张三');
+  await expect(waitingFor).toHaveValue('');
+  await page.getByRole('button', { name: '加入待办' }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByRole('heading', { name: '我答应的', exact: true })).toBeVisible();
+  await expect(page.getByText('张三', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('编辑旧双值承诺待办时归一化为单一方向', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-todos', JSON.stringify([{
+      id: 'legacy-commitment',
+      source: 'manual',
+      note: '旧双值承诺',
+      done: false,
+      createdAt: 1,
+      committedTo: '张三',
+      waitingFor: '李四',
+    }]));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
+  await page.getByText('旧双值承诺', { exact: true }).hover();
+  await page.getByTitle('编辑').click();
+  await page.getByRole('button', { name: '保存' }).click();
+
+  const [saved] = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('rcx-todos') ?? '[]') as Array<Record<string, unknown>>,
+  );
+  expect(saved?.committedTo).toBe('张三');
+  expect(saved).not.toHaveProperty('waitingFor');
+  expect(pageErrors).toEqual([]);
+});
+
+test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }) => {
+  const workItem = {
+    id: 128,
+    title: 'A very long work item title that must wrap inside a narrow chat column',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX-Project-With-A-Very-Long-Name',
+    assignedTo: 'Test User',
+    webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
+  };
+  await page.route('http://bridge.test/api/ado/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/config')) return fulfillJson(route, { webBase: 'http://ado.example', account: 'tester' });
+    if (path.endsWith('/workitems')) return fulfillJson(route, { items: [workItem] });
+    if (path.endsWith('/pullrequests')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/builds')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/workitem/128')) return fulfillJson(route, { item: workItem });
+    return fulfillJson(route, { success: true });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({ mode: 'bridge', bridge: 'http://bridge.test', account: 'tester' }));
+    localStorage.setItem('rcx-ado-web', 'http://ado.example');
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByPlaceholder(/输入消息/).fill('#128');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  const title = page.getByText(workItem.title, { exact: true });
+  await expect(title).toBeVisible();
+  await page.getByTitle('查看群信息').first().click();
+  const card = title.locator('xpath=ancestor::span[contains(@class,"inline-block")]');
+  await expect.poll(() => card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('待办里的网址可以直接点击打开（issue #117）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-todos', JSON.stringify([{
+      id: 'todo-with-link',
+      source: 'manual',
+      note: '查看 https://example.com/work-item',
+      done: false,
+      createdAt: 1,
+    }]));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
+  const link = page.getByRole('link', { name: 'https://example.com/work-item' });
+  await expect(link).toHaveAttribute('href', 'https://example.com/work-item');
+  await expect(link).toHaveAttribute('target', '_blank');
   expect(pageErrors).toEqual([]);
 });
 
@@ -306,14 +444,29 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('AI 提供执行间入口，Codex 不显示为侧栏一级入口', async ({ page }) => {
+test('管家对话提供执行间入口，Codex 不显示为侧栏一级入口', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
-  await page.getByRole('navigation').getByRole('button', { name: 'AI', exact: true }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
   await expect(page.getByText('直接告诉我你想了解什么，我会先查证据再回答。')).toBeVisible();
   await page.getByRole('button', { name: '执行间', exact: true }).click();
   await expect(page.getByText('执行间', { exact: true })).toBeVisible();
   await expect(page.getByText('AI 的本地执行区：在指定本地目录中运行 Codex 会话；由 Codex 原生沙箱和审批控制命令与文件修改。')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('管家停靠输入展开对话，收起再打开仍保留上下文', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('textbox', { name: '问管家' }).fill('记住这段桌面对话');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '收起对话', exact: true }).click();
+  await expect(page.getByRole('button', { name: '再看一圈' })).toBeVisible();
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -502,11 +655,19 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
 
+  // 基础设置直接可见：运行方式在最上面（报错提示会引导用户来这里切换大脑）
+  await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
+  await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
+  await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
   await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
-  await expect(page.getByText('Provider', { exact: true })).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
   await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
   await page.getByText('高级 AI 设置', { exact: true }).click();
-  await expect(page.getByText('Provider', { exact: true })).toBeVisible();
+  // 高级设置按保存方式分组：Provider/路由归「保存 AI 配置」，外部集成即时生效
+  await expect(page.getByRole('heading', { name: '模型 Provider' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '按能力路由' })).toBeVisible();
+  await expect(page.getByText('保存上方 Provider 与能力路由', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

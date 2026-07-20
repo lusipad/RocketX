@@ -19,12 +19,29 @@ import {
   type ButlerBrainKind,
   type ButlerCodexSettings,
 } from '../lib/butlerBrain';
+import {
+  getAgentHostingCodexSettings,
+  setAgentHostingCodexSettings,
+} from '../lib/agentHostingSettings';
+import {
+  DEFAULT_PERSONA,
+  getPersona,
+  resetPersona,
+  setPersona,
+} from '../lib/butlerProfile';
+import {
+  AXIS_META,
+  DEFAULT_AXES,
+  loadPersonality,
+  savePersonality,
+  type PersonalityAxes,
+} from '../lib/butlerPersonality';
 import { isTauri } from '../lib/http';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
-import { RadioGroup, Row } from './SettingControls';
+import { RadioGroup, Row, Slider } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -36,16 +53,24 @@ function newProvider(): AiProviderConfig {
     name: 'OpenAI-compatible',
     baseUrl: 'http://localhost:11434/v1',
     model: '',
-    embeddingModel: '',
     locality: 'local',
     hasSecret: false,
   };
 }
 
+/**
+ * AI 设置分三层：运行方式和工作目录是基础设置直接可见；「高级 AI 设置」里
+ * 按保存方式分成两组——Provider 与能力路由由「保存 AI 配置」统一保存，
+ * 外部集成（反向 MCP、共享 Agent 身份）各自即时生效。
+ */
 export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
   const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
+  const [hostingCodex, setHostingCodexState] = useState<ButlerCodexSettings>(getAgentHostingCodexSettings);
+  const [persona, setPersonaState] = useState<string>(getPersona);
+  const [savedPersona, setSavedPersona] = useState<string>(getPersona);
+  const [personality, setPersonalityState] = useState<PersonalityAxes>(loadPersonality);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -152,244 +177,367 @@ export default function AiSettings() {
     setButlerCodexState(next);
   };
 
+  const updateHostingCodex = (patch: Partial<ButlerCodexSettings>) => {
+    const next = { ...hostingCodex, ...patch };
+    setAgentHostingCodexSettings(next);
+    setHostingCodexState(next);
+  };
+
+  const savePersona = () => {
+    const value = persona.trim();
+    if (!value || value === DEFAULT_PERSONA) {
+      // 清空或改回默认文本都视为恢复默认
+      resetPersona();
+      setPersonaState(DEFAULT_PERSONA);
+      setSavedPersona(DEFAULT_PERSONA);
+    } else {
+      setPersona(persona);
+      setSavedPersona(persona);
+    }
+    toast.success('AI 人设已保存，对下一次提问生效');
+  };
+
+  const restoreDefaultPersona = () => {
+    resetPersona();
+    setPersonaState(DEFAULT_PERSONA);
+    setSavedPersona(DEFAULT_PERSONA);
+    toast.success('已恢复默认人设');
+  };
+
   const codexAvailability = codexBrainAvailability();
 
   return (
     <div className="space-y-6">
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行方式</h2>
+        <div className="rounded-lg border border-line bg-surface px-4">
+          <Row label="AI 管家大脑" hint="切换后立即对下一次管家提问生效；不会静默降级。">
+            <RadioGroup
+              value={butlerBrain}
+              onChange={(brain) => {
+                setButlerBrain(brain);
+                setButlerBrainState(brain);
+              }}
+              options={[
+                {
+                  key: 'codex',
+                  label: 'Codex（本机，桌面端）',
+                  hint: codexAvailability.available ? '使用本机 ChatGPT 账号模型' : codexAvailability.reason,
+                  disabled: !codexAvailability.available,
+                },
+                {
+                  key: 'api',
+                  label: 'API Provider',
+                  hint: '使用高级 AI 设置里「按能力路由」中 Agent 指向的 Provider',
+                },
+              ]}
+            />
+          </Row>
+          <Row
+            label="人设"
+            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，Codex 大脑会自动换用新线程。"
+          >
+            <textarea
+              aria-label="AI 人设"
+              value={persona}
+              onChange={(event) => setPersonaState(event.target.value)}
+              rows={5}
+              className="w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none transition focus:border-primary"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={savePersona}
+                disabled={persona === savedPersona}
+                className="h-8 rounded-md bg-primary px-3 text-sm text-white hover:opacity-90 disabled:opacity-50"
+              >
+                保存人设
+              </button>
+              <button
+                onClick={restoreDefaultPersona}
+                disabled={persona === DEFAULT_PERSONA && savedPersona === DEFAULT_PERSONA}
+                className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+              >
+                恢复默认
+              </button>
+            </div>
+          </Row>
+          {butlerBrain === 'codex' && (
+            <>
+              <Row label="管家 Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
+                <input
+                  aria-label="管家 Codex 模型"
+                  value={butlerCodex.model}
+                  onChange={(event) => updateButlerCodex({ model: event.target.value })}
+                  placeholder="例如 gpt-5.4"
+                  className={`${inputCls} max-w-xs`}
+                />
+              </Row>
+              <Row label="管家推理强度" hint="只影响 AI 管家；模型不支持时 Codex 会返回明确错误。">
+                <select
+                  aria-label="管家 Codex 推理强度"
+                  value={butlerCodex.effort}
+                  onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
+                  className={`${inputCls} max-w-xs`}
+                >
+                  {BUTLER_CODEX_EFFORTS.map((effort) => (
+                    <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+                  ))}
+                </select>
+              </Row>
+            </>
+          )}
+          <Row label="AI 托管 Codex 模型" hint="只影响聊天中的 AI 托管；留空时跟随 Codex CLI 默认模型。">
+            <input
+              aria-label="AI 托管 Codex 模型"
+              value={hostingCodex.model}
+              onChange={(event) => updateHostingCodex({ model: event.target.value })}
+              placeholder="例如 gpt-5.4"
+              className={`${inputCls} max-w-xs`}
+            />
+          </Row>
+          <Row label="AI 托管推理强度" hint="与管家独立，修改后对托管会话的下一次执行生效。">
+            <select
+              aria-label="AI 托管 Codex 推理强度"
+              value={hostingCodex.effort}
+              onChange={(event) => updateHostingCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
+              className={`${inputCls} max-w-xs`}
+            >
+              {BUTLER_CODEX_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+              ))}
+            </select>
+          </Row>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">管家性格</h2>
+        <p className="mb-2 text-xs text-ink-3">四条轴的组合覆盖从"极简效率"到"温和关怀"的跨度，影响管家的表达方式。</p>
+        <div className="rounded-lg border border-line bg-surface px-4">
+          {AXIS_META.map((axis) => (
+            <Row
+              key={axis.key}
+              label={axis.label}
+              hint={`${axis.low} ← → ${axis.high}`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-16 text-right text-xs text-ink-3">{axis.low}</span>
+                <Slider
+                  value={personality[axis.key]}
+                  onChange={(v) => {
+                    const next = { ...personality, [axis.key]: v };
+                    setPersonalityState(next);
+                    savePersonality(next);
+                  }}
+                  min={1}
+                  max={5}
+                />
+                <span className="w-16 text-xs text-ink-3">{axis.high}</span>
+              </div>
+            </Row>
+          ))}
+          <Row label="" hint="">
+            <button
+              onClick={() => {
+                setPersonalityState(DEFAULT_AXES);
+                savePersonality(DEFAULT_AXES);
+                toast.success('已恢复默认性格（克制、预判、不越界）');
+              }}
+              disabled={JSON.stringify(personality) === JSON.stringify(DEFAULT_AXES)}
+              className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+            >
+              恢复默认
+            </button>
+          </Row>
+        </div>
+      </section>
+
       <LocalAgentEnvironmentsSettings />
 
       <details className="group rounded-lg border border-line bg-surface">
         <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-ink">高级 AI 设置</div>
-            <div className="mt-0.5 text-xs text-ink-3">模型、Provider、能力路由、自动化接口和专用 Bot</div>
+            <div className="mt-0.5 text-xs text-ink-3">模型 Provider、能力路由与外部集成</div>
           </div>
           <ChevronDown size={16} className="shrink-0 text-ink-3 transition-transform group-open:rotate-180" />
         </summary>
 
-        <div className="space-y-6 border-t border-line p-4">
-      <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm text-ink-2">
-        <div className="font-medium text-ink">模型调用与隐私</div>
-        <p className="mt-1 leading-6">
-          Codex 默认负责聊天、本地工作和 AI 助手的模糊意图解析，无需配置 DeepSeek。下方 Provider
-          仅用于总结、晨报、翻译等可选能力；桌面端密钥只存系统钥匙串。
-        </p>
-      </div>
-
-      <section className="rounded-lg border border-line bg-surface px-4">
-        <Row label="AI 运行方式" hint="切换后立即对下一次 AI 提问生效；不会静默降级。">
-          <RadioGroup
-            value={butlerBrain}
-            onChange={(brain) => {
-              setButlerBrain(brain);
-              setButlerBrainState(brain);
-            }}
-            options={[
-              {
-                key: 'codex',
-                label: 'Codex（本机，桌面端）',
-                hint: codexAvailability.available ? '使用本机 ChatGPT 账号模型' : codexAvailability.reason,
-                disabled: !codexAvailability.available,
-              },
-              { key: 'api', label: 'API Provider', hint: '使用下方配置的模型 Provider' },
-            ]}
-          />
-        </Row>
-        {butlerBrain === 'codex' && (
-          <>
-            <Row label="Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
-              <input
-                aria-label="Codex 模型"
-                value={butlerCodex.model}
-                onChange={(event) => updateButlerCodex({ model: event.target.value })}
-                placeholder="例如 gpt-5.4"
-                className={`${inputCls} max-w-xs`}
-              />
-            </Row>
-            <Row label="推理强度" hint="模型不支持所选强度时，Codex 会返回明确错误。">
-              <select
-                aria-label="Codex 推理强度"
-                value={butlerCodex.effort}
-                onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
-                className={`${inputCls} max-w-xs`}
-              >
-                {BUTLER_CODEX_EFFORTS.map((effort) => (
-                  <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
-                ))}
-              </select>
-            </Row>
-          </>
-        )}
-      </section>
-
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink">Provider</h2>
-          <button
-            onClick={() => setSettings((current) => ({ ...current, providers: [...current.providers, newProvider()] }))}
-            className="flex h-8 items-center gap-1 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover"
-          >
-            <Plus size={14} /> 添加 OpenAI-compatible
-          </button>
-        </div>
-        <div className="space-y-3">
-          {settings.providers.map((provider) => (
-            <div key={provider.id} className="rounded-lg border border-line bg-surface p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <input
-                  aria-label="Provider 名称"
-                  value={provider.name}
-                  onChange={(event) => updateProvider(provider.id, { name: event.target.value })}
-                  className={`${inputCls} max-w-xs font-medium`}
-                />
-                <span className={`rounded px-2 py-1 text-xs ${provider.locality === 'local' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'}`}>
-                  {provider.locality === 'local' ? '本地' : '外部'}
-                </span>
-                <button
-                  title="删除 Provider"
-                  onClick={() => void remove(provider.id)}
-                  className="ml-auto rounded p-2 text-ink-3 hover:bg-fill-hover hover:text-danger"
-                >
-                  <Trash2 size={15} />
-                </button>
+        <div className="border-t border-line p-4">
+          <section>
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink">模型 Provider</h2>
+                <p className="mt-0.5 text-xs leading-5 text-ink-3">
+                  供会话总结、晨报、翻译等能力使用；「AI 运行方式」选 API 时也作为
+                  AI 大脑。桌面端密钥只保存到系统钥匙串。
+                </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-ink-3">
-                  协议
-                  <select
-                    value={provider.kind}
-                    onChange={(event) => updateProvider(provider.id, { kind: event.target.value as AiProviderConfig['kind'] })}
-                    className={`mt-1 ${inputCls}`}
-                  >
-                    <option value="openai-compatible">OpenAI-compatible</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="azure-openai">Azure OpenAI v1</option>
-                  </select>
-                </label>
-                <label className="text-xs text-ink-3">
-                  Base URL
-                  <input
-                    value={provider.baseUrl}
-                    onChange={(event) => updateProvider(provider.id, { baseUrl: event.target.value })}
-                    className={`mt-1 ${inputCls}`}
-                  />
-                </label>
-                <label className="text-xs text-ink-3">
-                  Chat 模型
-                  <input
-                    value={provider.model}
-                    onChange={(event) => updateProvider(provider.id, { model: event.target.value })}
-                    placeholder="deepseek-v4-flash"
-                    className={`mt-1 ${inputCls}`}
-                  />
-                </label>
-                <label className="text-xs text-ink-3">
-                  Embedding 模型（可选）
-                  <input
-                    value={provider.embeddingModel ?? ''}
-                    onChange={(event) => updateProvider(provider.id, { embeddingModel: event.target.value })}
-                    placeholder="DeepSeek 官方没有 embedding 模型"
-                    className={`mt-1 ${inputCls}`}
-                  />
-                </label>
-                <label className="text-xs text-ink-3">
-                  网络位置
-                  <select
-                    value={provider.locality}
-                    onChange={(event) => updateProvider(provider.id, { locality: event.target.value as 'local' | 'external' })}
-                    className={`mt-1 ${inputCls}`}
-                  >
-                    <option value="external">外部网络</option>
-                    <option value="local">本机 / 内网</option>
-                  </select>
-                </label>
-                <label className="text-xs text-ink-3 sm:col-span-2">
-                  API 密钥 {provider.hasSecret && <span className="text-success">（已保存）</span>}
-                  <div className="mt-1 flex gap-2">
+              <button
+                onClick={() => setSettings((current) => ({ ...current, providers: [...current.providers, newProvider()] }))}
+                className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover"
+              >
+                <Plus size={14} /> 添加 OpenAI-compatible
+              </button>
+            </div>
+            <div className="space-y-3">
+              {settings.providers.map((provider) => (
+                <div key={provider.id} className="rounded-lg border border-line bg-surface p-4">
+                  <div className="mb-3 flex items-center gap-2">
                     <input
-                      type="password"
-                      value={secrets[provider.id] ?? ''}
-                      onChange={(event) => setSecrets((current) => ({ ...current, [provider.id]: event.target.value }))}
-                      placeholder={provider.hasSecret ? '留空则保留现有密钥' : provider.locality === 'local' ? '本地服务可留空' : '输入后保存到系统钥匙串'}
-                      autoComplete="new-password"
-                      className={inputCls}
+                      aria-label="Provider 名称"
+                      value={provider.name}
+                      onChange={(event) => updateProvider(provider.id, { name: event.target.value })}
+                      className={`${inputCls} max-w-xs font-medium`}
                     />
-                    {provider.hasSecret && (
-                      <button
-                        onClick={() => void clearSecret(provider.id)}
-                        className="shrink-0 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover"
+                    <span className={`rounded px-2 py-1 text-xs ${provider.locality === 'local' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'}`}>
+                      {provider.locality === 'local' ? '本地' : '外部'}
+                    </span>
+                    <button
+                      title="删除 Provider"
+                      onClick={() => void remove(provider.id)}
+                      className="ml-auto rounded p-2 text-ink-3 hover:bg-fill-hover hover:text-danger"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-xs text-ink-3">
+                      协议
+                      <select
+                        value={provider.kind}
+                        onChange={(event) => updateProvider(provider.id, { kind: event.target.value as AiProviderConfig['kind'] })}
+                        className={`mt-1 ${inputCls}`}
                       >
-                        清除密钥
-                      </button>
+                        <option value="openai-compatible">OpenAI-compatible</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="azure-openai">Azure OpenAI v1</option>
+                      </select>
+                    </label>
+                    <label className="text-xs text-ink-3">
+                      Base URL
+                      <input
+                        value={provider.baseUrl}
+                        onChange={(event) => updateProvider(provider.id, { baseUrl: event.target.value })}
+                        className={`mt-1 ${inputCls}`}
+                      />
+                    </label>
+                    <label className="text-xs text-ink-3">
+                      Chat 模型
+                      <input
+                        value={provider.model}
+                        onChange={(event) => updateProvider(provider.id, { model: event.target.value })}
+                        placeholder="deepseek-v4-flash"
+                        className={`mt-1 ${inputCls}`}
+                      />
+                    </label>
+                    <label className="text-xs text-ink-3">
+                      网络位置
+                      <select
+                        value={provider.locality}
+                        onChange={(event) => updateProvider(provider.id, { locality: event.target.value as 'local' | 'external' })}
+                        className={`mt-1 ${inputCls}`}
+                      >
+                        <option value="external">外部网络</option>
+                        <option value="local">本机 / 内网</option>
+                      </select>
+                    </label>
+                    <label className="text-xs text-ink-3 sm:col-span-2">
+                      API 密钥 {provider.hasSecret && <span className="text-success">（已保存）</span>}
+                      <div className="mt-1 flex gap-2">
+                        <input
+                          type="password"
+                          value={secrets[provider.id] ?? ''}
+                          onChange={(event) => setSecrets((current) => ({ ...current, [provider.id]: event.target.value }))}
+                          placeholder={provider.hasSecret ? '留空则保留现有密钥' : provider.locality === 'local' ? '本地服务可留空' : '输入后保存到系统钥匙串'}
+                          autoComplete="new-password"
+                          className={inputCls}
+                        />
+                        {provider.hasSecret && (
+                          <button
+                            onClick={() => void clearSecret(provider.id)}
+                            className="shrink-0 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover"
+                          >
+                            清除密钥
+                          </button>
+                        )}
+                      </div>
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      onClick={() => void test(provider.id)}
+                      disabled={!!busy}
+                      className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
+                    >
+                      {busy === `test:${provider.id}` ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+                      测试连接
+                    </button>
+                    {results[provider.id] && (
+                      <span className={`text-xs ${results[provider.id].startsWith('连接成功') ? 'text-success' : 'text-danger'}`}>
+                        {results[provider.id]}
+                      </span>
                     )}
                   </div>
-                </label>
-              </div>
-              <div className="mt-3 flex items-center gap-3">
-                <button
-                  onClick={() => void test(provider.id)}
-                  disabled={!!busy}
-                  className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-                >
-                  {busy === `test:${provider.id}` ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
-                  测试连接
-                </button>
-                {results[provider.id] && (
-                  <span className={`text-xs ${results[provider.id].startsWith('连接成功') ? 'text-success' : 'text-danger'}`}>
-                    {results[provider.id]}
-                  </span>
-                )}
-              </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </section>
+          </section>
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">按能力路由</h2>
-        <div className="divide-y divide-line rounded-lg border border-line bg-surface">
-          {AI_CAPABILITIES.map(({ id, label }) => {
-            const route = settings.routes[id];
-            return (
-              <div key={id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                <span className="w-40 text-sm text-ink">{label}</span>
-                <select
-                  value={route.providerId}
-                  onChange={(event) => setSettings((current) => ({
-                    ...current,
-                    routes: { ...current.routes, [id]: { ...route, providerId: event.target.value } },
-                  }))}
-                  className={`${inputCls} max-w-xs`}
-                >
-                  {settings.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
-                </select>
-                <label className="flex items-center gap-2 text-xs text-ink-2">
-                  <input
-                    type="checkbox"
-                    checked={route.localOnly}
-                    onChange={(event) => setSettings((current) => ({
-                      ...current,
-                      routes: { ...current.routes, [id]: { ...route, localOnly: event.target.checked } },
-                    }))}
-                  />
-                  仅本地模型
-                </label>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+          <section className="mt-6">
+            <h2 className="mb-2 text-sm font-semibold text-ink">按能力路由</h2>
+            <div className="divide-y divide-line rounded-lg border border-line bg-surface">
+              {AI_CAPABILITIES.map(({ id, label }) => {
+                const route = settings.routes[id];
+                return (
+                  <div key={id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <span className="w-40 text-sm text-ink">{label}</span>
+                    <select
+                      value={route.providerId}
+                      onChange={(event) => setSettings((current) => ({
+                        ...current,
+                        routes: { ...current.routes, [id]: { ...route, providerId: event.target.value } },
+                      }))}
+                      className={`${inputCls} max-w-xs`}
+                    >
+                      {settings.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                    </select>
+                    <label className="flex items-center gap-2 text-xs text-ink-2">
+                      <input
+                        type="checkbox"
+                        checked={route.localOnly}
+                        onChange={(event) => setSettings((current) => ({
+                          ...current,
+                          routes: { ...current.routes, [id]: { ...route, localOnly: event.target.checked } },
+                        }))}
+                      />
+                      仅本地模型
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
-      <ReverseMcpSettings />
-      <AgentBotSettings />
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={() => void save()}
+              disabled={!!busy}
+              className="h-9 rounded-md bg-primary px-5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {busy === 'save' ? '保存中…' : '保存 AI 配置'}
+            </button>
+            <span className="text-xs text-ink-3">保存上方 Provider 与能力路由</span>
+          </div>
 
-      <button
-        onClick={() => void save()}
-        disabled={!!busy}
-        className="h-9 rounded-md bg-primary px-5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-      >
-        {busy === 'save' ? '保存中…' : '保存 AI 配置'}
-      </button>
+          <div className="mt-8 space-y-6 border-t border-line pt-5">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">外部集成</h2>
+              <p className="mt-0.5 text-xs text-ink-3">以下配置各自即时生效，不需要点「保存 AI 配置」。</p>
+            </div>
+            <ReverseMcpSettings />
+            <AgentBotSettings />
+          </div>
         </div>
       </details>
     </div>

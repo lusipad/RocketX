@@ -10,6 +10,7 @@ import {
   agentSessionCardMatchesMessage,
   parseAgentSessionCard,
   renderAgentSessionCard,
+  stripAgentSessionMarker,
   type AgentSessionCard,
 } from '../agent/card';
 import {
@@ -21,6 +22,12 @@ import {
   selectAgentContextMessages,
 } from '../agent/context';
 import { materializeAgentAttachments } from '../agent/attachments';
+import {
+  agentConversationLines,
+  startNamedCodexThreadWithTranscript,
+  transferTranscript,
+} from '../agent/codexTransfer';
+import { rocketxThreadName } from '../agent/threadName';
 import { adoWebBase } from '../lib/ado';
 import {
   SerialCommandQueue,
@@ -38,7 +45,7 @@ import { listAgentSessions, saveAgentSession } from '../agent/sessionStore';
 import { useWorkbench } from './workbench';
 import { useLocalCodex } from './localCodex';
 import { agentRoomSessionKey, useAgentEnvironments } from './agentEnvironments';
-import { getButlerCodexSettings } from '../lib/butlerBrain';
+import { getAgentHostingCodexSettings } from '../lib/agentHostingSettings';
 import {
   assertAllowedWorkspacePath,
   commandRequestMentionsSensitivePath,
@@ -120,6 +127,8 @@ interface SharedAgentState {
   setAccess: (tmid: string, access: AgentSession['access']) => Promise<void>;
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
+  /** 把托管对话转移进 Codex（导入成 App 认可来源的线程快照副本） */
+  transferToCodexApp: (tmid: string) => Promise<void>;
 }
 
 const queues = new Map<string, SerialCommandQueue>();
@@ -211,6 +220,25 @@ function trace(tmid: string, kind: AgentTrace['kind'], text: string): void {
       ),
     },
   }));
+}
+
+/**
+ * 托管线程是原生 Codex 线程（落盘于 CODEX_HOME 会话库，可在 codex resume /
+ * Codex App 里继续），起名让它在列表里可辨认。失败不影响托管本身。
+ */
+function nameCodexThread(appServer: AppServerClient, session: AgentSession): void {
+  if (!session.codexThreadId) return;
+  const chat = useChat.getState();
+  const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
+  const detail = session.workItem
+    ? `#${session.workItem.id} ${session.workItem.title}`
+    : room?.fname || room?.name || session.environmentName;
+  void appServer
+    .request('thread/name/set', {
+      threadId: session.codexThreadId,
+      name: rocketxThreadName('托管', detail),
+    })
+    .catch(() => undefined);
 }
 
 function sessionForThread(threadId: string): AgentSession | undefined {
@@ -437,10 +465,39 @@ async function loadContextMessages(session: AgentSession, command: RcMessage): P
   return [...messages.values()];
 }
 
+/** 托管会话的完整对话：房间托管取房间近 100 条，话题托管取话题消息（缓存兜底） */
+async function sessionConversationMessages(session: AgentSession): Promise<RcMessage[]> {
+  const cached = useChat.getState().messages[session.rid] ?? [];
+  const root = replyTmid(session);
+  if (!root) {
+    const messages = new Map(cached.map((message) => [message._id, message]));
+    const type = useChat.getState().subscriptions[session.rid]?.t ?? useChat.getState().rooms[session.rid]?.t ?? 'p';
+    try {
+      for (const message of await rest.getHistory(session.rid, type, 100)) messages.set(message._id, message);
+    } catch {
+      /* 拉取失败时用本机缓存兜底 */
+    }
+    return [...messages.values()]
+      .filter((message) => message.rid === session.rid)
+      .sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
+  }
+  const messages = new Map(
+    cached
+      .filter((message) => message._id === root || message.tmid === root)
+      .map((message) => [message._id, message]),
+  );
+  try {
+    for (const message of await rest.getThreadMessages(root, 100)) messages.set(message._id, message);
+  } catch {
+    /* 拉取失败时用本机缓存兜底 */
+  }
+  return [...messages.values()].sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
+}
+
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
   const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
   const appServer = await ensureClient(current);
-  const codexSettings = getButlerCodexSettings();
+  const codexSettings = getAgentHostingCodexSettings();
   const messages = await loadContextMessages(current, message);
   const selectedMessages = replyTmid(current)
     ? selectAgentContextMessages(message, messages)
@@ -585,7 +642,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       };
       updateSession(session);
       const appServer = await ensureClient(session);
-      const codexSettings = getButlerCodexSettings();
+      const codexSettings = getAgentHostingCodexSettings();
       const response = await appServer.request('thread/start', {
         ...(codexSettings.model ? { model: codexSettings.model } : {}),
         cwd: root,
@@ -603,6 +660,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         updatedAt: Date.now(),
       };
       updateSession(session);
+      nameCodexThread(appServer, session);
       trace(tmid, 'status', `Agent 会话已启动，Codex ${response.thread.cliVersion}`);
       const leaseMessage = await rest.sendMessage(rid, renderAgentSessionCard(cardFor(session)), replyTmid(session));
       session = { ...session, leaseMessageId: leaseMessage._id, updatedAt: Date.now() };
@@ -787,7 +845,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const resuming = enterResumeState(leased, host, now);
     updateSession(resuming);
     const appServer = await ensureClient(resuming);
-    const { model } = getButlerCodexSettings();
+    const { model } = getAgentHostingCodexSettings();
     const response = await appServer.request('thread/resume', {
       ...(model ? { model } : {}),
       threadId: resuming.codexThreadId!,
@@ -798,14 +856,49 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       sandbox: resuming.sandboxMode,
       excludeTurns: true,
     });
-    updateSession({
+    const resumed: AgentSession = {
       ...resuming,
       codexThreadId: response.thread.id,
       status: 'ready',
       updatedAt: Date.now(),
-    });
+    };
+    updateSession(resumed);
+    nameCodexThread(appServer, resumed); // 旧线程也补上名字
     trace(tmid, 'status', '已恢复 Codex 会话');
     await updateLeaseCard(get().sessions[tmid]);
+  },
+
+  transferToCodexApp: async (tmid) => {
+    const session = get().sessions[tmid];
+    if (!session || session.status === 'ended') throw new Error('托管会话未在运行');
+    const messages = await sessionConversationMessages(session);
+    const lines = agentConversationLines(
+      messages
+        .filter((message) => !message.pending && !message.failed && !parseAgentSessionCard(message.msg))
+        .map((message) => {
+          const raw = stripAgentSessionMarker(message.msg ?? '').trim();
+          const assistant = raw.startsWith('🤖');
+          return {
+            // 「🤖 Codex」前缀行只是署名，去掉；单行的状态类消息保留原文
+            text: assistant ? raw.replace(/^🤖[^\n]*\n?/u, '').trim() || raw : raw,
+            author: message.u.name || message.u.username,
+            assistant,
+          };
+        }),
+    );
+    const chat = useChat.getState();
+    const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
+    const detail = session.workItem
+      ? `#${session.workItem.id} ${session.workItem.title}`
+      : room?.fname || room?.name || session.environmentName;
+    const client = await ensureClient(session);
+    // companion 同款:原生线程 + 命名 + 记录作首轮输入,App/CLI 列表直接可见(issue #105)
+    await startNamedCodexThreadWithTranscript(client, {
+      cwd: session.workspaceRoots[0],
+      name: rocketxThreadName('托管对话', detail),
+      transcript: transferTranscript('托管对话', lines),
+    });
+    trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
   },
 
   endSession: async (tmid) => {

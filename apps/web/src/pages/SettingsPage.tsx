@@ -22,7 +22,16 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { getServerBase, isTauri, rest } from '../lib/client';
+import { getServerBase, isTauri, openExternal, rest } from '../lib/client';
+import {
+  launchDirInstaller,
+  loadUpdateSource,
+  probeConfiguredSource,
+  saveUpdateSource,
+  type UpdateProbe,
+  type UpdateSourceConfig,
+  type UpdateSourceKind,
+} from '../lib/updateSource';
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash } from '../lib/taskbar';
@@ -47,6 +56,7 @@ import { toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
+import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -68,6 +78,7 @@ const APP_VERSION = __APP_VERSION__;
 
 type Section =
   | 'account'
+  | 'workspace'
   | 'appearance'
   | 'sidebar'
   | 'message'
@@ -81,6 +92,7 @@ type Section =
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与状态', icon: Server },
+  { key: 'workspace', label: '工作区', icon: FolderOpen },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
@@ -1668,6 +1680,121 @@ function AppsSection() {
   );
 }
 
+const UPDATE_SOURCE_OPTIONS: { value: UpdateSourceKind; label: string }[] = [
+  { value: 'github', label: 'GitHub Releases（默认）' },
+  { value: 'http', label: '内网 HTTP 源' },
+  { value: 'dir', label: '共享目录' },
+];
+
+/** 更新源配置 + 手动检查（issue #106）：内网/受限网络用 HTTP 源或共享目录替代 GitHub */
+function UpdateSourceRow() {
+  const [config, setConfig] = useState(() => loadUpdateSource());
+  const [checking, setChecking] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [probe, setProbe] = useState<UpdateProbe | null>(null);
+
+  function update(next: Partial<UpdateSourceConfig>): void {
+    const merged = { ...config, ...next };
+    setConfig(merged);
+    saveUpdateSource(merged);
+    setProbe(null);
+    setStatus(null);
+  }
+
+  async function checkNow(): Promise<void> {
+    setChecking(true);
+    setStatus(null);
+    setProbe(null);
+    try {
+      if (config.kind === 'github') {
+        const { check } = await import('@tauri-apps/plugin-updater');
+        const found = await check({ timeout: 15_000 });
+        if (found) setProbe({ hasUpdate: true, version: found.version });
+        else setStatus('已是最新版本');
+      } else {
+        const result = await probeConfiguredSource(config, APP_VERSION);
+        if (result.hasUpdate) setProbe(result);
+        else setStatus(`已是最新版本（源上为 v${result.version}）`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function applyUpdate(): Promise<void> {
+    if (!probe) return;
+    try {
+      if (config.kind === 'github') {
+        const { check } = await import('@tauri-apps/plugin-updater');
+        const found = await check({ timeout: 15_000 });
+        if (!found) return;
+        const toastId = toast.loading(`正在下载 RocketX ${found.version}…`);
+        await found.downloadAndInstall();
+        toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+        const { relaunch } = await import('@tauri-apps/plugin-process');
+        await relaunch();
+      } else if (probe.installerPath) {
+        await launchDirInstaller(probe.installerPath);
+        toast.info('安装包已启动，请按安装向导完成更新');
+      } else if (probe.downloadUrl) {
+        await openExternal(probe.downloadUrl);
+      }
+    } catch (error) {
+      toast.error(error, '更新失败');
+    }
+  }
+
+  return (
+    <Row label="更新" hint="内网或受限网络可改用自建 HTTP 源或共享目录（放发布产物与 latest.json）">
+      <div className="flex flex-col gap-2">
+        <select
+          value={config.kind}
+          onChange={(event) => update({ kind: event.target.value as UpdateSourceKind })}
+          className="w-64 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink"
+        >
+          {UPDATE_SOURCE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        {config.kind !== 'github' && (
+          <input
+            value={config.location}
+            onChange={(event) => update({ location: event.target.value })}
+            placeholder={config.kind === 'http'
+              ? 'https://updates.example.com/rocketx（目录下有 latest.json）'
+              : '\\\\server\\share\\rocketx 或 D:\\updates\\rocketx'}
+            className="w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-3"
+          />
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void checkNow()}
+            disabled={checking}
+            className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
+          >
+            {checking ? '检查中…' : '检查更新'}
+          </button>
+          {probe?.hasUpdate && (
+            <button
+              onClick={() => void applyUpdate()}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover"
+            >
+              {config.kind === 'github'
+                ? `更新到 v${probe.version} 并重启`
+                : probe.installerPath
+                  ? `安装 v${probe.version}`
+                  : `下载 v${probe.version}`}
+            </button>
+          )}
+          {status && <span className="text-xs text-ink-3">{status}</span>}
+        </div>
+      </div>
+    </Row>
+  );
+}
+
 function AboutSection() {
   const [rcVersion, setRcVersion] = useState('查询中…');
 
@@ -1688,6 +1815,7 @@ function AboutSection() {
         </div>
         <div className="mt-1 text-xs text-ink-3">飞书体验的 Rocket.Chat 客户端</div>
       </Row>
+      {isTauri && <UpdateSourceRow />}
       <Row label="Rocket.Chat 服务器">
         <div className="text-sm text-ink-2">
           {getServerBase() || location.origin} · 版本 {rcVersion}
@@ -1768,6 +1896,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
           ) : (
             <>
               {section === 'account' && <AccountSection />}
+              {section === 'workspace' && <WorkspaceConfigSection />}
               {section === 'appearance' && <AppearanceSection />}
               {section === 'sidebar' && <SidebarSection />}
               {section === 'message' && <MessageSection />}

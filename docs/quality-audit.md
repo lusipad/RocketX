@@ -3,7 +3,7 @@
 > 日期:2026-07-15 · 基于 v0.12.1
 > 来源:4 轮并行代码审查(状态/实时流、消息渲染/输入、本地持久化、功能模块)+ GitHub 23 个 Issue + 实机走查
 > 基线:typecheck ✓、test:pure 219/219 ✓、test:regression 46/46 ✓、smoke 50/50 ✓(打真实 RC)——但这些测不到渲染层,以下多数问题它们全绿也照样存在
-> **当前候选基线(2026-07-17,v0.20.1 待发布):test:pure 219、test:regression 254、smoke 53、Rust 30；另有 classify 5、Codex 本机 app-server 真实 turn、工作目录架构合同与应用生态 clean-room 通过**——上两行的日期与数字是 v0.12.1 时点的历史快照,勿据此推导当前状态
+> **当前候选基线（2026-07-20，v0.25.4 待发布）：协议生成物 671 个一致、typecheck 通过、test:pure 219/219、test:regression 441/441、test:ui 18/18、应用生态 clean-room 通过、Web 生产构建通过、Rust 35/35（另 1 项外部 IP Messenger 验收测试按设计忽略）**——上两行的日期与数字是 v0.12.1 时点的历史快照，勿据此推导当前状态
 > 未修项由 `docs/blueprint.md`(v2)§7 稳定化轨道认领,本清单继续滚动更新
 
 ## 修复进度(滚动更新)

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_bot;
+mod butler_db;
 mod diagnostics;
 mod ipmsg;
 mod lan;
@@ -116,17 +117,10 @@ fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult,
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
     let mut command = proc::codex_command()?;
-    command.args([
-        "exec",
-        "--json",
-        "--sandbox",
-        "read-only",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-    ]);
+    // --json/--sandbox 是协议与安全必需；其余参数按当前 CLI 的 --help 探测，
+    // 避免新版移除参数后 clap 直接以退出码 2 拒绝（与 app-server --stdio 同款问题）
+    command.args(["exec", "--json", "--sandbox", "read-only"]);
+    command.args(proc::codex_exec_optional_args()?);
     command.arg("-C").arg(&cache_dir).arg("-");
     command
         .stdin(Stdio::piped())
@@ -480,12 +474,21 @@ fn main() {
             ai_secret_get,
             ai_secret_delete,
             codex_exec_once,
+            butler_db::butler_todo_add,
+            butler_db::butler_todo_update,
+            butler_db::butler_todo_delete,
+            butler_db::butler_todo_get,
+            butler_db::butler_todo_list,
+            butler_db::butler_todo_overdue,
+            butler_db::butler_todo_migrate_from_json,
             proc::codex_runtime_probe,
             proc::codex_app_server_start,
             proc::codex_app_server_write,
             proc::codex_app_server_stop,
             proc::codex_agent_workspace,
             proc::butler_home_dir,
+            proc::read_update_manifest_dir,
+            proc::launch_update_installer,
             proc::codex_agent_attachment_write,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
@@ -554,6 +557,14 @@ fn main() {
             None,
         ))
         .setup(|app| {
+            // 管家待办池 SQLite
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| std::io::Error::other(format!("无法获取应用数据目录：{error}")))?;
+            let db = butler_db::init_db(data_dir).map_err(std::io::Error::other)?;
+            app.manage(db);
+
             // 系统托盘：显示 / 退出（issue #3）
             let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

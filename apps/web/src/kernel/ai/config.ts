@@ -6,7 +6,6 @@ export interface AiProviderConfig {
   name: string;
   baseUrl: string;
   model: string;
-  embeddingModel?: string;
   locality: AiProviderLocality;
   hasSecret: boolean;
 }
@@ -20,7 +19,7 @@ export const AI_CAPABILITIES: Array<{ id: AiCapability; label: string }> = [
   { id: 'summary', label: '会话总结' },
   { id: 'extraction', label: '待办 / 工作项提取' },
   { id: 'daily-review', label: '晨报 / 晚间回顾' },
-  { id: 'semantic-search', label: '语义搜索' },
+  { id: 'butler-rounds', label: '管家简报' },
   { id: 'text-tool', label: '翻译 / 润色' },
   { id: 'agent', label: 'Agent' },
 ];
@@ -88,7 +87,18 @@ export function loadAiSettings(): AiSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultAiSettings();
-    return validateAiSettings(JSON.parse(raw) as AiSettings);
+    const parsed = JSON.parse(raw) as AiSettings;
+    if (!parsed.routes?.['butler-rounds']) {
+      const fallbackRoute = parsed.routes?.['daily-review'] ?? (
+        parsed.providers?.[0]
+          ? { providerId: parsed.providers[0].id, localOnly: false }
+          : undefined
+      );
+      if (fallbackRoute) {
+        parsed.routes = { ...parsed.routes, 'butler-rounds': fallbackRoute };
+      }
+    }
+    return validateAiSettings(parsed);
   } catch {
     return defaultAiSettings();
   }

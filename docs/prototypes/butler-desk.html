@@ -1,0 +1,518 @@
+<title>管家桌面 · 交互原型</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --text:#1c1e21; --muted:#6b7280; --line:#e2e4e9;
+  --accent:#3370ff; --chip:#eef1f6;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#17181c; --panel:#1f2126; --text:#e8eaed; --muted:#9aa0aa; --line:#33363d; --chip:#2a2d34; }
+}
+:root[data-theme="dark"]{ --bg:#17181c; --panel:#1f2126; --text:#e8eaed; --muted:#9aa0aa; --line:#33363d; --chip:#2a2d34; }
+:root[data-theme="light"]{ --bg:#f5f6f8; --panel:#ffffff; --text:#1c1e21; --muted:#6b7280; --line:#e2e4e9; --chip:#eef1f6; }
+
+*{box-sizing:border-box; margin:0}
+html,body{background:var(--bg); color:var(--text);
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;}
+body{padding:28px 16px 48px; line-height:1.6}
+
+.wrap{max-width:1060px; margin:0 auto}
+.chrome{display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin-bottom:6px}
+.chrome h1{font-size:17px; font-weight:600; letter-spacing:.01em}
+.chrome .ver{font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:99px; padding:1px 9px}
+.spacer{flex:1}
+.pills{display:flex; gap:6px; flex-wrap:wrap}
+.pill{font:inherit; font-size:13px; padding:5px 13px; border-radius:99px; border:1px solid var(--line);
+  background:var(--panel); color:var(--muted); cursor:pointer}
+.pill:hover{border-color:var(--accent); color:var(--accent)}
+.pill.on{background:var(--accent); border-color:var(--accent); color:#fff}
+.pill:focus-visible,.abtn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.abtn{font:inherit; font-size:13px; padding:5px 12px; border-radius:99px; border:1px dashed var(--line);
+  background:transparent; color:var(--muted); cursor:pointer}
+.abtn.on{border-color:var(--accent); color:var(--accent)}
+.storyline{font-size:13px; color:var(--muted); margin:8px 2px 14px; min-height:1.6em}
+.storyline b{color:var(--text); font-weight:600}
+
+.frame-scroll{overflow-x:auto; border-radius:14px}
+.frame{position:relative; display:flex; min-width:860px; min-height:660px; background:#fff;
+  border-radius:14px; overflow:hidden; border:1px solid var(--line);
+  font-size:14px; color:#1f2329; box-shadow:0 8px 32px rgba(15,23,42,.10)}
+
+/* ── 产品外壳:固定浅色(与真实应用一致,不随主题翻转) ── */
+.nav{width:58px; background:#1e2128; display:flex; flex-direction:column; align-items:center;
+  padding:14px 0 12px; gap:4px; flex-shrink:0}
+.nav .logo{width:30px; height:30px; border-radius:8px; background:#3370ff; color:#fff; display:flex;
+  align-items:center; justify-content:center; font-weight:700; font-size:14px; margin-bottom:10px}
+.nitem{width:48px; padding:7px 0 5px; border-radius:9px; display:flex; flex-direction:column; align-items:center;
+  gap:3px; color:#9aa3b2; cursor:pointer; position:relative}
+.nitem svg{width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+.nitem span{font-size:10px; line-height:1}
+.nitem:hover{color:#dfe5ee}
+.nitem.on{background:rgba(255,255,255,.13); color:#fff}
+.nitem .dot{position:absolute; top:5px; right:8px; min-width:15px; height:15px; padding:0 4px; border-radius:99px;
+  background:#f54a45; color:#fff; font-size:10px; line-height:15px; text-align:center}
+.nav .grow{flex:1}
+
+.desk{flex:1; display:flex; flex-direction:column; min-width:0; background:#fff}
+.dhead{display:flex; align-items:center; gap:10px; padding:13px 22px; border-bottom:1px solid #e8eaee}
+.dhead .avatar{width:26px; height:26px; border-radius:50%; background:#eef3ff; color:#3370ff; display:flex;
+  align-items:center; justify-content:center; font-size:13px; font-weight:600}
+.dhead h2{font-size:15px; font-weight:600}
+.dhead .sub{font-size:12px; color:#8f959e}
+.dhead .grow{flex:1}
+.ghost{font:inherit; font-size:12.5px; padding:5px 12px; border-radius:7px; border:1px solid #dee1e6;
+  background:#fff; color:#374151; cursor:pointer; white-space:nowrap}
+.ghost:hover{border-color:#3370ff; color:#3370ff}
+.ghost:focus-visible,.mini:focus-visible,.dockin:focus-visible{outline:2px solid #3370ff; outline-offset:1px}
+
+.dbody{flex:1; overflow-y:auto; padding:20px 22px 14px; position:relative}
+.state{display:none}
+.state.on{display:block}
+
+.sec{position:relative; margin-bottom:22px}
+.sec .anno{display:none; position:absolute; top:-9px; right:0; font-size:11px; color:#7c5cff;
+  border:1px dashed #b9a8ff; border-radius:6px; padding:2px 8px; background:#f7f4ff; z-index:3}
+.frame.annotate .anno{display:block}
+
+.brief-head{font-size:16.5px; font-weight:650; margin-bottom:3px; letter-spacing:.005em}
+.brief-sub{font-size:12.5px; color:#8f959e; margin-bottom:13px}
+
+.card{border:1px solid #e5e7ec; border-radius:11px; padding:13px 16px; margin-bottom:9px; background:#fff;
+  transition:opacity .25s}
+.card.danger{border-color:#f8c8c6; background:#fff5f5}
+.card.good{border-color:#bfe8c5; background:#f2fbf3}
+.card.warn{border-color:#f5ddb0; background:#fffaf0}
+.card.calm{background:#fafbfc}
+.card .t{font-size:14px; font-weight:600; line-height:1.5}
+.card.danger .t{color:#d0302b}
+.card.good .t{color:#1a7f37}
+.card .why{font-size:12.5px; color:#6a7078; margin-top:4px}
+.card .why b{color:#374151; font-weight:600}
+.card .acts{display:flex; flex-wrap:wrap; gap:7px; margin-top:10px}
+.mini{font:inherit; font-size:12.5px; padding:4px 12px; border-radius:7px; border:1px solid #d7dae0;
+  background:#fff; color:#374151; cursor:pointer}
+.mini.pri{background:#3370ff; border-color:#3370ff; color:#fff}
+.mini.pri:hover{background:#2a5ed6}
+.mini:hover{border-color:#3370ff; color:#3370ff}
+.mini.pri:hover{color:#fff}
+.mini.quiet{border-style:dashed; color:#8f959e}
+.card.dismissed{opacity:.5}
+.card.dismissed .t{text-decoration:line-through; color:#8f959e}
+.card .done-note{font-size:12.5px; color:#1a7f37; margin-top:8px; display:none}
+.card.resolved .acts{display:none}
+.card.resolved .done-note{display:block}
+
+.brief-foot{font-size:12.5px; color:#8f959e; margin-top:4px}
+.brief-foot a{color:#3370ff; text-decoration:none; cursor:pointer}
+
+.ledger{display:grid; grid-template-columns:1fr 1fr; gap:0 26px; border:1px solid #e8eaee; border-radius:11px; padding:14px 18px 8px}
+.ledger h3{grid-column:1/-1; font-size:13px; font-weight:600; color:#51565d; margin-bottom:8px; display:flex; align-items:center; gap:6px}
+.ledger h3 svg{width:15px; height:15px; stroke:#51565d; fill:none; stroke-width:1.8; stroke-linecap:round}
+.lcol .lh{font-size:12px; color:#8f959e; margin-bottom:2px}
+.lrow{display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #f0f1f4; font-size:13.5px}
+.lcol .lrow:last-child{border-bottom:none}
+.lrow .who{color:#1f2329}
+.lrow .grow{flex:1}
+.lrow .due{font-size:12px; color:#8f959e; white-space:nowrap; font-variant-numeric:tabular-nums}
+.lrow .due.hot{color:#d0302b; font-weight:600}
+.lrow .due.warm{color:#c77700}
+.lrow.struck .who,.lrow.struck .due{text-decoration:line-through; color:#b6bac1}
+.lrow .settle{font-size:11.5px; color:#3370ff; cursor:pointer; border:1px solid #cfdcff; background:#f0f5ff;
+  border-radius:6px; padding:1px 8px; white-space:nowrap}
+.lrow .settle:hover{background:#e3edff}
+
+.log{border:1px solid #e8eaee; border-radius:11px; background:#fafbfc}
+.log-head{display:flex; align-items:center; gap:9px; padding:11px 16px; cursor:pointer; user-select:none}
+.log-head svg{width:15px; height:15px; stroke:#8f959e; fill:none; stroke-width:2; stroke-linecap:round;
+  stroke-linejoin:round; transition:transform .2s; flex-shrink:0}
+.log.open .log-head svg{transform:rotate(90deg)}
+.log-head .lt{font-size:13px; color:#51565d}
+.log-head .lt b{font-weight:600; color:#374151}
+.log-body{display:none; padding:2px 16px 13px 40px}
+.log.open .log-body{display:block}
+.log-body .li{font-size:12.5px; color:#6a7078; padding:4px 0; display:flex; gap:8px}
+.log-body .li::before{content:"·"; color:#b6bac1}
+.log-body .li b{color:#374151; font-weight:600}
+
+.dock{border-top:1px solid #e8eaee; padding:11px 22px; display:flex; gap:9px; align-items:center; background:#fff}
+.dockin{flex:1; font:inherit; font-size:13.5px; padding:9px 14px; border-radius:9px; border:1px solid #dee1e6;
+  background:#f7f8fa; color:#1f2329; cursor:text; text-align:left}
+.dockin span{color:#8f959e}
+.send{width:36px; height:36px; border-radius:9px; border:none; background:#3370ff; color:#fff; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0}
+.send svg{width:17px; height:17px; stroke:#fff; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+
+/* 对话展开层 */
+.chat{position:absolute; inset:auto 0 0 0; top:18%; background:#fff; border-top:1px solid #e2e4e9;
+  border-radius:16px 16px 0 0; box-shadow:0 -12px 40px rgba(15,23,42,.14); display:none; flex-direction:column; z-index:6}
+.chat.on{display:flex}
+.chat-h{display:flex; align-items:center; gap:9px; padding:12px 20px; border-bottom:1px solid #eef0f3}
+.chat-h .avatar{width:24px; height:24px; border-radius:50%; background:#eef3ff; color:#3370ff; display:flex;
+  align-items:center; justify-content:center; font-size:12px; font-weight:600}
+.chat-h b{font-size:14px}
+.chat-h .note{font-size:11.5px; color:#8f959e}
+.chat-h .grow{flex:1}
+.xbtn{width:28px; height:28px; border-radius:7px; border:none; background:transparent; color:#8f959e; cursor:pointer;
+  display:flex; align-items:center; justify-content:center}
+.xbtn:hover{background:#f2f3f5}
+.xbtn svg{width:15px; height:15px; stroke:currentColor; stroke-width:2; stroke-linecap:round}
+.chat-b{flex:1; overflow-y:auto; padding:18px 22px; display:flex; flex-direction:column; gap:12px}
+.bub{max-width:72%; padding:9px 14px; border-radius:12px; font-size:13.5px; line-height:1.65}
+.bub.me{align-self:flex-end; background:#3370ff; color:#fff; border-bottom-right-radius:4px}
+.bub.bt{align-self:flex-start; background:#f2f4f7; color:#1f2329; border-bottom-left-radius:4px}
+.chat-tip{align-self:center; font-size:11.5px; color:#8f959e; background:#f7f8fa; border:1px dashed #e2e4e9;
+  border-radius:99px; padding:3px 14px}
+
+/* 14:00 打断 */
+.overlay-dim{position:absolute; inset:0; background:rgba(28,32,40,.32); z-index:4; display:none; border-radius:0}
+.frame.interrupt .overlay-dim{display:block}
+.osnote{position:absolute; top:18px; right:18px; width:330px; background:#fff; border-radius:13px; z-index:5;
+  box-shadow:0 16px 48px rgba(10,15,25,.28); padding:14px 16px; display:none}
+.frame.interrupt .osnote{display:block; animation:slidein .35s ease}
+@keyframes slidein{from{transform:translateY(-14px); opacity:0} to{transform:none; opacity:1}}
+@media (prefers-reduced-motion: reduce){ .frame.interrupt .osnote{animation:none} .log-head svg{transition:none} }
+.osnote .oh{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+.osnote .oh .avatar{width:20px; height:20px; border-radius:6px; background:#3370ff; color:#fff; font-size:11px;
+  display:flex; align-items:center; justify-content:center; font-weight:700}
+.osnote .oh b{font-size:12.5px}
+.osnote .oh .tm{font-size:11px; color:#8f959e; margin-left:auto}
+.osnote .ot{font-size:13.5px; line-height:1.55; color:#1f2329}
+.osnote .acts{display:flex; gap:8px; margin-top:11px}
+
+.toast{position:absolute; left:50%; bottom:76px; transform:translateX(-50%); background:#23262d; color:#fff;
+  font-size:13px; padding:8px 18px; border-radius:99px; opacity:0; pointer-events:none; transition:opacity .25s; z-index:9;
+  white-space:nowrap}
+.toast.on{opacity:.96}
+
+.legend{margin-top:16px; font-size:12.5px; color:var(--muted); line-height:1.9}
+.legend b{color:var(--text); font-weight:600}
+</style>
+
+<div class="wrap">
+  <div class="chrome">
+    <h1>管家桌面 · 交互原型</h1><span class="ver">v3 对账员</span>
+    <div class="spacer"></div>
+    <div class="pills" role="tablist" aria-label="时刻切换">
+      <button class="pill on" data-st="morning">早晨 09:02</button>
+      <button class="pill" data-st="back">会后 11:37</button>
+      <button class="pill" data-st="noon">14:00 打断</button>
+      <button class="pill" data-st="evening">傍晚 18:30</button>
+    </div>
+    <button class="abtn" id="annoBtn">标注</button>
+  </div>
+  <p class="storyline" id="story"><b>你打开应用。</b>管家已经看过一圈,今天值得你花时间的只有三件——其余 14 条动静被压在工作日志里,理由都写着。</p>
+
+  <div class="frame-scroll"><div class="frame" id="frame">
+    <nav class="nav" aria-label="主导航">
+      <div class="logo">R</div>
+      <div class="nitem"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l1.7-3.2A8 8 0 1 1 21 12z"/></svg><span>消息</span><span class="dot">3</span></div>
+      <div class="nitem on"><svg viewBox="0 0 24 24"><path d="M12 3l2 4 4.5.6-3.3 3.2.8 4.5L12 13.2 8 15.3l.8-4.5L5.5 7.6 10 7z"/></svg><span>管家</span></div>
+      <div class="nitem"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg><span>待办</span></div>
+      <div class="nitem"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>日历</span></div>
+      <div class="grow"></div>
+      <div class="nitem"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v2.2M12 17.8V20M4 12h2.2M17.8 12H20M6.3 6.3l1.6 1.6M16.1 16.1l1.6 1.6M6.3 17.7l1.6-1.6M16.1 7.9l1.6-1.6"/></svg><span>设置</span></div>
+    </nav>
+
+    <main class="desk">
+      <div class="dhead">
+        <div class="avatar">管</div><h2>管家</h2>
+        <span class="sub" id="lookTime">我 09:02 看了一圈</span>
+        <div class="grow"></div>
+        <button class="ghost">再看一圈</button>
+      </div>
+
+      <div class="dbody">
+
+        <!-- ═══ 早晨 ═══ -->
+        <section class="state on" id="st-morning">
+          <div class="sec">
+            <span class="anno">简报:≤3 条,每条带"为什么找你"+ 一键动作</span>
+            <div class="brief-head">今天先处理这三件</div>
+            <div class="brief-sub">早上好。昨晚到现在我看了一圈,值得你花时间的只有这些。</div>
+            <div class="card danger">
+              <div class="t">1 · 你答应张三的接口结论,今天到期,还没动</div>
+              <div class="why">为什么找你:这是台账里<b>今天唯一的硬承诺</b>(7 月 15 日你自己记的)。</div>
+              <div class="acts"><button class="mini pri">去回复张三</button><button class="mini">改到明天</button><button class="mini quiet" data-mute>少来这种</button></div>
+              <div class="done-note">好,我把这类事收敛了。</div>
+            </div>
+            <div class="card">
+              <div class="t">2 · 等李四 review 第 3 天了,PR #4812 只差他一票</div>
+              <div class="why">为什么找你:台账里<b>最老的一条等待</b>,再拖会卡住你周四要合的桌面端发版。</div>
+              <div class="acts"><button class="mini">帮我拟一句催促</button><button class="mini">再等一天</button><button class="mini quiet" data-mute>少来这种</button></div>
+              <div class="done-note">好,我把这类事收敛了。</div>
+            </div>
+            <div class="card calm" id="propCard">
+              <div class="t">3 · 你名下多了个 P2「导出超时」,要排进今天吗</div>
+              <div class="why">为什么找你:昨晚新指派的,<b>台账还不认识它</b>;迭代周四结束,今天不表态就挤到明天了。</div>
+              <div class="acts"><button class="mini pri" data-adopt>入账,排今天</button><button class="mini" data-skip>先不管</button></div>
+              <div class="done-note" id="propDone">已记下,排进今天——我会盯着。</div>
+            </div>
+            <div class="brief-foot">其余 14 条动静我都看过,不值得占用你 · <a data-openlog>查看工作日志</a></div>
+          </div>
+
+          <div class="sec">
+            <span class="anno">台账:只收承诺与等待,提议制开合账</span>
+            <div class="ledger">
+              <h3><svg viewBox="0 0 24 24"><path d="M6 4h9l3 3v13H6z M9 12h6M9 15.5h6"/></svg>台账</h3>
+              <div class="lcol">
+                <div class="lh">我答应的</div>
+                <div class="lrow"><span class="who">张三 · 接口结论</span><span class="grow"></span><span class="due hot">今天</span></div>
+                <div class="lrow"><span class="who">王五 · 评审意见</span><span class="grow"></span><span class="due">周三</span></div>
+              </div>
+              <div class="lcol">
+                <div class="lh">我在等的</div>
+                <div class="lrow"><span class="who">李四 · PR #4812 review</span><span class="grow"></span><span class="due warm">第 3 天</span></div>
+                <div class="lrow"><span class="who">运维 · 测试环境扩容</span><span class="grow"></span><span class="due">第 2 天</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <span class="anno">工作日志:沉默必须可审计——信任靠它挣</span>
+            <div class="log" id="log-m">
+              <div class="log-head" data-log><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+                <span class="lt">09:02 我看了一圈 · 12 个工作项、5 个 PR、3 条流水线 · <b>压下 14 条</b></span></div>
+              <div class="log-body">
+                <div class="li"><b>rcx-desktop 流水线</b>上周五失败过一次,但最新一次构建已通过——没提</div>
+                <div class="li"><b>#4520「历史迁移」</b>只改了区域标签,状态、指派、优先级都没变,也不在你的计划里——没提</div>
+                <div class="li">#4498、#4501 状态正常流转(活动→已解决)——没提,待办池里已同步</div>
+                <div class="li">其余 10 条与你的台账无关——没提</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══ 会后 ═══ -->
+        <section class="state" id="st-back">
+          <div class="sec">
+            <div class="brief-head">开会的 2 小时里,只有一件值得知道</div>
+            <div class="brief-sub">你 09:25 离开,刚回来。我 11:37 又看了一圈。</div>
+            <div class="card good">
+              <div class="t">李四 20 分钟前投了 approve——PR #4812 可以合了</div>
+              <div class="why">为什么找你:这是你台账里<b>等了 3 天</b>的那条,现在能闭环;合完周四发版就不悬了。</div>
+              <div class="acts"><button class="mini pri">去合并</button><button class="mini" data-settle-demo>销掉这条等待</button></div>
+              <div class="done-note">已销账。等待清单少了一条。</div>
+            </div>
+            <div class="brief-foot">这 2 小时共 23 条动静,其余 22 条不值得你看 · <a data-openlog>查看工作日志</a></div>
+          </div>
+
+          <div class="sec">
+            <div class="ledger">
+              <h3><svg viewBox="0 0 24 24"><path d="M6 4h9l3 3v13H6z M9 12h6M9 15.5h6"/></svg>台账</h3>
+              <div class="lcol">
+                <div class="lh">我答应的</div>
+                <div class="lrow"><span class="who">张三 · 接口结论</span><span class="grow"></span><span class="due hot">今天</span></div>
+                <div class="lrow"><span class="who">王五 · 评审意见</span><span class="grow"></span><span class="due">周三</span></div>
+              </div>
+              <div class="lcol">
+                <div class="lh">我在等的</div>
+                <div class="lrow" id="waitLi"><span class="who">李四 · PR #4812 review</span><span class="grow"></span><span class="settle" data-settle-demo>李四已回应,销账?</span></div>
+                <div class="lrow"><span class="who">运维 · 测试环境扩容</span><span class="grow"></span><span class="due">第 2 天</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <div class="log">
+              <div class="log-head" data-log><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+                <span class="lt">11:37 补看一圈(离开 2h) · 23 条动静 · <b>压下 22 条</b></span></div>
+              <div class="log-body">
+                <div class="li"><b>「支付网关」</b>群里 18 条讨论,没人 @你,结论没变——没提</div>
+                <div class="li"><b>#4515</b> 改了迭代路径,但不在你名下、不碰你的台账——没提</div>
+                <div class="li">rcx-web 流水线两次构建全绿——没提</div>
+                <div class="li">其余 2 条:工作项排序调整——没提</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══ 14:00 ═══ -->
+        <section class="state" id="st-noon">
+          <div class="sec">
+            <div class="brief-head">现在没有需要你的事</div>
+            <div class="brief-sub">上午三件你处理了两件。我在盯着,有值得说的会到你的下一个空档。</div>
+            <div class="card calm">
+              <div class="t">悬着的一件:答应张三的接口结论,还剩半天</div>
+              <div class="why">这条是承诺,到点我会打断你——这是全天唯一有资格打断你的事。</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══ 傍晚 ═══ -->
+        <section class="state" id="st-evening">
+          <div class="sec">
+            <div class="brief-head">今天闭环 2 件,还悬着 1 件</div>
+            <div class="brief-sub">18:30 收尾一圈。可以准备下班了。</div>
+            <div class="card good">
+              <div class="t">✓ 张三那条,你 15:40 回了——承诺已销账</div>
+            </div>
+            <div class="card good">
+              <div class="t">✓ PR #4812 已合并——等待已销账,周四发版不悬了</div>
+            </div>
+            <div class="card warn">
+              <div class="t">王五的评审意见周三到期,明天只剩一天缓冲</div>
+              <div class="why">建议:明早留 30 分钟给它?我把它排进明天的头条。</div>
+              <div class="acts"><button class="mini pri" data-tomorrow>记到明早</button><button class="mini">知道了</button></div>
+              <div class="done-note">好,明早第一条就是它。</div>
+            </div>
+            <div class="brief-foot">全天共看过 87 条动静,打断你 1 次,简报 5 条 · <a data-openlog>查看工作日志</a></div>
+          </div>
+
+          <div class="sec">
+            <div class="ledger">
+              <h3><svg viewBox="0 0 24 24"><path d="M6 4h9l3 3v13H6z M9 12h6M9 15.5h6"/></svg>台账</h3>
+              <div class="lcol">
+                <div class="lh">我答应的</div>
+                <div class="lrow struck"><span class="who">张三 · 接口结论</span><span class="grow"></span><span class="due">已兑现</span></div>
+                <div class="lrow"><span class="who">王五 · 评审意见</span><span class="grow"></span><span class="due warm">周三</span></div>
+              </div>
+              <div class="lcol">
+                <div class="lh">我在等的</div>
+                <div class="lrow struck"><span class="who">李四 · PR #4812 review</span><span class="grow"></span><span class="due">已闭环</span></div>
+                <div class="lrow"><span class="who">运维 · 测试环境扩容</span><span class="grow"></span><span class="due">第 2 天</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <div class="log">
+              <div class="log-head" data-log><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+                <span class="lt">全天 · 87 条动静 · 简报 5 条 · 打断 1 次 · <b>压下 81 条</b></span></div>
+              <div class="log-body">
+                <div class="li">打断的那 1 次:14:00 承诺到期提醒(日期安全网,确定性触发)</div>
+                <div class="li">压下的 81 条里:构建状态波动 9、他人工作项变更 31、群消息无 @ 38、其它 3</div>
+                <div class="li">你今天点了 1 次「少来这种」——我已记住,下轮生效</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <div class="dock">
+        <span class="anno" style="position:static">停靠对话:同一常驻线程,房间里说的这里接得上</span>
+        <button class="dockin" data-chat><span>问我:现在该先做哪件…</span></button>
+        <button class="send" data-chat aria-label="发送"><svg viewBox="0 0 24 24"><path d="M4 12l16-7-4.5 14-3.5-5.5L4 12z"/></svg></button>
+      </div>
+
+      <!-- 对话展开 -->
+      <div class="chat" id="chat">
+        <div class="chat-h"><div class="avatar">管</div><b>管家</b><span class="note">同一场对话——刚才在群里说的,这里都记得</span>
+          <div class="grow"></div><button class="xbtn" data-chatx aria-label="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div class="chat-b">
+          <div class="chat-tip">上午 10:12 · 你在「支付网关」群里召唤过我,以下接着那次的上下文</div>
+          <div class="bub me">李四那个 review,现在催合适吗?</div>
+          <div class="bub bt">他 10 点在群里说过下午要去机场,现在发正合适——路上有空看。要我拟一句不带火气的催促吗?带上 PR 链接和"周四发版"这个理由。</div>
+          <div class="bub me">拟吧</div>
+          <div class="bub bt">「李四,#4812 就差你一票了,周四要跟桌面端一起发,路上方便时扫一眼?」——要发到你俩的私聊吗?<b>发送前会经你确认</b>,我不会替你点发送。</div>
+        </div>
+      </div>
+
+      <div class="osnote" role="alert">
+        <div class="oh"><div class="avatar">管</div><b>管家</b><span class="tm">14:00</span></div>
+        <div class="ot">你答应张三的接口结论今天到期,还没动。</div>
+        <div class="acts"><button class="mini pri">去处理</button><button class="mini">知道了</button></div>
+      </div>
+      <div class="overlay-dim"></div>
+      <div class="toast" id="toast"></div>
+    </main>
+  </div></div>
+
+  <p class="legend" id="legendTxt"><b>可以点的:</b>工作日志(展开看被压掉的噪音和理由)· 第 3 张卡「入账/先不管」· 「少来这种」· 底部输入框(看停靠对话)· 右上角「标注」看设计规矩。<br>
+  注意日志里的前两条——"CI 跪了又绿""只改了标签",就是现版本会尖叫、v3 里被安静压掉的那两类噪音。</p>
+</div>
+
+<script>
+(function(){
+  var stories = {
+    morning: '<b>你打开应用。</b>管家已经看过一圈,今天值得你花时间的只有三件——其余 14 条动静被压在工作日志里,理由都写着。',
+    back: '<b>你开了 2 小时会回来。</b>管家补看了一圈:23 条动静里只有 1 件值得知道,而且是好消息——顺手就能销账。',
+    noon: '<b>14:00,你在写代码。</b>这是全天唯一一次打断:承诺日期安全网触发,纯日期算术,不需要大脑,也不该等巡视。',
+    evening: '<b>准备下班。</b>收尾一圈:闭环的划掉,悬着的排进明早。一天里它打断你 1 次,压下 81 条。'
+  };
+  var times = { morning:'我 09:02 看了一圈', back:'我 11:37 又看了一圈', noon:'我 11:37 看过一圈 · 正在值守', evening:'我 18:30 看了收尾一圈' };
+  var frame = document.getElementById('frame');
+  var toastEl = document.getElementById('toast'); var toastTimer;
+
+  function toast(msg){
+    toastEl.textContent = msg; toastEl.classList.add('on');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ toastEl.classList.remove('on'); }, 2200);
+  }
+
+  document.querySelectorAll('.pill').forEach(function(p){
+    p.addEventListener('click', function(){
+      document.querySelectorAll('.pill').forEach(function(x){ x.classList.remove('on'); });
+      p.classList.add('on');
+      var st = p.getAttribute('data-st');
+      document.querySelectorAll('.state').forEach(function(s){ s.classList.remove('on'); });
+      document.getElementById('st-' + st).classList.add('on');
+      document.getElementById('story').innerHTML = stories[st];
+      document.getElementById('lookTime').textContent = times[st];
+      frame.classList.toggle('interrupt', st === 'noon');
+      document.getElementById('chat').classList.remove('on');
+    });
+  });
+
+  document.getElementById('annoBtn').addEventListener('click', function(){
+    this.classList.toggle('on');
+    frame.classList.toggle('annotate');
+  });
+
+  document.querySelectorAll('[data-log]').forEach(function(h){
+    h.addEventListener('click', function(){ h.parentElement.classList.toggle('open'); });
+  });
+  document.querySelectorAll('[data-openlog]').forEach(function(a){
+    a.addEventListener('click', function(){
+      var sec = a.closest('.state').querySelector('.log');
+      sec.classList.add('open');
+      sec.scrollIntoView({behavior:'smooth', block:'center'});
+    });
+  });
+
+  document.querySelectorAll('[data-mute]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var card = b.closest('.card');
+      card.classList.add('dismissed','resolved');
+      card.querySelector('.done-note').textContent = '已记住:这类以后少提。(写进记忆,下轮巡视生效)';
+      toast('已记住:少来这种');
+    });
+  });
+
+  var prop = document.getElementById('propCard');
+  if (prop){
+    prop.querySelector('[data-adopt]').addEventListener('click', function(){
+      prop.classList.add('resolved'); prop.classList.add('good'); prop.classList.remove('calm');
+      toast('已入账,排进今天');
+    });
+    prop.querySelector('[data-skip]').addEventListener('click', function(){
+      prop.classList.add('resolved');
+      document.getElementById('propDone').textContent = '好,先不管——它只会留在待办池,不再上简报。';
+      toast('已忽略');
+    });
+  }
+
+  document.querySelectorAll('[data-settle-demo]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var row = document.getElementById('waitLi');
+      if (row){ row.classList.add('struck'); var s = row.querySelector('.settle'); if (s) s.remove();
+        var d = document.createElement('span'); d.className = 'due'; d.textContent = '已闭环'; row.appendChild(d); }
+      var card = b.closest('.card');
+      if (card){ card.classList.add('resolved'); }
+      toast('已销账');
+    });
+  });
+
+  document.querySelectorAll('[data-tomorrow]').forEach(function(b){
+    b.addEventListener('click', function(){
+      b.closest('.card').classList.add('resolved');
+      toast('已排进明早头条');
+    });
+  });
+
+  document.querySelectorAll('[data-chat]').forEach(function(b){
+    b.addEventListener('click', function(){ document.getElementById('chat').classList.add('on'); });
+  });
+  document.querySelector('[data-chatx]').addEventListener('click', function(){
+    document.getElementById('chat').classList.remove('on');
+  });
+})();
+</script>

@@ -5,6 +5,12 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
+import {
+  startNamedCodexThreadWithTranscript,
+  transferTranscript,
+  type TransferLine,
+} from '../agent/codexTransfer';
+import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import {
   codexBrainAvailability,
@@ -29,6 +35,9 @@ export interface ButlerCodexAskOptions {
 interface TurnController {
   onNotification(method: string, params: unknown): void;
   interrupt(error: Error): void;
+  /** 用户主动停止：就地完成本轮，保留已生成的内容 */
+  stop(): void;
+  activeTurnId(): string | undefined;
   start(client: AppServerClient, input: string): Promise<string>;
 }
 
@@ -144,6 +153,15 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
       current.reject(error);
     },
 
+    stop: () => {
+      if (!active) return;
+      const current = active;
+      active = undefined;
+      current.resolve(current.text.trim());
+    },
+
+    activeTurnId: () => active?.turnId,
+
     start: async (client, input) => {
       if (active) throw new Error('AI 正在处理上一条消息');
       let resolveCompletion!: (text: string) => void;
@@ -238,7 +256,9 @@ async function ensureResidentClient(): Promise<AppServerClient> {
     const next = new AppServerClient(
       transportFactory(residentSessionId, residentWorkspaceRoot),
       {
-        onNotification: (method, params) => residentTurn?.onNotification(method, params),
+        onNotification: (method, params) => {
+          residentTurn?.onNotification(method, params);
+        },
         onServerRequest: (request) => respondDynamicToolCall(
           request,
           residentThreadId,
@@ -294,6 +314,10 @@ async function startResidentThread(now: number, prompt: string, promptHash: stri
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
   residentStatus = 'ready';
+  // 常驻线程也是原生 Codex 线程，起名后在 codex resume / Codex App 里可辨认
+  void client
+    .request('thread/name/set', { threadId: response.thread.id, name: rocketxThreadName('AI 大脑') })
+    .catch(() => undefined);
 }
 
 async function resumeResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {
@@ -314,6 +338,25 @@ async function resumeResidentThread(now: number, prompt: string, promptHash: str
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
   residentStatus = 'ready';
+}
+
+/**
+ * 重启后接续上一次的常驻线程：标记为 interrupted，下次提问会走既有的
+ * thread/resume 路径把上下文从 Codex 会话库里恢复回来；resume 失败时
+ * 原有兜底会自动开新线程。本次运行已有活线程时不覆盖。
+ */
+export function hydrateResidentCodexThread(threadId: string, promptHash: string): void {
+  if (residentThreadId || !threadId || !promptHash) return;
+  residentThreadId = threadId;
+  residentPromptHash = promptHash;
+  residentStatus = 'interrupted';
+}
+
+/** 当前常驻线程快照，供对话持久化一并保存 */
+export function residentCodexThreadSnapshot(): { threadId: string; promptHash: string } | undefined {
+  return residentThreadId && residentPromptHash
+    ? { threadId: residentThreadId, promptHash: residentPromptHash }
+    : undefined;
 }
 
 async function ensureResidentThread(now: number): Promise<void> {
@@ -360,6 +403,48 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
     if (residentStatus !== 'interrupted') residentStatus = residentThreadId ? 'ready' : 'idle';
     throw error;
   }
+}
+
+/** 新对话：停掉并丢弃常驻线程，下次提问从全新线程（全新上下文）开始 */
+export async function discardResidentCodexThread(): Promise<void> {
+  await stopResident(true);
+}
+
+/**
+ * 把对话记录送进一条新的原生 Codex 线程——codex-companion 同款机制：
+ * thread/start + thread/name/set + 记录作为首轮输入(issue #105)。
+ * 早期版本走外部会话导入器,但 codex 0.144.x 的导入器只认
+ * ~/.claude/projects 布局、且原生线程本就在 App/CLI 列表可见,
+ * 导入这条弯路整体退役。快照副本语义不变:RocketX 里的对话
+ * 继续在原线程上,不会双写。
+ */
+export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<void> {
+  const availability = codexBrainAvailability();
+  if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+  const client = await ensureResidentClient();
+  const { model } = getButlerCodexSettings();
+  await startNamedCodexThreadWithTranscript(client, {
+    cwd: residentWorkspaceRoot!,
+    name: rocketxThreadName('管家对话'),
+    transcript: transferTranscript('管家对话', lines),
+    model: model || undefined,
+  });
+}
+
+/**
+ * 停止管家当前正在进行的回答：先请求服务端中断本轮，再就地完成
+ * 本轮 Promise（保留已生成的部分内容）。没有进行中的轮次时是 no-op。
+ */
+export async function stopButlerCodexTurn(): Promise<void> {
+  const turn = residentTurn;
+  if (!turn) return;
+  const turnId = turn.activeTurnId();
+  if (residentClient && residentThreadId && turnId) {
+    await residentClient
+      .request('turn/interrupt', { threadId: residentThreadId, turnId })
+      .catch(() => undefined);
+  }
+  turn.stop();
 }
 
 export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): Promise<{ text: string }> {

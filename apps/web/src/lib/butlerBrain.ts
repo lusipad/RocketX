@@ -49,6 +49,10 @@ export function getButlerCodexSettings(): ButlerCodexSettings {
   return { model, effort };
 }
 
+export function hasSavedButlerCodexSettings(): boolean {
+  return brainStorage.get(CODEX_MODEL_KEY) !== null || brainStorage.get(CODEX_EFFORT_KEY) !== null;
+}
+
 export function setButlerCodexSettings(settings: ButlerCodexSettings): void {
   brainStorage.set(CODEX_MODEL_KEY, settings.model.trim());
   brainStorage.set(CODEX_EFFORT_KEY, settings.effort);

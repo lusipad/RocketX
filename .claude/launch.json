@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rcx-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@rcx/web", "dev", "--", "--port", "5173"],
+      "port": 5173,
+      "autoPort": false
+    }
+  ]
+}

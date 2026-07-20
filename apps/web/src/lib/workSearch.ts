@@ -31,8 +31,8 @@ export function searchWork(
   for (const item of todos) {
     const score = matchScore(
       q,
-      item.note || item.excerpt,
-      `${item.excerpt} ${item.roomName} ${item.author} ${item.due ?? ''}`,
+      item.note || item.excerpt || '',
+      `${item.excerpt ?? ''} ${item.roomName ?? ''} ${item.author ?? ''} ${item.due ?? ''}`,
     );
     if (score !== null) matches.push({ score, order, result: { kind: 'todo', item } });
     order++;

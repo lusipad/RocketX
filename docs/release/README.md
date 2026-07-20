@@ -1,6 +1,6 @@
 # Release evidence and publication
 
-The current release target is `v0.20.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.25.4`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
 ## Future 1.0 external acceptance evidence
 
@@ -32,9 +32,9 @@ The active `Protect immutable v* release tags` ruleset prevents updates, force-p
 
 1. Verify that the protected environments and immutable `v*` tag ruleset above are still active.
 2. Commit the dated changelog section. For a major version of 1 or higher, also commit the real README PNG/GIF and two evidence JSON files.
-3. Push `release/v0.20.0` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, or existing tag; 1.0+ additionally refuses missing visuals or external evidence.
+3. Push `release/vX.Y.Z` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, or existing tag; 1.0+ additionally refuses missing visuals or external evidence.
 4. `Desktop Build` creates a draft Release, verifies every platform and updater signature, writes release notes from `CHANGELOG.md`, and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
-5. Run `Publish npm packages` with confirmation `publish v0.20.0`. The protected job publishes `@rcx/app-sdk` first and `create-rcx-app` second. A first publication requires a short-lived granular `NPM_TOKEN`; after both packages exist, configure npm Trusted Publishing for this exact workflow and revoke the bootstrap token.
+5. Run `Publish npm packages` with confirmation `publish vX.Y.Z`. The protected job publishes `@rcx/app-sdk` first and `create-rcx-app` second. A first publication requires a short-lived granular `NPM_TOKEN`; after both packages exist, configure npm Trusted Publishing for this exact workflow and revoke the bootstrap token.
 6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks evidence, artifacts, checksums, and both public npm versions before making the Release public and latest.
 
 Never delete and recreate a released npm version or rewrite an existing release tag.

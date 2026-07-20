@@ -24,7 +24,12 @@ import { findCommand } from '../lib/slash';
 import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
 import { flashTaskbar } from '../lib/taskbar';
-import { forwardableAttachments, mergedForwardAttachments } from '../lib/forward';
+import {
+  forwardFileName,
+  forwardableAttachments,
+  mergedForwardAttachments,
+  protectedFilePath,
+} from '../lib/forward';
 import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
 import {
   canApplyRetainedRoomResult,
@@ -626,6 +631,61 @@ function randomMessageId(): string {
   let s = '';
   for (let i = 0; i < 17; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
   return s;
+}
+
+/**
+ * 逐条转发一条消息到目标会话（issue #69）。
+ *
+ * 受保护文件跨房间引用会 403，此前只能留提示「请在原会话查看」。现在把文件
+ * 下载后重传到目标会话：原消息只有一个文件时文字作为它的说明，转发结果仍是
+ * 一条消息；多附件时先发文字和可复用附件，再逐个重传。单个文件下载或重传
+ * 失败时退回原来的元数据 + 提示，转发不整体失败。
+ */
+async function forwardSingleMessage(msg: RcMessage, rid: string): Promise<void> {
+  const attachments = msg.attachments ?? [];
+  const reupload = rid === msg.rid ? [] : attachments.filter((a) => protectedFilePath(a));
+  const text = stripQuotePrefix(msg.msg || '') || undefined;
+  if (reupload.length === 0) {
+    await rest.sendMessageRaw({
+      _id: randomMessageId(),
+      rid,
+      msg: text,
+      attachments: forwardableAttachments(attachments, rid === msg.rid),
+    });
+    return;
+  }
+
+  const others = forwardableAttachments(attachments.filter((a) => !reupload.includes(a)));
+  const singleFileOnly = reupload.length === 1 && others.length === 0;
+  if (!singleFileOnly && (text || others.length > 0)) {
+    await rest.sendMessageRaw({ _id: randomMessageId(), rid, msg: text, attachments: others });
+  }
+
+  const configuredLimit = await getPublicSetting('FileUpload_MaxFileSize').catch(() => 0);
+  const maxBytes =
+    typeof configuredLimit === 'number' && Number.isFinite(configuredLimit) ? configuredLimit : 0;
+  for (const attachment of reupload) {
+    try {
+      const blob = await rest.fetchFile(protectedFilePath(attachment)!);
+      if (maxBytes > 0 && blob.size > maxBytes) {
+        throw new RcApiError(
+          `文件超出服务器上传上限 ${Math.round(maxBytes / 1024 / 1024)} MiB`,
+          413,
+        );
+      }
+      await rest.uploadMedia(rid, blob, {
+        fileName: forwardFileName(attachment),
+        msg: singleFileOnly ? (text ?? '') : '',
+      });
+    } catch {
+      await rest.sendMessageRaw({
+        _id: randomMessageId(),
+        rid,
+        msg: singleFileOnly ? text : undefined,
+        attachments: forwardableAttachments([attachment]),
+      });
+    }
+  }
 }
 
 /** RC 用户状态的数字编码 → 语义字符串 */
@@ -1898,8 +1958,11 @@ export const useChat = create<ChatState>((set, get) => ({
       try {
         await rest.joinRoom(rid);
       } catch (err) {
-        // Rocket.Chat 旧版本没有 rooms.join；讨论加入由 DDP joinRoom 提供兼容路径。
-        if (!(err instanceof RcApiError) || err.status !== 404) throw err;
+        // Rocket.Chat 旧版本没有 rooms.join：服务端返回 404，部分部署（反代/网关）对
+        // 不支持的端点返回 405（issue #62）。两者都走 DDP joinRoom 兼容路径。
+        const missingEndpoint =
+          err instanceof RcApiError && (err.status === 404 || err.status === 405);
+        if (!missingEndpoint) throw err;
         await realtime.call('joinRoom', rid);
       }
       // 加入不一定推订阅变更，主动刷新并重新打开讨论。
@@ -2072,11 +2135,7 @@ export const useChat = create<ChatState>((set, get) => ({
       (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
     );
     for (const rid of rids) {
-      await rest.sendMessageRaw({
-        rid,
-        msg: stripQuotePrefix(msg.msg || '') || undefined,
-        attachments: forwardableAttachments(msg.attachments, rid === msg.rid),
-      });
+      await forwardSingleMessage(msg, rid);
     }
     toast.success(
       rids.length === 1 ? `已转发到「${names[0]}」` : `已转发到 ${rids.length} 个会话`,
@@ -2108,12 +2167,7 @@ export const useChat = create<ChatState>((set, get) => ({
         });
       } else {
         for (const m of ordered) {
-          await rest.sendMessageRaw({
-            _id: randomMessageId(),
-            rid,
-            msg: stripQuotePrefix(m.msg || '') || undefined,
-            attachments: forwardableAttachments(m.attachments, rid === m.rid),
-          });
+          await forwardSingleMessage(m, rid);
         }
       }
     }
@@ -2201,12 +2255,22 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return;
+    // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
+    // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
     const id = toast.loading(`正在发送 ${label}…`);
     set({ uploading: get().uploading + files.length });
     try {
-      for (const file of files) {
-        await rest.uploadMedia(rid, file, { tmid });
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
+      for (const [index, file] of files.entries()) {
+        await rest.uploadMedia(rid, file, {
+          tmid,
+          ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+        });
         set({ uploading: get().uploading - 1 });
       }
       toast.dismiss(id);
@@ -2223,14 +2287,21 @@ export const useChat = create<ChatState>((set, get) => ({
     const rid = get().activeRid;
     const me = useAuth.getState().user;
     if (!rid || !me || paths.length === 0) return;
+    // 原生拖拽文件回复也要带引用（issue #91 同类）。挂着引用时不走局域网
+    // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
+    const quote = !tmid ? get().replyTo : null;
+    if (quote) set({ replyTo: null });
     const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
     set({ uploading: get().uploading + paths.length });
     try {
+      const quoteMsg = quote
+        ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
+        : undefined;
       const { readFile, stat } = await import('@tauri-apps/plugin-fs');
-      for (const path of paths) {
+      for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
-        if (!tmid) {
+        if (!tmid && !quoteMsg) {
           const recipients = await lanRecipientIds(rid).catch(() => []);
           if (recipients.length === 1) {
             const messageId = randomMessageId();
@@ -2276,7 +2347,11 @@ export const useChat = create<ChatState>((set, get) => ({
             );
           }
           const bytes = await readFile(path);
-          await rest.uploadMedia(rid, new Blob([bytes]), { tmid, fileName });
+          await rest.uploadMedia(rid, new Blob([bytes]), {
+            tmid,
+            fileName,
+            ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+          });
         }
         set({ uploading: Math.max(0, get().uploading - 1) });
       }
