@@ -749,8 +749,11 @@ test('内网通插件可保存本机名称和 IP 范围并立即应用', async (
   });
 });
 
-test('内网通插件通过真实 iframe sandbox Bridge 保存范围并刷新设备', async ({ page }) => {
+test('内网通插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存范围并刷新设备', async ({ page }) => {
   const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
+  const desktopSecurity = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'))
+    .app.security as { csp: string; dangerousDisableAssetCspModification: string[] };
+  expect(desktopSecurity.dangerousDisableAssetCspModification).toContain('script-src');
   const srcDoc = sandboxDocument({
     id: 'dev.rocketx.intranet-link',
     name: '内网通',
@@ -761,7 +764,11 @@ test('内网通插件通过真实 iframe sandbox Bridge 保存范围并刷新设
     permissions: ['lan:discover'],
   }, pluginHtml);
 
-  await page.setContent('<main></main>');
+  await page.setContent(`
+    <meta http-equiv="Content-Security-Policy"
+      content="${desktopSecurity.csp}">
+    <main></main>
+  `);
   await page.evaluate((html) => {
     const iframe = document.createElement('iframe');
     iframe.title = '内网通';
