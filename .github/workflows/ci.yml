@@ -47,3 +47,20 @@ jobs:
 
       - name: 应用 SDK、CLI 与 clean-room 脚手架
         run: pnpm test:ecosystem
+
+  windows-desktop-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 编译缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Windows 桌面端单元与协议测试
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
