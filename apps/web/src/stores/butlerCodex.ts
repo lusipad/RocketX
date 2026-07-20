@@ -418,12 +418,12 @@ export async function discardResidentCodexThread(): Promise<void> {
  * 导入这条弯路整体退役。快照副本语义不变:RocketX 里的对话
  * 继续在原线程上,不会双写。
  */
-export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<void> {
+export async function transferConversationToCodexApp(lines: readonly TransferLine[]): Promise<string> {
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
-  await startNamedCodexThreadWithTranscript(client, {
+  return startNamedCodexThreadWithTranscript(client, {
     cwd: residentWorkspaceRoot!,
     name: rocketxThreadName('管家对话'),
     transcript: transferTranscript('管家对话', lines),

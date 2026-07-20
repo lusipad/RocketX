@@ -994,7 +994,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <ConfirmDeleteDialog
           onConfirm={() => {
             setConfirmDelete(false);
-            void deleteMessage(message._id);
+            void deleteMessage(message);
           }}
           onCancel={() => setConfirmDelete(false)}
         />

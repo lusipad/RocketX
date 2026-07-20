@@ -1,4 +1,5 @@
 import type { AppServerClient } from './protocol';
+import { isTauri } from '../lib/http';
 
 /** 待转移的对话行（结构化定义，避免依赖 butler store 造成环） */
 export interface TransferLine {
@@ -11,6 +12,34 @@ export interface AgentTransferMessage {
   text: string;
   author: string;
   assistant: boolean;
+}
+
+export function codexThreadDeepLink(threadId: string): string {
+  const id = threadId.trim();
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(id)) throw new Error('Codex threadId 无效');
+  return `codex://threads/${encodeURIComponent(id)}`;
+}
+
+export async function openCodexThread(
+  threadId: string,
+): Promise<'opened' | 'copied' | 'unavailable'> {
+  const url = codexThreadDeepLink(threadId);
+  try {
+    if (isTauri) {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl(url);
+    } else {
+      window.location.assign(url);
+    }
+    return 'opened';
+  } catch {
+    try {
+      await navigator.clipboard.writeText(`codex resume ${threadId}`);
+      return 'copied';
+    } catch {
+      return 'unavailable';
+    }
+  }
 }
 
 /**
@@ -44,7 +73,7 @@ export function agentConversationLines(
 export async function startNamedCodexThreadWithTranscript(
   client: AppServerClient,
   options: { cwd: string; name: string; transcript: string; model?: string },
-): Promise<void> {
+): Promise<string> {
   const response = await client.request('thread/start', {
     ...(options.model ? { model: options.model } : {}),
     cwd: options.cwd,
@@ -67,6 +96,7 @@ export async function startNamedCodexThreadWithTranscript(
     sandboxPolicy: { type: 'readOnly', networkAccess: false },
     effort: 'minimal',
   });
+  return threadId;
 }
 
 export function transferTranscript(

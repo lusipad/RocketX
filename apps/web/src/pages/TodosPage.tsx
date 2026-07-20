@@ -66,7 +66,7 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
             todo.done ? 'text-ink-3 line-through' : 'font-medium text-ink'
           }`}
         >
-          <LinkifiedText text={todo.note || todo.excerpt || '（无文字内容）'} renderPlain={emojify} />
+          <LinkifiedText text={todo.note || todo.excerpt || todo.title || '（无文字内容）'} renderPlain={emojify} />
         </div>
 
         {todo.note && hasSource && (

@@ -10,6 +10,7 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { openCodexThread } from '../agent/codexTransfer';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -57,10 +58,17 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const transferToCodex = async () => {
     setTransferring(true);
     try {
-      await transferConversationToCodexApp(
+      const threadId = await transferConversationToCodexApp(
         lines.map(({ role, text }) => ({ role, text })),
       );
-      toast.success('已转移到 Codex，可在 Codex App / CLI 的会话列表里继续');
+      const result = await openCodexThread(threadId);
+      toast.success(
+        result === 'opened'
+          ? '已转移并打开 Codex App'
+          : result === 'copied'
+            ? '已转移；App 打开失败，codex resume 命令已复制'
+            : `已转移；请运行 codex resume ${threadId} 继续`,
+      );
     } catch (error) {
       toast.error(error, '转移到 Codex 失败');
     } finally {

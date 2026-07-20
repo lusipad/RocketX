@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type { RcMessage, RcRoom, RcSubscription } from '../../packages/rc-client/src';
 import {
@@ -12,6 +13,10 @@ import {
 import { findQuoteImage } from '../../apps/web/src/lib/messageQuote';
 
 test('默认发送方式只让无修饰的 Enter 发送，Alt+Enter 保留为换行', () => {
+  for (const path of ['apps/web/src/components/Composer.tsx', 'apps/web/src/components/ThreadPanel.tsx']) {
+    const source = readFileSync(path, 'utf8');
+    assert.match(source, /prefsLoaded \? sendOnEnter : 'normal'/, `${path} 加载偏好前也必须使用默认 Enter 发送`);
+  }
   assert.equal(
     shouldSendMessage('normal', {
       altKey: false,

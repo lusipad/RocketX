@@ -12,10 +12,13 @@ import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 const TYPE_COLORS: Record<string, string> = {
   Bug: '#f54a45',
-  Task: '#3370ff',
-  'User Story': '#00b96b',
+  Task: '#00b96b',
+  'User Story': '#3370ff',
+  'Product Backlog Item': '#3370ff',
+  Requirement: '#3370ff',
   Feature: '#7f3bf5',
   Epic: '#ff8800',
+  Issue: '#3370ff',
 };
 
 /**

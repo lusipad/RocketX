@@ -29,11 +29,13 @@ import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 export const TYPE_COLORS: Record<string, string> = {
   Bug: '#f54a45',
-  Task: '#3370ff',
-  'User Story': '#00b96b',
+  Task: '#00b96b',
+  'User Story': '#3370ff',
+  'Product Backlog Item': '#3370ff',
+  Requirement: '#3370ff',
   Feature: '#7f3bf5',
   Epic: '#ff8800',
-  Issue: '#ff8800',
+  Issue: '#3370ff',
 };
 
 // 状态配色统一走 stateBadgeClass（中英文状态都认，中文 ADO 流程模板叫「活动/已解决/已关闭」）

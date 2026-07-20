@@ -243,7 +243,7 @@ interface ChatState {
   refreshReceipts: (rid: string) => Promise<void>;
   inviteMembers: (rid: string, users: RcUser[]) => Promise<void>;
   editMessage: (msgId: string, text: string) => Promise<void>;
-  deleteMessage: (msgId: string) => Promise<void>;
+  deleteMessage: (message: Pick<RcMessage, '_id' | 'rid'>) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   togglePin: (msg: RcMessage) => Promise<void>;
   /**
@@ -1730,12 +1730,11 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  deleteMessage: async (msgId) => {
-    const rid = get().activeRid;
-    if (!rid) return;
+  deleteMessage: async (message) => {
+    const { _id: msgId, rid } = message;
     try {
-      const list = get().messages[rid] ?? [];
       await rest.deleteMessage(rid, msgId);
+      const list = get().messages[rid] ?? [];
       set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
       const panel = get().rightPanel;
       if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });

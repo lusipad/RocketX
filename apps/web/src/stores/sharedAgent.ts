@@ -128,7 +128,7 @@ interface SharedAgentState {
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
   /** 把托管对话转移进 Codex（导入成 App 认可来源的线程快照副本） */
-  transferToCodexApp: (tmid: string) => Promise<void>;
+  transferToCodexApp: (tmid: string) => Promise<string>;
 }
 
 const queues = new Map<string, SerialCommandQueue>();
@@ -893,12 +893,13 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       : room?.fname || room?.name || session.environmentName;
     const client = await ensureClient(session);
     // companion 同款:原生线程 + 命名 + 记录作首轮输入,App/CLI 列表直接可见(issue #105)
-    await startNamedCodexThreadWithTranscript(client, {
+    const threadId = await startNamedCodexThreadWithTranscript(client, {
       cwd: session.workspaceRoots[0],
       name: rocketxThreadName('托管对话', detail),
       transcript: transferTranscript('托管对话', lines),
     });
     trace(tmid, 'status', '对话已转移到 Codex，可在 App / CLI 会话列表继续');
+    return threadId;
   },
 
   endSession: async (tmid) => {
