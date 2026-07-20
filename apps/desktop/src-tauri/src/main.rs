@@ -29,6 +29,7 @@ use tauri::{
     Manager, WindowEvent,
 };
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
+use tauri_plugin_opener::OpenerExt;
 
 const MAIN_TRAY_ID: &str = "main";
 
@@ -37,6 +38,40 @@ struct AllowedHttpOrigins(Mutex<HashSet<String>>);
 struct AiKeychainLock(Mutex<()>);
 
 const AI_KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.ai";
+
+fn validate_external_url(url: &str) -> Result<&str, String> {
+    let url = url.trim();
+    if url.len() > 8192 || url.chars().any(char::is_control) {
+        return Err("invalid external URL".to_string());
+    }
+    let parsed = tauri::Url::parse(url).map_err(|_| "invalid external URL".to_string())?;
+    if matches!(parsed.scheme(), "http" | "https") {
+        return Ok(url);
+    }
+    if parsed.scheme() == "codex"
+        && parsed.host_str() == Some("threads")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+    {
+        let thread_id = parsed.path().strip_prefix('/').unwrap_or_default();
+        if !thread_id.is_empty()
+            && thread_id.len() <= 256
+            && thread_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Ok(url);
+        }
+    }
+    Err("unsupported external URL".to_string())
+}
+
+#[tauri::command]
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(validate_external_url(&url)?, None::<&str>)
+        .map_err(|error| format!("failed to open external URL: {error}"))
+}
 
 fn validate_ai_provider_id(provider_id: &str) -> Result<&str, String> {
     let provider_id = provider_id.trim();
@@ -419,7 +454,9 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 
 #[cfg(test)]
 mod tray_icon_tests {
-    use super::{dim_tray_icon, normalize_http_origin, validate_ai_provider_id};
+    use super::{
+        dim_tray_icon, normalize_http_origin, validate_ai_provider_id, validate_external_url,
+    };
     use tauri::image::Image;
 
     #[test]
@@ -445,6 +482,26 @@ mod tray_icon_tests {
         assert!(validate_ai_provider_id("").is_err());
         assert!(validate_ai_provider_id("bad\nname").is_err());
     }
+
+    #[test]
+    fn external_url_allows_http_and_codex_threads_only() {
+        assert_eq!(
+            validate_external_url(" https://example.com/path ").unwrap(),
+            "https://example.com/path"
+        );
+        assert_eq!(
+            validate_external_url("HTTPS://example.com/path").unwrap(),
+            "HTTPS://example.com/path"
+        );
+        assert_eq!(
+            validate_external_url("codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d").unwrap(),
+            "codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d"
+        );
+        assert!(validate_external_url("codex://threads/").is_err());
+        assert!(validate_external_url("codex://settings").is_err());
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+        assert!(validate_external_url("https://example.com/\nheader").is_err());
+    }
 }
 
 fn main() {
@@ -464,6 +521,7 @@ fn main() {
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
             allow_http_origin,
+            open_external_url,
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,
             set_tray_icon_normal,

@@ -325,6 +325,21 @@ test('发送消息会乐观上屏并提交一次', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126）', async ({ page }) => {
+  const { sentMessages, pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByText('Welcome to General', { exact: true }).click({ button: 'right' });
+  await page.getByText('回复', { exact: true }).click();
+  await page.getByPlaceholder(/输入消息/).fill('Reply from UI');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+
+  await expect.poll(() => sentMessages.length).toBe(1);
+  expect(sentMessages[0]?.msg).toBe(
+    '[ ](http://127.0.0.1:4173/channel/general?msg=general-welcome) Reply from UI',
+  );
+  expect(pageErrors).toEqual([]);
+});
+
 test('消息待办可记录承诺对象并显示在管家里', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();

@@ -15,6 +15,7 @@ import {
 } from '../agent/card';
 import {
   agentMessageInstruction,
+  agentTurnInput,
   buildAgentDeveloperInstructions,
   buildAgentContext,
   collectLinkedWorkItems,
@@ -44,7 +45,7 @@ import {
 import { listAgentSessions, saveAgentSession } from '../agent/sessionStore';
 import { useWorkbench } from './workbench';
 import { useLocalCodex } from './localCodex';
-import { agentRoomSessionKey, useAgentEnvironments } from './agentEnvironments';
+import { resolveAgentSessionKey, useAgentEnvironments } from './agentEnvironments';
 import { getAgentHostingCodexSettings } from '../lib/agentHostingSettings';
 import {
   assertAllowedWorkspacePath,
@@ -521,7 +522,7 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
     ...(codexSettings.model ? { model: codexSettings.model } : {}),
     ...(codexSettings.effort === 'default' ? {} : { effort: codexSettings.effort }),
     threadId: current.codexThreadId!,
-    input: [{ type: 'text', text: prompt, text_elements: [] }],
+    input: agentTurnInput(prompt, attachments.imagePaths),
     approvalPolicy: APPROVAL_POLICY,
     approvalsReviewer: 'user',
     cwd: current.workspaceRoots[0],
@@ -689,8 +690,9 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
 
   handleMessage: async (message) => {
     get().ingestCard(message);
-    const sessionKey = message.tmid ?? agentRoomSessionKey(message.rid);
-    const allowLiteralAi = !message.tmid && !!get().sessions[sessionKey];
+    const sessions = get().sessions;
+    const sessionKey = resolveAgentSessionKey(message.rid, message.tmid, new Set(Object.keys(sessions)));
+    const allowLiteralAi = !!sessions[sessionKey];
     if (message.pending || message.failed || agentMessageInstruction(message, 'ai', allowLiteralAi) === null) return;
     if (processedMessages.has(message._id)) return;
     processedMessages.add(message._id);

@@ -6,6 +6,13 @@ import { stripAgentSessionMarker } from './card';
 const DEFAULT_MESSAGE_LIMIT = 50;
 const MAX_CONTEXT_CHARS = 100_000;
 
+export function agentTurnInput(text: string, imagePaths: readonly string[]) {
+  return [
+    { type: 'text' as const, text, text_elements: [] },
+    ...imagePaths.map((path) => ({ type: 'localImage' as const, path })),
+  ];
+}
+
 export function buildAgentDeveloperInstructions(input: {
   workItem?: { id: number; project?: string; title: string };
   proposedBranch?: string;
@@ -53,6 +60,7 @@ export interface AgentAttachmentSource {
   messageId: string;
   name: string;
   path: string;
+  image: boolean;
 }
 
 export interface AgentLinkedWorkItem {
@@ -106,7 +114,11 @@ export function selectAgentContextMessages(
 
 function attachmentSources(message: RcMessage): AgentAttachmentSource[] {
   const sources: AgentAttachmentSource[] = [];
-  const visit = (attachments: RcMessage['attachments'], preferredName?: string) => {
+  const visit = (
+    attachments: RcMessage['attachments'],
+    preferredName?: string,
+    preferredImage = false,
+  ) => {
     for (const [index, attachment] of (attachments ?? []).entries()) {
       const path = attachment.title_link_download
         ? attachment.title_link
@@ -118,12 +130,13 @@ function attachmentSources(message: RcMessage): AgentAttachmentSource[] {
           messageId: message._id,
           name: preferredName ?? attachment.title ?? `attachment-${index + 1}`,
           path,
+          image: preferredImage || !!attachment.image_url,
         });
       }
       visit(attachment.attachments);
     }
   };
-  visit(message.attachments, message.file?.name);
+  visit(message.attachments, message.file?.name, message.file?.type?.startsWith('image/') ?? false);
   return sources;
 }
 

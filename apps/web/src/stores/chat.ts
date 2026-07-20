@@ -30,7 +30,7 @@ import {
   mergedForwardAttachments,
   protectedFilePath,
 } from '../lib/forward';
-import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
+import { QUOTE_LINK_RE, quoteMessagePrefix, stripQuotePrefix } from '../lib/messageText';
 import {
   canApplyRetainedRoomResult,
   omitRoomEntries,
@@ -718,7 +718,7 @@ function quoteLinkPrefix(
   subs: Record<string, RcSubscription>,
   site: string,
 ): string {
-  return `[ ](${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id})\n`;
+  return quoteMessagePrefix(`${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}`);
 }
 
 /**

@@ -153,8 +153,8 @@ function wsUrlFor(base: string): string {
 export async function openExternal(url: string): Promise<void> {
   if (!/^https?:\/\//i.test(url)) return;
   if (isTauri) {
-    const { openUrl } = await import('@tauri-apps/plugin-opener');
-    await openUrl(url);
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_external_url', { url });
   } else {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
@@ -164,7 +164,7 @@ export async function openExternal(url: string): Promise<void> {
  * 全局拦截 <a> 点击：桌面端一律走系统浏览器。
  * 挂一次即可覆盖所有链接（消息正文、卡片、预览…）。
  */
-export function installLinkInterceptor(): void {
+export function installLinkInterceptor(onError: (error: unknown) => void = console.error): void {
   if (!isTauri) return;
   document.addEventListener(
     'click',
@@ -173,7 +173,7 @@ export function installLinkInterceptor(): void {
       const href = anchor?.getAttribute('href');
       if (!href || !/^https?:\/\//i.test(href)) return;
       e.preventDefault();
-      void openExternal(href);
+      void openExternal(href).catch(onError);
     },
     true,
   );
