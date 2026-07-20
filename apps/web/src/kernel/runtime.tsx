@@ -28,6 +28,7 @@ import ButlerPanel from '../components/ButlerPanel';
 import { useAiAssistant } from '../stores/aiAssistant';
 import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
 import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
+import { BUNDLED_APPS } from './bundled';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
 import { BridgeHost } from './bridge';
@@ -196,6 +197,27 @@ function registerCapabilities(): void {
       supportsUtf8,
       lastSeenMs,
     }));
+  });
+  capabilityBus.register('ipmsg.identity.get', 'lan:discover', (_params, context) => {
+    requireIntranetLink(context.appId);
+    const { displayName } = useIpmsg.getState();
+    const user = useAuth.getState().user;
+    return {
+      displayName,
+      effectiveDisplayName: displayName || user?.name || user?.username || '',
+    };
+  });
+  capabilityBus.register('ipmsg.identity.set', 'lan:discover', async (params, context) => {
+    requireIntranetLink(context.appId);
+    const displayName = stringParam(params, 'displayName');
+    await useIpmsg.getState().setDisplayName(displayName);
+    const saved = useIpmsg.getState().displayName;
+    const user = useAuth.getState().user;
+    return {
+      ok: true,
+      displayName: saved,
+      effectiveDisplayName: saved || user?.name || user?.username || '',
+    };
   });
   capabilityBus.register('ipmsg.discovery.get', 'lan:discover', (_params, context) => {
     requireIntranetLink(context.appId);
@@ -585,5 +607,5 @@ export function initializeKernel(): void {
   installedApps.setActivator(activateApp);
   bridgeHost.start();
   void hydrateButlerArchive().finally(startRoutineScheduler);
-  void installedApps.hydrate().catch((error) => toast.error(error, '加载扩展应用失败'));
+  void installedApps.hydrate(BUNDLED_APPS).catch((error) => toast.error(error, '加载扩展应用失败'));
 }

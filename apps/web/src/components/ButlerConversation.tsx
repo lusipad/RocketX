@@ -20,6 +20,8 @@ import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
+import ButlerSources from './ButlerSources';
+import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 
 const QUICK_PROMPTS = [
   '搜索最近关于发布失败的消息',
@@ -50,6 +52,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
+  const context = useButler((state) => state.context);
   const [input, setInput] = useState('');
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
@@ -107,6 +110,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             <Bot size={20} className="text-primary" />管家
           </h1>
           <p className="mt-1 text-xs text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
+          {context ? <div className="mt-2 inline-flex rounded-full bg-primary-light px-2.5 py-1 text-xs text-primary">当前工作面：{context.label}</div> : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
@@ -169,6 +173,8 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
                 ) : null}
                 <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
                   {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+                  {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+                  <ButlerMessageActions line={line} disabled={running} />
                 </div>
               </div>
             );
@@ -200,6 +206,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               </div>
             </div>
           ) : null}
+          <div className="ml-10"><ButlerActionCard /></div>
         </div>
       </main>
 

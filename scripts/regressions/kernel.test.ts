@@ -300,6 +300,14 @@ async function intranetLinkFiles(entryOverride?: string): Promise<File[]> {
   return [manifestFile, entryFile];
 }
 
+async function intranetLinkPackage(): Promise<{ manifestText: string; entryContent: string }> {
+  const [manifestText, entryContent] = await Promise.all([
+    readFile(new URL('../../plugins/intranet-link/rcx.app.json', import.meta.url), 'utf8'),
+    readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8'),
+  ]);
+  return { manifestText, entryContent };
+}
+
 test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得特权', async () => {
   const manager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
   await assert.rejects(
@@ -311,6 +319,51 @@ test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得�
   const installed = await manager.installDirectory(await intranetLinkFiles());
   assert.equal(isOfficialApp(installed, 'dev.rocketx.intranet-link'), true);
   assert.equal(installed.enabled, false);
+});
+
+test('内置内网通首次保持关闭，升级保留开关且不能卸载', async () => {
+  const store = createRcxStore({ backend: createMemoryBackend() });
+  const bundled = await intranetLinkPackage();
+  const firstLifecycle: string[] = [];
+  const firstManager = new AppManager(store);
+  firstManager.setActivator(() => {
+    firstLifecycle.push('activate');
+    return () => firstLifecycle.push('cleanup');
+  });
+
+  await firstManager.hydrate([bundled]);
+  const installed = firstManager.get('dev.rocketx.intranet-link');
+  assert.equal(installed?.source.kind, 'bundled');
+  assert.equal(installed?.enabled, false);
+  assert.equal(installed?.official, true);
+  assert.deepEqual(installed?.granted, ['lan:discover', 'lan:transfer', 'ui:notify']);
+  assert.deepEqual(firstLifecycle, [], '默认关闭时不能激活插件运行时');
+  await assert.rejects(
+    firstManager.uninstall('dev.rocketx.intranet-link'),
+    /内置应用不能卸载/,
+  );
+
+  await firstManager.setEnabled('dev.rocketx.intranet-link', true);
+  assert.deepEqual(firstLifecycle, ['activate']);
+
+  const upgradeLifecycle: string[] = [];
+  const upgradeManager = new AppManager(store);
+  upgradeManager.setActivator(() => {
+    upgradeLifecycle.push('activate');
+  });
+  await upgradeManager.hydrate([bundled]);
+  assert.equal(upgradeManager.get('dev.rocketx.intranet-link')?.enabled, true);
+  assert.deepEqual(upgradeLifecycle, ['activate'], '升级必须保留用户已启用状态');
+
+  await firstManager.setEnabled('dev.rocketx.intranet-link', false);
+  const disabledManager = new AppManager(store);
+  let disabledActivated = false;
+  disabledManager.setActivator(() => {
+    disabledActivated = true;
+  });
+  await disabledManager.hydrate([bundled]);
+  assert.equal(disabledManager.get('dev.rocketx.intranet-link')?.enabled, false);
+  assert.equal(disabledActivated, false, '关闭状态升级后仍不能激活运行时');
 });
 
 test('manifest 可声明默认禁用，且应用禁用和卸载会等待运行时清理完成', async () => {

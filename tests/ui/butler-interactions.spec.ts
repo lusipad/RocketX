@@ -1,0 +1,188 @@
+import { expect, test, type Page } from '@playwright/test';
+import { bootAuthenticated, type RocketChatMockState } from './support/rocket-chat-mock';
+
+const ANSWER = '发布前需要 Alice 确认检查清单。';
+
+async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
+  const state = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
+  return state;
+}
+
+async function seedButlerAnswer(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    useButler.setState({
+      lines: [
+        { id: 'question', role: 'user', text: '发布前还缺什么？' },
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: '发布前需要 Alice 确认检查清单。',
+          sources: [{
+            kind: 'message',
+            id: 'general-release',
+            rid: 'room-general',
+            mid: 'general-release',
+            label: 'General · Release checklist ready',
+          }],
+        },
+      ],
+      context: {
+        kind: 'room',
+        label: 'General',
+        detail: '当前 Rocket.Chat 房间',
+        sources: [{ kind: 'room', id: 'room-general', rid: 'room-general', label: 'General' }],
+      },
+      actionDraft: null,
+      running: false,
+      error: null,
+    });
+  });
+  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+}
+
+test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
+  const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByTitle('打开来源：General · Release checklist ready').click();
+
+  await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
+  expect(sentMessages).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('取消待办草案不会产生本地副作用', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await expect(page.getByLabel('待办草案')).toContainText('等待确认');
+  await page.getByLabel('动作标题').fill('确认发布清单');
+  expect(await page.evaluate(() => localStorage.getItem('rcx-todos'))).toBeNull();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+
+  await expect(page.getByLabel('待办草案')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('rcx-todos'))).toBeNull();
+  expect(pageErrors).toEqual([]);
+});
+
+test('取消动作会在管家页留下可见审计记录', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '收起对话', exact: true }).click();
+  await page.getByText(/^工作日志 ·/).click();
+
+  await expect(page.getByText('待办 · 已取消', { exact: true })).toBeVisible();
+  await expect(page.getByText('待办 · 已提议', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('带待确认动作开启新对话时会记为取消', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await page.getByRole('button', { name: '新对话', exact: true }).click();
+  await expect(page.getByLabel('待办草案')).toHaveCount(0);
+  await page.getByRole('button', { name: '收起对话', exact: true }).click();
+  await page.getByText(/^工作日志 ·/).click();
+
+  await expect(page.getByText('待办 · 已取消', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('确认待办会保存编辑内容与截止日期', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await page.getByLabel('动作标题').fill('确认发布清单');
+  await page.getByLabel('动作内容').fill('请 Alice 在发布前确认完整清单');
+  await page.getByLabel('截止日期').fill('2026-07-25');
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+
+  await expect(page.getByText(/✅ 已创建待办/)).toBeVisible();
+  const [todo] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
+  expect(todo).toMatchObject({
+    source: 'manual',
+    title: '确认发布清单',
+    note: '请 Alice 在发布前确认完整清单',
+    due: '2026-07-25',
+    done: false,
+  });
+  expect(pageErrors).toEqual([]);
+});
+
+test('承诺缺少对象时阻止执行，补齐后才保存', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '记承诺', exact: true }).click();
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+  await expect(page.getByText('请填写“我答应给谁”', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('rcx-todos'))).toBeNull();
+
+  await page.getByLabel('我答应给谁').fill('Alice');
+  await page.getByLabel('截止日期').fill('2026-07-24');
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+
+  const [todo] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
+  expect(todo).toMatchObject({ committedTo: 'Alice', due: '2026-07-24', done: false });
+  expect(pageErrors).toEqual([]);
+});
+
+test('确认回复只回填原会话草稿，不调用发送接口', async ({ page }) => {
+  const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '拟回复', exact: true }).click();
+  await page.getByLabel('动作内容').fill('Alice，发布清单我已确认。');
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+
+  await expect(page.getByPlaceholder(/输入消息/)).toHaveValue('Alice，发布清单我已确认。');
+  expect(sentMessages).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('ADO 动作确认后才打开已有创建表单', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '建 ADO', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '创建工作项' })).toHaveCount(0);
+  await expect(page.getByLabel('ADO 工作项草案')).toContainText('等待确认');
+  await page.getByRole('button', { name: '继续填写', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: '创建工作项' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('请先在设置中配置 ADO 直连');
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  await seedButlerAnswer(page);
+  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+
+  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});

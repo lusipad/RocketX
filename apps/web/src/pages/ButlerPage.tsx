@@ -9,6 +9,10 @@ import {
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerRoutines from '../components/ButlerRoutines';
+import ButlerAuditTrail from '../components/ButlerAuditTrail';
+import ButlerSources from '../components/ButlerSources';
+import type { ButlerSource } from '../lib/butlerContext';
+import type { StoredRoundsResult } from '../lib/butlerRoundsRunner';
 import { ledgerFromTodos, type LedgerEntry } from '../lib/butlerLedger';
 import {
   runButlerRoundsNow,
@@ -34,6 +38,20 @@ function lookedAtLabel(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '我看过一圈';
   return `我 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')} 看了一圈`;
+}
+
+function roundSources(ref: string, stored: StoredRoundsResult | null): ButlerSource[] {
+  if (!stored) return [];
+  const label = stored.refTitles[ref] ?? '相关事项';
+  const message = stored.refMessages?.[ref];
+  if (message) return [{ kind: 'message', id: ref.slice(4), mid: ref.slice(4), rid: message.rid, label }];
+  const [kind, id = ''] = ref.split(':', 2);
+  if (!id) return [];
+  if (kind === 'todo' || kind === 'ledger') return [{ kind: 'todo', id, label }];
+  if (kind === 'wi') return [{ kind: 'work-item', id, label }];
+  if (kind === 'pr') return [{ kind: 'pull-request', id, label }];
+  if (kind === 'build') return [{ kind: 'build', id, label }];
+  return [];
 }
 
 function canTurnIntoTodo(ref: string): boolean {
@@ -285,6 +303,7 @@ export default function ButlerPage() {
                             {item.suggestedAction && (
                               <p className="mt-2 text-xs leading-5 text-ink-2">建议：{item.suggestedAction}</p>
                             )}
+                            <ButlerSources sources={roundSources(item.ref, lastResult)} />
                             <div className="mt-3 flex flex-wrap items-center gap-2">
                               {canTurnIntoTodo(item.ref) && (
                                 <button
@@ -379,6 +398,7 @@ export default function ButlerPage() {
                         </blockquote>
                       )}
                       <p className="mt-1 text-xs leading-5 text-ink-2">{proposal.reason}</p>
+                      <ButlerSources sources={roundSources(proposal.ref, lastResult)} />
                       <div className="mt-3 flex gap-2">
                         <button
                           type="button"
@@ -435,6 +455,7 @@ export default function ButlerPage() {
                     <div key={`${item.ref}:${index}`} className="rounded-md bg-surface-2 px-3 py-2 text-xs">
                       <div className="font-medium text-ink">{refTitles.get(item.ref) ?? '相关事项'}</div>
                       <div className="mt-0.5 leading-5 text-ink-3">{item.reason}</div>
+                      <ButlerSources sources={roundSources(item.ref, lastResult)} />
                     </div>
                   ))}
                 </div>
@@ -464,6 +485,7 @@ export default function ButlerPage() {
                   </div>
                 </section>
               )}
+              <ButlerAuditTrail />
             </div>
           </details>
 

@@ -121,6 +121,12 @@
   color-scheme: dark;
 }
 
+.ipmsg-peer-select,
+.ipmsg-peer-select option {
+  background-color: var(--color-surface-2);
+  color: var(--color-ink);
+}
+
 html,
 body,
 #root {

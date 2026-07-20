@@ -216,6 +216,7 @@ function listWorkItems(args: Record<string, unknown>): string {
         priority: item.priority,
         dueDate: item.dueDate,
         changedDate: item.changedDate,
+        webUrl: item.webUrl,
       })),
   );
 }
@@ -242,6 +243,8 @@ function listPullRequests(args: Record<string, unknown>): string {
         relation: reviewIds.has(pr.id) && mineIds.has(pr.id)
           ? 'both'
           : reviewIds.has(pr.id) ? 'review' : 'mine',
+        project: pr.project,
+        webUrl: pr.webUrl,
       })),
   );
 }
@@ -263,6 +266,7 @@ function listBuilds(args: Record<string, unknown>): string {
         result: build.result,
         requestedFor: build.requestedFor,
         finishTime: build.finishTime,
+        webUrl: build.webUrl,
       })),
   );
 }

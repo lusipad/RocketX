@@ -13,7 +13,7 @@
       p { margin: 0; color: #646a73; line-height: 1.7; }
       .grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; align-items: start; }
       section { border: 1px solid #dee0e3; border-radius: 16px; background: #fff; box-shadow: 0 8px 30px #1f23290f; overflow: hidden; }
-      section.discovery { margin-bottom: 16px; }
+      section.identity, section.discovery { margin-bottom: 16px; }
       section h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid #eff0f2; font-size: 16px; }
       .content { padding: 14px 16px; }
       button, input, textarea { font: inherit; }
@@ -40,6 +40,16 @@
         <h1>内网通</h1>
         <p>作为独立 RocketX 应用运行，只通过 Bridge 配置发现范围并访问联系人、聊天与文件能力。IP 范围由宿主校验，插件不会直接接触旧协议 socket 或握手材料。</p>
       </header>
+      <section class="identity">
+        <h2>本机身份</h2>
+        <div class="content">
+          <label for="display-name">本机显示名称</label>
+          <input id="display-name" maxlength="128" autocomplete="off" placeholder="留空则使用 RocketX 账号昵称">
+          <p>其他内网通、飞鸽或 IP Messenger 设备会看到这个名称。留空时使用当前 RocketX 账号昵称。</p>
+          <button id="save-identity">保存并立即生效</button>
+          <p class="status" id="identity-status">尚未读取本机名称。</p>
+        </div>
+      </section>
       <section class="discovery">
         <h2>跨网段发现</h2>
         <div class="content">
@@ -79,7 +89,9 @@
       const peersList = document.querySelector('#peers');
       const peerStatus = document.querySelector('#peer-status');
       const sendStatus = document.querySelector('#send-status');
+      const identityStatus = document.querySelector('#identity-status');
       const discoveryStatus = document.querySelector('#discovery-status');
+      const displayNameInput = document.querySelector('#display-name');
       const discoveryRangesInput = document.querySelector('#discovery-ranges');
       const peerIdInput = document.querySelector('#peer-id');
       const payloadInput = document.querySelector('#payload');
@@ -151,6 +163,35 @@
         }
       }
 
+      async function loadIdentity() {
+        try {
+          const result = await call('ipmsg.identity.get');
+          displayNameInput.value = result.displayName || '';
+          identityStatus.textContent = result.displayName
+            ? `当前以“${result.effectiveDisplayName}”对外显示。`
+            : `当前跟随 RocketX 账号昵称：“${result.effectiveDisplayName}”。`;
+        } catch (error) {
+          identityStatus.textContent = `读取失败：${error.message}`;
+        }
+      }
+
+      async function saveIdentity() {
+        identityStatus.textContent = '正在保存并重新广播…';
+        try {
+          const result = await call('ipmsg.identity.set', {
+            displayName: displayNameInput.value,
+          });
+          displayNameInput.value = result.displayName || '';
+          identityStatus.textContent = result.displayName
+            ? `已保存并以“${result.effectiveDisplayName}”重新广播。`
+            : `已恢复跟随 RocketX 账号昵称：“${result.effectiveDisplayName}”。`;
+          notify('内网通本机显示名称已更新', 'success');
+        } catch (error) {
+          identityStatus.textContent = `保存失败：${error.message}`;
+          notify(`内网通本机显示名称保存失败：${error.message}`, 'error');
+        }
+      }
+
       async function loadDiscovery() {
         try {
           const result = await call('ipmsg.discovery.get');
@@ -213,9 +254,14 @@
       }
 
       document.querySelector('#refresh').addEventListener('click', refreshPeers);
+      document.querySelector('#save-identity').addEventListener('click', saveIdentity);
+      displayNameInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') saveIdentity();
+      });
       document.querySelector('#save-discovery').addEventListener('click', saveDiscovery);
       document.querySelector('#send').addEventListener('click', sendLan);
       document.querySelector('#send-file').addEventListener('click', sendFile);
+      loadIdentity();
       loadDiscovery();
       refreshPeers();
     </script>

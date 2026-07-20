@@ -24,7 +24,7 @@ export function sandboxDocument(manifest: RcxAppManifest, html: string): string 
     "form-action 'none'",
   ].join('; ');
   const base = entryUrl ? `<base href="${escapeAttribute(entryUrl.href)}">` : '';
-  const bridgeBootstrap = `<script>(()=>{let port;const queue=[];const listeners=new Set();const bridge=Object.freeze({postMessage(message){port?port.postMessage(message):queue.push(message)},addEventListener(type,listener){if(type==='message')listeners.add(listener)},removeEventListener(type,listener){if(type==='message')listeners.delete(listener)}});Object.defineProperty(window,'__RCX_BRIDGE__',{value:bridge});window.addEventListener('message',event=>{if(port||event.source!==parent||event.data?.method!=='rcx/connect'||!event.ports[0])return;port=event.ports[0];port.addEventListener('message',message=>{for(const listener of listeners)listener(message)});port.start();for(const message of queue.splice(0))port.postMessage(message)})})()</script>`;
+  const bridgeBootstrap = `<script>(()=>{let port;const queue=[];const listeners=new Set();const bridge=Object.freeze({postMessage(message){port?port.postMessage(message):queue.push(message)},addEventListener(type,listener){if(type==='message')listeners.add(listener)},removeEventListener(type,listener){if(type==='message')listeners.delete(listener)}});Object.defineProperty(window,'__RCX_BRIDGE__',{value:bridge});window.addEventListener('message',event=>{if(event.source!==parent||event.data?.method!=='rcx/connect'||!event.ports[0])return;port?.close();port=event.ports[0];port.addEventListener('message',message=>{for(const listener of listeners)listener(message)});port.start();for(const message of queue.splice(0))port.postMessage(message)})})()</script>`;
   const policy = `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">${base}${bridgeBootstrap}`;
   return /<head(?:\s[^>]*)?>/i.test(html)
     ? html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${policy}`)
@@ -46,7 +46,6 @@ export default function IframeSandbox({
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | undefined>();
-  const connectedDocument = useRef<string | undefined>();
   const srcDoc = useMemo(() => sandboxDocument(manifest, html), [html, manifest]);
   const documentId = useMemo(() => crypto.randomUUID(), [appId, srcDoc]);
 
@@ -58,15 +57,9 @@ export default function IframeSandbox({
   }, [documentId]);
 
   const handleLoad = () => {
-    if (connectedDocument.current === documentId) {
-      cleanup.current?.();
-      cleanup.current = undefined;
-      return;
-    }
     const source = ref.current?.contentWindow;
     if (!source) return;
     cleanup.current?.();
-    connectedDocument.current = documentId;
     cleanup.current = bridge.registerFrame(appId, manifest, source);
   };
 

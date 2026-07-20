@@ -80,6 +80,7 @@ interface IpmsgFileReceipt {
 
 interface PersistedIpmsgState {
   enabled: boolean;
+  displayName?: string;
   discoveryRanges?: string;
   selectedPeerId: string | null;
   messages: IpmsgMessage[];
@@ -91,6 +92,7 @@ interface IpmsgState {
   running: boolean;
   port: number;
   intranetAvailable: boolean;
+  displayName: string;
   discoveryRanges: string;
   discoveryTargetCount: number;
   error: string | null;
@@ -100,6 +102,7 @@ interface IpmsgState {
   unread: number;
   hydrate: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
+  setDisplayName: (value: string) => Promise<void>;
   setDiscoveryRanges: (value: string) => Promise<number>;
   selectPeer: (peerId: string) => void;
   refreshPeers: () => Promise<void>;
@@ -146,10 +149,11 @@ function trimMessages(messages: IpmsgMessage[]): IpmsgMessage[] {
 }
 
 async function persist(): Promise<void> {
-  const { enabled, discoveryRanges, selectedPeerId, messages } = useIpmsg.getState();
+  const { enabled, displayName, discoveryRanges, selectedPeerId, messages } = useIpmsg.getState();
   const { kernelStore } = await import('../kernel/store');
   await kernelStore.appData.set(APP_ID, scope(), {
     enabled,
+    displayName,
     discoveryRanges,
     selectedPeerId,
     messages: trimMessages(messages),
@@ -217,7 +221,7 @@ async function startRuntime(): Promise<void> {
   try {
     status = await invoke<IpmsgStatus>('ipmsg_start', {
       userName: user.username,
-      nickname: user.name || user.username,
+      nickname: useIpmsg.getState().displayName || user.name || user.username,
       group: 'RocketX',
       discoveryRanges: useIpmsg.getState().discoveryRanges,
     });
@@ -269,6 +273,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
   running: false,
   port: 2425,
   intranetAvailable: false,
+  displayName: '',
   discoveryRanges: '',
   discoveryTargetCount: 0,
   error: null,
@@ -284,6 +289,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
     set({
       hydrated: true,
       enabled: saved?.enabled ?? false,
+      displayName: saved?.displayName ?? '',
       discoveryRanges: saved?.discoveryRanges ?? '',
       selectedPeerId: saved?.selectedPeerId ?? null,
       messages: (saved?.messages ?? []).map((message) =>
@@ -317,6 +323,26 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
       await transitionRuntime(true);
     } catch (error) {
       set({ running: false, error: errorText(error) });
+      throw error;
+    }
+  },
+
+  setDisplayName: async (value) => {
+    const displayName = value.trim();
+    if ([...displayName].length > 128) throw new Error('本机显示名称不能超过 128 个字符');
+    if (/[:\u0000-\u001f\u007f]/.test(displayName)) {
+      throw new Error('本机显示名称不能包含冒号或控制字符');
+    }
+    const previous = get().displayName;
+    const wasRunning = get().running;
+    set({ displayName, error: null });
+    try {
+      await persist();
+      if (wasRunning) await startRuntime();
+    } catch (error) {
+      set({ displayName: previous, error: errorText(error) });
+      await persist();
+      if (wasRunning) await startRuntime();
       throw error;
     }
   },
@@ -379,7 +405,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
     append({
       id: `sent:${receipt.packetNo}`,
       peerId: peer.id,
-      senderName: useAuth.getState().user?.name || useAuth.getState().user?.username || '我',
+      senderName: get().displayName || useAuth.getState().user?.name || useAuth.getState().user?.username || '我',
       direction: 'outgoing',
       text: clean,
       timestamp: Date.now(),
@@ -393,7 +419,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
     append({
       id: `sent-file:${offer.id}`,
       peerId: peer.id,
-      senderName: useAuth.getState().user?.name || useAuth.getState().user?.username || '我',
+      senderName: get().displayName || useAuth.getState().user?.name || useAuth.getState().user?.username || '我',
       direction: 'outgoing',
       text: `发送文件 ${offer.fileName}`,
       timestamp: Date.now(),

@@ -19,6 +19,7 @@ import {
   setCodexBrainUnavailableReason,
 } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerProfile';
+import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import { createButlerTools } from '../lib/butlerTools';
 
 export interface ButlerCodexRoomContext {
@@ -28,7 +29,7 @@ export interface ButlerCodexRoomContext {
 
 export interface ButlerCodexAskOptions {
   text: string;
-  context?: ButlerCodexRoomContext;
+  context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   now?: number;
   onEvent?: (event: AgentLoopEvent) => void;
 }
@@ -119,9 +120,12 @@ export function friendlyButlerCodexError(error: unknown): string {
   return 'Codex 大脑暂时无法回答，请稍后重试。';
 }
 
-function roomPrefixedInput(text: string, context?: ButlerCodexRoomContext): string {
+function roomPrefixedInput(text: string, context?: ButlerSurfaceContext | ButlerCodexRoomContext): string {
   if (!context) return text;
-  return `（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+  if (!('kind' in context)) {
+    return `（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+  }
+  return `（${butlerContextPrompt(context)}）\n\n${text}`;
 }
 
 function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {

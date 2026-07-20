@@ -20,6 +20,8 @@ import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
+import { useButler } from '../stores/butler';
+import { captureButlerSurfaceContext } from '../lib/butlerSurface';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -208,7 +210,13 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               return (
                 <button
                   key={key}
-                  onClick={() => setModule(key)}
+                  onClick={() => {
+                    if (key === 'butler-view' && active !== 'butler-view') {
+                      useButler.getState().setContext(captureButlerSurfaceContext(active));
+                    }
+                    setModule(key);
+                  }}
+                  title={key === 'butler-view' && active !== 'butler-view' ? '把当前页面交给管家' : label}
                   className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                     isActive
                       ? 'bg-fill-active font-medium text-ink'
