@@ -1,6 +1,6 @@
 # Release evidence and publication
 
-The current release target is `v0.25.8`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.25.9`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
 ## Future 1.0 external acceptance evidence
 
