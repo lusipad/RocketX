@@ -60,8 +60,6 @@ jobs:
           node scripts/verify-release.mjs --tag "$INPUT_TAG" --require-ready
 
       - name: 依次发布 SDK 与 CLI
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           publish_package() {
             directory="$1"
@@ -75,7 +73,7 @@ jobs:
               echo "$spec already matches $RELEASE_SHA"
               return
             fi
-            (cd "$directory" && pnpm publish --access public --provenance --no-git-checks)
+            (cd "$directory" && npm publish --access public --provenance)
             test "$(npm view "$spec" version)" = "$version"
             test "$(npm view "$spec" gitHead)" = "$RELEASE_SHA"
           }
