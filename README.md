@@ -95,7 +95,7 @@ RocketX applications run behind a manifest, permission gate, and JSON-RPC bridge
 
 - RocketX uses public `/api/v1/*` and `/websocket` interfaces and does not patch the Rocket.Chat server.
 - Rocket.Chat `8.6.1` is the pinned, fully tested server in the repository. Other versions are not implied by that result.
-- IP Messenger compatibility mode is unauthenticated legacy interoperability and is disabled by default; it is separate from the authenticated RocketX LAN channel.
+- IP Messenger compatibility mode is unauthenticated legacy interoperability and is disabled by default; its optional IPv4 discovery ranges target both Intranet Link port 9011 and IP Messenger port 2425, separately from the authenticated RocketX LAN channel.
 - Secrets for native integrations are expected to stay in the operating-system credential store.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Third-party licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

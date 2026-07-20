@@ -13,6 +13,7 @@
       p { margin: 0; color: #646a73; line-height: 1.7; }
       .grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; align-items: start; }
       section { border: 1px solid #dee0e3; border-radius: 16px; background: #fff; box-shadow: 0 8px 30px #1f23290f; overflow: hidden; }
+      section.discovery { margin-bottom: 16px; }
       section h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid #eff0f2; font-size: 16px; }
       .content { padding: 14px 16px; }
       button, input, textarea { font: inherit; }
@@ -37,8 +38,18 @@
     <main>
       <header>
         <h1>内网通</h1>
-        <p>作为独立 RocketX 应用运行，只通过 Bridge 访问 <code>ipmsg.peers</code>、<code>ipmsg.send</code> 与 <code>ipmsg.offerFile</code>。它不会接触旧协议 socket、IP、端口或握手材料。</p>
+        <p>作为独立 RocketX 应用运行，只通过 Bridge 配置发现范围并访问联系人、聊天与文件能力。IP 范围由宿主校验，插件不会直接接触旧协议 socket 或握手材料。</p>
       </header>
+      <section class="discovery">
+        <h2>跨网段发现</h2>
+        <div class="content">
+          <label for="discovery-ranges">目标 IPv4 范围</label>
+          <textarea id="discovery-ranges" placeholder="单 IP：192.168.10.25&#10;CIDR：192.168.20.0/24&#10;起止范围：10.20.30.10-10.20.30.50"></textarea>
+          <p>可用换行、逗号或分号分隔，合计最多 1024 个目标。留空仍使用自动广播；配置后会同时向内网通 9011 与 IP Messenger 2425 发送发现宣告。</p>
+          <button id="save-discovery">保存并应用</button>
+          <p class="status" id="discovery-status">尚未读取发现范围。</p>
+        </div>
+      </section>
       <div class="grid">
         <section>
           <h2>局域网设备</h2>
@@ -68,6 +79,8 @@
       const peersList = document.querySelector('#peers');
       const peerStatus = document.querySelector('#peer-status');
       const sendStatus = document.querySelector('#send-status');
+      const discoveryStatus = document.querySelector('#discovery-status');
+      const discoveryRangesInput = document.querySelector('#discovery-ranges');
       const peerIdInput = document.querySelector('#peer-id');
       const payloadInput = document.querySelector('#payload');
 
@@ -138,6 +151,35 @@
         }
       }
 
+      async function loadDiscovery() {
+        try {
+          const result = await call('ipmsg.discovery.get');
+          discoveryRangesInput.value = result.discoveryRanges || '';
+          discoveryStatus.textContent = result.discoveryRanges
+            ? `已保存目标范围；当前运行时已展开 ${result.discoveryTargetCount || 0} 个目标。`
+            : '未配置目标范围，当前使用自动广播发现。';
+        } catch (error) {
+          discoveryStatus.textContent = `读取失败：${error.message}`;
+        }
+      }
+
+      async function saveDiscovery() {
+        discoveryStatus.textContent = '正在校验并应用…';
+        try {
+          const result = await call('ipmsg.discovery.set', {
+            discoveryRanges: discoveryRangesInput.value,
+          });
+          discoveryRangesInput.value = result.discoveryRanges;
+          discoveryStatus.textContent = result.discoveryTargetCount
+            ? `已应用 ${result.discoveryTargetCount} 个目标，同时覆盖 9011 与 2425。`
+            : '已清空目标范围，恢复自动广播发现。';
+          notify('内网通发现范围已更新', 'success');
+        } catch (error) {
+          discoveryStatus.textContent = `保存失败：${error.message}`;
+          notify(`内网通发现范围无效：${error.message}`, 'error');
+        }
+      }
+
       async function sendLan() {
         const params = {
           peerId: peerIdInput.value.trim(),
@@ -171,8 +213,10 @@
       }
 
       document.querySelector('#refresh').addEventListener('click', refreshPeers);
+      document.querySelector('#save-discovery').addEventListener('click', saveDiscovery);
       document.querySelector('#send').addEventListener('click', sendLan);
       document.querySelector('#send-file').addEventListener('click', sendFile);
+      loadDiscovery();
       refreshPeers();
     </script>
   </body>

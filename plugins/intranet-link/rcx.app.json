@@ -1,6 +1,6 @@
 {
   "id": "dev.rocketx.intranet-link",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "内网通",
   "publisher": "RocketX",
   "enabledByDefault": false,

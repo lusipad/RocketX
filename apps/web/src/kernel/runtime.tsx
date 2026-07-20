@@ -197,6 +197,17 @@ function registerCapabilities(): void {
       lastSeenMs,
     }));
   });
+  capabilityBus.register('ipmsg.discovery.get', 'lan:discover', (_params, context) => {
+    requireIntranetLink(context.appId);
+    const { discoveryRanges, discoveryTargetCount } = useIpmsg.getState();
+    return { discoveryRanges, discoveryTargetCount };
+  });
+  capabilityBus.register('ipmsg.discovery.set', 'lan:discover', async (params, context) => {
+    requireIntranetLink(context.appId);
+    const discoveryRanges = stringParam(params, 'discoveryRanges');
+    const discoveryTargetCount = await useIpmsg.getState().setDiscoveryRanges(discoveryRanges);
+    return { ok: true, discoveryRanges: discoveryRanges.trim(), discoveryTargetCount };
+  });
   capabilityBus.register('ipmsg.send', 'lan:transfer', async (params, context) => {
     requireIntranetLink(context.appId);
     const peerId = stringParam(params, 'peerId');

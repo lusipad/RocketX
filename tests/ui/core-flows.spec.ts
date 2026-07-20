@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
@@ -685,4 +686,43 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await expect(page.getByText('保存上方 Provider 与能力路由', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
   expect(pageErrors).toEqual([]);
+});
+
+test('内网通插件可保存 IP 范围并明确同时应用 9011 与 2425', async ({ page }) => {
+  const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
+  const bridgeBootstrap = `<script>
+    window.__bridgeCalls = [];
+    const bridge = new EventTarget();
+    bridge.postMessage = (message) => {
+      window.__bridgeCalls.push(message);
+      const method = message.params?.method;
+      let result = null;
+      if (method === 'ipmsg.discovery.get') {
+        result = { discoveryRanges: '192.168.20.0/30', discoveryTargetCount: 2 };
+      } else if (method === 'ipmsg.discovery.set') {
+        result = {
+          ok: true,
+          discoveryRanges: message.params.params.discoveryRanges.trim(),
+          discoveryTargetCount: 3,
+        };
+      } else if (method === 'ipmsg.peers') {
+        result = [];
+      }
+      queueMicrotask(() => bridge.dispatchEvent(new MessageEvent('message', {
+        data: { jsonrpc: '2.0', id: message.id, result },
+      })));
+    };
+    window.__RCX_BRIDGE__ = bridge;
+  </script>`;
+  await page.setContent(pluginHtml.replace('<script>', `${bridgeBootstrap}<script>`));
+
+  await expect(page.getByLabel('目标 IPv4 范围')).toHaveValue('192.168.20.0/30');
+  await page.getByLabel('目标 IPv4 范围').fill('10.20.30.10-10.20.30.12');
+  await page.getByRole('button', { name: '保存并应用' }).click();
+  await expect(page.getByText('已应用 3 个目标，同时覆盖 9011 与 2425。')).toBeVisible();
+  const configured = await page.evaluate(() => (
+    (window as unknown as { __bridgeCalls: Array<{ params?: { method?: string; params?: unknown } }> })
+      .__bridgeCalls.find((call) => call.params?.method === 'ipmsg.discovery.set')?.params?.params
+  ));
+  expect(configured).toEqual({ discoveryRanges: '10.20.30.10-10.20.30.12' });
 });

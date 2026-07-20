@@ -28,6 +28,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const ACK_TIMEOUT: Duration = Duration::from_millis(900);
 const ACK_ATTEMPTS: usize = 5;
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_DISCOVERY_TARGETS: usize = 1024;
 
 const IPMSG_BR_ENTRY: u32 = 0x0000_0001;
 const IPMSG_BR_EXIT: u32 = 0x0000_0002;
@@ -54,6 +55,7 @@ struct IpmsgRuntime {
     stop: Arc<AtomicBool>,
     sockets: Vec<(u16, Arc<UdpSocket>)>,
     identity: Arc<IpmsgIdentity>,
+    discovery_targets: Vec<Ipv4Addr>,
     peers: SharedPeers,
     acks: SharedAcks,
     outgoing: SharedOutgoing,
@@ -156,6 +158,7 @@ pub struct IpmsgStatus {
     port: u16,
     peer_count: usize,
     intranet_available: bool,
+    discovery_target_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -640,12 +643,97 @@ fn interface_broadcasts() -> Vec<Ipv4Addr> {
     Vec::new()
 }
 
-fn discovery_addresses(port: u16) -> Vec<SocketAddr> {
+fn valid_discovery_target(ip: Ipv4Addr) -> bool {
+    !ip.is_unspecified() && !ip.is_multicast() && ip != Ipv4Addr::BROADCAST
+}
+
+fn push_discovery_target(targets: &mut Vec<Ipv4Addr>, value: u32) -> Result<(), String> {
+    let ip = Ipv4Addr::from(value);
+    if !valid_discovery_target(ip) {
+        return Err(format!(
+            "IPMSG discovery target is not a unicast IPv4 address: {ip}"
+        ));
+    }
+    if !targets.contains(&ip) {
+        if targets.len() >= MAX_DISCOVERY_TARGETS {
+            return Err(format!(
+                "IPMSG discovery ranges exceed the {MAX_DISCOVERY_TARGETS} address limit"
+            ));
+        }
+        targets.push(ip);
+    }
+    Ok(())
+}
+
+fn parse_discovery_targets(value: &str) -> Result<Vec<Ipv4Addr>, String> {
+    let mut targets = Vec::new();
+    for item in value
+        .split(|character: char| character.is_whitespace() || matches!(character, ',' | ';'))
+        .filter(|item| !item.is_empty())
+    {
+        if let Some((address, prefix)) = item.split_once('/') {
+            let address = address
+                .parse::<Ipv4Addr>()
+                .map_err(|_| format!("invalid IPMSG discovery CIDR: {item}"))?;
+            let prefix = prefix
+                .parse::<u32>()
+                .map_err(|_| format!("invalid IPMSG discovery CIDR: {item}"))?;
+            if prefix > 32 {
+                return Err(format!("invalid IPMSG discovery CIDR: {item}"));
+            }
+            let size = 1_u64 << (32 - prefix);
+            let skip_edges = prefix <= 30;
+            let count = size - if skip_edges { 2 } else { 0 };
+            if count > MAX_DISCOVERY_TARGETS as u64 {
+                return Err(format!(
+                    "IPMSG discovery ranges exceed the {MAX_DISCOVERY_TARGETS} address limit"
+                ));
+            }
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            let first = (u32::from(address) & mask) + u32::from(skip_edges);
+            for offset in 0..count as u32 {
+                push_discovery_target(&mut targets, first + offset)?;
+            }
+            continue;
+        }
+        if let Some((first, last)) = item.split_once('-') {
+            let first = first
+                .parse::<Ipv4Addr>()
+                .map(u32::from)
+                .map_err(|_| format!("invalid IPMSG discovery range: {item}"))?;
+            let last = last
+                .parse::<Ipv4Addr>()
+                .map(u32::from)
+                .map_err(|_| format!("invalid IPMSG discovery range: {item}"))?;
+            if first > last || u64::from(last - first) + 1 > MAX_DISCOVERY_TARGETS as u64 {
+                return Err(format!("invalid IPMSG discovery range: {item}"));
+            }
+            for address in first..=last {
+                push_discovery_target(&mut targets, address)?;
+            }
+            continue;
+        }
+        let address = item
+            .parse::<Ipv4Addr>()
+            .map(u32::from)
+            .map_err(|_| format!("invalid IPMSG discovery address: {item}"))?;
+        push_discovery_target(&mut targets, address)?;
+    }
+    targets.sort_unstable();
+    Ok(targets)
+}
+
+fn discovery_addresses(port: u16, targets: &[Ipv4Addr]) -> Vec<SocketAddr> {
     let mut addresses = interface_broadcasts()
         .into_iter()
         .map(|ip| SocketAddr::from((ip, port)))
         .collect::<Vec<_>>();
     addresses.push(SocketAddr::from((Ipv4Addr::BROADCAST, port)));
+    addresses.extend(targets.iter().map(|ip| SocketAddr::from((*ip, port))));
     addresses.sort_unstable();
     addresses.dedup();
     addresses
@@ -655,11 +743,12 @@ fn announce_sockets(
     sockets: &[(u16, Arc<UdpSocket>)],
     identity: &IpmsgIdentity,
     command: u32,
+    targets: &[Ipv4Addr],
 ) -> Result<(), String> {
     let mut sent = false;
     let mut last_error = None;
     for (port, socket) in sockets {
-        for address in discovery_addresses(*port) {
+        for address in discovery_addresses(*port, targets) {
             match announce(socket, identity, command, address) {
                 Ok(()) => sent = true,
                 Err(error) => last_error = Some(error),
@@ -953,7 +1042,12 @@ fn stop_runtime(current: Option<IpmsgRuntime>) {
     let Some(current) = current else {
         return;
     };
-    let _ = announce_sockets(&current.sockets, &current.identity, IPMSG_BR_EXIT);
+    let _ = announce_sockets(
+        &current.sockets,
+        &current.identity,
+        IPMSG_BR_EXIT,
+        &current.discovery_targets,
+    );
     current.stop.store(true, Ordering::Relaxed);
     for thread in current.threads {
         let _ = thread.join();
@@ -1008,7 +1102,18 @@ pub fn ipmsg_start(
     user_name: String,
     nickname: String,
     group: Option<String>,
+    discovery_ranges: Option<String>,
 ) -> Result<IpmsgStatus, String> {
+    let mut discovery_targets =
+        parse_discovery_targets(discovery_ranges.as_deref().unwrap_or_default())?;
+    if let Ok(value) = std::env::var("ROCKETX_IPMSG_PEER") {
+        let address = value
+            .parse::<Ipv4Addr>()
+            .map(u32::from)
+            .map_err(|_| "ROCKETX_IPMSG_PEER is not a valid IPv4 address".to_string())?;
+        push_discovery_target(&mut discovery_targets, address)?;
+        discovery_targets.sort_unstable();
+    }
     stop_runtime(take_runtime(&state)?);
     let identity = Arc::new(IpmsgIdentity {
         user: sanitize_identity(&user_name, "rocketx"),
@@ -1056,6 +1161,7 @@ pub fn ipmsg_start(
     {
         let periodic_sockets = sockets.clone();
         let announce_identity = identity.clone();
+        let announce_targets = discovery_targets.clone();
         let announce_stop = stop.clone();
         threads.push(thread::spawn(move || {
             while !announce_stop.load(Ordering::Relaxed) {
@@ -1066,7 +1172,12 @@ pub fn ipmsg_start(
                     }
                     thread::sleep(Duration::from_millis(500));
                 }
-                let _ = announce_sockets(&periodic_sockets, &announce_identity, IPMSG_BR_ENTRY);
+                let _ = announce_sockets(
+                    &periodic_sockets,
+                    &announce_identity,
+                    IPMSG_BR_ENTRY,
+                    &announce_targets,
+                );
             }
         }));
     }
@@ -1074,6 +1185,7 @@ pub fn ipmsg_start(
         stop,
         sockets: sockets.clone(),
         identity: identity.clone(),
+        discovery_targets: discovery_targets.clone(),
         peers,
         acks,
         outgoing,
@@ -1084,27 +1196,16 @@ pub fn ipmsg_start(
         .0
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())? = Some(runtime);
-    if let Err(error) = announce_sockets(&sockets, &identity, IPMSG_BR_ENTRY) {
+    if let Err(error) = announce_sockets(&sockets, &identity, IPMSG_BR_ENTRY, &discovery_targets) {
         stop_runtime(take_runtime(&state)?);
         return Err(error);
-    }
-    if let Ok(value) = std::env::var("ROCKETX_IPMSG_PEER") {
-        if let Ok(ip) = value.parse::<Ipv4Addr>() {
-            for (port, socket) in &sockets {
-                let _ = announce(
-                    socket,
-                    &identity,
-                    IPMSG_BR_ENTRY,
-                    SocketAddr::from((ip, *port)),
-                );
-            }
-        }
     }
     Ok(IpmsgStatus {
         enabled: true,
         port: IPMSG_PORT,
         peer_count: 0,
         intranet_available,
+        discovery_target_count: discovery_targets.len(),
     })
 }
 
@@ -1126,6 +1227,7 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
             port: IPMSG_PORT,
             peer_count: 0,
             intranet_available: false,
+            discovery_target_count: 0,
         });
     };
     let peer_count = runtime.peers.read().map(|peers| peers.len()).unwrap_or(0);
@@ -1137,7 +1239,13 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
             .sockets
             .iter()
             .any(|(port, _)| *port == INTRANET_PORT),
+        discovery_target_count: runtime.discovery_targets.len(),
     })
+}
+
+#[tauri::command]
+pub fn ipmsg_validate_discovery_ranges(discovery_ranges: String) -> Result<usize, String> {
+    parse_discovery_targets(&discovery_ranges).map(|targets| targets.len())
 }
 
 #[tauri::command]
@@ -1591,6 +1699,78 @@ mod tests {
             directed_broadcast(Ipv4Addr::LOCALHOST, Ipv4Addr::new(255, 0, 0, 0)),
             None,
         );
+    }
+
+    #[test]
+    fn discovery_ranges_accept_single_cidr_and_explicit_range() {
+        let targets = parse_discovery_targets(
+            "10.20.30.40, 192.168.8.0/30\n172.16.2.10-172.16.2.12;10.20.30.40",
+        )
+        .unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                Ipv4Addr::new(10, 20, 30, 40),
+                Ipv4Addr::new(172, 16, 2, 10),
+                Ipv4Addr::new(172, 16, 2, 11),
+                Ipv4Addr::new(172, 16, 2, 12),
+                Ipv4Addr::new(192, 168, 8, 1),
+                Ipv4Addr::new(192, 168, 8, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovery_ranges_reject_invalid_or_unbounded_targets() {
+        assert!(parse_discovery_targets("192.168.1.20-192.168.1.10").is_err());
+        assert!(parse_discovery_targets("0.0.0.0").is_err());
+        assert!(parse_discovery_targets("224.0.0.1").is_err());
+        assert!(parse_discovery_targets("10.0.0.0/21").is_err());
+    }
+
+    #[test]
+    fn configured_targets_are_announced_on_9011_and_2425() {
+        let target = Ipv4Addr::new(172, 20, 10, 9);
+        assert!(discovery_addresses(IPMSG_PORT, &[target])
+            .contains(&SocketAddr::from((target, IPMSG_PORT))));
+        assert!(discovery_addresses(INTRANET_PORT, &[target])
+            .contains(&SocketAddr::from((target, INTRANET_PORT))));
+    }
+
+    #[test]
+    #[ignore = "explicit fixed-port discovery range integration test"]
+    fn configured_range_sends_real_discovery_on_9011_and_2425() {
+        let target = Ipv4Addr::new(127, 0, 0, 2);
+        let standard_receiver = UdpSocket::bind((target, IPMSG_PORT)).unwrap();
+        let intranet_receiver = UdpSocket::bind((target, INTRANET_PORT)).unwrap();
+        standard_receiver
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .unwrap();
+        intranet_receiver
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .unwrap();
+        let sockets = vec![
+            (
+                IPMSG_PORT,
+                Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()),
+            ),
+            (
+                INTRANET_PORT,
+                Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()),
+            ),
+        ];
+
+        announce_sockets(&sockets, &identity(), IPMSG_BR_ENTRY, &[target]).unwrap();
+
+        let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
+        let (standard_length, _) = standard_receiver.recv_from(&mut buffer).unwrap();
+        let standard = parse_packet_for_port(&buffer[..standard_length], IPMSG_PORT).unwrap();
+        assert_eq!(standard.command & COMMAND_MASK, IPMSG_BR_ENTRY);
+        assert_eq!(standard.dialect, Dialect::Standard);
+        let (intranet_length, _) = intranet_receiver.recv_from(&mut buffer).unwrap();
+        let intranet = parse_packet_for_port(&buffer[..intranet_length], INTRANET_PORT).unwrap();
+        assert_eq!(intranet.command & COMMAND_MASK, IPMSG_BR_ENTRY);
+        assert_eq!(intranet.dialect, Dialect::Intranet);
     }
 
     #[test]

@@ -558,6 +558,7 @@ fn main() {
             ipmsg::ipmsg_start,
             ipmsg::ipmsg_stop,
             ipmsg::ipmsg_status,
+            ipmsg::ipmsg_validate_discovery_ranges,
             ipmsg::ipmsg_peers,
             ipmsg::ipmsg_send_message,
             ipmsg::ipmsg_offer_file,
