@@ -73,7 +73,21 @@ jobs:
               echo "$spec already matches $RELEASE_SHA"
               return
             fi
-            (cd "$directory" && npm publish --access public --provenance)
+            pack_dir="$(mktemp -d)"
+            node - "$directory/package.json" "$RELEASE_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [packagePath, releaseSha] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          manifest.gitHead = releaseSha;
+          fs.writeFileSync(packagePath, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+            (cd "$directory" && pnpm pack --pack-destination "$pack_dir")
+            tarball="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+            test -n "$tarball"
+            packed_manifest="$(tar -xOf "$tarball" package/package.json)"
+            test "$(printf '%s' "$packed_manifest" | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).gitHead")" = "$RELEASE_SHA"
+            ! printf '%s' "$packed_manifest" | grep -q '"workspace:'
+            npm publish "$tarball" --access public --provenance
             test "$(npm view "$spec" version)" = "$version"
             test "$(npm view "$spec" gitHead)" = "$RELEASE_SHA"
           }
