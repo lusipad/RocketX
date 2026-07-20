@@ -439,7 +439,13 @@ export function renderMarkdownDoc(text: string): ReactNode {
 }
 
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */
-export function LinkifiedText({ text }: { text: string }) {
+export function LinkifiedText({
+  text,
+  renderPlain,
+}: {
+  text: string;
+  renderPlain?: (text: string) => ReactNode;
+}) {
   const parts = text.split(/(https?:\/\/[^\s<>"']+)/g);
   return (
     <>
@@ -455,7 +461,7 @@ export function LinkifiedText({ text }: { text: string }) {
             {part}
           </a>
         ) : (
-          <Fragment key={i}>{part}</Fragment>
+          <Fragment key={i}>{renderPlain ? renderPlain(part) : part}</Fragment>
         ),
       )}
     </>

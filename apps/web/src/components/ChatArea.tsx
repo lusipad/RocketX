@@ -388,7 +388,7 @@ export default function ChatArea({
             onClose={() => setMoreMenu(null)}
           />
         )}
-        <MessageList rid={activeRid} />
+        <MessageList key={activeRid} rid={activeRid} />
         {/* 从讨论卡片/搜索进来但还没加入的公开房间：给出加入入口（issue #19-6）。
             不加入也能看历史，但收不到通知、不在会话列表里。 */}
         {requiresJoin && (

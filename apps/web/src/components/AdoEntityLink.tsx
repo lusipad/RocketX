@@ -71,7 +71,7 @@ function Loading({ entity, variant }: { entity: RichAdoEntity; variant: 'card' |
     );
   }
   return (
-    <span className="my-1 inline-block w-full max-w-sm align-middle">
+    <span className="my-1 inline-block min-w-0 w-full max-w-sm align-middle">
       <span className="flex animate-pulse flex-col rounded-lg border border-line bg-fill-1">
         <span className="block h-1 rounded-t-lg bg-line" />
         <span className="px-3 py-2 text-xs text-ink-3">{label} 加载中…</span>
@@ -103,16 +103,16 @@ function PullRequestLink({
     );
   }
   return (
-    <span className="my-1 inline-block w-full max-w-lg align-middle">
-      <span className="flex flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
+    <span className="my-1 inline-block min-w-0 w-full max-w-lg align-middle">
+      <span className="flex min-w-0 flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
         <span className="block h-1 rounded-t-lg bg-[#7f3bf5]" />
         <span className="px-3 pb-2 pt-1.5">
-          <span className="flex items-center gap-1.5 text-xs text-ink-3">
-            <GitPullRequest size={13} className="text-[#7f3bf5]" />
-            <span>PR !{item.id}</span>
-            <span>·</span>
-            <span className="truncate">{item.project}/{item.repo}</span>
-            <a href={item.webUrl} target="_blank" rel="noreferrer" className="ml-auto">
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
+            <GitPullRequest size={13} className="shrink-0 text-[#7f3bf5]" />
+            <span className="shrink-0">PR !{item.id}</span>
+            <span className="shrink-0">·</span>
+            <span className="min-w-0 flex-1 truncate">{item.project}/{item.repo}</span>
+            <a href={item.webUrl} target="_blank" rel="noreferrer" className="shrink-0">
               <ExternalLink size={12} />
             </a>
           </span>
@@ -120,7 +120,7 @@ function PullRequestLink({
             href={item.webUrl}
             target="_blank"
             rel="noreferrer"
-            className="mt-1 block text-sm font-medium leading-snug text-ink no-underline hover:underline"
+            className="mt-1 block break-words text-sm font-medium leading-snug text-ink no-underline hover:underline"
           >
             {item.title}
           </a>
@@ -165,16 +165,16 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
     );
   }
   return (
-    <span className="my-1 inline-block w-full max-w-sm align-middle">
-      <span className="flex flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
+    <span className="my-1 inline-block min-w-0 w-full max-w-sm align-middle">
+      <span className="flex min-w-0 flex-col rounded-lg border border-line bg-fill-1 transition hover:border-primary">
         <span className="block h-1 rounded-t-lg bg-primary" />
         <span className="px-3 pb-2 pt-1.5">
-          <span className="flex items-center gap-1.5 text-xs text-ink-3">
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
             <BuildIcon build={item} size={13} />
             <span>构建 {item.buildNumber}</span>
             <span>·</span>
-            <span className="truncate">{item.project}</span>
-            <a href={item.webUrl} target="_blank" rel="noreferrer" className="ml-auto">
+            <span className="min-w-0 flex-1 truncate">{item.project}</span>
+            <a href={item.webUrl} target="_blank" rel="noreferrer" className="shrink-0">
               <ExternalLink size={12} />
             </a>
           </span>
@@ -182,7 +182,7 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
             href={item.webUrl}
             target="_blank"
             rel="noreferrer"
-            className="mt-1 block text-sm font-medium leading-snug text-ink no-underline hover:underline"
+            className="mt-1 block break-words text-sm font-medium leading-snug text-ink no-underline hover:underline"
           >
             {item.definition}
           </a>

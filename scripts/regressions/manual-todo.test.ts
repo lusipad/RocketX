@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { useTodos } from '../../apps/web/src/stores/todos';
 import { searchWork } from '../../apps/web/src/lib/workSearch';
 
@@ -70,4 +71,15 @@ test('待办可持久保存、编辑并清空承诺对象字段', () => {
   assert.ok(todo);
   assert.equal(todo.committedTo, undefined);
   assert.equal(todo.waitingFor, undefined);
+});
+
+test('待办说明和来源消息会把网址渲染成可点击链接（issue #117）', () => {
+  const page = readFileSync('apps/web/src/pages/TodosPage.tsx', 'utf8');
+  const markdown = readFileSync('apps/web/src/lib/markdown.tsx', 'utf8');
+
+  assert.match(page, /<LinkifiedText text=\{todo\.note \|\| todo\.excerpt \|\| '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
+  assert.match(page, /<LinkifiedText text=\{todo\.excerpt \?\? '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
+  assert.match(markdown, /renderPlain\?: \(text: string\) => ReactNode/);
+  assert.match(markdown, /target="_blank"/);
+  assert.match(markdown, /rel="noreferrer"/);
 });

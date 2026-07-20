@@ -298,6 +298,22 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('收起分组栏后不产生水平滚动（issue #114）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-folders', JSON.stringify(Array.from({ length: 20 }, (_, index) => ({
+      id: `folder-${index}`,
+      name: `非常长的分组名称-${index}`,
+      rids: [],
+    }))));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '收起分组栏' }).click();
+  const aside = page.getByRole('button', { name: '展开分组栏' }).locator('xpath=ancestor::aside');
+  await expect(aside).toBeVisible();
+  await expect.poll(() => aside.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
 test('发送消息会乐观上屏并提交一次', async ({ page }) => {
   const { sentMessages, pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -351,6 +367,60 @@ test('编辑旧双值承诺待办时归一化为单一方向', async ({ page }) 
   );
   expect(saved?.committedTo).toBe('张三');
   expect(saved).not.toHaveProperty('waitingFor');
+  expect(pageErrors).toEqual([]);
+});
+
+test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }) => {
+  const workItem = {
+    id: 128,
+    title: 'A very long work item title that must wrap inside a narrow chat column',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX-Project-With-A-Very-Long-Name',
+    assignedTo: 'Test User',
+    webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
+  };
+  await page.route('http://bridge.test/api/ado/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/config')) return fulfillJson(route, { webBase: 'http://ado.example', account: 'tester' });
+    if (path.endsWith('/workitems')) return fulfillJson(route, { items: [workItem] });
+    if (path.endsWith('/pullrequests')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/builds')) return fulfillJson(route, { items: [] });
+    if (path.endsWith('/workitem/128')) return fulfillJson(route, { item: workItem });
+    return fulfillJson(route, { success: true });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({ mode: 'bridge', bridge: 'http://bridge.test', account: 'tester' }));
+    localStorage.setItem('rcx-ado-web', 'http://ado.example');
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByPlaceholder(/输入消息/).fill('#128');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  const title = page.getByText(workItem.title, { exact: true });
+  await expect(title).toBeVisible();
+  await page.getByTitle('查看群信息').first().click();
+  const card = title.locator('xpath=ancestor::span[contains(@class,"inline-block")]');
+  await expect.poll(() => card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('待办里的网址可以直接点击打开（issue #117）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-todos', JSON.stringify([{
+      id: 'todo-with-link',
+      source: 'manual',
+      note: '查看 https://example.com/work-item',
+      done: false,
+      createdAt: 1,
+    }]));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
+  const link = page.getByRole('link', { name: 'https://example.com/work-item' });
+  await expect(link).toHaveAttribute('href', 'https://example.com/work-item');
+  await expect(link).toHaveAttribute('target', '_blank');
   expect(pageErrors).toEqual([]);
 });
 
@@ -587,6 +657,8 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
 
   // 基础设置直接可见：运行方式在最上面（报错提示会引导用户来这里切换大脑）
   await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
+  await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
+  await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
   await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();

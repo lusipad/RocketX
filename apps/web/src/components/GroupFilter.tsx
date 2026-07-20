@@ -275,7 +275,7 @@ export default function GroupFilter({
 
   return (
     <aside className={`flex shrink-0 flex-col border-r border-line bg-surface-2 ${
-      collapsed ? 'w-12 min-h-0 p-2' : 'w-[150px] px-2 py-3'
+      collapsed ? 'w-12 min-h-0 overflow-x-hidden p-2' : 'w-[150px] px-2 py-3'
     }`}>
       {collapsed ? (
         <>
@@ -299,7 +299,7 @@ export default function GroupFilter({
             })}
           </div>
 
-          <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-line pt-2">
+          <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto border-t border-line pt-2">
             <div className="flex flex-col items-center gap-0.5">
               {folders.map((folder) => renderFolderButton(folder, true))}
             </div>
