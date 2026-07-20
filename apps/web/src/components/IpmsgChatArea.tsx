@@ -20,7 +20,7 @@ function FileCard({ message }: { message: IpmsgMessage }) {
         await downloadFile(message.id);
       }
     } catch (error) {
-      toast.error(error, 'IP Messenger 文件操作失败');
+      toast.error(error, '内网通文件操作失败');
     } finally {
       setBusy(false);
     }
@@ -57,6 +57,7 @@ function FileCard({ message }: { message: IpmsgMessage }) {
 
 export default function IpmsgChatArea() {
   const running = useIpmsg((state) => state.running);
+  const intranetAvailable = useIpmsg((state) => state.intranetAvailable);
   const error = useIpmsg((state) => state.error);
   const peers = useIpmsg((state) => state.peers);
   const selectedPeerId = useIpmsg((state) => state.selectedPeerId);
@@ -81,7 +82,7 @@ export default function IpmsgChatArea() {
       await sendMessage(text);
       setText('');
     } catch (sendError) {
-      toast.error(sendError, 'IP Messenger 消息发送失败');
+      toast.error(sendError, '内网通消息发送失败');
     } finally {
       setSending(false);
     }
@@ -93,7 +94,7 @@ export default function IpmsgChatArea() {
       const path = await open({ multiple: false, directory: false, title: '选择要发送的文件' });
       if (typeof path === 'string') await offerFile(path);
     } catch (fileError) {
-      toast.error(fileError, 'IP Messenger 文件发送失败');
+      toast.error(fileError, '内网通文件发送失败');
     }
   };
 
@@ -105,9 +106,13 @@ export default function IpmsgChatArea() {
             <Radio size={18} />
           </span>
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold text-ink">IP Messenger 兼容频道</div>
+            <div className="text-[15px] font-semibold text-ink">内网通兼容频道</div>
             <div className="truncate text-xs text-ink-3">
-              {running ? `${peers.length} 个在线联系人 · 未认证旧协议` : error || '兼容模式未启动'}
+              {running
+                ? intranetAvailable
+                  ? `${peers.length} 个在线联系人 · 正在监听 2425/9011 · 未认证旧协议`
+                  : `${peers.length} 个在线联系人 · 正在监听 2425；9011 被占用，内网通兼容不可用`
+                : error || '内网通兼容模式未启动'}
             </div>
           </div>
         </div>
@@ -129,7 +134,7 @@ export default function IpmsgChatArea() {
       <div className="flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl space-y-3">
           <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-xs leading-5 text-warning">
-            此频道使用无身份认证的 IP Messenger 旧协议。请只与可信局域网设备通信；收到的文件不会自动下载或打开。
+            此频道使用无身份认证的 内网通 / 飞鸽 / 飞秋旧协议。请只与可信局域网设备通信；收到的文件不会自动下载或打开。
           </div>
           {messages.map((message) => (
             <div
@@ -151,7 +156,7 @@ export default function IpmsgChatArea() {
             </div>
           ))}
           {messages.length === 0 && (
-            <div className="py-16 text-center text-sm text-ink-3">发现联系人后即可发送消息或文件。</div>
+            <div className="py-16 text-center text-sm text-ink-3">发现内网通、飞鸽或飞秋联系人后即可发送消息或文件。</div>
           )}
         </div>
       </div>

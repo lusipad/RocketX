@@ -21,7 +21,8 @@
     "measure:memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-desktop-memory.ps1",
     "measure:memory:trend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-desktop-memory.ps1 -Samples 31 -IntervalSeconds 60 -MaxPrivateMB 350 -MaxGrowthMB 50 -CsvPath memory-trend.csv",
     "gen:emoji": "tsx scripts/gen-emoji.ts",
-    "test:classify": "tsx scripts/test-classify.ts"
+    "test:classify": "tsx scripts/test-classify.ts",
+    "package:plugins": "node scripts/package-plugins.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

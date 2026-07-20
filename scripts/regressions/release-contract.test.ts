@@ -58,6 +58,8 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   }
   assert.match(npmWorkflow, /RELEASE_SHA/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
+  const prepareRelease = desktopWorkflow.match(/prepare-release:[\s\S]*$/)?.[0] ?? '';
+  assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
   assert.match(tagWorkflow, /git config user\.name/);
   assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);
 });

@@ -5,8 +5,9 @@ import { getServerBase, isTauri } from '../lib/client';
 import { useAuth } from '../stores/auth';
 
 export const IPMSG_RID = 'local:ipmsg';
+export const INTRANET_LINK_APP_ID = 'dev.rocketx.intranet-link';
 
-const APP_ID = 'system:ipmsg';
+const APP_ID = INTRANET_LINK_APP_ID;
 const MAX_MESSAGES = 500;
 
 export interface IpmsgPeer {
@@ -17,7 +18,7 @@ export interface IpmsgPeer {
   group: string;
   ip: string;
   port: number;
-  dialect: 'ipmsg' | 'feiq';
+  dialect: 'ipmsg' | 'feiq' | 'intranet';
   supportsUtf8: boolean;
   lastSeenMs: number;
 }
@@ -41,6 +42,7 @@ interface IpmsgStatus {
   enabled: boolean;
   port: number;
   peerCount: number;
+  intranetAvailable: boolean;
 }
 
 interface IpmsgPeerEvent {
@@ -86,6 +88,7 @@ interface IpmsgState {
   enabled: boolean;
   running: boolean;
   port: number;
+  intranetAvailable: boolean;
   error: string | null;
   peers: IpmsgPeer[];
   selectedPeerId: string | null;
@@ -103,6 +106,21 @@ interface IpmsgState {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlisteners: UnlistenFn[] = [];
+let runtimeTransition: Promise<void> = Promise.resolve();
+
+function transitionRuntime(enabled: boolean): Promise<void> {
+  const transition = runtimeTransition.then(async () => {
+    if (useIpmsg.getState().enabled !== enabled) return;
+    if (enabled && useIpmsg.getState().running) return;
+    if (!enabled) {
+      await stopIpmsgRuntime();
+      return;
+    }
+    await startRuntime();
+  });
+  runtimeTransition = transition.catch(() => {});
+  return transition;
+}
 
 function scope(): string {
   return `${encodeURIComponent(getServerBase() || 'same-origin')}:${useAuth.getState().user?._id ?? 'guest'}`;
@@ -114,7 +132,7 @@ function errorText(error: unknown): string {
 
 function currentPeer(state: Pick<IpmsgState, 'peers' | 'selectedPeerId'>): IpmsgPeer {
   const peer = state.peers.find((candidate) => candidate.id === state.selectedPeerId);
-  if (!peer) throw new Error('请先选择一个在线的 IP Messenger 联系人');
+  if (!peer) throw new Error('请先选择一个在线的内网通/IP Messenger 联系人');
   return peer;
 }
 
@@ -183,7 +201,7 @@ async function wireEvents(): Promise<void> {
 }
 
 async function startRuntime(): Promise<void> {
-  if (!isTauri) throw new Error('IP Messenger 兼容模式仅支持桌面客户端');
+  if (!isTauri) throw new Error('内网通/IP Messenger 兼容模式仅支持桌面客户端');
   const user = useAuth.getState().user;
   if (!user) return;
   if (pollTimer) clearInterval(pollTimer);
@@ -201,7 +219,12 @@ async function startRuntime(): Promise<void> {
     unlisteners = [];
     throw error;
   }
-  useIpmsg.setState({ running: status.enabled, port: status.port, error: null });
+  useIpmsg.setState({
+    running: status.enabled,
+    port: status.port,
+    intranetAvailable: status.intranetAvailable,
+    error: null,
+  });
   await useIpmsg.getState().refreshPeers();
   pollTimer = setInterval(() => void useIpmsg.getState().refreshPeers(), 3_000);
 }
@@ -212,14 +235,15 @@ export async function stopIpmsgRuntime(): Promise<void> {
   for (const unlisten of unlisteners) unlisten();
   unlisteners = [];
   if (isTauri) await invoke('ipmsg_stop').catch(() => {});
-  useIpmsg.setState({ running: false, peers: [], selectedPeerId: null });
+  useIpmsg.setState({ running: false, intranetAvailable: false, peers: [], selectedPeerId: null });
 }
 
 export async function initializeIpmsgRuntime(): Promise<void> {
   await useIpmsg.getState().hydrate();
-  if (!useIpmsg.getState().enabled) return;
+  const { appManager } = await import('../kernel/installed');
+  if (!appManager().get(APP_ID)?.enabled || !useIpmsg.getState().enabled) return;
   try {
-    await startRuntime();
+    await transitionRuntime(true);
   } catch (error) {
     useIpmsg.setState({ running: false, error: errorText(error) });
   }
@@ -230,6 +254,7 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
   enabled: false,
   running: false,
   port: 2425,
+  intranetAvailable: false,
   error: null,
   peers: [],
   selectedPeerId: null,
@@ -254,13 +279,25 @@ export const useIpmsg = create<IpmsgState>((set, get) => ({
 
   setEnabled: async (enabled) => {
     set({ enabled, error: null });
-    await persist();
     if (!enabled) {
-      await stopIpmsgRuntime();
+      let persistenceError: unknown;
+      try {
+        await persist();
+      } catch (error) {
+        persistenceError = error;
+      }
+      try {
+        await transitionRuntime(false);
+      } catch (error) {
+        set({ running: false, error: errorText(error) });
+        throw error;
+      }
+      if (persistenceError) throw persistenceError;
       return;
     }
+    await persist();
     try {
-      await startRuntime();
+      await transitionRuntime(true);
     } catch (error) {
       set({ running: false, error: errorText(error) });
       throw error;

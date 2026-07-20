@@ -8,7 +8,7 @@ import { composerCommands, dispatchInput } from '../../apps/web/src/kernel/dispa
 import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 import { CapabilityBus } from '../../apps/web/src/kernel/capabilities/bus';
 import { BridgeHost } from '../../apps/web/src/kernel/bridge';
-import { AppManager } from '../../apps/web/src/kernel/installed';
+import { AppManager, isOfficialApp } from '../../apps/web/src/kernel/installed';
 import { runButlerCommand } from '../../apps/web/src/kernel/butler';
 import { createMemoryBackend, createRcxStore } from '../../packages/rcx-store/src/index';
 import { useButler } from '../../apps/web/src/stores/butler';
@@ -275,6 +275,102 @@ function appFiles(version: string, permissions: AppPermission[] = []): File[] {
   Object.defineProperty(entryFile, 'webkitRelativePath', { value: 'hello/index.html' });
   return [manifestFile, entryFile];
 }
+
+function disabledAppFiles(): File[] {
+  const manifestFile = new File(
+    [JSON.stringify({ ...manifest, enabledByDefault: false })],
+    'rcx.app.json',
+    { type: 'application/json' },
+  );
+  const entryFile = new File(['<!doctype html><h1>Hello</h1>'], 'index.html', { type: 'text/html' });
+  Object.defineProperty(manifestFile, 'webkitRelativePath', { value: 'hello/rcx.app.json' });
+  Object.defineProperty(entryFile, 'webkitRelativePath', { value: 'hello/index.html' });
+  return [manifestFile, entryFile];
+}
+
+async function intranetLinkFiles(entryOverride?: string): Promise<File[]> {
+  const [manifestText, officialEntry] = await Promise.all([
+    readFile(new URL('../../plugins/intranet-link/rcx.app.json', import.meta.url), 'utf8'),
+    readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8'),
+  ]);
+  const manifestFile = new File([manifestText], 'rcx.app.json', { type: 'application/json' });
+  const entryFile = new File([entryOverride ?? officialEntry], 'index.html', { type: 'text/html' });
+  Object.defineProperty(manifestFile, 'webkitRelativePath', { value: 'intranet-link/rcx.app.json' });
+  Object.defineProperty(entryFile, 'webkitRelativePath', { value: 'intranet-link/index.html' });
+  return [manifestFile, entryFile];
+}
+
+test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得特权', async () => {
+  const manager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
+  await assert.rejects(
+    manager.installDirectory(await intranetLinkFiles('<!doctype html><script>/* spoof */</script>')),
+    /官方插件保留.*身份校验失败/,
+  );
+  assert.equal(manager.get('dev.rocketx.intranet-link'), undefined);
+
+  const installed = await manager.installDirectory(await intranetLinkFiles());
+  assert.equal(isOfficialApp(installed, 'dev.rocketx.intranet-link'), true);
+  assert.equal(installed.enabled, false);
+});
+
+test('manifest 可声明默认禁用，且应用禁用和卸载会等待运行时清理完成', async () => {
+  assert.equal(parseManifest({ ...manifest, enabledByDefault: false }).enabledByDefault, false);
+  assert.throws(
+    () => parseManifest({ ...manifest, enabledByDefault: 'false' }),
+    /enabledByDefault/,
+  );
+
+  const store = createRcxStore({ backend: createMemoryBackend() });
+  const manager = new AppManager(store);
+  const lifecycle: string[] = [];
+  let releaseCleanup: (() => void) | undefined;
+  manager.setActivator(() => {
+    lifecycle.push('activate');
+    return () => new Promise<void>((resolve) => {
+      lifecycle.push('cleanup:start');
+      releaseCleanup = () => {
+        lifecycle.push('cleanup:done');
+        resolve();
+      };
+    });
+  });
+
+  const installed = await manager.installDirectory(disabledAppFiles());
+  assert.equal(installed.enabled, false);
+  assert.deepEqual(lifecycle, []);
+
+  await manager.setEnabled(manifest.id, true);
+  assert.deepEqual(lifecycle, ['activate']);
+
+  let disabled = false;
+  const disabling = manager.setEnabled(manifest.id, false).then(() => {
+    disabled = true;
+  });
+  await Promise.resolve();
+  assert.equal(disabled, false);
+  assert.deepEqual(lifecycle, ['activate', 'cleanup:start']);
+  releaseCleanup?.();
+  await disabling;
+  assert.equal(disabled, true);
+
+  await manager.setEnabled(manifest.id, true);
+  let uninstalled = false;
+  const uninstalling = manager.uninstall(manifest.id).then(() => {
+    uninstalled = true;
+  });
+  await Promise.resolve();
+  assert.equal(uninstalled, false);
+  releaseCleanup?.();
+  await uninstalling;
+  assert.equal(uninstalled, true);
+  assert.equal(manager.get(manifest.id), undefined);
+
+  const upgradeManager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
+  await upgradeManager.installDirectory(disabledAppFiles());
+  await upgradeManager.setEnabled(manifest.id, true);
+  const upgraded = await upgradeManager.installDirectory(disabledAppFiles());
+  assert.equal(upgraded.enabled, true, '升级不能重置用户已经启用的插件');
+});
 
 test('应用升级失败时恢复旧记录，卸载同时清理账号分区数据', async () => {
   const store = createRcxStore({ backend: createMemoryBackend() });

@@ -1,0 +1,14 @@
+{
+  "id": "dev.rocketx.intranet-link",
+  "version": "1.0.0",
+  "name": "内网通",
+  "publisher": "RocketX",
+  "enabledByDefault": false,
+  "runtime": "iframe",
+  "entry": "index.html",
+  "permissions": ["lan:discover", "lan:transfer", "ui:notify"],
+  "contributes": {
+    "nav.module": [{ "id": "intranet-link", "label": "内网通" }],
+    "composer.command": [{ "name": "intranet", "desc": "打开内网通 P2P 面板" }]
+  }
+}
