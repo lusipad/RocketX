@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { agentConversationLines, transferTranscript } from '../../apps/web/src/agent/codexTransfer';
+import {
+  agentConversationLines,
+  codexThreadDeepLink,
+  transferTranscript,
+} from '../../apps/web/src/agent/codexTransfer';
+
+test('转移后的原生线程可用官方 deep link 在 Codex App 直接打开（issue #120）', () => {
+  assert.equal(codexThreadDeepLink('019f7dcd-7b86-7c02-9ba6-7eadd0cf790d'), 'codex://threads/019f7dcd-7b86-7c02-9ba6-7eadd0cf790d');
+  assert.throws(() => codexThreadDeepLink('../settings'), /threadId/);
+});
 
 test('对话渲染为转移线程首轮输入：开场白与 📌 标记行不转移，角色前缀正确', () => {
   const transcript = transferTranscript('管家对话', [
@@ -50,6 +59,8 @@ test('转移走 companion 同款机制：原生线程 + 命名 + 首轮输入，
   assert.match(lib, /unknown \(variant\|method\)/);
   assert.match(lib, /'turn\/start'/);
   assert.match(lib, /effort: 'minimal'/);
+  assert.match(lib, /return threadId/);
+  assert.match(lib, /openCodexThread/);
 
   const codex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
   assert.match(codex, /export async function transferConversationToCodexApp/);
@@ -68,5 +79,9 @@ test('转移走 companion 同款机制：原生线程 + 命名 + 首轮输入，
   assert.match(shared, /startNamedCodexThreadWithTranscript/);
   assert.doesNotMatch(shared, /externalAgentConfig/);
   const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
-  assert.match(panel, /转到 App/);
+  assert.match(panel, /转到 Codex App/);
+  assert.match(panel, /openCodexThread/);
+
+  const capability = readFileSync('apps/desktop/src-tauri/capabilities/default.json', 'utf8');
+  assert.match(capability, /codex:\/\/threads\/\*/);
 });

@@ -77,7 +77,7 @@ test('待办说明和来源消息会把网址渲染成可点击链接（issue #1
   const page = readFileSync('apps/web/src/pages/TodosPage.tsx', 'utf8');
   const markdown = readFileSync('apps/web/src/lib/markdown.tsx', 'utf8');
 
-  assert.match(page, /<LinkifiedText text=\{todo\.note \|\| todo\.excerpt \|\| '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
+  assert.match(page, /<LinkifiedText text=\{todo\.note \|\| todo\.excerpt \|\| todo\.title \|\| '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
   assert.match(page, /<LinkifiedText text=\{todo\.excerpt \?\? '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
   assert.match(markdown, /renderPlain\?: \(text: string\) => ReactNode/);
   assert.match(markdown, /target="_blank"/);

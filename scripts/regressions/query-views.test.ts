@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 import { boardColumns, wbsStats, wbsSummary, workItemRisk } from '../../apps/web/src/lib/queryViews';
 import { updateWorkItemStateRequest } from '../../apps/web/src/lib/adoDirect';
 
 const TODAY = '2026-07-18';
+
+test('层级工作项类型使用不同颜色，User Story 为蓝色且 Feature 为紫色（issue #121）', () => {
+  for (const path of ['apps/web/src/components/AdoLists.tsx', 'apps/web/src/components/WorkItemLink.tsx']) {
+    const source = readFileSync(path, 'utf8');
+    assert.match(source, /Task: '#00b96b'/, path);
+    assert.match(source, /'User Story': '#3370ff'/, path);
+    assert.match(source, /Feature: '#7f3bf5'/, path);
+    assert.match(source, /Epic: '#ff8800'/, path);
+  }
+});
 
 function item(overrides: Partial<WorkItem> & { id: number }): WorkItem {
   return {

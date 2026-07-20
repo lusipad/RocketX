@@ -355,7 +355,7 @@ export default function Composer() {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 输入法合成中，方向键/回车/Esc 都归 IME 选字用，补全面板一律不拦（P2-f）
     const composing = e.nativeEvent.isComposing;
-    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
+    const effectiveMode = prefsLoaded ? sendOnEnter : 'normal';
     if (!composing && e.key === 'Enter' && shouldInsertNewline(effectiveMode, e)) {
       e.preventDefault();
       insertNewline();

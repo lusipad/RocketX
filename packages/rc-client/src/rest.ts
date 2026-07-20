@@ -494,8 +494,15 @@ export class RcRestClient {
     return res.message;
   }
 
-  deleteMessage(rid: string, msgId: string): Promise<unknown> {
-    return this.request('POST', 'chat.delete', { roomId: rid, msgId });
+  async deleteMessage(rid: string, msgId: string): Promise<void> {
+    const response = await this.request<{ success?: boolean }>('POST', 'chat.delete', {
+      roomId: rid,
+      msgId,
+      asUser: true,
+    });
+    if (response?.success !== true) {
+      throw new RcApiError('服务器未确认消息删除', 502);
+    }
   }
 
   /** 话题（线程）消息，按时间升序返回 */

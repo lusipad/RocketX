@@ -1,6 +1,7 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Shield, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { openCodexThread } from '../agent/codexTransfer';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -199,14 +200,23 @@ export default function AgentPanel() {
                     onClick={() => {
                       setTransferring(true);
                       void transferToCodexApp(tmid)
-                        .then(() => toast.success('已转移到 Codex，可在 App / CLI 会话列表继续'))
+                        .then(async (threadId) => {
+                          const result = await openCodexThread(threadId);
+                          toast.success(
+                            result === 'opened'
+                              ? '已转移并打开 Codex App'
+                              : result === 'copied'
+                                ? '已转移；App 打开失败，codex resume 命令已复制'
+                                : `已转移；请运行 codex resume ${threadId} 继续`,
+                          );
+                        })
                         .catch((error) => toast.error(error, '转移到 Codex 失败'))
                         .finally(() => setTransferring(false));
                     }}
                     className="flex shrink-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
                   >
                     {transferring ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
-                    转到 App
+                    转到 Codex App
                   </button>
                 </div>
               </div>

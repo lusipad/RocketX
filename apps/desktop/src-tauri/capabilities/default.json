@@ -9,7 +9,10 @@
     "core:window:allow-set-overlay-icon",
     "core:image:allow-new",
     "opener:default",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "codex://threads/*" }]
+    },
     "dialog:allow-save",
     "dialog:allow-open",
     "log:default",

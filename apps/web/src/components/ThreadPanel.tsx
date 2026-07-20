@@ -79,8 +79,8 @@ export default function ThreadPanel() {
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-    // 偏好未加载完先按保守规则（Ctrl+Enter 才发），避免默认 Enter 发送把半句发出去（P1-6）
-    const effectiveMode = prefsLoaded ? sendOnEnter : 'alternative';
+    // 偏好未加载完先沿用产品默认值，避免首屏短暂变成 Ctrl+Enter 发送（issue #122）
+    const effectiveMode = prefsLoaded ? sendOnEnter : 'normal';
     if (shouldInsertNewline(effectiveMode, e)) {
       e.preventDefault();
       insertText('\n');

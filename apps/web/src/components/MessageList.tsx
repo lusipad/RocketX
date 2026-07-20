@@ -343,7 +343,7 @@ export default function MessageList({ rid }: { rid: string }) {
                 if (!confirm(`确定删除自己的 ${deletableSelected.length} 条消息吗？`)) return;
                 void (async () => {
                   // 逐条等待：并发删除会让各请求用同一份旧列表回写，已删消息可能重新出现。
-                  for (const message of deletableSelected) await deleteMessage(message._id);
+                  for (const message of deletableSelected) await deleteMessage(message);
                   exitSelectMode();
                 })();
               }}
