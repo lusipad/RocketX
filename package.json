@@ -1,7 +1,7 @@
 {
   "name": "rocketchatx",
   "private": true,
-  "version": "0.25.12",
+  "version": "0.25.13",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "dev": "pnpm --filter @rcx/web dev",
@@ -11,7 +11,7 @@
     "smoke": "tsx scripts/smoke.ts",
     "spike:rc-offline-contract": "tsx scripts/spike-rc-offline-contract.ts",
     "test:pure": "tsx scripts/test-pure.ts",
-    "test:regression": "pnpm --filter @rcx/app-sdk build && tsx --test scripts/regressions/*.test.ts",
+    "test:regression": "pnpm --filter @lusipad/rocketx build && tsx --test scripts/regressions/*.test.ts",
     "test:ui": "playwright test",
     "test:ecosystem": "node scripts/test-app-ecosystem.mjs",
     "codex:protocol:generate": "node scripts/codex-protocol.mjs --write",

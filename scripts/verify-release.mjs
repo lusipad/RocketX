@@ -15,6 +15,8 @@ const packageFiles = [
   'services/ado-bridge/package.json',
 ];
 
+export const publicSdkPackage = '@lusipad/rocketx';
+
 export function parseReleaseTag(tag) {
   const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(tag);
   if (!match) throw new Error(`Release tag must be strict SemVer: ${tag}`);
@@ -47,6 +49,19 @@ export async function verifyVersions(version) {
 
   const tauri = await readJson('apps/desktop/src-tauri/tauri.conf.json');
   if (tauri.version !== version) failures.push(`apps/desktop/src-tauri/tauri.conf.json: ${tauri.version ?? '<missing>'}`);
+
+  const sdk = await readJson('packages/app-sdk/package.json');
+  if (sdk.name !== publicSdkPackage) {
+    failures.push(`packages/app-sdk/package.json name: ${sdk.name ?? '<missing>'}`);
+  }
+
+  const cli = await readJson('packages/create-rcx-app/package.json');
+  if (cli.dependencies?.[publicSdkPackage] !== 'workspace:*') {
+    failures.push(`packages/create-rcx-app/package.json dependency ${publicSdkPackage}: ${cli.dependencies?.[publicSdkPackage] ?? '<missing>'}`);
+  }
+  if (cli.dependencies?.['@rcx/app-sdk']) {
+    failures.push('packages/create-rcx-app/package.json still depends on @rcx/app-sdk');
+  }
 
   if (failures.length) {
     throw new Error(`Release version ${version} is not aligned:\n${failures.join('\n')}`);

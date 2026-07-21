@@ -28,7 +28,7 @@ RocketX development runs at <http://localhost:5173>; the pinned Rocket.Chat serv
 
 - Make the smallest change that solves the stated problem. Do not combine unrelated cleanup or formatting.
 - Preserve the public Rocket.Chat API boundary; do not patch the Rocket.Chat server or create private server tables.
-- Reuse the shared manifest and Bridge contracts from `@rcx/app-sdk` rather than defining a second copy.
+- Reuse the shared manifest and Bridge contracts from `@lusipad/rocketx` rather than defining a second copy.
 - Do not add a dependency without explaining why existing code or platform APIs are insufficient.
 - Add or update a regression test before changing behavior when practical.
 - Keep third-party application permissions minimal and document any new capability or trust boundary.

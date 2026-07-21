@@ -1,9 +1,9 @@
-# @rcx/app-sdk
+# @lusipad/rocketx
 
 Typed manifest validation and JSON-RPC Bridge access for RocketX applications.
 
 ```ts
-import { createBridgeClient, parseManifest } from '@rcx/app-sdk';
+import { createBridgeClient, parseManifest } from '@lusipad/rocketx';
 
 const manifest = parseManifest({
   id: 'com.example.hello',

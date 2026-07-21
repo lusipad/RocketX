@@ -1,6 +1,6 @@
 {
   "name": "create-rcx-app",
-  "version": "0.25.12",
+  "version": "0.25.13",
   "description": "Create, validate, and preview RocketX applications",
   "type": "module",
   "bin": {
@@ -24,7 +24,7 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@rcx/app-sdk": "workspace:*"
+    "@lusipad/rocketx": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

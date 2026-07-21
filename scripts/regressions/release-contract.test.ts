@@ -4,6 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   parseReleaseTag,
+  publicSdkPackage,
   releaseNotes,
   requiresMaturityEvidence,
   verifyVersions,
@@ -25,6 +26,7 @@ test('发布标签只接受严格 SemVer', () => {
 
 test('仓库全部公开版本面与当前版本对齐', async () => {
   const version = await currentVersion();
+  assert.equal(publicSdkPackage, '@lusipad/rocketx');
   await verifyVersions(version);
 });
 
@@ -62,6 +64,7 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(npmWorkflow, /grep -q '\"workspace:/);
   assert.match(npmWorkflow, /npm publish \"\$tarball\" --access public --provenance/);
   assert.doesNotMatch(npmWorkflow, /cd \"\$directory\" && npm publish/);
+  assert.doesNotMatch(npmWorkflow, /@rcx\/app-sdk/);
   assert.doesNotMatch(releaseWorkflow, /npm view/);
   assert.doesNotMatch(releaseWorkflow, /@rcx\/app-sdk|create-rcx-app/);
   assert.match(releaseWorkflow, /environment:\s*release/);

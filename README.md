@@ -23,7 +23,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 - `apps/web`: React and Vite client.
 - `apps/desktop`: Tauri 2 desktop shell and native integrations.
 - `packages/rc-client`: dependency-free Rocket.Chat REST and realtime client.
-- `packages/app-sdk`: typed JSON-RPC bridge and application manifest contract.
+- `packages/app-sdk`: public `@lusipad/rocketx` JSON-RPC bridge and application manifest contract.
 - `packages/create-rcx-app`: application scaffolding, validation, and local preview CLI.
 - `services/ado-bridge`: optional Azure DevOps Server 2022 event bridge.
 - `examples`: RocketX application examples.

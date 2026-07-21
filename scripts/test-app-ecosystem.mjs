@@ -38,12 +38,14 @@ try {
   const cleanRoom = path.join(temporary, 'consumer');
   await mkdir(artifacts, { recursive: true });
   await mkdir(cleanRoom, { recursive: true });
+  const sdkManifest = JSON.parse(await readFile(path.join(repoRoot, 'packages/app-sdk/package.json'), 'utf8'));
   run(pnpm, ['pack', '--pack-destination', artifacts], path.join(repoRoot, 'packages', 'app-sdk'));
   run(pnpm, ['pack', '--pack-destination', artifacts], path.join(repoRoot, 'packages', 'create-rcx-app'));
 
   const tarballs = (await readdir(artifacts)).filter((file) => file.endsWith('.tgz'));
   assert.equal(tarballs.length, 2, `Expected two package tarballs, got ${tarballs.join(', ')}`);
-  const sdkTarball = path.join(artifacts, tarballs.find((file) => file.includes('app-sdk')) ?? '');
+  const sdkArchiveName = `${sdkManifest.name.replace(/^@/, '').replace('/', '-')}-${sdkManifest.version}.tgz`;
+  const sdkTarball = path.join(artifacts, sdkArchiveName);
   const cliTarball = path.join(artifacts, tarballs.find((file) => file.includes('create-rcx-app')) ?? '');
   for (const [tarball, expected] of [
     [sdkTarball, ['package/dist/index.js', 'package/dist/index.d.ts']],
@@ -56,8 +58,7 @@ try {
   }
 
   const packedCliManifest = JSON.parse(run('tar', ['-xOf', cliTarball, 'package/package.json']));
-  const sdkManifest = JSON.parse(await readFile(path.join(repoRoot, 'packages/app-sdk/package.json'), 'utf8'));
-  assert.equal(packedCliManifest.dependencies['@rcx/app-sdk'], sdkManifest.version);
+  assert.equal(packedCliManifest.dependencies[sdkManifest.name], sdkManifest.version);
 
   run(npm, ['init', '-y'], cleanRoom);
   run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', sdkTarball, cliTarball], cleanRoom);
@@ -80,7 +81,7 @@ try {
     await development.close();
   }
 
-  const sdkModule = await import(pathToFileURL(path.join(cleanRoom, 'node_modules', '@rcx', 'app-sdk', 'dist', 'index.js')).href);
+  const sdkModule = await import(pathToFileURL(path.join(cleanRoom, 'node_modules', ...sdkManifest.name.split('/'), 'dist', 'index.js')).href);
   assert.equal(sdkModule.parseManifest(manifest).id, 'dev.local.first-app');
   console.log(JSON.stringify({
     status: 'ok',

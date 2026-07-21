@@ -11,7 +11,7 @@ Prerequisites: Node.js 20 or newer and pnpm 11.12.0. The repository CI baseline 
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
-pnpm --filter @rcx/app-sdk build
+pnpm --filter @lusipad/rocketx build
 pnpm --filter create-rcx-app build
 
 node packages/create-rcx-app/dist/create-cli.js my-app --template hello
@@ -46,7 +46,7 @@ A minimal iframe application uses this shape:
 }
 ```
 
-Important rules enforced by `@rcx/app-sdk`:
+Important rules enforced by `@lusipad/rocketx`:
 
 - `id` uses reverse-domain form and lowercase letters, digits, dots, or hyphens.
 - `version` is SemVer.
@@ -74,14 +74,14 @@ An iframe can additionally declare a bundled native service:
 
 This is not a sideloading API. `native:service` is accepted only for applications bundled into a signed RocketX desktop build. Commands are resolved from the bundled plugin resource directory, never from `PATH`; directory and URL installations are rejected. The iframe calls the generic `native.call` capability and receives Sidecar events as `native.event` Bridge events.
 
-Use `parseManifest` or `parseManifestJson` from `@rcx/app-sdk` when tooling needs to read a manifest. Do not copy the permission or extension-point lists into another parser.
+Use `parseManifest` or `parseManifestJson` from `@lusipad/rocketx` when tooling needs to read a manifest. Do not copy the permission or extension-point lists into another parser.
 
 ## Bridge API
 
-For TypeScript applications, import `createBridgeClient` from `@rcx/app-sdk` after the package is installed or linked:
+For TypeScript applications, import `createBridgeClient` from `@lusipad/rocketx` after the package is installed or linked:
 
 ```ts
-import { createBridgeClient } from '@rcx/app-sdk';
+import { createBridgeClient } from '@lusipad/rocketx';
 
 const bridge = createBridgeClient();
 
