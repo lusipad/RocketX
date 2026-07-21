@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.25.14"
+version = "0.25.15"
 dependencies = [
  "base64 0.22.1",
  "blake3",
