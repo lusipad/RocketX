@@ -62,6 +62,13 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(npmWorkflow, /grep -q '\"workspace:/);
   assert.match(npmWorkflow, /npm publish \"\$tarball\" --access public --provenance/);
   assert.doesNotMatch(npmWorkflow, /cd \"\$directory\" && npm publish/);
+  assert.doesNotMatch(releaseWorkflow, /npm view/);
+  assert.doesNotMatch(releaseWorkflow, /@rcx\/app-sdk|create-rcx-app/);
+  assert.match(releaseWorkflow, /environment:\s*release/);
+  assert.match(releaseWorkflow, /isDraft/);
+  assert.match(releaseWorkflow, /verify-release-assets\.mjs/);
+  assert.match(releaseWorkflow, /sha256sum -c SHA256SUMS\.txt/);
+  assert.match(releaseWorkflow, /--draft=false --latest/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
   const prepareRelease = desktopWorkflow.match(/prepare-release:[\s\S]*$/)?.[0] ?? '';
   assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
