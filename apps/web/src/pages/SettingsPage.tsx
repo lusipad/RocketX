@@ -1358,6 +1358,7 @@ const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
   'lan:transfer': '局域网传输',
   'agent:spawn': '启动 Agent（每次确认）',
   'process:spawn': '启动本地进程（每次确认）',
+  'native:service': '运行内置签名后台服务',
 };
 
 function AppPermissionPicker({

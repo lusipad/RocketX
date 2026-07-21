@@ -14,10 +14,9 @@ use std::{
 
 use encoding_rs::{GBK, SHIFT_JIS};
 use serde::Serialize;
-use tauri::{Emitter, Manager};
+use serde_json::Value;
 
 pub const IPMSG_PORT: u16 = 2425;
-const INTRANET_PORT: u16 = 9011;
 const MAX_DATAGRAM_BYTES: usize = 64 * 1024;
 const MAX_MESSAGE_BYTES: usize = 48 * 1024;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024 * 1024;
@@ -48,8 +47,23 @@ const FEIQ_VERSION: &str = "1_lbt6_0#128#ROCKETX#0#0#0#4001#9";
 
 static PACKET_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Default)]
-pub struct IpmsgRuntimeState(Mutex<Option<IpmsgRuntime>>);
+pub type EventSink = Arc<dyn Fn(&str, Value) + Send + Sync>;
+
+pub struct IpmsgRuntimeState {
+    runtime: Mutex<Option<IpmsgRuntime>>,
+    events: EventSink,
+    download_root: PathBuf,
+}
+
+impl IpmsgRuntimeState {
+    pub fn new(events: EventSink, download_root: PathBuf) -> Self {
+        Self {
+            runtime: Mutex::new(None),
+            events,
+            download_root,
+        }
+    }
+}
 
 struct IpmsgRuntime {
     stop: Arc<AtomicBool>,
@@ -157,7 +171,6 @@ pub struct IpmsgStatus {
     enabled: bool,
     port: u16,
     peer_count: usize,
-    intranet_available: bool,
     discovery_target_count: usize,
 }
 
@@ -248,6 +261,10 @@ fn peer_id(address: SocketAddr, user: &str, host: &str) -> String {
     blake3::hash(format!("{}\0{}\0{}", address, user, host).as_bytes()).to_hex()[..24].to_string()
 }
 
+fn is_self_packet(packet: &Packet, identity: &IpmsgIdentity) -> bool {
+    packet.user == identity.user && packet.host == identity.host
+}
+
 fn decode(bytes: &[u8], dialect: Dialect, utf8: bool) -> Result<String, String> {
     if utf8 {
         return String::from_utf8(bytes.to_vec())
@@ -314,6 +331,8 @@ fn parse_packet_with_dialect(bytes: &[u8], fallback_dialect: Dialect) -> Result<
         .to_string();
     let dialect = if version.starts_with("1_lbt") {
         Dialect::Feiq
+    } else if version.starts_with("1@shiyeline") {
+        Dialect::Intranet
     } else {
         fallback_dialect
     };
@@ -353,27 +372,16 @@ fn parse_packet(bytes: &[u8]) -> Result<Packet, String> {
     parse_packet_with_dialect(bytes, Dialect::Standard)
 }
 
-fn dialect_for_port(port: u16) -> Dialect {
-    if port == INTRANET_PORT {
-        Dialect::Intranet
-    } else {
-        Dialect::Standard
-    }
-}
-
 fn parse_packet_for_port(bytes: &[u8], local_port: u16) -> Result<Packet, String> {
-    if local_port == INTRANET_PORT {
-        parse_packet_with_dialect(bytes, dialect_for_port(local_port))
-    } else {
-        parse_packet(bytes)
-    }
+    let _ = local_port;
+    parse_packet(bytes)
 }
 
 fn packet_version(dialect: Dialect) -> &'static str {
-    if dialect == Dialect::Feiq {
-        FEIQ_VERSION
-    } else {
-        "1"
+    match dialect {
+        Dialect::Feiq => FEIQ_VERSION,
+        Dialect::Intranet => "1@shiyeline",
+        Dialect::Standard => "1",
     }
 }
 
@@ -584,7 +592,7 @@ fn announce(
     let packet_no = next_packet_no();
     let packet = build_packet(
         identity,
-        dialect_for_port(address.port()),
+        Dialect::Standard,
         &packet_no,
         command | IPMSG_CAPUTF8OPT | IPMSG_FILEATTACHOPT,
         &entry_extra(identity),
@@ -795,8 +803,14 @@ fn prune<T>(values: &mut HashMap<String, (Instant, T)>, ttl: Duration) {
     values.retain(|_, (seen_at, _)| now.duration_since(*seen_at) <= ttl);
 }
 
+fn emit<T: Serialize>(events: &EventSink, event: &str, payload: &T) {
+    if let Ok(payload) = serde_json::to_value(payload) {
+        events(event, payload);
+    }
+}
+
 fn udp_loop(
-    app: tauri::AppHandle,
+    events: EventSink,
     socket: UdpSocket,
     local_port: u16,
     identity: Arc<IpmsgIdentity>,
@@ -824,6 +838,9 @@ fn udp_loop(
         let Ok(packet) = parse_packet_for_port(&buffer[..length], local_port) else {
             continue;
         };
+        if is_self_packet(&packet, &identity) {
+            continue;
+        }
         let mode = packet.command & COMMAND_MASK;
         if mode == IPMSG_RECVMSG {
             let key = ack_key(address, packet.extra.trim());
@@ -851,9 +868,10 @@ fn udp_loop(
             if let Ok(mut values) = peers.write() {
                 values.insert(peer.id.clone(), record.clone());
             }
-            let _ = app.emit(
-                "rocketx://ipmsg-peer",
-                IpmsgPeerEvent {
+            emit(
+                &events,
+                "peer",
+                &IpmsgPeerEvent {
                     kind: "upsert".to_string(),
                     peer,
                 },
@@ -913,14 +931,14 @@ fn udp_loop(
                         text,
                         received_at: now_ms(),
                     };
-                    let _ = app.emit("rocketx://ipmsg-message", event);
+                    emit(&events, "message", &event);
                     let offers = parse_file_offers(&packet, &record);
                     if let Ok(mut values) = incoming.lock() {
                         values.retain(|_, value| value.expires_at > Instant::now());
                         for offer in offers {
                             let event = offer.offer.clone();
                             values.insert(event.id.clone(), offer);
-                            let _ = app.emit("rocketx://ipmsg-file-offer", event);
+                            emit(&events, "file-offer", &event);
                         }
                     }
                 }
@@ -931,9 +949,10 @@ fn udp_loop(
             let id = peer_id(address, &packet.user, &packet.host);
             let removed = peers.write().ok().and_then(|mut values| values.remove(&id));
             if let Some(record) = removed {
-                let _ = app.emit(
-                    "rocketx://ipmsg-peer",
-                    IpmsgPeerEvent {
+                emit(
+                    &events,
+                    "peer",
+                    &IpmsgPeerEvent {
                         kind: "remove".to_string(),
                         peer: record.peer,
                     },
@@ -1056,7 +1075,7 @@ fn stop_runtime(current: Option<IpmsgRuntime>) {
 
 fn take_runtime(state: &IpmsgRuntimeState) -> Result<Option<IpmsgRuntime>, String> {
     state
-        .0
+        .runtime
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())
         .map(|mut runtime| runtime.take())
@@ -1067,7 +1086,7 @@ fn bind_compatibility_ports(
 ) -> Result<(Vec<(u16, Arc<UdpSocket>)>, Vec<(u16, TcpListener)>), String> {
     let mut sockets = Vec::new();
     let mut listeners = Vec::new();
-    for port in [IPMSG_PORT, INTRANET_PORT] {
+    for port in [IPMSG_PORT] {
         let bound = (|| {
             let udp = UdpSocket::bind((bind_ip, port))
                 .map_err(|error| format!("IPMSG UDP {port} is unavailable: {error}"))?;
@@ -1088,17 +1107,14 @@ fn bind_compatibility_ports(
                 sockets.push((port, socket));
                 listeners.push((port, listener));
             }
-            Err(_) if port == INTRANET_PORT => {}
             Err(error) => return Err(error),
         }
     }
     Ok((sockets, listeners))
 }
 
-#[tauri::command]
-pub fn ipmsg_start(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, IpmsgRuntimeState>,
+pub fn start(
+    state: &IpmsgRuntimeState,
     user_name: String,
     nickname: String,
     group: Option<String>,
@@ -1126,7 +1142,6 @@ pub fn ipmsg_start(
         .and_then(|value| value.parse::<Ipv4Addr>().ok())
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
     let (sockets, listeners) = bind_compatibility_ports(bind_ip)?;
-    let intranet_available = sockets.iter().any(|(port, _)| *port == INTRANET_PORT);
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let acks = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
     let outgoing = Arc::new(Mutex::new(HashMap::new()));
@@ -1137,7 +1152,7 @@ pub fn ipmsg_start(
         let receiver = socket
             .try_clone()
             .map_err(|error| format!("failed to clone IPMSG UDP socket on {port}: {error}"))?;
-        let app = app.clone();
+        let events = state.events.clone();
         let identity = identity.clone();
         let peers = peers.clone();
         let acks = acks.clone();
@@ -1147,7 +1162,7 @@ pub fn ipmsg_start(
         let local_port = *port;
         threads.push(thread::spawn(move || {
             udp_loop(
-                app, receiver, local_port, identity, peers, acks, outgoing, incoming, stop,
+                events, receiver, local_port, identity, peers, acks, outgoing, incoming, stop,
             )
         }));
     }
@@ -1193,7 +1208,7 @@ pub fn ipmsg_start(
         threads,
     };
     *state
-        .0
+        .runtime
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())? = Some(runtime);
     if let Err(error) = announce_sockets(&sockets, &identity, IPMSG_BR_ENTRY, &discovery_targets) {
@@ -1204,21 +1219,18 @@ pub fn ipmsg_start(
         enabled: true,
         port: IPMSG_PORT,
         peer_count: 0,
-        intranet_available,
         discovery_target_count: discovery_targets.len(),
     })
 }
 
-#[tauri::command]
-pub fn ipmsg_stop(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<(), String> {
+pub fn stop(state: &IpmsgRuntimeState) -> Result<(), String> {
     stop_runtime(take_runtime(&state)?);
     Ok(())
 }
 
-#[tauri::command]
-pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgStatus, String> {
+pub fn status(state: &IpmsgRuntimeState) -> Result<IpmsgStatus, String> {
     let runtime = state
-        .0
+        .runtime
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())?;
     let Some(runtime) = runtime.as_ref() else {
@@ -1226,7 +1238,6 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
             enabled: false,
             port: IPMSG_PORT,
             peer_count: 0,
-            intranet_available: false,
             discovery_target_count: 0,
         });
     };
@@ -1235,23 +1246,17 @@ pub fn ipmsg_status(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<IpmsgS
         enabled: true,
         port: IPMSG_PORT,
         peer_count,
-        intranet_available: runtime
-            .sockets
-            .iter()
-            .any(|(port, _)| *port == INTRANET_PORT),
         discovery_target_count: runtime.discovery_targets.len(),
     })
 }
 
-#[tauri::command]
-pub fn ipmsg_validate_discovery_ranges(discovery_ranges: String) -> Result<usize, String> {
-    parse_discovery_targets(&discovery_ranges).map(|targets| targets.len())
+pub fn validate_discovery_ranges(discovery_ranges: &str) -> Result<usize, String> {
+    parse_discovery_targets(discovery_ranges).map(|targets| targets.len())
 }
 
-#[tauri::command]
-pub fn ipmsg_peers(state: tauri::State<'_, IpmsgRuntimeState>) -> Result<Vec<IpmsgPeer>, String> {
+pub fn peers(state: &IpmsgRuntimeState) -> Result<Vec<IpmsgPeer>, String> {
     let runtime = state
-        .0
+        .runtime
         .lock()
         .map_err(|_| "IPMSG runtime lock is unavailable".to_string())?;
     let Some(runtime) = runtime.as_ref() else {
@@ -1290,9 +1295,8 @@ fn peer_snapshot(runtime: &IpmsgRuntime, peer_id: &str) -> Result<PeerRecord, St
         .ok_or_else(|| "IPMSG peer is offline".to_string())
 }
 
-#[tauri::command]
-pub async fn ipmsg_send_message(
-    state: tauri::State<'_, IpmsgRuntimeState>,
+pub fn send_message(
+    state: &IpmsgRuntimeState,
     peer_id: String,
     text: String,
 ) -> Result<IpmsgSendReceipt, String> {
@@ -1302,7 +1306,7 @@ pub async fn ipmsg_send_message(
     }
     let (socket, identity, peer, acks) = {
         let runtime = state
-            .0
+            .runtime
             .lock()
             .map_err(|_| "IPMSG runtime lock is unavailable".to_string())?;
         let runtime = runtime
@@ -1316,28 +1320,23 @@ pub async fn ipmsg_send_message(
             runtime.acks.clone(),
         )
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        let packet_no = next_packet_no();
-        let utf8 = peer.peer.supports_utf8 && peer.dialect == Dialect::Standard;
-        let command = IPMSG_SENDMSG | IPMSG_SENDCHECKOPT | if utf8 { IPMSG_UTF8OPT } else { 0 };
-        let packet = build_packet(&identity, peer.dialect, &packet_no, command, &text, None)?;
-        let acknowledged = wait_for_ack(&socket, &acks, peer.address, &packet_no, &packet)?;
-        Ok(IpmsgSendReceipt {
-            packet_no,
-            acknowledged,
-        })
+    let packet_no = next_packet_no();
+    let utf8 = peer.peer.supports_utf8 && peer.dialect == Dialect::Standard;
+    let command = IPMSG_SENDMSG | IPMSG_SENDCHECKOPT | if utf8 { IPMSG_UTF8OPT } else { 0 };
+    let packet = build_packet(&identity, peer.dialect, &packet_no, command, &text, None)?;
+    let acknowledged = wait_for_ack(&socket, &acks, peer.address, &packet_no, &packet)?;
+    Ok(IpmsgSendReceipt {
+        packet_no,
+        acknowledged,
     })
-    .await
-    .map_err(|error| format!("IPMSG send task failed: {error}"))?
 }
 
 fn escaped_file_name(value: &str) -> String {
     value.replace(':', "::")
 }
 
-#[tauri::command]
-pub async fn ipmsg_offer_file(
-    state: tauri::State<'_, IpmsgRuntimeState>,
+pub fn offer_file(
+    state: &IpmsgRuntimeState,
     peer_id: String,
     path: String,
 ) -> Result<IpmsgFileOffer, String> {
@@ -1362,7 +1361,7 @@ pub async fn ipmsg_offer_file(
         .unwrap_or_default();
     let (socket, identity, peer, acks, outgoing) = {
         let runtime = state
-            .0
+            .runtime
             .lock()
             .map_err(|_| "IPMSG runtime lock is unavailable".to_string())?;
         let runtime = runtime
@@ -1377,63 +1376,59 @@ pub async fn ipmsg_offer_file(
             runtime.outgoing.clone(),
         )
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        let packet_no = next_packet_no();
-        let file_id = 1_u64;
-        let utf8 = peer.peer.supports_utf8 && peer.dialect == Dialect::Standard;
-        let attachment = format!(
-            "{file_id:x}:{}:{:x}:{modified_at:x}:1:\u{7}",
-            escaped_file_name(&file_name),
-            metadata.len()
+    let packet_no = next_packet_no();
+    let file_id = 1_u64;
+    let utf8 = peer.peer.supports_utf8 && peer.dialect == Dialect::Standard;
+    let attachment = format!(
+        "{file_id:x}:{}:{:x}:{modified_at:x}:1:\u{7}",
+        escaped_file_name(&file_name),
+        metadata.len()
+    );
+    let attachment = encode(&attachment, peer.dialect, utf8)?;
+    let command = IPMSG_SENDMSG
+        | IPMSG_SENDCHECKOPT
+        | IPMSG_FILEATTACHOPT
+        | if utf8 { IPMSG_UTF8OPT } else { 0 };
+    let packet = build_packet(
+        &identity,
+        peer.dialect,
+        &packet_no,
+        command,
+        &file_name,
+        Some(&attachment),
+    )?;
+    let id = blake3::hash(format!("{}\0{}\0{}", peer.peer.id, packet_no, file_name).as_bytes())
+        .to_hex()[..32]
+        .to_string();
+    outgoing
+        .lock()
+        .map_err(|_| "IPMSG outgoing file store is unavailable".to_string())?
+        .insert(
+            id.clone(),
+            OutgoingOffer {
+                peer_ip: peer.address.ip(),
+                packet_no: packet_no.clone(),
+                file_id,
+                path,
+                size: metadata.len(),
+                expires_at: Instant::now() + OFFER_TTL,
+            },
         );
-        let attachment = encode(&attachment, peer.dialect, utf8)?;
-        let command = IPMSG_SENDMSG
-            | IPMSG_SENDCHECKOPT
-            | IPMSG_FILEATTACHOPT
-            | if utf8 { IPMSG_UTF8OPT } else { 0 };
-        let packet = build_packet(
-            &identity,
-            peer.dialect,
-            &packet_no,
-            command,
-            &file_name,
-            Some(&attachment),
-        )?;
-        let id = blake3::hash(format!("{}\0{}\0{}", peer.peer.id, packet_no, file_name).as_bytes())
-            .to_hex()[..32]
-            .to_string();
+    let acknowledged = wait_for_ack(&socket, &acks, peer.address, &packet_no, &packet)?;
+    if !acknowledged {
         outgoing
             .lock()
             .map_err(|_| "IPMSG outgoing file store is unavailable".to_string())?
-            .insert(
-                id.clone(),
-                OutgoingOffer {
-                    peer_ip: peer.address.ip(),
-                    packet_no: packet_no.clone(),
-                    file_id,
-                    path,
-                    size: metadata.len(),
-                    expires_at: Instant::now() + OFFER_TTL,
-                },
-            );
-        let acknowledged = wait_for_ack(&socket, &acks, peer.address, &packet_no, &packet)?;
-        if !acknowledged {
-            outgoing
-                .lock()
-                .map_err(|_| "IPMSG outgoing file store is unavailable".to_string())?
-                .remove(&id);
-            return Err("IPMSG peer did not acknowledge the file offer".to_string());
-        }
-        Ok(IpmsgFileOffer {
-            id,
-            peer_id: peer.peer.id,
-            file_name,
-            size: metadata.len(),
-            modified_at,
-        })
+            .remove(&id);
+        return Err("IPMSG peer did not acknowledge the file offer".to_string());
+    }
+    Ok(IpmsgFileOffer {
+        id,
+        peer_id: peer.peer.id,
+        file_name,
+        size: metadata.len(),
+        modified_at,
     })
-    .await
-    .map_err(|error| format!("IPMSG file offer task failed: {error}"))?
 }
 
 fn download_target(root: &Path, offer: &IpmsgFileOffer) -> Result<PathBuf, String> {
@@ -1560,15 +1555,13 @@ fn download_offer(
     Err(last_error)
 }
 
-#[tauri::command]
-pub async fn ipmsg_download_file(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, IpmsgRuntimeState>,
+pub fn download_file(
+    state: &IpmsgRuntimeState,
     offer_id: String,
 ) -> Result<IpmsgFileReceipt, String> {
     let (identity, incoming) = {
         let runtime = state
-            .0
+            .runtime
             .lock()
             .map_err(|_| "IPMSG runtime lock is unavailable".to_string())?;
         let runtime = runtime
@@ -1576,21 +1569,11 @@ pub async fn ipmsg_download_file(
             .ok_or_else(|| "IPMSG compatibility is disabled".to_string())?;
         (runtime.identity.clone(), runtime.incoming.clone())
     };
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("failed to resolve IPMSG download directory: {error}"))?
-        .join("ipmsg");
-    tauri::async_runtime::spawn_blocking(move || {
-        download_offer(&identity, &root, &incoming, &offer_id)
-    })
-    .await
-    .map_err(|error| format!("IPMSG download task failed: {error}"))?
+    download_offer(&identity, &state.download_root, &incoming, &offer_id)
 }
 
-pub fn shutdown(app: &tauri::AppHandle) {
-    let state = app.state::<IpmsgRuntimeState>();
-    if let Ok(current) = take_runtime(&state) {
+pub fn shutdown(state: &IpmsgRuntimeState) {
+    if let Ok(current) = take_runtime(state) {
         stop_runtime(current);
     }
 }
@@ -1651,6 +1634,28 @@ mod tests {
     }
 
     #[test]
+    fn local_multicast_echo_is_not_exposed_as_a_peer() {
+        let local = identity();
+        let packet = build_packet(
+            &local,
+            Dialect::Standard,
+            "124",
+            IPMSG_BR_ENTRY | IPMSG_UTF8OPT,
+            &entry_extra(&local),
+            None,
+        )
+        .unwrap();
+        let parsed = parse_packet(&packet).unwrap();
+        assert!(is_self_packet(&parsed, &local));
+
+        let other = IpmsgIdentity {
+            user: "other".to_string(),
+            ..local
+        };
+        assert!(!is_self_packet(&parsed, &other));
+    }
+
+    #[test]
     fn feiq_gbk_fixture_is_detected_without_executing_feiq() {
         let mut fixture = b"1_lbt6_8#998#FeiX#0#0#0#4001#9:1523368691537:def:TINCHER:288:".to_vec();
         fixture.extend_from_slice(&[0xba, 0xc3]);
@@ -1661,7 +1666,7 @@ mod tests {
     }
 
     #[test]
-    fn intranet_port_decodes_gbk_before_exposing_packet_fields() {
+    fn shiyeline_2425_fixture_decodes_gbk_before_exposing_packet_fields() {
         let intranet_identity = IpmsgIdentity {
             user: "内网用户".to_string(),
             host: "研发电脑".to_string(),
@@ -1678,12 +1683,28 @@ mod tests {
         )
         .unwrap();
 
-        let parsed = parse_packet_for_port(&packet, INTRANET_PORT).unwrap();
+        let parsed = parse_packet_for_port(&packet, IPMSG_PORT).unwrap();
 
         assert_eq!(parsed.dialect, Dialect::Intranet);
         assert_eq!(parsed.user, "内网用户");
         assert_eq!(parsed.host, "研发电脑");
         assert_eq!(parsed.extra, "中文互通消息");
+    }
+
+    #[test]
+    fn captured_shiyeline_discovery_is_detected_on_2425() {
+        let mut fixture = b"1@shiyeline:6002:lus:LUS-PC:1:LUS-PC\0".to_vec();
+        fixture.extend_from_slice(&[
+            0xc4, 0xda, 0xcd, 0xf8, 0xcd, 0xa8, 0xc1, 0xaa, 0xcf, 0xb5, 0xc8, 0xcb, 0x00,
+        ]);
+        fixture.extend_from_slice(b"0123456789abcdef0123456789abcdef");
+
+        let parsed = parse_packet_for_port(&fixture, IPMSG_PORT).unwrap();
+
+        assert_eq!(parsed.dialect, Dialect::Intranet);
+        assert_eq!(parsed.user, "lus");
+        assert_eq!(parsed.host, "LUS-PC");
+        assert_eq!(parsed.extra, "LUS-PC");
     }
 
     #[test]
@@ -1729,36 +1750,24 @@ mod tests {
     }
 
     #[test]
-    fn configured_targets_are_announced_on_9011_and_2425() {
+    fn configured_targets_are_announced_on_2425() {
         let target = Ipv4Addr::new(172, 20, 10, 9);
         assert!(discovery_addresses(IPMSG_PORT, &[target])
             .contains(&SocketAddr::from((target, IPMSG_PORT))));
-        assert!(discovery_addresses(INTRANET_PORT, &[target])
-            .contains(&SocketAddr::from((target, INTRANET_PORT))));
     }
 
     #[test]
     #[ignore = "explicit fixed-port discovery range integration test"]
-    fn configured_range_sends_real_discovery_on_9011_and_2425() {
+    fn configured_range_sends_real_discovery_on_2425() {
         let target = Ipv4Addr::new(127, 0, 0, 2);
         let standard_receiver = UdpSocket::bind((target, IPMSG_PORT)).unwrap();
-        let intranet_receiver = UdpSocket::bind((target, INTRANET_PORT)).unwrap();
         standard_receiver
             .set_read_timeout(Some(IO_TIMEOUT))
             .unwrap();
-        intranet_receiver
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .unwrap();
-        let sockets = vec![
-            (
-                IPMSG_PORT,
-                Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()),
-            ),
-            (
-                INTRANET_PORT,
-                Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()),
-            ),
-        ];
+        let sockets = vec![(
+            IPMSG_PORT,
+            Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()),
+        )];
 
         announce_sockets(&sockets, &identity(), IPMSG_BR_ENTRY, &[target]).unwrap();
 
@@ -1767,75 +1776,6 @@ mod tests {
         let standard = parse_packet_for_port(&buffer[..standard_length], IPMSG_PORT).unwrap();
         assert_eq!(standard.command & COMMAND_MASK, IPMSG_BR_ENTRY);
         assert_eq!(standard.dialect, Dialect::Standard);
-        let (intranet_length, _) = intranet_receiver.recv_from(&mut buffer).unwrap();
-        let intranet = parse_packet_for_port(&buffer[..intranet_length], INTRANET_PORT).unwrap();
-        assert_eq!(intranet.command & COMMAND_MASK, IPMSG_BR_ENTRY);
-        assert_eq!(intranet.dialect, Dialect::Intranet);
-    }
-
-    #[test]
-    #[ignore = "explicit loopback integration test"]
-    fn intranet_gbk_message_round_trips_over_udp_loopback() {
-        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
-        receiver.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
-        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let intranet_identity = IpmsgIdentity {
-            user: "内网用户".to_string(),
-            host: "研发电脑".to_string(),
-            nickname: "RocketX 内网通".to_string(),
-            group: "研发组".to_string(),
-        };
-
-        announce(
-            &sender,
-            &intranet_identity,
-            IPMSG_BR_ENTRY,
-            receiver.local_addr().unwrap(),
-        )
-        .unwrap();
-        let mut buffer = vec![0_u8; MAX_DATAGRAM_BYTES];
-        let (length, address) = receiver.recv_from(&mut buffer).unwrap();
-        let discovery = parse_packet_for_port(&buffer[..length], INTRANET_PORT).unwrap();
-        let discovered_peer = peer_from_packet(&discovery, address, INTRANET_PORT);
-
-        assert_eq!(discovery.dialect, Dialect::Intranet);
-        assert_eq!(discovery.user, "内网用户");
-        assert_eq!(discovery.host, "研发电脑");
-        assert_eq!(discovered_peer.peer.nickname, "RocketX 内网通");
-        assert_eq!(discovered_peer.peer.group, "研发组");
-
-        let packet = build_packet(
-            &intranet_identity,
-            Dialect::Intranet,
-            "789",
-            IPMSG_SENDMSG | IPMSG_SENDCHECKOPT,
-            "RocketX 本机 9011 互通验证",
-            None,
-        )
-        .unwrap();
-
-        sender
-            .send_to(&packet, receiver.local_addr().unwrap())
-            .unwrap();
-        let (length, _) = receiver.recv_from(&mut buffer).unwrap();
-        let parsed = parse_packet_for_port(&buffer[..length], INTRANET_PORT).unwrap();
-
-        assert_eq!(parsed.dialect, Dialect::Intranet);
-        assert_eq!(parsed.extra, "RocketX 本机 9011 互通验证");
-    }
-
-    #[test]
-    #[ignore = "explicit fixed-port integration test"]
-    fn occupied_intranet_port_keeps_ipmsg_listener_available() {
-        let _blocked_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
-        let _blocked_tcp = TcpListener::bind((Ipv4Addr::LOCALHOST, INTRANET_PORT)).unwrap();
-
-        let (sockets, listeners) = bind_compatibility_ports(Ipv4Addr::LOCALHOST).unwrap();
-        let socket_ports = sockets.iter().map(|(port, _)| *port).collect::<Vec<_>>();
-        let listener_ports = listeners.iter().map(|(port, _)| *port).collect::<Vec<_>>();
-
-        assert_eq!(socket_ports, vec![IPMSG_PORT]);
-        assert_eq!(listener_ports, vec![IPMSG_PORT]);
     }
 
     #[test]

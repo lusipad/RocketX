@@ -56,6 +56,24 @@ Important rules enforced by `@rcx/app-sdk`:
 - A remote entry cannot request `agent:spawn` or `process:spawn`.
 - Unknown extension points are rejected.
 
+An iframe can additionally declare a bundled native service:
+
+```json
+{
+  "runtime": "iframe",
+  "entry": "index.html",
+  "service": {
+    "runtime": "native",
+    "command": "rcx-plugin-example",
+    "platforms": ["windows"],
+    "protocol": "jsonrpc-stdio"
+  },
+  "permissions": ["native:service"]
+}
+```
+
+This is not a sideloading API. `native:service` is accepted only for applications bundled into a signed RocketX desktop build. Commands are resolved from the bundled plugin resource directory, never from `PATH`; directory and URL installations are rejected. The iframe calls the generic `native.call` capability and receives Sidecar events as `native.event` Bridge events.
+
 Use `parseManifest` or `parseManifestJson` from `@rcx/app-sdk` when tooling needs to read a manifest. Do not copy the permission or extension-point lists into another parser.
 
 ## Bridge API
@@ -96,6 +114,8 @@ Common capability mappings include:
 | `storage.get/set/delete/list` | `storage:local` | Storage is scoped to the application and signed-in account. |
 | `net.fetch` | `net:fetch` | Only origins declared by `netAllow`; credential headers are stripped. |
 | `ui.notify` | `ui:notify` | Notification text is bounded by the host. |
+| `files.pick` | `files:read` | Desktop file picker; returns one user-selected local path. |
+| `native.call` | `native:service` | Signed bundled Sidecar only; bounded JSON-RPC over stdio. |
 
 Treat the examples as executable references rather than a complete promise of every future capability.
 

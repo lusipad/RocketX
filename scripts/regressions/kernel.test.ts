@@ -312,11 +312,12 @@ test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得�
   const manager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
   await assert.rejects(
     manager.installDirectory(await intranetLinkFiles('<!doctype html><script>/* spoof */</script>')),
-    /官方插件保留.*身份校验失败/,
+    /native service 只允许.*内置应用/,
   );
   assert.equal(manager.get('dev.rocketx.intranet-link'), undefined);
-
-  const installed = await manager.installDirectory(await intranetLinkFiles());
+  await manager.hydrate([await intranetLinkPackage()]);
+  const installed = manager.get('dev.rocketx.intranet-link');
+  assert.ok(installed);
   assert.equal(isOfficialApp(installed, 'dev.rocketx.intranet-link'), true);
   assert.equal(installed.enabled, false);
 });
@@ -336,7 +337,7 @@ test('内置内网通首次保持关闭，升级保留开关且不能卸载', as
   assert.equal(installed?.source.kind, 'bundled');
   assert.equal(installed?.enabled, false);
   assert.equal(installed?.official, true);
-  assert.deepEqual(installed?.granted, ['lan:discover', 'lan:transfer', 'ui:notify']);
+  assert.deepEqual(installed?.granted, ['native:service', 'storage:local', 'files:read', 'ui:notify']);
   assert.deepEqual(firstLifecycle, [], '默认关闭时不能激活插件运行时');
   await assert.rejects(
     firstManager.uninstall('dev.rocketx.intranet-link'),
@@ -364,6 +365,43 @@ test('内置内网通首次保持关闭，升级保留开关且不能卸载', as
   await disabledManager.hydrate([bundled]);
   assert.equal(disabledManager.get('dev.rocketx.intranet-link')?.enabled, false);
   assert.equal(disabledActivated, false, '关闭状态升级后仍不能激活运行时');
+});
+
+test('内置插件升级会移除旧权限并授权新声明的签名侧车能力', async () => {
+  const store = createRcxStore({ backend: createMemoryBackend() });
+  const legacyManifest = parseManifest({
+    id: 'dev.rocketx.intranet-link',
+    version: '1.2.0',
+    name: '内网通',
+    publisher: 'RocketX',
+    enabledByDefault: false,
+    runtime: 'iframe',
+    entry: 'index.html',
+    permissions: ['lan:discover', 'lan:transfer', 'ui:notify'],
+  });
+  await store.apps.set(legacyManifest.id, {
+    manifest: legacyManifest,
+    granted: ['lan:discover', 'lan:transfer', 'ui:notify'],
+    enabled: true,
+    official: true,
+    source: { kind: 'bundled', location: 'RocketX' },
+    entryContent: '<!doctype html>',
+    bundleHash: 'legacy',
+    installedAt: 1,
+  });
+
+  const manager = new AppManager(store);
+  await manager.hydrate([await intranetLinkPackage()]);
+
+  const upgraded = manager.get(legacyManifest.id);
+  assert.equal(upgraded?.manifest.version, '1.3.0');
+  assert.equal(upgraded?.enabled, true);
+  assert.deepEqual(upgraded?.granted, [
+    'native:service',
+    'storage:local',
+    'files:read',
+    'ui:notify',
+  ]);
 });
 
 test('manifest 可声明默认禁用，且应用禁用和卸载会等待运行时清理完成', async () => {

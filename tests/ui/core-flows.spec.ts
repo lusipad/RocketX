@@ -689,7 +689,7 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   expect(pageErrors).toEqual([]);
 });
 
-test('内网通插件可保存本机名称和 IP 范围并立即应用', async ({ page }) => {
+test('飞鸽 / IPMSG 插件可保存本机名称和 IP 范围并重新广播', async ({ page }) => {
   const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
   const bridgeBootstrap = `<script>
     window.__bridgeCalls = [];
@@ -697,25 +697,26 @@ test('内网通插件可保存本机名称和 IP 范围并立即应用', async (
     bridge.postMessage = (message) => {
       window.__bridgeCalls.push(message);
       const method = message.params?.method;
+      const params = message.params?.params || {};
       let result = null;
-      if (method === 'ipmsg.identity.get') {
-        result = { displayName: '', effectiveDisplayName: 'Admin' };
-      } else if (method === 'ipmsg.identity.set') {
-        result = {
-          ok: true,
-          displayName: message.params.params.displayName.trim(),
-          effectiveDisplayName: message.params.params.displayName.trim() || 'Admin',
-        };
-      } else if (method === 'ipmsg.discovery.get') {
-        result = { discoveryRanges: '192.168.20.0/30', discoveryTargetCount: 2 };
-      } else if (method === 'ipmsg.discovery.set') {
-        result = {
-          ok: true,
-          discoveryRanges: message.params.params.discoveryRanges.trim(),
-          discoveryTargetCount: 3,
-        };
-      } else if (method === 'ipmsg.peers') {
-        result = [];
+      if (method === 'storage.get') {
+        result = params.key === 'settings'
+          ? { displayName: '', discoveryRanges: '192.168.20.0/30' }
+          : [];
+      } else if (method === 'storage.set') {
+        result = { ok: true };
+      } else if (method === 'native.call') {
+        if (params.method === 'start') {
+          result = {
+            enabled: true,
+            port: 2425,
+            discoveryTargetCount: params.params.discoveryRanges ? 3 : 0,
+          };
+        } else if (params.method === 'validateDiscoveryRanges') {
+          result = { count: 3 };
+        } else if (params.method === 'peers') {
+          result = [];
+        }
       }
       queueMicrotask(() => bridge.dispatchEvent(new MessageEvent('message', {
         data: { jsonrpc: '2.0', id: message.id, result },
@@ -726,42 +727,60 @@ test('内网通插件可保存本机名称和 IP 范围并立即应用', async (
   await page.setContent(pluginHtml.replace('<script>', `${bridgeBootstrap}<script>`));
 
   await expect(page.getByLabel('本机显示名称')).toHaveValue('');
-  await expect(page.getByText('当前跟随 RocketX 账号昵称：“Admin”。')).toBeVisible();
-  await page.getByLabel('本机显示名称').fill('开发机');
-  await page.getByRole('button', { name: '保存并立即生效' }).click();
-  await expect(page.getByText('已保存并以“开发机”重新广播。')).toBeVisible();
   await expect(page.getByLabel('目标 IPv4 范围')).toHaveValue('192.168.20.0/30');
+  await expect(page.getByText('后台服务已启动，正在监听 UDP/TCP 2425；目标 IP 3 个。')).toBeVisible();
+  await page.getByLabel('本机显示名称').fill('开发机');
   await page.getByLabel('目标 IPv4 范围').fill('10.20.30.10-10.20.30.12');
-  await page.getByRole('button', { name: '保存并应用' }).click();
-  await expect(page.getByText('已应用 3 个目标，同时覆盖 9011 与 2425。')).toBeVisible();
+  await page.getByRole('button', { name: '保存并重新广播' }).click();
+  await expect(page.getByText('后台服务已启动，正在监听 UDP/TCP 2425；目标 IP 3 个。')).toBeVisible();
   const configured = await page.evaluate(() => {
     const calls = (window as unknown as {
-      __bridgeCalls: Array<{ params?: { method?: string; params?: unknown } }>;
+      __bridgeCalls: Array<{
+        params?: {
+          method?: string;
+          params?: { key?: string; value?: unknown; method?: string; params?: unknown };
+        };
+      }>;
     }).__bridgeCalls;
     return {
-      identity: calls.find((call) => call.params?.method === 'ipmsg.identity.set')?.params?.params,
-      discovery: calls.find((call) => call.params?.method === 'ipmsg.discovery.set')?.params?.params,
+      settings: calls.find((call) => (
+        call.params?.method === 'storage.set' && call.params.params?.key === 'settings'
+      ))?.params?.params?.value,
+      start: calls.filter((call) => (
+        call.params?.method === 'native.call' && call.params.params?.method === 'start'
+      )).at(-1)?.params?.params?.params,
     };
   });
   expect(configured).toEqual({
-    identity: { displayName: '开发机' },
-    discovery: { discoveryRanges: '10.20.30.10-10.20.30.12' },
+    settings: { displayName: '开发机', discoveryRanges: '10.20.30.10-10.20.30.12' },
+    start: {
+      userName: '开发机',
+      nickname: '开发机',
+      group: 'RocketX',
+      discoveryRanges: '10.20.30.10-10.20.30.12',
+    },
   });
 });
 
-test('内网通插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存范围并刷新设备', async ({ page }) => {
+test('飞鸽 / IPMSG 插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存范围并刷新设备', async ({ page }) => {
   const pluginHtml = readFileSync('plugins/intranet-link/index.html', 'utf8');
   const desktopSecurity = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'))
     .app.security as { csp: string; dangerousDisableAssetCspModification: string[] };
   expect(desktopSecurity.dangerousDisableAssetCspModification).toContain('script-src');
   const srcDoc = sandboxDocument({
     id: 'dev.rocketx.intranet-link',
-    name: '内网通',
-    version: '1.2.0',
+    name: '飞鸽 / IPMSG',
+    version: '1.3.0',
     publisher: 'RocketX',
     runtime: 'iframe',
     entry: 'index.html',
-    permissions: ['lan:discover'],
+    permissions: ['native:service', 'storage:local', 'files:read', 'ui:notify'],
+    service: {
+      runtime: 'native',
+      command: 'rcx-plugin-intranet-link',
+      platforms: ['windows'],
+      protocol: 'jsonrpc-stdio',
+    },
   }, pluginHtml);
 
   await page.setContent(`
@@ -771,7 +790,7 @@ test('内网通插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存
   `);
   await page.evaluate((html) => {
     const iframe = document.createElement('iframe');
-    iframe.title = '内网通';
+    iframe.title = '飞鸽 / IPMSG';
     iframe.sandbox.add('allow-scripts');
     let activePort: MessagePort | undefined;
     const connect = () => {
@@ -781,25 +800,34 @@ test('内网通插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存
       channel.port1.addEventListener('message', (event) => {
         const request = event.data;
         const method = request.params?.method;
+        const params = request.params?.params || {};
         let result = null;
-        if (method === 'ipmsg.identity.get') {
-          result = { displayName: 'WSL 节点', effectiveDisplayName: 'WSL 节点' };
-        } else if (method === 'ipmsg.discovery.get') {
-          result = { discoveryRanges: '192.168.20.0/30', discoveryTargetCount: 2 };
-        } else if (method === 'ipmsg.discovery.set') {
-          result = {
-            discoveryRanges: request.params.params.discoveryRanges.trim(),
-            discoveryTargetCount: 3,
-          };
-        } else if (method === 'ipmsg.peers') {
-          result = [{
-            id: 'peer-1',
-            user: 'tester',
-            host: 'wsl-peer',
-            nickname: 'WSL 测试节点',
-            dialect: 'ipmsg',
-            lastSeenMs: Date.now(),
-          }];
+        if (method === 'storage.get') {
+          result = params.key === 'settings'
+            ? { displayName: 'WSL 节点', discoveryRanges: '192.168.20.0/30' }
+            : [];
+        } else if (method === 'storage.set') {
+          result = { ok: true };
+        } else if (method === 'native.call') {
+          if (params.method === 'start') {
+            result = {
+              enabled: true,
+              port: 2425,
+              discoveryTargetCount: params.params.discoveryRanges === '10.20.30.10-10.20.30.12' ? 3 : 2,
+            };
+          } else if (params.method === 'validateDiscoveryRanges') {
+            result = { count: 3 };
+          } else if (params.method === 'peers') {
+            result = [{
+              id: 'peer-1',
+              user: 'tester',
+              host: 'wsl-peer',
+              nickname: 'WSL 测试节点',
+              dialect: 'ipmsg',
+              ip: '192.168.20.2',
+              lastSeenMs: Date.now(),
+            }];
+          }
         }
         channel.port1.postMessage({ jsonrpc: '2.0', id: request.id, result });
       });
@@ -816,14 +844,14 @@ test('内网通插件在桌面发布版 CSP 下通过真实 iframe Bridge 保存
     iframe.srcdoc = html;
   }, srcDoc);
 
-  const app = page.frameLocator('iframe[title="内网通"]');
+  const app = page.frameLocator('iframe[title="飞鸽 / IPMSG"]');
   await expect(app.getByLabel('本机显示名称')).toHaveValue('WSL 节点');
   await expect(app.getByLabel('目标 IPv4 范围')).toHaveValue('192.168.20.0/30');
-  await expect(app.getByText('发现 1 个内网通兼容联系人。')).toBeVisible();
+  await expect(app.getByText('发现 1 个联系人。')).toBeVisible();
   await page.evaluate(() => {
     (window as typeof window & { __reconnectBridge?: () => void }).__reconnectBridge?.();
   });
   await app.getByLabel('目标 IPv4 范围').fill('10.20.30.10-10.20.30.12');
-  await app.getByRole('button', { name: '保存并应用' }).click();
-  await expect(app.getByText('已应用 3 个目标，同时覆盖 9011 与 2425。')).toBeVisible();
+  await app.getByRole('button', { name: '保存并重新广播' }).click();
+  await expect(app.getByText('后台服务已启动，正在监听 UDP/TCP 2425；目标 IP 3 个。')).toBeVisible();
 });

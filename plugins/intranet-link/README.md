@@ -1,25 +1,25 @@
-# 内网通 RocketX 插件
+# 飞鸽 / IPMSG RocketX 插件
 
-这是一个独立 RocketX App 插件包，不依赖 RocketX 私有前端模块。安装目录只需要包含本目录的 `rcx.app.json` 与 `index.html`。
+该目录拥有完整的旧协议功能：`index.html` 是沙箱界面，`native/` 是独立 Rust Sidecar。RocketX 核心只提供通用的签名 Sidecar 生命周期、JSON-RPC 转发、应用存储和文件选择能力，不包含协议、端口或编码逻辑。
 
-## 能力
+## 兼容边界
 
-- `ipmsg.peers`：发现内网通 / 飞鸽 / 飞秋兼容联系人。
-- 可设置独立的本机显示名称；保存后兼容运行时会重新广播身份，留空则继续使用 RocketX 账号昵称。
-- Windows 多网卡环境会向每个有效网卡的定向广播地址宣告，并每 30 秒重新宣告，避免启动顺序不同导致双方长期互相看不见。
-- 可配置单个 IPv4、CIDR 或起止范围作为跨网段发现目标，合计最多展开 1024 个地址；同一范围会同时向内网通 `9011` 与 IP Messenger `2425` 宣告，留空时仍仅使用自动广播。
-- `ipmsg.send`：向选中的旧协议联系人发送聊天消息。
-- `ipmsg.offerFile`：由宿主文件选择器选择普通文件，再向旧协议联系人发送邀请；插件不能读取或提交任意本地路径，实际文件由宿主通过 TCP P2P 提供。
+- 标准 IP Messenger：UDP 2425 发现/消息，TCP 2425 普通文件传输。
+- 飞鸽/飞秋兼容报文：识别 `1_lbt` 前缀并使用 GBK。
+- 原版内网通：识别 `1@shiyeline` 的 2425 报文并使用 GBK，只承诺发现和文本。
+- 不监听或模拟私有 9011 协议；内网通联系人不会显示文件发送入口。
+- 所有旧协议联系人均为未认证 peer，不继承 RocketX 可信 LAN 身份。
 
-## 安装
+发现范围支持单个 IPv4、CIDR 和起止范围，合计最多展开 1024 个目标。附件不会自动下载或打开，接收文件必须由用户点击确认。
 
-1. 打开 RocketX 设置页。
-2. 进入 Apps。
-3. 选择 **Install local app**。
-4. 选择本目录。
-5. 确认 `lan:discover`、`lan:transfer`、`ui:notify` 权限后安装。
-6. 安装后插件默认禁用；需要使用时在 Apps 中启用，禁用或卸载会停止 2425/9011 监听并移除兼容频道。
+## 运行方式
 
-跨网段发现范围可在插件页面配置，例如 `192.168.20.0/24`、`10.20.30.10-10.20.30.50` 或单个 `172.16.8.9`。范围只补充发现目标，不能绕过路由、防火墙或终端安全策略；超过 1024 个目标、反向范围、组播和无效地址会被拒绝。
+插件随 RocketX 签名桌面包交付，默认关闭。启用时宿主从只读资源目录启动 `rcx-plugin-intranet-link`，禁用或退出时关闭 Sidecar 并释放 2425。当前 Sidecar 只随 Windows 包构建，普通目录安装和 URL 安装均不能获得 `native:service` 权限。
 
-旧协议 peer 始终是未认证 legacy peer，不复用 M9 可信 LAN 身份。
+本地验证：
+
+```powershell
+cargo test --manifest-path plugins/intranet-link/native/Cargo.toml --locked
+pnpm prepare:sidecars
+pnpm test:regression
+```

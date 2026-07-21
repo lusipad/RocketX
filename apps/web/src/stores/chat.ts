@@ -62,7 +62,6 @@ import {
   recordLanIncoming,
   recordLanOutgoing,
 } from '../lan/outbox';
-import { initializeIpmsgRuntime, IPMSG_RID, useIpmsg } from '../ipmsg/store';
 import { stripAgentSessionMarker } from '../agent/card';
 import { agentReplyNotificationTracker } from '../agent/replyNotification';
 
@@ -94,8 +93,6 @@ export interface Conversation {
   lastPreview: string;
   /** DM 用对方用户名取头像 */
   avatarUsername?: string;
-  /** 本机会话来源；不会触发 Rocket.Chat 会话 API。 */
-  source?: 'ipmsg';
 }
 
 /** 侧栏分区（对齐 Rocket.Chat 官方的 sidebarSectionsOrder） */
@@ -1191,24 +1188,9 @@ export const useChat = create<ChatState>((set, get) => ({
     void startLanRuntime(acceptLanMessage, acceptLanFile).catch((error) => {
       console.warn('[rcx] LAN 服务启动失败', error);
     });
-    void initializeIpmsgRuntime();
   },
 
   openRoom: async (rid) => {
-    if (rid === IPMSG_RID) {
-      set({
-        activeRid: rid,
-        rightPanel: null,
-        pendingFiles: null,
-        replyTo: null,
-        highlightMid: null,
-        selectMode: false,
-        selectedMids: new Set(),
-        scrollNonce: get().scrollNonce + 1,
-      });
-      useIpmsg.getState().markRead();
-      return;
-    }
     const requestGeneration = retainedRoomGeneration;
     const sub = get().subscriptions[rid];
     // 打开有未读的会话时记录「以下为新消息」位置（取上次已读时间）。

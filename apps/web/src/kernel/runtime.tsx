@@ -1,6 +1,8 @@
 import type { RcMessage } from '@rcx/rc-client';
 import { Bell, Blocks, TerminalSquare } from 'lucide-react';
-import { getServerBase, httpFetch, rest } from '../lib/client';
+import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
@@ -43,7 +45,6 @@ import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
-import { INTRANET_LINK_APP_ID, IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -53,6 +54,7 @@ export const installedApps = new AppManager(kernelStore);
 
 let initialized = false;
 let bridgeEventsStarted = false;
+const nativeServiceStarts = new Map<string, Promise<void>>();
 
 function WorkbenchModule() {
   const config = useWorkbench((state) => state.config);
@@ -76,11 +78,26 @@ function plainMessage(message: RcMessage): RcMessage {
   return structuredClone(message);
 }
 
-function requireIntranetLink(appId: string): void {
-  const app = installedApps.get(appId);
-  if (!app || !isOfficialApp(app, INTRANET_LINK_APP_ID)) {
-    throw new Error('旧协议能力仅供身份校验通过的内网通官方插件使用');
+function desktopPlatform(): 'windows' | 'macos' | 'linux' {
+  const value = navigator.userAgent.toLowerCase();
+  if (value.includes('windows')) return 'windows';
+  if (value.includes('mac')) return 'macos';
+  return 'linux';
+}
+
+async function startNativeService(app: InstalledApp): Promise<void> {
+  const service = app.manifest.service;
+  if (!service) return;
+  if (service.platforms && !service.platforms.includes(desktopPlatform())) return;
+  if (!isTauri) throw new Error('native service 仅支持桌面客户端');
+  if (!isOfficialApp(app) || app.source.kind !== 'bundled') {
+    throw new Error('native service 只允许签名发布的内置应用启动');
   }
+  await invoke('native_service_start', {
+    appId: app.manifest.id,
+    command: service.command,
+    args: service.args,
+  });
 }
 
 function registerCapabilities(): void {
@@ -182,81 +199,34 @@ function registerCapabilities(): void {
     });
     return { ok: true, messageId };
   });
-  capabilityBus.register('ipmsg.peers', 'lan:discover', async (_params, context) => {
-    requireIntranetLink(context.appId);
-    const ipmsg = useIpmsg.getState();
-    if (!ipmsg.running) await ipmsg.setEnabled(true);
-    await useIpmsg.getState().refreshPeers();
-    return useIpmsg.getState().peers.map(({ id, user, host, nickname, group, dialect, supportsUtf8, lastSeenMs }) => ({
-      id,
-      user,
-      host,
-      nickname,
-      group,
-      dialect,
-      supportsUtf8,
-      lastSeenMs,
-    }));
-  });
-  capabilityBus.register('ipmsg.identity.get', 'lan:discover', (_params, context) => {
-    requireIntranetLink(context.appId);
-    const { displayName } = useIpmsg.getState();
-    const user = useAuth.getState().user;
-    return {
-      displayName,
-      effectiveDisplayName: displayName || user?.name || user?.username || '',
-    };
-  });
-  capabilityBus.register('ipmsg.identity.set', 'lan:discover', async (params, context) => {
-    requireIntranetLink(context.appId);
-    const displayName = stringParam(params, 'displayName');
-    await useIpmsg.getState().setDisplayName(displayName);
-    const saved = useIpmsg.getState().displayName;
-    const user = useAuth.getState().user;
-    return {
-      ok: true,
-      displayName: saved,
-      effectiveDisplayName: saved || user?.name || user?.username || '',
-    };
-  });
-  capabilityBus.register('ipmsg.discovery.get', 'lan:discover', (_params, context) => {
-    requireIntranetLink(context.appId);
-    const { discoveryRanges, discoveryTargetCount } = useIpmsg.getState();
-    return { discoveryRanges, discoveryTargetCount };
-  });
-  capabilityBus.register('ipmsg.discovery.set', 'lan:discover', async (params, context) => {
-    requireIntranetLink(context.appId);
-    const discoveryRanges = stringParam(params, 'discoveryRanges');
-    const discoveryTargetCount = await useIpmsg.getState().setDiscoveryRanges(discoveryRanges);
-    return { ok: true, discoveryRanges: discoveryRanges.trim(), discoveryTargetCount };
-  });
-  capabilityBus.register('ipmsg.send', 'lan:transfer', async (params, context) => {
-    requireIntranetLink(context.appId);
-    const peerId = stringParam(params, 'peerId');
-    const text = stringParam(params, 'text');
-    if (!peerId) throw new Error('ipmsg.send 缺少 peerId');
-    const ipmsg = useIpmsg.getState();
-    if (!ipmsg.running) await ipmsg.setEnabled(true);
-    ipmsg.selectPeer(peerId);
-    await useIpmsg.getState().sendMessage(text);
-    return { ok: true };
-  });
-  capabilityBus.register('ipmsg.offerFile', 'lan:transfer', async (params, context) => {
-    requireIntranetLink(context.appId);
-    const peerId = stringParam(params, 'peerId');
-    if (!peerId) throw new Error('ipmsg.offerFile 缺少 peerId');
-    const ipmsg = useIpmsg.getState();
-    if (!ipmsg.running) await ipmsg.setEnabled(true);
-    ipmsg.selectPeer(peerId);
+  capabilityBus.register('files.pick', 'files:read', async () => {
+    if (!isTauri) throw new Error('文件选择仅支持桌面客户端');
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({
-      title: '选择要发送的文件',
+      title: '选择文件',
       multiple: false,
       directory: false,
     });
-    if (typeof selected !== 'string') return { ok: false, cancelled: true };
-    await useIpmsg.getState().offerFile(selected);
-    return { ok: true };
+    return typeof selected === 'string' ? { path: selected } : { cancelled: true };
+  });
+  capabilityBus.register('native.call', 'native:service', async (params, context) => {
+    const app = installedApps.get(context.appId);
+    if (!app?.manifest.service || !isOfficialApp(app) || app.source.kind !== 'bundled') {
+      throw new Error('当前应用没有可调用的签名 native service');
+    }
+    if (app.manifest.service.platforms && !app.manifest.service.platforms.includes(desktopPlatform())) {
+      throw new Error(`native service 暂不支持 ${desktopPlatform()}`);
+    }
+    const object = params as { method?: unknown; params?: unknown } | undefined;
+    if (typeof object?.method !== 'string' || !object.method) throw new Error('native.call 缺少 method');
+    const start = nativeServiceStarts.get(context.appId) ?? startNativeService(app);
+    nativeServiceStarts.set(context.appId, start);
+    await start;
+    return invoke('native_service_call', {
+      appId: context.appId,
+      method: object.method,
+      params: object.params ?? {},
+    });
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>
     kernelStore.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),
@@ -348,10 +318,14 @@ function emitAfterOpen(appId: string, event: string, payload: unknown): void {
 function activateApp(app: InstalledApp): () => void | Promise<void> {
   permissionGate.setGrant({ appId: app.manifest.id, granted: app.granted });
   const cleanups: Array<() => void | Promise<void>> = [];
-  const ownsIpmsgRuntime = isOfficialApp(app, INTRANET_LINK_APP_ID);
-  if (ownsIpmsgRuntime) {
-    void useIpmsg.getState().setEnabled(true).catch((error) => {
-      toast.error(error, '内网通插件启动失败');
+  if (app.manifest.service && app.granted.includes('native:service')) {
+    const start = startNativeService(app);
+    nativeServiceStarts.set(app.manifest.id, start);
+    void start.catch((error) => toast.error(error, `${app.manifest.name} 后台服务启动失败`));
+    cleanups.push(async () => {
+      nativeServiceStarts.delete(app.manifest.id);
+      await start.catch(() => {});
+      if (isTauri) await invoke('native_service_stop', { appId: app.manifest.id }).catch(() => {});
     });
   }
   if (app.manifest.runtime === 'worker') {
@@ -491,12 +465,6 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
     if (module.startsWith(`app:${app.manifest.id}:`)) useUI.getState().setModule('messages');
     const panel = useChat.getState().rightPanel;
     if (panel?.kind.startsWith(`app:${app.manifest.id}:`)) useChat.getState().setPanel(null);
-    if (ownsIpmsgRuntime) {
-      await useIpmsg.getState().setEnabled(false).catch((error) => {
-        console.warn('[rcx] 内网通插件状态清理失败', error);
-      });
-      if (useChat.getState().activeRid === IPMSG_RID) useChat.setState({ activeRid: null });
-    }
   };
 }
 
@@ -572,6 +540,15 @@ function registerBridgeEvents(): void {
   if (bridgeEventsStarted) return;
   bridgeEventsStarted = true;
   startSharedAgentBridge();
+  if (isTauri) {
+    void listen<{ appId: string; event: string; payload: unknown }>(
+      'rocketx://native-service-event',
+      ({ payload }) => bridgeHost.emit(payload.appId, 'native.event', {
+        event: payload.event,
+        payload: payload.payload,
+      }),
+    );
+  }
   useChat.subscribe((state, previous) => {
     if (state.activeRid !== previous.activeRid) {
       bridgeHost.emitAll('room.changed', { rid: state.activeRid });

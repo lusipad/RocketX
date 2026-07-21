@@ -25,8 +25,6 @@ import MessageList from './MessageList';
 import Composer from './Composer';
 import ContextMenu from './ContextMenu';
 import { useKernelContributions } from '../kernel/registry';
-import { IPMSG_RID } from '../ipmsg/store';
-import IpmsgChatArea from './IpmsgChatArea';
 
 function HeaderButton({
   icon: Icon,
@@ -101,7 +99,7 @@ export default function ChatArea({
   const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
 
   useEffect(() => {
-    if (!activeRid || activeRid === IPMSG_RID) return;
+    if (!activeRid) return;
     const sharedAgent = useSharedAgent.getState();
     const sessionKey = agentRoomSessionKey(activeRid);
     const local = sharedAgent.sessions[sessionKey];
@@ -133,8 +131,6 @@ export default function ChatArea({
       </main>
     );
   }
-
-  if (activeRid === IPMSG_RID) return <IpmsgChatArea />;
 
   // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像顶上
   const dmSize = room?.uids?.length ?? room?.usersCount;

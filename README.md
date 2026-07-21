@@ -95,7 +95,7 @@ RocketX applications run behind a manifest, permission gate, and JSON-RPC bridge
 
 - RocketX uses public `/api/v1/*` and `/websocket` interfaces and does not patch the Rocket.Chat server.
 - Rocket.Chat `8.6.1` is the pinned, fully tested server in the repository. Other versions are not implied by that result.
-- IP Messenger compatibility mode is unauthenticated legacy interoperability and is disabled by default; its optional IPv4 discovery ranges target both Intranet Link port 9011 and IP Messenger port 2425, separately from the authenticated RocketX LAN channel.
+- The optional Windows "Feiq / IPMSG" plugin owns its protocol Sidecar and uses UDP/TCP 2425. Standard IPMSG supports messages and ordinary files; original Intranet Link peers are limited to `1@shiyeline` discovery and text on 2425. Private port 9011 is not implemented, and legacy peers never inherit RocketX LAN trust.
 - Secrets for native integrations are expected to stay in the operating-system credential store.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Third-party licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

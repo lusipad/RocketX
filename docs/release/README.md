@@ -1,6 +1,6 @@
 # Release evidence and publication
 
-The current release target is `v0.25.10`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.25.11`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, npm, and explicit publication controls below, but it does not claim 1.0 maturity. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
 ## Future 1.0 external acceptance evidence
 
@@ -41,5 +41,5 @@ Never delete and recreate a released npm version or rewrite an existing release 
 
 ## Plugin bundle
 
-The desktop release workflow packages every directory under `plugins/` into `rocketx-plugins-<version>.zip` during the release gate and uploads that archive to the draft GitHub Release before checksums are generated. Users can download this archive, unzip it, and install any contained plugin with **Settings → Apps → Install local app** by selecting the plugin directory that contains `rcx.app.json`.
+The desktop release workflow packages every directory under `plugins/` into `rocketx-plugins-<version>.zip` during the release gate and uploads that archive to the draft GitHub Release before checksums are generated. Regular iframe plugins in that archive can be installed with **Settings → Apps → Install local app**. Plugins that declare `native:service`, including `intranet-link`, are signed built-ins: the archive contains their auditable source, while their executable Sidecar is delivered only inside the RocketX desktop package and cannot be granted to a directory or URL install.
 

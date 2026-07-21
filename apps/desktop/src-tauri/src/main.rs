@@ -4,9 +4,9 @@
 mod agent_bot;
 mod butler_db;
 mod diagnostics;
-mod ipmsg;
 mod lan;
 mod mcp;
+mod native_service;
 mod proc;
 mod winauth;
 
@@ -585,14 +585,9 @@ fn main() {
             agent_bot::agent_bot_config_status,
             agent_bot::agent_bot_config_delete,
             agent_bot::agent_bot_send,
-            ipmsg::ipmsg_start,
-            ipmsg::ipmsg_stop,
-            ipmsg::ipmsg_status,
-            ipmsg::ipmsg_validate_discovery_ranges,
-            ipmsg::ipmsg_peers,
-            ipmsg::ipmsg_send_message,
-            ipmsg::ipmsg_offer_file,
-            ipmsg::ipmsg_download_file,
+            native_service::native_service_start,
+            native_service::native_service_call,
+            native_service::native_service_stop,
             lan::lan_identity_get,
             lan::lan_service_start,
             lan::lan_service_stop,
@@ -606,7 +601,7 @@ fn main() {
         .manage(proc::CodexAppServerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
-        .manage(ipmsg::IpmsgRuntimeState::default())
+        .manage(native_service::NativeServiceState::default())
         .manage(lan::LanKeychainLock::default())
         .manage(lan::LanRuntimeState::default())
         // HTTP 走 Rust 通道，绕开 webview CORS——连接任意 Rocket.Chat 服务器
@@ -694,7 +689,7 @@ fn main() {
         .expect("error while building RocketX")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                ipmsg::shutdown(app);
+                native_service::shutdown(app);
                 proc::shutdown(app);
             }
         });

@@ -3,6 +3,9 @@
 日期：2026-07-17
 版本：v0.19.0
 
+> 当前实现已迁移到 `plugins/intranet-link/native` Sidecar；以下 v0.19.0 结果保留为历史验收证据。
+> 复跑命令中的 Cargo 清单应改为 `plugins/intranet-link/native/Cargo.toml`。
+
 ## 交付边界
 
 - 默认关闭、用户显式开启的 IP Messenger 共存模式；固定 UDP/TCP 2425。
@@ -21,7 +24,7 @@
 
 ```powershell
 $env:ROCKETX_IPMSG_OFFICIAL_DIR='<官方 5.8.3 解包目录>'
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked `
+cargo test --manifest-path plugins/intranet-link/native/Cargo.toml --locked `
   official_ipmsg_5x_message_and_file_interoperate -- `
   --ignored --test-threads=1
 ```

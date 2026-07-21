@@ -3674,12 +3674,11 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.25.10"
+version = "0.25.11"
 dependencies = [
  "base64 0.22.1",
  "blake3",
  "ed25519-dalek",
- "encoding_rs",
  "getrandom 0.4.3",
  "keyring",
  "log",

@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
-const PLUGINS = ['intranet-link'] as const;
+const pluginRoot = new URL('../../plugins/intranet-link/', import.meta.url);
+const manifestText = readFile(new URL('rcx.app.json', pluginRoot), 'utf8');
+const entryText = readFile(new URL('index.html', pluginRoot), 'utf8');
+const sidecarText = readFile(new URL('native/src/runtime.rs', pluginRoot), 'utf8');
+const sidecarMainText = readFile(new URL('native/src/main.rs', pluginRoot), 'utf8');
 const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
-const ipmsgBackendText = readFile(new URL('../../apps/desktop/src-tauri/src/ipmsg.rs', import.meta.url), 'utf8');
-const ipmsgStoreText = readFile(new URL('../../apps/web/src/ipmsg/store.ts', import.meta.url), 'utf8');
-const settingsText = readFile(new URL('../../apps/web/src/pages/SettingsPage.tsx', import.meta.url), 'utf8');
-const chatStoreText = readFile(new URL('../../apps/web/src/stores/chat.ts', import.meta.url), 'utf8');
+const nativeHostText = readFile(new URL('../../apps/desktop/src-tauri/src/native_service.rs', import.meta.url), 'utf8');
+const desktopMainText = readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8');
 const bundledAppsText = readFile(new URL('../../apps/web/src/kernel/bundled.ts', import.meta.url), 'utf8');
 
 function capabilityContract(source: string): Map<string, string> {
@@ -17,113 +19,105 @@ function capabilityContract(source: string): Map<string, string> {
   );
 }
 
-for (const plugin of PLUGINS) {
-  test(`官方插件 ${plugin} 的 manifest、入口和权限契约保持一致`, async () => {
-    const root = new URL(`../../plugins/${plugin}/`, import.meta.url);
-    const manifestText = await readFile(new URL('rcx.app.json', root), 'utf8');
-    const manifest = JSON.parse(manifestText) as {
-      runtime?: unknown;
-      entry?: unknown;
-      permissions?: unknown;
-      enabledByDefault?: unknown;
-    };
-    assert.equal(manifest.runtime, 'iframe');
-    assert.equal(manifest.entry, 'index.html');
-    assert.ok(Array.isArray(manifest.permissions), `${plugin} 必须声明 permissions`);
-    await stat(new URL(String(manifest.entry), root));
-
-    const html = await readFile(new URL(String(manifest.entry), root), 'utf8');
-    assert.match(html, /<!doctype html>/i);
-    assert.doesNotMatch(html, /<script\b[^>]*\bsrc\s*=/i, '官方插件必须保持单文件且不能加载外部脚本');
-    assert.doesNotMatch(html, /\b(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)\b/, '动态内容必须通过安全 DOM API 写入');
-    for (const script of [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)]) {
-      assert.doesNotThrow(() => new Function(script[1]), `${plugin} 的内联脚本必须是合法 JavaScript`);
-    }
-
-    const methods = [...html.matchAll(/\bcall\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
-    const methodPermissions = capabilityContract(await runtimeText);
-    for (const method of methods) {
-      const permission = methodPermissions.get(method);
-      assert.ok(permission, `${plugin} 调用了未知 capability: ${method}`);
-      assert.ok(manifest.permissions.includes(permission), `${plugin} 调用 ${method} 但未声明 ${permission}`);
-    }
-
-    if (html.includes("method: 'rcx/requestUI'") || html.includes('method: "rcx/requestUI"')) {
-      assert.ok(manifest.permissions.includes('ui:notify'), `${plugin} 请求宿主通知但未声明 ui:notify`);
-    }
-  });
-}
-
-test('内网通文件邀请必须由宿主选择文件，不能接受插件提供的本地路径', async () => {
-  const html = await readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8');
-  const runtime = await runtimeText;
-  const offerFileHandler = runtime.match(
-    /capabilityBus\.register\('ipmsg\.offerFile'[\s\S]*?capabilityBus\.register\('storage\.get'/,
-  )?.[0];
-
-  assert.ok(offerFileHandler, '必须注册 ipmsg.offerFile capability');
-  assert.doesNotMatch(html, /file-path|\bpath\s*:/, '插件不能提交任意本地文件路径');
-  assert.doesNotMatch(offerFileHandler, /stringParam\(params, 'path'\)/, '宿主不能信任插件提供的 path');
-  assert.match(offerFileHandler, /@tauri-apps\/plugin-dialog/, '宿主必须通过原生文件选择器获得路径');
-});
-
-test('内网通作为默认禁用的官方插件，不能绕过应用生命周期独立启动', async () => {
-  const manifest = JSON.parse(
-    await readFile(new URL('../../plugins/intranet-link/rcx.app.json', import.meta.url), 'utf8'),
-  ) as { enabledByDefault?: unknown };
+test('飞鸽插件以 iframe 加签名 native service 运行并声明最小权限', async () => {
+  const manifest = JSON.parse(await manifestText) as {
+    runtime: string;
+    entry: string;
+    enabledByDefault: boolean;
+    permissions: string[];
+    service?: { runtime?: string; command?: string; platforms?: string[]; protocol?: string };
+  };
+  assert.equal(manifest.runtime, 'iframe');
+  assert.equal(manifest.entry, 'index.html');
   assert.equal(manifest.enabledByDefault, false);
-  assert.match(await chatStoreText, /initializeIpmsgRuntime/);
-  assert.doesNotMatch(await settingsText, /内网通兼容模式/);
-  assert.match(await ipmsgStoreText, /const APP_ID = INTRANET_LINK_APP_ID/);
-  assert.match(await ipmsgStoreText, /appManager\(\)\.get\(APP_ID\)\?\.enabled/);
-  assert.match(await runtimeText, /isOfficialApp\(app, INTRANET_LINK_APP_ID\)/);
-  assert.match(await runtimeText, /installedApps\.get\(appId\)/);
-  assert.match(await runtimeText, /requireIntranetLink\(context\.appId\)/);
-  assert.match(await runtimeText, /if \(!ipmsg\.running\) await ipmsg\.setEnabled\(true\)/);
-  assert.match(await runtimeText, /setEnabled\(false\)/);
-  assert.match(await runtimeText, /activeRid === IPMSG_RID/);
-  assert.match(await chatStoreText, /startLanRuntime/);
-  assert.match(await settingsText, /局域网直传与离线回灌/);
+  assert.deepEqual(manifest.permissions, ['native:service', 'storage:local', 'files:read', 'ui:notify']);
+  assert.deepEqual(manifest.service, {
+    runtime: 'native',
+    command: 'rcx-plugin-intranet-link',
+    platforms: ['windows'],
+    protocol: 'jsonrpc-stdio',
+  });
+  await stat(new URL(manifest.entry, pluginRoot));
+
+  const html = await entryText;
+  assert.match(html, /<!doctype html>/i);
+  assert.doesNotMatch(html, /<script\b[^>]*\bsrc\s*=/i);
+  assert.doesNotMatch(html, /\b(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)\b/);
+  for (const script of [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)]) {
+    assert.doesNotThrow(() => new Function(script[1]));
+  }
+  const methods = [...html.matchAll(/\bcall\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+  const methodPermissions = capabilityContract(await runtimeText);
+  for (const method of methods) {
+    const permission = methodPermissions.get(method);
+    assert.ok(permission, `插件调用了未知 capability: ${method}`);
+    assert.ok(manifest.permissions.includes(permission), `插件调用 ${method} 但未声明 ${permission}`);
+  }
+});
+
+test('本地文件路径只能来自宿主文件选择器再传给签名 sidecar', async () => {
+  const html = await entryText;
+  const runtime = await runtimeText;
+  assert.match(html, /call\('files\.pick',\{\}\)/);
+  assert.match(html, /nativeCall\('offerFile',\{peerId:selectedPeer\.id,path:selected\.path\}\)/);
+  assert.match(runtime, /capabilityBus\.register\('files\.pick', 'files:read'/);
+  assert.match(runtime, /@tauri-apps\/plugin-dialog/);
+  assert.match(runtime, /capabilityBus\.register\('native\.call', 'native:service'/);
+  assert.match(runtime, /app\.source\.kind !== 'bundled'/);
+});
+
+test('启停生命周期只经过通用 native service 宿主', async () => {
+  const runtime = await runtimeText;
+  const desktop = await desktopMainText;
+  assert.match(runtime, /startNativeService\(app\)/);
+  assert.match(runtime, /native_service_stop/);
+  assert.match(runtime, /bridgeHost\.emit\(payload\.appId, 'native\.event'/);
+  assert.match(desktop, /native_service::native_service_start/);
+  assert.match(desktop, /native_service::native_service_call/);
+  assert.match(desktop, /native_service::shutdown\(app\)/);
+  assert.doesNotMatch(runtime, /ipmsg|feiq|shiyeline|2425|9011/i);
+  assert.doesNotMatch(desktop, /ipmsg|feiq|shiyeline|2425|9011/i);
   assert.match(await bundledAppsText, /plugins\/intranet-link\/rcx\.app\.json\?raw/);
-  assert.match(await bundledAppsText, /plugins\/intranet-link\/index\.html\?raw/);
-  assert.match(await runtimeText, /installedApps\.hydrate\(BUNDLED_APPS\)/);
-  assert.match(await settingsText, /内置 · 默认关闭/);
 });
 
-test('9011 被占用时保留 2425 兼容模式并向界面暴露降级状态', async () => {
-  assert.match(await ipmsgBackendText, /intranet_available/);
-  assert.match(await ipmsgStoreText, /intranetAvailable: status\.intranetAvailable/);
-  const chatArea = await readFile(new URL('../../apps/web/src/components/IpmsgChatArea.tsx', import.meta.url), 'utf8');
-  assert.match(chatArea, /9011 被占用，内网通兼容不可用/);
+test('通用宿主拒绝 PATH 查找与目录逃逸并限制 JSON 帧', async () => {
+  const host = await nativeHostText;
+  const tauriConfig = JSON.parse(await readFile('apps/desktop/src-tauri/tauri.conf.json', 'utf8')) as {
+    bundle?: { resources?: Record<string, string> };
+  };
+  assert.match(host, /value\.starts_with\("rcx-plugin-"\)/);
+  assert.match(host, /contained_file\(&root/);
+  assert.match(host, /!file\.starts_with\(&root\)/);
+  assert.match(host, /MAX_FRAME_BYTES: usize = 1024 \* 1024/);
+  assert.match(host, /CALL_TIMEOUT/);
+  assert.match(host, /stdin\.take\(\)/);
+  assert.match(host, /child\.kill\(\)/);
+  assert.deepEqual(tauriConfig.bundle?.resources, { 'resources/plugins/': 'plugins/' });
+  assert.match(
+    (tauriConfig as { build?: { beforeBuildCommand?: string } }).build?.beforeBuildCommand ?? '',
+    /^pnpm -w prepare:sidecars && /,
+  );
 });
 
-test('可配置发现范围由宿主校验、持久化并同时覆盖 9011 与 2425', async () => {
-  const html = await readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8');
-  assert.match(html, /ipmsg\.discovery\.get/);
-  assert.match(html, /ipmsg\.discovery\.set/);
-  assert.match(html, /9011 与 IP Messenger 2425/);
-  assert.match(await runtimeText, /capabilityBus\.register\('ipmsg\.discovery\.set', 'lan:discover'/);
-  assert.match(await ipmsgStoreText, /ipmsg_validate_discovery_ranges/);
-  assert.match(await ipmsgStoreText, /discoveryRanges/);
-  assert.match(await ipmsgBackendText, /MAX_DISCOVERY_TARGETS: usize = 1024/);
-  assert.match(await ipmsgBackendText, /discovery_addresses\(IPMSG_PORT, &\[target\]\)/);
-  assert.match(await ipmsgBackendText, /discovery_addresses\(INTRANET_PORT, &\[target\]\)/);
+test('协议、编码、2425 发现和文件传输全部留在插件 sidecar', async () => {
+  const sidecar = await sidecarText;
+  assert.match(sidecar, /IPMSG_PORT: u16 = 2425/);
+  assert.match(sidecar, /version\.starts_with\("1_lbt"\)/);
+  assert.match(sidecar, /version\.starts_with\("1@shiyeline"\)/);
+  assert.match(sidecar, /GBK/);
+  assert.match(sidecar, /TcpListener/);
+  assert.match(sidecar, /MAX_DISCOVERY_TARGETS: usize = 1024/);
+  assert.doesNotMatch(sidecar, /9011|INTRANET_PORT/);
+  assert.match(await sidecarMainText, /"jsonrpc": "2\.0"/);
 });
 
-test('内网通独立显示名称由宿主持久化并在保存后重新广播', async () => {
-  const html = await readFile(new URL('../../plugins/intranet-link/index.html', import.meta.url), 'utf8');
-  const store = await ipmsgStoreText;
-  assert.match(html, /ipmsg\.identity\.get/);
-  assert.match(html, /ipmsg\.identity\.set/);
-  assert.match(await runtimeText, /capabilityBus\.register\('ipmsg\.identity\.set', 'lan:discover'/);
-  assert.match(store, /displayName: saved\?\.displayName \?\? ''/);
-  assert.match(store, /nickname: useIpmsg\.getState\(\)\.displayName \|\| user\.name \|\| user\.username/);
-  assert.match(store, /if \(wasRunning\) await startRuntime\(\)/);
-});
-
-test('内网通联系人原生下拉框显式适配主题颜色', async () => {
-  const chatArea = await readFile(new URL('../../apps/web/src/components/IpmsgChatArea.tsx', import.meta.url), 'utf8');
-  const styles = await readFile(new URL('../../apps/web/src/styles.css', import.meta.url), 'utf8');
-  assert.match(chatArea, /ipmsg-peer-select/);
-  assert.match(styles, /\.ipmsg-peer-select option[\s\S]*?background-color: var\(--color-surface-2\);[\s\S]*?color: var\(--color-ink\);/);
+test('插件自己持久化设置和消息，并对原版内网通禁用文件入口', async () => {
+  const html = await entryText;
+  assert.match(html, /storage\.set/);
+  assert.match(html, /key:'settings'/);
+  assert.match(html, /key:'messages'/);
+  assert.match(html, /peer\.dialect!=='intranet'/);
+  assert.match(html, /原版内网通只支持 2425 文本/);
+  assert.match(html, /nativeCall\('start'/);
+  assert.match(html, /nativeCall\('validateDiscoveryRanges'/);
 });

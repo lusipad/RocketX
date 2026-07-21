@@ -16,6 +16,7 @@ export const APP_PERMISSIONS = [
   'lan:transfer',
   'agent:spawn',
   'process:spawn',
+  'native:service',
 ] as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[number];
@@ -34,6 +35,14 @@ export interface ManifestContribution {
   [key: string]: unknown;
 }
 
+export interface NativeServiceManifest {
+  runtime: 'native';
+  command: string;
+  args?: string[];
+  platforms?: Array<'windows' | 'macos' | 'linux'>;
+  protocol: 'jsonrpc-stdio';
+}
+
 export interface RcxAppManifest {
   id: string;
   version: string;
@@ -43,6 +52,7 @@ export interface RcxAppManifest {
   publisher: string;
   runtime: AppRuntime;
   entry: string | { command: string; args?: string[]; env?: Record<string, string> };
+  service?: NativeServiceManifest;
   permissions: AppPermission[];
   netAllow?: string[];
   contributes?: Partial<Record<ExtensionPoint, ManifestContribution[]>>;
@@ -118,6 +128,41 @@ export function parseManifest(value: unknown): RcxAppManifest {
     throw new Error('远程应用不能申请 agent:spawn 或 process:spawn');
   }
 
+  let service: NativeServiceManifest | undefined;
+  if (raw.service !== undefined) {
+    if (!raw.service || typeof raw.service !== 'object' || Array.isArray(raw.service)) {
+      throw new Error('service 必须是对象');
+    }
+    if (runtime !== 'iframe') throw new Error('native service 当前只能附加到 iframe runtime');
+    if (!permissions.includes('native:service')) throw new Error('声明 service 时必须申请 native:service');
+    const rawService = raw.service as Record<string, unknown>;
+    if (rawService.runtime !== 'native') throw new Error('service.runtime 必须是 native');
+    if (rawService.protocol !== 'jsonrpc-stdio') throw new Error('service.protocol 必须是 jsonrpc-stdio');
+    const args = rawService.args === undefined
+      ? undefined
+      : Array.isArray(rawService.args)
+        ? rawService.args.map((argument) => requireString(argument, 'service.args[]'))
+        : (() => { throw new Error('service.args 必须是字符串数组'); })();
+    const platforms = rawService.platforms === undefined
+      ? undefined
+      : Array.isArray(rawService.platforms)
+        ? rawService.platforms.map((platform) => {
+            const value = requireString(platform, 'service.platforms[]') as 'windows' | 'macos' | 'linux';
+            if (!['windows', 'macos', 'linux'].includes(value)) throw new Error(`未知 service 平台: ${value}`);
+            return value;
+          })
+        : (() => { throw new Error('service.platforms 必须是数组'); })();
+    service = {
+      runtime: 'native',
+      command: requireString(rawService.command, 'service.command'),
+      protocol: 'jsonrpc-stdio',
+      ...(args ? { args } : {}),
+      ...(platforms ? { platforms } : {}),
+    };
+  } else if (permissions.includes('native:service')) {
+    throw new Error('申请 native:service 时必须声明 service');
+  }
+
   let contributes: RcxAppManifest['contributes'];
   if (raw.contributes !== undefined) {
     if (!raw.contributes || typeof raw.contributes !== 'object' || Array.isArray(raw.contributes)) {
@@ -154,6 +199,7 @@ export function parseManifest(value: unknown): RcxAppManifest {
             : {}),
         },
     permissions,
+    ...(service ? { service } : {}),
     ...(typeof raw.icon === 'string' ? { icon: raw.icon } : {}),
     ...(typeof raw.enabledByDefault === 'boolean' ? { enabledByDefault: raw.enabledByDefault } : {}),
     ...(netAllow ? { netAllow } : {}),

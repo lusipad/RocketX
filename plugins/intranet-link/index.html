@@ -1,269 +1,58 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>内网通</title>
-    <style>
-      :root { color-scheme: light; }
-      body { margin: 0; min-height: 100vh; background: #f5f7fb; color: #1f2329; font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      main { max-width: 860px; margin: 0 auto; padding: 28px; }
-      header { margin-bottom: 18px; }
-      h1 { margin: 0 0 8px; font-size: 26px; }
-      p { margin: 0; color: #646a73; line-height: 1.7; }
-      .grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; align-items: start; }
-      section { border: 1px solid #dee0e3; border-radius: 16px; background: #fff; box-shadow: 0 8px 30px #1f23290f; overflow: hidden; }
-      section.identity, section.discovery { margin-bottom: 16px; }
-      section h2 { margin: 0; padding: 14px 16px; border-bottom: 1px solid #eff0f2; font-size: 16px; }
-      .content { padding: 14px 16px; }
-      button, input, textarea { font: inherit; }
-      button { border: 0; border-radius: 9px; padding: 9px 12px; background: #3370ff; color: #fff; cursor: pointer; }
-      button.secondary { background: #eef3ff; color: #245bdb; }
-      button:disabled { cursor: not-allowed; opacity: .55; }
-      label { display: block; margin: 10px 0 6px; color: #343840; font-weight: 600; }
-      input, textarea { box-sizing: border-box; width: 100%; border: 1px solid #c9cdd4; border-radius: 9px; padding: 10px; background: #fff; color: #1f2329; }
-      textarea { min-height: 136px; resize: vertical; }
-      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-      li { border: 1px solid #eff0f2; border-radius: 12px; padding: 10px; }
-      .peer { display: grid; gap: 6px; }
-      .peer strong { font-size: 14px; }
-      .meta { color: #8f959e; font-size: 12px; word-break: break-all; }
-      .badge { display: inline-flex; width: max-content; border-radius: 999px; padding: 2px 8px; font-size: 12px; background: #e8f7ef; color: #1f8f4d; }
-      .badge.untrusted { background: #fff4e8; color: #b35f00; }
-      .status { margin-top: 12px; color: #646a73; min-height: 22px; }
-      @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } main { padding: 18px; } }
-    </style>
-  </head>
-  <body>
-    <main>
-      <header>
-        <h1>内网通</h1>
-        <p>作为独立 RocketX 应用运行，只通过 Bridge 配置发现范围并访问联系人、聊天与文件能力。IP 范围由宿主校验，插件不会直接接触旧协议 socket 或握手材料。</p>
-      </header>
-      <section class="identity">
-        <h2>本机身份</h2>
-        <div class="content">
-          <label for="display-name">本机显示名称</label>
-          <input id="display-name" maxlength="128" autocomplete="off" placeholder="留空则使用 RocketX 账号昵称">
-          <p>其他内网通、飞鸽或 IP Messenger 设备会看到这个名称。留空时使用当前 RocketX 账号昵称。</p>
-          <button id="save-identity">保存并立即生效</button>
-          <p class="status" id="identity-status">尚未读取本机名称。</p>
-        </div>
-      </section>
-      <section class="discovery">
-        <h2>跨网段发现</h2>
-        <div class="content">
-          <label for="discovery-ranges">目标 IPv4 范围</label>
-          <textarea id="discovery-ranges" placeholder="单 IP：192.168.10.25&#10;CIDR：192.168.20.0/24&#10;起止范围：10.20.30.10-10.20.30.50"></textarea>
-          <p>可用换行、逗号或分号分隔，合计最多 1024 个目标。留空仍使用自动广播；配置后会同时向内网通 9011 与 IP Messenger 2425 发送发现宣告。</p>
-          <button id="save-discovery">保存并应用</button>
-          <p class="status" id="discovery-status">尚未读取发现范围。</p>
-        </div>
-      </section>
-      <div class="grid">
-        <section>
-          <h2>局域网设备</h2>
-          <div class="content">
-            <button class="secondary" id="refresh">刷新设备</button>
-            <p class="status" id="peer-status">尚未读取设备。</p>
-            <ul id="peers"></ul>
-          </div>
-        </section>
-        <section>
-          <h2>内网通聊天与文件</h2>
-          <div class="content">
-            <label for="peer-id">内网通 peerId</label>
-            <input id="peer-id" autocomplete="off" placeholder="从左侧联系人选择">
-            <label for="payload">文本负载</label>
-            <textarea id="payload" maxlength="49152">来自内网通插件的 P2P 测试消息</textarea>
-            <button id="send">发送聊天消息</button>
-            <button class="secondary" id="send-file">选择文件并发送邀请</button>
-            <p class="status" id="send-status">仅桌面端且兼容模式可绑定 2425/9011 时可发送。</p>
-          </div>
-        </section>
-      </div>
-    </main>
-    <script>
-      let nextId = 1;
-      const pending = new Map();
-      const peersList = document.querySelector('#peers');
-      const peerStatus = document.querySelector('#peer-status');
-      const sendStatus = document.querySelector('#send-status');
-      const identityStatus = document.querySelector('#identity-status');
-      const discoveryStatus = document.querySelector('#discovery-status');
-      const displayNameInput = document.querySelector('#display-name');
-      const discoveryRangesInput = document.querySelector('#discovery-ranges');
-      const peerIdInput = document.querySelector('#peer-id');
-      const payloadInput = document.querySelector('#payload');
-
-      window.__RCX_BRIDGE__.addEventListener('message', (event) => {
-        const message = event.data;
-        if (!message || message.jsonrpc !== '2.0' || message.id === undefined) return;
-        const request = pending.get(message.id);
-        if (!request) return;
-        pending.delete(message.id);
-        if (message.error) request.reject(new Error(message.error.message || 'Bridge 调用失败'));
-        else request.resolve(message.result);
-      });
-
-      function call(method, params) {
-        const id = nextId++;
-        const request = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/call', params: { method, params } });
-        return request;
-      }
-
-      function notify(message, level) {
-        const id = nextId++;
-        window.__RCX_BRIDGE__.postMessage({ jsonrpc: '2.0', id, method: 'rcx/requestUI', params: { kind: 'notify', props: { message, level } } });
-      }
-
-      function formatSeen(value) {
-        if (!Number.isFinite(value)) return '未知';
-        const seconds = Math.max(0, Math.round((Date.now() - value) / 1000));
-        return seconds < 60 ? `${seconds} 秒前` : `${Math.round(seconds / 60)} 分钟前`;
-      }
-
-      function renderPeers(peers) {
-        peersList.textContent = '';
-        if (!peers.length) {
-          peerStatus.textContent = '未发现内网通/飞鸽/飞秋联系人；请确认兼容模式开启、双方同网段且端口未被占用。';
-          return;
-        }
-        peerStatus.textContent = `发现 ${peers.length} 个内网通兼容联系人。`;
-        for (const peer of peers) {
-          const item = document.createElement('li');
-          item.className = 'peer';
-          const title = document.createElement('strong');
-          title.textContent = peer.nickname || peer.user || peer.id;
-          const badge = document.createElement('span');
-          badge.className = peer.trusted ? 'badge' : 'badge untrusted';
-          badge.textContent = peer.trusted ? '已信任' : '待信任';
-          const meta = document.createElement('div');
-          meta.className = 'meta';
-          meta.textContent = `${peer.nickname || peer.user} · ${peer.host || peer.group || '-'} · ${peer.dialect || 'unknown'} · ${formatSeen(peer.lastSeenMs)}`;
-          const select = document.createElement('button');
-          select.className = 'secondary';
-          select.textContent = '选为接收方';
-          select.addEventListener('click', () => {
-            peerIdInput.value = peer.id || '';
-            sendStatus.textContent = `已选择 ${peer.nickname || peer.user || peer.id}；可以发送聊天消息或文件邀请。`;
-          });
-          item.append(title, badge, meta, select);
-          peersList.append(item);
-        }
-      }
-
-      async function refreshPeers() {
-        peerStatus.textContent = '正在读取局域网设备…';
-        try {
-          renderPeers(await call('ipmsg.peers'));
-        } catch (error) {
-          peerStatus.textContent = `读取失败：${error.message}`;
-        }
-      }
-
-      async function loadIdentity() {
-        try {
-          const result = await call('ipmsg.identity.get');
-          displayNameInput.value = result.displayName || '';
-          identityStatus.textContent = result.displayName
-            ? `当前以“${result.effectiveDisplayName}”对外显示。`
-            : `当前跟随 RocketX 账号昵称：“${result.effectiveDisplayName}”。`;
-        } catch (error) {
-          identityStatus.textContent = `读取失败：${error.message}`;
-        }
-      }
-
-      async function saveIdentity() {
-        identityStatus.textContent = '正在保存并重新广播…';
-        try {
-          const result = await call('ipmsg.identity.set', {
-            displayName: displayNameInput.value,
-          });
-          displayNameInput.value = result.displayName || '';
-          identityStatus.textContent = result.displayName
-            ? `已保存并以“${result.effectiveDisplayName}”重新广播。`
-            : `已恢复跟随 RocketX 账号昵称：“${result.effectiveDisplayName}”。`;
-          notify('内网通本机显示名称已更新', 'success');
-        } catch (error) {
-          identityStatus.textContent = `保存失败：${error.message}`;
-          notify(`内网通本机显示名称保存失败：${error.message}`, 'error');
-        }
-      }
-
-      async function loadDiscovery() {
-        try {
-          const result = await call('ipmsg.discovery.get');
-          discoveryRangesInput.value = result.discoveryRanges || '';
-          discoveryStatus.textContent = result.discoveryRanges
-            ? `已保存目标范围；当前运行时已展开 ${result.discoveryTargetCount || 0} 个目标。`
-            : '未配置目标范围，当前使用自动广播发现。';
-        } catch (error) {
-          discoveryStatus.textContent = `读取失败：${error.message}`;
-        }
-      }
-
-      async function saveDiscovery() {
-        discoveryStatus.textContent = '正在校验并应用…';
-        try {
-          const result = await call('ipmsg.discovery.set', {
-            discoveryRanges: discoveryRangesInput.value,
-          });
-          discoveryRangesInput.value = result.discoveryRanges;
-          discoveryStatus.textContent = result.discoveryTargetCount
-            ? `已应用 ${result.discoveryTargetCount} 个目标，同时覆盖 9011 与 2425。`
-            : '已清空目标范围，恢复自动广播发现。';
-          notify('内网通发现范围已更新', 'success');
-        } catch (error) {
-          discoveryStatus.textContent = `保存失败：${error.message}`;
-          notify(`内网通发现范围无效：${error.message}`, 'error');
-        }
-      }
-
-      async function sendLan() {
-        const params = {
-          peerId: peerIdInput.value.trim(),
-          text: payloadInput.value,
-        };
-        sendStatus.textContent = '正在发送…';
-        try {
-          await call('ipmsg.send', params);
-          sendStatus.textContent = '聊天消息已发送';
-          notify('内网通聊天消息已发送', 'success');
-        } catch (error) {
-          sendStatus.textContent = `发送失败：${error.message}`;
-          notify(`内网通发送失败：${error.message}`, 'error');
-        }
-      }
-
-      async function sendFile() {
-        sendStatus.textContent = '正在发送文件邀请…';
-        try {
-          const result = await call('ipmsg.offerFile', { peerId: peerIdInput.value.trim() });
-          if (result.cancelled) {
-            sendStatus.textContent = '已取消选择文件。';
-            return;
-          }
-          sendStatus.textContent = '文件邀请已发送；对方接受后走 TCP P2P 拉取。';
-          notify('内网通文件邀请已发送', 'success');
-        } catch (error) {
-          sendStatus.textContent = `文件发送失败：${error.message}`;
-          notify(`内网通文件发送失败：${error.message}`, 'error');
-        }
-      }
-
-      document.querySelector('#refresh').addEventListener('click', refreshPeers);
-      document.querySelector('#save-identity').addEventListener('click', saveIdentity);
-      displayNameInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') saveIdentity();
-      });
-      document.querySelector('#save-discovery').addEventListener('click', saveDiscovery);
-      document.querySelector('#send').addEventListener('click', sendLan);
-      document.querySelector('#send-file').addEventListener('click', sendFile);
-      loadIdentity();
-      loadDiscovery();
-      refreshPeers();
-    </script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>飞鸽 / IPMSG</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#1f2329;font:14px system-ui,"Segoe UI",sans-serif}main{max-width:980px;margin:auto;padding:24px}h1{margin:0 0 6px}p{margin:0;color:#646a73;line-height:1.6}.grid{display:grid;grid-template-columns:minmax(260px,330px) 1fr;gap:16px;align-items:start}section{margin:16px 0;overflow:hidden;border:1px solid #dee0e3;border-radius:14px;background:#fff}h2{margin:0;padding:13px 15px;border-bottom:1px solid #eff0f2;font-size:15px}.content{padding:14px 15px}button,input,textarea{font:inherit}button{border:0;border-radius:8px;padding:9px 12px;background:#3370ff;color:#fff;cursor:pointer}button.secondary{background:#eef3ff;color:#245bdb}button:disabled{opacity:.5}label{display:block;margin:10px 0 6px;font-weight:600}input,textarea{width:100%;border:1px solid #c9cdd4;border-radius:8px;padding:9px}textarea{min-height:88px;resize:vertical}ul{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}li{display:grid;gap:5px;border:1px solid #eff0f2;border-radius:10px;padding:10px}.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.meta,.status{color:#8f959e;font-size:12px;word-break:break-word}.status{min-height:20px;margin-top:9px}.outgoing{background:#f3f7ff}@media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:16px}}
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>飞鸽 / IPMSG</h1><p>协议和端口由插件后台进程处理。标准 IPMSG/飞鸽支持消息与文件；原版内网通联系人仅保证 2425 发现和文本。</p></header>
+  <section><h2>本机与发现设置</h2><div class="content">
+    <label for="display-name">本机显示名称</label><input id="display-name" maxlength="128" placeholder="RocketX">
+    <label for="discovery-ranges">目标 IPv4 范围</label><textarea id="discovery-ranges" placeholder="192.168.10.25&#10;192.168.20.0/24&#10;10.20.30.10-10.20.30.50"></textarea>
+    <div class="row"><button id="save-settings">保存并重新广播</button><button class="secondary" id="refresh">刷新设备</button></div>
+    <p class="status" id="runtime-status">正在连接插件后台服务…</p>
+  </div></section>
+  <div class="grid">
+    <section><h2>局域网设备</h2><div class="content"><p id="peer-status">尚未读取设备。</p><ul id="peers"></ul></div></section>
+    <div>
+      <section><h2>发送</h2><div class="content">
+        <label for="peer-id">接收方</label><input id="peer-id" readonly placeholder="从设备列表选择">
+        <label for="payload">消息</label><textarea id="payload" maxlength="49152"></textarea>
+        <div class="row"><button id="send">发送消息</button><button class="secondary" id="send-file">选择文件并发送</button></div>
+        <p class="status" id="send-status">请先选择设备。</p>
+      </div></section>
+      <section><h2>本地消息记录</h2><div class="content"><ul id="messages"></ul></div></section>
+    </div>
+  </div>
+</main>
+<script>
+  let nextId=1,settings={displayName:'',discoveryRanges:''},messages=[],selectedPeer=null;
+  const pending=new Map(),q=(s)=>document.querySelector(s),peersList=q('#peers'),messagesList=q('#messages'),peerStatus=q('#peer-status'),runtimeStatus=q('#runtime-status'),sendStatus=q('#send-status'),displayNameInput=q('#display-name'),rangesInput=q('#discovery-ranges'),peerInput=q('#peer-id'),payloadInput=q('#payload'),sendFileButton=q('#send-file');
+  window.__RCX_BRIDGE__.addEventListener('message',(event)=>{
+    const message=event.data;if(!message||message.jsonrpc!=='2.0')return;
+    if(message.method==='rcx/event'){const p=message.params||{},n=p.payload||{};if(p.event==='native.event')handleEvent(n.event,n.payload);return}
+    if(message.id===undefined)return;const request=pending.get(message.id);if(!request)return;pending.delete(message.id);message.error?request.reject(new Error(message.error.message||'Bridge 调用失败')):request.resolve(message.result);
+  });
+  function call(method,params){const id=nextId++,request=new Promise((resolve,reject)=>pending.set(id,{resolve,reject}));window.__RCX_BRIDGE__.postMessage({jsonrpc:'2.0',id,method:'rcx/call',params:{method,params}});return request}
+  const nativeCall=(method,params)=>call('native.call',{method,params});
+  function notify(message,level){window.__RCX_BRIDGE__.postMessage({jsonrpc:'2.0',id:nextId++,method:'rcx/requestUI',params:{kind:'notify',props:{message,level}}})}
+  function appendMessage(value){messages=[...messages,{id:crypto.randomUUID(),timestamp:Date.now(),...value}].slice(-500);renderMessages();void call('storage.set',{key:'messages',value:messages})}
+  function renderMessages(){messagesList.textContent='';if(!messages.length){const item=document.createElement('li');item.textContent='暂无消息。';messagesList.append(item);return}for(const message of [...messages].reverse()){const item=document.createElement('li'),title=document.createElement('strong'),text=document.createElement('div'),meta=document.createElement('div');item.className=message.direction||'';title.textContent=message.sender||(message.direction==='outgoing'?'我':'局域网联系人');text.textContent=message.text||'';meta.className='meta';meta.textContent=new Date(message.timestamp).toLocaleString();item.append(title,text,meta);if(message.offerId&&!message.localPath){const button=document.createElement('button');button.className='secondary';button.textContent='下载文件';button.addEventListener('click',async()=>{button.disabled=true;try{const receipt=await nativeCall('downloadFile',{offerId:message.offerId});message.localPath=receipt.localPath;text.textContent=`${message.text}（已保存到 ${receipt.localPath}）`;await call('storage.set',{key:'messages',value:messages})}catch(error){notify(`文件下载失败：${error.message}`,'error');button.disabled=false}});item.append(button)}messagesList.append(item)}}
+  function handleEvent(event,payload){if(event==='peer')void refreshPeers();else if(event==='message'){appendMessage({direction:'incoming',sender:payload.nickname||payload.user,text:payload.text});notify(`收到 ${payload.nickname||payload.user||'联系人'} 的消息`,'success')}else if(event==='file-offer'){appendMessage({direction:'incoming',sender:'局域网联系人',text:`收到文件：${payload.fileName}`,offerId:payload.id});notify(`收到文件邀请：${payload.fileName}`,'success')}}
+  function selectPeer(peer){selectedPeer=peer;peerInput.value=peer.nickname||peer.user||peer.id;const files=peer.dialect!=='intranet';sendFileButton.disabled=!files;sendStatus.textContent=files?`已选择 ${peerInput.value}，可发送消息或标准 IPMSG 文件。`:`已选择 ${peerInput.value}；原版内网通只支持 2425 文本，文件传输已停用。`}
+  function renderPeers(peers){peersList.textContent='';if(!peers.length){peerStatus.textContent='未发现联系人；请确认同一广播域或配置目标 IP。';return}peerStatus.textContent=`发现 ${peers.length} 个联系人。`;for(const peer of peers){const item=document.createElement('li'),title=document.createElement('strong'),meta=document.createElement('div'),button=document.createElement('button');title.textContent=peer.nickname||peer.user||peer.id;meta.className='meta';meta.textContent=`${peer.host||'-'} · ${peer.dialect||'unknown'} · ${peer.ip||''}`;button.className='secondary';button.textContent='选择';button.addEventListener('click',()=>selectPeer(peer));item.append(title,meta,button);peersList.append(item)}}
+  async function startRuntime(){const status=await nativeCall('start',{userName:settings.displayName||'rocketx',nickname:settings.displayName||'RocketX',group:'RocketX',discoveryRanges:settings.discoveryRanges});runtimeStatus.textContent=`后台服务已启动，正在监听 UDP/TCP ${status.port}；目标 IP ${status.discoveryTargetCount||0} 个。`}
+  async function refreshPeers(){try{renderPeers(await nativeCall('peers',{}))}catch(error){peerStatus.textContent=`读取失败：${error.message}`}}
+  async function saveSettings(){const next={displayName:displayNameInput.value.trim(),discoveryRanges:rangesInput.value.trim()};try{await nativeCall('validateDiscoveryRanges',{discoveryRanges:next.discoveryRanges});settings=next;await call('storage.set',{key:'settings',value:settings});await startRuntime();await refreshPeers();notify('飞鸽 / IPMSG 设置已保存','success')}catch(error){runtimeStatus.textContent=`保存失败：${error.message}`;notify(`设置保存失败：${error.message}`,'error')}}
+  async function sendMessage(){if(!selectedPeer)return;const text=payloadInput.value.trim();if(!text)return;sendStatus.textContent='正在发送…';try{const receipt=await nativeCall('sendMessage',{peerId:selectedPeer.id,text});appendMessage({direction:'outgoing',sender:'我',text});payloadInput.value='';sendStatus.textContent=receipt.acknowledged?'消息已送达并确认。':'消息已发出，但对方未返回确认。'}catch(error){sendStatus.textContent=`发送失败：${error.message}`}}
+  async function sendFile(){if(!selectedPeer||selectedPeer.dialect==='intranet')return;try{const selected=await call('files.pick',{});if(selected.cancelled)return;const offer=await nativeCall('offerFile',{peerId:selectedPeer.id,path:selected.path});appendMessage({direction:'outgoing',sender:'我',text:`发送文件：${offer.fileName}`});sendStatus.textContent='文件邀请已发送；对方接受后通过 TCP 2425 拉取。'}catch(error){sendStatus.textContent=`文件发送失败：${error.message}`}}
+  async function initialize(){try{settings=(await call('storage.get',{key:'settings'}))||settings;messages=(await call('storage.get',{key:'messages'}))||[];displayNameInput.value=settings.displayName||'';rangesInput.value=settings.discoveryRanges||'';renderMessages();await startRuntime();await refreshPeers()}catch(error){runtimeStatus.textContent=`启动失败：${error.message}`}}
+  q('#save-settings').addEventListener('click',saveSettings);q('#refresh').addEventListener('click',refreshPeers);q('#send').addEventListener('click',sendMessage);q('#send-file').addEventListener('click',sendFile);void initialize();
+</script>
+</body>
 </html>

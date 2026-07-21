@@ -30,7 +30,6 @@ import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
-import { IPMSG_RID, useIpmsg } from '../ipmsg/store';
 
 const FILTER_TITLE: Record<ConvFilter, string> = {
   all: '消息',
@@ -95,13 +94,7 @@ function ConversationItem({
   // 规则命中的会话不提供「移出」——移出也会被规则立刻拉回来，只能去改规则
   const inFolders = folders.filter((f) => f.rids.includes(conv.rid));
   const notInFolders = folders.filter((f) => !inFolder(f, conv));
-  const isIpmsg = conv.source === 'ipmsg';
-
-  const menuItems: MenuItem[] = isIpmsg ? [
-    ...(conv.unread > 0
-      ? [{ label: '标为已读', icon: Check, onClick: () => useIpmsg.getState().markRead() }]
-      : []),
-  ] : [
+  const menuItems: MenuItem[] = [
     {
       label: currentAlias ? '修改备注名' : '设置备注名',
       icon: Tag,
@@ -153,9 +146,8 @@ function ConversationItem({
   return (
     <>
     <button
-      draggable={!isIpmsg}
+      draggable
       onDragStart={(e) => {
-        if (isIpmsg) return;
         e.dataTransfer.setData('text/rcx-rid', conv.rid);
         e.dataTransfer.effectAllowed = 'copy';
         setDragging(true);
@@ -180,9 +172,7 @@ function ConversationItem({
       title={
         avatarOnly
           ? shownName
-          : isIpmsg
-            ? '未认证的本地兼容频道'
-            : '拖到左侧分组可归类；右键更多操作'
+          : '拖到左侧分组可归类；右键更多操作'
       }
       className={`flex w-full cursor-pointer items-center rounded-lg ${
         avatarOnly ? 'justify-center px-1' : 'gap-2.5 px-2.5'
@@ -376,34 +366,10 @@ export default function ConversationList({
   const toggleCollapse = useFolders((s) => s.toggleCollapse);
   const reorderRoom = useFolders((s) => s.reorderRoom);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const ipmsgEnabled = useIpmsg((state) => state.enabled);
-  const ipmsgUnread = useIpmsg((state) => state.unread);
-  const ipmsgMessages = useIpmsg((state) => state.messages);
-
   const folder = folders.find((f) => f.id === activeFolder);
 
   const sections = useMemo(() => {
     const all = buildConversations(subscriptions, rooms, filter === 'hidden');
-    if (ipmsgEnabled) {
-      const last = ipmsgMessages.at(-1);
-      all.push({
-        rid: IPMSG_RID,
-        name: 'IP Messenger',
-        type: 'd',
-        unread: ipmsgUnread,
-        alert: ipmsgUnread > 0,
-        userMentions: 0,
-        favorite: false,
-        muted: false,
-        hidden: false,
-        isDiscussion: false,
-        isMultiDM: true,
-        isTeam: false,
-        lastTs: last?.timestamp ?? 0,
-        lastPreview: last?.text ?? '局域网旧协议兼容频道',
-        source: 'ipmsg',
-      });
-    }
     return buildConversationView(all, {
       filter,
       folder,
@@ -413,7 +379,7 @@ export default function ConversationList({
       showFavorites: prefs.sidebarShowFavorites,
       sortBy: prefs.sidebarSortby,
     });
-  }, [subscriptions, rooms, filter, prefs, folder, retainedUnreadRid, ipmsgEnabled, ipmsgMessages, ipmsgUnread]);
+  }, [subscriptions, rooms, filter, prefs, folder, retainedUnreadRid]);
 
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   const viewMode = prefs.sidebarViewMode;

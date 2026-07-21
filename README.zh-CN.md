@@ -62,7 +62,7 @@ pnpm dev
 与密钥也在这里配置，密钥只进入操作系统凭据库。托管会话中被 `@ai` 请求引用到的图片会
 下载到会话隔离缓存，并作为图片输入交给 Codex。
 
-随发布包提供的「内网通」官方插件默认关闭，可随时禁用或卸载。启用后可为跨网段发现配置单个 IPv4、CIDR 或起止范围，同一范围会同时覆盖内网通 `9011` 与 IP Messenger `2425`；该旧协议兼容能力不等同于 RocketX 的认证 LAN 通道。
+随 Windows 发布包提供的「飞鸽 / IPMSG」官方插件默认关闭，可随时禁用。协议、GBK 编码、UDP/TCP `2425`、消息和普通文件传输都在插件自己的 Rust Sidecar 中，RocketX 核心只提供通用进程桥。标准 IPMSG/飞鸽支持消息与文件；原版内网通仅支持 `1@shiyeline` 的 2425 发现和文本，不实现私有 `9011`。该旧协议能力不等同于 RocketX 的认证 LAN 通道。
 
 ## 测试
 
@@ -76,17 +76,17 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 460 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 469 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 20 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与内网通范围配置
+pnpm test:ui        # 30 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
 # M9 两套独立设备身份的四流 TCP、续传与 BLAKE3；5 GiB 实测见 docs/m9-validation.md
 ROCKETX_LAN_E2E_BYTES=5368709120 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked tcp_file_transfer_resumes_across_four_authenticated_streams -- --nocapture
 
-# M10 协议测试；官方 IP Messenger 5.8.3 真实验收步骤见 docs/m10-validation.md
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked ipmsg --no-fail-fast
+# M10 插件 Sidecar 协议测试；官方 IP Messenger 5.8.3 真实验收步骤见 docs/m10-validation.md
+cargo test --manifest-path plugins/intranet-link/native/Cargo.toml --locked --no-fail-fast
 
 RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin/rcxdev123
 ```
