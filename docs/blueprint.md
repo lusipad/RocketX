@@ -181,7 +181,7 @@ M6 必须收紧，详见 §3.8。
 │ 宿主运行时  @rcx/web (React 18 / zustand 5)                  │
 │            @rcx/rc-client (REST + 手写 DDP)                  │
 ├────────────────────────────────────────────────────────────┤
-│ Tauri 2 / Rust    winauth.rs(已有) │ proc.rs │ lan.rs │ ipmsg.rs │
+│ Tauri 2 / Rust    winauth.rs(已有) │ proc.rs │ lan.rs │ native_service.rs │
 ├────────────────────────────────────────────────────────────┤
 │ 旁挂服务（可选）  services/ado-bridge（已有）                   │
 └────────────────────────────────────────────────────────────┘

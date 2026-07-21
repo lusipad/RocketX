@@ -76,9 +76,9 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 460 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 469 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 20 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与内网通范围配置
+pnpm test:ui        # 30 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
