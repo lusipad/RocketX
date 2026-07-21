@@ -113,6 +113,16 @@ fn service_data_dir(app: &tauri::AppHandle, app_id: &str) -> Result<PathBuf, Str
     Ok(directory)
 }
 
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+}
+
 fn finish_pending(pending: &PendingCalls, message: &str) {
     if let Ok(mut calls) = pending.lock() {
         for (_, sender) in calls.drain() {
@@ -182,7 +192,7 @@ fn spawn_service(
     }
     let executable = service_path(app, command)?;
     let data_dir = service_data_dir(app, app_id)?;
-    let mut child = Command::new(executable)
+    let mut child = hidden_command(executable)
         .args(args)
         .env("ROCKETX_NATIVE_SERVICE_DATA_DIR", data_dir)
         .stdin(Stdio::piped())
@@ -373,5 +383,28 @@ mod tests {
         assert!(validate_command("cmd.exe").is_err());
         assert!(validate_app_id("dev.rocketx.intranet-link").is_ok());
         assert!(validate_app_id("../escape").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_services_do_not_create_a_console_window() {
+        let output = hidden_command("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ConsoleProbe { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); }'; [ConsoleProbe]::GetConsoleWindow().ToInt64()"#,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("Windows console probe should start");
+        assert!(
+            output.status.success(),
+            "Windows console probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
     }
 }
