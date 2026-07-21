@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -9,14 +9,18 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine;
+use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
+use tauri_plugin_updater::UpdaterExt;
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 
 #[derive(Clone)]
 struct ManagedCodex {
@@ -824,6 +828,121 @@ pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
 pub struct UpdateDirManifest {
     manifest: String,
     installer_path: Option<String>,
+    signature: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedHttpUpdateMetadata {
+    rid: tauri::ResourceId,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+fn decode_updater_text(value: &str, label: &str) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|error| format!("{label} Base64 无效：{error}"))?;
+    String::from_utf8(bytes).map_err(|_| format!("{label} 不是 UTF-8 文本"))
+}
+
+fn verify_update_package(path: &Path, signature: &str) -> Result<(), String> {
+    let public_key = PublicKey::decode(&decode_updater_text(UPDATER_PUBLIC_KEY, "更新公钥")?)
+        .map_err(|error| format!("更新公钥无效：{error}"))?;
+    let signature = Signature::decode(&decode_updater_text(signature, "更新签名")?)
+        .map_err(|error| format!("更新签名无效：{error}"))?;
+    let mut verifier = public_key
+        .verify_stream(&signature)
+        .map_err(|error| format!("无法创建更新验签器：{error}"))?;
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("读取更新包 {} 失败：{error}", path.display()))?;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("读取更新包 {} 失败：{error}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        verifier.update(&buffer[..count]);
+    }
+    verifier
+        .finalize()
+        .map_err(|error| format!("更新包签名校验失败：{error}"))
+}
+
+fn resolve_update_package(
+    base: &Path,
+    manifest: &serde_json::Value,
+) -> Result<(PathBuf, String), String> {
+    let platform = manifest
+        .get("platforms")
+        .and_then(|platforms| {
+            platforms
+                .get("windows-x86_64")
+                .or_else(|| platforms.get("windows-x86_64-msi"))
+        })
+        .ok_or_else(|| "latest.json 缺少 Windows x86_64 平台条目".to_string())?;
+    let url = platform
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Windows 更新条目缺少 url".to_string())?;
+    let signature = platform
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Windows 更新条目缺少 signature，拒绝使用未签名安装包".to_string())?
+        .to_string();
+    let file_name = url
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Windows 更新 URL 缺少文件名".to_string())?;
+    let path = base.join(file_name);
+    if !path.is_file() {
+        return Err(format!("更新包不存在：{}", path.display()));
+    }
+    Ok((path, signature))
+}
+
+#[tauri::command]
+pub async fn check_signed_http_update(
+    webview: tauri::Webview,
+    endpoint: String,
+) -> Result<Option<SignedHttpUpdateMetadata>, String> {
+    let url = tauri::Url::parse(endpoint.trim()).map_err(|_| "更新清单 URL 无效".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("更新清单必须是无凭据的 http/https URL".to_string());
+    }
+    let updater = webview
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|error| format!("更新源无效：{error}"))?
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("无法创建更新检查器：{error}"))?;
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?
+    else {
+        return Ok(None);
+    };
+    let metadata = SignedHttpUpdateMetadata {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: update.date.map(|value| value.to_string()),
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    };
+    Ok(Some(metadata))
 }
 
 /// 共享目录更新源（issue #106）：webview 读不了 UNC/本地任意路径，
@@ -839,42 +958,93 @@ pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, 
     let manifest = std::fs::read_to_string(&manifest_path)
         .map_err(|error| format!("读取 {} 失败：{error}", manifest_path.display()))?;
 
-    // 从清单 Windows 条目的 url 里取文件名，在同目录里找真实安装包
-    let installer_path = serde_json::from_str::<serde_json::Value>(&manifest)
-        .ok()
-        .and_then(|value| {
-            let platforms = value.get("platforms")?;
-            let url = platforms
-                .get("windows-x86_64")
-                .or_else(|| platforms.get("windows-x86_64-msi"))?
-                .get("url")?
-                .as_str()?
-                .to_string();
-            let file_name = url.rsplit(['/', '\\']).next()?.to_string();
-            // updater 产物是 .nsis.zip/.msi.zip 这类压缩层，共享目录直发时
-            // 通常放的是解开后的安装包，两种名字都认
-            let candidates = [
-                file_name.clone(),
-                file_name.trim_end_matches(".zip").to_string(),
-            ];
-            candidates.iter().find_map(|name| {
-                let path = base.join(name);
-                path.is_file().then(|| path.to_string_lossy().into_owned())
-            })
-        });
+    let value = serde_json::from_str::<serde_json::Value>(&manifest)
+        .map_err(|error| format!("latest.json 无效：{error}"))?;
+    let (package_path, signature) = resolve_update_package(&base, &value)?;
+    verify_update_package(&package_path, &signature)?;
 
     Ok(UpdateDirManifest {
         manifest,
-        installer_path,
+        installer_path: Some(package_path.to_string_lossy().into_owned()),
+        signature: Some(signature),
     })
 }
 
-/// 只运行更新目录里解析出来的安装包：后缀白名单 + 存在性校验。
-/// 共享目录本身是用户自己配置的可信源，这里不做签名校验（原生
-/// updater 通道才有签名，走目录直发的以目录访问控制为信任边界）。
+fn extract_signed_installer(package: &Path) -> Result<PathBuf, String> {
+    let extension = package
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if extension == "exe" || extension == "msi" {
+        return Ok(package.to_path_buf());
+    }
+    if extension != "zip" {
+        return Err("签名更新包只支持 .zip / .exe / .msi".to_string());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let target_dir =
+        std::env::temp_dir().join(format!("rocketx-update-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("创建更新临时目录失败：{error}"))?;
+    let mut command = Command::new("powershell");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+        ])
+        .arg(package)
+        .arg(&target_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("无法启动更新解压程序：{error}"))?;
+    if !status.success() {
+        return Err(format!("更新压缩包解压失败，退出码：{status}"));
+    }
+    for entry in
+        std::fs::read_dir(&target_dir).map_err(|error| format!("读取更新临时目录失败：{error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("读取更新临时目录失败：{error}"))?
+            .path();
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if path.is_file() && (ext == "exe" || ext == "msi") {
+            return Ok(path);
+        }
+    }
+    Err("签名更新压缩包中没有 .exe / .msi 安装器".to_string())
+}
+
+/// 只启动配置目录里的签名更新包；启动前再次验签，避免检查与执行之间被替换。
 #[tauri::command]
-pub async fn launch_update_installer(path: String) -> Result<(), String> {
-    let target = std::path::PathBuf::from(path.trim());
+pub async fn launch_update_installer(
+    dir: String,
+    path: String,
+    signature: String,
+) -> Result<(), String> {
+    let base = std::fs::canonicalize(PathBuf::from(dir.trim()))
+        .map_err(|error| format!("更新目录不可访问：{error}"))?;
+    let package = std::fs::canonicalize(PathBuf::from(path.trim()))
+        .map_err(|error| format!("更新包不可访问：{error}"))?;
+    if !package.starts_with(&base) {
+        return Err("更新包不在配置的共享目录中".to_string());
+    }
+    verify_update_package(&package, &signature)?;
+    let target = extract_signed_installer(&package)?;
     let extension = target
         .extension()
         .and_then(|value| value.to_str())
@@ -925,8 +1095,8 @@ mod tests {
     use super::ResolvedCodex;
     use super::{
         app_server_args_for_help, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, host_path, parse_codex_cli_version, safe_attachment_path,
-        validate_session_id,
+        exec_optional_args_for_help, host_path, parse_codex_cli_version, resolve_update_package,
+        safe_attachment_path, validate_session_id, verify_update_package, UPDATER_PUBLIC_KEY,
     };
     use serde_json::json;
     use std::path::Path;
@@ -970,6 +1140,35 @@ mod tests {
         assert_eq!(decoded.relative_path, "message/build.log");
         assert_eq!(bytes, &[0, 1, 2, 255]);
         assert!(decode_attachment_request(&[0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn shared_directory_update_rejects_unsigned_packages() {
+        let manifest = json!({
+            "platforms": {
+                "windows-x86_64": {
+                    "url": "RocketX-update.zip"
+                }
+            }
+        });
+        let error = resolve_update_package(Path::new("."), &manifest).unwrap_err();
+        assert!(error.contains("缺少 signature"));
+    }
+
+    #[test]
+    fn shared_directory_update_rejects_malformed_signatures_before_reading_the_package() {
+        let error = verify_update_package(Path::new("missing-package.zip"), "not-base64").unwrap_err();
+        assert!(error.contains("更新签名 Base64 无效"));
+    }
+
+    #[test]
+    fn shared_directory_verifier_uses_the_tauri_updater_public_key() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["plugins"]["updater"]["pubkey"].as_str(),
+            Some(UPDATER_PUBLIC_KEY)
+        );
     }
 
     #[test]

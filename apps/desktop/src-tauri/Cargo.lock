@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.25.13"
+version = "0.25.14"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -3683,6 +3683,7 @@ dependencies = [
  "keyring",
  "log",
  "mdns-sd",
+ "minisign-verify",
  "notify-rust",
  "rusqlite",
  "serde",

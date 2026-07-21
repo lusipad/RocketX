@@ -26,6 +26,8 @@ export interface UpdateProbe {
   notes?: string;
   /** dir 源：清单声明且真实存在的安装包绝对路径 */
   installerPath?: string;
+  /** dir 源：Tauri Minisign 签名，启动前再次验证以阻止 TOCTOU 替换 */
+  signature?: string;
   /** http 源：Windows 安装包的下载地址 */
   downloadUrl?: string;
 }
@@ -122,17 +124,40 @@ export async function probeHttpSource(location: string, currentVersion: string):
 
 export async function probeDirSource(location: string, currentVersion: string): Promise<UpdateProbe> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const result = await invoke<{ manifest: string; installerPath: string | null }>(
+  const result = await invoke<{ manifest: string; installerPath: string | null; signature: string | null }>(
     'read_update_manifest_dir',
     { dir: location.trim() },
   );
   const probe = parseUpdateManifest(result.manifest, currentVersion);
-  return { ...probe, installerPath: result.installerPath ?? undefined };
+  return {
+    ...probe,
+    installerPath: result.installerPath ?? undefined,
+    signature: result.signature ?? undefined,
+  };
 }
 
-export async function launchDirInstaller(path: string): Promise<void> {
+export async function launchDirInstaller(dir: string, path: string, signature: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('launch_update_installer', { path });
+  await invoke('launch_update_installer', { dir, path, signature });
+}
+
+/** HTTP 更新源走 Tauri 原生 updater：运行时端点仍使用内置公钥验签。 */
+export async function checkSignedHttpSource(
+  location: string,
+): Promise<import('@tauri-apps/plugin-updater').Update | null> {
+  const endpoint = manifestUrlOf(location);
+  const { invoke } = await import('@tauri-apps/api/core');
+  const metadata = await invoke<{
+    rid: number;
+    currentVersion: string;
+    version: string;
+    date?: string;
+    body?: string;
+    rawJson: Record<string, unknown>;
+  } | null>('check_signed_http_update', { endpoint });
+  if (!metadata) return null;
+  const { Update } = await import('@tauri-apps/plugin-updater');
+  return new Update(metadata);
 }
 
 /** 按当前配置探测一次；github 源不走这里（原生 updater 通道自带下载安装） */

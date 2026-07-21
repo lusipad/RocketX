@@ -575,6 +575,7 @@ fn main() {
             proc::codex_app_server_stop,
             proc::codex_agent_workspace,
             proc::butler_home_dir,
+            proc::check_signed_http_update,
             proc::read_update_manifest_dir,
             proc::launch_update_installer,
             proc::codex_agent_attachment_write,
