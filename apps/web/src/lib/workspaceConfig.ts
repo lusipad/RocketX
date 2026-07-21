@@ -333,6 +333,7 @@ export function pendingWorkspaceFields(fields: WorkspaceField[]): WorkspaceField
 }
 
 const SOURCE_KEY = 'rcx-workspace-source';
+export const WORKSPACE_SOURCE_CHANGED_EVENT = 'rcx-workspace-source-changed';
 
 export function loadWorkspaceSource(): WorkspaceSource | null {
   try {
@@ -346,6 +347,9 @@ export function loadWorkspaceSource(): WorkspaceSource | null {
 export function saveWorkspaceSource(source: WorkspaceSource): void {
   try {
     localStorage.setItem(SOURCE_KEY, JSON.stringify(source));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(WORKSPACE_SOURCE_CHANGED_EVENT));
+    }
   } catch {
     /* 存储满时只影响下次覆盖判定 */
   }
@@ -354,13 +358,51 @@ export function saveWorkspaceSource(source: WorkspaceSource): void {
 /** 合并本次应用的字段值到应用记录；未勾选的字段保留旧记录 */
 export function mergeAppliedFields(
   previous: WorkspaceSource | null,
-  update: { url?: string; name?: string; importedAt: number },
+  update: {
+    url?: string;
+    name?: string;
+    importedAt: number;
+    sourceKind?: 'url' | 'file';
+    checkedAt?: number;
+  },
   appliedNow: Record<string, string>,
 ): WorkspaceSource {
+  const url = update.sourceKind === 'file' ? undefined : (update.url ?? previous?.url);
+  const sameUrl = !!url && url === previous?.url;
+  const lastCheckedAt = update.checkedAt ?? (sameUrl ? previous?.lastCheckedAt : undefined);
   return {
-    url: update.url ?? previous?.url,
+    ...(url ? { url } : {}),
     name: update.name ?? previous?.name,
     importedAt: update.importedAt,
     applied: { ...previous?.applied, ...appliedNow },
+    ...(url
+      ? {
+          follow: sameUrl ? previous?.follow : true,
+          ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
+        }
+      : {}),
   };
+}
+
+/** 凭据与端点绑定：kind 或 baseUrl 变化时不能沿用原 AI 密钥/本地信任分类。 */
+export function aiProviderEndpointChanged(
+  current: { kind: string; baseUrl: string } | undefined,
+  incoming: { kind: string; baseUrl: string },
+): boolean {
+  return !!current && (
+    current.kind !== incoming.kind
+    || current.baseUrl.replace(/\/+$/, '') !== incoming.baseUrl.replace(/\/+$/, '')
+  );
+}
+
+/** ADO PAT 与连接三元组绑定；地址、模式或认证方式任一变化都必须解绑。 */
+export function adoConnectionChanged(
+  current: { mode: string; adoBase?: string; auth?: string } | undefined,
+  incoming: { mode: string; adoBase?: string; auth?: string },
+): boolean {
+  return !!current && (
+    current.mode !== incoming.mode
+    || current.adoBase !== incoming.adoBase
+    || current.auth !== incoming.auth
+  );
 }

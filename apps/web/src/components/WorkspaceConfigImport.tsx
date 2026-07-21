@@ -2,15 +2,20 @@ import { useMemo, useRef, useState } from 'react';
 import { FileUp, Globe, Loader2 } from 'lucide-react';
 import Dialog from './Dialog';
 import { toast } from '../stores/toast';
-import { getServerBase, httpFetch, setServerBase } from '../lib/client';
+import { getServerBase, setServerBase } from '../lib/client';
 import { ADO_WEB_KEY, adoWebBase, loadWorkbenchConfig } from '../lib/ado';
 import { useWorkbench } from '../stores/workbench';
 import { useWiTemplates } from '../stores/wiTemplates';
 import { loadAiSettings, saveAiSettings, type AiProviderConfig } from '../kernel/ai/config';
 import { loadUpdateSource, saveUpdateSource } from '../lib/updateSource';
 import { loadHierarchyLayout, saveHierarchyLayout } from '../stores/wiTemplates';
+import { deleteAiSecret } from '../kernel/ai/secrets';
+import { useAuth } from '../stores/auth';
+import { fetchWorkspaceConfig } from '../lib/workspaceConfigSource';
 import {
   aiProviderFingerprint,
+  adoConnectionChanged,
+  aiProviderEndpointChanged,
   loadWorkspaceSource,
   mergeAppliedFields,
   parseWorkspaceConfig,
@@ -25,7 +30,7 @@ import {
 /**
  * 工作区配置导入（issue #67）。
  * 配置文件提供默认值；用户自己改过的字段默认保留本地值（仍可勾选强制覆盖），
- * 其余字段跟随配置。凭据（PAT / AI key）不在配置文件里，也永远不会被这里改动。
+ * 其余字段跟随配置。凭据（PAT / AI key）不在配置文件里；端点变化时旧凭据解绑。
  */
 
 export function collectCurrentValues(): WorkspaceCurrentValues {
@@ -46,17 +51,36 @@ export function collectCurrentValues(): WorkspaceCurrentValues {
   };
 }
 
-function applySelectedFields(
+async function applySelectedFields(
   config: WorkspaceConfig,
   fields: WorkspaceField[],
   selected: ReadonlySet<string>,
   sourceUrl?: string,
-): number {
+): Promise<number> {
   const applied: Record<string, string> = {};
   for (const field of fields) {
     if (selected.has(field.key)) applied[field.key] = field.incoming;
   }
 
+  const pickedProviders = (config.ai?.providers ?? []).filter((provider) =>
+    selected.has(`ai.provider.${provider.id}`),
+  );
+  const aiSettings = pickedProviders.length > 0 ? loadAiSettings() : undefined;
+  const providerUpdates = pickedProviders.map((provider) => {
+    const existing = aiSettings?.providers.find((entry) => entry.id === provider.id);
+    return { provider, existing, endpointChanged: aiProviderEndpointChanged(existing, provider) };
+  });
+  await Promise.all(
+    providerUpdates
+      .filter(({ endpointChanged }) => endpointChanged)
+      .map(({ provider }) => deleteAiSecret(provider.id)),
+  );
+
+  const serverChanged = selected.has('server.url')
+    && !!config.rocketChat
+    && getServerBase() !== config.rocketChat.url;
+  const wasAuthed = serverChanged && useAuth.getState().status === 'authed';
+  if (wasAuthed) useAuth.getState().handleAuthLost();
   if (selected.has('server.url') && config.rocketChat) {
     setServerBase(config.rocketChat.url);
   }
@@ -64,13 +88,26 @@ function applySelectedFields(
   const adoTouched = ['ado.base', 'ado.mode', 'ado.auth'].some((key) => selected.has(key));
   if (adoTouched) {
     const existing = loadWorkbenchConfig();
-    // 只改选中的字段，PAT / 账号 / 桥接地址等本地内容原样保留
+    const nextMode = selected.has('ado.mode') && config.ado?.mode
+      ? config.ado.mode
+      : (existing?.mode ?? 'direct');
+    const nextBase = selected.has('ado.base') && config.ado?.url
+      ? config.ado.url
+      : existing?.adoBase;
+    const nextAuth = selected.has('ado.auth') && config.ado?.auth
+      ? config.ado.auth
+      : existing?.auth;
+    const connectionChanged = adoConnectionChanged(existing ?? undefined, {
+      mode: nextMode,
+      adoBase: nextBase,
+      auth: nextAuth,
+    });
     useWorkbench.getState().setConfig({
-      mode: selected.has('ado.mode') && config.ado?.mode ? config.ado.mode : (existing?.mode ?? 'direct'),
+      mode: nextMode,
       bridge: existing?.bridge,
-      adoBase: selected.has('ado.base') && config.ado?.url ? config.ado.url : existing?.adoBase,
-      pat: existing?.pat,
-      auth: selected.has('ado.auth') && config.ado?.auth ? config.ado.auth : existing?.auth,
+      adoBase: nextBase,
+      pat: connectionChanged ? undefined : existing?.pat,
+      auth: nextAuth,
       account: existing?.account ?? '',
     });
   }
@@ -98,38 +135,50 @@ function applySelectedFields(
     saveHierarchyLayout(config.workItems.hierarchyLayout);
   }
 
-  const pickedProviders = (config.ai?.providers ?? []).filter((provider) =>
-    selected.has(`ai.provider.${provider.id}`),
-  );
-  if (pickedProviders.length > 0) {
-    const settings = loadAiSettings();
-    for (const provider of pickedProviders) {
-      const existing = settings.providers.find((entry) => entry.id === provider.id);
+  if (aiSettings) {
+    for (const { provider, existing, endpointChanged } of providerUpdates) {
       const next: AiProviderConfig = {
         id: provider.id,
         kind: provider.kind,
         baseUrl: provider.baseUrl,
         model: provider.model,
         name: provider.name || existing?.name || provider.id,
-        locality: existing?.locality ?? 'external',
-        // 密钥状态不动：配置文件里没有也不可能有 key
-        hasSecret: existing?.hasSecret ?? false,
+        locality: endpointChanged ? 'external' : (existing?.locality ?? 'external'),
+        hasSecret: endpointChanged ? false : (existing?.hasSecret ?? false),
       };
-      settings.providers = existing
-        ? settings.providers.map((entry) => (entry.id === provider.id ? next : entry))
-        : [...settings.providers, next];
+      aiSettings.providers = existing
+        ? aiSettings.providers.map((entry) => (entry.id === provider.id ? next : entry))
+        : [...aiSettings.providers, next];
     }
-    saveAiSettings(settings);
+    saveAiSettings(aiSettings);
   }
 
   saveWorkspaceSource(
     mergeAppliedFields(
       loadWorkspaceSource(),
-      { url: sourceUrl, name: config.name, importedAt: Date.now() },
+      {
+        url: sourceUrl,
+        sourceKind: sourceUrl ? 'url' : 'file',
+        name: config.name,
+        importedAt: Date.now(),
+        checkedAt: sourceUrl ? Date.now() : undefined,
+      },
       applied,
     ),
   );
+  if (wasAuthed) queueMicrotask(() => location.reload());
   return Object.keys(applied).length;
+}
+
+/** 首次加入团队时应用所有默认选中的字段；已有本地覆盖仍按团队配置规则保留。 */
+export function applyWorkspaceConfigDefaults(config: WorkspaceConfig, sourceUrl?: string): Promise<number> {
+  const fields = planWorkspaceFields(
+    config,
+    collectCurrentValues(),
+    loadWorkspaceSource()?.applied ?? {},
+  );
+  const selected = new Set(fields.filter((field) => field.selected).map((field) => field.key));
+  return applySelectedFields(config, fields, selected, sourceUrl);
 }
 
 function FieldRow({
@@ -208,9 +257,9 @@ export function ImportPreviewDialog({
     });
   };
 
-  const apply = () => {
+  const apply = async () => {
     try {
-      const count = applySelectedFields(config, fields, selected, sourceUrl);
+      const count = await applySelectedFields(config, fields, selected, sourceUrl);
       toast.success(count > 0 ? `已应用 ${count} 个配置字段` : '没有需要应用的字段');
       onApplied();
     } catch (err) {
@@ -222,7 +271,7 @@ export function ImportPreviewDialog({
   return (
     <Dialog
       title={config.name ? `导入「${config.name}」` : '导入工作区配置'}
-      hint="勾选的字段会写入本地配置；「本地已修改」的字段默认保留你的值。PAT 和 AI 密钥不受影响。"
+      hint="勾选字段会写入本地配置；本地修改默认保留。端点变化时会清除对应 PAT/AI 密钥，Rocket.Chat 变化时需要重新登录。"
       onClose={onClose}
       footer={
         <>
@@ -233,7 +282,7 @@ export function ImportPreviewDialog({
             取消
           </button>
           <button
-            onClick={apply}
+            onClick={() => void apply()}
             disabled={selected.size === 0}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -281,9 +330,7 @@ export function WorkspaceConfigSection() {
   const fetchFromUrl = async (target: string) => {
     setLoading(true);
     try {
-      const res = await httpFetch(target);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      importText(await res.text(), target);
+      setPreview({ config: await fetchWorkspaceConfig(target), sourceUrl: target });
     } catch (err) {
       toast.error(err, '拉取配置失败');
     } finally {
@@ -334,7 +381,7 @@ export function WorkspaceConfigSection() {
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="配置文件的 URL（也可放在 Git 仓库的 raw 地址）"
+          placeholder="无需登录即可访问的配置 URL（可使用 Git Raw 地址）"
           className="h-9 flex-1 rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
         />
         <button

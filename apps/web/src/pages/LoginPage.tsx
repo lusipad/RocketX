@@ -1,8 +1,11 @@
 import { useState, type FormEvent } from 'react';
-import { Rocket } from 'lucide-react';
+import { Building2, Rocket } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { getServerBase, isTauri, setServerBase } from '../lib/client';
 import { loginFailureMessage, probeRocketChat } from '../lib/loginDiagnostic';
+import { loadFirstRunState, shouldShowFirstRun } from '../lib/firstRun';
+import { loadWorkspaceSource } from '../lib/workspaceConfig';
+import FirstRunPage from './FirstRunPage';
 
 export default function LoginPage() {
   const { status, error, login } = useAuth();
@@ -16,7 +19,30 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [firstRun, setFirstRun] = useState(() =>
+    shouldShowFirstRun({
+      desktop: isTauri,
+      serverUrl: getServerBase(),
+      hasWorkspaceSource: !!loadWorkspaceSource(),
+      state: loadFirstRunState(typeof localStorage === 'undefined' ? undefined : localStorage),
+    }),
+  );
+  const [editServer, setEditServer] = useState(false);
   const busy = checking || status === 'authing';
+
+  if (firstRun) {
+    return (
+      <FirstRunPage
+        onContinue={() => {
+          setServer(getServerBase() || (isTauri ? 'http://localhost:3300' : ''));
+          setFirstRun(false);
+        }}
+      />
+    );
+  }
+
+  const workspace = loadWorkspaceSource();
+  const teamServer = !!workspace && !!getServerBase() && !editServer;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -69,17 +95,37 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-sm text-ink-2">服务器地址</label>
-            <input
-              value={server}
-              onChange={(e) => setServer(e.target.value)}
-              autoComplete="url"
-              className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary-light"
-              placeholder={isTauri ? 'https://chat.example.com' : '留空使用当前站点'}
-            />
-            {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
-          </div>
+          {teamServer ? (
+            <div className="rounded-lg border border-line bg-fill-1 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-sm text-ink-2">
+                <Building2 size={15} className="text-primary" />
+                <span className="font-medium">{workspace.name || '团队工作区'}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-3 text-xs text-ink-3">
+                <span className="min-w-0 truncate">{getServerBase()}</span>
+                <button
+                  type="button"
+                  onClick={() => setEditServer(true)}
+                  className="shrink-0 text-primary hover:underline"
+                >
+                  更换服务器
+                </button>
+              </div>
+              {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
+            </div>
+          ) : (
+            <div>
+              <label className="mb-1.5 block text-sm text-ink-2">服务器地址</label>
+              <input
+                value={server}
+                onChange={(e) => setServer(e.target.value)}
+                autoComplete="url"
+                className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary-light"
+                placeholder={isTauri ? 'https://chat.example.com' : '留空使用当前站点'}
+              />
+              {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
+            </div>
+          )}
           <div>
             <label className="mb-1.5 block text-sm text-ink-2">用户名 / 邮箱</label>
             <input
