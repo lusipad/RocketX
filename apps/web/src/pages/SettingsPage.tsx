@@ -22,8 +22,9 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { getServerBase, isTauri, openExternal, rest } from '../lib/client';
+import { getServerBase, isTauri, rest } from '../lib/client';
 import {
+  checkSignedHttpSource,
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
@@ -65,6 +66,7 @@ import {
 } from '../kernel/manifest';
 import { SENSITIVE_PERMISSIONS } from '../kernel/permission';
 import { ensureHttpOrigin, httpFetch } from '../lib/http';
+import { resetFirstRun } from '../lib/firstRun';
 import AiSettings from '../components/AiSettings';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
@@ -126,7 +128,6 @@ function AccountSection() {
   const [saved, setSaved] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [confirmSetup, setConfirmSetup] = useState(false);
-  const resetOnboarding = useOnboarding((s) => s.reset);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -372,7 +373,7 @@ function AccountSection() {
         </button>
       </Row>
 
-      <Row label="首次设置" hint="重新确认 Rocket.Chat 登录、Azure DevOps 连接和首用清单">
+      <Row label="启动引导" hint="重新选择团队配置或个人设置，并再次登录">
         <button
           onClick={() => setConfirmSetup(true)}
           className="h-9 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
@@ -393,10 +394,10 @@ function AccountSection() {
       {confirmSetup && (
         <ConfirmDialog
           title="重新运行首次设置"
-          message="将退出当前登录并回到登录页。已有 Azure DevOps 配置会保留并自动回填。"
+          message="将退出当前登录并重新显示团队配置引导。已有本地配置会保留，团队配置不会静默覆盖你的修改。"
           confirmLabel="重新开始"
           onConfirm={() => {
-            resetOnboarding();
+            resetFirstRun();
             void logout();
           }}
           onClose={() => setConfirmSetup(false)}
@@ -1662,12 +1663,14 @@ function UpdateSourceRow() {
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [probe, setProbe] = useState<UpdateProbe | null>(null);
+  const [signedUpdate, setSignedUpdate] = useState<Awaited<ReturnType<typeof checkSignedHttpSource>>>(null);
 
   function update(next: Partial<UpdateSourceConfig>): void {
     const merged = { ...config, ...next };
     setConfig(merged);
     saveUpdateSource(merged);
     setProbe(null);
+    setSignedUpdate(null);
     setStatus(null);
   }
 
@@ -1675,12 +1678,24 @@ function UpdateSourceRow() {
     setChecking(true);
     setStatus(null);
     setProbe(null);
+    setSignedUpdate(null);
     try {
       if (config.kind === 'github') {
         const { check } = await import('@tauri-apps/plugin-updater');
         const found = await check({ timeout: 15_000 });
-        if (found) setProbe({ hasUpdate: true, version: found.version });
+        if (found) {
+          setSignedUpdate(found);
+          setProbe({ hasUpdate: true, version: found.version });
+        }
         else setStatus('已是最新版本');
+      } else if (config.kind === 'http') {
+        const found = await checkSignedHttpSource(config.location);
+        if (found) {
+          setSignedUpdate(found);
+          setProbe({ hasUpdate: true, version: found.version });
+        } else {
+          setStatus('已是最新版本');
+        }
       } else {
         const result = await probeConfiguredSource(config, APP_VERSION);
         if (result.hasUpdate) setProbe(result);
@@ -1696,20 +1711,20 @@ function UpdateSourceRow() {
   async function applyUpdate(): Promise<void> {
     if (!probe) return;
     try {
-      if (config.kind === 'github') {
-        const { check } = await import('@tauri-apps/plugin-updater');
-        const found = await check({ timeout: 15_000 });
+      if (config.kind === 'github' || config.kind === 'http') {
+        const found = signedUpdate ?? (config.kind === 'github'
+          ? await import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15_000 }))
+          : await checkSignedHttpSource(config.location));
         if (!found) return;
-        const toastId = toast.loading(`正在下载 RocketX ${found.version}…`);
+        const toastId = toast.loading(`正在下载并验证 RocketX ${found.version}…`);
         await found.downloadAndInstall();
         toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
         const { relaunch } = await import('@tauri-apps/plugin-process');
         await relaunch();
       } else if (probe.installerPath) {
-        await launchDirInstaller(probe.installerPath);
+        if (!probe.signature) throw new Error('更新包缺少签名');
+        await launchDirInstaller(config.location, probe.installerPath, probe.signature);
         toast.info('安装包已启动，请按安装向导完成更新');
-      } else if (probe.downloadUrl) {
-        await openExternal(probe.downloadUrl);
       }
     } catch (error) {
       toast.error(error, '更新失败');
@@ -1717,7 +1732,7 @@ function UpdateSourceRow() {
   }
 
   return (
-    <Row label="更新" hint="内网或受限网络可改用自建 HTTP 源或共享目录（放发布产物与 latest.json）">
+    <Row label="更新" hint="内网 HTTP 与共享目录都必须使用带 signature 的 latest.json；安装前使用内置公钥验签">
       <div className="flex flex-col gap-2">
         <select
           value={config.kind}
@@ -1751,7 +1766,7 @@ function UpdateSourceRow() {
               onClick={() => void applyUpdate()}
               className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover"
             >
-              {config.kind === 'github'
+              {config.kind === 'github' || config.kind === 'http'
                 ? `更新到 v${probe.version} 并重启`
                 : probe.installerPath
                   ? `安装 v${probe.version}`

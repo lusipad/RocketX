@@ -5,7 +5,6 @@ import { useUI } from '../stores/ui';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
-import { focusComposerInput } from '../lib/focus';
 import { shortcutKeyOf } from '../lib/shortcutKey';
 import {
   clearTrayAttention,
@@ -22,7 +21,6 @@ import ChatArea from '../components/ChatArea';
 import QuickSwitcher from '../components/QuickSwitcher';
 import UploadConfirm from '../components/UploadConfirm';
 import SettingsPage from './SettingsPage';
-import FirstUseChecklist from '../components/FirstUseChecklist';
 import { StartDMDialog } from '../components/NewChatDialogs';
 import { useImLayout } from '../stores/imLayout';
 import {
@@ -63,7 +61,6 @@ export default function MainPage() {
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
-  const activeRid = useChat((s) => s.activeRid);
   const rightPanel = useChat((s) => s.rightPanel);
   const rightPanelOpen = rightPanel !== null;
   const butlerPanelOpen = rightPanel?.kind === 'butler';
@@ -418,17 +415,6 @@ export default function MainPage() {
         />
       )}
       <UploadConfirm />
-      <FirstUseChecklist
-        hasActiveConversation={!!activeRid}
-        onStartConversation={() => {
-          useUI.getState().setModule('messages');
-          setNewChatOpen(true);
-        }}
-        onFocusComposer={() => {
-          useUI.getState().setModule('messages');
-          focusComposerInput();
-        }}
-      />
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
       {shortcutsOpen && <ShortcutHelpDialog onClose={() => setShortcutsOpen(false)} />}
     </div>

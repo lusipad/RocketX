@@ -7,6 +7,45 @@ const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'on
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = 'http://127.0.0.1:4173';
 
+async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
+  await page.addInitScript(({ config }) => {
+    let responseUrl = '';
+    let responseBodySent = false;
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {
+        invoke: async (command: string, args?: Record<string, any>) => {
+          if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
+          if (command === 'plugin:http|fetch') {
+            responseUrl = String(args?.clientConfig?.url ?? '');
+            return 1;
+          }
+          if (command === 'plugin:http|fetch_send') {
+            responseBodySent = false;
+            return { status: 200, statusText: 'OK', url: responseUrl, headers: [], rid: 2 };
+          }
+          if (command === 'plugin:http|fetch_read_body') {
+            if (responseBodySent) return [1];
+            responseBodySent = true;
+            const body = responseUrl.endsWith('/api/info')
+              ? { version: '8.6.1', success: true }
+              : (config ?? { version: 1, rocketChat: { url: 'https://chat.example.com' } });
+            return [...new TextEncoder().encode(JSON.stringify(body)), 0];
+          }
+          if (command === 'plugin:updater|check') return null;
+          return null;
+        },
+        transformCallback: () => 0,
+        unregisterCallback: () => {},
+      },
+    });
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', {
+      configurable: true,
+      value: { unregisterListener: () => {} },
+    });
+  }, { config: workspaceConfig });
+}
+
 function agentCardMessage() {
   const card = {
     version: 1,
@@ -271,10 +310,205 @@ test('登录后进入主界面', async ({ page }) => {
   await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
   await page.getByPlaceholder('请输入密码').fill('password');
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '连接 Azure DevOps' })).toBeVisible();
-  await page.getByRole('button', { name: '暂时跳过' }).click();
-  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await expect(page.getByRole('heading', { name: '连接 Azure DevOps' })).toHaveCount(0);
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('桌面新安装优先展示团队引导和设计理念', async ({ page }, testInfo) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await installTauriMock(page);
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /让团队消息进入系统，\s*而不是留在每个人的大脑里。/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
+  await expect(page.getByText('捕获', { exact: true })).toBeVisible();
+  await expect(page.getByText('执行', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('team-first-onboarding.png'), fullPage: true });
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'rcx.workspace.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      version: 1,
+      name: '验证团队',
+      rocketChat: { url: 'https://chat.example.com' },
+      ado: { url: 'https://ado.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
+    })),
+  });
+  await expect(page.getByRole('heading', { name: '加入「验证团队」' })).toBeVisible();
+  await expect(page.getByText('用户名、密码、PAT 和 AI 密钥不会从团队配置读取')).toBeVisible();
+  await page.getByRole('button', { name: '确认并继续' }).click();
+  await expect(page.getByText('验证团队', { exact: true })).toBeVisible();
+  await expect(page.getByText('https://chat.example.com', { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder('https://chat.example.com')).toHaveCount(0);
+  await expect(page.getByPlaceholder('请输入用户名或邮箱')).toBeVisible();
+  await expect(page.getByPlaceholder('请输入密码')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('桌面重启后会重新授权并检查团队配置 URL', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await installTauriMock(page, {
+    version: 1,
+    name: '同步团队',
+    rocketChat: { url: 'https://chat.example.com' },
+    update: { source: 'dir', location: '\\\\fileserver\\software\\rocketx' },
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-server', 'https://chat.example.com');
+    localStorage.setItem('rcx-update-source', JSON.stringify({ kind: 'github', location: '' }));
+    localStorage.setItem('rcx-first-run-v1', 'complete');
+    localStorage.setItem('rcx-workspace-source', JSON.stringify({
+      url: 'https://git.example.com/team/raw/rcx.workspace.json',
+      name: '同步团队',
+      importedAt: 1,
+      lastCheckedAt: 0,
+      follow: true,
+      applied: {
+        'server.url': 'https://chat.example.com',
+        'update.source': 'github|',
+      },
+    }));
+  });
+
+  await page.goto('/');
+  await expect(page.getByText(/团队配置有更新：1 项变化/)).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('团队端点变化会解绑 ADO PAT 和 AI 密钥状态', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      mode: 'direct',
+      adoBase: 'https://ado-old.example.com/tfs/DefaultCollection',
+      auth: 'pat',
+      pat: 'old-pat',
+      account: 'tester',
+    }));
+    localStorage.setItem('rcx-ai-settings-v1', JSON.stringify({
+      providers: [{
+        id: 'team-ai',
+        kind: 'openai-compatible',
+        name: 'Team AI',
+        baseUrl: 'https://ai-old.example.com/v1',
+        model: 'old-model',
+        locality: 'local',
+        hasSecret: true,
+      }],
+      routes: Object.fromEntries(
+        ['summary', 'extraction', 'daily-review', 'butler-rounds', 'text-tool', 'agent']
+          .map((id) => [id, { providerId: 'team-ai', localOnly: false }]),
+      ),
+    }));
+    localStorage.setItem('rcx-workspace-source', JSON.stringify({
+      url: 'https://git.example.com/team/raw/rcx.workspace.json',
+      name: '旧团队',
+      importedAt: 1,
+      follow: true,
+      applied: {
+        'ado.base': 'https://ado-old.example.com/tfs/DefaultCollection',
+        'ado.mode': 'direct',
+        'ado.auth': 'pat',
+        'ai.provider.team-ai': 'openai-compatible|https://ai-old.example.com/v1|old-model',
+      },
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.locator('input[accept=".json,application/json"]').setInputFiles({
+    name: 'rcx.workspace.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      version: 1,
+      name: '新团队',
+      ado: { url: 'https://ado-new.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
+      ai: {
+        providers: [{
+          id: 'team-ai',
+          kind: 'openai-compatible',
+          name: 'Team AI',
+          baseUrl: 'https://ai-new.example.com/v1',
+          model: 'new-model',
+        }],
+      },
+    })),
+  });
+  await page.getByRole('button', { name: /应用 \d+ 项/ }).click();
+
+  const stored = await page.evaluate(() => ({
+    workbench: JSON.parse(localStorage.getItem('rcx-workbench') ?? '{}'),
+    ai: JSON.parse(localStorage.getItem('rcx-ai-settings-v1') ?? '{}'),
+    source: JSON.parse(localStorage.getItem('rcx-workspace-source') ?? '{}'),
+  }));
+  expect(stored.workbench).not.toHaveProperty('pat');
+  expect(stored.workbench.adoBase).toBe('https://ado-new.example.com/tfs/DefaultCollection');
+  expect(stored.ai.providers[0]).toMatchObject({
+    id: 'team-ai',
+    baseUrl: 'https://ai-new.example.com/v1',
+    locality: 'external',
+    hasSecret: false,
+  });
+  expect(stored.source).not.toHaveProperty('url');
+  expect(stored.source).not.toHaveProperty('follow');
+  expect(pageErrors).toEqual([]);
+});
+
+test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', async ({ page }) => {
+  const { pageErrors } = await installRocketChatMock(page);
+  await page.addInitScript(({ server, userId }) => {
+    if (sessionStorage.getItem('rcx-server-change-seeded')) return;
+    sessionStorage.setItem('rcx-server-change-seeded', '1');
+    localStorage.setItem('rcx-server', server);
+    localStorage.setItem('rcx-auth', JSON.stringify({ authToken: 'test-token', userId }));
+    localStorage.setItem('rcx-owner', `${userId}@${server}`);
+    localStorage.setItem(
+      `rcx-onboarding-v1:${encodeURIComponent(server)}:${userId}`,
+      JSON.stringify({
+        version: 1,
+        ado: 'skipped',
+        checklist: {
+          startedConversation: true,
+          sentMessage: true,
+          notificationsEnabled: true,
+          dismissed: true,
+        },
+      }),
+    );
+    localStorage.setItem('rcx-workspace-source', JSON.stringify({
+      name: '旧团队',
+      importedAt: 1,
+      applied: { 'server.url': server },
+    }));
+  }, { server: SERVER, userId: ME._id });
+
+  await page.goto('/');
+  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.locator('input[accept=".json,application/json"]').setInputFiles({
+    name: 'rcx.workspace.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      version: 1,
+      name: '新团队',
+      rocketChat: { url: 'https://chat-new.example.com' },
+    })),
+  });
+  await page.getByRole('button', { name: '应用 1 项' }).click();
+
+  await expect(page.getByText('新团队', { exact: true })).toBeVisible();
+  await expect(page.getByText('https://chat-new.example.com', { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder('请输入用户名或邮箱')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('rcx-auth'))).toBeNull();
   expect(pageErrors).toEqual([]);
 });
 

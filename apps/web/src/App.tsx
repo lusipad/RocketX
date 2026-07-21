@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useAuth } from './stores/auth';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
-import AdoOnboardingPage from './pages/AdoOnboardingPage';
 import { useOnboarding } from './stores/onboarding';
 import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
@@ -53,7 +52,7 @@ export default function App() {
       </div>
     );
   } else {
-    content = onboarding.ado === 'pending' ? <AdoOnboardingPage /> : <MainPage />;
+    content = <MainPage />;
   }
   return (
     <>
