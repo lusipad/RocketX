@@ -70,6 +70,7 @@ jobs:
             if [ "$published" = "$version" ]; then
               git_head="$(npm view "$spec" gitHead 2>/dev/null || true)"
               test "$git_head" = "$RELEASE_SHA"
+              (cd "$directory" && pnpm build)
               echo "$spec already matches $RELEASE_SHA"
               return
             fi
@@ -88,8 +89,16 @@ jobs:
             test "$(printf '%s' "$packed_manifest" | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).gitHead")" = "$RELEASE_SHA"
             ! printf '%s' "$packed_manifest" | grep -q '"workspace:'
             npm publish "$tarball" --access public --provenance
-            test "$(npm view "$spec" version)" = "$version"
-            test "$(npm view "$spec" gitHead)" = "$RELEASE_SHA"
+            for attempt in {1..12}; do
+              published_version="$(npm view "$spec" version 2>/dev/null || true)"
+              published_git_head="$(npm view "$spec" gitHead 2>/dev/null || true)"
+              if [ "$published_version" = "$version" ] && [ "$published_git_head" = "$RELEASE_SHA" ]; then
+                return
+              fi
+              sleep 5
+            done
+            echo "npm registry did not expose $spec with gitHead $RELEASE_SHA within 60 seconds" >&2
+            return 1
           }
           publish_package packages/app-sdk
           publish_package packages/create-rcx-app
