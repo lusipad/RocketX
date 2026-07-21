@@ -38,6 +38,7 @@ import argparse
 import ipaddress
 import os
 import re
+import select
 import socket
 import subprocess
 import sys
@@ -46,6 +47,8 @@ import time
 import uuid
 
 PORT = 2425
+INTRANET_PORT = 9011  # 内网通私有协议端口(加密/GBK,非 IPMsg 语法)
+SNIFF_PORTS = "2425,9011"
 
 # IPMsg 命令字与选项位
 BR_ENTRY = 0x00000001
@@ -721,6 +724,100 @@ def cmd_diag(args):
     sock.close()
 
 
+# ──────────────────────────── 多端口抓包 ────────────────────────────
+
+def hexdump(data, width=16, limit=256):
+    lines = []
+    view = data[:limit]
+    for offset in range(0, len(view), width):
+        chunk = view[offset:offset + width]
+        hexpart = " ".join("{:02x}".format(b) for b in chunk)
+        asciipart = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append("    {:04x}  {:<{}}  {}".format(offset, hexpart, width * 3 - 1, asciipart))
+    if len(data) > limit:
+        lines.append("    …(共 {} 字节,仅显示前 {} 字节)".format(len(data), limit))
+    return "\n".join(lines)
+
+
+def sniff_describe(port, data):
+    """尽力识别端口/内容:2425 的 IPMsg 语法能解则解,9011 视为内网通私有协议。"""
+    if port == PORT:
+        packet = parse_packet(data)
+        if packet:
+            utf8 = bool(packet["command"] & UTF8OPT)
+            lines = [
+                "  IPMsg 语法 | 版本串 {!r} → {}".format(packet["version"], guess_dialect(packet["version"])),
+                "  命令 {} (raw={})".format(describe_command(packet["command"]), packet["command"]),
+                field_view("user", packet["user"], utf8),
+                field_view("host", packet["host"], utf8),
+                field_view("extra", packet["extra"], utf8),
+            ]
+            return "\n".join(lines)
+        return "  端口 2425 但不符合 IPMsg 语法(可能是加密/私有帧):\n" + hexdump(data)
+    if port == INTRANET_PORT:
+        views = try_decode(data)
+        note = "  端口 9011 = 内网通私有协议。RocketX 当前不解析该协议(#142 已移除)。"
+        decoded = "  GBK 试解={}".format(repr(views["GBK"])[:120]) if views["GBK"] else "  (非文本/已加密)"
+        return note + "\n" + decoded + "\n" + hexdump(data)
+    return hexdump(data)
+
+
+def cmd_sniff(args):
+    ports = []
+    for token in str(args.ports).split(","):
+        token = token.strip()
+        if token:
+            ports.append(int(token))
+    sockets = {}
+    for port in ports:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.bind((args.bind, port))
+            sockets[sock.fileno()] = (sock, port)
+            print("监听 {}:{}".format(args.bind, port))
+        except OSError as error:
+            print("! 无法绑定 {}:{}: {}".format(args.bind, port, error))
+            if port == INTRANET_PORT:
+                print("  → 9011 已被占用,说明本机正运行着内网通;请在另一台机器上抓包。")
+    if not sockets:
+        sys.exit("没有任何端口绑定成功,无法抓包。")
+    print("本机 IP: {}  ——  现在让 192.168.0.111 的内网通刷新列表或发一条消息。Ctrl+C 结束。\n".format(
+        guess_local_ip() or "未知"))
+    seen_ports = {}
+    deadline = time.time() + args.seconds if args.seconds else None
+    try:
+        while deadline is None or time.time() < deadline:
+            readable, _, _ = select.select([s for s, _ in sockets.values()], [], [], 0.5)
+            for sock in readable:
+                port = sockets[sock.fileno()][1]
+                try:
+                    data, source = sock.recvfrom(65536)
+                except OSError:
+                    continue
+                seen_ports[port] = seen_ports.get(port, 0) + 1
+                print("─" * 72)
+                print("[{}] 来自 {}:{}  {} 字节".format(port, source[0], source[1], len(data)))
+                print(sniff_describe(port, data))
+                sys.stdout.flush()
+    except KeyboardInterrupt:
+        pass
+    print("\n" + "=" * 72)
+    print("抓包汇总:")
+    if not seen_ports:
+        print("  未捕获到任何报文。可能:入站被防火墙拦、被 AP/端口隔离、或对方未活动。")
+    for port in sorted(seen_ports):
+        tag = "内网通私有协议" if port == INTRANET_PORT else ("IPMsg/2425" if port == PORT else "")
+        print("  端口 {}: {} 个报文  {}".format(port, seen_ports[port], tag))
+    if seen_ports.get(INTRANET_PORT) and not seen_ports.get(PORT):
+        print("\n结论:内网通只在 9011 私有协议上活动,2425 上完全没有它的报文。")
+        print("  这就是 RocketX 无法与内网通互通的根因 —— RocketX 只支持 2425,")
+        print("  而当前版本内网通用 9011,双方根本不在同一协议上。见 docs/ipmsg-interop-findings.md。")
+    elif seen_ports.get(PORT):
+        print("\n内网通在 2425 上也有报文,请把上面的版本串/十六进制发给开发者比对。")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="飞鸽/飞秋/内网通 2425 协议探测器", formatter_class=argparse.RawDescriptionHelpFormatter
@@ -739,6 +836,11 @@ def main():
     diag.add_argument("--wait", type=float, default=6.0, help="每阶段等待应答秒数")
     diag.add_argument("--listen-seconds", type=float, default=6.0, help="被动监听阶段时长")
     diag.set_defaults(func=cmd_diag)
+
+    sniff = sub.add_parser("sniff", help="同时监听 2425+9011,抓取内网通真实报文(定位私有协议)")
+    sniff.add_argument("--ports", default=SNIFF_PORTS, help="监听端口,逗号分隔(默认 2425,9011)")
+    sniff.add_argument("--seconds", type=float, default=0, help="抓包时长秒数,0=一直到 Ctrl+C")
+    sniff.set_defaults(func=cmd_sniff)
 
     listen = sub.add_parser("listen", help="监听并解码 2425 流量")
     listen.add_argument("--reply", action="store_true", help="收到 BR_ENTRY 时自动回复 ANSENTRY")
