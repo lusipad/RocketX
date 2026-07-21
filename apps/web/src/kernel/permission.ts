@@ -17,6 +17,7 @@ export const SENSITIVE_PERMISSIONS: readonly AppPermission[] = [
   'ai:invoke',
   'lan:discover',
   'lan:transfer',
+  'native:service',
 ];
 
 export const DANGEROUS_PERMISSIONS: readonly AppPermission[] = ['agent:spawn', 'process:spawn'];

@@ -62,5 +62,5 @@ Do not replace the pinned Rocket.Chat image with `latest`.
 
 - Azure DevOps Server 2022 integration is optional and does not change Rocket.Chat compatibility.
 - M9 trusted LAN transfer is a RocketX-to-RocketX transport with separate device identity and trust state.
-- M10 IP Messenger compatibility is opt-in, local, unauthenticated legacy interoperability. It never inherits M9 trust.
+- M10 IP Messenger compatibility is an opt-in Windows plugin with its own native Sidecar. Standard peers use UDP/TCP 2425 for messages and ordinary files; original Intranet Link peers are limited to 2425 discovery and text. It never inherits M9 trust.
 - Official Rocket.Chat clients can continue to connect to the same server; RocketX-only local features may not appear in those clients.

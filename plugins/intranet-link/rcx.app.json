@@ -1,14 +1,20 @@
 {
   "id": "dev.rocketx.intranet-link",
-  "version": "1.2.0",
-  "name": "内网通",
+  "version": "1.3.0",
+  "name": "飞鸽 / IPMSG",
   "publisher": "RocketX",
   "enabledByDefault": false,
   "runtime": "iframe",
   "entry": "index.html",
-  "permissions": ["lan:discover", "lan:transfer", "ui:notify"],
+  "service": {
+    "runtime": "native",
+    "command": "rcx-plugin-intranet-link",
+    "platforms": ["windows"],
+    "protocol": "jsonrpc-stdio"
+  },
+  "permissions": ["native:service", "storage:local", "files:read", "ui:notify"],
   "contributes": {
-    "nav.module": [{ "id": "intranet-link", "label": "内网通" }],
-    "composer.command": [{ "name": "intranet", "desc": "打开内网通 P2P 面板" }]
+    "nav.module": [{ "id": "intranet-link", "label": "飞鸽 / IPMSG" }],
+    "composer.command": [{ "name": "intranet", "desc": "打开飞鸽 / IPMSG 局域网面板" }]
   }
 }

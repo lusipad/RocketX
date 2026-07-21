@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseReleaseTag } from './verify-release.mjs';
@@ -21,6 +21,12 @@ function validateManifest(plugin, manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail(`${plugin}: rcx.app.json must be an object`);
   if (manifest.runtime !== 'iframe') fail(`${plugin}: only iframe plugins are packaged`);
   if (manifest.entry !== 'index.html') fail(`${plugin}: packaged plugins must use index.html entry`);
+  if (manifest.service) {
+    if (manifest.service.runtime !== 'native' || manifest.service.protocol !== 'jsonrpc-stdio') {
+      fail(`${plugin}: native service must use jsonrpc-stdio`);
+    }
+    if (!manifest.permissions?.includes('native:service')) fail(`${plugin}: native service permission is missing`);
+  }
   if (!Array.isArray(manifest.permissions)) fail(`${plugin}: permissions must be an array`);
   for (const permission of manifest.permissions) {
     if (typeof permission !== 'string') fail(`${plugin}: permission must be a string`);
@@ -63,6 +69,16 @@ for (const plugin of pluginNames) {
     if ((await stat(source).catch(() => null))?.isFile()) {
       await copyFile(source, path.join(destination, name));
     }
+  }
+  if (manifest.service) {
+    const nativeRoot = path.join(root, 'native');
+    if (!(await stat(path.join(nativeRoot, 'Cargo.toml')).catch(() => null))?.isFile()) {
+      fail(`${plugin}: native service source is missing Cargo.toml`);
+    }
+    await cp(nativeRoot, path.join(destination, 'native'), {
+      recursive: true,
+      filter: (source) => !source.split(path.sep).includes('target'),
+    });
   }
   packaged.push({ directory: plugin, id: manifest.id, name: manifest.name, version: manifest.version });
 }

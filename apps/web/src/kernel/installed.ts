@@ -32,12 +32,12 @@ const BASIC = new Set<AppPermission>(BASIC_PERMISSIONS);
 const SENSITIVE = new Set<AppPermission>(SENSITIVE_PERMISSIONS);
 const DANGEROUS = new Set<AppPermission>(DANGEROUS_PERMISSIONS);
 
-const OFFICIAL_APP_IDENTITY_HASHES = new Map([
-  ['dev.rocketx.intranet-link', '2126f490c59575754f655e47d13f65f6bf9c5f6696fe2f9f69d265b913e618ff'],
-]);
-
-function officialIdentity(manifest: RcxAppManifest, identityHash: string): boolean {
-  const expected = OFFICIAL_APP_IDENTITY_HASHES.get(manifest.id);
+function officialIdentity(
+  identities: ReadonlyMap<string, string>,
+  manifest: RcxAppManifest,
+  identityHash: string,
+): boolean {
+  const expected = identities.get(manifest.id);
   if (!expected) return false;
   if (identityHash.toLowerCase() !== expected) {
     throw new Error(`应用 ID ${manifest.id} 由 RocketX 官方插件保留，当前包身份校验失败`);
@@ -45,8 +45,8 @@ function officialIdentity(manifest: RcxAppManifest, identityHash: string): boole
   return true;
 }
 
-export function isOfficialApp(app: InstalledApp, appId: string): boolean {
-  return app.manifest.id === appId && app.official === true;
+export function isOfficialApp(app: InstalledApp, appId?: string): boolean {
+  return app.official === true && (appId === undefined || app.manifest.id === appId);
 }
 
 async function officialIdentityHash(manifestText: string, entryContent: string): Promise<string> {
@@ -95,9 +95,31 @@ function grantsFor(manifest: RcxAppManifest, selected: AppPermission[] = []): Ap
   );
 }
 
+function grantsForBundledApp(manifest: RcxAppManifest, previous?: InstalledApp): AppPermission[] {
+  if (!previous) {
+    return grantsFor(
+      manifest,
+      manifest.permissions.filter((permission) => SENSITIVE.has(permission)),
+    );
+  }
+  const previousPermissions = new Set(previous.manifest.permissions);
+  const previousGrants = new Set(previous.granted);
+  return grantsFor(
+    manifest,
+    manifest.permissions.filter((permission) => (
+      SENSITIVE.has(permission) && (
+        previousGrants.has(permission) || !previousPermissions.has(permission)
+      )
+    )),
+  );
+}
+
 function validateRuntime(manifest: RcxAppManifest, source: InstalledApp['source']['kind']): void {
   if (manifest.runtime === 'native' || manifest.runtime === 'mcp') {
     throw new Error(`${manifest.runtime} runtime 按蓝图留到 M8`);
+  }
+  if (manifest.service && source !== 'bundled') {
+    throw new Error('native service 只允许随 RocketX 签名发布的内置应用使用');
   }
   if (manifest.runtime === 'worker' && source !== 'directory') {
     throw new Error('M6 只允许本机显式安装的 worker，远程 worker 已被安全策略拒绝');
@@ -116,6 +138,7 @@ export class AppManager {
   private version = 0;
   private loaded = false;
   private activator?: AppActivator;
+  private officialIdentities = new Map<string, string>();
 
   constructor(private store: RcxStore) {}
 
@@ -152,16 +175,11 @@ export class AppManager {
       const manifest = parseManifestJson(bundled.manifestText);
       validateRuntime(manifest, 'bundled');
       const identityHash = await officialIdentityHash(bundled.manifestText, bundled.entryContent);
-      if (!officialIdentity(manifest, identityHash)) {
-        throw new Error(`内置应用 ${manifest.id} 必须使用 RocketX 官方身份`);
-      }
+      this.officialIdentities.set(manifest.id, identityHash);
       const previous = this.apps.get(manifest.id);
       const next: InstalledApp = {
         manifest,
-        granted: previous?.granted ?? grantsFor(
-          manifest,
-          manifest.permissions.filter((permission) => SENSITIVE.has(permission)),
-        ),
+        granted: grantsForBundledApp(manifest, previous),
         enabled: previous?.enabled ?? (manifest.enabledByDefault !== false),
         official: true,
         source: { kind: 'bundled', location: 'RocketX' },
@@ -200,7 +218,11 @@ export class AppManager {
     );
     if (!entryFile) throw new Error(`找不到 entry: ${manifest.entry}`);
     const entryContent = await entryFile.text();
-    const official = officialIdentity(manifest, await officialIdentityHash(manifestText, entryContent));
+    const official = officialIdentity(
+      this.officialIdentities,
+      manifest,
+      await officialIdentityHash(manifestText, entryContent),
+    );
     const sorted = [...files].sort((left, right) =>
       (left.webkitRelativePath || left.name).localeCompare(right.webkitRelativePath || right.name),
     );
@@ -248,7 +270,11 @@ export class AppManager {
       manifest: { ...manifest, entry: entryUrl.href },
       granted: grantsFor(manifest, options.sensitiveGrants),
       enabled: this.apps.get(manifest.id)?.enabled ?? (manifest.enabledByDefault !== false),
-      official: officialIdentity(manifest, await officialIdentityHash(manifestText, entryContent)),
+      official: officialIdentity(
+        this.officialIdentities,
+        manifest,
+        await officialIdentityHash(manifestText, entryContent),
+      ),
       source: { kind: 'url', location: url.href },
       entryContent,
       bundleHash,

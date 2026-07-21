@@ -1,7 +1,7 @@
 {
   "name": "rocketchatx",
   "private": true,
-  "version": "0.25.10",
+  "version": "0.25.11",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "dev": "pnpm --filter @rcx/web dev",
@@ -22,7 +22,8 @@
     "measure:memory:trend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-desktop-memory.ps1 -Samples 31 -IntervalSeconds 60 -MaxPrivateMB 350 -MaxGrowthMB 50 -CsvPath memory-trend.csv",
     "gen:emoji": "tsx scripts/gen-emoji.ts",
     "test:classify": "tsx scripts/test-classify.ts",
-    "package:plugins": "node scripts/package-plugins.mjs"
+    "package:plugins": "node scripts/package-plugins.mjs",
+    "prepare:sidecars": "node scripts/prepare-plugin-sidecars.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

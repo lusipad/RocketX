@@ -59,8 +59,11 @@ jobs:
       - name: Rust 编译缓存
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri
+          workspaces: |
+            apps/desktop/src-tauri
+            plugins/intranet-link/native
 
       - name: Windows 桌面端单元与协议测试
-        working-directory: apps/desktop/src-tauri
-        run: cargo test --locked
+        run: |
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo test --locked --manifest-path plugins/intranet-link/native/Cargo.toml

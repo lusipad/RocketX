@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'node:zlib';
 
-test('发布插件包包含可本地安装的内网通插件', async () => {
+test('发布插件源码包包含飞鸽界面、清单和独立 Sidecar', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'rocketx-plugins-'));
   try {
     const result = spawnSync(
@@ -26,6 +26,8 @@ test('发布插件包包含可本地安装的内网通插件', async () => {
     assert.match(listing, /rocketx-plugins-0\.20\.1\/intranet-link\/rcx\.app\.json/);
     assert.match(listing, /rocketx-plugins-0\.20\.1\/intranet-link\/index\.html/);
     assert.match(listing, /rocketx-plugins-0\.20\.1\/intranet-link\/README\.md/);
+    assert.match(listing, /rocketx-plugins-0\.20\.1\/intranet-link\/native\/Cargo\.toml/);
+    assert.match(listing, /rocketx-plugins-0\.20\.1\/intranet-link\/native\/src\/runtime\.rs/);
     assert.throws(() => unzipSync(content), /incorrect header check|invalid/i, 'plugin bundle should be a zip, not gzip');
   } finally {
     await rm(temp, { recursive: true, force: true });

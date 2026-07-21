@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.25.10"
+version = "0.25.11"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -34,7 +34,6 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 blake3 = "1.8"
 ed25519-dalek = "3.0"
-encoding_rs = "0.8"
 getrandom = "0.4"
 mdns-sd = "0.20"
 socket2 = "0.6"

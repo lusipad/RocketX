@@ -6,5 +6,6 @@ export {
   type AppPermission,
   type AppRuntime,
   type ManifestContribution,
+  type NativeServiceManifest,
   type RcxAppManifest,
 } from '../../../../packages/app-sdk/src/index.js';
