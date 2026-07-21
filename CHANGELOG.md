@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.25.12 - 2026-07-21
+
+### 修复
+
+- 修复 Windows 启用内网通官方插件时额外弹出命令行窗口的问题；Native Sidecar 现在使用无控制台窗口方式启动（#144）。
+
+### 工程
+
+- 新增 Windows 进程级回归，由 Sidecar 子进程直接核验 `GetConsoleWindow()` 返回空；协议门禁归一化 Windows CRLF 与生成器 LF，避免无语义漂移误报；GitHub 桌面 Release 与可选的 npm 包发布解耦，补丁版不再被无关 Registry 状态阻塞。
+
 ## v0.25.11 - 2026-07-21
 
 ### 变更

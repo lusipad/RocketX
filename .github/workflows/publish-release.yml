@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '已完成三平台构建和 npm 发布的标签'
+        description: '已完成三平台构建的标签'
         required: true
         default: 'v1.0.0'
       confirmation:
@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: 核验发布合同、产物和 npm 包
+      - name: 核验发布合同和产物
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_CONFIRMATION: ${{ inputs.confirmation }}
@@ -53,10 +53,6 @@ jobs:
           gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
           node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory release-assets
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
-          version="$INPUT_TAG"
-          version="${version#v}"
-          test "$(npm view "@rcx/app-sdk@$version" version)" = "$version"
-          test "$(npm view "create-rcx-app@$version" version)" = "$version"
 
       - name: 公开 Release
         env:

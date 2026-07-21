@@ -1,6 +1,6 @@
 {
   "name": "@rcx/app-sdk",
-  "version": "0.25.11",
+  "version": "0.25.12",
   "description": "RocketX application bridge and manifest SDK",
   "license": "MIT",
   "repository": {
