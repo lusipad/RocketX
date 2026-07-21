@@ -4,7 +4,7 @@
     "lib": ["ES2022", "DOM"],
     "baseUrl": ".",
     "paths": {
-      "@rcx/app-sdk": ["../app-sdk/src/index.ts"]
+      "@lusipad/rocketx": ["../app-sdk/src/index.ts"]
     },
     "types": ["node"]
   },

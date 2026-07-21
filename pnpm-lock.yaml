@@ -126,7 +126,7 @@ importers:
 
   packages/create-rcx-app:
     dependencies:
-      '@rcx/app-sdk':
+      '@lusipad/rocketx':
         specifier: workspace:*
         version: link:../app-sdk
     devDependencies:

@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.25.13 - 2026-07-21
+
+### 变更
+
+- RocketX 应用 SDK 采用项目可控的公开 npm 身份 `@lusipad/rocketx`；`create-rcx-app` 保持原包名，并自动依赖同版本 SDK。
+
+### 工程
+
+- 发布合同、脚手架导入、开发文档和 clean-room 打包测试统一迁移到新 SDK 身份；npm 可信发布仍独立于桌面/GitHub Release，不向 RocketX 核心引入包管理器逻辑。
+
 ## v0.25.12 - 2026-07-21
 
 ### 修复

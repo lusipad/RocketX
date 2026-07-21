@@ -1,6 +1,6 @@
 {
-  "name": "@rcx/app-sdk",
-  "version": "0.25.12",
+  "name": "@lusipad/rocketx",
+  "version": "0.25.13",
   "description": "RocketX application bridge and manifest SDK",
   "license": "MIT",
   "repository": {

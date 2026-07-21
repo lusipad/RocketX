@@ -1,7 +1,7 @@
 import { access, cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseManifestJson, type RcxAppManifest } from '@rcx/app-sdk';
+import { parseManifestJson, type RcxAppManifest } from '@lusipad/rocketx';
 
 export const TEMPLATE_NAMES = ['hello', 'kanban', 'poll', 'oncall'] as const;
 export type TemplateName = (typeof TEMPLATE_NAMES)[number];

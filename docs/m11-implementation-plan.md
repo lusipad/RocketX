@@ -5,7 +5,7 @@
 
 ## 1. 最可能调整的决定
 
-### 1.1 manifest 契约归属 `@rcx/app-sdk`
+### 1.1 manifest 契约归属 `@lusipad/rocketx`
 
 公开面：
 
@@ -69,8 +69,7 @@ rcx-app dev [directory] [--port 4174]
 2. 合并 `main` 后创建 `v0.20.0` 标签，复用现有三平台工作流生成草稿 Release。
 3. 三平台产物存在且校验后才发布 GitHub Release；npm 发布仅在本机/CI 具有对应 scope 权限时执行。
 
-`@rcx/app-sdk` 与 `create-rcx-app` 在 npm registry 当前均为 404，但 404 不证明当前账号拥有
-`@rcx` scope。
+`@lusipad/rocketx` 与 `create-rcx-app` 在首次发布前均需由 `lusipad` 完成 npm 身份引导，之后绑定 GitHub Trusted Publishing。旧 `@rcx/app-sdk` 无法发布，因为 `@rcx` 是不受项目控制的第三方 scope。
 
 - **Confidence: high**
 - **What would flip it**：npm scope 无权或三平台签名材料缺失；GitHub v0.20.0 不因此伪装 npm 已发布，
@@ -79,7 +78,7 @@ rcx-app dev [directory] [--port 4174]
 ## 2. Assumptions
 
 - M6–M10 已合并 `main`；高置信，来自 Git 历史和 v0.19.0 验收记录。
-- `@rcx/app-sdk` 与 `create-rcx-app` 名称当前未公开发布；中置信，来自 2026-07-17 npm registry 404，
+- `@lusipad/rocketx` 与 `create-rcx-app` 的公开状态必须以 npm registry 查询为准；仓库配置不能替代发布证据，
   可能受私有包可见性影响。
 - 三平台 workflow 可创建安装包和草稿 Release；高置信，来自 `.github/workflows/desktop.yml`。
 - Windows/macOS 未配置的签名材料不阻止生成可测试的未签名产物；中置信，最终以 workflow 为准。
