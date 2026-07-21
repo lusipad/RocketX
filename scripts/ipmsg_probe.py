@@ -64,6 +64,26 @@ def local_mac() -> str:
     return "%012X" % uuid.getnode()
 
 
+def guess_local_ip():
+    """不发包地探测默认出口网卡的本机 IP(多网卡/VPN 环境下用于自检)。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("223.5.5.5", 53))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def directed_broadcast_of(ip: str):
+    """按 /24 估算定向广播地址(绝大多数办公/家用网段适用)。"""
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return None
+    return ".".join(parts[:3] + ["255"])
+
+
 def feiq_version() -> str:
     # 飞秋版本串第 3 段必须是本机 MAC,飞秋用它作为主机标识。
     return "1_lbt6_0#128#{}#0#0#0#4001#9".format(local_mac())
@@ -253,7 +273,15 @@ def report_answers(answers):
     print("=" * 72)
     if not answers:
         print("结果:没有收到任何 ANSENTRY 应答。")
-        print("  可能原因:目标不在线 / 防火墙拦截 / 广播被 AP 隔离 / 目标不认这些方言。")
+        print("  四种方言全部无应答通常说明问题在网络层,而不是协议方言层。按顺序排查:")
+        print("  1) 单播绕开广播:python ipmsg_probe.py probe <对方IP> —— 回包来自同一")
+        print("     IP,Windows 防火墙一般放行;单播通而广播不通 → 广播被 AP 隔离或路由丢弃。")
+        print("  2) 验证入站方向:本机运行 listen,让对方客户端刷新联系人列表(会广播")
+        print("     BR_ENTRY);listen 毫无输出 → 入站被防火墙/AP 隔离拦截。")
+        print("  3) Windows 防火墙对 python.exe 放行 UDP 2425 入站(广播的应答来自各主机")
+        print("     的单播地址,不匹配防火墙的 UDP 状态跟踪,默认可能被丢)。")
+        print("  4) 多网卡/VPN:用 --bind <本机局域网IP> 强制物理网卡,并用")
+        print("     --broadcast x.y.z.255 定向广播。")
         return
     print("结果:收到 {} 个应答".format(len(answers)))
     for (ip, version), nickname in sorted(answers.items()):
@@ -264,6 +292,7 @@ def cmd_probe(args):
     sock = open_socket(args.bind, args.src_port)
     dialects = args.dialects.split(",")
     answers = {}
+    print_network_hint(args)
 
     def on_packet(source, packet):
         print_packet(source, packet)
@@ -278,10 +307,19 @@ def cmd_probe(args):
     report_answers(answers)
 
 
+def print_network_hint(args):
+    ip = guess_local_ip()
+    print("本机默认出口 IP:{}(绑定 {}:{})".format(ip or "未知", args.bind, args.src_port))
+    if ip and args.bind == "0.0.0.0":
+        print("  多网卡/VPN 环境建议加 --bind {} 强制走物理网卡".format(ip))
+    return ip
+
+
 def cmd_announce(args):
     sock = open_socket(args.bind, args.src_port)
     dialects = args.dialects.split(",")
     answers = {}
+    local = print_network_hint(args)
 
     def on_packet(source, packet):
         print_packet(source, packet)
@@ -290,7 +328,13 @@ def cmd_announce(args):
             nickname = views["UTF-8"] if packet["command"] & UTF8OPT else (views["GBK"] or views["CP932"])
             answers[(source[0], packet["version"])] = nickname
 
-    send_entries(sock, [args.broadcast], dialects, args)
+    targets = [args.broadcast]
+    if args.broadcast == "255.255.255.255" and local:
+        directed = directed_broadcast_of(local)
+        if directed and directed not in targets:
+            # 部分路由器/驱动会丢 255.255.255.255,同时补发 /24 定向广播
+            targets.append(directed)
+    send_entries(sock, targets, dialects, args)
     print("等待全网应答 {} 秒 …".format(args.wait))
     collect_replies(sock, args.wait, on_packet)
     report_answers(answers)
