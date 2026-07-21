@@ -56,7 +56,7 @@ async function snapshot(dir) {
       const path = join(current, entry.name);
       const key = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(path, key);
-      else if (entry.isFile()) result.set(key, await readFile(path, 'utf8'));
+      else if (entry.isFile()) result.set(key, (await readFile(path, 'utf8')).replaceAll('\r\n', '\n'));
     }
   }
   await walk(dir);
