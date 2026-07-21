@@ -55,6 +55,12 @@ pnpm dev
 
 接入 Azure DevOps Server 2022 通知见 [`services/ado-bridge/README.md`](services/ado-bridge/README.md)。
 
+桌面端全新安装会先显示「加入团队」：可从本地文件或无需登录的 HTTP(S) / Git Raw URL
+导入不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、AI、模板和更新源等默认值后，
+再在本机填写密码、PAT 与 API key。URL 团队配置每 24 小时检查一次，有变化时先展示差异，
+不会静默覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
+[`团队配置说明`](docs/proposal-config-provisioning.md)。
+
 登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询 ADO 工作项/PR/构建、
 生成工作项草案或运行例行复盘；所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
 本机 Codex CLI，也可把管家或群托管对话转进 Codex App / CLI 的原生线程列表继续处理。
@@ -76,9 +82,9 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 469 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 476 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 30 项浏览器流程：登录、消息、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
+pnpm test:ui        # 34 项浏览器流程：登录、消息、首次引导、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 

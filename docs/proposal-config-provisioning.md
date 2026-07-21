@@ -51,6 +51,8 @@
 3. 首次加入时先探测 Rocket.Chat；需要个人凭据的 ADO/AI 在相应设置保存时验证。
 4. URL 来源可选「跟随更新」：定期拉取，字段有变化时提示用户确认后应用。
 
+可复制并按团队环境修改 [`docs/examples/rcx.workspace.sample.json`](examples/rcx.workspace.sample.json)。
+
 **非目标**
 
 - 集中管控 / 强制下发（政企向已冻结，见 blueprint §11）。配置永远是「用户主动导入 + 本地可覆盖」。
