@@ -30,7 +30,10 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
-    "resources": { "resources/plugins/": "plugins/" },
+    "resources": {
+      "resources/plugins/": "plugins/",
+      "target/ocr-resources/ocr/": "ocr/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

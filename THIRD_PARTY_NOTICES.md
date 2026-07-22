@@ -27,9 +27,21 @@ pnpm licenses list --prod
 
 ## Desktop components
 
-The desktop application uses Tauri and Rust crates including Serde, BLAKE3, Ed25519, encoding_rs, mdns-sd, socket2, keyring, and platform integration crates. Exact crate versions and checksums are recorded in `apps/desktop/src-tauri/Cargo.lock`; license metadata is supplied by each crate and its source distribution.
+The desktop application uses Tauri and Rust crates including Serde, BLAKE3, Ed25519, encoding_rs, mdns-sd, socket2, keyring, `oar-ocr`, `ort`, and platform integration crates. Exact crate versions and checksums are recorded in `apps/desktop/src-tauri/Cargo.lock`; license metadata is supplied by each crate and its source distribution.
 
 Tauri and most listed Rust ecosystem components use MIT, Apache-2.0, or dual MIT/Apache-2.0 terms. Consumers who redistribute desktop binaries must audit the complete locked dependency graph for their target platform rather than relying only on this summary.
+
+### Bundled local OCR runtime and models
+
+RocketX desktop now bundles a local PP-OCRv5 inference path for image OCR. The build script downloads, verifies, and repackages the following upstream assets into the application resources; runtime never downloads them:
+
+| Component | License | Project |
+| --- | --- | --- |
+| OAR OCR (`oar-ocr`, `oar-ocr-core`) | Apache-2.0 | <https://github.com/GreatV/oar-ocr> |
+| ONNX Runtime 1.23.2 CPU runtime | MIT | <https://github.com/microsoft/onnxruntime> |
+| PP-OCRv5 model files (`pp-ocrv5_mobile_det`, `pp-ocrv5_mobile_rec`, `pp-lcnet_x1_0_textline_ori`, `ppocrv5_dict.txt`) | Apache-2.0 | <https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0> |
+
+The exact upstream URLs and SHA-256 digests are pinned in `apps/desktop/src-tauri/build.rs`. Build output also preserves ONNX Runtime's upstream `LICENSE` and `ThirdPartyNotices.txt` alongside the extracted runtime library files for the packaged app.
 
 ## Container images
 

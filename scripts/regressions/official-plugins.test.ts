@@ -94,7 +94,10 @@ test('通用宿主拒绝 PATH 查找与目录逃逸并限制 JSON 帧', async ()
   assert.match(host, /child\.kill\(\)/);
   assert.match(host, /hidden_command\(executable\)/);
   assert.match(host, /command\.creation_flags\(0x08000000\)/);
-  assert.deepEqual(tauriConfig.bundle?.resources, { 'resources/plugins/': 'plugins/' });
+  assert.deepEqual(tauriConfig.bundle?.resources, {
+    'resources/plugins/': 'plugins/',
+    'target/ocr-resources/ocr/': 'ocr/',
+  });
   assert.match(
     (tauriConfig as { build?: { beforeBuildCommand?: string } }).build?.beforeBuildCommand ?? '',
     /^pnpm -w prepare:sidecars && /,
