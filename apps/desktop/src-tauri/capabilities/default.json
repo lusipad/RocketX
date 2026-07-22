@@ -29,9 +29,10 @@
     "fs:allow-stat",
     "fs:allow-write-file",
     "fs:allow-remove",
+    "fs:allow-mkdir",
     {
       "identifier": "fs:scope",
-      "allow": ["$APPDATA/butler/**"]
+      "allow": ["$APPDATA/butler/**", "$APPDATA/attachment-archive/**"]
     }
   ]
 }

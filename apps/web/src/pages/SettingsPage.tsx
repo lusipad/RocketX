@@ -72,6 +72,16 @@ import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
 import { lanOutboxCapability } from '../lan/outbox';
+import { fmtSize } from '../lib/format';
+import { roomArchiveSummaries, type AttachmentArchiveSettingsV1 } from '../lib/attachmentArchive';
+import {
+  ATTACHMENT_ARCHIVE_CHANGED,
+  deleteRoomAttachmentArchive,
+  enqueueAttachmentArchives,
+  openRoomAttachmentArchive,
+  readAttachmentArchiveSnapshot,
+  saveAttachmentArchiveSettings,
+} from '../lib/attachmentArchiveRuntime';
 
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
@@ -734,6 +744,141 @@ function SidebarSection() {
   );
 }
 
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+
+function AttachmentArchiveSettings() {
+  const [snapshot, setSnapshot] = useState(readAttachmentArchiveSnapshot);
+  const [deleteRid, setDeleteRid] = useState<string | null>(null);
+  const rooms = roomArchiveSummaries(snapshot.archive);
+  const totalBytes = snapshot.archive.records.reduce((sum, item) => sum + item.size, 0);
+
+  useEffect(() => {
+    const refresh = () => setSnapshot(readAttachmentArchiveSnapshot());
+    window.addEventListener(ATTACHMENT_ARCHIVE_CHANGED, refresh);
+    refresh();
+    return () => window.removeEventListener(ATTACHMENT_ARCHIVE_CHANGED, refresh);
+  }, []);
+
+  const updateSettings = (patch: Partial<AttachmentArchiveSettingsV1>) => {
+    const settings = { ...snapshot.settings, ...patch };
+    saveAttachmentArchiveSettings(settings);
+    setSnapshot((current) => ({ ...current, settings }));
+    if (patch.enabled === true) {
+      const chat = useChat.getState();
+      for (const [rid, messages] of Object.entries(chat.messages)) {
+        const roomName = chat.subscriptions[rid]?.fname || chat.subscriptions[rid]?.name ||
+          chat.rooms[rid]?.fname || chat.rooms[rid]?.name || '会话';
+        enqueueAttachmentArchives(messages, roomName);
+      }
+    }
+  };
+
+  return (
+    <>
+      <Row
+        label="自动留存附件到本机"
+        hint={isTauri
+          ? '默认关闭；开启后，客户端看到的所有房间附件会在服务端清理前保存本地副本。不会删除或修改 Rocket.Chat 原文件。'
+          : '仅桌面端支持本地附件留存；网页版仍由浏览器管理文件。'}
+        inline
+      >
+        <Toggle
+          checked={isTauri && snapshot.settings.enabled}
+          disabled={!isTauri}
+          onChange={(enabled) => updateSettings({ enabled })}
+        />
+      </Row>
+
+      {isTauri && snapshot.settings.enabled && (
+        <Row label="本地留存限制" hint="超过保留期或账号总配额时，只删除最旧的本地副本。">
+          <div className="grid max-w-2xl grid-cols-3 gap-3">
+            <label className="text-xs text-ink-3">
+              单文件上限
+              <select
+                aria-label="附件留存单文件上限"
+                value={snapshot.settings.maxFileBytes}
+                onChange={(event) => updateSettings({ maxFileBytes: Number(event.target.value) })}
+                className={`${inputCls} mt-1 max-w-none`}
+              >
+                {[10, 25, 50, 100].map((value) => (
+                  <option key={value} value={value * MIB}>{value} MB</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-ink-3">
+              账号总配额
+              <select
+                aria-label="附件留存账号总配额"
+                value={snapshot.settings.maxTotalBytes}
+                onChange={(event) => updateSettings({ maxTotalBytes: Number(event.target.value) })}
+                className={`${inputCls} mt-1 max-w-none`}
+              >
+                {[1, 2, 5, 10].map((value) => (
+                  <option key={value} value={value * GIB}>{value} GB</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-ink-3">
+              保留时间
+              <select
+                aria-label="附件留存时间"
+                value={snapshot.settings.retentionDays}
+                onChange={(event) => updateSettings({ retentionDays: Number(event.target.value) })}
+                className={`${inputCls} mt-1 max-w-none`}
+              >
+                {[7, 30, 90, 365].map((value) => (
+                  <option key={value} value={value}>{value} 天</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </Row>
+      )}
+
+      {isTauri && rooms.length > 0 && (
+        <Row
+          label={`本地附件（${snapshot.archive.records.length} 个，${fmtSize(totalBytes)}）`}
+          hint="按房间查看或删除本地副本；删除后无法由 RocketX 恢复，但服务器原文件不受影响。"
+        >
+          <div className="max-w-2xl overflow-hidden rounded-lg border border-line">
+            {rooms.map((room) => (
+              <div key={room.rid} className="flex items-center gap-3 border-b border-line px-3 py-2.5 last:border-b-0">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-ink">{room.roomName}</div>
+                  <div className="text-xs text-ink-3">{room.files} 个文件 · {fmtSize(room.bytes)}</div>
+                </div>
+                <button
+                  onClick={() => void openRoomAttachmentArchive(room.rid).catch((error) => toast.error(error, '无法打开本地附件目录'))}
+                  className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
+                >
+                  打开目录
+                </button>
+                <button
+                  onClick={() => setDeleteRid(room.rid)}
+                  className="h-8 rounded-md border border-danger px-3 text-xs text-danger hover:bg-danger/10"
+                >
+                  删除本地副本
+                </button>
+              </div>
+            ))}
+          </div>
+        </Row>
+      )}
+
+      {deleteRid && (
+        <ConfirmDialog
+          title="删除这个房间的本地附件"
+          message="将删除该房间由 RocketX 自动留存的全部本地副本。Rocket.Chat 服务器上的消息和原文件不会被删除。"
+          confirmLabel="删除本地副本"
+          onConfirm={() => void deleteRoomAttachmentArchive(deleteRid).catch((error) => toast.error(error, '删除本地副本失败'))}
+          onClose={() => setDeleteRid(null)}
+        />
+      )}
+    </>
+  );
+}
+
 /** 消息偏好 */
 function MessageSection() {
   const prefs = usePrefs((s) => s.prefs);
@@ -773,6 +918,8 @@ function MessageSection() {
           onChange={(v) => void update({ autoImageLoad: v })}
         />
       </Row>
+
+      <AttachmentArchiveSettings />
 
       <Row label="在消息中显示头像" inline>
         <Toggle
