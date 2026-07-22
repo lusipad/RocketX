@@ -27,7 +27,14 @@ function configSummary(config: WorkspaceConfig): { label: string; value: string 
         .join('、'),
     });
   }
-  if (config.workItemTemplates) items.push({ label: '工作项模板', value: config.workItemTemplates.url });
+  if (config.workItemTemplates) {
+    items.push({
+      label: '工作项模板',
+      value: 'url' in config.workItemTemplates
+        ? config.workItemTemplates.url
+        : `${config.workItemTemplates.templates.length} 个内联模板`,
+    });
+  }
   if (config.update) {
     const value = config.update.source === 'github' ? 'GitHub Release' : config.update.location || config.update.source;
     items.push({ label: '更新源', value });

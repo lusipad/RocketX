@@ -72,7 +72,15 @@
     "auth": "pat",
     "webUrl": "http://ado.example.com/tfs/DefaultCollection"
   },
-  "workItemTemplates": { "url": "https://git.example.com/team/rcx-config/raw/templates.json" },
+  "workItemTemplates": {
+    "defaultProject": "Alpha",
+    "templates": [
+      {
+        "name": "单个工作项",
+        "items": [{ "type": "{type}", "title": "{title}" }]
+      }
+    ]
+  },
   "ai": {
     "providers": [
       { "id": "team-default", "kind": "openai-compatible", "baseUrl": "https://api.deepseek.com", "model": "deepseek-chat" }
@@ -87,6 +95,9 @@
 
 - **凭据永远不进文件。** ADO PAT、AI 密钥和 Rocket.Chat 密码由用户在本机单独填写。
 - 所有字段可选，缺省字段跳过对应向导步骤，不覆盖本地已有值。
+- 工作项模板默认可直接内联到同一文件；需要独立更新模板时仍可改用
+  `"workItemTemplates": { "url": "https://git.example.com/team/rcx-config/raw/templates.json" }`。
+  `url` 与 `templates` 不能同时提供。
 - schema 校验复用 app-sdk 的「单一解析器」模式：一个 `parseWorkspaceConfig()` 纯函数 + 回归测试，
   Web / 桌面 / CLI 三端共用。
 

@@ -348,9 +348,14 @@ test('桌面新安装优先展示团队引导和设计理念', async ({ page }, 
       name: '验证团队',
       rocketChat: { url: 'https://chat.example.com' },
       ado: { url: 'https://ado.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
+      workItemTemplates: {
+        defaultProject: 'Alpha',
+        templates: [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }],
+      },
     })),
   });
   await expect(page.getByRole('heading', { name: '加入「验证团队」' })).toBeVisible();
+  await expect(page.getByText('1 个内联模板', { exact: true })).toBeVisible();
   await expect(page.getByText('用户名、密码、PAT 和 AI 密钥不会从团队配置读取')).toBeVisible();
   await page.getByRole('button', { name: '确认并继续' }).click();
   await expect(page.getByText('验证团队', { exact: true })).toBeVisible();
@@ -358,6 +363,16 @@ test('桌面新安装优先展示团队引导和设计理念', async ({ page }, 
   await expect(page.getByPlaceholder('https://chat.example.com')).toHaveCount(0);
   await expect(page.getByPlaceholder('请输入用户名或邮箱')).toBeVisible();
   await expect(page.getByPlaceholder('请输入密码')).toBeVisible();
+  expect(await page.evaluate(() => ({
+    url: localStorage.getItem('rcx-wi-template-url'),
+    config: JSON.parse(localStorage.getItem('rcx-wi-template-cache') ?? '{}'),
+  }))).toEqual({
+    url: null,
+    config: {
+      defaultProject: 'Alpha',
+      templates: [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }],
+    },
+  });
   expect(pageErrors).toEqual([]);
 });
 

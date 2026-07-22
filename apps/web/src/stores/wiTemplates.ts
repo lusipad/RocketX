@@ -246,6 +246,7 @@ interface WiTemplatesState {
   templates: WiTemplate[];
   defaultProject: string | undefined;
   setUrl: (url: string) => void;
+  setInline: (config: WiTemplatesConfig) => void;
   fetch: () => Promise<void>;
 }
 
@@ -267,6 +268,19 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
         localStorage.removeItem(CACHE_KEY);
         set({ remote: null, templates: BUILTIN, defaultProject: undefined });
       }
+    },
+
+    setInline: (config) => {
+      localStorage.removeItem(URL_KEY);
+      localStorage.setItem(CACHE_KEY, JSON.stringify(config));
+      set({
+        url: '',
+        remote: config,
+        templates: config.templates,
+        defaultProject: config.defaultProject,
+        loading: false,
+        error: null,
+      });
     },
 
     fetch: async () => {

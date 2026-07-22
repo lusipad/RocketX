@@ -9,7 +9,21 @@
     "webUrl": "http://ado.example.com/tfs/DefaultCollection"
   },
   "workItemTemplates": {
-    "url": "https://git.example.com/team/rocketx-config/raw/main/wi-templates.json"
+    "defaultProject": "Alpha",
+    "templates": [
+      {
+        "name": "缺陷修复套装",
+        "items": [
+          { "type": "Bug", "title": "{title}" },
+          { "type": "Task", "title": "【修复】{title}", "parent": 0 },
+          { "type": "Task", "title": "【验证】{title}", "parent": 0 }
+        ]
+      },
+      {
+        "name": "单个工作项",
+        "items": [{ "type": "{type}", "title": "{title}" }]
+      }
+    ]
   },
   "ai": {
     "providers": [
