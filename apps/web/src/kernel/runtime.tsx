@@ -1,5 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
-import { Bell, Blocks, TerminalSquare } from 'lucide-react';
+import { Bell, Blocks, Download, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -16,6 +16,7 @@ import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
 import ButlerPage from '../pages/ButlerPage';
 import CodexPage from '../pages/CodexPage';
+import DownloadsPage from '../pages/DownloadsPage';
 import ThreadPanel from '../components/ThreadPanel';
 import AgentPanel from '../components/AgentPanel';
 import PinPanel from '../components/PinPanel';
@@ -479,6 +480,14 @@ function registerBuiltins(): void {
   ] as const;
   for (const [id, label, render, icon] of modules) {
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
+    if (id === 'calendar' && isTauri) {
+      kernelRegistry.register('core', 'nav.module', {
+        id: 'downloads',
+        label: '下载',
+        render: DownloadsPage,
+        icon: Download,
+      });
+    }
   }
   const panels = [
     ['thread', ThreadPanel],

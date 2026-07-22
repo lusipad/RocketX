@@ -75,6 +75,7 @@ test('模块快捷键保留执行间直达顺序', () => {
     'butler-view',
     'todos',
     'calendar',
+    'downloads',
     'workbench',
     'contacts',
     'codex',

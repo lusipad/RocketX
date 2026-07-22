@@ -5,7 +5,7 @@ import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
 const NOW = '2026-07-17T08:00:00.000Z';
-const SERVER = 'http://127.0.0.1:4173';
+const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 
 async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
   await page.addInitScript(({ config }) => {
@@ -314,7 +314,7 @@ async function installRocketChatMock(page: Page) {
     if (endpoint === 'settings.public') {
       const id = url.searchParams.get('_id');
       return fulfillJson(route, {
-        settings: [{ _id: id, value: id === 'Site_Url' ? 'http://127.0.0.1:4173' : false }],
+        settings: [{ _id: id, value: id === 'Site_Url' ? SERVER : false }],
       });
     }
     if (endpoint === 'subscriptions.get') return fulfillJson(route, { update: subscriptions });
@@ -717,7 +717,7 @@ test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126
 
   await expect.poll(() => sentMessages.length).toBe(1);
   expect(sentMessages[0]?.msg).toBe(
-    '[ ](http://127.0.0.1:4173/channel/general?msg=general-welcome) Reply from UI',
+    `[ ](${SERVER}/channel/general?msg=general-welcome) Reply from UI`,
   );
   expect(pageErrors).toEqual([]);
 });

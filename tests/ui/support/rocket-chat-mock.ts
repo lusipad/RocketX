@@ -1,6 +1,6 @@
 import type { Page, Route } from '@playwright/test';
 
-export const TEST_SERVER = 'http://127.0.0.1:4173';
+export const TEST_SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 
 const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };

@@ -1,4 +1,6 @@
 import { assetUrl, isTauri, normalizeAssetPath, rest } from './client';
+import { useDownloadHistory } from '../stores/downloadHistory';
+import { fileNameOfDownloadPath } from './downloadHistory';
 
 /**
  * 保存站内文件到本地。
@@ -29,6 +31,7 @@ export async function saveFile(path: string, fileName: string): Promise<void> {
     const response = await rest.fetchFileResponse(path);
     if (!response.body) throw new Error('文件响应没有可读取的内容');
     await writeFile(target, response.body);
+    useDownloadHistory.getState().record(fileNameOfDownloadPath(target, fileName), target);
     return;
   }
 
