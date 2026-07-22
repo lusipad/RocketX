@@ -32,10 +32,11 @@ import { useRoutines } from './routines';
 const HISTORY_LIMIT = 40;
 /** 持久化的展示行上限：超出裁旧，避免本地存储无限增长 */
 const LINES_LIMIT = 200;
-/** 过期不续：超过这个时长没有对话活动，恢复时只回看不续上下文，防止上下文腐烂 */
-const CONTEXT_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
-const STALE_HINT = '📌 距上次对话已久，已开启全新上下文；以上历史仅供回看。';
 const APP_ID = 'builtin:butler';
+const SESSION_REGISTRY_VERSION = 1;
+const SESSION_REGISTRY_PREFIX = 'session-registry:';
+const DEFAULT_SESSION_ID = 'default';
+const DEFAULT_SESSION_TITLE = '默认对话';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
 
@@ -61,8 +62,17 @@ export interface ButlerRoomContext {
 
 export type ButlerAskContext = ButlerRoomContext | ButlerSurfaceContext;
 
+export interface ButlerSessionSummary {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface ButlerState {
   lines: ButlerLine[];
+  sessions: ButlerSessionSummary[];
+  activeSessionId: string;
   activity: string | null;
   /** 本轮（或上一轮）的执行步骤，新提问时清空 */
   steps: ButlerStep[];
@@ -80,8 +90,10 @@ export interface ButlerState {
   completeAction: (message: string) => void;
   /** 停止当前回答：保留已生成内容，不当错误处理 */
   stop: () => Promise<void>;
-  /** 新对话：清空对话与持久化记录，丢弃 Codex 常驻线程，从全新上下文开始 */
+  /** 新对话：保留当前 session 并创建一个独立 session。 */
   newConversation: () => Promise<void>;
+  switchSession: (sessionId: string) => Promise<void>;
+  renameSession: (sessionId: string, title: string) => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   confirmRoutineDraft: () => void;
@@ -98,6 +110,22 @@ interface PersistedButler {
   lastAt?: number;
 }
 
+interface PersistedButlerSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  lines: ButlerLine[];
+  history: AiMessage[];
+  codexThread?: { threadId: string; promptHash: string };
+}
+
+interface PersistedButlerSessionRegistry {
+  schemaVersion: typeof SESSION_REGISTRY_VERSION;
+  activeSessionId: string;
+  sessions: PersistedButlerSession[];
+}
+
 type ButlerLoopRunner = typeof runAgentLoop;
 type ButlerCodexRunner = typeof askButlerCodex;
 
@@ -107,8 +135,15 @@ let butlerNow = () => Date.now();
 
 let persistScope = '';
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistInFlight: Promise<void> = Promise.resolve();
+let sessionRegistry: PersistedButlerSessionRegistry | null = null;
+let suppressPersistence = false;
+let sessionDirty = false;
+let hydrateGeneration = 0;
+let hydrateInFlight: { scope: string; promise: Promise<void> } | null = null;
 /** 当前 API 大脑回合的中止控制器（Codex 大脑走 turn/interrupt） */
 let currentAbort: AbortController | undefined;
+let currentTurnFinished: Promise<void> | null = null;
 
 interface ButlerAppData {
   get<T>(appId: string, key: string): Promise<T | undefined>;
@@ -131,21 +166,120 @@ export function setButlerPersistence(store: ButlerAppData): () => void {
   };
 }
 
-async function persistButler(): Promise<void> {
-  if (!persistScope) return;
-  const { lines, history } = useButler.getState();
+function registryKey(scope: string): string {
+  return `${SESSION_REGISTRY_PREFIX}${scope}`;
+}
+
+function sessionSummaries(registry: PersistedButlerSessionRegistry): ButlerSessionSummary[] {
+  return registry.sessions
+    .map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt }))
+    .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
+}
+
+function normalizeRegistry(
+  stored: PersistedButlerSessionRegistry | undefined,
+): PersistedButlerSessionRegistry | undefined {
+  if (stored?.schemaVersion !== SESSION_REGISTRY_VERSION || !Array.isArray(stored.sessions)) return undefined;
+  const seen = new Set<string>();
+  const sessions: PersistedButlerSession[] = [];
+  for (const candidate of stored.sessions) {
+    if (!candidate || typeof candidate.id !== 'string' || !candidate.id || seen.has(candidate.id)) continue;
+    seen.add(candidate.id);
+    const updatedAt = Number.isFinite(candidate.updatedAt) ? candidate.updatedAt : butlerNow();
+    const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
+    const codexThread = candidate.codexThread;
+    sessions.push({
+      id: candidate.id,
+      title: typeof candidate.title === 'string' && candidate.title.trim()
+        ? candidate.title.trim()
+        : DEFAULT_SESSION_TITLE,
+      createdAt,
+      updatedAt,
+      lines: Array.isArray(candidate.lines) && candidate.lines.length
+        ? candidate.lines.slice(-LINES_LIMIT)
+        : welcomeLines(),
+      history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
+      ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
+    });
+  }
+  if (!sessions.length) return undefined;
+  const activeSessionId = sessions.some((session) => session.id === stored.activeSessionId)
+    ? stored.activeSessionId
+    : sessions[0].id;
+  return { schemaVersion: SESSION_REGISTRY_VERSION, activeSessionId, sessions };
+}
+
+function defaultSession(legacy?: PersistedButler): PersistedButlerSession {
+  const updatedAt = legacy?.lastAt != null && Number.isFinite(legacy.lastAt) ? legacy.lastAt : butlerNow();
+  const codexThread = legacy?.codexThread;
+  return {
+    id: DEFAULT_SESSION_ID,
+    title: DEFAULT_SESSION_TITLE,
+    createdAt: updatedAt,
+    updatedAt,
+    lines: legacy?.lines?.length ? legacy.lines.slice(-LINES_LIMIT) : welcomeLines(),
+    history: trimButlerHistory(legacy?.history ?? []),
+    ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
+  };
+}
+
+function legacyRecord(session: PersistedButlerSession): PersistedButler {
+  return {
+    lines: session.lines.slice(-LINES_LIMIT),
+    history: trimButlerHistory(session.history),
+    lastAt: session.updatedAt,
+    ...(session.codexThread ? { codexThread: session.codexThread } : {}),
+  };
+}
+
+function activeSession(registry: PersistedButlerSessionRegistry): PersistedButlerSession {
+  return registry.sessions.find((session) => session.id === registry.activeSessionId) ?? registry.sessions[0];
+}
+
+function captureActiveSession(
+  registry: PersistedButlerSessionRegistry,
+  touchActivity: boolean,
+): PersistedButlerSessionRegistry {
+  const current = activeSession(registry);
+  const { codexThread: _previousCodexThread, ...base } = current;
+  const state = useButler.getState();
   const codexThread = residentCodexThreadSnapshot();
-  await (await butlerAppData()).set<PersistedButler>(APP_ID, persistScope, {
-    lines: lines.slice(-LINES_LIMIT),
-    history,
-    lastAt: butlerNow(),
+  const captured: PersistedButlerSession = {
+    ...base,
+    updatedAt: touchActivity ? butlerNow() : current.updatedAt,
+    lines: state.lines.slice(-LINES_LIMIT),
+    history: trimButlerHistory(state.history),
     ...(codexThread ? { codexThread } : {}),
+  };
+  return {
+    ...registry,
+    sessions: registry.sessions.map((session) => session.id === captured.id ? captured : session),
+  };
+}
+
+function queueRegistryWrite(scope: string, registry: PersistedButlerSessionRegistry): Promise<void> {
+  const task = persistInFlight.catch(() => undefined).then(async () => {
+    const appData = await butlerAppData();
+    await appData.set<PersistedButlerSessionRegistry>(APP_ID, registryKey(scope), registry);
+    await appData.set<PersistedButler>(APP_ID, scope, legacyRecord(activeSession(registry)));
   });
+  persistInFlight = task;
+  return task;
+}
+
+async function persistButler(touchActivity = sessionDirty): Promise<void> {
+  if (!persistScope || !sessionRegistry) return;
+  const scope = persistScope;
+  const registry = captureActiveSession(sessionRegistry, touchActivity);
+  sessionRegistry = registry;
+  sessionDirty = false;
+  useButler.setState({ sessions: sessionSummaries(registry) });
+  await queueRegistryWrite(scope, registry);
 }
 
 /** 对话变更后防抖落盘；未 hydrate（不知道账号范围）前不写 */
 function schedulePersist(): void {
-  if (!persistScope) return;
+  if (!persistScope || suppressPersistence) return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
@@ -168,7 +302,12 @@ export function resetButlerPersistenceForTests(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  hydrateGeneration += 1;
   persistScope = '';
+  sessionRegistry = null;
+  suppressPersistence = false;
+  sessionDirty = false;
+  hydrateInFlight = null;
 }
 
 const toolLabels: Record<string, string> = {
@@ -244,8 +383,35 @@ export function appendButlerLine(role: ButlerLine['role'], text: string): void {
   useButler.setState((state) => ({ lines: [...state.lines, line(role, text)] }));
 }
 
+function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
+  const session = activeSession(registry);
+  sessionDirty = false;
+  suppressPersistence = true;
+  try {
+    useButler.setState({
+      lines: session.lines.length ? session.lines.slice(-LINES_LIMIT) : welcomeLines(),
+      sessions: sessionSummaries(registry),
+      activeSessionId: session.id,
+      activity: null,
+      steps: [],
+      history: trimButlerHistory(session.history),
+      running: false,
+      error: null,
+      routineDraft: null,
+      actionDraft: null,
+    });
+  } finally {
+    suppressPersistence = false;
+  }
+  if (session.codexThread) {
+    hydrateResidentCodexThread(session.codexThread.threadId, session.codexThread.promptHash);
+  }
+}
+
 export const useButler = create<ButlerState>((set, get) => ({
   lines: welcomeLines(),
+  sessions: [],
+  activeSessionId: '',
   activity: null,
   steps: [],
   history: [],
@@ -259,32 +425,86 @@ export const useButler = create<ButlerState>((set, get) => ({
     const user = useAuth.getState().user;
     if (!user) return;
     const scope = `${getServerBase() || 'same-origin'}:${user._id}`;
-    if (persistScope === scope) return;
-    const firstHydrate = persistScope === '';
-    persistScope = scope;
-    const stored = await (await butlerAppData())
-      .get<PersistedButler>(APP_ID, scope)
-      .catch(() => undefined);
-    // 首次注水时用户可能已经开始新对话，不覆盖；切换账号则总是切到该账号的记录
-    if (firstHydrate && get().lines.some((line) => line.role === 'user')) return;
-    const storedLines = stored?.lines?.length ? stored.lines.slice(-LINES_LIMIT) : welcomeLines();
-    // 过期不续：久未对话时旧记录仅供回看，模型上下文从头开始，防止上下文腐烂
-    const fresh = stored?.lastAt != null && butlerNow() - stored.lastAt <= CONTEXT_FRESH_MS;
-    const hadConversation = storedLines.some((item) => item.role === 'user');
-    const staleHintNeeded =
-      !fresh && hadConversation && storedLines.at(-1)?.text !== STALE_HINT;
-    set({
-      lines: staleHintNeeded ? [...storedLines, line('assistant', STALE_HINT)] : storedLines,
-      history: fresh ? trimButlerHistory(stored?.history ?? []) : [],
-    });
-    if (fresh && stored?.codexThread) {
-      hydrateResidentCodexThread(stored.codexThread.threadId, stored.codexThread.promptHash);
+    if (persistScope === scope && sessionRegistry) return;
+    if (hydrateInFlight?.scope === scope) {
+      await hydrateInFlight.promise;
+      return;
+    }
+
+    const task = (async () => {
+      const generation = ++hydrateGeneration;
+      const firstHydrate = persistScope === '';
+      const previousScope = persistScope;
+      const startedState = get();
+      const startedConversation = firstHydrate && startedState.lines.some((item) => item.role === 'user');
+      const startedCodexThread = residentCodexThreadSnapshot();
+
+      // scope 变更前先同步旧状态并等待已有写入，避免防抖回调把旧状态写进新账号/服务器。
+      if (previousScope && sessionRegistry && get().running) await get().stop();
+      if (previousScope && sessionRegistry) await flushButlerPersist();
+      if (generation !== hydrateGeneration) return;
+      persistScope = '';
+      sessionRegistry = null;
+      await discardResidentCodexThread();
+      if (generation !== hydrateGeneration) return;
+
+      const appData = await butlerAppData();
+      const [storedRegistry, legacy] = await Promise.all([
+        appData
+          .get<PersistedButlerSessionRegistry>(APP_ID, registryKey(scope))
+          .catch(() => undefined),
+        appData.get<PersistedButler>(APP_ID, scope).catch(() => undefined),
+      ]);
+      if (generation !== hydrateGeneration) return;
+
+      const existingRegistry = normalizeRegistry(storedRegistry);
+      let registry: PersistedButlerSessionRegistry = existingRegistry ?? {
+        schemaVersion: SESSION_REGISTRY_VERSION,
+        activeSessionId: DEFAULT_SESSION_ID,
+        sessions: [defaultSession(legacy)],
+      };
+
+      // 首次 hydrate 前用户已经开聊时保留当前内容；若另有旧记录，则作为独立 session 并存。
+      if (startedConversation) {
+        const hasStoredConversation = Boolean(existingRegistry || legacy);
+        const id = hasStoredConversation ? crypto.randomUUID() : DEFAULT_SESSION_ID;
+        const now = butlerNow();
+        const startedSession: PersistedButlerSession = {
+          id,
+          title: hasStoredConversation ? '当前对话' : DEFAULT_SESSION_TITLE,
+          createdAt: now,
+          updatedAt: now,
+          lines: startedState.lines.slice(-LINES_LIMIT),
+          history: trimButlerHistory(startedState.history),
+          ...(startedCodexThread ? { codexThread: startedCodexThread } : {}),
+        };
+        registry = {
+          schemaVersion: SESSION_REGISTRY_VERSION,
+          activeSessionId: id,
+          sessions: hasStoredConversation ? [...registry.sessions, startedSession] : [startedSession],
+        };
+      }
+
+      persistScope = scope;
+      sessionRegistry = registry;
+      applyActiveSession(registry);
+      if (!existingRegistry || startedConversation) {
+        await queueRegistryWrite(scope, registry).catch(() => undefined);
+      }
+    })();
+    hydrateInFlight = { scope, promise: task };
+    try {
+      await task;
+    } finally {
+      if (hydrateInFlight?.promise === task) hydrateInFlight = null;
     }
   },
 
   ask: async (text, context) => {
     const content = text.trim();
     if (!content || get().running) return;
+    await get().hydrate();
+    if (get().running) return;
 
     const turnContext = context ? normalizeContext(context) : get().context;
     const brain = getButlerBrain();
@@ -293,6 +513,11 @@ export const useButler = create<ButlerState>((set, get) => ({
     const history = brain === 'api'
       ? trimButlerHistory([...get().history, { role: 'user', content }])
       : get().history;
+    let finishTurn: (() => void) | undefined;
+    const turnFinished = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    currentTurnFinished = turnFinished;
     set((state) => ({
       lines: [...state.lines, line('user', content)],
       activity: null,
@@ -407,6 +632,8 @@ export const useButler = create<ButlerState>((set, get) => ({
       set({ activity: null, running: false, error: message });
     } finally {
       if (currentAbort === abort) currentAbort = undefined;
+      if (currentTurnFinished === turnFinished) currentTurnFinished = null;
+      finishTurn?.();
     }
   },
 
@@ -447,6 +674,7 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   stop: async () => {
     if (!get().running) return;
+    const turnFinished = currentTurnFinished;
     if (getButlerBrain() === 'codex') {
       // 服务端中断本轮并就地完成，ask 会沿正常路径收尾
       await stopButlerCodexTurn();
@@ -454,27 +682,87 @@ export const useButler = create<ButlerState>((set, get) => ({
       currentAbort?.abort(new Error('已停止'));
     }
     set({ activity: null });
+    if (turnFinished) await turnFinished;
   },
 
   newConversation: async () => {
+    await get().hydrate();
+    if (get().running) await get().stop();
+    if (!sessionRegistry || !persistScope) return;
+    const actionDraft = get().actionDraft;
+    if (actionDraft) {
+      await auditButlerAction(actionDraft.kind, 'cancelled', actionDraft).catch(() => undefined);
+    }
+
+    await flushButlerPersist();
+    const scope = persistScope;
+    const currentRegistry = sessionRegistry;
+    await discardResidentCodexThread();
+    const now = butlerNow();
+    const nextSession: PersistedButlerSession = {
+      id: crypto.randomUUID(),
+      title: '新对话',
+      createdAt: now,
+      updatedAt: now,
+      lines: welcomeLines(),
+      history: [],
+    };
+    const nextRegistry: PersistedButlerSessionRegistry = {
+      ...currentRegistry,
+      activeSessionId: nextSession.id,
+      sessions: [...currentRegistry.sessions, nextSession],
+    };
+    sessionRegistry = nextRegistry;
+    applyActiveSession(nextRegistry);
+    await queueRegistryWrite(scope, nextRegistry);
+  },
+
+  switchSession: async (sessionId) => {
+    const targetId = sessionId.trim();
+    if (!targetId) return;
+    await get().hydrate();
+    if (!sessionRegistry || !persistScope || sessionRegistry.activeSessionId === targetId) return;
+    if (!sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     if (get().running) await get().stop();
     const actionDraft = get().actionDraft;
     if (actionDraft) {
       await auditButlerAction(actionDraft.kind, 'cancelled', actionDraft).catch(() => undefined);
     }
-    await discardResidentCodexThread();
-    set({
-      lines: welcomeLines(),
-      activity: null,
-      steps: [],
-      history: [],
-      running: false,
-      error: null,
-      routineDraft: null,
-      actionDraft: null,
-    });
-    // 立即把清空后的状态落盘，别让旧记录在下次启动时诈尸
+
     await flushButlerPersist();
+    if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
+    const scope = persistScope;
+    const nextRegistry: PersistedButlerSessionRegistry = {
+      ...sessionRegistry,
+      activeSessionId: targetId,
+    };
+    await discardResidentCodexThread();
+    sessionRegistry = nextRegistry;
+    applyActiveSession(nextRegistry);
+    await queueRegistryWrite(scope, nextRegistry);
+  },
+
+  renameSession: async (sessionId, title) => {
+    const nextTitle = title.trim();
+    if (!sessionId || !nextTitle) return;
+    await get().hydrate();
+    if (!sessionRegistry || !persistScope) return;
+    const target = sessionRegistry.sessions.find((session) => session.id === sessionId);
+    if (!target || target.title === nextTitle) return;
+
+    await flushButlerPersist();
+    if (!sessionRegistry) return;
+    const scope = persistScope;
+    const nextRegistry: PersistedButlerSessionRegistry = {
+      ...sessionRegistry,
+      sessions: sessionRegistry.sessions.map((session) => session.id === sessionId
+        ? { ...session, title: nextTitle, updatedAt: butlerNow() }
+        : session),
+    };
+    sessionRegistry = nextRegistry;
+    sessionDirty = false;
+    set({ sessions: sessionSummaries(nextRegistry) });
+    await queueRegistryWrite(scope, nextRegistry);
   },
 
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
@@ -499,6 +787,8 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   reset: () => set({
     lines: welcomeLines(),
+    sessions: [],
+    activeSessionId: '',
     activity: null,
     steps: [],
     history: [],
@@ -512,8 +802,10 @@ export const useButler = create<ButlerState>((set, get) => ({
 
 setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
 
-// 对话行或模型历史变化即防抖落盘；reset 会把欢迎语落盘，等价于清空记录
+// 只有当前已 hydrate 的 session 发生 transcript 变化时才更新活动时间并防抖落盘。
 useButler.subscribe((state, previous) => {
   if (state.lines === previous.lines && state.history === previous.history) return;
+  if (suppressPersistence || !persistScope || !sessionRegistry) return;
+  sessionDirty = true;
   schedulePersist();
 });

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, Loader2, MessageSquarePlus, SendHorizontal, Square } from 'lucide-react';
+import { Bot, Loader2, SendHorizontal, Square } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
@@ -7,6 +7,7 @@ import { renderMarkdown } from '../lib/markdown';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
+import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import PanelShell from './PanelShell';
 
 function roomName(
@@ -34,7 +35,6 @@ export default function ButlerPanel() {
   const steps = useButler((state) => state.steps);
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
-  const newConversation = useButler((state) => state.newConversation);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrate = useButler((state) => state.hydrate);
@@ -64,19 +64,7 @@ export default function ButlerPanel() {
 
   return (
     <PanelShell
-      title={
-        <span className="flex items-center gap-2">
-          AI
-          <button
-            title="新对话：清空并开启全新上下文"
-            onClick={() => void newConversation()}
-            disabled={running}
-            className="flex h-6 w-6 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-ink disabled:opacity-50"
-          >
-            <MessageSquarePlus size={14} />
-          </button>
-        </span>
-      }
+      title={<ButlerSessionSwitcher compact label="AI" />}
       resizable
     >
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">

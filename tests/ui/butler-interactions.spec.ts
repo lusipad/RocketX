@@ -186,3 +186,26 @@ test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
+
+test('可新建、重命名并切换独立的管家会话', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await seedButlerAnswer(page);
+
+  const sessionSelect = page.getByLabel('管家会话');
+  await expect(sessionSelect).toHaveValue('default');
+  await page.getByRole('button', { name: '新对话', exact: true }).click();
+  await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: '重命名会话', exact: true }).click();
+  await page.getByRole('textbox', { name: '会话名称', exact: true }).fill('构建调查');
+  await page.getByRole('button', { name: '保存会话名称', exact: true }).click();
+  await expect(sessionSelect.locator('option:checked')).toHaveText('构建调查');
+
+  await sessionSelect.selectOption('default');
+  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await sessionSelect.selectOption({ label: '构建调查' });
+  await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
