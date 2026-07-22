@@ -12,8 +12,9 @@ function fmtSize(bytes: number): string {
 }
 
 /** 粘贴/拖拽文件后的发送确认弹窗（飞书交互：先预览再发送） */
-export default function UploadConfirm() {
+export default function UploadConfirm({ caption, onSent }: { caption?: string; onSent?: () => void }) {
   const pendingFiles = useChat((s) => s.pendingFiles);
+  const pendingUploadMessage = useChat((s) => s.pendingUploadMessage);
   const confirmUpload = useChat((s) => s.confirmUpload);
   const cancelUpload = useChat((s) => s.cancelUpload);
   const replyTo = useChat((s) => s.replyTo);
@@ -21,6 +22,7 @@ export default function UploadConfirm() {
   const [busy, setBusy] = useState(false);
   const name = sub?.fname || sub?.name || '当前会话';
   const dialogRef = useDialogBehavior(cancelUpload, !!pendingFiles);
+  const message = pendingUploadMessage ?? caption;
 
   const previews = useMemo(
     () =>
@@ -36,17 +38,22 @@ export default function UploadConfirm() {
     [previews],
   );
 
+  const sendPending = async () => {
+    setBusy(true);
+    try {
+      if (await confirmUpload(message)) onSent?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!pendingFiles) return;
       if (e.key === 'Escape') cancelUpload();
       if (e.key === 'Enter') {
         e.preventDefault();
-        setBusy(true);
-        // 失败由 store 内的 toast 承接，这里只要不抛未捕获异常
-        void confirmUpload()
-          .catch(() => {})
-          .finally(() => setBusy(false));
+        void sendPending();
       }
     };
     document.addEventListener('keydown', onKey);
@@ -85,6 +92,11 @@ export default function UploadConfirm() {
             </span>
           </div>
         )}
+        {message?.trim() && (
+          <div className="mx-5 mb-1 max-h-24 overflow-y-auto whitespace-pre-wrap rounded bg-fill-1 px-2.5 py-2 text-sm text-ink">
+            {message.trim()}
+          </div>
+        )}
         <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-5 py-2">
           {previews.map(({ file, url }, i) => (
             <div
@@ -114,12 +126,7 @@ export default function UploadConfirm() {
             取消
           </button>
           <button
-            onClick={() => {
-              setBusy(true);
-              void confirmUpload()
-                .catch(() => {})
-                .finally(() => setBusy(false));
-            }}
+            onClick={() => void sendPending()}
             disabled={busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"
           >

@@ -268,7 +268,7 @@ async function main() {
     assert(history[0]?.file?.name === name, `文件名被破坏: ${history[0]?.file?.name}`);
     return name;
   });
-  await check('上传图片 + 附件带 image_url', async () => {
+  await check('上传图片 + 正文 + 附件带 image_url', async () => {
     // 1x1 PNG
     const png = Uint8Array.from(
       atob(
@@ -276,8 +276,10 @@ async function main() {
       ),
       (c) => c.charCodeAt(0),
     );
-    await rest.uploadMedia(channelId, new File([png], '截图.png', { type: 'image/png' }));
+    const caption = '图文消息说明';
+    await rest.uploadMedia(channelId, new File([png], '截图.png', { type: 'image/png' }), { msg: caption });
     const history = await rest.getHistory(channelId, 'c', 1);
+    assert(history[0]?.msg === caption, '图片消息正文未保留');
     assert(history[0]?.attachments?.[0]?.image_url, '图片附件缺少 image_url');
   });
   await check('引用图片消息仍保留图片', async () => {
