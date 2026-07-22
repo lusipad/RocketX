@@ -55,6 +55,7 @@ import {
   validateApprovalPaths,
   validatePermissionRequest,
 } from '../agent/safety';
+import { agentMessageBridgeChanges } from '../agent/messageBridge';
 
 const LEASE_MS = 90_000;
 const ORPHAN_SESSION_MS = 30 * 60_000;
@@ -935,12 +936,17 @@ export function startSharedAgentBridge(): () => void {
     for (const [rid, messages] of Object.entries(state.messages)) {
       const before = previous.messages[rid] ?? [];
       if (messages === before) continue;
-      const previousById = new Map(before.map((message) => [message._id, message]));
-      for (const message of messages) {
-        const prior = previousById.get(message._id);
-        if (!prior || prior.msg !== message.msg || (prior.pending && !message.pending)) {
-          void useSharedAgent.getState().handleMessage(message);
-        }
+      const changes = agentMessageBridgeChanges(
+        messages,
+        before,
+        // 首次打开房间会整批写入历史消息；旧 @ai 只能用于展示，不能重新执行。
+        !previous.historyLoaded[rid] && !!state.historyLoaded[rid],
+      );
+      for (const message of changes.ingestOnly) {
+        useSharedAgent.getState().ingestCard(message);
+      }
+      for (const message of changes.handle) {
+        void useSharedAgent.getState().handleMessage(message);
       }
     }
   });
