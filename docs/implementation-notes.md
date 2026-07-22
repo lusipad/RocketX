@@ -897,3 +897,38 @@ P1-P6 实施计划、一组对应 #168 七类真实任务的可执行 scenario b
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — M12 Butler 多会话 transcript 与 TTL 移除（Issue #172 / P1）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- 新会话注册表写入 `builtin:butler / session-registry:<server scope>:<userId>`；旧
+  `builtin:butler / <server scope>:<userId>` 不删除，并持续镜像当前活动会话，保证旧版本回滚可读。
+- 注册表只承载 P1 必需的 `id/title/createdAt/updatedAt/lines/history/codexThread`；不提前加入 P2 task state、
+  context compiler 或主动执行状态。
+- 切换账号、服务器或 session 时，先同步保存旧 scope/session，再丢弃内存中的 Codex resident client，最后
+  恢复目标 session 的 thread snapshot，避免防抖写入和常驻线程跨 scope 串写。
+- 固定三天 TTL 与 stale hint 整体移除；P1 只按 session 是否存在恢复 transcript/history/thread，后续是否继续
+  具体任务由 P2 task state 决定。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- 旧实现的防抖回调读取可变的全局 `persistScope`；账号或服务器切换恰好发生在 500ms 窗口内时，旧会话可能
+  被写入新 scope。P1 将 scope 切换前的同步落盘作为数据隔离的一部分修复。
+- 停靠输入会先发问再挂载完整对话页；两条路径同时 hydrate 同一 scope 时，后完成的注水曾会覆盖刚加入的用户
+  消息。P1 让同 scope hydrate 复用一个在途 Promise，并保留 generation guard 处理不同 scope 的迟到结果。
+- `newConversation` 也必须在等待 hydrate 结束后重新检查当前回合；否则同一窗口内发问与新建 session 并发时，
+  旧 session 可能只保存 user 行而漏掉已经完成的 assistant 回复。切换前的 stop 还要等待 API/Codex 的 ask Promise
+  完整收尾，不能假设 Codex resident turn 已经建立并可立即 interrupt。
+
+## Questions for review
+
+- 无。

@@ -2,7 +2,6 @@ import {
   Bot,
   ChevronDown,
   Loader2,
-  MessageSquarePlus,
   Search,
   Send,
   Share2,
@@ -22,6 +21,7 @@ import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
+import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 
 const QUICK_PROMPTS = [
   '搜索最近关于发布失败的消息',
@@ -47,7 +47,6 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const steps = useButler((state) => state.steps);
   const askButler = useButler((state) => state.ask);
   const stopButler = useButler((state) => state.stop);
-  const newConversation = useButler((state) => state.newConversation);
   const routineDraft = useButler((state) => state.routineDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
@@ -113,6 +112,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           {context ? <div className="mt-2 inline-flex rounded-full bg-primary-light px-2.5 py-1 text-xs text-primary">当前工作面：{context.label}</div> : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <ButlerSessionSwitcher />
           <button
             type="button"
             onClick={() => void transferToCodex()}
@@ -122,15 +122,6 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           >
             {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}
             转到 Codex
-          </button>
-          <button
-            type="button"
-            onClick={() => void newConversation()}
-            disabled={running}
-            title="清空当前对话并开启全新上下文"
-            className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
-          >
-            <MessageSquarePlus size={13} />新对话
           </button>
           <button
             type="button"
