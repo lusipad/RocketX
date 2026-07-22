@@ -7,6 +7,7 @@ mod diagnostics;
 mod lan;
 mod mcp;
 mod native_service;
+mod ocr;
 mod proc;
 mod winauth;
 
@@ -558,6 +559,7 @@ fn main() {
             set_tray_tooltip,
             show_main_window,
             show_message_notification,
+            ocr::image_ocr_recognize,
             ai_secret_set,
             ai_secret_get,
             ai_secret_delete,
