@@ -179,6 +179,8 @@ interface ChatState {
   unreadMarkTs: Record<string, number>;
   /** 待确认发送的文件（粘贴/拖拽后进入预览确认） */
   pendingFiles: File[] | null;
+  /** 选择文件时输入框里的文字，确认后随第一个文件发送 */
+  pendingUploadMessage: string | null;
   /** 正在引用回复的消息 */
   replyTo: RcMessage | null;
   /** 被跳转定位的消息 id（短暂高亮） */
@@ -283,11 +285,11 @@ interface ChatState {
   createTeam: (name: string, members: string[], priv: boolean) => Promise<string>;
   /** 从消息创建讨论（RC Discussion）并跳转 */
   createDiscussionFrom: (msg: RcMessage) => Promise<void>;
-  requestUpload: (files: File[]) => void;
-  confirmUpload: () => Promise<void>;
+  requestUpload: (files: File[], message?: string) => void;
+  confirmUpload: (message?: string) => Promise<boolean>;
   cancelUpload: () => void;
-  uploadFiles: (files: File[], tmid?: string) => Promise<void>;
-  uploadNativeFiles: (paths: string[], tmid?: string) => Promise<void>;
+  uploadFiles: (files: File[], tmid?: string, message?: string) => Promise<boolean>;
+  uploadNativeFiles: (paths: string[], tmid?: string, message?: string) => Promise<boolean>;
 }
 
 /**
@@ -917,6 +919,7 @@ export const useChat = create<ChatState>((set, get) => ({
   drafts: loadDrafts(),
   unreadMarkTs: {},
   pendingFiles: null,
+  pendingUploadMessage: null,
   replyTo: null,
   highlightMid: null,
   typing: {},
@@ -1210,6 +1213,7 @@ export const useChat = create<ChatState>((set, get) => ({
       rightPanel: null,
       unreadMarkTs: marks,
       pendingFiles: null,
+      pendingUploadMessage: null,
       replyTo: null,
       // 普通打开/重复点击会话应回到最新消息，不能让上一次搜索或通知跳转
       // 遗留的高亮随后 scrollIntoView，把列表从底部再次拉回旧消息。
@@ -2221,21 +2225,22 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  requestUpload: (files) => {
-    if (files.length > 0) set({ pendingFiles: files });
+  requestUpload: (files, message) => {
+    if (files.length > 0) set({ pendingFiles: files, pendingUploadMessage: message?.trim() || null });
   },
 
-  confirmUpload: async () => {
+  confirmUpload: async (message) => {
     const files = get().pendingFiles;
-    set({ pendingFiles: null });
-    if (files) await get().uploadFiles(files);
+    const uploadMessage = get().pendingUploadMessage ?? message;
+    set({ pendingFiles: null, pendingUploadMessage: null });
+    return files ? get().uploadFiles(files, undefined, uploadMessage) : false;
   },
 
-  cancelUpload: () => set({ pendingFiles: null }),
+  cancelUpload: () => set({ pendingFiles: null, pendingUploadMessage: null }),
 
-  uploadFiles: async (files, tmid) => {
+  uploadFiles: async (files, tmid, message) => {
     const rid = get().activeRid;
-    if (!rid || files.length === 0) return;
+    if (!rid || files.length === 0) return false;
     // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
     // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
     const quote = !tmid ? get().replyTo : null;
@@ -2247,27 +2252,31 @@ export const useChat = create<ChatState>((set, get) => ({
       const quoteMsg = quote
         ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
         : undefined;
+      const caption = message?.trim();
+      const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
       for (const [index, file] of files.entries()) {
         await rest.uploadMedia(rid, file, {
           tmid,
-          ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+          ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
         });
         set({ uploading: get().uploading - 1 });
       }
       toast.dismiss(id);
+      return true;
     } catch (err) {
       set({ uploading: 0 });
       toast.update(id, {
         kind: 'error',
         message: humanError(err, `发送 ${label} 失败`),
       });
+      return false;
     }
   },
 
-  uploadNativeFiles: async (paths, tmid) => {
+  uploadNativeFiles: async (paths, tmid, message) => {
     const rid = get().activeRid;
     const me = useAuth.getState().user;
-    if (!rid || !me || paths.length === 0) return;
+    if (!rid || !me || paths.length === 0) return false;
     // 原生拖拽文件回复也要带引用（issue #91 同类）。挂着引用时不走局域网
     // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
     const quote = !tmid ? get().replyTo : null;
@@ -2278,11 +2287,13 @@ export const useChat = create<ChatState>((set, get) => ({
       const quoteMsg = quote
         ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
         : undefined;
+      const caption = message?.trim();
+      const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
       const { readFile, stat } = await import('@tauri-apps/plugin-fs');
       for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
-        if (!tmid && !quoteMsg) {
+        if (!tmid && !firstMessage) {
           const recipients = await lanRecipientIds(rid).catch(() => []);
           if (recipients.length === 1) {
             const messageId = randomMessageId();
@@ -2331,18 +2342,20 @@ export const useChat = create<ChatState>((set, get) => ({
           await rest.uploadMedia(rid, new Blob([bytes]), {
             tmid,
             fileName,
-            ...(index === 0 && quoteMsg ? { msg: quoteMsg } : {}),
+            ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
           });
         }
         set({ uploading: Math.max(0, get().uploading - 1) });
       }
       toast.dismiss(id);
+      return true;
     } catch (error) {
       set({ uploading: 0 });
       toast.update(id, {
         kind: 'error',
         message: humanError(error, '发送文件失败'),
       });
+      return false;
     }
   },
 }));

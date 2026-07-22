@@ -28,6 +28,7 @@ import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
 import { stripAgentSessionMarker } from '../agent/card';
+import UploadConfirm from './UploadConfirm';
 
 // @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
 const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
@@ -240,7 +241,7 @@ export default function Composer() {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length > 0) {
       e.preventDefault();
-      requestUpload(files);
+      requestUpload(files, text);
     }
   };
 
@@ -426,7 +427,7 @@ export default function Composer() {
   const onFiles = (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (files.length > 0) requestUpload(files);
+    if (files.length > 0) requestUpload(files, text);
   };
 
   const chooseNativeFiles = async (imagesOnly: boolean) => {
@@ -446,13 +447,14 @@ export default function Composer() {
         : {}),
     });
     const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : [];
-    if (paths.length > 0) await uploadNativeFiles(paths);
+    if (paths.length > 0 && await uploadNativeFiles(paths, undefined, text)) clearInput();
   };
 
   const toolBtn =
     'flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink';
 
   return (
+    <>
     <div className="relative shrink-0 border-t border-line px-4 pt-2 pb-3">
       {/* 斜杠命令补全弹层：命令有 27 个，装不下就滚，别把数据砍掉 */}
       {slashQuery !== null && slashCandidates.length > 0 && (
@@ -651,5 +653,7 @@ export default function Composer() {
         </button>
       </div>
     </div>
+    <UploadConfirm caption={text} onSent={clearInput} />
+    </>
   );
 }

@@ -192,6 +192,7 @@ function fulfillJson(route: Route, json: unknown, status = 200) {
 
 async function installRocketChatMock(page: Page) {
   const sentMessages: Record<string, unknown>[] = [];
+  const uploadedMessages: Record<string, unknown>[] = [];
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
@@ -235,6 +236,13 @@ async function installRocketChatMock(page: Page) {
         message: { ...body.message, ts: new Date().toISOString(), u: ME },
       });
     }
+    if (endpoint.startsWith('rooms.media/')) {
+      return fulfillJson(route, { file: { _id: `file-${uploadedMessages.length + 1}` } });
+    }
+    if (endpoint.startsWith('rooms.mediaConfirm/')) {
+      uploadedMessages.push(request.postDataJSON() as Record<string, unknown>);
+      return fulfillJson(route, { success: true });
+    }
     if (endpoint === 'rooms.createDiscussion') {
       return fulfillJson(route, {
         discussion: {
@@ -262,7 +270,7 @@ async function installRocketChatMock(page: Page) {
     });
   });
 
-  return { sentMessages, pageErrors };
+  return { sentMessages, uploadedMessages, pageErrors };
 }
 
 async function bootAuthenticated(
@@ -558,6 +566,27 @@ test('发送消息会乐观上屏并提交一次', async ({ page }) => {
   await expect(page.getByText('UI smoke message', { exact: true })).toBeVisible();
   await expect.poll(() => sentMessages.length).toBe(1);
   expect(sentMessages[0]?.msg).toBe('UI smoke message');
+  expect(pageErrors).toEqual([]);
+});
+
+test('文字和图片确认后作为同一条上传消息发送（issue #155）', async ({ page }) => {
+  const { uploadedMessages, pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  const composer = page.getByPlaceholder(/输入消息/);
+  await composer.fill('图文说明');
+  await page.locator('input[accept="image/*"]').setInputFiles({
+    name: 'diagram.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('image-bytes'),
+  });
+
+  const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
+  await expect(dialog.getByText('图文说明', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '发送（1）' }).click();
+
+  await expect.poll(() => uploadedMessages.length).toBe(1);
+  expect(uploadedMessages[0]?.msg).toBe('图文说明');
+  await expect(composer).toHaveValue('');
   expect(pageErrors).toEqual([]);
 });
 
