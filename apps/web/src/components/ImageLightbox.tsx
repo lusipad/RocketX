@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Download, Maximize2, Minus, Plus, X } from 'lucide-react';
+import { Copy, Download, Loader2, Maximize2, Minus, Plus, ScanText, X } from 'lucide-react';
 import AuthImage from './AuthImage';
 import { saveFile } from '../lib/download';
 import { toast } from '../stores/toast';
+import { rest } from '../lib/client';
+import {
+  isWindowsDesktopOcr,
+  ocrWordStyle,
+  recognizeImageBlob,
+  type ImageOcrResult,
+} from '../lib/imageOcr';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
@@ -22,6 +29,10 @@ export default function ImageLightbox({
   const [zoom, setZoom] = useState<number | null>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState<{ x: number; y: number } | null>(null);
+  const [ocr, setOcr] = useState<ImageOcrResult | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrError, setOcrError] = useState('');
+  const ocrAvailable = isWindowsDesktopOcr('__TAURI_INTERNALS__' in window, navigator.userAgent);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,15 +66,29 @@ export default function ImageLightbox({
     setOffset({ x: 0, y: 0 });
   };
 
+  const recognize = async () => {
+    if (ocrBusy) return;
+    setOcrBusy(true);
+    setOcrError('');
+    try {
+      const result = await recognizeImageBlob(await rest.fetchFile(path));
+      setOcr(result);
+      if (!result.words.length) setOcrError('图片中未识别到文字');
+    } catch (error) {
+      setOcr(null);
+      setOcrError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
   // 适应窗口：撑满可视区（小图也放大）；手动缩放：按倍数显示
-  const imgStyle: React.CSSProperties =
+  const stageStyle: React.CSSProperties =
     zoom === null
-      ? { maxWidth: '92vw', maxHeight: '86vh', width: 'auto', height: 'auto' }
+      ? {}
       : {
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           transformOrigin: 'center',
-          maxWidth: '92vw',
-          maxHeight: '86vh',
           cursor: dragging ? 'grabbing' : 'grab',
         };
 
@@ -105,6 +130,28 @@ export default function ImageLightbox({
         >
           <Download size={16} />
         </button>
+        {ocrAvailable && (
+          <button
+            title={ocr ? '重新识别文字' : '识别图片文字'}
+            className={btn}
+            disabled={ocrBusy}
+            onClick={() => void recognize()}
+          >
+            {ocrBusy ? <Loader2 size={16} className="animate-spin" /> : <ScanText size={16} />}
+          </button>
+        )}
+        {ocr?.text && (
+          <button
+            title="复制全部识别文字"
+            className={btn}
+            onClick={() => void navigator.clipboard.writeText(ocr.text).then(
+              () => toast.success('已复制识别文字'),
+              (error) => toast.error(error, '复制失败'),
+            )}
+          >
+            <Copy size={16} />
+          </button>
+        )}
         <button title="关闭 (Esc)" className={btn} onClick={onClose}>
           <X size={18} />
         </button>
@@ -116,24 +163,45 @@ export default function ImageLightbox({
       </div>
 
       <div
+        style={stageStyle}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => {
-          if (zoom === null) return;
+          if (zoom === null || (ocr && !e.altKey)) return;
           e.preventDefault();
           setDragging({ x: e.clientX - offset.x, y: e.clientY - offset.y });
         }}
+        className="relative inline-flex max-h-[86vh] max-w-[92vw]"
       >
         <AuthImage
           path={path}
           alt={fileName}
-          style={imgStyle}
-          className="select-none rounded-md object-contain"
+          className="block max-h-[86vh] max-w-[92vw] select-none rounded-md object-contain"
           fallback={<div className="text-sm text-white/70">图片加载失败</div>}
         />
+        {ocr && (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-md" aria-label="图片识别文字">
+            {ocr.words.map((word, index) => (
+              <span
+                key={`${index}-${word.text}`}
+                className="pointer-events-auto absolute cursor-text overflow-hidden whitespace-nowrap text-transparent selection:bg-blue-500/70 selection:text-white hover:outline hover:outline-1 hover:outline-blue-400/70"
+                style={ocrWordStyle(word)}
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                {word.text}{word.spaceAfter ? ' ' : ''}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="absolute bottom-5 text-xs text-white/50">
-        滚轮缩放 · 拖拽平移 · Esc 关闭
+      <div className="absolute bottom-5 text-center text-xs text-white/60">
+        {ocrError ? (
+          <span className="rounded bg-red-950/70 px-3 py-1.5 text-red-100">{ocrError}</span>
+        ) : ocr ? (
+          <span>已用 Windows 本地 OCR 识别 {ocr.words.length} 处文字（{ocr.language}） · 拖选复制 · Alt+拖拽平移</span>
+        ) : (
+          <span>滚轮缩放 · 拖拽平移 · Esc 关闭</span>
+        )}
       </div>
     </div>,
     document.body,

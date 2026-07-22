@@ -47,6 +47,11 @@ minisign-verify = "0.2.5"
 [target.'cfg(windows)'.dependencies]
 notify-rust = "4.18"
 windows = { version = "0.61", features = [
+  "Foundation",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
   "Win32_Networking_WinHttp",

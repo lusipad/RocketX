@@ -46,6 +46,69 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
   }, { config: workspaceConfig });
 }
 
+async function installFullTauriMock(page: Page) {
+  await page.addInitScript(() => {
+    let nextRid = 1;
+    const requests = new Map<number, { method: string; url: string; headers: string[][]; data?: number[] }>();
+    const responses = new Map<number, { bytes: number[]; read: boolean }>();
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {
+        invoke: async (command: string, args?: Record<string, any>) => {
+          if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
+          if (command === 'plugin:http|fetch') {
+            const rid = nextRid++;
+            requests.set(rid, args?.clientConfig);
+            return rid;
+          }
+          if (command === 'plugin:http|fetch_send') {
+            const request = requests.get(Number(args?.rid))!;
+            const response = await fetch(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: request.data ? new Uint8Array(request.data) : undefined,
+            });
+            const rid = nextRid++;
+            responses.set(rid, { bytes: [...new Uint8Array(await response.arrayBuffer())], read: false });
+            return {
+              status: response.status,
+              statusText: response.statusText,
+              url: response.url,
+              headers: [...response.headers.entries()],
+              rid,
+            };
+          }
+          if (command === 'plugin:http|fetch_read_body') {
+            const response = responses.get(Number(args?.rid))!;
+            if (response.read) return [1];
+            response.read = true;
+            return [...response.bytes, 0];
+          }
+          if (command === 'image_ocr_recognize') {
+            return {
+              text: 'RocketX 本地 OCR',
+              language: 'zh-Hans',
+              words: [
+                { text: 'RocketX', x: 0.08, y: 0.2, width: 0.35, height: 0.18, spaceAfter: false },
+                { text: '本地', x: 0.08, y: 0.55, width: 0.2, height: 0.18, spaceAfter: true },
+                { text: 'OCR', x: 0.3, y: 0.55, width: 0.2, height: 0.18, spaceAfter: false },
+              ],
+            };
+          }
+          if (command === 'plugin:updater|check') return null;
+          return null;
+        },
+        transformCallback: () => 0,
+        unregisterCallback: () => {},
+      },
+    });
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', {
+      configurable: true,
+      value: { unregisterListener: () => {} },
+    });
+  });
+}
+
 function agentCardMessage() {
   const card = {
     version: 1,
@@ -152,6 +215,19 @@ const rooms = [
 const histories: Record<string, unknown[]> = {
   'room-general': [
     {
+      _id: 'general-ocr-image',
+      rid: 'room-general',
+      msg: '',
+      ts: '2026-07-17T08:01:00.000Z',
+      u: ALICE,
+      file: { _id: 'file-ocr', name: 'OCR 示例.svg', type: 'image/svg+xml', size: 256 },
+      attachments: [{
+        title: 'OCR 示例.svg',
+        image_url: '/file-upload/ocr/demo.svg',
+        title_link: '/file-upload/ocr/demo.svg',
+      }],
+    },
+    {
       _id: 'general-release',
       rid: 'room-general',
       msg: 'Release checklist ready',
@@ -186,6 +262,27 @@ const histories: Record<string, unknown[]> = {
   ],
 };
 
+test('Windows 图片灯箱使用本地 OCR 并叠加可选择文字（issue #153）', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page);
+  expect(await page.evaluate(() => ({
+    tauri: '__TAURI_INTERNALS__' in window,
+    userAgent: navigator.userAgent,
+  }))).toMatchObject({ tauri: true, userAgent: expect.stringMatching(/Windows/i) });
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /OCR 示例\.svg/ }).last().click();
+  await page.getByRole('button', { name: '识别图片文字' }).click();
+  const layer = page.getByLabel('图片识别文字');
+  await expect(layer).toBeVisible();
+  const selectableWord = layer.getByText('RocketX', { exact: true });
+  await expect(selectableWord).toBeVisible();
+  await selectableWord.selectText();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('RocketX');
+  await expect(page.getByText(/已用 Windows 本地 OCR 识别 3 处文字/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '复制全部识别文字' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 function fulfillJson(route: Route, json: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', json });
 }
@@ -197,6 +294,11 @@ async function installRocketChatMock(page: Page) {
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
   await page.route('**/avatar/**', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/file-upload/ocr/demo.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240"><rect width="100%" height="100%" fill="white"/><text x="40" y="100" font-size="52">RocketX 123</text><text x="40" y="180" font-size="44">本地 OCR</text></svg>',
+  }));
   await page.route('**/api/info', (route) => fulfillJson(route, { version: '8.6.1' }));
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
