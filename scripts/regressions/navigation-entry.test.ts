@@ -13,7 +13,7 @@ test('Codex 是管家的执行间：保留可达性但不显示为侧栏入口',
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
   assert.doesNotMatch(runtime, /TodayPage|AiAssistantPage|'today'|'ai-assistant'/);
   assert.match(runtime, /\['codex', 'Codex', CodexPage, TerminalSquare\]/);
-  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'butler-view', 'todos', 'calendar'\]\);/);
+  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'butler-view', 'todos', 'calendar', 'downloads'\]\);/);
   assert.doesNotMatch(navRail, /AI_MODULE_IDS|'today'|'ai-assistant'/);
   assert.match(navRail, /const HIDDEN_MODULE_IDS = new Set\(\['codex'\]\);/);
   assert.match(navRail, /const visibleModules = modules\.filter\(\(module\) => !HIDDEN_MODULE_IDS\.has\(module\.key\)\);/);
@@ -27,6 +27,7 @@ test('Codex 是管家的执行间：保留可达性但不显示为侧栏入口',
     'butler-view',
     'todos',
     'calendar',
+    'downloads',
     'workbench',
     'contacts',
     'codex',

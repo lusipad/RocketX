@@ -39,7 +39,7 @@ const MODULE_META: Record<string, {
   workbench: { label: '工作台', icon: LayoutGrid },
 };
 
-const PRIMARY_MODULE_IDS = new Set(['messages', 'butler-view', 'todos', 'calendar']);
+const PRIMARY_MODULE_IDS = new Set(['messages', 'butler-view', 'todos', 'calendar', 'downloads']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
 const HIDDEN_MODULE_IDS = new Set(['codex']);
 const KNOWN_CORE_MODULE_IDS = new Set([

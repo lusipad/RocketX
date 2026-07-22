@@ -8,6 +8,7 @@ export const MODULE_ORDER: ModuleKey[] = [
   'butler-view',
   'todos',
   'calendar',
+  'downloads',
   'workbench',
   'contacts',
   'codex',

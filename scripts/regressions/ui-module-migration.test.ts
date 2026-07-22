@@ -23,6 +23,7 @@ test('退役的模块持久化值启动时迁到管家桌面', () => {
   assert.equal(migratePersistedModule('today'), 'butler-view');
   assert.equal(migratePersistedModule('ai-assistant'), 'butler-view');
   assert.equal(migratePersistedModule('butler-view'), 'butler-view');
+  assert.equal(migratePersistedModule('downloads'), 'downloads');
   assert.equal(migratePersistedModule('unknown'), 'messages');
 
   const storage = new MemoryStorage();
