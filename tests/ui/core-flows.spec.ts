@@ -111,6 +111,7 @@ async function installFullTauriMock(page: Page) {
             return {
               text: 'RocketX 本地 OCR',
               language: 'zh-Hans',
+              backend: 'pp-ocrv5',
               words: [
                 { text: 'RocketX', x: 0.08, y: 0.2, width: 0.35, height: 0.18, spaceAfter: false },
                 { text: '本地', x: 0.08, y: 0.55, width: 0.2, height: 0.18, spaceAfter: true },
@@ -285,7 +286,7 @@ const histories: Record<string, unknown[]> = {
   ],
 };
 
-test('Windows 图片灯箱使用本地 OCR 并叠加可选择文字（issue #153）', async ({ page }) => {
+test('桌面图片灯箱优先显示 PP-OCRv5 本地离线后端并叠加可选择文字（issue #163）', async ({ page }) => {
   await installFullTauriMock(page);
   const { pageErrors } = await bootAuthenticated(page);
   expect(await page.evaluate(() => ({
@@ -301,7 +302,7 @@ test('Windows 图片灯箱使用本地 OCR 并叠加可选择文字（issue #153
   await expect(selectableWord).toBeVisible();
   await selectableWord.selectText();
   expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('RocketX');
-  await expect(page.getByText(/已用 Windows 本地 OCR 识别 3 处文字/)).toBeVisible();
+  await expect(page.getByText(/已用 PP-OCRv5 本地离线引擎\s+识别 3 处文字/)).toBeVisible();
   await expect(page.getByRole('button', { name: '复制全部识别文字' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

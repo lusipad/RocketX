@@ -7,6 +7,11 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"
+ureq = "3"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 
 [dependencies]
 # tray-icon：关闭到系统托盘 + 托盘菜单（issue #3）
@@ -35,7 +40,10 @@ base64 = "0.22"
 blake3 = "1.8"
 ed25519-dalek = "3.0"
 getrandom = "0.4"
+image = "0.25"
 mdns-sd = "0.20"
+oar-ocr = { version = "0.8.0", default-features = false, features = ["simd"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "api-23"] }
 socket2 = "0.6"
 zeroize = "1"
 # 已由 tauri-plugin-updater 间接使用；共享目录更新复用同一 Minisign 验签格式。

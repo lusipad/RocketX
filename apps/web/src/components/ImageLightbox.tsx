@@ -6,7 +6,8 @@ import { saveFile } from '../lib/download';
 import { toast } from '../stores/toast';
 import { rest } from '../lib/client';
 import {
-  isWindowsDesktopOcr,
+  desktopLocalOcrAvailable,
+  ocrBackendLabel,
   ocrWordStyle,
   recognizeImageBlob,
   type ImageOcrResult,
@@ -32,7 +33,7 @@ export default function ImageLightbox({
   const [ocr, setOcr] = useState<ImageOcrResult | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState('');
-  const ocrAvailable = isWindowsDesktopOcr('__TAURI_INTERNALS__' in window, navigator.userAgent);
+  const ocrAvailable = desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -94,6 +95,7 @@ export default function ImageLightbox({
 
   const btn =
     'flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white transition hover:bg-white/25';
+  const ocrButtonLabel = ocr ? '重新识别文字' : '识别图片文字';
 
   return createPortal(
     <div
@@ -114,17 +116,28 @@ export default function ImageLightbox({
         <span className="mr-1 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white/80">
           {zoom === null ? '适应窗口' : `${Math.round(zoom * 100)}%`}
         </span>
-        <button title="缩小 (-)" className={btn} onClick={() => setZoom((z) => Math.max((z ?? 1) / 1.25, MIN_ZOOM))}>
+        <button
+          title="缩小 (-)"
+          aria-label="缩小 (-)"
+          className={btn}
+          onClick={() => setZoom((z) => Math.max((z ?? 1) / 1.25, MIN_ZOOM))}
+        >
           <Minus size={16} />
         </button>
-        <button title="放大 (+)" className={btn} onClick={() => setZoom((z) => Math.min((z ?? 1) * 1.25, MAX_ZOOM))}>
+        <button
+          title="放大 (+)"
+          aria-label="放大 (+)"
+          className={btn}
+          onClick={() => setZoom((z) => Math.min((z ?? 1) * 1.25, MAX_ZOOM))}
+        >
           <Plus size={16} />
         </button>
-        <button title="适应窗口 (0)" className={btn} onClick={fit}>
+        <button title="适应窗口 (0)" aria-label="适应窗口 (0)" className={btn} onClick={fit}>
           <Maximize2 size={15} />
         </button>
         <button
           title="下载"
+          aria-label="下载"
           className={btn}
           onClick={() => void saveFile(path, fileName).catch((err) => toast.error(err, '下载失败'))}
         >
@@ -132,7 +145,8 @@ export default function ImageLightbox({
         </button>
         {ocrAvailable && (
           <button
-            title={ocr ? '重新识别文字' : '识别图片文字'}
+            title={ocrButtonLabel}
+            aria-label={ocrButtonLabel}
             className={btn}
             disabled={ocrBusy}
             onClick={() => void recognize()}
@@ -143,6 +157,7 @@ export default function ImageLightbox({
         {ocr?.text && (
           <button
             title="复制全部识别文字"
+            aria-label="复制全部识别文字"
             className={btn}
             onClick={() => void navigator.clipboard.writeText(ocr.text).then(
               () => toast.success('已复制识别文字'),
@@ -152,7 +167,7 @@ export default function ImageLightbox({
             <Copy size={16} />
           </button>
         )}
-        <button title="关闭 (Esc)" className={btn} onClick={onClose}>
+        <button title="关闭 (Esc)" aria-label="关闭 (Esc)" className={btn} onClick={onClose}>
           <X size={18} />
         </button>
       </div>
@@ -198,7 +213,9 @@ export default function ImageLightbox({
         {ocrError ? (
           <span className="rounded bg-red-950/70 px-3 py-1.5 text-red-100">{ocrError}</span>
         ) : ocr ? (
-          <span>已用 Windows 本地 OCR 识别 {ocr.words.length} 处文字（{ocr.language}） · 拖选复制 · Alt+拖拽平移</span>
+          <span>
+            已用 {ocrBackendLabel(ocr.backend)} 识别 {ocr.words.length} 处文字（{ocr.language}） · 拖选复制 · Alt+拖拽平移
+          </span>
         ) : (
           <span>滚轮缩放 · 拖拽平移 · Esc 关闭</span>
         )}

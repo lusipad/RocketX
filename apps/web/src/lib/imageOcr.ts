@@ -7,14 +7,26 @@ export interface ImageOcrWord {
   spaceAfter: boolean;
 }
 
+export type ImageOcrBackend = 'pp-ocrv5' | 'windows-media-ocr';
+
 export interface ImageOcrResult {
   text: string;
   language: string;
   words: ImageOcrWord[];
+  backend: ImageOcrBackend;
 }
 
-export function isWindowsDesktopOcr(tauri: boolean, userAgent: string): boolean {
-  return tauri && /Windows/i.test(userAgent);
+export function desktopLocalOcrAvailable(tauri: boolean): boolean {
+  return tauri;
+}
+
+export function ocrBackendLabel(backend: ImageOcrBackend): string {
+  switch (backend) {
+    case 'pp-ocrv5':
+      return 'PP-OCRv5 本地离线引擎';
+    case 'windows-media-ocr':
+      return 'Windows.Media.Ocr';
+  }
 }
 
 function percent(value: number): string {
