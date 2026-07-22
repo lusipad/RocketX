@@ -16,6 +16,7 @@ import {
   aiProviderFingerprint,
   adoConnectionChanged,
   aiProviderEndpointChanged,
+  inlineWorkItemTemplatesFingerprint,
   loadWorkspaceSource,
   mergeAppliedFields,
   parseWorkspaceConfig,
@@ -36,13 +37,17 @@ import {
 export function collectCurrentValues(): WorkspaceCurrentValues {
   const workbench = loadWorkbenchConfig();
   const ai = loadAiSettings();
+  const templateState = useWiTemplates.getState();
   return {
     serverUrl: getServerBase(),
     adoBase: workbench?.adoBase ?? '',
     adoMode: workbench?.mode ?? '',
     adoAuth: workbench?.auth ?? '',
     adoWebUrl: adoWebBase() ?? '',
-    templatesUrl: useWiTemplates.getState().url,
+    templatesUrl: templateState.url,
+    templatesInline: !templateState.url && templateState.remote
+      ? inlineWorkItemTemplatesFingerprint(templateState.remote)
+      : '',
     aiProviders: Object.fromEntries(
       ai.providers.map((provider) => [provider.id, aiProviderFingerprint(provider)]),
     ),
@@ -123,8 +128,11 @@ async function applySelectedFields(
     }
   }
 
-  if (selected.has('templates.url') && config.workItemTemplates) {
+  if (selected.has('templates.url') && config.workItemTemplates && 'url' in config.workItemTemplates) {
     useWiTemplates.getState().setUrl(config.workItemTemplates.url);
+  }
+  if (selected.has('templates.inline') && config.workItemTemplates && 'templates' in config.workItemTemplates) {
+    useWiTemplates.getState().setInline(config.workItemTemplates);
   }
 
   if (selected.has('update.source') && config.update) {

@@ -1,3 +1,5 @@
+import type { WiTemplatesConfig } from '../stores/wiTemplates';
+
 /**
  * 工作区配置描述文件（issue #67）。
  *
@@ -25,7 +27,7 @@ export interface WorkspaceConfig {
     /** 消息里 #123 链接用的 Web 地址；不填时复用 url */
     webUrl?: string;
   };
-  workItemTemplates?: { url: string };
+  workItemTemplates?: { url: string } | WiTemplatesConfig;
   ai?: { providers: WorkspaceAiProvider[] };
   /** 更新源（issue #106）：github 走原生通道；http/dir 需要 location */
   update?: {
@@ -69,6 +71,51 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: s
   return value as T;
 }
 
+function parseInlineWorkItemTemplates(raw: any): WiTemplatesConfig {
+  if (!Array.isArray(raw.templates) || raw.templates.length === 0) {
+    throw new Error('workItemTemplates 模板列表为空');
+  }
+  const config: WiTemplatesConfig = {
+    templates: raw.templates.map((template: any, templateIndex: number) => {
+      const label = `workItemTemplates.templates[${templateIndex}]`;
+      if (typeof template?.name !== 'string' || !template.name.trim()) {
+        throw new Error(`${label}.name 必须是非空字符串`);
+      }
+      if (!Array.isArray(template.items) || template.items.length === 0) {
+        throw new Error(`${label}.items 不能为空`);
+      }
+      return {
+        name: template.name.trim(),
+        items: template.items.map((item: any, itemIndex: number) => {
+          const itemLabel = `${label}.items[${itemIndex}]`;
+          if (typeof item?.type !== 'string' || !item.type.trim()) {
+            throw new Error(`${itemLabel}.type 必须是非空字符串`);
+          }
+          if (typeof item.title !== 'string' || !item.title.trim()) {
+            throw new Error(`${itemLabel}.title 必须是非空字符串`);
+          }
+          if (item.parent !== undefined
+            && (!Number.isInteger(item.parent) || item.parent < 0 || item.parent >= itemIndex)) {
+            throw new Error(`${itemLabel}.parent 必须引用前面的模板项`);
+          }
+          return {
+            type: item.type.trim(),
+            title: item.title.trim(),
+            ...(item.parent !== undefined ? { parent: item.parent } : {}),
+          };
+        }),
+      };
+    }),
+  };
+  if (raw.defaultProject !== undefined) {
+    if (typeof raw.defaultProject !== 'string' || !raw.defaultProject.trim()) {
+      throw new Error('workItemTemplates.defaultProject 必须是非空字符串');
+    }
+    config.defaultProject = raw.defaultProject.trim();
+  }
+  return config;
+}
+
 /** 解析并校验配置文件。整体不可信输入：任何一处非法都拒绝导入，不做部分接受。 */
 export function parseWorkspaceConfig(text: string): WorkspaceConfig {
   let raw: any;
@@ -102,9 +149,17 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
     config.ado = ado;
   }
   if (raw.workItemTemplates !== undefined) {
-    config.workItemTemplates = {
-      url: normalizeUrl(raw.workItemTemplates?.url, 'workItemTemplates.url'),
-    };
+    if (!raw.workItemTemplates || typeof raw.workItemTemplates !== 'object') {
+      throw new Error('workItemTemplates 必须是对象');
+    }
+    const hasUrl = raw.workItemTemplates.url !== undefined;
+    const hasTemplates = raw.workItemTemplates.templates !== undefined;
+    if (hasUrl === hasTemplates) {
+      throw new Error('workItemTemplates 必须且只能提供 url 或 templates');
+    }
+    config.workItemTemplates = hasUrl
+      ? { url: normalizeUrl(raw.workItemTemplates.url, 'workItemTemplates.url') }
+      : parseInlineWorkItemTemplates(raw.workItemTemplates);
   }
   if (raw.ai !== undefined) {
     const providers = raw.ai?.providers;
@@ -203,12 +258,17 @@ export interface WorkspaceCurrentValues {
   adoAuth?: string;
   adoWebUrl?: string;
   templatesUrl?: string;
+  templatesInline?: string;
   /** 现有 AI Provider 的比对串，键为 provider id */
   aiProviders?: Record<string, string>;
   /** 更新源比对串（updateSourceFingerprint 口径） */
   updateSource?: string;
   /** 层级工作项当前形态 */
   hierarchyLayout?: string;
+}
+
+export function inlineWorkItemTemplatesFingerprint(config: WiTemplatesConfig): string {
+  return JSON.stringify(config);
 }
 
 /** AI Provider 的比对口径：kind、地址、模型任一变化都算变化；name 和密钥不参与 */
@@ -260,9 +320,21 @@ export function planWorkspaceFields(
     fields.push(field('ado.webUrl', 'ADO Web 链接地址', webUrl, current.adoWebUrl ?? '', lastApplied));
   }
   if (config.workItemTemplates) {
-    fields.push(
-      field('templates.url', '工作项模板地址', config.workItemTemplates.url, current.templatesUrl ?? '', lastApplied),
-    );
+    if ('url' in config.workItemTemplates) {
+      fields.push(
+        field('templates.url', '工作项模板地址', config.workItemTemplates.url, current.templatesUrl ?? '', lastApplied),
+      );
+    } else {
+      fields.push(
+        field(
+          'templates.inline',
+          '内联工作项模板',
+          inlineWorkItemTemplatesFingerprint(config.workItemTemplates),
+          current.templatesInline ?? '',
+          lastApplied,
+        ),
+      );
+    }
   }
   for (const provider of config.ai?.providers ?? []) {
     fields.push(
