@@ -854,3 +854,46 @@ Windows 实机通过 `codex://threads/new` 在 `rocketchatx / 本地 / main` 打
 
 主要兼容风险是 Codex App 将来调整 deep-link 合同。回滚时恢复旧转交调用即可，但旧路径会重新产生
 列表可见、实际不可续的线程；因此回滚前必须重新证明 app-server 线程已能被 Desktop 宿主接管。
+
+---
+
+# Implementation notes — M12 管家多会话调查与地基收口（Issue #168 / P0）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Shipped vs planned
+
+本轮只交付 M12 的 P0 地基，不交付 P1 及以后阶段的产品代码。已落地的内容是：一份按架构审计重排后的
+P1-P6 实施计划、一组对应 #168 七类真实任务的可执行 scenario baseline、以及把持久化 scope 与
+迁移/回滚合同写成后续阶段必须遵守的事实。首个后续代码切片固定为
+“P1 多 session / transcript / 去 3 天 TTL”；当前仓库还没有该能力。
+
+## Decisions
+
+- 把 P1-P6 改回架构审计要求的顺序：P1 多 session/transcript/去 TTL，P2 context compiler +
+  manifest + task state，P3 API/Codex 共用 engine/session contract，P4 typed tool runtime +
+  preflight + approval/checkpoint，P5 scoped memory，P6 主动 rounds/workflows 合流。
+- 把 `server scope + userId` 写回 Butler 持久化事实：`same-origin` 只是测试/同源部署退化值，不是固定产品合同。
+- 把 `rocketx.butler/archive` 新仓优先、`rcx-butler-v1:*` 旧键保留写成 cross-cutting 迁移/回滚合同，
+  不再把它塞成某一个 phase 的独占目标。
+- 把 `scripts/regressions/butler-runtime-baseline.test.ts` 改成七类真实任务的 scenario baseline：
+  目前基线结果是“找昨日某人文件=部分、比较两个 PR=部分、群聊提取承诺=缺口、逾期 WI 跟进草稿=部分、
+  构建失败关联提交=缺口、创建周报例行任务=完成、跨重启续跑=部分”。
+
+## Deviations
+
+- 原 runtime baseline 更像支撑合同验证，不能代表 #168 的真实任务评测。本轮把它收紧成“真实任务 scenario
+  baseline + 计划 + 迁移合同”，先把能力边界说清楚，再进入后续实现。
+
+## Surprises
+
+- 当前 Butler 的“单会话”不只是 UI 现象，而是 `PersistedButler` 以
+  ``${getServerBase() || 'same-origin'}:${userId}`` 为唯一键的存储现实；这意味着多 session 不是组件级修补，
+  必须改持久化模型。
+- 现有档案迁移已经天然具备“新仓优先、旧键保留”的回滚友好形态，P0 只需要把它提升为显式合同，而不是
+  另起一套迁移方案。
+- 七类真实任务里，当前只有“创建周报例行任务”能完整闭环；其余六类要么只有事实检索，要么存在结构化合同缺口。
+
+## Questions for review
+
+- 无。
