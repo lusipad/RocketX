@@ -64,6 +64,10 @@ import {
 } from '../lan/outbox';
 import { stripAgentSessionMarker } from '../agent/card';
 import { agentReplyNotificationTracker } from '../agent/replyNotification';
+import {
+  enqueueAttachmentArchives,
+  scheduleAttachmentArchiveCleanup,
+} from '../lib/attachmentArchiveRuntime';
 
 export interface Conversation {
   rid: string;
@@ -949,6 +953,7 @@ export const useChat = create<ChatState>((set, get) => ({
   init: async () => {
     const auth = loadStoredAuth();
     if (!auth) return;
+    scheduleAttachmentArchiveCleanup();
     // 重新登录/切换服务器后不能复用上一个会话尚未完成的成员请求。
     resetMemberRequestState();
     resetRoomRetention();
@@ -1010,6 +1015,12 @@ export const useChat = create<ChatState>((set, get) => ({
         if (rid && get().historyLoaded[rid]) {
           const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
           const latest = await rest.getHistory(rid, type, HISTORY_PAGE);
+          const snapshot = get();
+          enqueueAttachmentArchives(
+            latest,
+            snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
+              snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+          );
           let merged = [...(get().messages[rid] ?? [])];
           for (const m of latest) merged = upsertMessage(merged, m);
           merged.sort((a, b) => messageTime(a) - messageTime(b));
@@ -1073,6 +1084,11 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       const rid = msg.rid;
       const state = get();
+      enqueueAttachmentArchives(
+        [msg],
+        state.subscriptions[rid]?.fname || state.subscriptions[rid]?.name ||
+          state.rooms[rid]?.fname || state.rooms[rid]?.name || '会话',
+      );
       const alreadyKnown = (state.messages[rid] ?? []).some((message) => message._id === msg._id);
       let nextList = upsertMessage(state.messages[rid] ?? [], msg);
       // 还没打开过的会话只留个尾巴当预览：全局流会给所有房间推消息，
@@ -1238,6 +1254,11 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!historyLoaded[rid]) {
       const type = subscriptions[rid]?.t ?? rooms[rid]?.t ?? 'c';
       const history = await rest.getHistory(rid, type, HISTORY_PAGE);
+      enqueueAttachmentArchives(
+        history,
+        subscriptions[rid]?.fname || subscriptions[rid]?.name ||
+          rooms[rid]?.fname || rooms[rid]?.name || '会话',
+      );
       // 用户快速切过很多房间时，旧请求可能在该房间已被淘汰后才返回。
       // 不再保留的房间由下次打开重新加载，避免迟到响应绕过内存上限。
       if (
@@ -1270,6 +1291,12 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!rid) return;
     try {
       const threadMessages = await rest.getThreadMessages(mid);
+      const snapshot = get();
+      enqueueAttachmentArchives(
+        threadMessages,
+        snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
+          snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+      );
       let list = get().messages[rid] ?? [];
       for (const m of threadMessages) list = upsertMessage(list, m);
       list.sort((a, b) => messageTime(a) - messageTime(b));
@@ -1293,6 +1320,12 @@ export const useChat = create<ChatState>((set, get) => ({
       type,
       HISTORY_PAGE,
       new Date(tsMs(oldest.ts)).toISOString(),
+    );
+    const snapshot = get();
+    enqueueAttachmentArchives(
+      older,
+      snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
+        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
     );
     let merged = get().messages[rid] ?? [];
     for (const m of older) merged = upsertMessage(merged, m);

@@ -51,11 +51,34 @@ async function installFullTauriMock(page: Page) {
     let nextRid = 1;
     const requests = new Map<number, { method: string; url: string; headers: string[][]; data?: number[] }>();
     const responses = new Map<number, { bytes: number[]; read: boolean }>();
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    (window as unknown as { __tauriCalls: typeof calls }).__tauriCalls = calls;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
         invoke: async (command: string, args?: Record<string, any>) => {
+          calls.push({ command, args });
           if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
+          if (command === 'plugin:path|resolve_directory') return 'C:\\Users\\tester\\AppData\\Roaming\\com.lusipad.rocketx';
+          if (command === 'plugin:path|join') return (args?.paths ?? []).join('\\');
+          if (command === 'plugin:fs|mkdir') return null;
+          if (command === 'plugin:fs|remove') {
+            if ((window as unknown as { __failArchiveRemove?: boolean }).__failArchiveRemove) {
+              throw new Error('mock remove failed');
+            }
+            return null;
+          }
+          if (command === 'plugin:fs|open') return 91;
+          if (command === 'plugin:fs|write') return args?.data?.byteLength ?? args?.data?.length ?? 0;
+          if (command === 'plugin:resources|close') return null;
+          if (command === 'plugin:fs|stat') {
+            return {
+              isFile: true, isDirectory: false, isSymlink: false, size: 256,
+              mtime: null, atime: null, birthtime: null, readonly: false,
+              fileAttributes: null, dev: null, ino: null, mode: null, nlink: null,
+              uid: null, gid: null, rdev: null, blksize: null, blocks: null,
+            };
+          }
           if (command === 'plugin:http|fetch') {
             const rid = nextRid++;
             requests.set(rid, args?.clientConfig);
@@ -280,6 +303,95 @@ test('Windows 图片灯箱使用本地 OCR 并叠加可选择文字（issue #153
   expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('RocketX');
   await expect(page.getByText(/已用 Windows 本地 OCR 识别 3 处文字/)).toBeVisible();
   await expect(page.getByRole('button', { name: '复制全部识别文字' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('桌面附件留存默认关闭，可配置并按房间删除本地副本（issue #152）', async ({ page }) => {
+  await installFullTauriMock(page);
+  await page.addInitScript(({ server, userId, cachedAt }) => {
+    const key = `rcx-attachment-archive-v1:${encodeURIComponent(server.toLocaleLowerCase())}:${encodeURIComponent(userId)}`;
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      records: [
+        {
+          fileId: 'file-general',
+          rid: 'room-general',
+          roomName: 'General',
+          name: '项目资料.pdf',
+          sourcePath: '/file-upload/file-general/project.pdf',
+          size: 1024,
+          cachedAt,
+        },
+        {
+          fileId: 'file-expired',
+          rid: 'room-expired',
+          roomName: '过期房间',
+          name: '过期资料.pdf',
+          sourcePath: '/file-upload/file-expired/expired.pdf',
+          size: 2048,
+          cachedAt: cachedAt - 40 * 86_400_000,
+        },
+      ],
+    }));
+  }, { server: SERVER, userId: ME._id, cachedAt: Date.parse(NOW) });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '消息', exact: true }).last().click();
+  const archiveRow = page.getByText('自动留存附件到本机', { exact: true }).locator('..').locator('..');
+  const toggle = archiveRow.getByRole('switch');
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByLabel('附件留存单文件上限')).toHaveValue(String(25 * 1024 * 1024));
+  await expect(page.getByLabel('附件留存账号总配额')).toHaveValue(String(2 * 1024 * 1024 * 1024));
+  await expect(page.getByLabel('附件留存时间')).toHaveValue('30');
+
+  await expect(page.getByText('本地附件（1 个，1.0 KB）')).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { __failArchiveRemove: boolean }).__failArchiveRemove = true;
+  });
+  await page.getByRole('button', { name: '删除本地副本', exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: '删除这个房间的本地附件' });
+  await expect(dialog).toContainText('Rocket.Chat 服务器上的消息和原文件不会被删除');
+  await dialog.getByRole('button', { name: '删除本地副本', exact: true }).click();
+  await expect(page.getByText('mock remove failed')).toBeVisible();
+  await expect(page.getByText('本地附件（1 个，1.0 KB）')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as unknown as { __failArchiveRemove: boolean }).__failArchiveRemove = false;
+  });
+  await page.getByRole('button', { name: '删除本地副本', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '删除这个房间的本地附件' });
+  await dialog.getByRole('button', { name: '删除本地副本', exact: true }).click();
+  await expect(page.getByText('本地附件（1 个，1.0 KB）')).toHaveCount(0);
+
+  const result = await page.evaluate(({ server, userId }) => {
+    const key = `rcx-attachment-archive-v1:${encodeURIComponent(server.toLocaleLowerCase())}:${encodeURIComponent(userId)}`;
+    return {
+      archive: JSON.parse(localStorage.getItem(key) ?? '{}'),
+      removeCalls: (window as unknown as { __tauriCalls: Array<{ command: string; args?: Record<string, unknown> }> })
+        .__tauriCalls.filter((item) => item.command === 'plugin:fs|remove'),
+    };
+  }, { server: SERVER, userId: ME._id });
+  expect(result.archive.records).toEqual([]);
+  const recursiveRemoveCalls = result.removeCalls.filter((call) => (
+    (call.args?.options as { recursive?: boolean } | undefined)?.recursive === true
+  ));
+  expect(recursiveRemoveCalls).toHaveLength(2);
+
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await conversation(page, 'General').click();
+  await expect.poll(() => page.evaluate(({ server, userId }) => {
+    const key = `rcx-attachment-archive-v1:${encodeURIComponent(server.toLocaleLowerCase())}:${encodeURIComponent(userId)}`;
+    const archive = JSON.parse(localStorage.getItem(key) ?? '{"records":[]}');
+    return archive.records.map((item: { fileId: string }) => item.fileId);
+  }, { server: SERVER, userId: ME._id })).toContain('file-ocr');
+  const writeCalls = await page.evaluate(() =>
+    (window as unknown as { __tauriCalls: Array<{ command: string }> }).__tauriCalls
+      .filter((item) => item.command === 'plugin:fs|write'),
+  );
+  expect(writeCalls.length).toBeGreaterThan(0);
   expect(pageErrors).toEqual([]);
 });
 

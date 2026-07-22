@@ -504,7 +504,10 @@ test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', as
   const fsScope = capability.permissions.find(
     (permission) => typeof permission === 'object' && permission.identifier === 'fs:scope',
   );
-  assert.deepEqual(fsScope, { identifier: 'fs:scope', allow: ['$APPDATA/butler/**'] });
+  assert.deepEqual(fsScope, {
+    identifier: 'fs:scope',
+    allow: ['$APPDATA/butler/**', '$APPDATA/attachment-archive/**'],
+  });
   assert.ok(capability.permissions.includes('fs:allow-write-file'));
   assert.ok(capability.permissions.includes('fs:allow-remove'));
   assert.equal(
