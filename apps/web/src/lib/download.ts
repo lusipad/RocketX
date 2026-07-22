@@ -20,14 +20,15 @@ export async function saveFile(path: string, fileName: string): Promise<void> {
   // Site_Url 拼出来的绝对地址重拼到当前连接地址上，见 normalizeAssetPath 的说明
   path = normalizeAssetPath(path);
   if (isTauri) {
-    const blob = await rest.fetchFile(path);
     const [{ save }, { writeFile }] = await Promise.all([
       import('@tauri-apps/plugin-dialog'),
       import('@tauri-apps/plugin-fs'),
     ]);
     const target = await save({ defaultPath: fileName });
     if (!target) return; // 用户取消了保存对话框，不是错误
-    await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
+    const response = await rest.fetchFileResponse(path);
+    if (!response.body) throw new Error('文件响应没有可读取的内容');
+    await writeFile(target, response.body);
     return;
   }
 

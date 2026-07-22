@@ -872,8 +872,8 @@ export class RcRestClient {
     return data;
   }
 
-  /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */
-  async fetchFile(path: string): Promise<Blob> {
+  /** 带认证拉取站内文件，并保留响应流给桌面端直接写盘。 */
+  async fetchFileResponse(path: string): Promise<Response> {
     const auth =
       this.authProvider?.() ??
       (this.authToken && this.userId
@@ -925,7 +925,12 @@ export class RcRestClient {
       }
     }
     if (!res.ok) throw new RcApiError(`HTTP ${res.status}`, res.status);
-    return await res.blob();
+    return res;
+  }
+
+  /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */
+  async fetchFile(path: string): Promise<Blob> {
+    return await (await this.fetchFileResponse(path)).blob();
   }
 
   /** 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话） */

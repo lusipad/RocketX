@@ -917,6 +917,10 @@ async function main(): Promise<void> {
     fetchImpl: redirectFetch,
   });
   fileClient.setAuth('secret-token', 'user-1');
+  const streamedResponse = await fileClient.fetchFileResponse('/file-upload/a.txt');
+  check('文件下载响应可直接交给流式写入', streamedResponse.body !== null);
+  check('文件下载响应不会预先缓冲正文', redirectCalls.length === 2);
+  redirectCalls.length = 0;
   const redirectedFile = await fileClient.fetchFile('/file-upload/a.txt');
   check('文件重定向后仍能下载', (await redirectedFile.text()) === '附件内容');
   check(
