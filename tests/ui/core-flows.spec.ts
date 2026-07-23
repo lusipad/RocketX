@@ -772,6 +772,39 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('文件拖拽离开聊天区或窗口后会取消发送遮罩（issue #194）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  const chatArea = page.locator('main');
+  const overlay = page.getByText('松开即可发送文件', { exact: true });
+
+  const dragFileOverChat = () => chatArea.evaluate((element) => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File(['test'], 'test.txt', { type: 'text/plain' }));
+    element.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+    }));
+  });
+
+  await dragFileOverChat();
+  await expect(overlay).toBeVisible();
+  await chatArea.locator('header').evaluate((element) => {
+    element.dispatchEvent(new DragEvent('dragleave', {
+      bubbles: true,
+      relatedTarget: document.body,
+    }));
+  });
+  await expect(overlay).toHaveCount(0);
+
+  await dragFileOverChat();
+  await expect(overlay).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(overlay).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('收起分组栏后不产生水平滚动（issue #114）', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rcx-folders', JSON.stringify(Array.from({ length: 20 }, (_, index) => ({

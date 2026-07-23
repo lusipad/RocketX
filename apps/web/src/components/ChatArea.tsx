@@ -117,6 +117,19 @@ export default function ChatArea({
     });
   }, [activeRid]);
 
+  useEffect(() => {
+    if (!dragging) return;
+    const clearDragging = () => setDragging(false);
+    window.addEventListener('blur', clearDragging);
+    window.addEventListener('dragend', clearDragging);
+    window.addEventListener('drop', clearDragging);
+    return () => {
+      window.removeEventListener('blur', clearDragging);
+      window.removeEventListener('dragend', clearDragging);
+      window.removeEventListener('drop', clearDragging);
+    };
+  }, [dragging]);
+
   if (!activeRid) {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-surface-3">
@@ -217,7 +230,10 @@ export default function ChatArea({
           }
         }}
         onDragLeave={(e) => {
-          if (e.currentTarget === e.target) setDragging(false);
+          const nextTarget = e.relatedTarget;
+          if (!(nextTarget instanceof Node) || !e.currentTarget.contains(nextTarget)) {
+            setDragging(false);
+          }
         }}
         onDrop={onDrop}
       >
