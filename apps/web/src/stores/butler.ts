@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage, AiToolCall } from '../kernel/ai/provider';
+import {
+  butlerImageAttachments,
+  type ButlerImageAttachment,
+  type ButlerImageInput,
+} from '../lib/butlerImages';
 import { getServerBase } from '../lib/client';
 import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import {
@@ -84,6 +89,7 @@ export interface ButlerLine {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  attachments?: ButlerImageAttachment[];
   sources?: ButlerSource[];
 }
 
@@ -167,7 +173,11 @@ export interface ButlerState {
   actionDraft: ButlerActionDraft | null;
   taskState: ButlerTaskState | null;
   engineState: ButlerEngineState;
-  ask: (text: string, context?: ButlerAskContext) => Promise<void>;
+  ask: (
+    text: string,
+    context?: ButlerAskContext,
+    images?: readonly ButlerImageInput[],
+  ) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
   updateAction: (patch: Partial<Pick<ButlerActionDraft, 'title' | 'text' | 'rid' | 'committedTo' | 'due'>>) => void;
@@ -567,7 +577,9 @@ function engineTranscript(
   return transcript.map((item, index) => ({
     revision: firstRevision + index,
     role: item.role,
-    text: item.text,
+    text: item.attachments?.length
+      ? `${item.text}\n[图片：${item.attachments.map((attachment) => attachment.name).join('、')}]`
+      : item.text,
   }));
 }
 
@@ -1293,8 +1305,12 @@ export const useButler = create<ButlerState>((set, get) => ({
     }
   },
 
-  ask: async (text, context) => {
-    const content = text.trim();
+  ask: async (text, context, images = []) => {
+    const displayText = text.trim();
+    const content = displayText || (images.length ? '请分析这些图片。' : '');
+    const modelContent = images.length
+      ? `${content}\n\n[用户附加图片：${images.map((image) => image.name).join('、')}]`
+      : content;
     if (!content || get().running) return;
     await get().hydrate();
     if (get().running) return;
@@ -1329,7 +1345,17 @@ export const useButler = create<ButlerState>((set, get) => ({
     currentAbort = abort;
     const bridgeHistory: AiMessage[] = prepared.bridgeTranscript.map(({ role, text }) => ({ role, content: text }));
     const runnerHistory = brain === 'api'
-      ? trimButlerHistory([...get().history, ...bridgeHistory, { role: 'user', content }])
+      ? trimButlerHistory([
+          ...get().history,
+          ...bridgeHistory,
+          {
+            role: 'user',
+            content: modelContent,
+            ...(images.length
+              ? { images: images.map(({ dataUrl }) => ({ dataUrl })) }
+              : {}),
+          },
+        ])
       : get().history;
     const runningTask = updateButlerTask(compiledTask, { status: 'running' }, butlerNow());
     let finishTurn: (() => void) | undefined;
@@ -1340,7 +1366,13 @@ export const useButler = create<ButlerState>((set, get) => ({
     currentTurnBrain = brain;
     currentStopRequested = false;
     set((state) => ({
-      lines: [...state.lines, line('user', content)],
+      lines: [
+        ...state.lines,
+        {
+          ...line('user', displayText || '[图片]'),
+          ...(images.length ? { attachments: butlerImageAttachments(images) } : {}),
+        },
+      ],
       activity: null,
       steps: [],
       running: true,
@@ -1424,7 +1456,8 @@ export const useButler = create<ButlerState>((set, get) => ({
         const availability = codexBrainAvailability();
         if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
         const result = await codexRunner({
-          text: content,
+          text: modelContent,
+          images,
           context: turnContext ?? undefined,
           taskContext: butlerTaskPrompt(runningTask),
           taskState: runningTask,
@@ -1450,7 +1483,9 @@ export const useButler = create<ButlerState>((set, get) => ({
         });
         resultText = result.text;
         nextHistory = trimButlerHistory([
-          ...result.messages.filter((message) => message.role !== 'system'),
+          ...result.messages
+            .filter((message) => message.role !== 'system')
+            .map(({ images: _images, ...message }) => message),
           { role: 'assistant', content: result.text },
         ]);
       }

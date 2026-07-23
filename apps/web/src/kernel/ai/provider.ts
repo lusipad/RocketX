@@ -1,8 +1,13 @@
 export type AiMessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
+export interface AiImageInput {
+  dataUrl: string;
+}
+
 export interface AiMessage {
   role: AiMessageRole;
   content: string;
+  images?: AiImageInput[];
   name?: string;
   toolCallId?: string;
   toolCalls?: AiToolCall[];

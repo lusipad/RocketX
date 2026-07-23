@@ -5,6 +5,7 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
+import type { UserInput } from '../agent/protocol/generated/v2';
 import {
   openCodexNewThread,
   transferTranscript,
@@ -23,6 +24,7 @@ import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerPro
 import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
+import type { ButlerImageInput } from '../lib/butlerImages';
 import { createButlerTools } from '../lib/butlerTools';
 import {
   formatButlerToolResult,
@@ -36,6 +38,7 @@ export interface ButlerCodexRoomContext {
 
 export interface ButlerCodexAskOptions {
   text: string;
+  images?: readonly ButlerImageInput[];
   context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   taskContext?: string;
   taskState?: ButlerTaskState;
@@ -59,7 +62,7 @@ interface TurnController {
   /** 用户主动停止：就地完成本轮，保留已生成的内容 */
   stop(): void;
   activeTurnId(): string | undefined;
-  start(client: AppServerClient, input: string): Promise<string>;
+  start(client: AppServerClient, input: UserInput[]): Promise<string>;
 }
 
 interface ActiveTurn {
@@ -91,6 +94,56 @@ let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
 let residentToolRuntimeContext: ((toolCall: AiToolCall) => ButlerToolRuntimeContext) | undefined;
 let residentStopRequested = false;
+
+type ButlerCodexImageMaterializer = (
+  sessionId: string,
+  images: readonly ButlerImageInput[],
+) => Promise<string[]>;
+
+function imageBytes(dataUrl: string): Uint8Array {
+  const match = /^data:image\/[^;]+;base64,(.+)$/i.exec(dataUrl);
+  if (!match) throw new Error('图片数据无效');
+  const binary = atob(match[1]);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function safeImageName(value: string, index: number): string {
+  const name = value
+    .normalize('NFKC')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/^\.+$/, '_')
+    .slice(0, 120);
+  return name || `image-${index + 1}`;
+}
+
+const defaultImageMaterializer: ButlerCodexImageMaterializer = async (sessionId, images) => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const paths: string[] = [];
+  for (const [index, image] of images.entries()) {
+    const relativePath = `butler/${crypto.randomUUID()}-${safeImageName(image.name, index)}`;
+    const metadata = new TextEncoder().encode(JSON.stringify({ sessionId, relativePath }));
+    const bytes = imageBytes(image.dataUrl);
+    const request = new Uint8Array(4 + metadata.length + bytes.length);
+    new DataView(request.buffer).setUint32(0, metadata.length, true);
+    request.set(metadata, 4);
+    request.set(bytes, 4 + metadata.length);
+    const runtime = await invoke<{ path: string }>('codex_agent_attachment_write', request);
+    paths.push(runtime.path);
+  }
+  return paths;
+};
+
+let imageMaterializer = defaultImageMaterializer;
+
+export function setButlerCodexImageMaterializer(
+  materializer: ButlerCodexImageMaterializer,
+): () => void {
+  const previous = imageMaterializer;
+  imageMaterializer = materializer;
+  return () => {
+    imageMaterializer = previous;
+  };
+}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -225,7 +278,7 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
         const { effort } = getButlerCodexSettings();
         const response = await client.request('turn/start', {
           threadId,
-          input: [{ type: 'text', text: input, text_elements: [] }],
+          input,
           approvalPolicy: 'on-request',
           approvalsReviewer: 'user',
           sandboxPolicy: { type: 'readOnly', networkAccess: false },
@@ -452,12 +505,19 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     const transcript = resumeMode === 'started' || resumeMode === 'restarted'
       ? options.fallbackTranscript
       : options.bridgeTranscript;
+    const prefixedText = timePrefixedInput(
+      roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
+      now,
+    );
+    const imagePaths = options.images?.length
+      ? await imageMaterializer(residentSessionId!, options.images)
+      : [];
     const result = await controller.start(
       await ensureResidentClient(),
-      timePrefixedInput(
-        roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
-        now,
-      ),
+      [
+        { type: 'text' as const, text: prefixedText, text_elements: [] },
+        ...imagePaths.map((path) => ({ type: 'localImage' as const, path })),
+      ],
     );
     residentStatus = 'ready';
     residentTurn = undefined;
@@ -561,7 +621,13 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     threadId = response.thread.id;
     controller = createTurnController(threadId, options.onEvent);
     if (options.signal?.aborted) throw abortError();
-    return { text: await controller.start(client, timePrefixedInput(options.text.trim(), now)) };
+    return {
+      text: await controller.start(client, [{
+        type: 'text',
+        text: timePrefixedInput(options.text.trim(), now),
+        text_elements: [],
+      }]),
+    };
   } catch (error) {
     const reason = unavailableReason(error);
     if (reason) setCodexBrainUnavailableReason(reason);

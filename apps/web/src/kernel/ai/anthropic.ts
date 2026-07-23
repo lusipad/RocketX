@@ -48,6 +48,10 @@ function asUsage(input?: number, output?: number): AiUsage | undefined {
 
 type AnthropicContentBlock =
   | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source: { type: 'base64'; media_type: string; data: string };
+    }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string };
 
@@ -77,6 +81,27 @@ function assistantContent(message: AiMessage): string | AnthropicContentBlock[] 
   ];
 }
 
+function imageBlock(dataUrl: string): AnthropicContentBlock {
+  const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=\s]+)$/i.exec(dataUrl);
+  if (!match) throw new Error('Anthropic 仅支持 PNG、JPEG、GIF 或 WebP 图片');
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: match[1].toLowerCase(),
+      data: match[2].replace(/\s/g, ''),
+    },
+  };
+}
+
+function userContent(message: AiMessage): string | AnthropicContentBlock[] {
+  if (!message.images?.length) return message.content;
+  return [
+    ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+    ...message.images.map((image) => imageBlock(image.dataUrl)),
+  ];
+}
+
 function asBlocks(content: string | AnthropicContentBlock[]): AnthropicContentBlock[] {
   return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
 }
@@ -93,7 +118,7 @@ function apiMessages(messages: AiMessage[]): AnthropicMessage[] {
               role: 'user',
               content: [{ type: 'tool_result', tool_use_id: message.toolCallId ?? '', content: message.content }],
             }
-          : { role: 'user', content: message.content };
+          : { role: 'user', content: userContent(message) };
     const previous = result.at(-1);
     if (previous?.role === next.role) {
       previous.content = [...asBlocks(previous.content), ...asBlocks(next.content)];

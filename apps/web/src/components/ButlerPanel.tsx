@@ -9,7 +9,12 @@ import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
+import ButlerImagePicker, {
+  ButlerImageAttachments,
+  ButlerImagePreviews,
+} from './ButlerImagePicker';
 import PanelShell from './PanelShell';
+import type { ButlerImageInput } from '../lib/butlerImages';
 
 function roomName(
   rid: string,
@@ -43,6 +48,7 @@ export default function ButlerPanel() {
   const hydrate = useButler((state) => state.hydrate);
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
+  const [images, setImages] = useState<ButlerImageInput[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasConversation = lines.some((line) => line.role === 'user');
   const routineCheckpoint = routineDraft
@@ -63,9 +69,11 @@ export default function ButlerPanel() {
 
   const submit = async () => {
     const text = input.trim();
-    if (!text || running) return;
+    if ((!text && !images.length) || running) return;
+    const submittedImages = images;
     setInput('');
-    await ask(text, { rid, roomName: roomName(rid, subscription, room) });
+    setImages([]);
+    await ask(text, { rid, roomName: roomName(rid, subscription, room) }, submittedImages);
   };
 
   return (
@@ -85,6 +93,7 @@ export default function ButlerPanel() {
               line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'
             }`}>
               {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+              {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
               {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
               <ButlerMessageActions line={line} disabled={running} />
             </div>
@@ -117,7 +126,9 @@ export default function ButlerPanel() {
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="shrink-0 border-t border-line p-3">
+        <ButlerImagePreviews images={images} onChange={setImages} />
         <div className="flex items-end gap-2 rounded-md border border-line px-2 focus-within:border-primary">
+          <ButlerImagePicker images={images} onChange={setImages} disabled={running} compact />
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -141,7 +152,7 @@ export default function ButlerPanel() {
               <Square size={12} />
             </button>
           ) : (
-            <button type="submit" disabled={!input.trim()} className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40">
+            <button type="submit" aria-label="发送" disabled={!input.trim() && !images.length} className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40">
               <SendHorizontal size={14} />
             </button>
           )}

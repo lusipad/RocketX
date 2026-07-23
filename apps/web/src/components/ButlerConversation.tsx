@@ -21,8 +21,13 @@ import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
+import ButlerImagePicker, {
+  ButlerImageAttachments,
+  ButlerImagePreviews,
+} from './ButlerImagePicker';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
+import type { ButlerImageInput } from '../lib/butlerImages';
 
 const QUICK_PROMPTS = [
   '搜索最近关于发布失败的消息',
@@ -56,6 +61,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const hydrateButler = useButler((state) => state.hydrate);
   const context = useButler((state) => state.context);
   const [input, setInput] = useState('');
+  const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
   const routineCheckpoint = routineDraft
@@ -103,10 +109,12 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
 
   const submit = async (text = input) => {
     const value = text.trim();
-    if (!value || running) return;
+    if ((!value && !images.length) || running) return;
+    const submittedImages = images;
     setInput('');
+    setImages([]);
     stickToBottom.current = true;
-    await askButler(value);
+    await askButler(value, undefined, submittedImages);
   };
 
   return (
@@ -172,6 +180,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
                 ) : null}
                 <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
                   {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+                  {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
                   {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
                   <ButlerMessageActions line={line} disabled={running} />
                 </div>
@@ -223,13 +232,19 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
             <Search size={17} className="ml-2 text-ink-3" />
-            <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
+            <div className="min-w-0 flex-1">
+              <ButlerImagePreviews images={images} onChange={setImages} />
+              <div className="flex items-center">
+                <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
+                <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 w-full min-w-0 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
+              </div>
+            </div>
             {running ? (
               <button type="button" onClick={() => void stopButler()} className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover">
                 <Square size={13} />停止
               </button>
             ) : (
-              <button type="submit" disabled={!input.trim()} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
+              <button type="submit" disabled={!input.trim() && !images.length} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>
             )}
           </form>
         </div>
