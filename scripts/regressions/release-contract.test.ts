@@ -56,8 +56,9 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   for (const workflow of [npmWorkflow, releaseWorkflow]) {
     assert.doesNotMatch(workflow, /ref:\s*\$\{\{\s*inputs\.tag/);
     assert.match(workflow, /git cat-file -t/);
-    assert.match(workflow, /git merge-base --is-ancestor/);
   }
+  assert.match(npmWorkflow, /git merge-base --is-ancestor/);
+  assert.match(releaseWorkflow, /test "\$release_sha" = "\$\(git rev-parse origin\/main\)"/);
   assert.match(npmWorkflow, /RELEASE_SHA/);
   assert.match(npmWorkflow, /pnpm pack --pack-destination/);
   assert.match(npmWorkflow, /manifest\.gitHead = releaseSha/);
@@ -71,9 +72,15 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(releaseWorkflow, /isDraft/);
   assert.match(releaseWorkflow, /verify-release-assets\.mjs/);
   assert.match(releaseWorkflow, /sha256sum -c SHA256SUMS\.txt/);
-  assert.match(releaseWorkflow, /--draft=false --latest/);
+  assert.match(releaseWorkflow, /--draft=false --latest=false/);
+  assert.doesNotMatch(releaseWorkflow, /三平台/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
+  const buildJob = desktopWorkflow.match(/\n  build:[\s\S]*?\n  prepare-release:/)?.[0] ?? '';
+  assert.match(buildJob, /runs-on:\s*windows-latest/);
+  assert.doesNotMatch(buildJob, /matrix:|macos-latest|ubuntu-22\.04|\.dmg|\.AppImage|\.deb|\.rpm/);
+  assert.match(desktopWorkflow, /test "\$release_sha" = "\$\(git rev-parse origin\/main\)"/);
   const prepareRelease = desktopWorkflow.match(/prepare-release:[\s\S]*$/)?.[0] ?? '';
+  assert.match(prepareRelease, /核验 Windows 产物并准备草稿 Release/);
   assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
   assert.match(tagWorkflow, /git config user\.name/);
   assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);

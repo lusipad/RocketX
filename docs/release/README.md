@@ -1,6 +1,8 @@
 # Release evidence and publication
 
-The current release target is `v0.29.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.29.1`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+During the current stabilization phase, the official desktop Release is Windows x64 only. `v0.29.1` is published but is not marked as GitHub's Latest release; Windows users download it manually from the Release page. `v0.28.0` remains Latest so existing macOS and Linux update checks continue to resolve a complete cross-platform manifest. macOS and Linux installers, updater entries, and support claims return only after those platforms have stable acceptance evidence.
 
 ## Future 1.0 external acceptance evidence
 
@@ -33,9 +35,9 @@ The active `Protect immutable v* release tags` ruleset prevents updates, force-p
 1. Verify that the protected environments and immutable `v*` tag ruleset above are still active.
 2. Commit the dated changelog section. For a major version of 1 or higher, also commit the real README PNG/GIF and two evidence JSON files.
 3. Push `release/vX.Y.Z` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, or existing tag; 1.0+ additionally refuses missing visuals or external evidence.
-4. `Desktop Build` creates a draft Release, verifies every expected platform artifact and updater signature file is present, writes release notes from `CHANGELOG.md`, and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
+4. `Desktop Build` creates a draft Release, verifies the Windows MSI and NSIS installer, updater metadata, signatures, and plugin bundle, rejects deferred-platform assets, writes release notes from `CHANGELOG.md`, and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
 5. If the release changes the public SDK or CLI and npm delivery is required, run `Publish npm packages` with confirmation `publish vX.Y.Z`. The protected job publishes `@lusipad/rocketx` first and `create-rcx-app` second. Bootstrap each new package against the immutable tag with npm's interactive identity flow, then bind this exact workflow as its Trusted Publisher; later releases use GitHub OIDC without a stored npm token. This step is independent from the desktop Release.
-6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks evidence, artifacts, and checksums before making the Release public and latest.
+6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks the Windows-only evidence, artifacts, and checksums before making the Release public without replacing `v0.28.0` as Latest.
 
 Never delete and recreate a released npm version or rewrite an existing release tag.
 
