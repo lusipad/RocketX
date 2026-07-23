@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import {
   BUTLER_ROUNDS_SYSTEM_PROMPT,
   isRoundsResult,
@@ -35,7 +36,17 @@ import {
   type ButlerBrainStorage,
 } from '../../apps/web/src/lib/butlerBrain';
 import { loadAiSettings } from '../../apps/web/src/kernel/ai/config';
+import { setServerBase } from '../../apps/web/src/lib/client';
 import type { Todo } from '../../apps/web/src/stores/todos';
+import { useAuth } from '../../apps/web/src/stores/auth';
+import {
+  listButlerWorkflowSnapshots,
+  resetButlerPersistenceForTests,
+  setButlerPersistence,
+  useButler,
+} from '../../apps/web/src/stores/butler';
+import { useTodos } from '../../apps/web/src/stores/todos';
+import { useWorkbench, type WorkItem } from '../../apps/web/src/stores/workbench';
 import type { Build } from '../../apps/web/src/stores/workbench';
 
 class MemoryStorage implements ButlerBrainStorage, Storage {
@@ -423,6 +434,10 @@ test('持久化结果必须满足完整结构和界面用语约束', () => {
 });
 
 test('一轮失败时保留上一轮结果并暴露可展示错误', async () => {
+  const restorePersistence = setButlerPersistence(createRcxStore({ backend: createMemoryBackend() }).appData);
+  const storage = new MemoryStorage();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
   const previous = {
     generatedAt: '2026-07-18T02:00:00.000Z',
     checkedCount: 1,
@@ -441,9 +456,14 @@ test('一轮失败时保留上一轮结果并暴露可展示错误', async () =>
     running: false,
     error: null,
   });
-  const restoreStorage = setButlerBrainStorage(new MemoryStorage());
+  const restoreStorage = setButlerBrainStorage(storage);
   const restoreTauri = setButlerBrainTauriProvider(() => false);
+  useAuth.setState({ user: { _id: 'rounds-error-user', username: 'rounds-error' } as never });
+  useButler.getState().reset();
+  resetButlerPersistenceForTests();
+  setServerBase('https://chat.example');
   try {
+    await useButler.getState().hydrate();
     setButlerBrain('codex');
     await runButlerRoundsNow(new Date('2026-07-19T04:00:00.000Z'));
     const state = useButlerRoundsRunner.getState();
@@ -459,6 +479,12 @@ test('一轮失败时保留上一轮结果并暴露可展示错误', async () =>
     });
     restoreTauri();
     restoreStorage();
+    restorePersistence();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    useAuth.setState({ user: undefined } as never);
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
   }
 });
 
@@ -509,4 +535,81 @@ test('台账只派生未完成的承诺与等待', () => {
     { kind: 'commitment', todoId: 'both', who: 'Carol', title: '双向', due: undefined, dueState: 'none' },
     { kind: 'wait', todoId: 'both', who: 'Dave', title: '双向', due: undefined, dueState: 'none' },
   ]);
+});
+
+test('rounds 通过 workflow 固定 kind/triggerReason 持久化前三条来源，并保留原因与建议动作', async () => {
+  const storage = new MemoryStorage();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  const restorePersistence = setButlerPersistence(createRcxStore({ backend: createMemoryBackend() }).appData);
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restoreTauri = setButlerBrainTauriProvider(() => true);
+  const restoreCodex = setButlerRoundsCodexRunner(async () => ({
+    text: resultJson([
+      { ref: 'todo:t1', why: '今天到期', suggestedAction: '上午确认交付' },
+      { ref: 'wi:42', why: '今天新指派', suggestedAction: '先确认 owner' },
+      { ref: 'build:CI|Alpha', why: '刚失败', suggestedAction: '先看失败摘要' },
+      { ref: 'todo:t2', why: '第四条应被裁掉', suggestedAction: '不应进入 workflow source' },
+    ]),
+  }));
+
+  useTodos.setState({
+    todos: [
+      { id: 't1', title: '提交发布说明', done: false, createdAt: 1 },
+      { id: 't2', title: '第四条待办', done: false, createdAt: 2 },
+    ],
+  } as never);
+  useWorkbench.setState({
+    config: null,
+    configRevision: 0,
+    workItems: [{
+      id: 42,
+      title: '处理发布异常',
+      type: 'Task',
+      state: 'Active',
+      project: 'Alpha',
+      webUrl: 'https://ado.example/wi/42',
+    } satisfies WorkItem],
+    prs: [],
+    builds: [build({ id: 7, definition: 'CI', project: 'Alpha', buildNumber: '20260723.1' })],
+    loading: false,
+    error: null,
+    lastRefresh: null,
+    refresh: async () => undefined,
+  } as never);
+  useAuth.setState({ user: { _id: 'rounds-workflow-user', username: 'rounds' } as never });
+  useButler.getState().reset();
+  resetButlerPersistenceForTests();
+  setServerBase('https://chat.example');
+  setButlerBrain('codex');
+
+  try {
+    await useButler.getState().hydrate();
+    await runButlerRoundsNow(new Date('2026-07-23T09:00:00.000Z'), 'wake-resume');
+
+    assert.equal(useButlerRoundsRunner.getState().error, null);
+    const snapshots = listButlerWorkflowSnapshots().filter((snapshot) => snapshot.kind === 'rounds');
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0]?.triggerReason, 'wake-resume');
+    assert.deepEqual(snapshots[0]?.sources, [
+      { kind: 'todo', id: 't1', label: '提交发布说明' },
+      { kind: 'work-item', id: '42', label: '#42 处理发布异常', project: 'Alpha', webUrl: 'https://ado.example/wi/42' },
+      { kind: 'build', id: 'CI|Alpha', label: '构建 20260723.1', project: 'Alpha', webUrl: 'https://ado.example/build/1' },
+    ]);
+    assert.deepEqual(useButlerRoundsRunner.getState().lastResult?.result.items, [
+      { ref: 'todo:t1', why: '今天到期', suggestedAction: '上午确认交付' },
+      { ref: 'wi:42', why: '今天新指派', suggestedAction: '先确认 owner' },
+      { ref: 'build:CI|Alpha', why: '刚失败', suggestedAction: '先看失败摘要' },
+    ]);
+  } finally {
+    restoreCodex();
+    restoreTauri();
+    restoreBrainStorage();
+    restorePersistence();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    useAuth.setState({ user: undefined } as never);
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
 });

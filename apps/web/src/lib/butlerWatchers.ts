@@ -8,6 +8,7 @@ export interface ButlerEventCard {
 
 export interface ButlerWatcherEvent extends ButlerEventCard {
   dedupeKey: string;
+  rid: string;
 }
 
 export interface ButlerWatcherSnapshot {
@@ -45,6 +46,7 @@ export function checkWatchers(snapshot: ButlerWatcherSnapshot, now: number): But
     cards.push({
       id: `event:${dedupeKey}`,
       dedupeKey,
+      rid: subscription.rid,
       kind: 'mention-stale',
       title: `@我未回应：${subscription.name}（${hours}小时前）`,
       detail: `当前仍有 ${subscription.userMentions} 条 @我 未处理。`,

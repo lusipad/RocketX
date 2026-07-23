@@ -113,6 +113,90 @@ async function seedMemoryApproval(page: Page): Promise<{ status: string; checkpo
   });
 }
 
+async function seedWorkflowMemoryApproval(
+  page: Page,
+): Promise<{ status: string; hidden: boolean; sessionId: string }> {
+  return page.evaluate(async () => {
+    const loadTools = new Function('return import("/src/lib/butlerTools.ts")') as () => Promise<{
+      createButlerTools: () => Array<{
+        name: string;
+        invoke: (args: Record<string, unknown>, context: Record<string, unknown>) => Promise<{
+          status: string;
+        }>;
+      }>;
+    }>;
+    const loadProfile = new Function('return import("/src/lib/butlerProfile.ts")') as () => Promise<{
+      setButlerProfileStorage: (
+        storage: { get: (key: string) => string | null; set: (key: string, value: string) => void },
+      ) => void;
+    }>;
+    const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      runButlerWorkflowTask: (options: Record<string, unknown>) => Promise<unknown>;
+      listButlerWorkflowSnapshots: () => Array<{
+        key: string;
+        hidden: boolean;
+        sessionId: string;
+      }>;
+      useButler: { getState: () => { hydrate: () => Promise<void> } };
+    }>;
+
+    const { createButlerTools } = await loadTools();
+    const { setButlerProfileStorage } = await loadProfile();
+    const { listButlerWorkflowSnapshots, runButlerWorkflowTask, useButler } = await loadStore();
+    const entries = new Map<string, string>();
+    setButlerProfileStorage({
+      get: (key) => entries.get(key) ?? null,
+      set: (key, value) => entries.set(key, value),
+    });
+    (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
+      .__butlerWorkflowMemoryEntries = entries;
+    await useButler.getState().hydrate();
+
+    let status = '';
+    await runButlerWorkflowTask({
+      key: 'routine:ui-memory',
+      kind: 'routine',
+      goal: '验证主动任务的长期记忆审批',
+      triggerReason: 'ui-test',
+      context: {
+        kind: 'room',
+        label: 'General',
+        detail: 'UI workflow approval test',
+        sources: [{ kind: 'room', id: 'general', rid: 'general', label: 'General' }],
+      },
+      execute: async (workflow: {
+        taskState: { id: string };
+        toolRuntimeContext: (callId: string) => Record<string, unknown>;
+      }) => {
+        const remember = createButlerTools().find((tool) => tool.name === 'remember');
+        if (!remember) throw new Error('remember tool not found');
+        const invoked = await remember.invoke({
+          kind: 'preference',
+          scope: 'room',
+          subject: 'workflow-style',
+          value: '主动任务也先审批',
+        }, {
+          ...workflow.toolRuntimeContext('workflow-memory-ui'),
+          taskId: workflow.taskState.id,
+        });
+        status = invoked.status;
+        return {
+          value: null,
+          summary: '主动任务已生成待审批记忆。',
+        };
+      },
+    });
+    const snapshot = listButlerWorkflowSnapshots()
+      .find((item) => item.key === 'routine:ui-memory');
+    if (!snapshot) throw new Error('workflow snapshot not found');
+    return {
+      status,
+      hidden: snapshot.hidden,
+      sessionId: snapshot.sessionId,
+    };
+  });
+}
+
 test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
   const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
@@ -317,5 +401,56 @@ test('memory.write 需要显式审批，确认后才写入 v2 记忆', async ({ 
       room: 'general',
     },
   }]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选择器', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  const seeded = await seedWorkflowMemoryApproval(page);
+
+  expect(seeded.status).toBe('approval-required');
+  expect(seeded.hidden).toBe(true);
+  const approvals = page.getByLabel('待批准的管家操作');
+  await expect(approvals).toContainText('写入长期记忆');
+  const sessionOptions = await page.getByLabel('管家会话').locator('option').evaluateAll(
+    (options) => options.map((option) => ({
+      value: (option as HTMLOptionElement).value,
+      text: option.textContent ?? '',
+    })),
+  );
+  expect(sessionOptions.some((option) => (
+    option.value === seeded.sessionId || option.text.includes('workflow:')
+  ))).toBe(false);
+  expect(await page.evaluate(() => (
+    (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
+      .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory') ?? null
+  ))).toBeNull();
+
+  await approvals.getByRole('button', { name: '确认执行', exact: true }).click();
+
+  await expect(approvals).toHaveCount(0);
+  const completed = await page.evaluate(async () => {
+    const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      listButlerWorkflowSnapshots: () => Array<{
+        key: string;
+        taskState: { status: string } | null;
+        engineState: { status: string };
+      }>;
+    }>;
+    const { listButlerWorkflowSnapshots } = await loadStore();
+    const snapshot = listButlerWorkflowSnapshots()
+      .find((item) => item.key === 'routine:ui-memory');
+    return {
+      taskStatus: snapshot?.taskState?.status,
+      engineStatus: snapshot?.engineState.status,
+      memory: (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
+        .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory') ?? null,
+    };
+  });
+  expect(completed).toMatchObject({
+    taskStatus: 'completed',
+    engineStatus: 'ready',
+  });
+  expect(completed.memory).not.toBeNull();
   expect(pageErrors).toEqual([]);
 });

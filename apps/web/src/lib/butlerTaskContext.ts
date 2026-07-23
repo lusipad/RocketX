@@ -7,8 +7,11 @@ export type ButlerScenario =
   | 'draft-overdue-work-item-followup'
   | 'associate-build-failure'
   | 'create-weekly-routine'
+  | 'workflow'
   | 'resume-task'
   | 'general';
+
+export type ButlerWorkflowKind = 'today' | 'watcher' | 'rounds' | 'routine' | 'workflow';
 
 export type ButlerTaskStatus =
   | 'awaiting-clarification'
@@ -227,6 +230,48 @@ export function compileButlerTask(
       },
       prohibitedActions: definition.prohibitedActions,
       recovery: definition.recovery,
+    },
+    sources,
+  };
+}
+
+export function compileButlerWorkflowTask(
+  input: {
+    kind: ButlerWorkflowKind;
+    goal: string;
+    sources?: readonly ButlerSource[];
+  },
+  previous: ButlerTaskState | null | undefined,
+  now = Date.now(),
+): ButlerTaskState {
+  const continuing = previous?.manifest.scenario === 'workflow'
+    && previous.status !== 'completed';
+  const sources = [...(input.sources ?? [])];
+  const sourcePlan = sources.map((source) => ({
+    tool: `workflow:${input.kind}`,
+    kind: source.kind,
+    freshness: 'loaded-snapshot' as const,
+  }));
+  return {
+    id: continuing ? previous.id : crypto.randomUUID(),
+    goal: input.goal,
+    status: 'ready',
+    createdAt: continuing ? previous.createdAt : now,
+    updatedAt: now,
+    manifest: {
+      schemaVersion: 1,
+      scenario: 'workflow',
+      capabilityPreflight: {
+        available: ['复用 Butler session、task、engine、tool runtime 与恢复合同'],
+        missing: [],
+      },
+      sourcePlan,
+      clarification: {
+        required: false,
+        missing: [],
+      },
+      prohibitedActions: ['不绕过 typed tool runtime 执行写操作', '不把主动任务混入用户对话 transcript'],
+      recovery: '失败或暂停后从同一 workflow session、task state 与 checkpoint 明确重试。',
     },
     sources,
   };

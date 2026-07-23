@@ -25,8 +25,10 @@ import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } f
 import {
   butlerTaskPrompt,
   compileButlerTask,
+  compileButlerWorkflowTask,
   updateButlerTask,
   type ButlerTaskState,
+  type ButlerWorkflowKind,
 } from '../lib/butlerTaskContext';
 import { createButlerTools, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
@@ -107,6 +109,47 @@ export interface ButlerSessionSummary {
   updatedAt: number;
 }
 
+export interface ButlerWorkflowSnapshot {
+  sessionId: string;
+  key: string;
+  kind: ButlerWorkflowKind;
+  hidden: true;
+  triggerReason?: string;
+  attempts: number;
+  paused: boolean;
+  taskState: ButlerTaskState | null;
+  engineState: ButlerEngineState;
+  sources: ButlerSource[];
+  workflowRuntimeCheckpoints: ButlerToolCheckpoint[];
+  updatedAt: number;
+}
+
+export interface ButlerWorkflowRunContext {
+  sessionId: string;
+  taskState: ButlerTaskState;
+  signal: AbortSignal;
+  toolRuntimeContext: (
+    callId: string,
+    sources?: readonly ButlerSource[],
+  ) => ButlerToolRuntimeContext;
+}
+
+export interface ButlerWorkflowRunResult<T> {
+  value: T;
+  summary?: string;
+  sources?: ButlerSource[];
+}
+
+export interface ButlerWorkflowRunOptions<T> {
+  key: string;
+  kind: ButlerWorkflowKind;
+  goal: string;
+  triggerReason?: string;
+  context?: ButlerSurfaceContext | null;
+  sources?: ButlerSource[];
+  execute: (context: ButlerWorkflowRunContext) => Promise<ButlerWorkflowRunResult<T>>;
+}
+
 export interface ButlerState {
   lines: ButlerLine[];
   sessions: ButlerSessionSummary[];
@@ -119,6 +162,7 @@ export interface ButlerState {
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
   runtimeCheckpoints: ButlerToolCheckpoint[];
+  workflowRuntimeCheckpoints: ButlerToolCheckpoint[];
   context: ButlerSurfaceContext | null;
   actionDraft: ButlerActionDraft | null;
   taskState: ButlerTaskState | null;
@@ -167,6 +211,14 @@ interface PersistedButlerSession {
   engineState?: ButlerEngineState;
   runtimeCheckpoints?: ButlerToolCheckpoint[];
   actionDraft?: ButlerActionDraft;
+  kind?: 'interactive' | 'workflow';
+  workflow?: {
+    key: string;
+    kind: ButlerWorkflowKind;
+    triggerReason?: string;
+    attempts: number;
+    paused?: boolean;
+  };
 }
 
 interface PersistedButlerSessionRegistry {
@@ -190,6 +242,8 @@ let suppressPersistence = false;
 let sessionDirty = false;
 let hydrateGeneration = 0;
 let hydrateInFlight: { scope: string; promise: Promise<void> } | null = null;
+const activeWorkflowRuns = new Map<string, Promise<unknown>>();
+const activeWorkflowControllers = new Map<string, AbortController>();
 /** 当前 API 大脑回合的中止控制器（Codex 大脑走 turn/interrupt） */
 let currentAbort: AbortController | undefined;
 let currentTurnFinished: Promise<void> | null = null;
@@ -222,8 +276,18 @@ function registryKey(scope: string): string {
   return `${SESSION_REGISTRY_PREFIX}${scope}`;
 }
 
+function currentWorkflowScope(): string | undefined {
+  const userId = useAuth.getState().user?._id;
+  return userId ? `${getServerBase() || 'same-origin'}:${userId}` : undefined;
+}
+
+function workflowRunKey(scope: string, key: string): string {
+  return `${scope}\u0000${key}`;
+}
+
 function sessionSummaries(registry: PersistedButlerSessionRegistry): ButlerSessionSummary[] {
   return registry.sessions
+    .filter((session) => session.kind !== 'workflow')
     .map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt }))
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
 }
@@ -270,6 +334,26 @@ function routineDraftFrom(checkpoints: readonly ButlerToolCheckpoint[]): ButlerR
   };
 }
 
+function normalizeWorkflow(value: PersistedButlerSession['workflow']): PersistedButlerSession['workflow'] | undefined {
+  if (!value || typeof value.key !== 'string' || !value.key.trim()) return undefined;
+  if (
+    value.kind !== 'today'
+    && value.kind !== 'watcher'
+    && value.kind !== 'rounds'
+    && value.kind !== 'routine'
+    && value.kind !== 'workflow'
+  ) return undefined;
+  return {
+    key: value.key.trim(),
+    kind: value.kind,
+    ...(typeof value.triggerReason === 'string' && value.triggerReason.trim()
+      ? { triggerReason: value.triggerReason.trim() }
+      : {}),
+    attempts: Number.isInteger(value.attempts) && value.attempts >= 0 ? value.attempts : 0,
+    ...(value.paused ? { paused: true } : {}),
+  };
+}
+
 function normalizeRegistry(
   stored: PersistedButlerSessionRegistry | undefined,
 ): PersistedButlerSessionRegistry | undefined {
@@ -281,13 +365,24 @@ function normalizeRegistry(
     seen.add(candidate.id);
     const updatedAt = Number.isFinite(candidate.updatedAt) ? candidate.updatedAt : butlerNow();
     const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
+    const workflow = candidate.kind === 'workflow' ? normalizeWorkflow(candidate.workflow) : undefined;
+    if (candidate.kind === 'workflow' && !workflow) continue;
     const codexThread = candidate.codexThread;
-    const engineState = normalizeButlerEngineState(candidate.engineState);
+    let engineState = normalizeButlerEngineState(candidate.engineState);
     const runtimeCheckpoints = normalizeRuntimeCheckpoints(candidate.runtimeCheckpoints);
     const actionDraft = normalizeButlerActionDraft(candidate.actionDraft);
     const actionCheckpoint = actionDraft
       ? runtimeCheckpoints.find((item) => item.id === actionDraft.checkpointId)
       : undefined;
+    let taskState = candidate.taskState?.manifest?.schemaVersion === 1 ? candidate.taskState : undefined;
+    if (workflow && engineState?.status === 'running') {
+      engineState = pauseButlerEngineTurn(engineState, { pausedBrain: engineState.activeBrain });
+      workflow.paused = true;
+    }
+    if (workflow && taskState?.status === 'running') {
+      taskState = updateButlerTask(taskState, { status: 'paused' }, butlerNow());
+      workflow.paused = true;
+    }
     sessions.push({
       id: candidate.id,
       title: typeof candidate.title === 'string' && candidate.title.trim()
@@ -297,22 +392,26 @@ function normalizeRegistry(
       updatedAt,
       lines: Array.isArray(candidate.lines) && candidate.lines.length
         ? candidate.lines.slice(-LINES_LIMIT)
-        : welcomeLines(),
+        : workflow ? [] : welcomeLines(),
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
       ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
-      ...(candidate.taskState?.manifest?.schemaVersion === 1 ? { taskState: candidate.taskState } : {}),
+      ...(taskState ? { taskState } : {}),
       ...(engineState ? { engineState } : {}),
       ...(runtimeCheckpoints.length ? { runtimeCheckpoints } : {}),
-      ...(actionDraft && actionCheckpoint
+      ...(!workflow && actionDraft && actionCheckpoint
         && !checkpointClosed(actionCheckpoint)
         ? { actionDraft }
         : {}),
+      ...(workflow ? { kind: 'workflow' as const, workflow } : {}),
     });
   }
   if (!sessions.length) return undefined;
-  const activeSessionId = sessions.some((session) => session.id === stored.activeSessionId)
+  if (!sessions.some((session) => session.kind !== 'workflow')) sessions.unshift(defaultSession());
+  const activeSessionId = sessions.some((session) => (
+    session.id === stored.activeSessionId && session.kind !== 'workflow'
+  ))
     ? stored.activeSessionId
-    : sessions[0].id;
+    : sessions.find((session) => session.kind !== 'workflow')!.id;
   return { schemaVersion: SESSION_REGISTRY_VERSION, activeSessionId, sessions };
 }
 
@@ -427,6 +526,9 @@ export function resetButlerPersistenceForTests(): void {
   suppressPersistence = false;
   sessionDirty = false;
   hydrateInFlight = null;
+  for (const controller of activeWorkflowControllers.values()) controller.abort(new Error('测试重置'));
+  activeWorkflowControllers.clear();
+  activeWorkflowRuns.clear();
 }
 
 const toolLabels: Record<string, string> = {
@@ -658,6 +760,375 @@ function runtimeContextForCheckpoint(checkpoint: ButlerToolCheckpoint): ButlerTo
   return runtimeContext(checkpoint.id);
 }
 
+function workflowSessionByKey(
+  registry: PersistedButlerSessionRegistry | null,
+  key: string,
+): PersistedButlerSession | undefined {
+  return registry?.sessions.find((session) => (
+    session.kind === 'workflow' && session.workflow?.key === key
+  ));
+}
+
+function workflowCheckpointById(
+  checkpointId: string,
+): { session: PersistedButlerSession; checkpoint: ButlerToolCheckpoint } | undefined {
+  for (const session of sessionRegistry?.sessions ?? []) {
+    if (session.kind !== 'workflow') continue;
+    const checkpoint = session.runtimeCheckpoints?.find((item) => item.id === checkpointId);
+    if (checkpoint) return { session, checkpoint };
+  }
+  return undefined;
+}
+
+function workflowCheckpointProjection(
+  registry: PersistedButlerSessionRegistry | null,
+): ButlerToolCheckpoint[] {
+  return (registry?.sessions ?? []).flatMap((session) => (
+    session.kind === 'workflow'
+      ? (session.runtimeCheckpoints ?? []).filter((checkpoint) => (
+          checkpoint.effect === 'write' && !checkpointClosed(checkpoint)
+        ))
+      : []
+  )).slice(-RUNTIME_CHECKPOINT_LIMIT);
+}
+
+function workflowEngineState(session: PersistedButlerSession | undefined): ButlerEngineState {
+  if (session) return sessionEngineState(session);
+  return initializeButlerEngineState({ activeBrain: getButlerBrain(), transcript: [] });
+}
+
+function workflowSnapshot(session: PersistedButlerSession): ButlerWorkflowSnapshot | undefined {
+  const workflow = session.workflow;
+  if (session.kind !== 'workflow' || !workflow) return undefined;
+  return {
+    sessionId: session.id,
+    key: workflow.key,
+    kind: workflow.kind,
+    hidden: true,
+    ...(workflow.triggerReason ? { triggerReason: workflow.triggerReason } : {}),
+    attempts: workflow.attempts,
+    paused: workflow.paused === true,
+    taskState: session.taskState ?? null,
+    engineState: workflowEngineState(session),
+    sources: session.taskState?.sources ?? [],
+    workflowRuntimeCheckpoints: normalizeRuntimeCheckpoints(session.runtimeCheckpoints),
+    updatedAt: session.updatedAt,
+  };
+}
+
+export function listButlerWorkflowSnapshots(): ButlerWorkflowSnapshot[] {
+  return (sessionRegistry?.sessions ?? [])
+    .map(workflowSnapshot)
+    .filter((snapshot): snapshot is ButlerWorkflowSnapshot => !!snapshot)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+interface WorkflowBinding {
+  scope: string;
+  sessionId: string;
+}
+
+async function writeWorkflowRegistry(
+  registry: PersistedButlerSessionRegistry,
+  scope: string,
+): Promise<void> {
+  if (!persistScope || persistScope !== scope) {
+    throw new Error('Butler workflow runtime 的登录作用域已切换。');
+  }
+  sessionRegistry = registry;
+  useButler.setState({
+    sessions: sessionSummaries(registry),
+    workflowRuntimeCheckpoints: workflowCheckpointProjection(registry),
+  });
+  await queueRegistryWrite(scope, registry);
+}
+
+async function updateWorkflowSession(
+  key: string,
+  update: (session: PersistedButlerSession) => PersistedButlerSession,
+  binding?: WorkflowBinding,
+): Promise<PersistedButlerSession> {
+  if (binding && persistScope !== binding.scope) {
+    throw new Error('Butler workflow runtime 的登录作用域已切换。');
+  }
+  if (sessionDirty) await flushButlerPersist();
+  if (binding && persistScope !== binding.scope) {
+    throw new Error('Butler workflow runtime 的登录作用域已切换。');
+  }
+  const registry = sessionRegistry;
+  const existing = workflowSessionByKey(registry, key);
+  if (!registry || !existing || (binding && existing.id !== binding.sessionId)) {
+    throw new Error(`未找到当前作用域的 Butler workflow session：${key}`);
+  }
+  const updated = update(existing);
+  await writeWorkflowRegistry({
+    ...registry,
+    sessions: registry.sessions.map((session) => session.id === existing.id ? updated : session),
+  }, binding?.scope ?? persistScope);
+  return updated;
+}
+
+async function saveWorkflowCheckpoint(
+  key: string,
+  binding: WorkflowBinding,
+  checkpoint: ButlerToolCheckpoint,
+): Promise<void> {
+  await updateWorkflowSession(key, (session) => ({
+    ...session,
+    updatedAt: butlerNow(),
+    runtimeCheckpoints: [
+      ...(session.runtimeCheckpoints ?? []).filter((item) => item.id !== checkpoint.id),
+      checkpoint,
+    ].slice(-RUNTIME_CHECKPOINT_LIMIT),
+  }), binding);
+}
+
+function workflowRuntimeContext(
+  key: string,
+  scope: string,
+  sessionId: string,
+  taskState: ButlerTaskState,
+  context: ButlerSurfaceContext | null | undefined,
+  sources: readonly ButlerSource[],
+  callId: string,
+): ButlerToolRuntimeContext {
+  return {
+    taskId: taskState.id,
+    callId,
+    sessionId,
+    scope: runtimeScope(context),
+    sources: runtimeSources(sources),
+    now: butlerNow,
+    loadCheckpoint: (checkpointId) => (
+      persistScope === scope
+        ? workflowSessionByKey(sessionRegistry, key)?.runtimeCheckpoints?.find((item) => item.id === checkpointId)
+        : undefined
+    ),
+    saveCheckpoint: (checkpoint) => saveWorkflowCheckpoint(key, { scope, sessionId }, checkpoint),
+    requestApproval: () => undefined,
+    writeAudit: writeToolAudit,
+  };
+}
+
+export function runButlerWorkflowTask<T>(options: ButlerWorkflowRunOptions<T>): Promise<T> {
+  const key = options.key.trim();
+  if (!key) return Promise.reject(new Error('Butler workflow key 不能为空。'));
+  const scope = currentWorkflowScope();
+  if (!scope) return Promise.reject(new Error('Butler workflow runtime 需要已登录账号。'));
+  const runKey = workflowRunKey(scope, key);
+  const active = activeWorkflowRuns.get(runKey);
+  if (active) return active as Promise<T>;
+
+  const controller = new AbortController();
+  activeWorkflowControllers.set(runKey, controller);
+  const task = (async () => {
+    await useButler.getState().hydrate();
+    if (!sessionRegistry || persistScope !== scope) {
+      throw new Error('Butler workflow runtime 的登录作用域已切换。');
+    }
+    await flushButlerPersist();
+    if (!sessionRegistry || persistScope !== scope) {
+      throw new Error('Butler workflow runtime 的登录作用域已切换。');
+    }
+
+    const startedAt = butlerNow();
+    const previous = workflowSessionByKey(sessionRegistry, key);
+    const taskState = compileButlerWorkflowTask({
+      kind: options.kind,
+      goal: options.goal,
+      sources: options.sources ?? options.context?.sources,
+    }, previous?.taskState, startedAt);
+    const runningTask = updateButlerTask(taskState, { status: 'running' }, startedAt);
+    const previousEngine = workflowEngineState(previous);
+    const prepared = prepareButlerEngineTurn({
+      engineState: previousEngine,
+      targetBrain: getButlerBrain(),
+      transcript: engineTranscript(previous?.lines ?? [], previousEngine),
+    });
+    const sessionId = previous?.id ?? crypto.randomUUID();
+    const userLine = line('user', options.goal);
+    const workflow = {
+      key,
+      kind: options.kind,
+      ...(options.triggerReason ? { triggerReason: options.triggerReason } : {}),
+      attempts: (previous?.workflow?.attempts ?? 0) + 1,
+    } satisfies NonNullable<PersistedButlerSession['workflow']>;
+    const runningSession: PersistedButlerSession = {
+      ...(previous ?? {
+        id: sessionId,
+        title: `workflow:${key}`,
+        createdAt: startedAt,
+        lines: [],
+        history: [],
+      }),
+      id: sessionId,
+      title: `workflow:${key}`,
+      updatedAt: startedAt,
+      lines: [...(previous?.lines ?? []), userLine].slice(-LINES_LIMIT),
+      history: previous?.history ?? [],
+      kind: 'workflow',
+      workflow,
+      taskState: runningTask,
+      engineState: prepared.engineState,
+    };
+    const registry = sessionRegistry;
+    const nextRegistry = previous
+      ? {
+          ...registry,
+          sessions: registry.sessions.map((session) => session.id === previous.id ? runningSession : session),
+        }
+      : { ...registry, sessions: [...registry.sessions, runningSession] };
+    const binding = { scope, sessionId };
+    await writeWorkflowRegistry(nextRegistry, scope);
+
+    try {
+      const result = await options.execute({
+        sessionId,
+        taskState: runningTask,
+        signal: controller.signal,
+        toolRuntimeContext: (callId, sources) => workflowRuntimeContext(
+          key,
+          scope,
+          sessionId,
+          runningTask,
+          options.context,
+          sources ?? options.sources ?? options.context?.sources ?? [],
+          callId,
+        ),
+      });
+      if (controller.signal.aborted) {
+        throw controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error('Butler workflow 已暂停。');
+      }
+      const completedAt = butlerNow();
+      const sources = mergeButlerSources(runningTask.sources, result.sources ?? []);
+      const assistantLine = line('assistant', result.summary?.trim() || 'workflow 已完成。');
+      await updateWorkflowSession(key, (session) => {
+        const pending = (session.runtimeCheckpoints ?? []).some((checkpoint) => (
+          checkpoint.effect === 'write' && !checkpointClosed(checkpoint)
+        ));
+        const progressedEngine = {
+          ...(session.engineState ?? prepared.engineState),
+          transcriptRevision: (session.engineState ?? prepared.engineState).transcriptRevision + 2,
+        };
+        return {
+          ...session,
+          updatedAt: completedAt,
+          lines: [...session.lines, assistantLine].slice(-LINES_LIMIT),
+          taskState: updateButlerTask(
+            runningTask,
+            { status: pending ? 'paused' : 'completed', sources },
+            completedAt,
+          ),
+          engineState: pending
+            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: progressedEngine.activeBrain })
+            : completeButlerEngineTurn(progressedEngine, {
+                completedBrain: progressedEngine.activeBrain,
+                transcriptRevision: progressedEngine.transcriptRevision,
+              }),
+          workflow: { ...workflow, ...(pending ? { paused: true } : {}) },
+        };
+      }, binding);
+      return result.value;
+    } catch (error) {
+      if (persistScope !== scope) throw error;
+      const paused = controller.signal.aborted;
+      const failedAt = butlerNow();
+      const message = error instanceof Error ? error.message : String(error);
+      await updateWorkflowSession(key, (session) => {
+        const progressedEngine = {
+          ...(session.engineState ?? prepared.engineState),
+          transcriptRevision: (session.engineState ?? prepared.engineState).transcriptRevision + 1,
+        };
+        return {
+          ...session,
+          updatedAt: failedAt,
+          taskState: updateButlerTask(
+            runningTask,
+            { status: paused ? 'paused' : 'failed', ...(paused ? {} : { error: message }) },
+            failedAt,
+          ),
+          engineState: paused
+            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: progressedEngine.activeBrain })
+            : failButlerEngineTurn(progressedEngine, {
+                failedBrain: progressedEngine.activeBrain,
+                error: 'workflow-failed',
+              }),
+          workflow: { ...workflow, ...(paused ? { paused: true } : {}) },
+        };
+      }, binding);
+      throw error;
+    }
+  })();
+  activeWorkflowRuns.set(runKey, task);
+  void task.finally(() => {
+    if (activeWorkflowRuns.get(runKey) === task) activeWorkflowRuns.delete(runKey);
+    if (activeWorkflowControllers.get(runKey) === controller) activeWorkflowControllers.delete(runKey);
+  }).catch(() => undefined);
+  return task;
+}
+
+export async function pauseButlerWorkflowTask(
+  key: string,
+  reason = '用户暂停 workflow',
+): Promise<void> {
+  const normalized = key.trim();
+  if (!normalized) return;
+  const scope = currentWorkflowScope();
+  if (!scope) return;
+  activeWorkflowControllers.get(workflowRunKey(scope, normalized))?.abort(new Error(reason));
+  await useButler.getState().hydrate();
+  if (persistScope !== scope) return;
+  const session = workflowSessionByKey(sessionRegistry, normalized);
+  if (!session?.taskState) return;
+  const binding = { scope, sessionId: session.id };
+  const pausedAt = butlerNow();
+  await updateWorkflowSession(normalized, (current) => {
+    const engineState = workflowEngineState(current);
+    return {
+      ...current,
+      updatedAt: pausedAt,
+      taskState: updateButlerTask(current.taskState!, { status: 'paused' }, pausedAt),
+      engineState: pauseButlerEngineTurn(engineState, { pausedBrain: engineState.activeBrain }),
+      workflow: current.workflow ? { ...current.workflow, paused: true } : current.workflow,
+    };
+  }, binding);
+}
+
+async function settleWorkflowCheckpoint(
+  key: string,
+  binding: WorkflowBinding,
+  content?: string,
+): Promise<void> {
+  await updateWorkflowSession(key, (session) => {
+    const pending = (session.runtimeCheckpoints ?? []).some((checkpoint) => (
+      checkpoint.effect === 'write' && !checkpointClosed(checkpoint)
+    ));
+    if (pending || session.taskState?.status !== 'paused') return session;
+    const now = butlerNow();
+    const engineState = workflowEngineState(session);
+    const nextRevision = engineState.transcriptRevision + (content ? 1 : 0);
+    const progressedEngine = { ...engineState, transcriptRevision: nextRevision };
+    const { paused: _paused, ...workflow } = session.workflow ?? {
+      key,
+      kind: 'workflow' as const,
+      attempts: 0,
+    };
+    return {
+      ...session,
+      updatedAt: now,
+      ...(content ? { lines: [...session.lines, line('assistant', content)].slice(-LINES_LIMIT) } : {}),
+      taskState: updateButlerTask(session.taskState, { status: 'completed' }, now),
+      engineState: completeButlerEngineTurn(progressedEngine, {
+        completedBrain: progressedEngine.activeBrain,
+        transcriptRevision: nextRevision,
+      }),
+      workflow,
+    };
+  }, binding);
+}
+
 export async function executeApprovedButlerOperation<T extends string>(
   checkpoint: ButlerToolCheckpoint,
   execute: () => T | Promise<T>,
@@ -705,6 +1176,7 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       error: null,
       routineDraft: routineDraftFrom(runtimeCheckpoints),
       runtimeCheckpoints,
+      workflowRuntimeCheckpoints: workflowCheckpointProjection(registry),
       actionDraft: session.actionDraft ?? null,
       taskState: taskState ?? null,
       engineState,
@@ -728,6 +1200,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   error: null,
   routineDraft: null,
   runtimeCheckpoints: [],
+  workflowRuntimeCheckpoints: [],
   context: null,
   actionDraft: null,
   taskState: null,
@@ -1246,12 +1719,33 @@ export const useButler = create<ButlerState>((set, get) => ({
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
 
   approveToolCheckpoint: async (checkpointId) => {
-    const checkpoint = runtimeCheckpoint(checkpointId);
+    const workflowEntry = workflowCheckpointById(checkpointId);
+    const checkpoint = runtimeCheckpoint(checkpointId) ?? workflowEntry?.checkpoint;
     if (checkpointClosed(checkpoint)) return;
     if (!checkpoint) return;
     const tool = createButlerTools().find((item) => item.name === checkpoint.toolName);
     if (!tool?.approve) return;
-    const result = await tool.approve(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    const workflow = workflowEntry?.session.workflow;
+    const workflowTask = workflowEntry?.session.taskState;
+    const workflowBinding = workflowEntry && persistScope
+      ? { scope: persistScope, sessionId: workflowEntry.session.id }
+      : undefined;
+    const context = workflow && workflowTask
+      ? workflowRuntimeContext(
+          workflow.key,
+          persistScope,
+          workflowEntry.session.id,
+          workflowTask,
+          undefined,
+          workflowTask.sources,
+          checkpoint.id,
+        )
+      : runtimeContextForCheckpoint(checkpoint);
+    const result = await tool.approve(checkpoint, context);
+    if (workflow && workflowBinding && result.status === 'completed') {
+      await settleWorkflowCheckpoint(workflow.key, workflowBinding, result.content);
+      return;
+    }
     if (result.status !== 'completed') return;
     set((state) => {
       const prefix = checkpoint.capability === 'memory.write' ? '📌' : '✅';
@@ -1269,10 +1763,31 @@ export const useButler = create<ButlerState>((set, get) => ({
   },
 
   dismissToolCheckpoint: async (checkpointId) => {
-    const checkpoint = runtimeCheckpoint(checkpointId);
+    const workflowEntry = workflowCheckpointById(checkpointId);
+    const checkpoint = runtimeCheckpoint(checkpointId) ?? workflowEntry?.checkpoint;
     if (checkpointClosed(checkpoint)) return;
     if (!checkpoint) return;
-    await cancelButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    const workflow = workflowEntry?.session.workflow;
+    const workflowTask = workflowEntry?.session.taskState;
+    const workflowBinding = workflowEntry && persistScope
+      ? { scope: persistScope, sessionId: workflowEntry.session.id }
+      : undefined;
+    const context = workflow && workflowTask
+      ? workflowRuntimeContext(
+          workflow.key,
+          persistScope,
+          workflowEntry.session.id,
+          workflowTask,
+          undefined,
+          workflowTask.sources,
+          checkpoint.id,
+        )
+      : runtimeContextForCheckpoint(checkpoint);
+    await cancelButlerToolCheckpoint(checkpoint, context);
+    if (workflow && workflowBinding) {
+      await settleWorkflowCheckpoint(workflow.key, workflowBinding);
+      return;
+    }
     set((state) => ({
       routineDraft: state.routineDraft?.checkpointId === checkpoint.id ? null : state.routineDraft,
     }));
@@ -1303,6 +1818,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       error: null,
       routineDraft: null,
       runtimeCheckpoints: [],
+      workflowRuntimeCheckpoints: [],
       context: null,
       actionDraft: null,
       taskState: null,
