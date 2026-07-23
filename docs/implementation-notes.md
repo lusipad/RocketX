@@ -932,3 +932,36 @@ Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — M12 Butler context compiler 与 task state（Issue #173 / P2）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- `butlerTaskContext.ts` 用七个数据驱动场景定义编译 v1 manifest；每个 manifest 同时记录能力预检、计划来源与
+  新鲜度、最小澄清、禁止动作和恢复合同。未命中特定场景的提问仍生成 `general` 任务态，不退回只有页面计数的
+  隐式上下文。
+- `taskState` 作为活动 session 的一部分写入 P1 注册表；旧 `builtin:butler / <scope>` 镜像格式保持不变，旧版本
+  回滚仍只读取 transcript/history/thread，不会因不认识 P2 字段而失败。
+- 不完整指代由代码侧在进入 API 或 Codex 大脑前拦截，只提出一个最小问题；用户补充后沿用同一 task id、目标和
+  创建时间。没有已有任务时，“继续上次调查”同样先澄清，不跨 session 猜测。
+- API 大脑通过 system prompt、Codex 大脑通过本轮只读输入接收同一份任务合同；本阶段不统一两套 engine
+  lifecycle，也不新增 PR diff、构建变更集或任何写工具。
+- 工具结果沿用现有 `ButlerSource` 提取器写回 task sources；正常结束、停止和异常分别落为
+  `completed`、`paused`、`failed`，供同一 session 恢复。
+
+## Deviations
+
+- 无。
+
+## Surprises
+
+- 本机已升级到 Codex CLI 0.145.0，而仓库与 CI 明确固定 0.144.4；直接执行协议门禁会报告生成树漂移。使用与
+  CI 相同的 0.144.4 后，671 个协议文件一致，因此未把无关协议升级混入 P2。
+
+## Questions for review
+
+- 无。

@@ -11,6 +11,12 @@ import {
   type ButlerSurfaceContext,
 } from '../lib/butlerContext';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
+import {
+  butlerTaskPrompt,
+  compileButlerTask,
+  updateButlerTask,
+  type ButlerTaskState,
+} from '../lib/butlerTaskContext';
 import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
   auditButlerAction,
@@ -82,6 +88,7 @@ export interface ButlerState {
   routineDraft: ButlerRoutineDraft | null;
   context: ButlerSurfaceContext | null;
   actionDraft: ButlerActionDraft | null;
+  taskState: ButlerTaskState | null;
   ask: (text: string, context?: ButlerAskContext) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
@@ -118,6 +125,7 @@ interface PersistedButlerSession {
   lines: ButlerLine[];
   history: AiMessage[];
   codexThread?: { threadId: string; promptHash: string };
+  taskState?: ButlerTaskState;
 }
 
 interface PersistedButlerSessionRegistry {
@@ -200,6 +208,7 @@ function normalizeRegistry(
         : welcomeLines(),
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
       ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
+      ...(candidate.taskState?.manifest?.schemaVersion === 1 ? { taskState: candidate.taskState } : {}),
     });
   }
   if (!sessions.length) return undefined;
@@ -250,6 +259,7 @@ function captureActiveSession(
     lines: state.lines.slice(-LINES_LIMIT),
     history: trimButlerHistory(state.history),
     ...(codexThread ? { codexThread } : {}),
+    ...(state.taskState ? { taskState: state.taskState } : {}),
   };
   return {
     ...registry,
@@ -399,6 +409,7 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       error: null,
       routineDraft: null,
       actionDraft: null,
+      taskState: session.taskState ?? null,
     });
   } finally {
     suppressPersistence = false;
@@ -420,6 +431,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   routineDraft: null,
   context: null,
   actionDraft: null,
+  taskState: null,
 
   hydrate: async () => {
     const user = useAuth.getState().user;
@@ -507,6 +519,21 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (get().running) return;
 
     const turnContext = context ? normalizeContext(context) : get().context;
+    const compiledTask = compileButlerTask(content, turnContext, get().taskState, butlerNow());
+    if (compiledTask.status === 'awaiting-clarification') {
+      set((state) => ({
+        lines: [
+          ...state.lines,
+          line('user', content),
+          line('assistant', compiledTask.manifest.clarification.question ?? '请补充完成这项任务所需的信息。'),
+        ],
+        steps: [],
+        error: null,
+        taskState: compiledTask,
+        ...(context && 'kind' in context ? { context: turnContext } : {}),
+      }));
+      return;
+    }
     const brain = getButlerBrain();
     const abort = brain === 'api' ? new AbortController() : undefined;
     currentAbort = abort;
@@ -526,6 +553,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       running: true,
       error: null,
       ...(context && 'kind' in context ? { context: turnContext } : {}),
+      taskState: updateButlerTask(compiledTask, { status: 'running' }, butlerNow()),
     }));
 
     let assistantLineId: string | undefined;
@@ -570,6 +598,9 @@ export const useButler = create<ButlerState>((set, get) => ({
                 ? { ...item, ...(turnSources.length ? { sources: turnSources } : {}) }
                 : item)
               : state.lines,
+          taskState: state.taskState
+            ? updateButlerTask(state.taskState, { sources: turnSources }, butlerNow())
+            : null,
         }));
       }
     };
@@ -581,6 +612,7 @@ export const useButler = create<ButlerState>((set, get) => ({
         const result = await codexRunner({
           text: content,
           context: turnContext ?? undefined,
+          taskContext: butlerTaskPrompt(compiledTask),
           now: butlerNow(),
           onEvent,
         });
@@ -592,10 +624,13 @@ export const useButler = create<ButlerState>((set, get) => ({
             : state.lines,
           activity: null,
           running: false,
+          taskState: state.taskState
+            ? updateButlerTask(state.taskState, { status: 'completed', sources: turnSources }, butlerNow())
+            : null,
         }));
         return;
       }
-      const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}${
+      const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}\n${butlerTaskPrompt(compiledTask)}${
         turnContext
           ? `\n${butlerContextPrompt(turnContext)}`
           : ''
@@ -619,17 +654,33 @@ export const useButler = create<ButlerState>((set, get) => ({
         activity: null,
         history: nextHistory,
         running: false,
+        taskState: state.taskState
+          ? updateButlerTask(state.taskState, { status: 'completed', sources: turnSources }, butlerNow())
+          : null,
       }));
     } catch (error) {
       // 用户主动停止不是错误：保留已生成的内容，安静收尾
       if (abort?.signal.aborted) {
-        set({ activity: null, running: false });
+        set((state) => ({
+          activity: null,
+          running: false,
+          taskState: state.taskState
+            ? updateButlerTask(state.taskState, { status: 'paused' }, butlerNow())
+            : null,
+        }));
         return;
       }
       const message = brain === 'codex'
         ? `${friendlyButlerCodexError(error).replace(/[。.]$/, '')}。可在设置页切换为 API 大脑。`
         : friendlyButlerError(error);
-      set({ activity: null, running: false, error: message });
+      set((state) => ({
+        activity: null,
+        running: false,
+        error: message,
+        taskState: state.taskState
+          ? updateButlerTask(state.taskState, { status: 'failed', error: message }, butlerNow())
+          : null,
+      }));
     } finally {
       if (currentAbort === abort) currentAbort = undefined;
       if (currentTurnFinished === turnFinished) currentTurnFinished = null;
@@ -797,6 +848,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     routineDraft: null,
     context: null,
     actionDraft: null,
+    taskState: null,
   }),
 }));
 
