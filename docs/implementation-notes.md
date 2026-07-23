@@ -79,11 +79,14 @@ Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
   结果写错账号。P6 同时锁定启动 scope、session id 和写入 scope，并加入跨账号并发回归。
 - 主动任务写 registry 前若不先冲刷人工会话的防抖 transcript，旧内存快照会覆盖刚完成的主动任务；反向顺序也
   会丢失人工回复。两条写路径现在都先保存当前人工事实，再合并 workflow session。
+- scheduler 在未登录时不能提前写入 `lastFiredDate`，否则当天登录后不会再执行；P6 只在 workflow 已进入
+  execute 后确认当日触发，并让未 admission 的尝试不留下失败 run。rounds 暂停也必须把 workflow
+  `AbortSignal` 继续传给 Codex runner，不能只丢弃迟到结果。
 
 ## Verification
 
 - `pnpm typecheck` 通过完整 monorepo 类型门禁。
-- `pnpm test:regression` 通过 579 项，覆盖隐藏 workflow session、重启恢复、失败重试、用户暂停、
+- `pnpm test:regression` 通过 581 项，覆盖隐藏 workflow session、重启恢复、失败重试、用户暂停、
   跨账号隔离、并发 transcript、审批投影、rounds/routine/watcher 合流与 Codex 中断。
 - `pnpm test:ui` 通过 41 项；真实审批卡可推进隐藏 workflow checkpoint，且隐藏 session 不出现在会话选择器。
 - P6 定向 Butler workflow、rounds、routines 与 Codex abort 回归全部通过。

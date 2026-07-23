@@ -41,6 +41,7 @@ import type { Todo } from '../../apps/web/src/stores/todos';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
   listButlerWorkflowSnapshots,
+  pauseButlerWorkflowTask,
   resetButlerPersistenceForTests,
   setButlerPersistence,
   useButler,
@@ -398,6 +399,76 @@ test('Codex adapter 能剥掉完整 JSON 代码围栏', async () => {
     assert.equal(result.items[0].ref, 'todo:t1');
   } finally {
     restore();
+  }
+});
+
+test('暂停 rounds workflow 会把 AbortSignal 传给 Codex runner', async () => {
+  const storage = new MemoryStorage();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  const restorePersistence = setButlerPersistence(createRcxStore({ backend: createMemoryBackend() }).appData);
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restoreTauri = setButlerBrainTauriProvider(() => true);
+  let receivedSignal: AbortSignal | undefined;
+  let started!: () => void;
+  const runnerStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const restoreCodex = setButlerRoundsCodexRunner(async (options) => {
+    receivedSignal = options.signal;
+    started();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('rounds Codex runner 未收到中断')), 50);
+      options.signal?.addEventListener('abort', () => {
+        clearTimeout(timeout);
+        reject(options.signal?.reason ?? new Error('rounds 已暂停'));
+      }, { once: true });
+      if (options.signal?.aborted) {
+        clearTimeout(timeout);
+        reject(options.signal.reason ?? new Error('rounds 已暂停'));
+      }
+    });
+  });
+
+  useTodos.setState({ todos: [] } as never);
+  useWorkbench.setState({
+    config: null,
+    configRevision: 0,
+    workItems: [],
+    prs: [],
+    builds: [],
+    loading: false,
+    error: null,
+    lastRefresh: null,
+    refresh: async () => undefined,
+  } as never);
+  useAuth.setState({ user: { _id: 'rounds-abort-user', username: 'rounds-abort' } as never });
+  useButler.getState().reset();
+  resetButlerPersistenceForTests();
+  setServerBase('https://chat.example');
+  setButlerBrain('codex');
+
+  try {
+    await useButler.getState().hydrate();
+    const running = runButlerRoundsNow(new Date('2026-07-23T09:00:00.000Z'), 'manual');
+    await runnerStarted;
+    await pauseButlerWorkflowTask('rounds:today', '测试暂停 rounds');
+    await running;
+
+    assert.equal(receivedSignal?.aborted, true);
+    const snapshot = listButlerWorkflowSnapshots().find((item) => item.key === 'rounds:today');
+    assert.equal(snapshot?.paused, true);
+    assert.equal(snapshot?.taskState?.status, 'paused');
+  } finally {
+    restoreCodex();
+    restoreTauri();
+    restoreBrainStorage();
+    restorePersistence();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    useAuth.setState({ user: undefined } as never);
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
   }
 });
 

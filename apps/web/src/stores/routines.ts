@@ -61,7 +61,10 @@ interface RoutineState {
   addRoutine: (routine: Routine) => void;
   removeRoutine: (id: string) => void;
   dismissCard: (id: string) => void;
-  runNow: (id: string, options?: { triggerReason?: string }) => Promise<void>;
+  runNow: (
+    id: string,
+    options?: { triggerReason?: string; onAdmitted?: () => void },
+  ) => Promise<void>;
   tick: (now?: number) => Promise<void>;
 }
 
@@ -290,10 +293,12 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   runNow: async (id, options) => {
     const routine = get().routines.find((item) => item.id === id);
-    if (!routine || get().runningIds.includes(id)) return;
+    if (!routine) return;
+    if (get().runningIds.includes(id)) return;
     set((state) => ({ runningIds: [...state.runningIds, id] }));
     const at = routineNow();
     const brain = getButlerBrain();
+    let admitted = false;
     let run: RoutineRun;
     try {
       const result = await runButlerWorkflowTask({
@@ -308,6 +313,8 @@ export const useRoutines = create<RoutineState>((set, get) => ({
           sources: [],
         },
         execute: async ({ signal, toolRuntimeContext }) => {
+          admitted = true;
+          options?.onAdmitted?.();
           let sources: ButlerSource[] = [];
           const toolNames = new Map<string, string>();
           const onEvent = (event: AgentLoopEvent) => {
@@ -361,6 +368,12 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         text: brain === 'codex' ? friendlyButlerCodexError(error) : friendlyButlerError(error),
       };
     }
+    if (!admitted && options?.triggerReason === 'schedule') {
+      set((state) => ({
+        runningIds: state.runningIds.filter((runningId) => runningId !== id),
+      }));
+      return;
+    }
     let routines: Routine[] = [];
     set((state) => {
       routines = state.routines.map((item) => item.id === id
@@ -390,15 +403,19 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       persist(get().routines, eventCards, seenKeys);
     }
     const due = dueRoutines(get().routines, now);
-    if (due.length > 0) {
+    const firedIds = new Set<string>();
+    await Promise.all(due.map((routine) => get().runNow(routine.id, {
+      triggerReason: 'schedule',
+      onAdmitted: () => firedIds.add(routine.id),
+    })));
+    if (firedIds.size > 0) {
       const today = localDate(now);
-      const routines = get().routines.map((routine) => due.some((item) => item.id === routine.id)
+      const routines = get().routines.map((routine) => firedIds.has(routine.id)
         ? { ...routine, lastFiredDate: today }
         : routine);
       set({ routines });
       persist(routines, get().eventCards, get().seenKeys);
     }
-    await Promise.all(due.map((routine) => get().runNow(routine.id, { triggerReason: 'schedule' })));
   },
 }));
 

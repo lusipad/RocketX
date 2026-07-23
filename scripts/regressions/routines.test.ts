@@ -158,6 +158,68 @@ test('dueRoutines 只在匹配日期到点后触发一次', () => {
   assert.equal(dueRoutines([routine({ enabled: false })], MONDAY_0830).length, 0);
 });
 
+test('未登录时 scheduler 不消耗当日触发，登录后仍会执行', async () => {
+  const storage = new MemoryStorage();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (_key: string) => undefined,
+    },
+  });
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restorePersistence = setButlerPersistence(
+    createRcxStore({ backend: createMemoryBackend() }).appData,
+  );
+  let calls = 0;
+  const restoreRunner = setRoutineLoopRunner(async () => {
+    calls += 1;
+    return { text: '登录后晨报', messages: [] };
+  });
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  useAuth.setState({ user: undefined } as never);
+  useChat.setState({ subscriptions: {}, rooms: {}, messages: {}, activeRid: null } as never);
+  setServerBase('https://chat.example');
+  resetRoutineStore([routine()]);
+
+  try {
+    await useRoutines.getState().tick(MONDAY_0830);
+    assert.equal(calls, 0);
+    assert.equal(useRoutines.getState().routines[0]?.lastFiredDate, undefined);
+    assert.deepEqual(useRoutines.getState().routines[0]?.runs, []);
+
+    await useRoutines.getState().runNow('routine-1');
+    assert.equal(useRoutines.getState().routines[0]?.runs[0]?.status, 'error');
+    assert.ok(useRoutines.getState().routines[0]?.runs[0]?.text);
+    assert.equal(useRoutines.getState().routines[0]?.lastFiredDate, undefined);
+
+    useAuth.setState({ user: { _id: 'routine-login-user', username: 'routine-login' } as never });
+    await useButler.getState().hydrate();
+    await useRoutines.getState().tick(MONDAY_0830);
+
+    assert.equal(calls, 1);
+    assert.equal(useRoutines.getState().routines[0]?.lastFiredDate, '2026-01-05');
+    assert.equal(useRoutines.getState().routines[0]?.runs[0]?.status, 'ok');
+  } finally {
+    restoreRunner();
+    restorePersistence();
+    restoreBrainStorage();
+    restoreNow();
+    restoreStorage();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    useAuth.setState({ user: undefined } as never);
+    resetRoutineStore();
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
+
 test('runNow 写入成功记录并裁剪到十条', async () => {
   const oldRuns = Array.from({ length: 10 }, (_, index) => ({
     id: `old-${index}`,

@@ -315,8 +315,8 @@ export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Pr
           sources: contextSources,
         },
         sources: [],
-        execute: async () => {
-          const value = await runRoundsWithBrain(input);
+        execute: async ({ signal }) => {
+          const value = await runRoundsWithBrain(input, signal);
           const sources = butlerRoundsSources(input, value.items.map((item) => item.ref));
           return {
             value,
