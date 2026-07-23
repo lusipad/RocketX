@@ -52,9 +52,26 @@ export interface ButlerToolAuditEntry {
   reason?: string;
 }
 
+export interface ButlerToolScope {
+  server: string;
+  account: string;
+  project?: string;
+  room?: string;
+}
+
+export interface ButlerToolSourceRef {
+  kind: string;
+  id: string;
+  rid?: string;
+  project?: string;
+}
+
 export interface ButlerToolRuntimeContext {
   taskId?: string;
   callId?: string;
+  sessionId?: string;
+  scope?: ButlerToolScope;
+  sources?: readonly ButlerToolSourceRef[];
   now?: () => number;
   loadCheckpoint?: (id: string) => ButlerToolCheckpoint | undefined | Promise<ButlerToolCheckpoint | undefined>;
   saveCheckpoint?: (checkpoint: ButlerToolCheckpoint) => void | Promise<void>;
@@ -95,6 +112,7 @@ export interface ButlerToolDefinition<TArgs extends Record<string, unknown>> {
   parameters: Record<string, unknown>;
   effect: ButlerToolEffect;
   capability: string;
+  capture?: (args: TArgs, context: ButlerToolRuntimeContext) => TArgs | Promise<TArgs>;
   preflight?: (args: TArgs) => ButlerToolPreflight | Promise<ButlerToolPreflight>;
   preview?: (args: TArgs) => string;
   idempotencyKey?: (args: TArgs, context: ButlerToolRuntimeContext) => string;
@@ -521,7 +539,18 @@ export function defineButlerTool<TArgs extends Record<string, unknown>>(
         validationError,
       );
     }
-    const args = rawArgs as TArgs;
+    let args: TArgs;
+    try {
+      args = definition.capture
+        ? await definition.capture(rawArgs as TArgs, context)
+        : rawArgs as TArgs;
+    } catch (error) {
+      return failedResult(
+        definition as ButlerToolDefinition<Record<string, unknown>>,
+        'preflight',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     let preflight: ButlerToolPreflight;
     try {
       preflight = await definition.preflight?.(args) ?? { allowed: true };

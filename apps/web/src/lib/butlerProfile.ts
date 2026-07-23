@@ -4,15 +4,10 @@ import {
   onButlerArchiveHydrated,
   removeButlerArchiveSkillFile,
   type ButlerProfileStorage,
+  type ButlerQuarantinedLegacyMemoryEntry,
 } from './butlerArchive';
 
-export type { ButlerProfileStorage } from './butlerArchive';
-
-export interface ButlerMemoryEntry {
-  id: string;
-  text: string;
-  at: number;
-}
+export type { ButlerProfileStorage, ButlerQuarantinedLegacyMemoryEntry } from './butlerArchive';
 
 export interface ButlerSkill {
   name: string;
@@ -21,19 +16,18 @@ export interface ButlerSkill {
 }
 
 const STORAGE_PREFIX = 'rcx-butler-v1:';
+const LEGACY_MEMORY_STORAGE_KEY = 'rcx-butler-v1:memory';
+const ACTIVE_MEMORY_V2_STORAGE_KEY = 'rcx-butler-v2:memory';
 const PERSONA_KEY = 'persona';
-const MEMORY_KEY = 'memory';
 const SKILLS_KEY = 'skills';
-const MEMORY_LIMIT = 30;
-const MEMORY_CHARACTER_LIMIT = 4000;
 
 export const BUTLER_PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
 
 export const DEFAULT_PERSONA = `你是 RocketX 中的 AI，服务于 GTD 与注意力保护。
 
-默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时，先查已注入的记忆，不足时调用 recall_memory，再用业务工具查证；出现多个候选时列出证据，请用户二选一。绝不编造数据。
+默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时，先基于当前上下文和业务工具查证；需要跨会话偏好、alias、纠错或承诺时，再调用 recall_memory。出现多个候选时列出证据，请用户二选一。绝不编造数据。
 
-当用户表达需要跨会话保留的偏好、纠错、别名、决定或承诺时，先调用 remember 再回答，并让用户看到写入结果。不要把工作项、PR、构建、日程等可随时查询的动态数据写入长期记忆。
+只有 alias、偏好、用户已明确确认且需要跨会话延续的承诺，才允许写入长期记忆。不要把 PR、构建、日程、工作项、待办或其他可查询的动态状态写入长期记忆；没有确认的意图、猜测中的计划也不要长期保存。
 
 输出格式：用**粗体小标题**和短列表组织内容；不使用 markdown 表格、水平分隔线（---）和 #/## 标题（渲染环境不支持）；每条列表项一行内说完。提到工作项、PR 或构建时直接写 #编号（界面会把它变成可点开的链接），查询结果尽量带上编号。`;
 
@@ -49,7 +43,7 @@ export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] = [
 
 1. 调用 \`list_mentions\`、\`list_todos\`；调用 \`list_calendar\` 时把当前日期同时作为 \`from\` 和 \`to\`，找出需回应的消息、到期事项和时间冲突。
 2. 调用 \`list_work_items\`、\`list_pull_requests\` 和 \`list_builds\`，检查分配给我的工作、待我评审/我提的 PR、失败或进行中的构建。
-3. 结合已注入的长期记忆判断偏好和承诺，但所有工作状态必须以工具当次返回为准。
+3. 如需历史偏好、alias 或确认过的承诺，调用 \`recall_memory\`；所有工作状态必须以工具当次返回为准。
 4. 输出四段：**先回应**、**今天计划**、**代码与交付**、**风险**。每段用一行粗体小标题开头，下面跟短列表；禁止表格与分隔线；最后给出建议的处理顺序。`,
   },
   {
@@ -61,7 +55,7 @@ export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] = [
 
 1. 调用 \`list_mentions\`、\`list_todos\`；调用 \`list_calendar\` 时把当前日期同时作为 \`from\` 和 \`to\`，找出今天没回应、没完成或已过时的事。
 2. 调用 \`list_work_items\`、\`list_pull_requests\` 和 \`list_builds\`，找出仍在进行、待评审、失败或阻塞交付的项。
-3. 结合已注入的长期记忆检查用户明确说过的决定和承诺，但不把动态工作数据写入记忆。
+3. 如需历史偏好、alias 或确认过的承诺，调用 \`recall_memory\`；不要把动态工作数据写入记忆。
 4. 输出 **未回应**、**未完成**、**交付风险** 三段；每条给出顺延、完成、放弃或明日首先处理之一的明确建议。`,
   },
   {
@@ -95,16 +89,9 @@ function readJson(key: string): unknown {
 
 function writeJson(key: string, value: unknown): void {
   profileStorage.set(storageKey(key), JSON.stringify(value));
-  if (key === MEMORY_KEY || key === SKILLS_KEY) {
-    void mirrorButlerArchiveFiles(listMemory(), listSkills());
+  if (key === SKILLS_KEY) {
+    void mirrorButlerArchiveFiles(listSkills());
   }
-}
-
-function isMemoryEntry(value: unknown): value is ButlerMemoryEntry {
-  return !!value && typeof value === 'object' &&
-    typeof (value as ButlerMemoryEntry).id === 'string' &&
-    typeof (value as ButlerMemoryEntry).text === 'string' &&
-    typeof (value as ButlerMemoryEntry).at === 'number';
 }
 
 function isSkill(value: unknown): value is ButlerSkill {
@@ -123,21 +110,38 @@ function isBuiltInSkill(name: string): boolean {
   return BUILT_IN_BUTLER_SKILLS.some((skill) => skill.name === name);
 }
 
-function memoryForPrompt(): ButlerMemoryEntry[] {
-  const recent = listMemory().slice(0, MEMORY_LIMIT);
-  let characterCount = recent.reduce((total, entry) => total + entry.text.length, 0);
-  while (characterCount > MEMORY_CHARACTER_LIMIT && recent.length > 0) {
-    characterCount -= recent.pop()!.text.length;
-  }
-  return recent;
-}
-
 export function setButlerProfileStorage(storage: ButlerProfileStorage): () => void {
   const previous = profileStorage;
   profileStorage = storage;
   return () => {
     profileStorage = previous;
   };
+}
+
+function isQuarantinedLegacyMemoryEntry(value: unknown): value is ButlerQuarantinedLegacyMemoryEntry {
+  return !!value && typeof value === 'object'
+    && typeof (value as ButlerQuarantinedLegacyMemoryEntry).id === 'string'
+    && typeof (value as ButlerQuarantinedLegacyMemoryEntry).text === 'string'
+    && typeof (value as ButlerQuarantinedLegacyMemoryEntry).at === 'number';
+}
+
+export function readButlerActiveMemoryV2RawJson(): string | null {
+  return profileStorage.get(ACTIVE_MEMORY_V2_STORAGE_KEY);
+}
+
+export function writeButlerActiveMemoryV2RawJson(rawJson: string): void {
+  profileStorage.set(ACTIVE_MEMORY_V2_STORAGE_KEY, rawJson);
+}
+
+export function listButlerQuarantinedLegacyMemory(): ButlerQuarantinedLegacyMemoryEntry[] {
+  const raw = profileStorage.get(LEGACY_MEMORY_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isQuarantinedLegacyMemoryEntry) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function getPersona(): string {
@@ -150,33 +154,6 @@ export function setPersona(text: string): void {
 
 export function resetPersona(): void {
   profileStorage.set(storageKey(PERSONA_KEY), '');
-}
-
-export function listMemory(): ButlerMemoryEntry[] {
-  const saved = readJson(MEMORY_KEY);
-  return (Array.isArray(saved) ? saved.filter(isMemoryEntry) : [])
-    .sort((left, right) => right.at - left.at);
-}
-
-export function appendMemory(text: string): ButlerMemoryEntry {
-  const normalized = text.trim();
-  const entry = { id: crypto.randomUUID(), text: normalized, at: Date.now() };
-  writeJson(MEMORY_KEY, [
-    entry,
-    ...listMemory().filter((item) => item.text.toLocaleLowerCase() !== normalized.toLocaleLowerCase()),
-  ]);
-  return entry;
-}
-
-export function recallButlerMemory(query = '', limit = 20): ButlerMemoryEntry[] {
-  const normalized = query.trim().toLocaleLowerCase();
-  return listMemory()
-    .filter((entry) => !normalized || entry.text.toLocaleLowerCase().includes(normalized))
-    .slice(0, limit);
-}
-
-export function removeMemory(id: string): void {
-  writeJson(MEMORY_KEY, listMemory().filter((entry) => entry.id !== id));
 }
 
 export function listSkills(): ButlerSkill[] {
@@ -207,12 +184,6 @@ export function loadButlerSkill(name: string): string {
   return `未找到技能：${name}，可用技能：${listSkills().map((item) => item.name).join('、')}`;
 }
 
-export function rememberButlerFact(fact: string): string {
-  if (!fact.trim()) return '没有可记住的内容。';
-  const entry = appendMemory(fact);
-  return `已记住：${entry.text}`;
-}
-
 export function friendlyButlerError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/unconfigured|尚未配置路由|Provider 不存在/iu.test(message)) return BUTLER_PROVIDER_ERROR;
@@ -227,10 +198,6 @@ export function butlerCurrentTimeLine(now: number): string {
 
 export function buildButlerSystemPrompt(): string {
   const sections = [getPersona()];
-  const memories = memoryForPrompt();
-  if (memories.length > 0) {
-    sections.push(`## 你记住的事实\n${memories.map((entry) => `- ${entry.text}`).join('\n')}`);
-  }
   sections.push([
     '## 可用技能',
     ...listSkills().map((skill) => `- ${skill.name}：${skill.description}`),
@@ -241,7 +208,7 @@ export function buildButlerSystemPrompt(): string {
 }
 
 onButlerArchiveHydrated(() => {
-  void mirrorButlerArchiveFiles(listMemory(), listSkills());
+  void mirrorButlerArchiveFiles(listSkills());
 });
 
 // 档案由内存缓存写穿到 IndexedDB；旧 localStorage 键仅保留作迁移回退。

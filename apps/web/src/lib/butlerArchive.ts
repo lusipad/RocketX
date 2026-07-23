@@ -6,7 +6,8 @@ export interface ButlerProfileStorage {
   set(key: string, value: string): void;
 }
 
-export interface ButlerArchiveMemoryEntry {
+export interface ButlerQuarantinedLegacyMemoryEntry {
+  id: string;
   text: string;
   at: number;
 }
@@ -19,9 +20,12 @@ export interface ButlerArchiveSkill {
 
 const ARCHIVE_APP_ID = 'rocketx.butler';
 const ARCHIVE_KEY = 'archive';
+const LEGACY_MEMORY_KEY = 'rcx-butler-v1:memory';
+const ACTIVE_MEMORY_V2_KEY = 'rcx-butler-v2:memory';
 const ARCHIVE_KEYS = [
   'rcx-butler-v1:persona',
-  'rcx-butler-v1:memory',
+  LEGACY_MEMORY_KEY,
+  ACTIVE_MEMORY_V2_KEY,
   'rcx-butler-v1:skills',
   'rcx-butler-v1:routines',
   'rcx-butler-v1:routine-seen',
@@ -193,6 +197,7 @@ export function hydrateButlerArchive(): Promise<void> {
     } catch (error) {
       console.warn('[Butler archive] 水合 IndexedDB 失败', error);
     } finally {
+      void removeLegacyFactsFileBestEffort();
       hydrated = true;
       notifyHydrated();
     }
@@ -204,9 +209,34 @@ export function renderButlerSkillFile(skill: ButlerArchiveSkill): string {
   return `# ${skill.name}\n${skill.description}\n\n${skill.body}\n`;
 }
 
-export function renderButlerMemoryFile(entries: readonly ButlerArchiveMemoryEntry[]): string {
-  const facts = entries.map((entry) => `- [${new Date(entry.at).toISOString()}] ${entry.text}`);
-  return ['AI 保存的事实，供 AI 只读参考。', '', ...facts, ''].join('\n');
+function readArchiveValue(key: ButlerArchiveKey): string | null {
+  return butlerArchiveStorage.get(key);
+}
+
+function isQuarantinedLegacyMemoryEntry(value: unknown): value is ButlerQuarantinedLegacyMemoryEntry {
+  return !!value && typeof value === 'object' &&
+    typeof (value as ButlerQuarantinedLegacyMemoryEntry).id === 'string' &&
+    typeof (value as ButlerQuarantinedLegacyMemoryEntry).text === 'string' &&
+    typeof (value as ButlerQuarantinedLegacyMemoryEntry).at === 'number';
+}
+
+export function readButlerActiveMemoryV2RawJson(): string | null {
+  return readArchiveValue(ACTIVE_MEMORY_V2_KEY);
+}
+
+export function writeButlerActiveMemoryV2RawJson(rawJson: string): void {
+  butlerArchiveStorage.set(ACTIVE_MEMORY_V2_KEY, rawJson);
+}
+
+export function listButlerQuarantinedLegacyMemory(): ButlerQuarantinedLegacyMemoryEntry[] {
+  const raw = readArchiveValue(LEGACY_MEMORY_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isQuarantinedLegacyMemoryEntry) : [];
+  } catch {
+    return [];
+  }
 }
 
 function skillRelativePath(name: string): string {
@@ -220,6 +250,13 @@ function absolutePath(homeDir: string, relativePath: string): string {
   return `${homeDir.replace(/[\\/]+$/, '')}/${relativePath}`;
 }
 
+async function removeLegacyFactsFile(
+  homeDir: string,
+  remove: (path: string) => Promise<void>,
+): Promise<void> {
+  await remove(absolutePath(homeDir, 'memory/facts.md')).catch(() => undefined);
+}
+
 function enqueueMirror(task: () => Promise<void>): Promise<void> {
   mirrorQueue = mirrorQueue.then(task).catch((error) => {
     console.warn('[Butler archive] 写入桌面档案镜像失败', error);
@@ -227,21 +264,29 @@ function enqueueMirror(task: () => Promise<void>): Promise<void> {
   return mirrorQueue;
 }
 
-export function mirrorButlerArchiveFiles(
-  memory: readonly ButlerArchiveMemoryEntry[],
-  skills: readonly ButlerArchiveSkill[],
-): Promise<void> {
+function removeLegacyFactsFileBestEffort(): Promise<void> {
   if (!isTauri) return Promise.resolve();
   return enqueueMirror(async () => {
-    const [{ invoke }, { writeFile }] = await Promise.all([
+    const [{ invoke }, { remove }] = await Promise.all([
       import('@tauri-apps/api/core'),
       import('@tauri-apps/plugin-fs'),
     ]);
     const homeDir = await invoke<string>('butler_home_dir');
-    await writeFile(
-      absolutePath(homeDir, 'memory/facts.md'),
-      new TextEncoder().encode(renderButlerMemoryFile(memory)),
-    );
+    await removeLegacyFactsFile(homeDir, remove);
+  });
+}
+
+export function mirrorButlerArchiveFiles(
+  skills: readonly ButlerArchiveSkill[],
+): Promise<void> {
+  if (!isTauri) return Promise.resolve();
+  return enqueueMirror(async () => {
+    const [{ invoke }, { remove, writeFile }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+    const homeDir = await invoke<string>('butler_home_dir');
+    await removeLegacyFactsFile(homeDir, remove);
     for (const skill of skills) {
       await writeFile(
         absolutePath(homeDir, skillRelativePath(skill.name)),
@@ -259,6 +304,7 @@ export function removeButlerArchiveSkillFile(name: string): Promise<void> {
       import('@tauri-apps/plugin-fs'),
     ]);
     const homeDir = await invoke<string>('butler_home_dir');
+    await removeLegacyFactsFile(homeDir, remove);
     await remove(absolutePath(homeDir, skillRelativePath(name)));
   });
 }

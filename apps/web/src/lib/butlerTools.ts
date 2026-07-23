@@ -3,8 +3,31 @@ import {
   defineButlerTool,
   type ButlerTool,
   type ButlerToolPreflight,
+  type ButlerToolRuntimeContext,
 } from './butlerToolRuntime';
-import { listSkills, loadButlerSkill, recallButlerMemory, rememberButlerFact } from './butlerProfile';
+import {
+  listButlerQuarantinedLegacyMemory,
+  listSkills,
+  loadButlerSkill,
+  readButlerActiveMemoryV2RawJson,
+  writeButlerActiveMemoryV2RawJson,
+} from './butlerProfile';
+import {
+  BUTLER_MEMORY_SCHEMA_VERSION,
+  importLegacyButlerMemory,
+  normalizeButlerMemoryScope,
+  parseButlerMemoryState,
+  recallButlerMemory,
+  rememberButlerMemory,
+  restoreButlerMemory,
+  revokeButlerMemory,
+  serializeButlerMemoryState,
+  type ButlerMemoryKind,
+  type ButlerMemoryProvenance,
+  type ButlerMemoryRecord,
+  type ButlerMemoryScope,
+  type ButlerMemoryState,
+} from './butlerMemory';
 import { realtime, rest } from './client';
 import {
   mergeMessageSearchResults,
@@ -271,13 +294,278 @@ function loadSkill(args: Record<string, unknown>): string {
   return loadButlerSkill(optionalString(args, 'name') ?? '');
 }
 
+type ButlerMemoryScopeLevel = 'account' | 'project' | 'room';
+
+interface CapturedMemoryArgs extends Record<string, unknown> {
+  trustedScope: ButlerMemoryScope;
+  capturedProvenance: ButlerMemoryProvenance;
+  capturedAt: number;
+  expiresAtTimestamp?: number;
+}
+
+const MEMORY_KINDS = new Set<ButlerMemoryKind>(['alias', 'preference', 'commitment']);
+const MEMORY_SCOPE_LEVELS = new Set<ButlerMemoryScopeLevel>(['account', 'project', 'room']);
+
+function memoryKind(args: Record<string, unknown>): ButlerMemoryKind {
+  const kind = optionalString(args, 'kind') as ButlerMemoryKind | undefined;
+  if (!kind || !MEMORY_KINDS.has(kind)) throw new Error('记忆 kind 必须是 alias、preference 或 commitment。');
+  return kind;
+}
+
+function memoryScopeLevel(args: Record<string, unknown>): ButlerMemoryScopeLevel {
+  const level = optionalString(args, 'scope') as ButlerMemoryScopeLevel | undefined;
+  if (!level || !MEMORY_SCOPE_LEVELS.has(level)) throw new Error('记忆 scope 必须是 account、project 或 room。');
+  return level;
+}
+
+function trustedMemoryScope(
+  context: ButlerToolRuntimeContext,
+  level: ButlerMemoryScopeLevel,
+): ButlerMemoryScope {
+  const scope = context.scope;
+  if (!scope?.server?.trim() || !scope.account?.trim()) {
+    throw new Error('当前没有可验证的 Rocket.Chat server/account 上下文，不能访问长期记忆。');
+  }
+  if (level === 'project' && !scope.project?.trim()) {
+    throw new Error('当前上下文没有唯一 project，不能使用 project 级记忆。');
+  }
+  if (level === 'room' && !scope.room?.trim()) {
+    throw new Error('当前上下文没有 room，不能使用 room 级记忆。');
+  }
+  return normalizeButlerMemoryScope({
+    server: scope.server,
+    account: scope.account,
+    ...(level === 'project' ? { project: scope.project! } : {}),
+    ...(level === 'room' ? { room: scope.room! } : {}),
+  });
+}
+
+function memoryProvenance(context: ButlerToolRuntimeContext): ButlerMemoryProvenance {
+  const sources = (context.sources ?? []).slice(0, 8);
+  const sourceRefs = sources.map((source) => [
+    `${source.kind}:${source.id}`,
+    source.rid ? `rid=${source.rid}` : '',
+    source.project ? `project=${source.project}` : '',
+  ].filter(Boolean).join('@'));
+  return {
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+    ...(context.taskId ? { taskId: context.taskId } : {}),
+    ...(context.callId ? { callId: context.callId } : {}),
+    butlerSource: sourceRefs.join(',') || 'butler:user-confirmed',
+    summary: sourceRefs.length
+      ? `来自当前 Butler 任务的 ${sourceRefs.length} 个可信来源引用`
+      : '用户在当前 Butler 会话中直接确认',
+  };
+}
+
+function captureMemoryArgs(
+  args: Record<string, unknown>,
+  context: ButlerToolRuntimeContext,
+): CapturedMemoryArgs {
+  const level = memoryScopeLevel(args);
+  const capturedAt = context.now?.() ?? Date.now();
+  const expiresAt = optionalString(args, 'expiresAt');
+  const expiresAtTimestamp = expiresAt ? Date.parse(expiresAt) : undefined;
+  if (expiresAt && !Number.isFinite(expiresAtTimestamp)) {
+    throw new Error('expiresAt 必须是有效的 ISO 日期时间。');
+  }
+  if (expiresAtTimestamp !== undefined && expiresAtTimestamp <= capturedAt) {
+    throw new Error('expiresAt 必须晚于当前时间。');
+  }
+  return {
+    ...args,
+    trustedScope: trustedMemoryScope(context, level),
+    capturedProvenance: memoryProvenance(context),
+    capturedAt,
+    ...(expiresAtTimestamp === undefined ? {} : { expiresAtTimestamp }),
+  };
+}
+
+function capturedMemoryArgs(args: Record<string, unknown>): CapturedMemoryArgs {
+  const captured = args as Partial<CapturedMemoryArgs>;
+  if (!captured.trustedScope || !captured.capturedProvenance || !Number.isFinite(captured.capturedAt)) {
+    throw new Error('记忆工具缺少可信 scope/provenance 快照。');
+  }
+  return captured as CapturedMemoryArgs;
+}
+
+function loadMemoryState(): ButlerMemoryState {
+  return parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
+}
+
+function saveMemoryState(state: ButlerMemoryState): void {
+  writeButlerActiveMemoryV2RawJson(serializeButlerMemoryState(state));
+}
+
+function scopeLabel(scope: ButlerMemoryScope): string {
+  if (scope.room) return `room:${scope.room}${scope.project ? ` / project:${scope.project}` : ''}`;
+  if (scope.project) return `project:${scope.project}`;
+  return `account:${scope.account} @ ${scope.server}`;
+}
+
+function isoTimestamp(value: number | null | undefined): string | null {
+  return value == null ? null : new Date(value).toISOString();
+}
+
+function memoryRecordView(record: ButlerMemoryRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    kind: record.kind,
+    status: record.status,
+    scope: record.scope,
+    subject: record.subject,
+    value: record.value,
+    ...(record.due ? { due: record.due } : {}),
+    confidence: record.confidence,
+    createdAt: isoTimestamp(record.createdAt),
+    confirmedAt: isoTimestamp(record.confirmedAt),
+    expiresAt: isoTimestamp(record.expiresAt),
+    provenance: record.provenance,
+    supersedes: record.supersedes,
+    ...(record.supersededBy ? { supersededBy: record.supersededBy } : {}),
+    ...(record.revokedAt ? { revokedAt: isoTimestamp(record.revokedAt) } : {}),
+    ...(record.restoredFrom ? { restoredFrom: record.restoredFrom } : {}),
+  };
+}
+
 function recallMemory(args: Record<string, unknown>): string {
-  const query = optionalString(args, 'query') ?? '';
-  return JSON.stringify(recallButlerMemory(query).map((entry) => ({
-    id: entry.id,
-    text: entry.text,
-    at: new Date(entry.at).toISOString(),
-  })));
+  const captured = capturedMemoryArgs(args);
+  const includeHistory = optionalBoolean(args, 'includeHistory') ?? false;
+  const limitValue = args.limit;
+  const limit = typeof limitValue === 'number' && Number.isFinite(limitValue)
+    ? Math.max(1, Math.min(100, Math.trunc(limitValue)))
+    : LIMIT;
+  const kindValue = optionalString(args, 'kind');
+  const kind = kindValue ? memoryKind(args) : undefined;
+  const active = recallButlerMemory(loadMemoryState(), captured.trustedScope, {
+    query: optionalString(args, 'query'),
+    limit,
+    now: captured.capturedAt,
+    ...(kind ? { kind } : {}),
+    includeHistory,
+  }).map(memoryRecordView);
+  const legacy = optionalBoolean(args, 'includeLegacy')
+    ? listButlerQuarantinedLegacyMemory().slice(0, limit).map((entry) => ({
+        id: entry.id,
+        status: 'quarantined',
+        confidence: 'legacy-unverified',
+        text: entry.text,
+        at: isoTimestamp(entry.at),
+      }))
+    : [];
+  return JSON.stringify({
+    schemaVersion: BUTLER_MEMORY_SCHEMA_VERSION,
+    scope: captured.trustedScope,
+    records: active,
+    ...(legacy.length ? { quarantinedLegacy: legacy } : {}),
+  });
+}
+
+function writeInput(
+  args: Record<string, unknown>,
+  checkpointId?: string,
+  writeAt?: number,
+) {
+  const captured = capturedMemoryArgs(args);
+  const confirmedAt = writeAt ?? captured.capturedAt;
+  return {
+    kind: memoryKind(args),
+    scope: captured.trustedScope,
+    subject: optionalString(args, 'subject') ?? '',
+    value: optionalString(args, 'value') ?? '',
+    ...(optionalString(args, 'due') ? { due: optionalString(args, 'due') } : {}),
+    provenance: {
+      ...captured.capturedProvenance,
+      ...(checkpointId ? { checkpointId } : {}),
+    },
+    createdAt: confirmedAt,
+    confirmedAt,
+    expiresAt: captured.expiresAtTimestamp ?? null,
+  };
+}
+
+function rememberPreflight(args: Record<string, unknown>): ButlerToolPreflight {
+  const captured = capturedMemoryArgs(args);
+  const result = rememberButlerMemory(
+    loadMemoryState(),
+    writeInput(args),
+    { now: captured.capturedAt, createId: () => '__memory-preview__' },
+  );
+  const action = result.created
+    ? result.record.supersedes.length
+      ? `更新并替代 ${result.record.supersedes.length} 条冲突记忆`
+      : '写入长期记忆'
+    : '确认已存在的相同记忆';
+  return {
+    allowed: true,
+    preview: `${action}（${scopeLabel(captured.trustedScope)}）：${result.record.kind} · ${result.record.subject} = ${result.record.value}`,
+  };
+}
+
+function scopedRecord(args: Record<string, unknown>): ButlerMemoryRecord | undefined {
+  const captured = capturedMemoryArgs(args);
+  const state = loadMemoryState();
+  const id = optionalString(args, 'id');
+  if (!id) return undefined;
+  return recallButlerMemory(state, captured.trustedScope, {
+    includeHistory: true,
+    limit: Math.max(1, state.records.length),
+    now: captured.capturedAt,
+  }).find((record) => record.id === id);
+}
+
+function revokePreflight(args: Record<string, unknown>): ButlerToolPreflight {
+  const record = scopedRecord(args);
+  if (!record) return { allowed: false, reason: '当前 scope 内未找到该记忆。' };
+  if (record.status !== 'active') return { allowed: false, reason: `该记忆当前状态为 ${record.status}，不能撤销。` };
+  return {
+    allowed: true,
+    preview: `撤销长期记忆（${scopeLabel(record.scope)}）：${record.kind} · ${record.subject} = ${record.value}`,
+  };
+}
+
+function restorePreflight(args: Record<string, unknown>): ButlerToolPreflight {
+  const record = scopedRecord(args);
+  if (!record) return { allowed: false, reason: '当前 scope 内未找到该记忆。' };
+  if (record.status === 'active') return { allowed: false, reason: '该记忆仍处于 active，无需恢复。' };
+  return {
+    allowed: true,
+    preview: `恢复长期记忆（${scopeLabel(record.scope)}）：${record.kind} · ${record.subject} = ${record.value}`,
+  };
+}
+
+function quarantinedLegacy(args: Record<string, unknown>) {
+  const legacyId = optionalString(args, 'legacyId');
+  return listButlerQuarantinedLegacyMemory().find((entry) => entry.id === legacyId);
+}
+
+function importLegacyPreflight(args: Record<string, unknown>): ButlerToolPreflight {
+  const captured = capturedMemoryArgs(args);
+  const legacy = quarantinedLegacy(args);
+  if (!legacy) return { allowed: false, reason: '隔离区中未找到该 legacy 记忆。' };
+  const results = importLegacyButlerMemory(loadMemoryState(), [legacy], {
+    now: captured.capturedAt,
+    createId: () => '__legacy-preview__',
+    mapLegacy: () => ({
+      scope: captured.trustedScope,
+      kind: memoryKind(args),
+      subject: optionalString(args, 'subject') ?? '',
+      value: optionalString(args, 'value') ?? '',
+      ...(optionalString(args, 'due') ? { due: optionalString(args, 'due') } : {}),
+      provenance: {
+        ...captured.capturedProvenance,
+        butlerSource: `legacy-v1:${legacy.id}`,
+        summary: `用户显式导入隔离记忆 ${legacy.id}`,
+      },
+      expiresAt: captured.expiresAtTimestamp ?? null,
+    }),
+  });
+  const record = results.at(-1)?.record;
+  if (!record) return { allowed: false, reason: 'legacy 记忆内容无效，不能导入。' };
+  return {
+    allowed: true,
+    preview: `显式导入隔离记忆（${scopeLabel(record.scope)}，legacy-unverified）：${record.kind} · ${record.subject} = ${record.value}`,
+  };
 }
 
 function validTime(time: string): boolean {
@@ -327,6 +615,27 @@ function queryParameters(description: string): Record<string, unknown> {
     additionalProperties: false,
   };
 }
+
+const memoryScopeParameter = {
+  type: 'string',
+  enum: ['account', 'project', 'room'],
+  description: '显式记忆范围。server/account 始终由 RocketX 可信上下文提供；project/room 也只能取当前上下文。',
+};
+
+const memoryKindParameter = {
+  type: 'string',
+  enum: ['alias', 'preference', 'commitment'],
+  description: '长期记忆类型：别名、偏好或已确认承诺。',
+};
+
+const memoryWriteProperties = {
+  kind: memoryKindParameter,
+  scope: memoryScopeParameter,
+  subject: { type: 'string', description: '稳定的记忆主题或冲突键，例如 reply-style 或 u:zhangsan。' },
+  value: { type: 'string', description: '要保存的值；不得包含可查询的动态工作状态。' },
+  due: { type: 'string', description: '仅 commitment 可用的到期描述。' },
+  expiresAt: { type: 'string', description: '可选 ISO 日期时间；到期后默认不再召回。' },
+};
 
 export function createButlerTools(): ButlerTool[] {
   return [
@@ -423,14 +732,23 @@ export function createButlerTools(): ButlerTool[] {
     }),
     defineButlerTool({
       name: 'recall_memory',
-      description: '按关键词检索 AI 的全部长期记忆；用于近期提示未注入的偏好、纠错、别名、决定和承诺。',
+      description: '在当前可信 server/account 下按显式 scope 召回 alias、偏好和已确认承诺；不会跨账号或 sibling project/room。',
       parameters: {
         type: 'object',
-        properties: { query: { type: 'string', description: '要召回的事实关键词；省略时返回最近记忆。' } },
+        properties: {
+          scope: memoryScopeParameter,
+          query: { type: 'string', description: '主题、值或承诺到期描述的关键词；省略时返回该 scope 的最近记忆。' },
+          kind: memoryKindParameter,
+          limit: { type: 'integer', description: '最多返回多少条，默认 20，最大 100。' },
+          includeHistory: { type: 'boolean', description: '是否显式包含 superseded/revoked/已过期历史，默认 false。' },
+          includeLegacy: { type: 'boolean', description: '是否显式查看尚未导入的 v1 隔离区，默认 false。' },
+        },
+        required: ['scope'],
         additionalProperties: false,
       },
       effect: 'read',
       capability: 'memory.read',
+      capture: captureMemoryArgs,
       execute: async (args) => recallMemory(args),
     }),
     defineButlerTool({
@@ -448,23 +766,169 @@ export function createButlerTools(): ButlerTool[] {
     }),
     defineButlerTool({
       name: 'remember',
-      description: '为用户生成长期记忆写入草案；必须等用户在 RocketX 中确认后才会写入。不要存储能从数据里查到的内容。',
+      description: '为 alias、偏好或已确认承诺生成 scoped v2 长期记忆草案；必须等用户在 RocketX 中确认后才写入。',
       parameters: {
         type: 'object',
-        properties: { fact: { type: 'string', description: '要长期记住的事实。' } },
-        required: ['fact'],
+        properties: memoryWriteProperties,
+        required: ['kind', 'scope', 'subject', 'value'],
         additionalProperties: false,
       },
       effect: 'write',
       capability: 'memory.write',
-      idempotencyKey: (args) => `memory:${optionalString(args, 'fact')?.toLocaleLowerCase() ?? ''}`,
-      preflight: (args) => {
-        const fact = optionalString(args, 'fact');
-        return fact
-          ? { allowed: true, preview: `写入长期记忆：${fact}` }
-          : { allowed: false, reason: '没有可记住的内容。' };
+      capture: captureMemoryArgs,
+      idempotencyKey: (args) => {
+        const captured = capturedMemoryArgs(args);
+        return JSON.stringify({
+          schemaVersion: BUTLER_MEMORY_SCHEMA_VERSION,
+          action: 'remember',
+          kind: memoryKind(args),
+          scope: captured.trustedScope,
+          subject: optionalString(args, 'subject')?.toLocaleLowerCase() ?? '',
+          value: optionalString(args, 'value') ?? '',
+          due: optionalString(args, 'due') ?? null,
+          expiresAt: captured.expiresAtTimestamp ?? null,
+        });
       },
-      execute: async (args) => rememberButlerFact(optionalString(args, 'fact') ?? ''),
+      preflight: rememberPreflight,
+      execute: async (args, { checkpoint, context }) => {
+        const captured = capturedMemoryArgs(args);
+        const result = rememberButlerMemory(
+          loadMemoryState(),
+          writeInput(args, checkpoint.id, context.now?.() ?? Date.now()),
+          { now: context.now?.() ?? Date.now() },
+        );
+        if (result.created) saveMemoryState(result.state);
+        return result.created
+          ? `已记录 ${result.record.kind} 记忆（${scopeLabel(captured.trustedScope)}）：${result.record.subject} = ${result.record.value}`
+          : `相同 ${result.record.kind} 记忆已存在（${scopeLabel(captured.trustedScope)}）：${result.record.subject} = ${result.record.value}`;
+      },
+    }),
+    defineButlerTool({
+      name: 'revoke_memory',
+      description: '生成撤销 scoped 长期记忆的草案；只改变状态，不硬删除记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '要撤销的 v2 记忆 id。' },
+          scope: memoryScopeParameter,
+        },
+        required: ['id', 'scope'],
+        additionalProperties: false,
+      },
+      effect: 'write',
+      capability: 'memory.write',
+      capture: captureMemoryArgs,
+      idempotencyKey: (args) => JSON.stringify({
+        schemaVersion: BUTLER_MEMORY_SCHEMA_VERSION,
+        action: 'revoke',
+        scope: capturedMemoryArgs(args).trustedScope,
+        id: optionalString(args, 'id') ?? '',
+      }),
+      preflight: revokePreflight,
+      execute: async (args, { context }) => {
+        const state = loadMemoryState();
+        const id = optionalString(args, 'id') ?? '';
+        const target = scopedRecord(args);
+        if (!target) throw new Error('当前 scope 内未找到该记忆。');
+        const result = revokeButlerMemory(state, id, { now: context.now?.() ?? Date.now() });
+        if (!result || result.record.status !== 'revoked') throw new Error('该记忆不能撤销。');
+        saveMemoryState(result.state);
+        return `已撤销 ${result.record.kind} 记忆（${scopeLabel(result.record.scope)}）：${result.record.subject}`;
+      },
+    }),
+    defineButlerTool({
+      name: 'restore_memory',
+      description: '生成恢复 superseded/revoked scoped 长期记忆的草案；恢复会新建 active 记录并保留历史。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '要恢复的历史 v2 记忆 id。' },
+          scope: memoryScopeParameter,
+        },
+        required: ['id', 'scope'],
+        additionalProperties: false,
+      },
+      effect: 'write',
+      capability: 'memory.write',
+      capture: captureMemoryArgs,
+      idempotencyKey: (args) => JSON.stringify({
+        schemaVersion: BUTLER_MEMORY_SCHEMA_VERSION,
+        action: 'restore',
+        scope: capturedMemoryArgs(args).trustedScope,
+        id: optionalString(args, 'id') ?? '',
+      }),
+      preflight: restorePreflight,
+      execute: async (args, { checkpoint, context }) => {
+        const state = loadMemoryState();
+        const target = scopedRecord(args);
+        if (!target) throw new Error('当前 scope 内未找到该记忆。');
+        const captured = capturedMemoryArgs(args);
+        const result = restoreButlerMemory(state, target.id, {
+          now: context.now?.() ?? Date.now(),
+          provenance: {
+            ...captured.capturedProvenance,
+            checkpointId: checkpoint.id,
+          },
+        });
+        saveMemoryState(result.state);
+        return `已恢复 ${result.record.kind} 记忆（${scopeLabel(result.record.scope)}）：${result.record.subject} = ${result.record.value}`;
+      },
+    }),
+    defineButlerTool({
+      name: 'import_legacy_memory',
+      description: '把一条显式选择的 v1 隔离记忆映射成 scoped v2 记录；导入后仍标记 legacy-unverified。',
+      parameters: {
+        type: 'object',
+        properties: {
+          legacyId: { type: 'string', description: 'recall_memory(includeLegacy=true) 返回的隔离记忆 id。' },
+          ...memoryWriteProperties,
+        },
+        required: ['legacyId', 'kind', 'scope', 'subject', 'value'],
+        additionalProperties: false,
+      },
+      effect: 'write',
+      capability: 'memory.write',
+      capture: captureMemoryArgs,
+      idempotencyKey: (args) => JSON.stringify({
+        schemaVersion: BUTLER_MEMORY_SCHEMA_VERSION,
+        action: 'import-legacy',
+        legacyId: optionalString(args, 'legacyId') ?? '',
+        kind: memoryKind(args),
+        scope: capturedMemoryArgs(args).trustedScope,
+        subject: optionalString(args, 'subject')?.toLocaleLowerCase() ?? '',
+        value: optionalString(args, 'value') ?? '',
+        due: optionalString(args, 'due') ?? null,
+        expiresAt: capturedMemoryArgs(args).expiresAtTimestamp ?? null,
+      }),
+      preflight: importLegacyPreflight,
+      execute: async (args, { checkpoint, context }) => {
+        const legacy = quarantinedLegacy(args);
+        if (!legacy) throw new Error('隔离区中未找到该 legacy 记忆。');
+        const captured = capturedMemoryArgs(args);
+        const results = importLegacyButlerMemory(loadMemoryState(), [legacy], {
+          now: context.now?.() ?? Date.now(),
+          mapLegacy: () => ({
+            scope: captured.trustedScope,
+            kind: memoryKind(args),
+            subject: optionalString(args, 'subject') ?? '',
+            value: optionalString(args, 'value') ?? '',
+            ...(optionalString(args, 'due') ? { due: optionalString(args, 'due') } : {}),
+            provenance: {
+              ...captured.capturedProvenance,
+              checkpointId: checkpoint.id,
+              butlerSource: `legacy-v1:${legacy.id}`,
+              summary: `用户显式导入隔离记忆 ${legacy.id}`,
+            },
+            expiresAt: captured.expiresAtTimestamp ?? null,
+          }),
+        });
+        const result = results.at(-1);
+        if (!result) throw new Error('legacy 记忆内容无效，不能导入。');
+        if (result.created) saveMemoryState(result.state);
+        return result.created
+          ? `已导入 legacy-unverified 记忆（${scopeLabel(result.record.scope)}）：${result.record.subject} = ${result.record.value}`
+          : `相同 legacy-unverified 记忆已存在（${scopeLabel(result.record.scope)}）：${result.record.subject} = ${result.record.value}`;
+      },
     }),
     defineButlerTool({
       name: 'draft_routine',
