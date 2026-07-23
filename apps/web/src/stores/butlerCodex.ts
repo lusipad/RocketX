@@ -30,6 +30,7 @@ export interface ButlerCodexRoomContext {
 export interface ButlerCodexAskOptions {
   text: string;
   context?: ButlerSurfaceContext | ButlerCodexRoomContext;
+  taskContext?: string;
   now?: number;
   onEvent?: (event: AgentLoopEvent) => void;
 }
@@ -120,12 +121,17 @@ export function friendlyButlerCodexError(error: unknown): string {
   return 'Codex 大脑暂时无法回答，请稍后重试。';
 }
 
-function roomPrefixedInput(text: string, context?: ButlerSurfaceContext | ButlerCodexRoomContext): string {
-  if (!context) return text;
+function roomPrefixedInput(
+  text: string,
+  context?: ButlerSurfaceContext | ButlerCodexRoomContext,
+  taskContext?: string,
+): string {
+  const taskPrefix = taskContext ? `${taskContext}\n\n` : '';
+  if (!context) return `${taskPrefix}${text}`;
   if (!('kind' in context)) {
-    return `（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+    return `${taskPrefix}（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
   }
-  return `（${butlerContextPrompt(context)}）\n\n${text}`;
+  return `${taskPrefix}（${butlerContextPrompt(context)}）\n\n${text}`;
 }
 
 function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {
@@ -395,7 +401,10 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
     residentTurn = controller;
     residentEvent = options.onEvent;
     residentStatus = 'running';
-    const result = await controller.start(await ensureResidentClient(), roomPrefixedInput(text, options.context));
+    const result = await controller.start(
+      await ensureResidentClient(),
+      roomPrefixedInput(text, options.context, options.taskContext),
+    );
     residentStatus = 'ready';
     residentTurn = undefined;
     residentEvent = undefined;

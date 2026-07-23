@@ -421,29 +421,64 @@ test('场景基线 7/7：跨重启续跑', async () => {
 
   try {
     await useButler.getState().hydrate();
-    await useButler.getState().ask('先继续昨天的调查');
+    await useButler.getState().ask('调查昨天的问题');
     await flushButlerPersist();
 
     const scope = `${getServerBase() || 'same-origin'}:resume-user`;
     const stored = await appData.get<Record<string, unknown>>('builtin:butler', scope);
     assert.ok(stored, '应按 server scope + userId 持久化');
+    const registry = await appData.get<{
+      sessions: Array<{ taskState?: { goal: string; status: string; manifest: { schemaVersion: number } } }>;
+    }>('builtin:butler', `session-registry:${scope}`);
+    const taskState = registry?.sessions[0]?.taskState;
+    assert.equal(taskState?.goal, '调查昨天的问题');
+    assert.equal(taskState?.status, 'completed');
+    assert.equal(taskState?.manifest.schemaVersion, 1);
 
     resetButlerPersistenceForTests();
     useButler.getState().reset();
     await useButler.getState().hydrate();
-    assert.equal(useButler.getState().lines.some((line) => line.text === '先继续昨天的调查'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '调查昨天的问题'), true);
+    assert.equal(useButler.getState().taskState?.goal, '调查昨天的问题');
 
     await useButler.getState().ask('补充第二个问题');
     assert.deepEqual(
       useButler.getState().history.slice(-4).map(({ role, content }) => ({ role, content })),
       [
-        { role: 'user', content: '先继续昨天的调查' },
-        { role: 'assistant', content: '回复：先继续昨天的调查' },
+        { role: 'user', content: '调查昨天的问题' },
+        { role: 'assistant', content: '回复：调查昨天的问题' },
         { role: 'user', content: '补充第二个问题' },
         { role: 'assistant', content: '回复：补充第二个问题' },
       ],
     );
     assert.equal(baseline.completion, 'partial');
+  } finally {
+    restoreRunner();
+  }
+});
+
+test('不完整指代不调用大脑，补齐后把任务合同注入实际回合', async () => {
+  login('clarify-user');
+  let calls = 0;
+  let systemPrompt = '';
+  const restoreRunner = setButlerLoopRunner(async (options) => {
+    calls += 1;
+    systemPrompt = String(options.messages[0]?.content ?? '');
+    return { text: '已完成只读比较。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('比较这两个 PR');
+    assert.equal(calls, 0);
+    assert.equal(useButler.getState().taskState?.status, 'awaiting-clarification');
+    assert.equal(useButler.getState().lines.at(-1)?.text, '请给出要比较的两个 PR 编号。');
+
+    await useButler.getState().ask('PR #101 和 PR #102');
+    assert.equal(calls, 1);
+    assert.equal(useButler.getState().taskState?.status, 'completed');
+    assert.match(systemPrompt, /"scenario":"compare-pull-requests"/);
+    assert.match(systemPrompt, /"freshness":"loaded-snapshot"/);
+    assert.match(systemPrompt, /不评论、合并或修改 PR/);
   } finally {
     restoreRunner();
   }
