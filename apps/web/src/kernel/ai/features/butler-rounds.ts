@@ -182,17 +182,18 @@ function objectArray(value: unknown, label: string): Record<string, unknown>[] {
 }
 
 const FORBIDDEN_UI_WORDS = /巡视|台账|对账|传感器|大脑|ephemeral/i;
+const INVALID_UI_COPY_ERROR = 'AI 返回内容不符合界面用语要求';
 
 function uiString(value: unknown, label: string): string {
   const parsed = requiredString(value, label);
-  if (FORBIDDEN_UI_WORDS.test(parsed)) throw new Error('AI 返回内容不符合界面用语要求');
+  if (FORBIDDEN_UI_WORDS.test(parsed)) throw new Error(INVALID_UI_COPY_ERROR);
   return parsed;
 }
 
 function optionalUiString(value: unknown, label: string): string | undefined {
   const parsed = optionalString(value, label);
   if (parsed && FORBIDDEN_UI_WORDS.test(parsed)) {
-    throw new Error('AI 返回内容不符合界面用语要求');
+    throw new Error(INVALID_UI_COPY_ERROR);
   }
   return parsed;
 }
@@ -340,9 +341,29 @@ export async function runButlerRounds(
       { role: 'user', content: JSON.stringify(snapshot) },
     ],
   });
-  return suppressMutedRoundItems(
-    parseRoundsResult(value, refs),
+  const accept = (candidate: unknown) => suppressMutedRoundItems(
+    parseRoundsResult(candidate, refs),
     snapshotRefTitles(snapshot),
     input.mutes ?? [],
   );
+  try {
+    return accept(value);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== INVALID_UI_COPY_ERROR) throw error;
+    const repaired = await collectStructuredObject(gateway, 'butler-rounds', {
+      responseFormat: 'json',
+      thinking: 'disabled',
+      maxTokens: 1600,
+      messages: [
+        { role: 'system', content: BUTLER_ROUNDS_SYSTEM_PROMPT },
+        { role: 'user', content: JSON.stringify(snapshot) },
+        { role: 'assistant', content: JSON.stringify(value) },
+        {
+          role: 'user',
+          content: `${INVALID_UI_COPY_ERROR}。请仅返回修正后的完整 JSON 对象，不要解释。`,
+        },
+      ],
+    });
+    return accept(repaired);
+  }
 }

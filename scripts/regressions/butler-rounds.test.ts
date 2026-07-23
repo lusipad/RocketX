@@ -141,6 +141,57 @@ test('合法 JSON 会按契约解析，并发送 JSON 模式请求', async () =>
   assert.equal(result.items[0].why, '今天到期');
 });
 
+test('界面用语校验失败时携带原因修正一次（issue #184）', async () => {
+  const requests: AiChatRequest[] = [];
+  const responses: AiChunk[][] = [
+    [{
+      content: JSON.stringify({
+        headline: '本轮巡视完成',
+        summary: '有一件事值得现在处理。',
+        items: [],
+        proposals: [],
+        suppressed: [],
+      }),
+      finishReason: 'stop',
+    }],
+    [{
+      content: resultJson(),
+      finishReason: 'stop',
+    }],
+  ];
+  const repairGateway: AiChatGateway = {
+    async *chat(_capability, request) {
+      requests.push(request);
+      for (const chunk of responses[requests.length - 1] ?? []) yield chunk;
+    },
+  };
+
+  const result = await runButlerRounds(input(), repairGateway);
+
+  assert.equal(result.headline, '今天先处理承诺');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].messages.slice(-2).map((message) => message.role), ['assistant', 'user']);
+  assert.match(requests[1].messages.at(-1)?.content ?? '', /不符合界面用语要求/);
+});
+
+test('界面用语修正仍不合规时停止重试', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => runButlerRounds(input(), gateway([{
+      content: JSON.stringify({
+        headline: '本轮巡视完成',
+        summary: '没有需要处理的事项。',
+        items: [],
+        proposals: [],
+        suppressed: [],
+      }),
+      finishReason: 'stop',
+    }], () => { calls += 1; })),
+    /不符合界面用语要求/,
+  );
+  assert.equal(calls, 2);
+});
+
 test('未知 ref 会让整轮失败', async () => {
   await assert.rejects(
     () => runButlerRounds(input(), gateway([
