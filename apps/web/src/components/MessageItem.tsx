@@ -34,6 +34,7 @@ import {
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
 import { saveFile } from '../lib/download';
+import type { DownloadSourceV1 } from '../lib/downloadHistory';
 import { toast } from '../stores/toast';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import ImageLightbox from './ImageLightbox';
@@ -85,11 +86,13 @@ function ImageAttachment({
   fullPath,
   name,
   dims,
+  source,
 }: {
   thumbPath: string;
   fullPath: string;
   name: string;
   dims?: { width?: number; height?: number };
+  source: DownloadSourceV1;
 }) {
   const autoLoad = usePrefs((s) => s.prefs.autoImageLoad);
   const [lightbox, setLightbox] = useState(false);
@@ -129,7 +132,12 @@ function ImageAttachment({
         />
       </button>
       {lightbox && (
-        <ImageLightbox path={fullPath} fileName={name} onClose={() => setLightbox(false)} />
+        <ImageLightbox
+          path={fullPath}
+          fileName={name}
+          source={source}
+          onClose={() => setLightbox(false)}
+        />
       )}
     </>
   );
@@ -145,11 +153,13 @@ function FileAttachment({
   name: fileName,
   size,
   localPath,
+  source,
 }: {
   att: RcMessageAttachment;
   name?: string;
   size?: number;
   localPath?: string;
+  source: DownloadSourceV1;
 }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -166,7 +176,7 @@ function FileAttachment({
         const { openPath } = await import('@tauri-apps/plugin-opener');
         await openPath(localPath);
       } else {
-        await saveFile(path, name);
+        await saveFile(path, name, source);
       }
     } catch (err) {
       toast.error(err, '下载失败');
@@ -213,6 +223,7 @@ function FileAttachment({
           path={path}
           fileName={name}
           size={size}
+          source={source}
           onClose={() => setPreview(false)}
         />
       )}
@@ -293,7 +304,15 @@ function safeTitleHref(link: string): string | null {
 }
 
 /** 附件卡片：ADO 集成等富文本消息载体 */
-function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: RcMessage }) {
+function AttachmentCard({
+  att,
+  message,
+  source,
+}: {
+  att: RcMessageAttachment;
+  message: RcMessage;
+  source: DownloadSourceV1;
+}) {
   const renderers = useKernelContributions('message.renderer');
   // 引用回复
   if (att.message_link) {
@@ -308,6 +327,7 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
         fullPath={att.title_link ?? att.image_url}
         name={name}
         dims={att.image_dimensions}
+        source={source}
       />
     );
   }
@@ -319,6 +339,7 @@ function AttachmentCard({ att, message }: { att: RcMessageAttachment; message: R
         name={message.file?.name}
         size={message.file?.size}
         localPath={message.rocketxLocalPath}
+        source={source}
       />
     );
   }
@@ -861,7 +882,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
                 {message.attachments?.map((att, i) => (
-                  <AttachmentCard key={i} att={att} message={message} />
+                  <AttachmentCard
+                    key={i}
+                    att={att}
+                    message={message}
+                    source={{ rid: message.rid, roomName, messageId: message._id }}
+                  />
                 ))}
                 {message.urls
                   ?.filter((u) => u.meta && Object.keys(u.meta).length > 0)

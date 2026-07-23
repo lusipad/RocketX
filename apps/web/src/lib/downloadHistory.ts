@@ -1,11 +1,18 @@
 export const DOWNLOAD_HISTORY_VERSION = 1;
 export const MAX_DOWNLOAD_HISTORY = 200;
 
+export interface DownloadSourceV1 {
+  rid: string;
+  roomName: string;
+  messageId: string;
+}
+
 export interface DownloadRecordV1 {
   id: string;
   fileName: string;
   path: string;
   completedAt: number;
+  source?: DownloadSourceV1;
 }
 
 export interface DownloadHistoryV1 {
@@ -35,6 +42,19 @@ export function isAbsoluteLocalPath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path) || path.startsWith('/');
 }
 
+function isDownloadSource(value: unknown): value is DownloadSourceV1 {
+  if (!value || typeof value !== 'object') return false;
+  const source = value as Partial<DownloadSourceV1>;
+  return (
+    typeof source.rid === 'string' &&
+    !!source.rid.trim() &&
+    typeof source.roomName === 'string' &&
+    !!source.roomName.trim() &&
+    typeof source.messageId === 'string' &&
+    !!source.messageId.trim()
+  );
+}
+
 function isDownloadRecord(value: unknown): value is DownloadRecordV1 {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<DownloadRecordV1>;
@@ -44,7 +64,8 @@ function isDownloadRecord(value: unknown): value is DownloadRecordV1 {
     typeof record.path === 'string' &&
     isAbsoluteLocalPath(record.path) &&
     typeof record.completedAt === 'number' &&
-    Number.isFinite(record.completedAt)
+    Number.isFinite(record.completedAt) &&
+    (record.source === undefined || isDownloadSource(record.source))
   );
 }
 

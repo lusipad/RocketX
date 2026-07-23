@@ -6,6 +6,7 @@ import {
   emptyDownloadHistory,
   parseDownloadHistory,
   type DownloadHistoryV1,
+  type DownloadSourceV1,
 } from '../lib/downloadHistory';
 
 interface DownloadHistoryStore {
@@ -13,7 +14,7 @@ interface DownloadHistoryStore {
   ownerServer: string | null;
   history: DownloadHistoryV1;
   hydrate: (userId: string) => void;
-  record: (fileName: string, path: string, completedAt?: number) => void;
+  record: (fileName: string, path: string, source?: DownloadSourceV1, completedAt?: number) => void;
   clear: () => void;
 }
 
@@ -52,7 +53,7 @@ export const useDownloadHistory = create<DownloadHistoryStore>((set, get) => ({
     set({ ownerId: userId, ownerServer: server, history });
   },
 
-  record: (fileName, path, completedAt = Date.now()) => {
+  record: (fileName, path, source, completedAt = Date.now()) => {
     const { ownerId, ownerServer, history } = get();
     if (!ownerId || ownerServer === null) return;
     const next = addDownloadRecord(history, {
@@ -60,6 +61,7 @@ export const useDownloadHistory = create<DownloadHistoryStore>((set, get) => ({
       fileName,
       path,
       completedAt,
+      source,
     });
     persist(ownerServer, ownerId, next);
     set({ history: next });

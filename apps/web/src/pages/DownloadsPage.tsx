@@ -79,6 +79,14 @@ export default function DownloadsPage() {
                 <div className="mt-0.5 truncate text-xs text-ink-3" title={record.path}>
                   {record.path}
                 </div>
+                {record.source && (
+                  <div
+                    className="mt-0.5 truncate text-xs text-ink-3"
+                    title={`${record.source.roomName} · ${record.source.messageId}`}
+                  >
+                    来源：{record.source.roomName}
+                  </div>
+                )}
                 <div className="mt-0.5 text-xs text-ink-3">{completedAtLabel(record.completedAt)}</div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
