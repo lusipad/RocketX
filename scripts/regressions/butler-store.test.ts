@@ -123,6 +123,32 @@ test('管家连续提问会累积模型历史和展示行', async () => {
   }
 });
 
+test('API 管家本轮收到图片，但持久历史只保留图片名称', async () => {
+  resetStore();
+  let captured: AiMessage | undefined;
+  const restore = setButlerLoopRunner(async (options) => {
+    captured = options.messages.at(-1);
+    return { text: '看到了。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('分析截图', undefined, [{
+      name: 'screen.png',
+      type: 'image/png',
+      size: 5,
+      dataUrl: 'data:image/png;base64,aW1hZ2U=',
+    }]);
+
+    assert.deepEqual(captured?.images, [{ dataUrl: 'data:image/png;base64,aW1hZ2U=' }]);
+    assert.equal(useButler.getState().lines.at(-2)?.attachments?.[0]?.name, 'screen.png');
+    assert.equal(useButler.getState().history.some((message) => !!message.images?.length), false);
+    assert.match(useButler.getState().history[0].content, /screen\.png/);
+  } finally {
+    restore();
+    resetStore();
+  }
+});
+
 test('管家提示会带入可注入的本地当前时间', async () => {
   resetStore();
   const restoreNow = setButlerNowProvider(() => new Date(2026, 0, 5, 8, 30).getTime());

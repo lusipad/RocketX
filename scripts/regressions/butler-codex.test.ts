@@ -23,6 +23,7 @@ import {
   residentCodexThreadSnapshot,
   resetButlerCodexRuntime,
   runButlerCodexEphemeral,
+  setButlerCodexImageMaterializer,
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
   stopButlerCodexTurn,
@@ -198,6 +199,47 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     assert.deepEqual(await asking, { text: '完成。' });
     assert.deepEqual(events, ['content']);
   } finally {
+    await restore();
+  }
+});
+
+test('Codex 管家把用户图片写入当前会话并作为 localImage 输入', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const materialized: Array<{ sessionId: string; names: string[] }> = [];
+  const restoreImages = setButlerCodexImageMaterializer(async (sessionId, images) => {
+    materialized.push({ sessionId, names: images.map((image) => image.name) });
+    return ['C:/RocketX/AppData/butler/screenshot.png'];
+  });
+  try {
+    const asking = askButlerCodex({
+      text: '分析截图',
+      images: [{
+        name: 'screenshot.png',
+        type: 'image/png',
+        size: 5,
+        dataUrl: 'data:image/png;base64,aW1hZ2U=',
+      }],
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport);
+    const turnStart = await startTurn(transport);
+    const input = (turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>;
+    assert.equal(input[0].type, 'text');
+    assert.match(String(input[0].text), /分析截图/);
+    assert.deepEqual(input[0].text_elements, []);
+    assert.deepEqual(input[1], {
+      type: 'localImage',
+      path: 'C:/RocketX/AppData/butler/screenshot.png',
+    });
+    assert.equal(materialized.length, 1);
+    assert.deepEqual(materialized[0].names, ['screenshot.png']);
+    assert.match(materialized[0].sessionId, /^butler-/);
+    await completeTurn(transport);
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    restoreImages();
     await restore();
   }
 });

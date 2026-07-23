@@ -102,6 +102,38 @@ test('Azure OpenAI v1 使用 api-key 且保留部署名作为 model', async () =
   assert.equal(body.model, 'summary-deployment');
 });
 
+test('OpenAI-compatible 把管家图片作为标准多模态用户内容发送', async () => {
+  let body: Record<string, unknown> = {};
+  const provider = new OpenAiCompatibleProvider({
+    id: 'vision',
+    baseUrl: 'https://api.example.com/v1',
+    model: 'vision-model',
+    locality: 'external',
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseResponse(['data: {"choices":[{"delta":{"content":"看到了"},"finish_reason":"stop"}]}\n\n']);
+    },
+  });
+
+  for await (const _chunk of provider.chat({
+    messages: [{
+      role: 'user',
+      content: '这张图是什么？',
+      images: [{ dataUrl: 'data:image/png;base64,aW1hZ2U=' }],
+    }],
+  })) {
+    // 消费完整流
+  }
+
+  assert.deepEqual(body.messages, [{
+    role: 'user',
+    content: [
+      { type: 'text', text: '这张图是什么？' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } },
+    ],
+  }]);
+});
+
 test('Anthropic 适配器把 system 提到顶层并解析命名 SSE 事件', async () => {
   let body: Record<string, unknown> = {};
   const provider = new AnthropicProvider({
@@ -142,6 +174,45 @@ test('Anthropic 适配器把 system 提到顶层并解析命名 SSE 事件', asy
       finishReason: 'end_turn',
     },
   ]);
+});
+
+test('Anthropic 把管家图片转换为 base64 image block', async () => {
+  let body: Record<string, unknown> = {};
+  const provider = new AnthropicProvider({
+    id: 'anthropic-vision',
+    baseUrl: 'https://api.anthropic.com',
+    model: 'claude-sonnet',
+    locality: 'external',
+    getApiKey: async () => 'anthropic-secret',
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseResponse([
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"看到了"}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+      ]);
+    },
+  });
+
+  for await (const _chunk of provider.chat({
+    messages: [{
+      role: 'user',
+      content: '分析截图',
+      images: [{ dataUrl: 'data:image/jpeg;base64,aW1hZ2U=' }],
+    }],
+  })) {
+    // 消费完整流
+  }
+
+  assert.deepEqual(body.messages, [{
+    role: 'user',
+    content: [
+      { type: 'text', text: '分析截图' },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: 'aW1hZ2U=' },
+      },
+    ],
+  }]);
 });
 
 test('仅本地路由在调用 Provider 前拒绝外部模型且审计不包含 prompt', async () => {

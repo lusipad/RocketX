@@ -49,6 +49,24 @@ async function seedButlerAnswer(page: Page): Promise<void> {
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
 }
 
+async function captureButlerAsks(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    const captured: unknown[] = [];
+    (window as Window & { __capturedButlerAsks?: unknown[] }).__capturedButlerAsks = captured;
+    useButler.setState({
+      ask: async (text: string, context: unknown, images: unknown[]) => {
+        captured.push({ text, context, images });
+      },
+    });
+  });
+}
+
 async function seedMemoryApproval(page: Page): Promise<{ status: string; checkpointId: string | null }> {
   return page.evaluate(async () => {
     const loadTools = new Function('return import("/src/lib/butlerTools.ts")') as () => Promise<{
@@ -205,6 +223,66 @@ test('来源标签可返回原消息且不会发送消息', async ({ page }) => 
 
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
   expect(sentMessages).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('完整管家页可以发送图片和文字', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await captureButlerAsks(page);
+
+  await page.getByLabel('选择管家图片').setInputFiles({
+    name: 'release.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('image-bytes'),
+  });
+  await expect(page.getByAltText('release.png')).toBeVisible();
+  await page.getByPlaceholder(/例如：搜索张三/).fill('分析这张发布截图');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+
+  const captured = await page.evaluate(() => (
+    (window as Window & { __capturedButlerAsks?: unknown[] }).__capturedButlerAsks
+  ));
+  expect(captured).toEqual([{
+    text: '分析这张发布截图',
+    context: undefined,
+    images: [{
+      name: 'release.png',
+      type: 'image/png',
+      size: 11,
+      dataUrl: 'data:image/png;base64,aW1hZ2UtYnl0ZXM=',
+    }],
+  }]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家侧栏可以仅发送图片并保留房间上下文', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  await captureButlerAsks(page);
+
+  await page.getByLabel('选择管家图片').setInputFiles({
+    name: 'room.webp',
+    mimeType: 'image/webp',
+    buffer: Buffer.from('room-image'),
+  });
+  await page.locator('form').filter({ has: page.getByPlaceholder('问问这个房间的讨论…') })
+    .getByRole('button', { name: '发送', exact: true })
+    .click();
+
+  const captured = await page.evaluate(() => (
+    (window as Window & { __capturedButlerAsks?: unknown[] }).__capturedButlerAsks
+  ));
+  expect(captured).toEqual([{
+    text: '',
+    context: { rid: 'room-general', roomName: 'General' },
+    images: [{
+      name: 'room.webp',
+      type: 'image/webp',
+      size: 10,
+      dataUrl: 'data:image/webp;base64,cm9vbS1pbWFnZQ==',
+    }],
+  }]);
   expect(pageErrors).toEqual([]);
 });
 

@@ -56,7 +56,15 @@ function usage(value: OpenAiUsage | null | undefined): AiUsage | undefined {
 function apiMessages(messages: AiMessage[]): Array<Record<string, unknown>> {
   return messages.map((message) => ({
     role: message.role,
-    content: message.content,
+    content: message.images?.length
+      ? [
+          ...(message.content ? [{ type: 'text', text: message.content }] : []),
+          ...message.images.map((image) => ({
+            type: 'image_url',
+            image_url: { url: image.dataUrl },
+          })),
+        ]
+      : message.content,
     ...(message.name ? { name: message.name } : {}),
     ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
     ...(message.role === 'assistant' && message.toolCalls?.length
