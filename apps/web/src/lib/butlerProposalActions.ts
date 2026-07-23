@@ -1,6 +1,7 @@
 import type { RoundsProposal } from '../kernel/ai/features/butler-rounds';
 import { todayKey, useTodos, type Todo } from '../stores/todos';
 import { useWorkbench, type WorkItem } from '../stores/workbench';
+import { createButlerToolCheckpoint, type ButlerToolCheckpoint } from './butlerToolRuntime';
 import {
   markProposalHandled,
   type ButlerProposalHandledStorage,
@@ -27,6 +28,50 @@ export interface ButlerProposalContext {
 }
 
 export type ButlerProposalResult = 'applied' | 'already-applied' | 'needs-who' | 'missing-ref';
+
+export function createButlerProposalCheckpoint(
+  proposal: RoundsProposal,
+  input: {
+    action: 'accept' | 'dismiss';
+    generatedAt?: string;
+    today?: string;
+    who?: string;
+    now?: number;
+  },
+): ButlerToolCheckpoint {
+  let actionLabel = '把建议写入待办台账';
+  if (input.action === 'dismiss') {
+    actionLabel = '忽略本轮建议';
+  } else if (proposal.kind === 'close-wait') {
+    actionLabel = '销账';
+  }
+  const idempotencyKey = [
+    'rounds',
+    input.generatedAt ?? 'current',
+    input.action,
+    proposal.kind,
+    proposal.ref,
+  ].join(':');
+  return createButlerToolCheckpoint({
+    toolName: `rounds.${input.action}.${proposal.kind}`,
+    effect: 'write',
+    capability: input.action === 'dismiss' ? 'rounds.proposals.dismiss' : 'todos.write',
+    idempotencyKey,
+    status: 'approval-required',
+    params: {
+      action: input.action,
+      kind: proposal.kind,
+      ref: proposal.ref,
+      reason: proposal.reason,
+      ...(proposal.who ? { proposalWho: proposal.who } : {}),
+      ...(input.who ? { who: input.who } : {}),
+      ...(proposal.due ? { due: proposal.due } : {}),
+      ...(input.today ? { today: input.today } : {}),
+    },
+    preview: `${actionLabel}：${proposal.reason}`,
+    now: input.now,
+  });
+}
 
 function refId(ref: string, prefix: string): string | null {
   return ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : null;

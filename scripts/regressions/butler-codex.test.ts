@@ -15,6 +15,7 @@ import {
   setPersona,
   type ButlerProfileStorage,
 } from '../../apps/web/src/lib/butlerProfile';
+import type { ButlerToolCheckpoint } from '../../apps/web/src/lib/butlerToolRuntime';
 import {
   askButlerCodex,
   hydrateResidentCodexThread,
@@ -251,6 +252,55 @@ test('动态工具仅执行当前线程已注册工具，并按 Spike D 格式�
     await completeTurn(transport);
     await asking;
   } finally {
+    await restore();
+  }
+});
+
+test('Codex 动态写工具只生成审批 checkpoint，不会直接写长期记忆', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const profile = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(profile);
+  const checkpoints = new Map<string, ButlerToolCheckpoint>();
+  try {
+    const asking = askButlerCodex({
+      text: '记住我偏好简短回复',
+      toolRuntimeContext: () => ({
+        taskId: 'task-codex-write',
+        loadCheckpoint: (id) => checkpoints.get(id),
+        saveCheckpoint: (checkpoint) => checkpoints.set(checkpoint.id, checkpoint),
+        requestApproval: () => undefined,
+        writeAudit: () => undefined,
+      }),
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport);
+    await startTurn(transport);
+
+    transport.line({
+      id: 81,
+      method: 'item/tool/call',
+      params: {
+        threadId: 'butler-thread',
+        turnId: 'butler-turn',
+        callId: 'remember-1',
+        namespace: null,
+        tool: 'remember',
+        arguments: { fact: '我偏好简短回复' },
+      },
+    });
+    await tick();
+
+    const response = transport.writes.find((message) => message.id === 81);
+    assert.match(JSON.stringify(response), /approval-required.*尚未执行/);
+    assert.equal([...checkpoints.values()][0]?.status, 'approval-required');
+    assert.equal(profile.get('memory'), null);
+
+    await completeTurn(transport);
+    await asking;
+  } finally {
+    restoreProfile();
     await restore();
   }
 });

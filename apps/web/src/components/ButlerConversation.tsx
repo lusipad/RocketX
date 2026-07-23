@@ -22,6 +22,7 @@ import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
+import ButlerToolApprovals from './ButlerToolApprovals';
 
 const QUICK_PROMPTS = [
   '搜索最近关于发布失败的消息',
@@ -48,6 +49,8 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const askButler = useButler((state) => state.ask);
   const stopButler = useButler((state) => state.stop);
   const routineDraft = useButler((state) => state.routineDraft);
+  const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
+  const actionDraft = useButler((state) => state.actionDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
@@ -55,6 +58,9 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const [input, setInput] = useState('');
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
+  const routineCheckpoint = routineDraft
+    ? runtimeCheckpoints.find((item) => item.id === routineDraft.checkpointId)
+    : undefined;
 
   const transferToCodex = async () => {
     setTransferring(true);
@@ -86,6 +92,8 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
     activity,
     butlerError,
     routineDraft,
+    runtimeCheckpoints,
+    actionDraft,
     steps,
   ]);
 
@@ -186,14 +194,19 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div>
           ) : null}
 
+          <div className="ml-10"><ButlerToolApprovals /></div>
+
           {routineDraft ? (
             <div className="ml-10 rounded-lg border border-primary/30 bg-primary-light/40 p-4">
               <div className="text-xs font-medium text-primary">例行事务草案</div>
               <div className="mt-2 font-medium text-ink">{routineDraft.name}</div>
               <div className="mt-1 text-sm text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
+              {routineCheckpoint?.error ? (
+                <div className="mt-1 text-xs text-danger">{routineCheckpoint.error.message}</div>
+              ) : null}
               <div className="mt-3 flex items-center justify-end gap-2">
-                <button type="button" onClick={dismissRoutineDraft} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover">取消</button>
-                <button type="button" onClick={confirmRoutineDraft} className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover">确认启用</button>
+                <button type="button" onClick={() => void dismissRoutineDraft()} className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover">取消</button>
+                <button type="button" onClick={() => void confirmRoutineDraft()} className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover">确认启用</button>
               </div>
             </div>
           ) : null}

@@ -3,7 +3,12 @@ import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { getServerBase, realtime, rest } from '../../apps/web/src/lib/client';
 import { setButlerMentionProvider } from '../../apps/web/src/lib/butlerTools';
-import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
+import { createButlerTools, type ButlerRoutineDraft } from '../../apps/web/src/lib/butlerTools';
+import {
+  formatButlerToolResult,
+  type ButlerToolCheckpoint,
+  type ButlerToolRuntimeContext,
+} from '../../apps/web/src/lib/butlerToolRuntime';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
   flushButlerPersist,
@@ -65,6 +70,14 @@ interface ScenarioBaseline {
   recovery: string;
 }
 
+type RoutineDraftWithCheckpoint = ButlerRoutineDraft & { checkpointId?: string };
+
+interface RuntimeHarness {
+  checkpoints: Map<string, ButlerToolCheckpoint>;
+  approvals: ButlerToolCheckpoint[];
+  context: ButlerToolRuntimeContext;
+}
+
 function parseJson<T>(raw: string): T {
   return JSON.parse(raw) as T;
 }
@@ -73,6 +86,51 @@ function tool(name: string) {
   const found = createButlerTools().find((item) => item.name === name);
   assert.ok(found, `缺少工具 ${name}`);
   return found;
+}
+
+function runtimeHarness(now = Date.UTC(2026, 6, 23, 9, 30)): RuntimeHarness {
+  const checkpoints = new Map<string, ButlerToolCheckpoint>();
+  const approvals: ButlerToolCheckpoint[] = [];
+  const syncRuntimeCheckpoints = () => {
+    useButler.setState({ runtimeCheckpoints: [...checkpoints.values()] });
+  };
+  return {
+    checkpoints,
+    approvals,
+    context: {
+      now: () => now,
+      loadCheckpoint: async (id) => checkpoints.get(id),
+      saveCheckpoint: async (checkpoint) => {
+        checkpoints.set(checkpoint.id, checkpoint);
+        syncRuntimeCheckpoints();
+      },
+      requestApproval: async (checkpoint) => {
+        approvals.push(checkpoint);
+        if (checkpoint.toolName !== 'draft_routine') return;
+        const params = checkpoint.params as Record<string, unknown>;
+        useButler.getState().setRoutineDraft({
+          name: String(params.name ?? ''),
+          time: String(params.time ?? ''),
+          days: Array.isArray(params.days) ? params.days as number[] : undefined,
+          skillName: String(params.skillName ?? ''),
+          checkpointId: checkpoint.id,
+        } as RoutineDraftWithCheckpoint);
+      },
+    },
+  };
+}
+
+async function invokeTool(
+  name: string,
+  args: Record<string, unknown>,
+  context: ButlerToolRuntimeContext = {},
+): Promise<{ text: string; checkpoint?: ButlerToolCheckpoint; status: string }> {
+  const result = await tool(name).invoke(args, context);
+  return {
+    text: formatButlerToolResult(result),
+    checkpoint: result.checkpoint,
+    status: result.status,
+  };
 }
 
 function toolNames(): Set<string> {
@@ -94,7 +152,7 @@ async function searchLoadedMessages(args: Record<string, unknown>): Promise<stri
   rest.searchMessages = async () => [];
 
   try {
-    return await tool('search_messages').execute(args);
+    return (await invokeTool('search_messages', args)).text;
   } finally {
     realtime.call = originalRealtimeCall;
     rest.searchMessages = originalRestSearchMessages;
@@ -228,7 +286,7 @@ test('场景基线 2/7：比较两个 PR', async () => {
   });
 
   const rows = parseJson<Array<Record<string, string | number>>>(
-    await tool('list_pull_requests').execute({ query: '支付服务' }),
+    (await invokeTool('list_pull_requests', { query: '支付服务' })).text,
   );
   const names = toolNames();
 
@@ -317,7 +375,7 @@ test('场景基线 4/7：逾期 WI 跟进草稿', async () => {
   });
 
   const rows = parseJson<Array<Record<string, string | number>>>(
-    await tool('list_work_items').execute({ query: '付款接口' }),
+    (await invokeTool('list_work_items', { query: '付款接口' })).text,
   );
   const draftTools = [...toolNames()].filter((name) => name.startsWith('draft_'));
 
@@ -356,7 +414,7 @@ test('场景基线 5/7：构建失败关联提交', async () => {
   });
 
   const rows = parseJson<Array<Record<string, string | number>>>(
-    await tool('list_builds').execute({ query: 'payments-ci', failedOnly: true }),
+    (await invokeTool('list_builds', { query: 'payments-ci', failedOnly: true })).text,
   );
   const names = toolNames();
 
@@ -377,25 +435,49 @@ test('场景基线 6/7：创建周报例行任务', async () => {
     recovery: '用户可重新生成草案并再次确认；重启后 routines 走既有持久化路径。',
   };
 
-  const skillBody = await tool('load_skill').execute({ name: 'weekly-report' });
-  const draftResult = await tool('draft_routine').execute({
+  const runtime = runtimeHarness();
+  const skillBody = (await invokeTool('load_skill', { name: 'weekly-report' })).text;
+  const draftResult = await tool('draft_routine').invoke({
     name: '每周周报',
     time: '18:30',
     days: [5],
     skillName: 'weekly-report',
-  });
+  }, runtime.context);
 
   assert.match(skillBody, /周报/);
-  assert.equal(draftResult, '已生成例行事务草案，等待用户确认。');
-  assert.deepEqual(useButler.getState().routineDraft, {
-    name: '每周周报',
-    time: '18:30',
-    days: [5],
-    skillName: 'weekly-report',
-  });
+  assert.equal(draftResult.status, 'approval-required');
+  assert.match(formatButlerToolResult(draftResult), /approval-required/);
+  assert.equal(runtime.approvals.length, 1);
+  const draft = useButler.getState().routineDraft as RoutineDraftWithCheckpoint | null;
+  assert.ok(draft);
+  assert.equal(draft.name, '每周周报');
+  assert.equal(draft.time, '18:30');
+  assert.deepEqual(draft.days, [5]);
+  assert.equal(draft.skillName, 'weekly-report');
+  assert.equal(draft.checkpointId, draftResult.checkpoint?.id);
+  assert.equal(useRoutines.getState().routines.length, 0);
 
-  useButler.getState().confirmRoutineDraft();
+  const originalApprove = useButler.getState().approveToolCheckpoint;
+  useButler.setState({
+    approveToolCheckpoint: async (checkpointId) => {
+      const checkpoint = runtime.checkpoints.get(checkpointId);
+      assert.ok(checkpoint, `缺少 checkpoint ${checkpointId}`);
+      const draftRoutine = tool('draft_routine');
+      assert.ok(draftRoutine.approve, 'draft_routine 缺少 approve');
+      const approved = await draftRoutine.approve(checkpoint, runtime.context);
+      assert.equal(approved.status, 'completed');
+      useButler.setState((state) => ({
+        routineDraft: state.routineDraft?.checkpointId === checkpointId ? null : state.routineDraft,
+      }));
+    },
+  });
+  try {
+    await useButler.getState().confirmRoutineDraft();
+  } finally {
+    useButler.setState({ approveToolCheckpoint: originalApprove });
+  }
   const created = useRoutines.getState().routines[0];
+  assert.ok(created);
   assert.equal(created.name, '每周周报');
   assert.equal(created.skillName, 'weekly-report');
   assert.equal(created.enabled, true);

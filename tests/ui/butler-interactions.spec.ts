@@ -89,17 +89,16 @@ test('取消动作会在管家页留下可见审计记录', async ({ page }) => 
   expect(pageErrors).toEqual([]);
 });
 
-test('带待确认动作开启新对话时会记为取消', async ({ page }) => {
+test('带待确认动作开启新对话时按原会话保留 checkpoint', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
   await page.getByRole('button', { name: '转待办', exact: true }).click();
   await page.getByRole('button', { name: '新对话', exact: true }).click();
   await expect(page.getByLabel('待办草案')).toHaveCount(0);
-  await page.getByRole('button', { name: '收起对话', exact: true }).click();
-  await page.getByText(/^工作日志 ·/).click();
 
-  await expect(page.getByText('待办 · 已取消', { exact: true })).toBeVisible();
+  await page.getByLabel('管家会话').selectOption('default');
+  await expect(page.getByLabel('待办草案')).toContainText('等待确认');
   expect(pageErrors).toEqual([]);
 });
 
@@ -156,7 +155,7 @@ test('确认回复只回填原会话草稿，不调用发送接口', async ({ pa
   expect(pageErrors).toEqual([]);
 });
 
-test('ADO 动作确认后才打开已有创建表单', async ({ page }) => {
+test('ADO 未配置时在进入执行态和打开创建表单前完成能力预检', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
@@ -166,10 +165,9 @@ test('ADO 动作确认后才打开已有创建表单', async ({ page }) => {
   await page.getByRole('button', { name: '继续填写', exact: true }).click();
 
   const dialog = page.getByRole('dialog', { name: '创建工作项' });
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText('请先在设置中配置 ADO 直连');
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(dialog).toHaveCount(0);
+  await expect(page.getByText('请先在设置中配置 ADO 直连', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('ADO 工作项草案')).toContainText('等待确认');
   expect(pageErrors).toEqual([]);
 });
 

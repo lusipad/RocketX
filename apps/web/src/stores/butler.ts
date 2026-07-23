@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
-import type { AiMessage } from '../kernel/ai/provider';
+import type { AiMessage, AiToolCall } from '../kernel/ai/provider';
 import { getServerBase } from '../lib/client';
 import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
 import {
@@ -28,14 +28,32 @@ import {
   updateButlerTask,
   type ButlerTaskState,
 } from '../lib/butlerTaskContext';
-import { createButlerTools, setRoutineDraftHandler, type ButlerRoutineDraft } from '../lib/butlerTools';
+import { createButlerTools, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
+  beginButlerToolCheckpoint,
+  cancelButlerToolCheckpoint,
+  completeButlerToolCheckpoint,
+  failButlerToolCheckpoint,
+  normalizeButlerToolCheckpoint,
+  recordButlerToolCheckpoint,
+  recoverButlerToolCheckpoint,
+  type ButlerToolAuditEntry,
+  type ButlerToolCheckpoint,
+  type ButlerToolRuntimeContext,
+} from '../lib/butlerToolRuntime';
+import {
+  BUTLER_AUDIT_UPDATED_EVENT,
   auditButlerAction,
+  createButlerActionCheckpoint,
   createButlerActionDraft,
+  normalizeButlerActionDraft,
+  preflightButlerAction,
+  updateButlerActionCheckpoint,
   type ButlerActionDraft,
   type ButlerActionKind,
 } from '../lib/butlerActions';
 import { useAuth } from './auth';
+import { useWorkbench } from './workbench';
 import {
   askButlerCodex,
   discardResidentCodexThread,
@@ -44,11 +62,11 @@ import {
   residentCodexThreadSnapshot,
   stopButlerCodexTurn,
 } from './butlerCodex';
-import { useRoutines } from './routines';
 
 const HISTORY_LIMIT = 40;
 /** 持久化的展示行上限：超出裁旧，避免本地存储无限增长 */
 const LINES_LIMIT = 200;
+const RUNTIME_CHECKPOINT_LIMIT = 50;
 const APP_ID = 'builtin:butler';
 const SESSION_REGISTRY_VERSION = 1;
 const SESSION_REGISTRY_PREFIX = 'session-registry:';
@@ -98,6 +116,7 @@ export interface ButlerState {
   running: boolean;
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
+  runtimeCheckpoints: ButlerToolCheckpoint[];
   context: ButlerSurfaceContext | null;
   actionDraft: ButlerActionDraft | null;
   taskState: ButlerTaskState | null;
@@ -106,8 +125,10 @@ export interface ButlerState {
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
   updateAction: (patch: Partial<Pick<ButlerActionDraft, 'title' | 'text' | 'rid' | 'committedTo' | 'due'>>) => void;
-  dismissAction: () => void;
-  completeAction: (message: string) => void;
+  dismissAction: () => Promise<void>;
+  beginAction: () => Promise<{ allowed: boolean; reason?: string }>;
+  failAction: (reason: string) => Promise<void>;
+  completeAction: (message: string) => Promise<void>;
   /** 停止当前回答：保留已生成内容，不当错误处理 */
   stop: () => Promise<void>;
   /** 新对话：保留当前 session 并创建一个独立 session。 */
@@ -116,8 +137,10 @@ export interface ButlerState {
   renameSession: (sessionId: string, title: string) => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
-  confirmRoutineDraft: () => void;
-  dismissRoutineDraft: () => void;
+  approveToolCheckpoint: (checkpointId: string) => Promise<void>;
+  dismissToolCheckpoint: (checkpointId: string) => Promise<void>;
+  confirmRoutineDraft: () => Promise<void>;
+  dismissRoutineDraft: () => Promise<void>;
   reset: () => void;
 }
 
@@ -140,6 +163,8 @@ interface PersistedButlerSession {
   codexThread?: { threadId: string; promptHash: string };
   taskState?: ButlerTaskState;
   engineState?: ButlerEngineState;
+  runtimeCheckpoints?: ButlerToolCheckpoint[];
+  actionDraft?: ButlerActionDraft;
 }
 
 interface PersistedButlerSessionRegistry {
@@ -175,6 +200,7 @@ interface ButlerAppData {
 }
 
 let appDataOverride: ButlerAppData | null = null;
+let toolAuditWriterOverride: ((entry: ButlerToolAuditEntry) => void | Promise<void>) | null = null;
 
 async function butlerAppData(): Promise<ButlerAppData> {
   if (appDataOverride) return appDataOverride;
@@ -200,6 +226,48 @@ function sessionSummaries(registry: PersistedButlerSessionRegistry): ButlerSessi
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
 }
 
+/** 测试用：捕获 tool runtime 审计，避免依赖浏览器 IndexedDB。 */
+export function setButlerToolAuditWriter(
+  writer: (entry: ButlerToolAuditEntry) => void | Promise<void>,
+): () => void {
+  const previous = toolAuditWriterOverride;
+  toolAuditWriterOverride = writer;
+  return () => {
+    toolAuditWriterOverride = previous;
+  };
+}
+
+function normalizeRuntimeCheckpoints(value: unknown): ButlerToolCheckpoint[] {
+  if (!Array.isArray(value)) return [];
+  const checkpoints: ButlerToolCheckpoint[] = [];
+  for (const candidate of value.slice(-RUNTIME_CHECKPOINT_LIMIT)) {
+    try {
+      checkpoints.push(recoverButlerToolCheckpoint(normalizeButlerToolCheckpoint(candidate), butlerNow()));
+    } catch {
+      // 持久化数据不可信；忽略单条损坏记录，不影响其余会话恢复。
+    }
+  }
+  return checkpoints;
+}
+
+function routineDraftFrom(checkpoints: readonly ButlerToolCheckpoint[]): ButlerRoutineDraft | null {
+  const checkpoint = [...checkpoints]
+    .reverse()
+    .find((item) => item.toolName === 'draft_routine'
+      && (item.status === 'approval-required' || item.status === 'failed'));
+  if (!checkpoint) return null;
+  const { name, time, days, skillName } = checkpoint.params;
+  if (typeof name !== 'string' || typeof time !== 'string' || typeof skillName !== 'string') return null;
+  if (days !== undefined && (!Array.isArray(days) || days.some((day) => !Number.isInteger(day)))) return null;
+  return {
+    checkpointId: checkpoint.id,
+    name,
+    time,
+    ...(Array.isArray(days) ? { days: days as number[] } : {}),
+    skillName,
+  };
+}
+
 function normalizeRegistry(
   stored: PersistedButlerSessionRegistry | undefined,
 ): PersistedButlerSessionRegistry | undefined {
@@ -213,6 +281,11 @@ function normalizeRegistry(
     const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
     const codexThread = candidate.codexThread;
     const engineState = normalizeButlerEngineState(candidate.engineState);
+    const runtimeCheckpoints = normalizeRuntimeCheckpoints(candidate.runtimeCheckpoints);
+    const actionDraft = normalizeButlerActionDraft(candidate.actionDraft);
+    const actionCheckpoint = actionDraft
+      ? runtimeCheckpoints.find((item) => item.id === actionDraft.checkpointId)
+      : undefined;
     sessions.push({
       id: candidate.id,
       title: typeof candidate.title === 'string' && candidate.title.trim()
@@ -227,6 +300,11 @@ function normalizeRegistry(
       ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
       ...(candidate.taskState?.manifest?.schemaVersion === 1 ? { taskState: candidate.taskState } : {}),
       ...(engineState ? { engineState } : {}),
+      ...(runtimeCheckpoints.length ? { runtimeCheckpoints } : {}),
+      ...(actionDraft && actionCheckpoint
+        && !checkpointClosed(actionCheckpoint)
+        ? { actionDraft }
+        : {}),
     });
   }
   if (!sessions.length) return undefined;
@@ -271,6 +349,8 @@ function captureActiveSession(
   const {
     codexThread: _previousCodexThread,
     engineState: _previousEngineState,
+    runtimeCheckpoints: _previousRuntimeCheckpoints,
+    actionDraft: _previousActionDraft,
     ...base
   } = current;
   const state = useButler.getState();
@@ -283,6 +363,10 @@ function captureActiveSession(
     ...(codexThread ? { codexThread } : {}),
     ...(state.taskState ? { taskState: state.taskState } : {}),
     engineState: state.engineState,
+    ...(state.runtimeCheckpoints.length ? {
+      runtimeCheckpoints: state.runtimeCheckpoints.slice(-RUNTIME_CHECKPOINT_LIMIT),
+    } : {}),
+    ...(state.actionDraft ? { actionDraft: state.actionDraft } : {}),
   };
   return {
     ...registry,
@@ -481,9 +565,86 @@ export function appendButlerLine(role: ButlerLine['role'], text: string): void {
   }));
 }
 
+function upsertRuntimeCheckpoint(checkpoint: ButlerToolCheckpoint): void {
+  if (checkpoint.effect === 'read') return;
+  useButler.setState((state) => ({
+    runtimeCheckpoints: [
+      ...state.runtimeCheckpoints.filter((item) => item.id !== checkpoint.id),
+      checkpoint,
+    ].slice(-RUNTIME_CHECKPOINT_LIMIT),
+  }));
+}
+
+async function writeToolAudit(entry: ButlerToolAuditEntry): Promise<void> {
+  if (toolAuditWriterOverride) {
+    await toolAuditWriterOverride(entry);
+    return;
+  }
+  const { kernelStore } = await import('../kernel/store');
+  await kernelStore.audit.append({ ...entry });
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(BUTLER_AUDIT_UPDATED_EVENT));
+}
+
+function runtimeCheckpoint(checkpointId: string): ButlerToolCheckpoint | undefined {
+  return useButler.getState().runtimeCheckpoints.find((item) => item.id === checkpointId);
+}
+
+function checkpointClosed(checkpoint: ButlerToolCheckpoint | undefined): boolean {
+  return checkpoint?.status === 'completed' || checkpoint?.status === 'cancelled';
+}
+
+function runtimeContext(callId: string): ButlerToolRuntimeContext {
+  return {
+    taskId: useButler.getState().taskState?.id ?? useButler.getState().activeSessionId,
+    callId,
+    now: butlerNow,
+    loadCheckpoint: runtimeCheckpoint,
+    saveCheckpoint: upsertRuntimeCheckpoint,
+    requestApproval: (checkpoint) => {
+      if (checkpoint.toolName !== 'draft_routine') return;
+      const draft = routineDraftFrom([checkpoint]);
+      if (draft) useButler.setState({ routineDraft: draft });
+    },
+    writeAudit: writeToolAudit,
+  };
+}
+
+function runtimeContextFor(toolCall: AiToolCall): ButlerToolRuntimeContext {
+  return runtimeContext(toolCall.id);
+}
+
+function runtimeContextForCheckpoint(checkpoint: ButlerToolCheckpoint): ButlerToolRuntimeContext {
+  return runtimeContext(checkpoint.id);
+}
+
+export async function executeApprovedButlerOperation<T extends string>(
+  checkpoint: ButlerToolCheckpoint,
+  execute: () => T | Promise<T>,
+): Promise<T> {
+  await useButler.getState().hydrate();
+  const existing = runtimeCheckpoint(checkpoint.id);
+  let current = existing ?? checkpoint;
+  if (!existing) await recordButlerToolCheckpoint(current, runtimeContextForCheckpoint(current));
+  current = await beginButlerToolCheckpoint(current, runtimeContextForCheckpoint(current));
+  if (current.status === 'completed') return (current.result ?? '') as T;
+  try {
+    const result = await execute();
+    await completeButlerToolCheckpoint(current, result, runtimeContextForCheckpoint(current));
+    return result;
+  } catch (error) {
+    await failButlerToolCheckpoint(current, {
+      kind: 'execution',
+      message: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    }, runtimeContextForCheckpoint(current));
+    throw error;
+  }
+}
+
 function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
   const session = activeSession(registry);
   const engineState = sessionEngineState(session);
+  const runtimeCheckpoints = normalizeRuntimeCheckpoints(session.runtimeCheckpoints);
   const taskState = session.taskState?.status === 'running'
     && engineState.status === 'paused'
     && engineState.compatibility.reason === 'interrupted-turn'
@@ -501,8 +662,9 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       history: trimButlerHistory(session.history),
       running: false,
       error: null,
-      routineDraft: null,
-      actionDraft: null,
+      routineDraft: routineDraftFrom(runtimeCheckpoints),
+      runtimeCheckpoints,
+      actionDraft: session.actionDraft ?? null,
       taskState: taskState ?? null,
       engineState,
     });
@@ -524,6 +686,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   running: false,
   error: null,
   routineDraft: null,
+  runtimeCheckpoints: [],
   context: null,
   actionDraft: null,
   taskState: null,
@@ -565,6 +728,9 @@ export const useButler = create<ButlerState>((set, get) => ({
       ]);
       if (generation !== hydrateGeneration) return;
 
+      const recoveredInterruptedRuntime = storedRegistry?.sessions.some((session) => (
+        session.runtimeCheckpoints?.some((checkpoint) => checkpoint.status === 'running')
+      )) ?? false;
       const existingRegistry = normalizeRegistry(storedRegistry);
       let registry: PersistedButlerSessionRegistry = existingRegistry ?? {
         schemaVersion: SESSION_REGISTRY_VERSION,
@@ -586,6 +752,10 @@ export const useButler = create<ButlerState>((set, get) => ({
           history: trimButlerHistory(startedState.history),
           ...(startedCodexThread ? { codexThread: startedCodexThread } : {}),
           engineState: startedState.engineState,
+          ...(startedState.runtimeCheckpoints.length
+            ? { runtimeCheckpoints: startedState.runtimeCheckpoints.slice(-RUNTIME_CHECKPOINT_LIMIT) }
+            : {}),
+          ...(startedState.actionDraft ? { actionDraft: startedState.actionDraft } : {}),
         };
         registry = {
           schemaVersion: SESSION_REGISTRY_VERSION,
@@ -597,7 +767,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       persistScope = scope;
       sessionRegistry = registry;
       applyActiveSession(registry);
-      if (!existingRegistry || startedConversation) {
+      if (!existingRegistry || startedConversation || recoveredInterruptedRuntime) {
         await queueRegistryWrite(scope, registry).catch(() => undefined);
       }
     })();
@@ -703,7 +873,7 @@ export const useButler = create<ButlerState>((set, get) => ({
             step.id === event.toolCallId ? { ...step, status: failed ? 'failed' as const : 'done' as const } : step,
           );
           let lines = state.lines;
-          if (toolName === 'remember') {
+          if (toolName === 'remember' && event.content.startsWith('已记住')) {
             lines = [...state.lines, line('assistant', `📌 ${event.content}`)];
           } else if (assistantLineId) {
             lines = state.lines.map((item) => item.id === assistantLineId
@@ -746,6 +916,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           fallbackTranscript: transcriptBeforeTurn,
           now: butlerNow(),
           onEvent,
+          toolRuntimeContext: runtimeContextFor,
         });
         resultText = result.text;
       } else {
@@ -759,6 +930,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           tools: createButlerTools(),
           signal: abort?.signal,
           onEvent,
+          toolRuntimeContext: runtimeContextFor,
         });
         resultText = result.text;
         nextHistory = trimButlerHistory([
@@ -846,28 +1018,93 @@ export const useButler = create<ButlerState>((set, get) => ({
     const source = get().lines.find((item) => item.id === sourceLineId && item.role === 'assistant');
     if (!source) return;
     const previous = get().actionDraft;
-    if (previous) void auditButlerAction(previous.kind, 'cancelled', previous).catch(() => undefined);
+    if (previous) {
+      const previousCheckpoint = runtimeCheckpoint(previous.checkpointId);
+      if (previousCheckpoint) {
+        void cancelButlerToolCheckpoint(previousCheckpoint, runtimeContextForCheckpoint(previousCheckpoint));
+      }
+      void auditButlerAction(previous.kind, 'cancelled', previous).catch(() => undefined);
+    }
     const actionDraft = createButlerActionDraft(kind, source, get().context);
+    const checkpoint = createButlerActionCheckpoint(actionDraft, butlerNow());
     set({ actionDraft });
+    void recordButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
     void auditButlerAction(kind, 'proposed', actionDraft).catch(() => undefined);
   },
 
-  updateAction: (patch) => set((state) => ({
-    actionDraft: state.actionDraft ? { ...state.actionDraft, ...patch } : null,
-  })),
+  updateAction: (patch) => set((state) => {
+    if (!state.actionDraft) return { actionDraft: null };
+    const actionDraft = { ...state.actionDraft, ...patch };
+    const checkpoint = state.runtimeCheckpoints.find((item) => item.id === actionDraft.checkpointId);
+    return {
+      actionDraft,
+      ...(checkpoint && checkpoint.status !== 'running'
+        ? {
+          runtimeCheckpoints: [
+            ...state.runtimeCheckpoints.filter((item) => item.id !== checkpoint.id),
+            updateButlerActionCheckpoint(checkpoint, actionDraft, butlerNow()),
+          ].slice(-RUNTIME_CHECKPOINT_LIMIT),
+        }
+        : {}),
+    };
+  }),
 
-  dismissAction: () => {
+  dismissAction: async () => {
     const draft = get().actionDraft;
     if (!draft) return;
-    set({ actionDraft: null });
-    void auditButlerAction(draft.kind, 'cancelled', draft).catch(() => undefined);
+    const checkpoint = runtimeCheckpoint(draft.checkpointId);
+    if (checkpoint) await cancelButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    set((state) => ({ actionDraft: state.actionDraft?.id === draft.id ? null : state.actionDraft }));
+    await auditButlerAction(draft.kind, 'cancelled', draft).catch(() => undefined);
   },
 
-  completeAction: (message) => {
+  beginAction: async () => {
+    const draft = get().actionDraft;
+    if (!draft) return { allowed: false, reason: '没有待执行的动作草案' };
+    const existing = runtimeCheckpoint(draft.checkpointId);
+    if (!existing) return { allowed: false, reason: '动作 checkpoint 不存在' };
+    const checkpoint = updateButlerActionCheckpoint(existing, draft, butlerNow());
+    upsertRuntimeCheckpoint(checkpoint);
+    const workbenchConfig = useWorkbench.getState().config;
+    const reason = preflightButlerAction(draft, {
+      adoDirectConfigured: workbenchConfig?.mode === 'direct' && Boolean(workbenchConfig.adoBase),
+    });
+    if (reason) {
+      await failButlerToolCheckpoint(checkpoint, {
+        kind: 'preflight',
+        message: reason,
+        retryable: true,
+      }, runtimeContextForCheckpoint(checkpoint));
+      return { allowed: false, reason };
+    }
+    const running = await beginButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    if (running.status !== 'running') return { allowed: false, reason: '动作已完成，不能重复执行' };
+    return { allowed: true };
+  },
+
+  failAction: async (reason) => {
     const draft = get().actionDraft;
     if (!draft) return;
+    const checkpoint = runtimeCheckpoint(draft.checkpointId);
+    if (checkpoint) {
+      await failButlerToolCheckpoint(checkpoint, {
+        kind: 'execution',
+        message: reason,
+        retryable: true,
+      }, runtimeContextForCheckpoint(checkpoint));
+    }
+    await auditButlerAction(draft.kind, 'failed', draft, reason).catch(() => undefined);
+  },
+
+  completeAction: async (message) => {
+    const draft = get().actionDraft;
+    if (!draft) return;
+    const checkpoint = runtimeCheckpoint(draft.checkpointId);
+    if (!checkpoint) return;
+    await completeButlerToolCheckpoint(checkpoint, message, runtimeContextForCheckpoint(checkpoint));
+    await auditButlerAction(draft.kind, 'executed', draft).catch(() => undefined);
     set((state) => ({
-      actionDraft: null,
+      actionDraft: state.actionDraft?.id === draft.id ? null : state.actionDraft,
       lines: [...state.lines, {
         ...line('assistant', `✅ ${message}`),
         ...(draft.sources.length ? { sources: draft.sources } : {}),
@@ -894,10 +1131,6 @@ export const useButler = create<ButlerState>((set, get) => ({
     await get().hydrate();
     if (get().running) await get().stop();
     if (!sessionRegistry || !persistScope) return;
-    const actionDraft = get().actionDraft;
-    if (actionDraft) {
-      await auditButlerAction(actionDraft.kind, 'cancelled', actionDraft).catch(() => undefined);
-    }
 
     await flushButlerPersist();
     const scope = persistScope;
@@ -930,10 +1163,6 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!sessionRegistry || !persistScope || sessionRegistry.activeSessionId === targetId) return;
     if (!sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     if (get().running) await get().stop();
-    const actionDraft = get().actionDraft;
-    if (actionDraft) {
-      await auditButlerAction(actionDraft.kind, 'cancelled', actionDraft).catch(() => undefined);
-    }
 
     await flushButlerPersist();
     if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
@@ -973,23 +1202,50 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
 
-  confirmRoutineDraft: () => {
-    const draft = get().routineDraft;
-    if (!draft) return;
-    useRoutines.getState().addRoutine({
-      id: crypto.randomUUID(),
-      name: draft.name,
-      trigger: { kind: 'daily', time: draft.time, days: draft.days },
-      skillName: draft.skillName,
-      delivery: 'today',
-      enabled: true,
-      createdAt: butlerNow(),
-      runs: [],
+  approveToolCheckpoint: async (checkpointId) => {
+    const checkpoint = runtimeCheckpoint(checkpointId);
+    if (checkpointClosed(checkpoint)) return;
+    if (!checkpoint) return;
+    const tool = createButlerTools().find((item) => item.name === checkpoint.toolName);
+    if (!tool?.approve) return;
+    const result = await tool.approve(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    if (result.status !== 'completed') return;
+    set((state) => {
+      const prefix = checkpoint.toolName === 'remember' ? '📌' : '✅';
+      const lines = result.content
+        ? [...state.lines, line('assistant', `${prefix} ${result.content}`)]
+        : state.lines;
+      return {
+        lines,
+        routineDraft: state.routineDraft?.checkpointId === checkpoint.id ? null : state.routineDraft,
+        engineState: result.content
+          ? recordLocalTranscript(state.engineState, 1, 'local-tool-result')
+          : state.engineState,
+      };
     });
-    set({ routineDraft: null });
   },
 
-  dismissRoutineDraft: () => set({ routineDraft: null }),
+  dismissToolCheckpoint: async (checkpointId) => {
+    const checkpoint = runtimeCheckpoint(checkpointId);
+    if (checkpointClosed(checkpoint)) return;
+    if (!checkpoint) return;
+    await cancelButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    set((state) => ({
+      routineDraft: state.routineDraft?.checkpointId === checkpoint.id ? null : state.routineDraft,
+    }));
+  },
+
+  confirmRoutineDraft: async () => {
+    const draft = get().routineDraft;
+    if (!draft) return;
+    await get().approveToolCheckpoint(draft.checkpointId);
+  },
+
+  dismissRoutineDraft: async () => {
+    const draft = get().routineDraft;
+    if (!draft) return;
+    await get().dismissToolCheckpoint(draft.checkpointId);
+  },
 
   reset: () => set(() => {
     const lines = welcomeLines();
@@ -1003,6 +1259,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       running: false,
       error: null,
       routineDraft: null,
+      runtimeCheckpoints: [],
       context: null,
       actionDraft: null,
       taskState: null,
@@ -1011,8 +1268,6 @@ export const useButler = create<ButlerState>((set, get) => ({
   }),
 }));
 
-setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
-
 // 当前已 hydrate 的 session 发生 transcript 或任务态变化时更新活动时间并防抖落盘。
 useButler.subscribe((state, previous) => {
   if (
@@ -1020,6 +1275,8 @@ useButler.subscribe((state, previous) => {
     && state.history === previous.history
     && state.taskState === previous.taskState
     && state.engineState === previous.engineState
+    && state.runtimeCheckpoints === previous.runtimeCheckpoints
+    && state.actionDraft === previous.actionDraft
   ) return;
   if (suppressPersistence || !persistScope || !sessionRegistry) return;
   sessionDirty = true;

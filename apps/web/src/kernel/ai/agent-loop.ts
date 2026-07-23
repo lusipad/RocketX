@@ -1,12 +1,12 @@
 import { getAiBus } from './runtime';
 import type { AiChatRequest, AiChunk, AiMessage, AiTool, AiToolCall } from './provider';
+import {
+  formatButlerToolResult,
+  type ButlerTool,
+  type ButlerToolRuntimeContext,
+} from '../../lib/butlerToolRuntime';
 
-export interface ButlerTool {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>) => Promise<string>;
-}
+export type { ButlerTool } from '../../lib/butlerToolRuntime';
 
 export type AgentLoopEvent =
   | { type: 'content'; content: string }
@@ -45,6 +45,7 @@ function asArguments(argumentsText: string): Record<string, unknown> {
 async function executeToolCall(
   toolCall: AiToolCall,
   tools: ReadonlyMap<string, ButlerTool>,
+  runtimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext,
 ): Promise<string> {
   const tool = tools.get(toolCall.name);
   if (!tool) return `未知工具：${toolCall.name}`;
@@ -58,7 +59,7 @@ async function executeToolCall(
   }
 
   try {
-    return await tool.execute(args);
+    return formatButlerToolResult(await tool.invoke(args, runtimeContext?.(toolCall)));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return `工具执行失败：${message}`;
@@ -72,6 +73,7 @@ export async function runAgentLoop(options: {
   maxRounds?: number;
   signal?: AbortSignal;
   onEvent?: (event: AgentLoopEvent) => void;
+  toolRuntimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext;
 }): Promise<{ text: string; messages: AiMessage[] }> {
   const gateway = options.gateway ?? getAiBus();
   const messages = [...options.messages];
@@ -102,7 +104,7 @@ export async function runAgentLoop(options: {
     messages.push({ role: 'assistant', content: roundText, toolCalls });
     for (const toolCall of toolCalls) {
       throwIfAborted(options.signal);
-      const content = await executeToolCall(toolCall, tools);
+      const content = await executeToolCall(toolCall, tools, options.toolRuntimeContext);
       throwIfAborted(options.signal);
       messages.push({ role: 'tool', toolCallId: toolCall.id, content });
       options.onEvent?.({ type: 'tool-result', toolCallId: toolCall.id, content });
