@@ -80,11 +80,11 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件上传下载/中文搜索/置顶免打扰/通讯录/实时推送/
                     # 斜杠命令/群管理（踢人·角色·禁言·归档·只读）/
                     # 文件与提及面板/改昵称与头像
-pnpm test:pure      # 219 项纯函数：拼音、日期、分组规则、待办、emoji、
+pnpm test:pure      # 221 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 476 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 585 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 34 项浏览器流程：登录、消息、首次引导、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
+pnpm test:ui        # 41 项浏览器流程：登录、消息、首次引导、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
@@ -108,12 +108,14 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-GitHub Actions 自动构建 Windows（msi/nsis）、macOS（dmg，universal）、Linux（deb/rpm/AppImage）安装包：
+当前稳定化阶段，GitHub Actions 只构建 Windows x64（msi/nsis）正式安装包；macOS 与 Linux
+源码目标继续保留，待平台验收稳定后再恢复官方安装包与自动更新：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
-  并构建三平台安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
+  并构建 Windows 安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
   还会强制核验两位外部开发者证据和真实 README 截图/GIF；
-- **公开发布**：复核草稿后手动运行受保护的 `Publish GitHub Release`；创建标签不会自动公开 Release；
+- **公开发布**：复核草稿后手动运行受保护的 `Publish GitHub Release`；`v0.29.1` 公开但不标记为
+  Latest，Windows 用户从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
 - **npm 包（按需）**：公开 SDK/CLI 变更需要 npm 交付时，独立运行受保护的
   `Publish npm packages`，按 SDK → CLI 顺序发布；npm 不阻塞桌面安装包与 GitHub Release；
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
