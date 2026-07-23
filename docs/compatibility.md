@@ -24,7 +24,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Starting with `v0.29.1`, official desktop Releases are temporarily Windows x64 only. Windows users install `v0.29.1` manually from its Release page, while `v0.28.0` remains GitHub's Latest release and the last public cross-platform artifact set. macOS and Linux delivery, together with normal Latest-based auto-update promotion, resumes only after platform-specific validation is stable.
+Starting with `v0.29.1`, official desktop Releases are temporarily Windows x64 only. Windows users install `v0.29.1` manually after its public Release is available, while `v0.28.0` remains GitHub's Latest release and the last public cross-platform artifact set. macOS and Linux delivery, together with normal Latest-based auto-update promotion, resumes only after platform-specific validation is stable.
 
 ## Required and optional server settings
 
