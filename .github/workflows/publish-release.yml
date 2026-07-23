@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '已完成三平台构建的标签'
+        description: '已完成 Windows 构建的标签'
         required: true
         default: 'v1.0.0'
       confirmation:
@@ -32,7 +32,7 @@ jobs:
           git fetch origin main --tags
           test "$(git cat-file -t "refs/tags/$INPUT_TAG")" = "tag"
           release_sha="$(git rev-parse "refs/tags/$INPUT_TAG^{commit}")"
-          git merge-base --is-ancestor "$release_sha" origin/main
+          test "$release_sha" = "$(git rev-parse origin/main)"
           git checkout --detach "$release_sha"
 
       - uses: actions/setup-node@v7
@@ -58,4 +58,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.tag }}
-        run: gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

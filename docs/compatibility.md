@@ -18,11 +18,13 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 | Surface | Baseline | Notes |
 | --- | --- | --- |
 | Web | Production Vite build behind the pinned Nginx image | Nginx serves the SPA and proxies Rocket.Chat API, file, avatar, emoji, and WebSocket routes on the same origin. |
-| Windows desktop | Tauri 2 / WebView2 | Windows-specific integrated authentication and native notifications are platform-gated. |
-| macOS desktop | Tauri 2 / system WebView | CI build configuration exists; platform-only integrations must be verified on macOS. |
-| Linux desktop | Tauri 2 / WebKitGTK | CI build configuration exists; distribution WebKitGTK versions can differ. |
+| Windows desktop | Tauri 2 / WebView2 | The current official desktop Release target. Windows-specific integrated authentication and native notifications are platform-gated. |
+| macOS desktop | Tauri 2 / system WebView | Source target only during stabilization; official installers and updater entries are deferred pending macOS acceptance evidence. |
+| Linux desktop | Tauri 2 / WebKitGTK | Source target only during stabilization; official installers and updater entries are deferred pending distribution-level acceptance evidence. |
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
+
+Starting with `v0.29.1`, official desktop Releases are temporarily Windows x64 only. Windows users install `v0.29.1` manually after its public Release is available, while `v0.28.0` remains GitHub's Latest release and the last public cross-platform artifact set. macOS and Linux delivery, together with normal Latest-based auto-update promotion, resumes only after platform-specific validation is stable.
 
 ## Required and optional server settings
 

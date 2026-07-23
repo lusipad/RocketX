@@ -1,6 +1,6 @@
 # 更新日志
 
-## v0.29.0 - 2026-07-23
+## v0.29.1 - 2026-07-23
 
 ### 新增
 
@@ -25,6 +25,17 @@
 
 - 保留现有 Provider 与 Codex adapter、Today 结果和 routine/event card 读模型，不新增第二套导航或状态机；主动 workflow session 对人工会话选择器保持隐藏（#174、#177）。
 - 新增任务编译、双运行模式切换、typed tool runtime、作用域记忆、主动 workflow、跨账号并发、审批投影与真实 Codex 中断回归（#173–#177）。
+
+### 发布
+
+- 桌面 Release 在当前稳定化阶段仅提供 Windows x64 的 MSI 与 NSIS 安装包、对应 Updater 元数据和签名；macOS 与 Linux 官方安装包延后到平台验证稳定后恢复。
+- Windows-only Release 采用非 Latest 发布策略，Windows 用户在公开后从 Release 页面手动下载；`v0.28.0` 暂时保留为跨平台 Latest，避免现有 macOS/Linux 客户端读取缺少平台条目的更新清单。
+
+## v0.29.0 - 2026-07-23
+
+### 发布
+
+- 此受保护标签完成过三平台草稿构建，但在公开前因发布范围收敛而中止；标签保留且没有公开 Release，正式交付顺延为 Windows-only 的 v0.29.1。
 
 ## v0.28.0 - 2026-07-23
 
