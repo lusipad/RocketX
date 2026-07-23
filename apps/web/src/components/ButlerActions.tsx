@@ -1,6 +1,6 @@
 import { Bot, CalendarClock, CheckSquare, Code2, MessageSquareReply, Send } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { auditButlerAction, type ButlerActionKind } from '../lib/butlerActions';
+import { useEffect, useRef, useState } from 'react';
+import type { ButlerActionKind } from '../lib/butlerActions';
 import { useButler, type ButlerLine } from '../stores/butler';
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
 import { useChat } from '../stores/chat';
@@ -55,49 +55,56 @@ export function ButlerActionCard() {
   const lines = useButler((state) => state.lines);
   const update = useButler((state) => state.updateAction);
   const dismiss = useButler((state) => state.dismissAction);
+  const begin = useButler((state) => state.beginAction);
+  const failAction = useButler((state) => state.failAction);
   const complete = useButler((state) => state.completeAction);
   const [executing, setExecuting] = useState(false);
   const [adoOpen, setAdoOpen] = useState(false);
+  const adoCreated = useRef(false);
 
   useEffect(() => {
     setExecuting(false);
     setAdoOpen(false);
+    adoCreated.current = false;
   }, [draft?.id]);
 
   if (!draft) return null;
 
   const fail = async (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    await auditButlerAction(draft.kind, 'failed', draft, message).catch(() => undefined);
+    await failAction(message);
     toast.error(error, '动作执行失败');
     setExecuting(false);
   };
 
   const done = async (message: string) => {
-    await auditButlerAction(draft.kind, 'executed', draft).catch(() => undefined);
-    complete(message);
+    await complete(message);
     toast.success(message);
     setExecuting(false);
   };
 
   const confirm = async () => {
     if (executing) return;
-    if (!draft.text.trim() && draft.kind !== 'codex') return;
-    if (draft.kind === 'reply' && !draft.rid) {
-      toast.error('这条结论没有可回复的 Rocket.Chat 房间');
-      return;
-    }
-    if (draft.kind === 'commitment' && !draft.committedTo?.trim()) {
-      toast.error('请填写“我答应给谁”');
-      return;
-    }
     setExecuting(true);
+    const authorization = await begin().catch((error) => ({
+      allowed: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
+    if (!authorization.allowed) {
+      toast.error(authorization.reason ?? '动作预检未通过');
+      setExecuting(false);
+      return;
+    }
     try {
       if (draft.kind === 'reply') {
         useChat.getState().setDraft(draft.rid!, draft.text.trim());
         await done('回复草稿已放入原会话编辑框，尚未发送');
-        useUI.getState().setModule('messages');
-        await useChat.getState().openRoom(draft.rid!);
+        try {
+          useUI.getState().setModule('messages');
+          await useChat.getState().openRoom(draft.rid!);
+        } catch (error) {
+          toast.error(error, '回复草稿已保存，但无法打开原会话');
+        }
         return;
       }
       if (draft.kind === 'todo') {
@@ -116,8 +123,8 @@ export function ButlerActionCard() {
         return;
       }
       if (draft.kind === 'ado') {
+        adoCreated.current = false;
         setAdoOpen(true);
-        setExecuting(false);
         return;
       }
       const result = await transferConversationToCodexApp(lines.map(({ role, text }) => ({ role, text })));
@@ -136,6 +143,7 @@ export function ButlerActionCard() {
           <input
             value={draft.title}
             onChange={(event) => update({ title: event.target.value })}
+            disabled={executing}
             aria-label="动作标题"
             className="mt-2 h-9 w-full rounded-md border border-line bg-surface px-2.5 text-sm text-ink outline-none focus:border-primary"
           />
@@ -144,6 +152,7 @@ export function ButlerActionCard() {
           <textarea
             value={draft.text}
             onChange={(event) => update({ text: event.target.value })}
+            disabled={executing}
             aria-label="动作内容"
             rows={3}
             className="mt-2 w-full resize-y rounded-md border border-line bg-surface px-2.5 py-2 text-sm leading-5 text-ink outline-none focus:border-primary"
@@ -153,6 +162,7 @@ export function ButlerActionCard() {
           <input
             value={draft.committedTo ?? ''}
             onChange={(event) => update({ committedTo: event.target.value })}
+            disabled={executing}
             placeholder="我答应给谁（必填）"
             aria-label="我答应给谁"
             className="mt-2 h-9 w-full rounded-md border border-line bg-surface px-2.5 text-sm text-ink outline-none focus:border-primary"
@@ -161,11 +171,11 @@ export function ButlerActionCard() {
         {draft.kind === 'todo' || draft.kind === 'commitment' ? (
           <label className="mt-2 flex items-center gap-2 text-xs text-ink-2">
             截止日期
-            <input type="date" value={draft.due ?? ''} onChange={(event) => update({ due: event.target.value })} className="h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink" />
+            <input type="date" value={draft.due ?? ''} onChange={(event) => update({ due: event.target.value })} disabled={executing} className="h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink" />
           </label>
         ) : null}
         <div className="mt-3 flex justify-end gap-2">
-          <button type="button" onClick={dismiss} disabled={executing} className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50">取消</button>
+          <button type="button" onClick={() => void dismiss()} disabled={executing} className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50">取消</button>
           <button type="button" onClick={() => void confirm()} disabled={executing} className="rounded-md bg-primary px-3 py-1.5 text-xs text-white hover:bg-primary-hover disabled:opacity-50">
             {executing ? '执行中…' : draft.kind === 'ado' ? '继续填写' : '确认执行'}
           </button>
@@ -176,8 +186,14 @@ export function ButlerActionCard() {
           defaultTitle={draft.title}
           defaultDescription={draft.text}
           rid={draft.rid}
-          onCreated={(created) => void done(`已创建 ADO 工作项 #${created[0]?.id ?? ''}`)}
-          onClose={() => setAdoOpen(false)}
+          onCreated={(created) => {
+            adoCreated.current = true;
+            void done(`已创建 ADO 工作项 #${created[0]?.id ?? ''}`);
+          }}
+          onClose={() => {
+            setAdoOpen(false);
+            if (!adoCreated.current) void fail(new Error('已取消 ADO 工作项草稿'));
+          }}
         />
       ) : null}
     </>

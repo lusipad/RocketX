@@ -1,5 +1,9 @@
 import { tsMs } from '@rcx/rc-client';
-import type { ButlerTool } from '../kernel/ai/agent-loop';
+import {
+  defineButlerTool,
+  type ButlerTool,
+  type ButlerToolPreflight,
+} from './butlerToolRuntime';
 import { listSkills, loadButlerSkill, recallButlerMemory, rememberButlerFact } from './butlerProfile';
 import { realtime, rest } from './client';
 import {
@@ -12,19 +16,19 @@ import { useCalendar } from '../stores/calendar';
 import { useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
 import { myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
+import { useRoutines } from '../stores/routines';
 import { stripAgentSessionMarker } from '../agent/card';
 
 const LIMIT = 20;
 const WORK_LIMIT = 100;
 
 export interface ButlerRoutineDraft {
+  checkpointId: string;
   name: string;
   time: string;
   days?: number[];
   skillName: string;
 }
-
-let routineDraftHandler: ((draft: ButlerRoutineDraft) => void) | undefined;
 
 export interface ButlerMentionSnapshot {
   id: string;
@@ -43,14 +47,6 @@ export function setButlerMentionProvider(provider: () => ButlerMentionSnapshot[]
   mentionProvider = provider;
   return () => {
     mentionProvider = previous;
-  };
-}
-
-export function setRoutineDraftHandler(handler: (draft: ButlerRoutineDraft) => void): () => void {
-  const previous = routineDraftHandler;
-  routineDraftHandler = handler;
-  return () => {
-    routineDraftHandler = previous;
   };
 }
 
@@ -275,10 +271,6 @@ function loadSkill(args: Record<string, unknown>): string {
   return loadButlerSkill(optionalString(args, 'name') ?? '');
 }
 
-function remember(args: Record<string, unknown>): string {
-  return rememberButlerFact(optionalString(args, 'fact') ?? '');
-}
-
 function recallMemory(args: Record<string, unknown>): string {
   const query = optionalString(args, 'query') ?? '';
   return JSON.stringify(recallButlerMemory(query).map((entry) => ({
@@ -293,22 +285,26 @@ function validTime(time: string): boolean {
   return !!match && Number(match[1]) < 24 && Number(match[2]) < 60;
 }
 
-function draftRoutine(args: Record<string, unknown>): string {
+function routinePreflight(args: Record<string, unknown>): ButlerToolPreflight {
   const name = optionalString(args, 'name');
   const time = optionalString(args, 'time');
   const skillName = optionalString(args, 'skillName');
-  if (!name) return '例行事务名称不能为空。';
-  if (!time || !validTime(time)) return '时间格式无效，请使用 HH:mm。';
+  if (!name) return { allowed: false, reason: '例行事务名称不能为空。' };
+  if (!time || !validTime(time)) return { allowed: false, reason: '时间格式无效，请使用 HH:mm。' };
   if (!skillName || !listSkills().some((skill) => skill.name === skillName)) {
-    return `未找到技能：${skillName ?? '（未填写）'}。`;
+    return { allowed: false, reason: `未找到技能：${skillName ?? '（未填写）'}。` };
   }
   const days = args.days;
   if (days !== undefined && (!Array.isArray(days) || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {
-    return '星期必须是 0 到 6 的数字数组。';
+    return { allowed: false, reason: '星期必须是 0 到 6 的数字数组。' };
   }
-  if (!routineDraftHandler) return '例行事务草案暂不可用，请稍后重试。';
-  routineDraftHandler({ name, time, days: days as number[] | undefined, skillName });
-  return '已生成例行事务草案，等待用户确认。';
+  const dayLabel = Array.isArray(days) && days.length
+    ? days.map((day) => `周${'日一二三四五六'[Number(day)]}`).join('、')
+    : '每天';
+  return {
+    allowed: true,
+    preview: `创建并启用例行事务「${name}」：${time} · ${dayLabel} · 技能 ${skillName}`,
+  };
 }
 
 const searchMessagesParameters: Record<string, unknown> = {
@@ -334,19 +330,23 @@ function queryParameters(description: string): Record<string, unknown> {
 
 export function createButlerTools(): ButlerTool[] {
   return [
-    {
+    defineButlerTool({
       name: 'search_messages',
       description: '搜索消息，可按发送人、房间、日期范围和是否有文件筛选；返回最多 20 条消息摘要。',
       parameters: searchMessagesParameters,
+      effect: 'read',
+      capability: 'rocket-chat.messages.read',
       execute: searchMessages,
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_mentions',
       description: '列出当前 @我 收件箱中的消息及是否已处理；返回最多 20 条。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
+      effect: 'read',
+      capability: 'rocket-chat.messages.read',
       execute: async () => listMentions(),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'search_people_rooms',
       description: '搜索 Rocket.Chat 中的用户和房间，query 为要匹配的姓名、用户名或房间名。',
       parameters: {
@@ -355,9 +355,11 @@ export function createButlerTools(): ButlerTool[] {
         required: ['query'],
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'rocket-chat.directory.read',
       execute: searchPeopleAndRooms,
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_todos',
       description: '列出本地待办；默认只返回未完成项，可按关键词筛选或包含已完成项。',
       parameters: {
@@ -368,9 +370,11 @@ export function createButlerTools(): ButlerTool[] {
         },
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'todos.read',
       execute: async (args) => listTodos(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_calendar',
       description: '列出本地日程，可按关键词和 YYYY-MM-DD 日期范围筛选。',
       parameters: {
@@ -382,21 +386,27 @@ export function createButlerTools(): ButlerTool[] {
         },
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'calendar.read',
       execute: async (args) => listCalendar(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_work_items',
       description: '列出已加载的 Azure DevOps 工作项，可按编号、标题、类型、状态或项目筛选；返回最多 100 条。',
       parameters: queryParameters('工作项编号、标题、类型、状态或项目关键词。'),
+      effect: 'read',
+      capability: 'ado.work-items.read',
       execute: async (args) => listWorkItems(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_pull_requests',
       description: '列出已加载的待我评审或我提的 Azure DevOps 拉取请求，可按编号、标题、仓库或创建者筛选；返回最多 100 条。',
       parameters: queryParameters('拉取请求编号、标题、仓库或创建者关键词。'),
+      effect: 'read',
+      capability: 'ado.pull-requests.read',
       execute: async (args) => listPullRequests(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'list_builds',
       description: '列出已加载的 Azure DevOps 构建，可按关键词筛选，也可只看失败构建；返回最多 100 条。',
       parameters: {
@@ -407,9 +417,11 @@ export function createButlerTools(): ButlerTool[] {
         },
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'ado.builds.read',
       execute: async (args) => listBuilds(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'recall_memory',
       description: '按关键词检索 AI 的全部长期记忆；用于近期提示未注入的偏好、纠错、别名、决定和承诺。',
       parameters: {
@@ -417,9 +429,11 @@ export function createButlerTools(): ButlerTool[] {
         properties: { query: { type: 'string', description: '要召回的事实关键词；省略时返回最近记忆。' } },
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'memory.read',
       execute: async (args) => recallMemory(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'load_skill',
       description: '按名称加载技能的方法论正文。',
       parameters: {
@@ -428,22 +442,33 @@ export function createButlerTools(): ButlerTool[] {
         required: ['name'],
         additionalProperties: false,
       },
+      effect: 'read',
+      capability: 'skills.read',
       execute: async (args) => loadSkill(args),
-    },
-    {
+    }),
+    defineButlerTool({
       name: 'remember',
-      description: '当用户告诉你一个应长期记住的事实（偏好、别名、纠错、承诺）时调用；不要存储能从数据里查到的内容。',
+      description: '为用户生成长期记忆写入草案；必须等用户在 RocketX 中确认后才会写入。不要存储能从数据里查到的内容。',
       parameters: {
         type: 'object',
         properties: { fact: { type: 'string', description: '要长期记住的事实。' } },
         required: ['fact'],
         additionalProperties: false,
       },
-      execute: async (args) => remember(args),
-    },
-    {
+      effect: 'write',
+      capability: 'memory.write',
+      idempotencyKey: (args) => `memory:${optionalString(args, 'fact')?.toLocaleLowerCase() ?? ''}`,
+      preflight: (args) => {
+        const fact = optionalString(args, 'fact');
+        return fact
+          ? { allowed: true, preview: `写入长期记忆：${fact}` }
+          : { allowed: false, reason: '没有可记住的内容。' };
+      },
+      execute: async (args) => rememberButlerFact(optionalString(args, 'fact') ?? ''),
+    }),
+    defineButlerTool({
       name: 'draft_routine',
-      description: '用户要求定期、每天或每周做某事时调用；创建前必须由用户确认。只生成例行事务草案，不会直接创建或启用。',
+      description: '用户要求定期、每天或每周做某事时调用；只生成可见审批草案，用户确认后才创建并启用。',
       parameters: {
         type: 'object',
         properties: {
@@ -455,7 +480,25 @@ export function createButlerTools(): ButlerTool[] {
         required: ['name', 'time', 'skillName'],
         additionalProperties: false,
       },
-      execute: async (args) => draftRoutine(args),
-    },
+      effect: 'write',
+      capability: 'routines.write',
+      preflight: routinePreflight,
+      execute: async (args, { checkpoint, context }) => {
+        const name = optionalString(args, 'name')!;
+        const time = optionalString(args, 'time')!;
+        const skillName = optionalString(args, 'skillName')!;
+        useRoutines.getState().addRoutine({
+          id: checkpoint.id,
+          name,
+          trigger: { kind: 'daily', time, days: args.days as number[] | undefined },
+          skillName,
+          delivery: 'today',
+          enabled: true,
+          createdAt: context.now?.() ?? Date.now(),
+          runs: [],
+        });
+        return `已创建并启用例行事务：${name}`;
+      },
+    }),
   ];
 }

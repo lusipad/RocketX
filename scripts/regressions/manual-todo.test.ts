@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { useTodos } from '../../apps/web/src/stores/todos';
 import { searchWork } from '../../apps/web/src/lib/workSearch';
 import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
+import { formatButlerToolResult } from '../../apps/web/src/lib/butlerToolRuntime';
 
 test.afterEach(() => {
   useTodos.setState({ todos: [] });
@@ -53,7 +54,7 @@ test('管家工具能搜索并读出只有 title 的入账待办（issue #119）
   const listTodos = createButlerTools().find((tool) => tool.name === 'list_todos');
   assert.ok(listTodos);
 
-  const result = JSON.parse(await listTodos.execute({ query: '季度发布' })) as Array<{
+  const result = JSON.parse(formatButlerToolResult(await listTodos.invoke({ query: '季度发布' }))) as Array<{
     text?: string;
   }>;
   assert.deepEqual(result.map((todo) => todo.text), ['季度发布对账']);

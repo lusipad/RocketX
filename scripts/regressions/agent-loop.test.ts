@@ -6,6 +6,11 @@ import {
   type ButlerTool,
 } from '../../apps/web/src/kernel/ai/agent-loop';
 import type { AiChunk, AiChatRequest } from '../../apps/web/src/kernel/ai/provider';
+import {
+  defineButlerTool,
+  type ButlerToolCheckpoint,
+  type ButlerToolResult,
+} from '../../apps/web/src/lib/butlerToolRuntime';
 
 function scriptedGateway(rounds: AiChunk[][]): { gateway: AgentLoopGateway; requests: AiChatRequest[] } {
   const requests: AiChatRequest[] = [];
@@ -21,8 +26,24 @@ function scriptedGateway(rounds: AiChunk[][]): { gateway: AgentLoopGateway; requ
   };
 }
 
-function tool(name: string, execute: ButlerTool['execute']): ButlerTool {
-  return { name, description: `${name} 工具`, parameters: { type: 'object' }, execute };
+function tool(
+  name: string,
+  invokeImpl: (args: Record<string, unknown>) => Promise<string> | string,
+): ButlerTool {
+  return {
+    name,
+    description: `${name} 工具`,
+    parameters: { type: 'object' },
+    effect: 'read',
+    capability: `test.${name}`,
+    invoke: async (args): Promise<ButlerToolResult> => ({
+      status: 'completed',
+      toolName: name,
+      effect: 'read',
+      capability: `test.${name}`,
+      content: await invokeImpl(args),
+    }),
+  };
 }
 
 test('Agent 循环执行工具并把结果回填到下一轮消息', async () => {
@@ -119,5 +140,49 @@ test('Agent 循环响应 AbortSignal，且不吞掉网关错误', async () => {
   await assert.rejects(
     () => runAgentLoop({ gateway: failingGateway, messages: [{ role: 'user', content: '查' }], tools: [] }),
     /网关失败/,
+  );
+});
+
+test('API Agent 写工具只生成审批 checkpoint，不会绕过 runtime 直接执行', async () => {
+  const { gateway } = scriptedGateway([
+    [{ toolCalls: [{ id: 'remember-1', name: 'remember', arguments: '{"fact":"偏好简短回复"}' }] }],
+    [{ content: '已提交确认。' }],
+  ]);
+  const checkpoints = new Map<string, ButlerToolCheckpoint>();
+  let writes = 0;
+  const remember = defineButlerTool({
+    name: 'remember',
+    description: '记忆草案',
+    parameters: {
+      type: 'object',
+      properties: { fact: { type: 'string' } },
+      required: ['fact'],
+      additionalProperties: false,
+    },
+    effect: 'write',
+    capability: 'memory.write',
+    preview: (args) => `写入长期记忆：${String(args.fact)}`,
+    execute: async () => {
+      writes += 1;
+      return '已记住';
+    },
+  });
+  const result = await runAgentLoop({
+    gateway,
+    messages: [{ role: 'user', content: '记住我偏好简短回复' }],
+    tools: [remember],
+    toolRuntimeContext: () => ({
+      taskId: 'task-1',
+      loadCheckpoint: (id) => checkpoints.get(id),
+      saveCheckpoint: (checkpoint) => checkpoints.set(checkpoint.id, checkpoint),
+      writeAudit: () => undefined,
+    }),
+  });
+
+  assert.equal(writes, 0);
+  assert.equal([...checkpoints.values()][0]?.status, 'approval-required');
+  assert.match(
+    result.messages.find((message) => message.role === 'tool')?.content ?? '',
+    /approval-required.*尚未执行/,
   );
 });

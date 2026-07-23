@@ -13,6 +13,7 @@ import {
 } from '../agent/codexTransfer';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
+import type { AiToolCall } from '../kernel/ai/provider';
 import {
   codexBrainAvailability,
   getButlerCodexSettings,
@@ -23,6 +24,10 @@ import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerCon
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
 import { createButlerTools } from '../lib/butlerTools';
+import {
+  formatButlerToolResult,
+  type ButlerToolRuntimeContext,
+} from '../lib/butlerToolRuntime';
 
 export interface ButlerCodexRoomContext {
   rid: string;
@@ -38,6 +43,7 @@ export interface ButlerCodexAskOptions {
   fallbackTranscript?: readonly ButlerEngineTranscriptLine[];
   now?: number;
   onEvent?: (event: AgentLoopEvent) => void;
+  toolRuntimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext;
 }
 
 export type ButlerCodexResumeMode = 'native' | 'started' | 'resumed' | 'restarted';
@@ -82,6 +88,7 @@ let residentStatus: 'idle' | 'ready' | 'running' | 'interrupted' = 'idle';
 let residentTools = new Map<string, ButlerTool>();
 let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
+let residentToolRuntimeContext: ((toolCall: AiToolCall) => ButlerToolRuntimeContext) | undefined;
 let residentStopRequested = false;
 
 function record(value: unknown): Record<string, unknown> {
@@ -237,6 +244,7 @@ async function respondDynamicToolCall(
   expectedThreadId: string | undefined,
   tools: ReadonlyMap<string, ButlerTool>,
   onEvent?: (event: AgentLoopEvent) => void,
+  runtimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext,
 ): Promise<unknown> {
   if (request.policy !== 'dynamic-tool' || request.method !== 'item/tool/call') {
     if (request.method === 'item/commandExecution/requestApproval' ||
@@ -260,9 +268,10 @@ async function respondDynamicToolCall(
   }
   const args = record(params.arguments);
   const callId = typeof params.callId === 'string' ? params.callId : crypto.randomUUID();
-  onEvent?.({ type: 'tool-call', toolCall: { id: callId, name, arguments: JSON.stringify(args) } });
+  const toolCall: AiToolCall = { id: callId, name, arguments: JSON.stringify(args) };
+  onEvent?.({ type: 'tool-call', toolCall });
   try {
-    const result = await tool.execute(args);
+    const result = formatButlerToolResult(await tool.invoke(args, runtimeContext?.(toolCall)));
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: result });
     // 工具已返回 JSON 字符串，直接透传，避免二次编码。
     return {
@@ -301,6 +310,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
           residentThreadId,
           residentTools,
           residentEvent,
+          residentToolRuntimeContext,
         ),
         onInterrupted: onResidentInterrupted,
       },
@@ -326,6 +336,7 @@ async function stopResident(clearThread = true): Promise<void> {
   if (client) await client.stop().catch(() => undefined);
   residentTurn = undefined;
   residentEvent = undefined;
+  residentToolRuntimeContext = undefined;
   residentStatus = 'idle';
   if (clearThread) {
     residentThreadId = undefined;
@@ -430,6 +441,7 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     const controller = createTurnController(threadId, options.onEvent);
     residentTurn = controller;
     residentEvent = options.onEvent;
+    residentToolRuntimeContext = options.toolRuntimeContext;
     residentStatus = 'running';
     const transcript = resumeMode === 'started' || resumeMode === 'restarted'
       ? options.fallbackTranscript
@@ -441,12 +453,14 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     residentStatus = 'ready';
     residentTurn = undefined;
     residentEvent = undefined;
+    residentToolRuntimeContext = undefined;
     return { text: result };
   } catch (error) {
     const reason = unavailableReason(error);
     if (reason) setCodexBrainUnavailableReason(reason);
     residentTurn = undefined;
     residentEvent = undefined;
+    residentToolRuntimeContext = undefined;
     if (residentStatus !== 'interrupted') residentStatus = residentThreadId ? 'ready' : 'idle';
     throw error;
   } finally {
@@ -499,7 +513,13 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
   let controller: TurnController | undefined;
   const client = new AppServerClient(transportFactory(sessionId, workspaceRoot), {
     onNotification: (method, params) => controller?.onNotification(method, params),
-    onServerRequest: (request) => respondDynamicToolCall(request, threadId, registeredTools, options.onEvent),
+    onServerRequest: (request) => respondDynamicToolCall(
+      request,
+      threadId,
+      registeredTools,
+      options.onEvent,
+      options.toolRuntimeContext,
+    ),
     onInterrupted: (error) => controller?.interrupt(error),
   });
   try {

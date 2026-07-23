@@ -8,6 +8,7 @@ import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
+import ButlerToolApprovals from './ButlerToolApprovals';
 import PanelShell from './PanelShell';
 
 function roomName(
@@ -32,6 +33,8 @@ export default function ButlerPanel() {
   const running = useButler((state) => state.running);
   const error = useButler((state) => state.error);
   const routineDraft = useButler((state) => state.routineDraft);
+  const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
+  const actionDraft = useButler((state) => state.actionDraft);
   const steps = useButler((state) => state.steps);
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
@@ -42,6 +45,9 @@ export default function ButlerPanel() {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasConversation = lines.some((line) => line.role === 'user');
+  const routineCheckpoint = routineDraft
+    ? runtimeCheckpoints.find((item) => item.id === routineDraft.checkpointId)
+    : undefined;
 
   // 恢复本账号保存的对话记录（与管家桌面对话共用同一份）
   useEffect(() => {
@@ -51,7 +57,7 @@ export default function ButlerPanel() {
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [lines, activity, error, routineDraft]);
+  }, [lines, activity, error, routineDraft, runtimeCheckpoints, actionDraft]);
 
   if (!rid) return null;
 
@@ -93,14 +99,17 @@ export default function ButlerPanel() {
           </div>
         ) : null}
 
+        <div className="mt-3"><ButlerToolApprovals compact /></div>
+
         {routineDraft ? (
           <div className="mt-3 rounded-lg border border-primary/30 bg-primary-light/40 p-3">
             <div className="text-xs font-medium text-primary">例行事务草案</div>
             <div className="mt-1 font-medium text-ink">{routineDraft.name}</div>
             <div className="mt-1 text-xs text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
+            {routineCheckpoint?.error ? <div className="mt-1 text-xs text-danger">{routineCheckpoint.error.message}</div> : null}
             <div className="mt-3 flex justify-end gap-2">
-              <button onClick={dismissRoutineDraft} className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover">取消</button>
-              <button onClick={confirmRoutineDraft} className="rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover">确认启用</button>
+              <button onClick={() => void dismissRoutineDraft()} className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover">取消</button>
+              <button onClick={() => void confirmRoutineDraft()} className="rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover">确认启用</button>
             </div>
           </div>
         ) : null}

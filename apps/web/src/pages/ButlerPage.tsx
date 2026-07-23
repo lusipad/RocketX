@@ -23,11 +23,15 @@ import {
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
 import { listMutes, removeMute } from '../lib/butlerMutes';
-import { acceptButlerProposal, dismissButlerProposal } from '../lib/butlerProposalActions';
+import {
+  acceptButlerProposal,
+  createButlerProposalCheckpoint,
+  dismissButlerProposal,
+} from '../lib/butlerProposalActions';
 import { turnButlerBriefItemIntoTodo } from '../lib/butlerBriefActions';
 import { runDraftWithBrain } from '../lib/butlerRoundsBrain';
 import { isProposalHandled } from '../lib/butlerOutbox';
-import { useButler } from '../stores/butler';
+import { executeApprovedButlerOperation, useButler } from '../stores/butler';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { dueLabel, todayKey, useTodos } from '../stores/todos';
@@ -117,6 +121,7 @@ export default function ButlerPage() {
   const [hiddenProposals, setHiddenProposals] = useState<Set<string>>(() => new Set());
   const [mutes, setMutes] = useState(() => listMutes());
   const [draftingRef, setDraftingRef] = useState<string | null>(null);
+  const [proposalOperationKey, setProposalOperationKey] = useState<string | null>(null);
   const [draftCard, setDraftCard] = useState<{ ref: string; text: string; rid?: string } | null>(null);
   const draftTextRef = useRef<HTMLTextAreaElement>(null);
   const conversationOpen = useUI((state) => state.butlerConversationOpen);
@@ -163,26 +168,62 @@ export default function ButlerPage() {
     setHiddenProposals((current) => new Set(current).add(key));
   }
 
-  function acceptProposal(
+  async function acceptProposal(
     proposal: NonNullable<typeof result>['proposals'][number],
     key: string,
-  ): void {
+  ): Promise<void> {
     let who: string | undefined;
     if (proposal.kind === 'add-commitment' && !proposal.who) {
       who = window.prompt('这件事答应给谁？')?.trim();
       if (!who) return;
     }
-    const outcome = acceptButlerProposal(proposal, {
-      today,
-      who,
-      messageRefs: lastResult?.refMessages,
-    });
-    if (outcome === 'needs-who') return;
-    if (outcome === 'missing-ref') toast.info('这项已经找不到了');
-    else if (outcome === 'already-applied') toast.info('这项已经处理过了');
-    else if (proposal.kind === 'close-wait') toast.success('已销账');
-    else toast.success('已入账');
-    hideProposal(key);
+    setProposalOperationKey(key);
+    try {
+      const checkpoint = createButlerProposalCheckpoint(proposal, {
+        action: 'accept',
+        generatedAt: lastResult?.generatedAt,
+        today,
+        who,
+      });
+      const outcome = await executeApprovedButlerOperation(checkpoint, () => acceptButlerProposal(proposal, {
+        today,
+        who,
+        messageRefs: lastResult?.refMessages,
+      }));
+      if (outcome === 'needs-who') return;
+      if (outcome === 'missing-ref') toast.info('这项已经找不到了');
+      else if (outcome === 'already-applied') toast.info('这项已经处理过了');
+      else if (proposal.kind === 'close-wait') toast.success('已销账');
+      else toast.success('已入账');
+      hideProposal(key);
+    } catch (error) {
+      toast.error(error, '建议执行失败，可明确重试');
+    } finally {
+      setProposalOperationKey(null);
+    }
+  }
+
+  async function dismissProposal(
+    proposal: NonNullable<typeof result>['proposals'][number],
+    key: string,
+  ): Promise<void> {
+    setProposalOperationKey(key);
+    try {
+      const checkpoint = createButlerProposalCheckpoint(proposal, {
+        action: 'dismiss',
+        generatedAt: lastResult?.generatedAt,
+      });
+      await executeApprovedButlerOperation(checkpoint, () => {
+        dismissButlerProposal(proposal);
+        return 'dismissed';
+      });
+      hideProposal(key);
+      toast.info('这次先不管');
+    } catch (error) {
+      toast.error(error, '暂时无法忽略这项建议');
+    } finally {
+      setProposalOperationKey(null);
+    }
   }
 
   function muteItem(title: string): void {
@@ -402,19 +443,17 @@ export default function ButlerPage() {
                       <div className="mt-3 flex gap-2">
                         <button
                           type="button"
-                          onClick={() => acceptProposal(proposal, key)}
-                          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
+                          disabled={proposalOperationKey === key}
+                          onClick={() => void acceptProposal(proposal, key)}
+                          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50"
                         >
-                          {proposal.kind === 'close-wait' ? '销账' : '入账'}
+                          {proposalOperationKey === key ? '执行中…' : proposal.kind === 'close-wait' ? '销账' : '入账'}
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            dismissButlerProposal(proposal);
-                            hideProposal(key);
-                            toast.info('这次先不管');
-                          }}
-                          className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover"
+                          disabled={proposalOperationKey === key}
+                          onClick={() => void dismissProposal(proposal, key)}
+                          className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
                         >
                           先不管
                         </button>

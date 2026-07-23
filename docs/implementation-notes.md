@@ -1008,3 +1008,55 @@ Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — M12 Butler typed tool runtime（Issue #175 / P4）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- `ButlerTool` 由裸 `execute(args) -> string` 收敛为共享的 typed `invoke/approve` 合同；参数 schema、结果、错误、
+  effect、capability、预检、可见预览与幂等键都由代码定义，API 与 Codex adapter 只调用同一入口。
+- 写工具第一次调用只生成 `approval-required` checkpoint；用户在 RocketX 可见卡片明确确认后才能进入
+  `running`。完成、失败、取消与中断恢复都写回同一 operation，失败只能再次明确批准后重试。
+- checkpoint 作为当前 Butler session 的可选字段写入既有 `session-registry:<scope>`，继续沿用服务器和账号隔离；
+  旧回滚镜像保持 transcript/history/thread 格式，不加入 P4 状态。
+- `remember`、例行事务、统一动作卡和 rounds proposal 接受/忽略都接入同一运行时。动作卡仍由现有 UI 执行
+  本地副作用，但必须先通过 store 的 preflight 与 `running` checkpoint，不能直接调用完成入口。
+- 审计只记录 operation id、工具、effect、capability、幂等键与状态，不记录参数正文或预览内容；checkpoint
+  仍保留恢复执行所需参数，并受 session scope 隔离。
+
+## Deviations
+
+- P4 没有合并 rounds 调度、routine scheduler 与对话引擎；只把 rounds proposal 作为 operation producer/consumer
+  接入运行时，主动工作流合流仍留给 P6。
+- P4 没有改变长期记忆的内容模型或注入范围；`remember` 仍调用既有存储语义，只新增预检、预览、批准、幂等和恢复，
+  scoped memory 留给 P5。
+
+## Surprises
+
+- 旧动作卡的 `completeAction()` 只是清草案并追加成功文案，真实副作用散落在 React 组件里；因此只在按钮上加确认
+  不能阻止 API/Codex 或其他入口绕过。执行态必须由 store checkpoint 先行，组件只能在 `running` 后做副作用。
+- ADO 工作项草稿有第二层对话框；打开对话框后必须保持 operation 为 `running`，关闭未创建时转为可重试失败，
+  创建成功后再完成 checkpoint，避免“打开窗口”被误记为执行成功。
+- 审计写失败不能把已经完成的副作用重新标成可重试，否则会制造重复写入；checkpoint 保存是幂等事实，审计失败
+  单独告警，不改变 operation 状态。
+
+## Verification
+
+- `pnpm codex:protocol:check` 使用仓库锁定的 `codex-cli 0.144.4` 验证 671 个协议文件。
+- `pnpm typecheck`、`pnpm test:pure`（221 项）、`pnpm test:regression`（553 项）和
+  `pnpm test:ui`（39 项）全部通过。
+- 真实本地 Rocket.Chat 已完成登录、管家页导航和只读问题提交；页面正确进入回答失败状态，
+  未绕过审批产生任何写副作用。
+
+## Verification limits
+
+- 本机 AI 提供方在真实请求时返回“AI 暂时无法回答”，因此本轮没有把模拟的动作卡/审批/取消测试描述成
+  真实 Provider 或 Codex E2E；这些交互由 39 项 Playwright UI 测试覆盖。
+
+## Questions for review
+
+- 无。
