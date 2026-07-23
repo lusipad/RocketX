@@ -49,6 +49,70 @@ async function seedButlerAnswer(page: Page): Promise<void> {
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
 }
 
+async function seedMemoryApproval(page: Page): Promise<{ status: string; checkpointId: string | null }> {
+  return page.evaluate(async () => {
+    const loadTools = new Function('return import("/src/lib/butlerTools.ts")') as () => Promise<{
+      createButlerTools: () => Array<{
+        name: string;
+        invoke: (args: Record<string, unknown>, context: Record<string, unknown>) => Promise<{
+          status: string;
+          checkpoint?: { id: string };
+        }>;
+      }>;
+    }>;
+    const loadProfile = new Function('return import("/src/lib/butlerProfile.ts")') as () => Promise<{
+      setButlerProfileStorage: (storage: { get: (key: string) => string | null; set: (key: string, value: string) => void }) => void;
+    }>;
+    const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+
+    const { createButlerTools } = await loadTools();
+    const { setButlerProfileStorage } = await loadProfile();
+    const { useButler } = await loadStore();
+
+    const entries = new Map<string, string>();
+    const storage = {
+      get: (key: string) => entries.get(key) ?? null,
+      set: (key: string, value: string) => {
+        entries.set(key, value);
+      },
+    };
+    setButlerProfileStorage(storage);
+    (window as Window & { __butlerMemoryEntries?: Map<string, string> }).__butlerMemoryEntries = entries;
+
+    const checkpoints = new Map<string, unknown>();
+    const sync = () => useButler.setState({ runtimeCheckpoints: [...checkpoints.values()] });
+    const remember = createButlerTools().find((tool) => tool.name === 'remember');
+    if (!remember) throw new Error('remember tool not found');
+    const invoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'room',
+      subject: 'reply-style',
+      value: '默认简短回复',
+    }, {
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+        room: 'general',
+      },
+      loadCheckpoint: (id: string) => checkpoints.get(id),
+      saveCheckpoint: (checkpoint: { id: string }) => {
+        checkpoints.set(checkpoint.id, checkpoint);
+        sync();
+      },
+      requestApproval: (checkpoint: { id: string }) => {
+        checkpoints.set(checkpoint.id, checkpoint);
+        sync();
+      },
+    });
+    return {
+      status: invoked.status,
+      checkpointId: invoked.checkpoint?.id ?? null,
+    };
+  });
+}
+
 test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
   const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
@@ -205,5 +269,53 @@ test('可新建、重命名并切换独立的管家会话', async ({ page }) => 
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
   await sessionSelect.selectOption({ label: '构建调查' });
   await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('memory.write 需要显式审批，确认后才写入 v2 记忆', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  const seeded = await seedMemoryApproval(page);
+
+  expect(seeded.status).toBe('approval-required');
+  await expect(page.getByLabel('待批准的管家操作')).toContainText('写入长期记忆');
+  expect(await page.evaluate(() => (window as Window & { __butlerMemoryEntries?: Map<string, string> }).__butlerMemoryEntries?.get('rcx-butler-v2:memory') ?? null)).toBeNull();
+
+  await page.getByRole('button', { name: '确认执行', exact: true }).click();
+
+  await expect(page.getByLabel('待批准的管家操作')).toHaveCount(0);
+  await expect(page.getByText('📌 已记录 preference 记忆（room:general）：reply-style = 默认简短回复', { exact: true })).toBeVisible();
+  const records = await page.evaluate(async () => {
+    const loadMemory = new Function('return import("/src/lib/butlerMemory.ts")') as () => Promise<{
+      parseButlerMemoryState: (raw: string) => {
+        records: Array<{
+          kind: string;
+          status: string;
+          subject: string;
+          value: string;
+          scope: Record<string, string>;
+        }>;
+      };
+    }>;
+    const { parseButlerMemoryState } = await loadMemory();
+    const raw = (window as Window & { __butlerMemoryEntries?: Map<string, string> }).__butlerMemoryEntries?.get('rcx-butler-v2:memory') ?? '';
+    return parseButlerMemoryState(raw).records.map((record) => ({
+      kind: record.kind,
+      status: record.status,
+      subject: record.subject,
+      value: record.value,
+      scope: record.scope,
+    }));
+  });
+  expect(records).toEqual([{
+    kind: 'preference',
+    status: 'active',
+    subject: 'reply-style',
+    value: '默认简短回复',
+    scope: {
+      server: 'https://chat.example',
+      account: 'alice',
+      room: 'general',
+    },
+  }]);
   expect(pageErrors).toEqual([]);
 });

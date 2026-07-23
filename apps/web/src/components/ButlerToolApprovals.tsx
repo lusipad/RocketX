@@ -8,7 +8,7 @@ export default function ButlerToolApprovals({ compact = false }: { compact?: boo
   const dismiss = useButler((state) => state.dismissToolCheckpoint);
   const [busyId, setBusyId] = useState<string | null>(null);
   const pending = checkpoints.filter((checkpoint) => (
-    checkpoint.toolName === 'remember'
+    checkpoint.capability === 'memory.write'
     && (checkpoint.status === 'approval-required'
       || checkpoint.status === 'running'
       || checkpoint.status === 'failed')

@@ -47,6 +47,39 @@ Plan: `docs/m8-implementation-plan.md`
 
 ---
 
+# Implementation notes — M12 Butler scoped memory（Issue #176 / P5）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- v2 长期记忆只接受 `alias`、`preference`、`commitment` 三类 typed record；每条记录显式带 `server/account[/project/room]` scope，`server/account` 取自运行时可信上下文，`provenance` 记录 session/task/call/checkpoint 与来源摘要，`expiresAt` 作为可选到期时间保留。
+- `recall_memory`、`remember`、`revoke_memory`、`restore_memory`、`import_legacy_memory` 共用同一套 typed runtime 合同；写入前只会生成审批 checkpoint，确认后才落到 `rcx-butler-v2:memory`。
+- `recall_memory` 只返回当前 scope 可验证的 active 记录，并按 `kind`、`query`、`includeHistory`、`includeLegacy` 过滤；冲突写入会先 supersede 旧 active，`revoke_memory` 只改状态不硬删，`restore_memory` 会新建 active 并保留历史。
+- `rcx-butler-v1:memory` 现在只作为 quarantine 读取，不会自动进入活动 recall；只有用户显式批准 `import_legacy_memory`，它才会把单条 v1 记录映射成 `legacy-unverified` 的 v2 记录。
+- `buildButlerSystemPrompt()` 不再注入记忆列表；当前时间从 Codex 常驻 `baseInstructions` 移到每轮输入。`memory/facts.md` 也不再作为活动镜像持续写入，桌面档案只保留 skills，并 best-effort 删除旧 facts 文件。
+- API 与 Codex 继续共享同一份 `createButlerTools()` 工具表，P5 没有拆出两套记忆实现。
+
+## Deviations
+
+- P6 的 proactive rounds / workflows 合流仍然不在本 PR。
+- 这次没有把长期记忆做成隐式 prompt 注入；召回走显式工具，所有写操作继续走审批。
+
+## Surprises
+
+- `server/account` 是长期记忆可见性的硬边界；缺少它们，或缺少用户所选 scope 要求的 project/room 时，工具会直接拒绝。
+- 旧 v1 memory 在档案层和工具层都被刻意隔离：档案层只做 quarantine，工具层只允许用户点名导入，避免遗留事实无审批进入活动记忆。
+- `facts.md` 的清理和活动记忆写入必须解耦，否则旧文件会被误当成稳定事实源。
+
+## Verification
+
+- 记忆状态回归覆盖了跨 `server/account/project/room` 的 recall 边界、`supersede/revoke/restore` 语义、过期过滤、幂等性、动态工作状态拒绝、损坏数据过滤和 legacy 导入标记。
+- profile 回归覆盖了系统提示只注入人设和技能索引、不再内嵌记忆事实，以及旧 `appendMemory` / `listMemory` / `rememberButlerFact` 活动 API 的收口。
+- 档案回归覆盖了 `rcx-butler-v2:memory` 的写穿、`rcx-butler-v1:memory` 的 quarantine 行为，以及旧 `facts.md` 的 best-effort 清理。
+- Codex 回归覆盖了动态记忆工具通过同一 runtime 暴露，以及 `remember` 首次调用只生成审批 checkpoint、不直接落盘。
+
+---
+
 # Implementation notes — M9 LAN P2P 与断网降级
 
 ## Shipped vs planned

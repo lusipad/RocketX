@@ -3,14 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   DEFAULT_PERSONA,
-  appendMemory,
   buildButlerSystemPrompt,
   getPersona,
-  listMemory,
   listSkills,
   loadButlerSkill,
-  rememberButlerFact,
-  recallButlerMemory,
   removeSkill,
   resetPersona,
   saveSkill,
@@ -31,17 +27,18 @@ class MemoryStorage implements ButlerProfileStorage {
   }
 }
 
-function withMemoryStorage(run: () => void): void {
-  const restore = setButlerProfileStorage(new MemoryStorage());
+function withMemoryStorage(run: (storage: MemoryStorage) => void): void {
+  const storage = new MemoryStorage();
+  const restore = setButlerProfileStorage(storage);
   try {
-    run();
+    run(storage);
   } finally {
     restore();
   }
 }
 
-test('系统提示注入人设和技能索引，并按需注入记忆', () => {
-  withMemoryStorage(() => {
+test('系统提示只注入人设和技能索引，永不内嵌任何记忆事实', () => {
+  withMemoryStorage((storage) => {
     const initial = buildButlerSystemPrompt();
     assert.ok(initial.startsWith(DEFAULT_PERSONA));
     assert.doesNotMatch(initial, /## 你记住的事实/);
@@ -50,33 +47,22 @@ test('系统提示注入人设和技能索引，并按需注入记忆', () => {
     assert.match(initial, /- evening-review：/);
     assert.match(initial, /- weekly-report：/);
 
-    appendMemory('老李是李建国');
-    assert.match(buildButlerSystemPrompt(), /## 你记住的事实\n- 老李是李建国/);
+    storage.set('rcx-butler-v1:memory', JSON.stringify([{ id: 'fact-1', text: '老李是李建国', at: 1 }]));
+    storage.set('rcx-butler-v2:memory', '{"scopes":{"global":{"entries":[{"id":"fact-2","text":"偏好简短"}]}}}');
+    const prompt = buildButlerSystemPrompt();
+    assert.doesNotMatch(prompt, /老李是李建国|偏好简短/);
+    assert.doesNotMatch(prompt, /## 你记住的事实/);
+    assert.match(prompt, /recall_memory/);
   });
 });
 
-test('默认人设约束管家使用渲染环境支持的输出格式', () => {
-  assert.match(DEFAULT_PERSONA, /不使用 markdown 表格/);
-  assert.match(DEFAULT_PERSONA, /粗体小标题/);
-  assert.match(DEFAULT_PERSONA, /偏好、纠错、别名、决定或承诺/);
-  assert.match(DEFAULT_PERSONA, /先调用 remember/);
-});
-
-test('系统提示仅保留最近 30 条记忆，并从最旧项开始压缩到 4000 字符', () => {
-  withMemoryStorage(() => {
-    for (let index = 0; index < 31; index += 1) appendMemory(`第${index}条`);
-
-    const recentPrompt = buildButlerSystemPrompt();
-    assert.equal(listMemory().length, 31);
-    assert.doesNotMatch(recentPrompt, /- 第0条/);
-    assert.match(recentPrompt, /- 第30条/);
-
-    appendMemory(`旧事实${'甲'.repeat(3990)}`);
-    appendMemory(`最新事实${'乙'.repeat(20)}`);
-    const compactedPrompt = buildButlerSystemPrompt();
-    assert.doesNotMatch(compactedPrompt, /旧事实/);
-    assert.match(compactedPrompt, /最新事实/);
-  });
+test('默认人设改为按需 recall_memory，并严格限制可持久化内容', () => {
+  assert.match(DEFAULT_PERSONA, /recall_memory/);
+  assert.match(DEFAULT_PERSONA, /alias/);
+  assert.match(DEFAULT_PERSONA, /偏好/);
+  assert.match(DEFAULT_PERSONA, /承诺/);
+  assert.match(DEFAULT_PERSONA, /PR、构建、日程、工作项、待办/);
+  assert.doesNotMatch(DEFAULT_PERSONA, /先调用 remember/);
 });
 
 test('AI 设置页提供人设编辑入口，托管纪律不受人设影响', () => {
@@ -85,7 +71,7 @@ test('AI 设置页提供人设编辑入口，托管纪律不受人设影响', ()
   assert.match(settings, /savePersona/);
   assert.match(settings, /restoreDefaultPersona/);
   assert.match(settings, /AI 托管的编码代理和安全纪律不受影响/);
-  // 托管指令构造不引用管家人设
+
   const context = readFileSync('apps/web/src/agent/context.ts', 'utf8');
   assert.doesNotMatch(context, /getPersona|DEFAULT_PERSONA|buildButlerSystemPrompt/);
 });
@@ -109,14 +95,20 @@ test('人设可覆盖和复位，自定义技能可保存和删除', () => {
   });
 });
 
-test('load_skill 与 remember 使用可测试的纯档案逻辑', () => {
+test('profile 源码不再导出让 legacy memory 变成活动记忆的旧 API', () => {
+  const source = readFileSync('apps/web/src/lib/butlerProfile.ts', 'utf8');
+  assert.doesNotMatch(source, /export function appendMemory/);
+  assert.doesNotMatch(source, /export function listMemory/);
+  assert.doesNotMatch(source, /export function recallButlerMemory/);
+  assert.doesNotMatch(source, /export function removeMemory/);
+  assert.doesNotMatch(source, /export function rememberButlerFact/);
+  assert.match(source, /readButlerActiveMemoryV2RawJson/);
+  assert.match(source, /listButlerQuarantinedLegacyMemory/);
+});
+
+test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
   withMemoryStorage(() => {
     assert.match(loadButlerSkill('morning-brief'), /^晨报/);
     assert.match(loadButlerSkill('missing'), /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report/);
-    assert.equal(rememberButlerFact('我偏好简短回复'), '已记住：我偏好简短回复');
-    assert.equal(listMemory()[0]?.text, '我偏好简短回复');
-    rememberButlerFact('老李是李建国');
-    assert.deepEqual(recallButlerMemory('老李').map((entry) => entry.text), ['老李是李建国']);
-    assert.equal(rememberButlerFact('  '), '没有可记住的内容。');
   });
 });

@@ -7,20 +7,36 @@ import {
   setButlerBrainTauriProvider,
   type ButlerBrainStorage,
 } from '../../apps/web/src/lib/butlerBrain';
+import { parseButlerMemoryState } from '../../apps/web/src/lib/butlerMemory';
+import { setButlerProfileStorage, type ButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
 import { createButlerTools, type ButlerRoutineDraft } from '../../apps/web/src/lib/butlerTools';
 import {
   formatButlerToolResult,
   type ButlerToolCheckpoint,
   type ButlerToolRuntimeContext,
 } from '../../apps/web/src/lib/butlerToolRuntime';
-import { setButlerLoopRunner, setButlerNowProvider, useButler } from '../../apps/web/src/stores/butler';
+import { setButlerLoopRunner, setButlerNowProvider, setButlerPersistence, setButlerToolAuditWriter, useButler } from '../../apps/web/src/stores/butler';
+import { useAuth } from '../../apps/web/src/stores/auth';
 import { useRoutines } from '../../apps/web/src/stores/routines';
+import { getServerBase, setServerBase } from '../../apps/web/src/lib/client';
 
 function resetStore(): void {
   useButler.getState().reset();
 }
 
 class BrainStorage implements ButlerBrainStorage {
+  private readonly values = new Map<string, string>();
+
+  get(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  set(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+}
+
+class MemoryStorage implements ButlerProfileStorage {
   private readonly values = new Map<string, string>();
 
   get(key: string): string | null {
@@ -70,6 +86,10 @@ function runtimeHarness(now = Date.UTC(2026, 6, 23, 9, 30)): RuntimeHarness {
       },
     },
   };
+}
+
+function storedMemoryRecords(storage: ButlerProfileStorage) {
+  return parseButlerMemoryState(storage.get('rcx-butler-v2:memory') ?? '').records;
 }
 
 test('管家连续提问会累积模型历史和展示行', async () => {
@@ -178,14 +198,18 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
   }
 });
 
-test('管家透明展示 remember 工具写入的记忆', async () => {
+test('remember 在 ask 流里只留下待审批 checkpoint，不伪造已写入成功消息', async () => {
   resetStore();
   const restore = setButlerLoopRunner(async (options) => {
     options.onEvent?.({
       type: 'tool-call',
-      toolCall: { id: 'remember_1', name: 'remember', arguments: '{"fact":"我偏好简短回复"}' },
+      toolCall: {
+        id: 'remember_1',
+        name: 'remember',
+        arguments: '{"kind":"preference","scope":"account","subject":"reply-style","value":"默认简短回复"}',
+      },
     });
-    options.onEvent?.({ type: 'tool-result', toolCallId: 'remember_1', content: '已记住：我偏好简短回复' });
+    options.onEvent?.({ type: 'tool-result', toolCallId: 'remember_1', content: 'approval-required：写入长期记忆；尚未执行。' });
     return { text: '我会按这个偏好回复。', messages: options.messages };
   });
 
@@ -194,11 +218,180 @@ test('管家透明展示 remember 工具写入的记忆', async () => {
 
     assert.deepEqual(useButler.getState().lines.slice(1).map(({ role, text }) => ({ role, text })), [
       { role: 'user', text: '以后简短一点' },
-      { role: 'assistant', text: '📌 已记住：我偏好简短回复' },
       { role: 'assistant', text: '我会按这个偏好回复。' },
     ]);
   } finally {
     restore();
+    resetStore();
+  }
+});
+
+test('ask runner 的 toolRuntimeContext 冻结当前 auth 与 room/project source snapshot', async () => {
+  resetStore();
+  const restorePersistence = setButlerPersistence({
+    get: async () => undefined,
+    set: async () => undefined,
+  });
+  const previousAuth = useAuth.getState();
+  const previousServerBase = getServerBase();
+  const previousLocalStorage = globalThis.localStorage;
+  const entries = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        entries.set(key, value);
+      },
+      removeItem: (key: string) => {
+        entries.delete(key);
+      },
+    },
+  });
+  useButler.setState({ activeSessionId: 'session-1' });
+  useAuth.setState({
+    status: 'authed',
+    user: { _id: 'alice' } as never,
+  });
+  setServerBase('https://chat.example');
+  const captured: ButlerToolRuntimeContext[] = [];
+  const restore = setButlerLoopRunner(async (options) => {
+    const first = options.toolRuntimeContext?.({ id: 'remember_1', name: 'remember', arguments: '{}' } as never);
+    assert.ok(first);
+    captured.push(first);
+    useButler.setState({
+      context: {
+        kind: 'room',
+        label: 'Other',
+        detail: '切走后的房间',
+        sources: [
+          { kind: 'room', id: 'room-other', rid: 'room-other', label: 'Other' },
+          { kind: 'work-item', id: 'wi-2', project: 'project-b', label: '#2' },
+        ],
+      } as never,
+    });
+    const second = options.toolRuntimeContext?.({ id: 'remember_2', name: 'remember', arguments: '{}' } as never);
+    assert.ok(second);
+    captured.push(second);
+    return { text: '收到。', messages: options.messages };
+  });
+
+  try {
+    await useButler.getState().ask('记一下发布偏好', {
+      kind: 'room',
+      label: 'General',
+      detail: '当前 Rocket.Chat 房间',
+      sources: [
+        { kind: 'room', id: 'room-general', rid: 'room-general', label: 'General' },
+        { kind: 'work-item', id: 'wi-1', project: 'project-a', label: '#1 发布' },
+      ],
+    } as never);
+
+    assert.equal(captured.length, 2);
+    assert.ok(captured[0]?.taskId);
+    assert.equal(captured[1]?.taskId, captured[0]?.taskId);
+    assert.ok(captured[0]?.sessionId);
+    assert.equal(captured[1]?.sessionId, captured[0]?.sessionId);
+    assert.deepEqual(captured.map((context) => ({
+      callId: context.callId,
+      scope: context.scope,
+      sources: context.sources,
+    })), [
+      {
+        callId: 'remember_1',
+        scope: {
+          server: 'https://chat.example',
+          account: 'alice',
+          project: 'project-a',
+          room: 'room-general',
+        },
+        sources: [
+          { kind: 'room', id: 'room-general', rid: 'room-general' },
+          { kind: 'work-item', id: 'wi-1', project: 'project-a' },
+        ],
+      },
+      {
+        callId: 'remember_2',
+        scope: {
+          server: 'https://chat.example',
+          account: 'alice',
+          project: 'project-a',
+          room: 'room-general',
+        },
+        sources: [
+          { kind: 'room', id: 'room-general', rid: 'room-general' },
+          { kind: 'work-item', id: 'wi-1', project: 'project-a' },
+        ],
+      },
+    ]);
+  } finally {
+    restore();
+    restorePersistence();
+    useAuth.setState(previousAuth);
+    setServerBase(previousServerBase);
+    if (previousLocalStorage === undefined) delete (globalThis as { localStorage?: Storage }).localStorage;
+    else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: previousLocalStorage,
+      });
+    }
+    resetStore();
+  }
+});
+
+test('确认 typed remember checkpoint 后写入 v2 memory，并在对话中追加一次性审批结果', async () => {
+  resetStore();
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const restoreAuditWriter = setButlerToolAuditWriter(() => undefined);
+  const remember = createButlerTools().find((tool) => tool.name === 'remember');
+  assert.ok(remember);
+  const runtime = runtimeHarness();
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'alice',
+    room: 'release-room',
+  };
+  try {
+    const invoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'room',
+      subject: 'reply-style',
+      value: '默认简短回复',
+    }, runtime.context);
+
+    assert.equal(invoked.status, 'approval-required');
+    assert.equal(storedMemoryRecords(storage).length, 0);
+    assert.equal(useButler.getState().runtimeCheckpoints.length, 1);
+
+    await useButler.getState().approveToolCheckpoint(invoked.checkpoint!.id);
+    assert.deepEqual(storedMemoryRecords(storage).map((record) => ({
+      kind: record.kind,
+      scope: record.scope,
+      subject: record.subject,
+      value: record.value,
+      status: record.status,
+    })), [{
+      kind: 'preference',
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+        room: 'release-room',
+      },
+      subject: 'reply-style',
+      value: '默认简短回复',
+      status: 'active',
+    }]);
+    assert.equal(useButler.getState().lines.at(-1)?.text, '📌 已记录 preference 记忆（room:release-room）：reply-style = 默认简短回复');
+
+    const lineCount = useButler.getState().lines.length;
+    await useButler.getState().approveToolCheckpoint(invoked.checkpoint!.id);
+    assert.equal(storedMemoryRecords(storage).length, 1);
+    assert.equal(useButler.getState().lines.length, lineCount);
+  } finally {
+    restoreAuditWriter();
+    restoreStorage();
     resetStore();
   }
 });

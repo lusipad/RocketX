@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   cancelButlerToolCheckpoint,
   createButlerToolCheckpoint,
+  defineButlerTool,
   formatButlerToolResult,
   normalizeButlerToolCheckpoint,
   recoverButlerToolCheckpoint,
@@ -11,7 +12,12 @@ import {
   type ButlerToolRuntimeContext,
 } from '../../apps/web/src/lib/butlerToolRuntime';
 import {
-  recallButlerMemory,
+  parseButlerMemoryState,
+  rememberButlerMemory,
+  serializeButlerMemoryState,
+  type ButlerMemoryState,
+} from '../../apps/web/src/lib/butlerMemory';
+import {
   setButlerProfileStorage,
   type ButlerProfileStorage,
 } from '../../apps/web/src/lib/butlerProfile';
@@ -81,29 +87,434 @@ function resetStores(): void {
 
 test.afterEach(() => resetStores());
 
-test('remember 在 approve 前只生成 checkpoint，不直接写长期记忆', async () => {
-  const restoreStorage = setButlerProfileStorage(new MemoryStorage());
+function storedMemoryState(storage: ButlerProfileStorage): ButlerMemoryState {
+  return parseButlerMemoryState(storage.get('rcx-butler-v2:memory') ?? '');
+}
+
+function writeMemoryState(storage: ButlerProfileStorage, state: ButlerMemoryState): void {
+  storage.set('rcx-butler-v2:memory', serializeButlerMemoryState(state));
+}
+
+function appendScopedMemory(
+  state: ButlerMemoryState,
+  overrides: {
+    kind: 'alias' | 'preference' | 'commitment';
+    subject: string;
+    value: string;
+    scope?: {
+      server?: string;
+      account?: string;
+      project?: string;
+      room?: string;
+    };
+    provenance?: {
+      butlerSource?: string;
+      summary?: string;
+      checkpointId?: string;
+    };
+    due?: string;
+    expiresAt?: number | null;
+    createdAt?: number;
+    id?: string;
+  },
+): ButlerMemoryState {
+  return rememberButlerMemory(state, {
+    kind: overrides.kind,
+    scope: {
+      server: String(overrides.scope?.server ?? 'https://chat.example'),
+      account: String(overrides.scope?.account ?? 'alice'),
+      ...(overrides.scope?.project ? { project: String(overrides.scope.project) } : {}),
+      ...(overrides.scope?.room ? { room: String(overrides.scope.room) } : {}),
+    },
+    subject: overrides.subject,
+    value: overrides.value,
+    ...(overrides.due ? { due: String(overrides.due) } : {}),
+    provenance: {
+      butlerSource: overrides.provenance?.butlerSource ?? 'seed',
+      summary: overrides.provenance?.summary ?? 'seeded regression record',
+      ...(overrides.provenance?.checkpointId ? { checkpointId: overrides.provenance.checkpointId } : {}),
+    },
+    ...(overrides.expiresAt !== undefined ? { expiresAt: overrides.expiresAt } : {}),
+  }, {
+    now: overrides.createdAt ?? Date.UTC(2026, 6, 23, 9, 30),
+    createId: () => overrides.id ?? `seed-${Math.random().toString(36).slice(2, 8)}`,
+  }).state;
+}
+
+test('工具在 checkpoint 中冻结调用时的可信 scope，审批时不读取后来切换的账号', async () => {
   const runtime = runtimeHarness();
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'user-a',
+    room: 'room-a',
+  };
+  let executedScope: unknown;
+  const scopedWrite = defineButlerTool({
+    name: 'scoped_write',
+    description: '测试可信 scope 捕获',
+    parameters: {
+      type: 'object',
+      properties: { value: { type: 'string' } },
+      required: ['value'],
+      additionalProperties: false,
+    },
+    effect: 'write',
+    capability: 'memory.write',
+    capture: (args, context) => ({ ...args, trustedScope: context.scope }),
+    execute: async (args) => {
+      executedScope = args.trustedScope;
+      return 'ok';
+    },
+  });
+
+  const invoked = await scopedWrite.invoke({ value: 'short' }, runtime.context);
+  assert.equal(invoked.status, 'approval-required');
+  assert.deepEqual(invoked.checkpoint?.params.trustedScope, {
+    server: 'https://chat.example',
+    account: 'user-a',
+    room: 'room-a',
+  });
+
+  runtime.context.scope = {
+    server: 'https://other.example',
+    account: 'user-b',
+    room: 'room-b',
+  };
+  const approved = await scopedWrite.approve?.(invoked.checkpoint!, runtime.context);
+  assert.equal(approved?.status, 'completed');
+  assert.deepEqual(executedScope, {
+    server: 'https://chat.example',
+    account: 'user-a',
+    room: 'room-a',
+  });
+});
+
+test('remember 在 approve 前只生成 checkpoint，不直接写长期记忆', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const runtime = runtimeHarness();
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'alice',
+  };
   try {
     const remember = tool('remember');
-    const invoked = await remember.invoke({ fact: '我偏好简短回复' }, runtime.context);
+    const invoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'account',
+      subject: 'reply-style',
+      value: '默认简短回复',
+    }, runtime.context);
 
     assert.equal(invoked.status, 'approval-required');
     assert.equal(invoked.effect, 'write');
     assert.equal(runtime.approvals.length, 1);
-    assert.equal(recallButlerMemory('简短回复').length, 0);
+    assert.equal(storedMemoryState(storage).records.length, 0);
     assert.match(formatButlerToolResult(invoked), /approval-required/);
-    assert.equal(JSON.stringify(runtime.audits).includes('我偏好简短回复'), false, '审计不能通过幂等键泄漏记忆正文');
+    assert.equal(JSON.stringify(runtime.audits).includes('默认简短回复'), false, '审计不能通过幂等键泄漏记忆正文');
 
     const approved = await remember.approve?.(invoked.checkpoint!, runtime.context);
     assert.equal(approved?.status, 'completed');
     assert.equal(approved?.checkpoint?.attempts, 1);
-    assert.equal(recallButlerMemory('简短回复').map((entry) => entry.text).join(','), '我偏好简短回复');
+    assert.deepEqual(storedMemoryState(storage).records.map((record) => ({
+      kind: record.kind,
+      subject: record.subject,
+      value: record.value,
+      scope: record.scope,
+    })), [{
+      kind: 'preference',
+      subject: 'reply-style',
+      value: '默认简短回复',
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+      },
+    }]);
 
     const repeated = await remember.approve?.(invoked.checkpoint!, runtime.context);
     assert.equal(repeated?.status, 'completed');
     assert.equal(repeated?.checkpoint?.attempts, 1);
-    assert.equal(recallButlerMemory('简短回复').length, 1);
+    assert.equal(storedMemoryState(storage).records.length, 1);
+  } finally {
+    restoreStorage();
+  }
+});
+
+test('remember 和 legacy import 在审批时拒绝已经到期的记忆', async () => {
+  const invokedAt = Date.UTC(2026, 6, 23, 9, 30);
+  const expiresAt = invokedAt + 60_000;
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const runtime = runtimeHarness(invokedAt);
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'alice',
+  };
+  try {
+    const remember = tool('remember');
+    const rememberInvoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'account',
+      subject: 'reply-style',
+      value: '默认简短回复',
+      expiresAt: new Date(expiresAt).toISOString(),
+    }, runtime.context);
+    assert.equal(rememberInvoked.status, 'approval-required');
+
+    runtime.context.now = () => expiresAt;
+    const remembered = await remember.approve?.(rememberInvoked.checkpoint!, runtime.context);
+    assert.equal(remembered?.status, 'failed');
+    assert.match(remembered?.error?.message ?? '', /审批前到期/);
+    assert.equal(storedMemoryState(storage).records.length, 0);
+
+    storage.set('rcx-butler-v1:memory', JSON.stringify([
+      { id: 'legacy-expiring', text: '以后默认简短回复', at: invokedAt },
+    ]));
+    runtime.context.now = () => invokedAt;
+    const importLegacy = tool('import_legacy_memory');
+    const importInvoked = await importLegacy.invoke({
+      legacyId: 'legacy-expiring',
+      kind: 'preference',
+      scope: 'account',
+      subject: 'legacy:legacy-expiring',
+      value: '以后默认简短回复',
+      expiresAt: new Date(expiresAt).toISOString(),
+    }, runtime.context);
+    assert.equal(importInvoked.status, 'approval-required');
+
+    runtime.context.now = () => expiresAt;
+    const imported = await importLegacy.approve?.(importInvoked.checkpoint!, runtime.context);
+    assert.equal(imported?.status, 'failed');
+    assert.match(imported?.error?.message ?? '', /审批前到期/);
+    assert.equal(storedMemoryState(storage).records.length, 0);
+  } finally {
+    restoreStorage();
+  }
+});
+
+test('remember 冻结 trusted scope/provenance，approve 前不落盘且重复 approve 保持幂等', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const runtime = runtimeHarness();
+  runtime.context.scope = {
+    server: 'HTTPS://CHAT.EXAMPLE',
+    account: 'Alice',
+    project: 'Release',
+    room: 'General',
+  };
+  runtime.context.sessionId = 'session-a';
+  runtime.context.taskId = 'task-a';
+  runtime.context.callId = 'call-a';
+  try {
+    const remember = tool('remember');
+    const invoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'room',
+      subject: 'reply-style',
+      value: '默认简短回复',
+    }, runtime.context);
+
+    assert.equal(invoked.status, 'approval-required');
+    assert.deepEqual(storedMemoryState(storage).records, []);
+    assert.deepEqual(invoked.checkpoint?.params.trustedScope, {
+      server: 'https://chat.example',
+      account: 'alice',
+      room: 'general',
+    });
+    assert.deepEqual(invoked.checkpoint?.params.capturedProvenance, {
+      sessionId: 'session-a',
+      taskId: 'task-a',
+      callId: 'call-a',
+      butlerSource: 'butler:user-confirmed',
+      summary: '用户在当前 Butler 会话中直接确认',
+    });
+
+    runtime.context.scope = {
+      server: 'https://other.example',
+      account: 'bob',
+      project: 'other',
+      room: 'random',
+    };
+    runtime.context.sessionId = 'session-b';
+    runtime.context.taskId = 'task-b';
+    runtime.context.callId = 'call-b';
+
+    const approved = await remember.approve?.(invoked.checkpoint!, runtime.context);
+    assert.equal(approved?.status, 'completed');
+    assert.equal(approved?.checkpoint?.attempts, 1);
+    assert.deepEqual(storedMemoryState(storage).records.map((record) => ({
+      kind: record.kind,
+      scope: record.scope,
+      subject: record.subject,
+      value: record.value,
+      provenance: record.provenance,
+      status: record.status,
+    })), [{
+      kind: 'preference',
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+        room: 'general',
+      },
+      subject: 'reply-style',
+      value: '默认简短回复',
+      provenance: {
+        sessionId: 'session-a',
+        taskId: 'task-a',
+        callId: 'call-a',
+        checkpointId: invoked.checkpoint!.id,
+        butlerSource: 'butler:user-confirmed',
+        summary: '用户在当前 Butler 会话中直接确认',
+      },
+      status: 'active',
+    }]);
+
+    const repeated = await remember.approve?.(invoked.checkpoint!, runtime.context);
+    assert.equal(repeated?.status, 'completed');
+    assert.equal(repeated?.checkpoint?.attempts, 1);
+    assert.equal(storedMemoryState(storage).records.length, 1);
+  } finally {
+    restoreStorage();
+  }
+});
+
+test('recall_memory 从 v2 scoped memory 返回 typed 记录，不泄漏其他 scope', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  try {
+    let state = parseButlerMemoryState('');
+    state = appendScopedMemory(state, {
+      kind: 'preference',
+      subject: 'reply-style',
+      value: '默认简短回复',
+      scope: { server: 'https://chat.example', account: 'alice' },
+      id: 'memory-1',
+      createdAt: Date.UTC(2026, 6, 23, 9, 30),
+    });
+    state = appendScopedMemory(state, {
+      kind: 'alias',
+      subject: '老李',
+      value: '李建国',
+      scope: { server: 'https://chat.example', account: 'alice', room: 'release-room' },
+      id: 'memory-2',
+      createdAt: Date.UTC(2026, 6, 23, 9, 31),
+    });
+    writeMemoryState(storage, state);
+
+    const recall = tool('recall_memory');
+    const invoked = await recall.invoke({
+      scope: 'account',
+      kind: 'preference',
+      query: '简短',
+    }, {
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+        project: 'ignored-project',
+      },
+    });
+
+    assert.equal(invoked.status, 'completed');
+    assert.deepEqual(JSON.parse(formatButlerToolResult(invoked)), {
+      schemaVersion: 2,
+      scope: {
+        server: 'https://chat.example',
+        account: 'alice',
+      },
+      records: [{
+        id: 'memory-1',
+        kind: 'preference',
+        status: 'active',
+        scope: {
+          server: 'https://chat.example',
+          account: 'alice',
+        },
+        subject: 'reply-style',
+        value: '默认简短回复',
+        confidence: 'confirmed',
+        createdAt: '2026-07-23T09:30:00.000Z',
+        confirmedAt: '2026-07-23T09:30:00.000Z',
+        expiresAt: null,
+        provenance: {
+          butlerSource: 'seed',
+          summary: 'seeded regression record',
+        },
+        supersedes: [],
+      }],
+    });
+  } finally {
+    restoreStorage();
+  }
+});
+
+test('revoke/restore/import memory 都先等待审批，再对 v2 state 生效', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const runtime = runtimeHarness();
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'alice',
+    room: 'release-room',
+  };
+  runtime.context.sessionId = 'session-a';
+  runtime.context.taskId = 'task-a';
+  runtime.context.callId = 'call-a';
+  try {
+    let state = parseButlerMemoryState('');
+    state = appendScopedMemory(state, {
+      kind: 'alias',
+      subject: '老李',
+      value: '李建国',
+      scope: { server: 'https://chat.example', account: 'alice', room: 'release-room' },
+      id: 'memory-1',
+      createdAt: Date.UTC(2026, 6, 23, 9, 30),
+    });
+    writeMemoryState(storage, state);
+
+    const revoke = tool('revoke_memory');
+    const restore = tool('restore_memory');
+    const importLegacy = tool('import_legacy_memory');
+
+    const revokeInvoked = await revoke.invoke({ id: 'memory-1', scope: 'room' }, runtime.context);
+    assert.equal(revokeInvoked.status, 'approval-required');
+    assert.equal(storedMemoryState(storage).records.find((record) => record.id === 'memory-1')?.status, 'active');
+    const revoked = await revoke.approve?.(revokeInvoked.checkpoint!, runtime.context);
+    assert.equal(revoked?.status, 'completed');
+    assert.equal(storedMemoryState(storage).records.find((record) => record.id === 'memory-1')?.status, 'revoked');
+
+    const restoreInvoked = await restore.invoke({ id: 'memory-1', scope: 'room' }, runtime.context);
+    assert.equal(restoreInvoked.status, 'approval-required');
+    const restored = await restore.approve?.(restoreInvoked.checkpoint!, runtime.context);
+    assert.equal(restored?.status, 'completed');
+    const restoredState = storedMemoryState(storage);
+    const latest = restoredState.records[0];
+    assert.equal(latest?.value, '李建国');
+    assert.equal(latest?.status, 'active');
+    assert.equal(latest?.restoredFrom, 'memory-1');
+    assert.equal(restoredState.records.find((record) => record.id === 'memory-1')?.status, 'revoked');
+
+    storage.set('rcx-butler-v1:memory', JSON.stringify([{ id: 'legacy-1', text: '以后默认简短回复', at: 123 }]));
+    storage.set('rcx-butler-v2:memory', serializeButlerMemoryState(parseButlerMemoryState('')));
+    const importInvoked = await importLegacy.invoke({
+      legacyId: 'legacy-1',
+      kind: 'preference',
+      scope: 'room',
+      subject: 'legacy:legacy-1',
+      value: '以后默认简短回复',
+    }, runtime.context);
+    assert.equal(importInvoked.status, 'approval-required');
+    assert.equal(storedMemoryState(storage).records.length, 0);
+    const imported = await importLegacy.approve?.(importInvoked.checkpoint!, runtime.context);
+    assert.equal(imported?.status, 'completed');
+    assert.deepEqual(storedMemoryState(storage).records.map((record) => ({
+      subject: record.subject,
+      value: record.value,
+      confidence: record.confidence,
+    })), [{
+      subject: 'legacy:legacy-1',
+      value: '以后默认简短回复',
+      confidence: 'legacy-unverified',
+    }]);
   } finally {
     restoreStorage();
   }

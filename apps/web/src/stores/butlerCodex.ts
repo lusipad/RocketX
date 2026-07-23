@@ -106,8 +106,12 @@ function hash(value: string): string {
   return (result >>> 0).toString(16);
 }
 
-function instructions(now: number): string {
-  return `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(now)}`;
+function instructions(): string {
+  return buildButlerSystemPrompt();
+}
+
+function timePrefixedInput(text: string, now: number): string {
+  return `${butlerCurrentTimeLine(now)}\n\n${text}`;
 }
 
 function dynamicTools(tools: readonly ButlerTool[]) {
@@ -345,7 +349,7 @@ async function stopResident(clearThread = true): Promise<void> {
   }
 }
 
-async function startResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {
+async function startResidentThread(prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
   const tools = createButlerTools();
@@ -356,7 +360,7 @@ async function startResidentThread(now: number, prompt: string, promptHash: stri
     approvalPolicy: 'on-request',
     approvalsReviewer: 'user',
     sandbox: 'read-only',
-    baseInstructions: `${prompt}\n\n${butlerCurrentTimeLine(now)}`,
+    baseInstructions: prompt,
     dynamicTools: dynamicTools(tools),
   });
   residentThreadId = response.thread.id;
@@ -368,7 +372,7 @@ async function startResidentThread(now: number, prompt: string, promptHash: stri
     .catch(() => undefined);
 }
 
-async function resumeResidentThread(now: number, prompt: string, promptHash: string): Promise<void> {
+async function resumeResidentThread(prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
   const tools = createButlerTools();
@@ -380,7 +384,7 @@ async function resumeResidentThread(now: number, prompt: string, promptHash: str
     approvalPolicy: 'on-request',
     approvalsReviewer: 'user',
     sandbox: 'read-only',
-    baseInstructions: `${prompt}\n\n${butlerCurrentTimeLine(now)}`,
+    baseInstructions: prompt,
     excludeTurns: true,
   });
   residentThreadId = response.thread.id;
@@ -407,22 +411,22 @@ export function residentCodexThreadSnapshot(): { threadId: string; promptHash: s
     : undefined;
 }
 
-async function ensureResidentThread(now: number): Promise<ButlerCodexResumeMode> {
+async function ensureResidentThread(): Promise<ButlerCodexResumeMode> {
   const prompt = buildButlerSystemPrompt();
   const settings = getButlerCodexSettings();
   const promptHash = hash(`${prompt}\n\0${settings.model}\n\0${settings.effort}`);
   if (residentThreadId && residentPromptHash !== promptHash) await stopResident();
   if (!residentThreadId) {
-    await startResidentThread(now, prompt, promptHash);
+    await startResidentThread(prompt, promptHash);
     return 'started';
   }
   if (residentStatus !== 'interrupted') return 'native';
   try {
-    await resumeResidentThread(now, prompt, promptHash);
+    await resumeResidentThread(prompt, promptHash);
     return 'resumed';
   } catch {
     await stopResident();
-    await startResidentThread(now, prompt, promptHash);
+    await startResidentThread(prompt, promptHash);
     return 'restarted';
   }
 }
@@ -434,7 +438,8 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
   if (!text) return { text: '' };
   residentStopRequested = false;
   try {
-    const resumeMode = await ensureResidentThread(options.now ?? Date.now());
+    const now = options.now ?? Date.now();
+    const resumeMode = await ensureResidentThread();
     if (residentStopRequested) return { text: '' };
     const threadId = residentThreadId;
     if (!threadId) throw new Error('AI Codex 会话尚未创建');
@@ -448,7 +453,10 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
       : options.bridgeTranscript;
     const result = await controller.start(
       await ensureResidentClient(),
-      roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
+      timePrefixedInput(
+        roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
+        now,
+      ),
     );
     residentStatus = 'ready';
     residentTurn = undefined;
@@ -533,12 +541,12 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
       approvalsReviewer: 'user',
       sandbox: 'read-only',
       ephemeral: true,
-      baseInstructions: instructions(now),
+      baseInstructions: instructions(),
       dynamicTools: dynamicTools(tools),
     });
     threadId = response.thread.id;
     controller = createTurnController(threadId, options.onEvent);
-    return { text: await controller.start(client, options.text.trim()) };
+    return { text: await controller.start(client, timePrefixedInput(options.text.trim(), now)) };
   } catch (error) {
     const reason = unavailableReason(error);
     if (reason) setCodexBrainUnavailableReason(reason);

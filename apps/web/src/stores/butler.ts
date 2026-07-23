@@ -40,6 +40,8 @@ import {
   type ButlerToolAuditEntry,
   type ButlerToolCheckpoint,
   type ButlerToolRuntimeContext,
+  type ButlerToolScope,
+  type ButlerToolSourceRef,
 } from '../lib/butlerToolRuntime';
 import {
   BUTLER_AUDIT_UPDATED_EVENT,
@@ -439,6 +441,9 @@ const toolLabels: Record<string, string> = {
   recall_memory: '召回记忆',
   load_skill: '加载技能',
   remember: '记录记忆',
+  revoke_memory: '撤销记忆',
+  restore_memory: '恢复记忆',
+  import_legacy_memory: '导入旧记忆',
   draft_routine: '生成例行事务草案',
 };
 
@@ -593,10 +598,50 @@ function checkpointClosed(checkpoint: ButlerToolCheckpoint | undefined): boolean
   return checkpoint?.status === 'completed' || checkpoint?.status === 'cancelled';
 }
 
-function runtimeContext(callId: string): ButlerToolRuntimeContext {
+interface ButlerRuntimeSnapshot {
+  context?: ButlerSurfaceContext | null;
+  taskId?: string;
+  sources?: readonly ButlerSource[];
+}
+
+function runtimeScope(context?: ButlerSurfaceContext | null): ButlerToolScope | undefined {
+  const user = useAuth.getState().user;
+  if (!user?._id) return undefined;
+  const projects = new Set(
+    context?.sources
+      .map((source) => source.project?.trim())
+      .filter((project): project is string => !!project),
+  );
+  const room = context?.kind === 'room'
+    ? context.sources.find((source) => source.kind === 'room')?.rid
+      ?? context.sources.find((source) => source.rid)?.rid
+    : undefined;
   return {
-    taskId: useButler.getState().taskState?.id ?? useButler.getState().activeSessionId,
+    server: getServerBase() || 'same-origin',
+    account: user._id,
+    ...(projects.size === 1 ? { project: [...projects][0] } : {}),
+    ...(room ? { room } : {}),
+  };
+}
+
+function runtimeSources(sources: readonly ButlerSource[] | undefined): ButlerToolSourceRef[] {
+  return (sources ?? []).slice(0, 8).map(({ kind, id, rid, project }) => ({
+    kind,
+    id,
+    ...(rid ? { rid } : {}),
+    ...(project ? { project } : {}),
+  }));
+}
+
+function runtimeContext(callId: string, snapshot: ButlerRuntimeSnapshot = {}): ButlerToolRuntimeContext {
+  const state = useButler.getState();
+  const context = snapshot.context === undefined ? state.context : snapshot.context;
+  return {
+    taskId: snapshot.taskId ?? state.taskState?.id ?? state.activeSessionId,
     callId,
+    sessionId: state.activeSessionId,
+    scope: runtimeScope(context),
+    sources: runtimeSources(snapshot.sources ?? state.taskState?.sources ?? context?.sources),
     now: butlerNow,
     loadCheckpoint: runtimeCheckpoint,
     saveCheckpoint: upsertRuntimeCheckpoint,
@@ -607,10 +652,6 @@ function runtimeContext(callId: string): ButlerToolRuntimeContext {
     },
     writeAudit: writeToolAudit,
   };
-}
-
-function runtimeContextFor(toolCall: AiToolCall): ButlerToolRuntimeContext {
-  return runtimeContext(toolCall.id);
 }
 
 function runtimeContextForCheckpoint(checkpoint: ButlerToolCheckpoint): ButlerToolRuntimeContext {
@@ -839,6 +880,11 @@ export const useButler = create<ButlerState>((set, get) => ({
     let assistantLineId: string | undefined;
     let turnOpen = true;
     let turnSources = turnContext?.sources ?? [];
+    const toolRuntimeContextFor = (toolCall: AiToolCall) => runtimeContext(toolCall.id, {
+      context: turnContext,
+      taskId: runningTask.id,
+      sources: turnSources,
+    });
     const toolCallNames = new Map<string, string>();
     const onEvent = (event: AgentLoopEvent) => {
       if (!turnOpen) return;
@@ -872,14 +918,11 @@ export const useButler = create<ButlerState>((set, get) => ({
           const steps = state.steps.map((step) =>
             step.id === event.toolCallId ? { ...step, status: failed ? 'failed' as const : 'done' as const } : step,
           );
-          let lines = state.lines;
-          if (toolName === 'remember' && event.content.startsWith('已记住')) {
-            lines = [...state.lines, line('assistant', `📌 ${event.content}`)];
-          } else if (assistantLineId) {
-            lines = state.lines.map((item) => item.id === assistantLineId
+          const lines = assistantLineId
+            ? state.lines.map((item) => item.id === assistantLineId
               ? { ...item, ...(turnSources.length ? { sources: turnSources } : {}) }
-              : item);
-          }
+              : item)
+            : state.lines;
           return {
             activity: null,
             steps,
@@ -916,7 +959,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           fallbackTranscript: transcriptBeforeTurn,
           now: butlerNow(),
           onEvent,
-          toolRuntimeContext: runtimeContextFor,
+          toolRuntimeContext: toolRuntimeContextFor,
         });
         resultText = result.text;
       } else {
@@ -930,7 +973,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           tools: createButlerTools(),
           signal: abort?.signal,
           onEvent,
-          toolRuntimeContext: runtimeContextFor,
+          toolRuntimeContext: toolRuntimeContextFor,
         });
         resultText = result.text;
         nextHistory = trimButlerHistory([
@@ -1211,7 +1254,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const result = await tool.approve(checkpoint, runtimeContextForCheckpoint(checkpoint));
     if (result.status !== 'completed') return;
     set((state) => {
-      const prefix = checkpoint.toolName === 'remember' ? '📌' : '✅';
+      const prefix = checkpoint.capability === 'memory.write' ? '📌' : '✅';
       const lines = result.content
         ? [...state.lines, line('assistant', `${prefix} ${result.content}`)]
         : state.lines;
