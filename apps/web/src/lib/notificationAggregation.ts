@@ -19,7 +19,7 @@ export type NotificationAggregationConfigPatch = Partial<
 > & { urgent?: Partial<NotificationUrgentRules> };
 
 export const DEFAULT_NOTIFICATION_AGGREGATION_CONFIG: NotificationAggregationConfig = {
-  enabled: true,
+  enabled: false,
   windowMinutes: 5,
   urgent: {
     directMessages: false,

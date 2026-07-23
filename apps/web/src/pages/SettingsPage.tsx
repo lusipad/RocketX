@@ -1014,7 +1014,7 @@ function NotificationSection() {
 
       {aggregationState && (
         <>
-          <Row label="通知聚合" hint="普通消息按会话合并，紧急消息仍立即穿透" inline>
+          <Row label="禅模式" hint="开启后按会话聚合普通通知，紧急消息仍立即穿透" inline>
             <Toggle
               checked={aggregationState.config.enabled}
               onChange={(enabled) => updateAggregation({ enabled })}
