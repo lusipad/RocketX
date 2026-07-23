@@ -62,7 +62,8 @@ pnpm dev
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
 登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询 ADO 工作项/PR/构建、
-生成工作项草案或运行例行复盘；所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
+生成工作项草案或运行例行复盘；完整页和房间侧栏都能直接附加图片，并把真实多模态输入交给
+所选 API Provider 或 Codex 大脑。所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
 本机 Codex CLI，也可把管家或群托管对话转进 Codex App / CLI 的原生线程列表继续处理。
 管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；DeepSeek 等 Provider
 与密钥也在这里配置，密钥只进入操作系统凭据库。托管会话中被 `@ai` 请求引用到的图片会
@@ -82,9 +83,9 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 221 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 585 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 593 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 41 项浏览器流程：登录、消息、首次引导、AI 设置、分组栏、ADO 卡片、待办链接与插件 Bridge
+pnpm test:ui        # 46 项浏览器流程：登录、消息、管家图片、禅模式、表情面板、首次引导、AI 设置与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
@@ -115,7 +116,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
   并构建 Windows 安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
   还会强制核验两位外部开发者证据和真实 README 截图/GIF；
 - **公开发布**：复核草稿后手动运行受保护的 `Publish GitHub Release`；公开工作流以非 Latest
-  方式发布 `v0.29.1`，Windows 用户在公开后从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
+  方式发布 `v0.30.0`，Windows 用户在公开后从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
 - **npm 包（按需）**：公开 SDK/CLI 变更需要 npm 交付时，独立运行受保护的
   `Publish npm packages`，按 SDK → CLI 顺序发布；npm 不阻塞桌面安装包与 GitHub Release；
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
