@@ -17,9 +17,12 @@ import {
 } from '../../apps/web/src/lib/butlerProfile';
 import {
   askButlerCodex,
+  hydrateResidentCodexThread,
+  residentCodexThreadSnapshot,
   resetButlerCodexRuntime,
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
+  stopButlerCodexTurn,
 } from '../../apps/web/src/stores/butlerCodex';
 
 class FakeTransport implements CodexTransport {
@@ -88,6 +91,14 @@ async function initialize(transport: FakeTransport): Promise<void> {
 
 async function startThread(transport: FakeTransport, id = 'butler-thread'): Promise<Record<string, unknown>> {
   const request = transport.writes.find((message) => message.method === 'thread/start');
+  assert.ok(request);
+  transport.line({ id: request.id, result: { thread: { id, cliVersion: CODEX_APP_SERVER_VERSION } } });
+  await tick();
+  return request;
+}
+
+async function resumeThread(transport: FakeTransport, id = 'butler-thread'): Promise<Record<string, unknown>> {
+  const request = transport.writes.find((message) => message.method === 'thread/resume');
   assert.ok(request);
   transport.line({ id: request.id, result: { thread: { id, cliVersion: CODEX_APP_SERVER_VERSION } } });
   await tick();
@@ -297,6 +308,151 @@ test('Codex 模型或推理强度变化会停止旧线程，并在下一问前�
     await completeTurn(secondTransport, 'configured-thread', 'configured-turn');
     await second;
     assert.equal(transports.length, 2);
+  } finally {
+    await restore();
+  }
+});
+
+test('resume 失败重建线程时，重建后首轮 turn input 带 fallbackTranscript，thread start 保持既有协议字段', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  let asking: Promise<{ text: string }> | undefined;
+  try {
+    const first = askButlerCodex({ text: '第一问' });
+    const firstTransport = await transportAt(transports, 0);
+    await initialize(firstTransport);
+    await startThread(firstTransport, 'persisted-thread');
+    await startTurn(firstTransport, 'persisted-turn');
+    await completeTurn(firstTransport, 'persisted-thread', 'persisted-turn', '第一答');
+    await first;
+
+    const snapshot = residentCodexThreadSnapshot();
+    assert.deepEqual(snapshot, { threadId: 'persisted-thread', promptHash: snapshot?.promptHash });
+
+    await resetButlerCodexRuntime();
+    hydrateResidentCodexThread(snapshot!.threadId, snapshot!.promptHash);
+
+    asking = askButlerCodex({
+      text: '第二问',
+      fallbackTranscript: [
+        { revision: 1, role: 'user', text: '第一问' },
+        { revision: 2, role: 'assistant', text: '第一答' },
+      ],
+    });
+    const secondTransport = await transportAt(transports, 1);
+    await initialize(secondTransport);
+
+    const resumeRequest = secondTransport.writes.find((message) => message.method === 'thread/resume');
+    assert.ok(resumeRequest);
+    secondTransport.line({
+      id: resumeRequest.id,
+      error: { code: -32000, message: 'resume failed' },
+    });
+    await tick();
+
+    const rebuiltTransport = await transportAt(transports, 2);
+    await initialize(rebuiltTransport);
+    assert.equal(secondTransport.stopped, true);
+    const threadStart = await startThread(rebuiltTransport, 'rebuilt-thread');
+    const threadParams = threadStart.params as Record<string, unknown>;
+    assert.equal('fallbackTranscript' in threadParams, false);
+    assert.equal(threadParams.cwd, 'C:/RocketX/AppData/butler');
+    assert.equal(threadParams.sandbox, 'read-only');
+
+    const turnStart = await startTurn(rebuiltTransport, 'rebuilt-turn');
+    const turnInput = String(((turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>)[0].text);
+    assert.match(turnInput, /第一问/);
+    assert.match(turnInput, /第一答/);
+    assert.match(turnInput, /第二问/);
+    await completeTurn(rebuiltTransport, 'rebuilt-thread', 'rebuilt-turn');
+
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    await Promise.allSettled(asking ? [asking] : []);
+    await restore();
+  }
+});
+
+test('新建线程的首轮 turn input 也带 fallbackTranscript，thread start 保持既有协议字段', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  let asking: Promise<{ text: string }> | undefined;
+  try {
+    asking = askButlerCodex({
+      text: '现在的问题',
+      fallbackTranscript: [
+        { revision: 1, role: 'user', text: '历史问题' },
+        { revision: 2, role: 'assistant', text: '历史回答' },
+      ],
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const threadStart = await startThread(transport);
+    const threadParams = threadStart.params as Record<string, unknown>;
+    assert.equal('fallbackTranscript' in threadParams, false);
+    assert.equal(threadParams.cwd, 'C:/RocketX/AppData/butler');
+    assert.equal(threadParams.sandbox, 'read-only');
+    const turnStart = await startTurn(transport);
+    const turnInput = String(((turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>)[0].text);
+    assert.match(turnInput, /历史问题/);
+    assert.match(turnInput, /历史回答/);
+    assert.match(turnInput, /现在的问题/);
+    await completeTurn(transport);
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    await Promise.allSettled(asking ? [asking] : []);
+    await restore();
+  }
+});
+
+test('thread start 或 resume 未完成且尚无 turnId 时，stop 仍让 ask 安静结束且不启动 turn', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const asking = askButlerCodex({ text: '未启动 turn 的停止' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await stopButlerCodexTurn();
+    transport.line({
+      id: (transport.writes.find((message) => message.method === 'thread/start') as Record<string, unknown>).id,
+      result: { thread: { id: 'late-thread', cliVersion: CODEX_APP_SERVER_VERSION } },
+    });
+    await tick();
+
+    assert.equal(transport.writes.some((message) => message.method === 'turn/start'), false);
+    assert.deepEqual(await Promise.race([
+      asking,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('ask did not settle after stop before turn start')), 80)),
+    ]), { text: '' });
+  } finally {
+    await restore();
+  }
+});
+
+test('thread 已就绪但 turn/start 尚未发送时，stop 仍阻止迟到 turn', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const asking = askButlerCodex({ text: '线程刚就绪时停止' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const threadStart = transport.writes.find((message) => message.method === 'thread/start');
+    assert.ok(threadStart);
+    transport.line({
+      id: threadStart.id,
+      result: { thread: { id: 'ready-thread', cliVersion: CODEX_APP_SERVER_VERSION } },
+    });
+    const stopping = new Promise<void>((resolve) => {
+      queueMicrotask(() => void stopButlerCodexTurn().then(resolve));
+    });
+    await stopping;
+    await tick();
+
+    assert.equal(transport.writes.some((message) => message.method === 'turn/start'), false);
+    assert.deepEqual(await Promise.race([
+      asking,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('ask did not settle after stop before turn request')), 80)),
+    ]), { text: '' });
   } finally {
     await restore();
   }
