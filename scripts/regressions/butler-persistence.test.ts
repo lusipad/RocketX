@@ -66,6 +66,81 @@ test('AI 对话落盘后重启可恢复，账号隔离', async () => {
   }
 });
 
+test('回合失败后的 taskState 会覆盖已落盘的 running 状态', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('task-failed-user');
+  setButlerBrain('api');
+  let rejectTurn!: (reason?: unknown) => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const restore = setButlerLoopRunner(async () => {
+    markStarted();
+    return new Promise<never>((_resolve, reject) => {
+      rejectTurn = reject;
+    });
+  });
+
+  try {
+    await useButler.getState().hydrate();
+    const asking = useButler.getState().ask('调查昨天的问题');
+    await started;
+    await flushButlerPersist();
+    rejectTurn(new Error('调查失败'));
+    await asking;
+    assert.equal(useButler.getState().taskState?.status, 'failed');
+    await new Promise<void>((resolve) => setTimeout(resolve, 550));
+
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await useButler.getState().hydrate();
+    assert.equal(useButler.getState().taskState?.status, 'failed');
+  } finally {
+    restore();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
+test('停止回合后的 taskState 会覆盖已落盘的 running 状态', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('task-paused-user');
+  setButlerBrain('api');
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const restore = setButlerLoopRunner(async (options) => {
+    markStarted();
+    return new Promise<never>((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+    });
+  });
+
+  try {
+    await useButler.getState().hydrate();
+    const asking = useButler.getState().ask('调查昨天的问题');
+    await started;
+    await flushButlerPersist();
+    await useButler.getState().stop();
+    await asking;
+    assert.equal(useButler.getState().taskState?.status, 'paused');
+    await new Promise<void>((resolve) => setTimeout(resolve, 550));
+
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await useButler.getState().hydrate();
+    assert.equal(useButler.getState().taskState?.status, 'paused');
+  } finally {
+    restore();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
 test('直接入口发问会先 hydrate 当前 session，不丢失已存上下文', async () => {
   resetButlerPersistenceForTests();
   useButler.getState().reset();

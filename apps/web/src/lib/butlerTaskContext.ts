@@ -187,6 +187,10 @@ function identify(input: string): ScenarioDefinition {
   return definitions.find((definition) => definition.matches.some((pattern) => pattern.test(input))) ?? generalDefinition;
 }
 
+function startsNewTask(input: string): boolean {
+  return /^(?:新任务|另一个任务|开始新任务)(?:\s*[:：]\s*|\s+|$)/u.test(input.trim());
+}
+
 export function compileButlerTask(
   input: string,
   context: ButlerSurfaceContext | null | undefined,
@@ -194,7 +198,8 @@ export function compileButlerTask(
   now = Date.now(),
 ): ButlerTaskState {
   const identified = identify(input);
-  const continuing = identified.id === 'general' && previous?.status === 'awaiting-clarification';
+  const continuing = !startsNewTask(input) && previous?.status === 'awaiting-clarification' &&
+    (identified.id === 'general' || identified.id === previous.manifest.scenario);
   const definition = continuing
     ? definitions.find((candidate) => candidate.id === previous.manifest.scenario) ?? identified
     : identified;

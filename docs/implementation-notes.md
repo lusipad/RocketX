@@ -961,6 +961,8 @@ Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
 
 - 本机已升级到 Codex CLI 0.145.0，而仓库与 CI 明确固定 0.144.4；直接执行协议门禁会报告生成树漂移。使用与
   CI 相同的 0.144.4 后，671 个协议文件一致，因此未把无关协议升级混入 P2。
+- 合并后独立复审发现两个恢复边界：补充内容再次包含原场景关键词时仍应沿用待澄清 task id；失败或停止只改变
+  `taskState` 时也必须触发持久化。两项都用可复现回归锁定后修正，没有改变 P2 的能力或写权限边界。
 
 ## Questions for review
 

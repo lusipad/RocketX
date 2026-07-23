@@ -854,9 +854,9 @@ export const useButler = create<ButlerState>((set, get) => ({
 
 setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
 
-// 只有当前已 hydrate 的 session 发生 transcript 变化时才更新活动时间并防抖落盘。
+// 当前已 hydrate 的 session 发生 transcript 或任务态变化时更新活动时间并防抖落盘。
 useButler.subscribe((state, previous) => {
-  if (state.lines === previous.lines && state.history === previous.history) return;
+  if (state.lines === previous.lines && state.history === previous.history && state.taskState === previous.taskState) return;
   if (suppressPersistence || !persistScope || !sessionRegistry) return;
   sessionDirty = true;
   schedulePersist();
