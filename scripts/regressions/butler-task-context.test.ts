@@ -91,6 +91,26 @@ test('不完整指代先进入最小澄清，补充后沿用同一 task', () => 
   assert.match(resumed.goal, /补充：PR #101 和 PR #102/);
 });
 
+test('补充内容重复场景关键词时仍沿用待澄清 task', () => {
+  const first = compileButlerTask('比较这两个 PR', null, null, 100);
+  const resumed = compileButlerTask('比较 PR #101 和 PR #102', null, first, 200);
+
+  assert.equal(resumed.id, first.id);
+  assert.equal(resumed.createdAt, first.createdAt);
+  assert.equal(resumed.status, 'ready');
+  assert.match(resumed.goal, /补充：比较 PR #101 和 PR #102/);
+});
+
+test('明确声明新任务时不会吞并到同场景待澄清 task', () => {
+  const first = compileButlerTask('比较这两个 PR', null, null, 100);
+  const next = compileButlerTask('新任务：比较 PR #201 和 PR #202', null, first, 200);
+
+  assert.notEqual(next.id, first.id);
+  assert.equal(next.createdAt, 200);
+  assert.equal(next.goal, '新任务：比较 PR #201 和 PR #202');
+  assert.equal(next.status, 'ready');
+});
+
 test('任务提示包含预检、来源、新鲜度、禁止动作与恢复合同', () => {
   const task = compileButlerTask('关联失败构建 #9001 与提交', null, null, 100);
   const progressed = updateButlerTask(task, {
