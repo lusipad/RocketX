@@ -4,14 +4,17 @@ import { useButler } from '../stores/butler';
 
 export default function ButlerToolApprovals({ compact = false }: { compact?: boolean }) {
   const checkpoints = useButler((state) => state.runtimeCheckpoints);
+  const workflowCheckpoints = useButler((state) => state.workflowRuntimeCheckpoints);
   const approve = useButler((state) => state.approveToolCheckpoint);
   const dismiss = useButler((state) => state.dismissToolCheckpoint);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const pending = checkpoints.filter((checkpoint) => (
-    checkpoint.capability === 'memory.write'
-    && (checkpoint.status === 'approval-required'
+  const pending = [
+    ...checkpoints.filter((checkpoint) => checkpoint.capability === 'memory.write'),
+    ...workflowCheckpoints,
+  ].filter((checkpoint) => (
+    checkpoint.status === 'approval-required'
       || checkpoint.status === 'running'
-      || checkpoint.status === 'failed')
+      || checkpoint.status === 'failed'
   ));
 
   if (!pending.length) return null;

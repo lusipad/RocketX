@@ -23,31 +23,34 @@ function stripJsonFence(content: string): string {
   return match ? match[1].trim() : trimmed;
 }
 
-export function codexEphemeralGateway(): AiChatGateway {
+export function codexEphemeralGateway(signal?: AbortSignal): AiChatGateway {
   return {
     async *chat(_capability, request) {
       const text = request.messages
         .map((message) => `[${message.role.toUpperCase()}]\n${message.content}`)
         .join('\n\n');
-      const result = await codexRunner({ text });
+      const result = await codexRunner({ text, signal });
       yield { content: stripJsonFence(result.text), finishReason: 'stop' };
     },
   };
 }
 
-function selectedButlerGateway(): AiChatGateway {
+function selectedButlerGateway(signal?: AbortSignal): AiChatGateway {
   if (getButlerBrain() === 'codex') {
     const availability = codexBrainAvailability();
     if (!availability.available) {
       throw new Error(`${availability.reason ?? 'Codex 大脑暂不可用'}，可在设置中切换为 API 大脑`);
     }
-    return codexEphemeralGateway();
+    return codexEphemeralGateway(signal);
   }
   return getAiBus();
 }
 
-export async function runRoundsWithBrain(input: RoundsInput): Promise<RoundsResult> {
-  return runButlerRounds(input, selectedButlerGateway());
+export async function runRoundsWithBrain(
+  input: RoundsInput,
+  signal?: AbortSignal,
+): Promise<RoundsResult> {
+  return runButlerRounds(input, selectedButlerGateway(signal));
 }
 
 export async function runDraftWithBrain(input: ButlerDraftInput): Promise<ButlerDraftResult> {

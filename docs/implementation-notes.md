@@ -47,6 +47,61 @@ Plan: `docs/m8-implementation-plan.md`
 
 ---
 
+# Implementation notes — M12 Butler 主动 workflow runtime 合流（Issue #177 / P6）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- Today、watcher、rounds、routine 与通用 workflow 复用现有 Butler session registry、task state、
+  engine state、typed tool runtime、checkpoint、证据来源和恢复合同；主动任务写入隐藏 workflow session，
+  不进入人工会话选择器，也不污染人工 transcript。
+- workflow 运行键与注册表写入同时绑定 `server/account` scope 和 workflow key；账号或服务器切换后，
+  迟到结果不会写入新 scope，同名任务也不会跨账号错误去重。
+- rounds 以最多三条可执行摘要完成共享 task，每条保留原因、建议动作和实际入选来源；routine 的 API 与
+  Codex 路径接收同一 tool runtime context；watcher 只有在共享 workflow 成功记录后才推进去重游标。
+- workflow 写操作继续生成 P4 审批 checkpoint，并投影到现有审批界面；批准或驳回只推进对应隐藏任务，
+  不改写当前人工会话的运行状态。
+- Codex 临时主动任务接受 `AbortSignal`；暂停时发送真实 `turn/interrupt` 并停止 transport，确保跨重启恢复、
+  失败重试和用户暂停都可由同一任务事实验证。
+
+## Deviations
+
+- 既有 Today 结果、rounds 结果、routine run 和 watcher event card 继续作为兼容的可见读模型保留；
+  它们不再承担主动任务的权威执行状态，因此没有新增第二套导航或状态机。
+- 本阶段没有重做管家导航，也没有改变人工会话的可见交互模型。
+
+## Surprises
+
+- 在 Windows `tsx` 回归环境中用动态 import 规避 store 模块环会产生两个模块实例，导致认证状态与 session
+  registry 分裂；改回静态 ESM live binding 后，完整 typecheck、回归和 UI 测试均证明初始化顺序安全。
+- 仅按 workflow key 管理在途任务会让两个账号的同名 routine 相互去重；仅在完成时读取当前 scope 又会把迟到
+  结果写错账号。P6 同时锁定启动 scope、session id 和写入 scope，并加入跨账号并发回归。
+- 主动任务写 registry 前若不先冲刷人工会话的防抖 transcript，旧内存快照会覆盖刚完成的主动任务；反向顺序也
+  会丢失人工回复。两条写路径现在都先保存当前人工事实，再合并 workflow session。
+- scheduler 在未登录时不能提前写入 `lastFiredDate`，否则当天登录后不会再执行；P6 只在 workflow 已进入
+  execute 后确认当日触发，并让未 admission 的尝试不留下失败 run。rounds 暂停也必须把 workflow
+  `AbortSignal` 继续传给 Codex runner，不能只丢弃迟到结果。
+
+## Verification
+
+- `pnpm typecheck` 通过完整 monorepo 类型门禁。
+- `pnpm test:regression` 通过 581 项，覆盖隐藏 workflow session、重启恢复、失败重试、用户暂停、
+  跨账号隔离、并发 transcript、审批投影、rounds/routine/watcher 合流与 Codex 中断。
+- `pnpm test:ui` 通过 41 项；真实审批卡可推进隐藏 workflow checkpoint，且隐藏 session 不出现在会话选择器。
+- P6 定向 Butler workflow、rounds、routines 与 Codex abort 回归全部通过。
+
+## Verification limits
+
+- 尚未在真实登录的 Rocket.Chat/Codex 桌面环境执行长时间主动任务 E2E；本阶段的调度、审批和中断验证由
+  回归与 Playwright 环境覆盖，最终发布前仍需执行仓库完整门禁。
+
+## Questions for review
+
+- 无。
+
+---
+
 # Implementation notes — M12 Butler scoped memory（Issue #176 / P5）
 
 Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)

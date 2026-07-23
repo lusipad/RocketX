@@ -22,6 +22,7 @@ import {
   hydrateResidentCodexThread,
   residentCodexThreadSnapshot,
   resetButlerCodexRuntime,
+  runButlerCodexEphemeral,
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
   stopButlerCodexTurn,
@@ -561,6 +562,35 @@ test('thread 已就绪但 turn/start 尚未发送时，stop 仍阻止迟到 turn
       asking,
       new Promise((_, reject) => setTimeout(() => reject(new Error('ask did not settle after stop before turn request')), 80)),
     ]), { text: '' });
+  } finally {
+    await restore();
+  }
+});
+
+test('ephemeral workflow 收到暂停信号时中断当前 Codex turn 并停止 transport', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const controller = new AbortController();
+
+  try {
+    const running = runButlerCodexEphemeral({
+      text: '生成晨报',
+      signal: controller.signal,
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport, 'workflow-thread');
+    await startTurn(transport, 'workflow-turn');
+
+    controller.abort(new Error('用户暂停 workflow'));
+
+    await assert.rejects(running, /用户暂停 workflow/);
+    await tick();
+    assert.deepEqual(
+      transport.writes.find((message) => message.method === 'turn/interrupt')?.params,
+      { threadId: 'workflow-thread', turnId: 'workflow-turn' },
+    );
+    assert.equal(transport.stopped, true);
   } finally {
     await restore();
   }

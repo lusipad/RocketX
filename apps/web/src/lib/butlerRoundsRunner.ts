@@ -8,6 +8,8 @@ import {
 } from '../kernel/ai/features/butler-rounds';
 import { useTodos, todayKey } from '../stores/todos';
 import { useWorkbench } from '../stores/workbench';
+import { runButlerWorkflowTask } from '../stores/butler';
+import { mergeButlerSources, type ButlerSource } from './butlerContext';
 import { ledgerFromTodos } from './butlerLedger';
 import { addMute, listMutes, type ButlerMute } from './butlerMutes';
 import {
@@ -216,17 +218,117 @@ function resultDisplaySnapshot(
   };
 }
 
+export function butlerRoundsSources(input: RoundsInput, refs?: readonly string[]): ButlerSource[] {
+  const snapshot = serializeButlerRoundsInput(input);
+  const sources = new Map<string, ButlerSource>();
+  const todos = new Map(input.todos.map((todo) => [todo.id, todo]));
+  const workItems = new Map(input.workItems.map((item) => [item.id, item]));
+  const pullRequests = new Map(input.pullRequests.map((item) => [item.id, item]));
+  const builds = new Map(input.builds.map((item) => [item.id, item]));
+
+  for (const item of snapshot.todos) {
+    const todo = todos.get(item.id);
+    sources.set(item.ref, {
+      kind: 'todo',
+      id: item.id,
+      label: item.title,
+      ...(todo?.rid ? { rid: todo.rid } : {}),
+      ...(todo?.mid ? { mid: todo.mid } : {}),
+      ...(todo?.adoProject ? { project: todo.adoProject } : {}),
+    });
+  }
+  for (const item of snapshot.ledger) {
+    const todoSource = sources.get(`todo:${item.todoId}`);
+    if (todoSource) sources.set(item.ref, todoSource);
+  }
+  for (const item of snapshot.workItems) {
+    const workItem = workItems.get(item.id);
+    sources.set(item.ref, {
+      kind: 'work-item',
+      id: String(item.id),
+      label: `#${item.id} ${item.title}`,
+      project: item.project,
+      ...(workItem?.webUrl ? { webUrl: workItem.webUrl } : {}),
+    });
+  }
+  for (const item of snapshot.pullRequests) {
+    const pullRequest = pullRequests.get(item.id);
+    sources.set(item.ref, {
+      kind: 'pull-request',
+      id: String(item.id),
+      label: `PR #${item.id} ${item.title}`,
+      ...(pullRequest?.project || item.repo ? { project: pullRequest?.project ?? item.repo } : {}),
+      ...(pullRequest?.webUrl ? { webUrl: pullRequest.webUrl } : {}),
+    });
+  }
+  for (const item of snapshot.builds) {
+    const build = builds.get(item.id);
+    sources.set(item.ref, {
+      kind: 'build',
+      id: `${item.definition}|${item.project}`,
+      label: `构建 ${item.buildNumber}`,
+      project: item.project,
+      ...(build?.webUrl ? { webUrl: build.webUrl } : {}),
+    });
+  }
+  for (const message of snapshot.recentSentMessages) {
+    const id = message.ref.slice('msg:'.length);
+    sources.set(message.ref, {
+      kind: 'message',
+      id,
+      mid: id,
+      rid: message.rid,
+      label: `${message.roomName}：${message.text}`,
+    });
+  }
+
+  const orderedRefs = refs ?? [
+    ...snapshot.todos.map((item) => item.ref),
+    ...snapshot.workItems.map((item) => item.ref),
+    ...snapshot.pullRequests.map((item) => item.ref),
+    ...snapshot.builds.map((item) => item.ref),
+    ...snapshot.recentSentMessages.map((item) => item.ref),
+  ];
+  return mergeButlerSources(orderedRefs.flatMap((ref) => {
+    const source = sources.get(ref);
+    return source ? [source] : [];
+  }));
+}
+
 export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Promise<void> {
   if (activeRun) return activeRun;
   const task = (async () => {
     useButlerRoundsRunner.setState({ running: true, error: null });
     try {
       const input = await collectButlerRoundsInput(now);
-      const result = await runRoundsWithBrain(input);
+      const contextSources = butlerRoundsSources(input);
+      const reason = triggerReason?.trim() || 'manual';
+      const result = await runButlerWorkflowTask({
+        key: 'rounds:today',
+        kind: 'rounds',
+        goal: '生成 Today 主动简报',
+        triggerReason: reason,
+        context: {
+          kind: 'surface',
+          label: 'Today',
+          detail: '主动简报只保留最多三条必须提醒的事项、原因和建议动作。',
+          sources: contextSources,
+        },
+        sources: [],
+        execute: async ({ signal }) => {
+          const value = await runRoundsWithBrain(input, signal);
+          const sources = butlerRoundsSources(input, value.items.map((item) => item.ref));
+          return {
+            value,
+            summary: [value.headline, value.summary].filter(Boolean).join('：'),
+            sources,
+          };
+        },
+      });
       const stored = {
         result,
         generatedAt: now.toISOString(),
-        ...(triggerReason ? { triggerReason } : {}),
+        triggerReason: reason,
         ...resultDisplaySnapshot(input),
       } satisfies StoredRoundsResult;
       persistResult(stored);
@@ -326,5 +428,5 @@ export function runDailyButlerRoundsIfNeeded(now = new Date()): Promise<void> {
   if (lastResultAt && todayKey(new Date(lastResultAt)) === todayKey(now)) {
     return Promise.resolve();
   }
-  return runButlerRoundsNow(now);
+  return runButlerRoundsNow(now, 'daily');
 }

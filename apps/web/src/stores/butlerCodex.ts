@@ -42,6 +42,7 @@ export interface ButlerCodexAskOptions {
   bridgeTranscript?: readonly ButlerEngineTranscriptLine[];
   fallbackTranscript?: readonly ButlerEngineTranscriptLine[];
   now?: number;
+  signal?: AbortSignal;
   onEvent?: (event: AgentLoopEvent) => void;
   toolRuntimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext;
 }
@@ -511,6 +512,10 @@ export async function stopButlerCodexTurn(): Promise<void> {
 }
 
 export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): Promise<{ text: string }> {
+  const abortError = () => options.signal?.reason instanceof Error
+    ? options.signal.reason
+    : new Error('Butler 临时会话已暂停');
+  if (options.signal?.aborted) throw abortError();
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
   const tools = createButlerTools();
@@ -530,8 +535,17 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     ),
     onInterrupted: (error) => controller?.interrupt(error),
   });
+  const handleAbort = () => {
+    const turnId = controller?.activeTurnId();
+    if (threadId && turnId) {
+      void client.request('turn/interrupt', { threadId, turnId }).catch(() => undefined);
+    }
+    controller?.interrupt(abortError());
+  };
+  options.signal?.addEventListener('abort', handleAbort, { once: true });
   try {
     await client.start();
+    if (options.signal?.aborted) throw abortError();
     const now = options.now ?? Date.now();
     const { model } = getButlerCodexSettings();
     const response = await client.request('thread/start', {
@@ -546,12 +560,14 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     });
     threadId = response.thread.id;
     controller = createTurnController(threadId, options.onEvent);
+    if (options.signal?.aborted) throw abortError();
     return { text: await controller.start(client, timePrefixedInput(options.text.trim(), now)) };
   } catch (error) {
     const reason = unavailableReason(error);
     if (reason) setCodexBrainUnavailableReason(reason);
     throw error;
   } finally {
+    options.signal?.removeEventListener('abort', handleAbort);
     await client.stop().catch(() => undefined);
   }
 }
