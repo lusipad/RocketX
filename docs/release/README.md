@@ -1,8 +1,8 @@
 # Release evidence and publication
 
-The current release target is `v0.29.1`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.30.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
-During the current stabilization phase, the official desktop Release is Windows x64 only. The protected workflow publishes `v0.29.1` without marking it as GitHub's Latest release; Windows users download it manually after its public Release is available. `v0.28.0` remains Latest so existing macOS and Linux update checks continue to resolve a complete cross-platform manifest. macOS and Linux installers, updater entries, and support claims return only after those platforms have stable acceptance evidence.
+During the current stabilization phase, the official desktop Release is Windows x64 only. The protected workflow publishes `v0.30.0` without marking it as GitHub's Latest release; Windows users download it manually after its public Release is available. `v0.28.0` remains Latest so existing macOS and Linux update checks continue to resolve a complete cross-platform manifest. macOS and Linux installers, updater entries, and support claims return only after those platforms have stable acceptance evidence.
 
 ## Future 1.0 external acceptance evidence
 
