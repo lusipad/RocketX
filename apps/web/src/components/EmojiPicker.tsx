@@ -74,10 +74,10 @@ export default function EmojiPicker({
     if (!pos || !ref.current) return;
     const rect = ref.current.getBoundingClientRect();
     setPlace({
-      x: Math.min(pos.x, window.innerWidth - rect.width - 8),
-      y: Math.min(pos.y, window.innerHeight - rect.height - 8),
+      x: Math.max(8, Math.min(pos.x, window.innerWidth - rect.width - 8)),
+      y: Math.max(8, Math.min(pos.y, window.innerHeight - rect.height - 8)),
     });
-  }, [pos]);
+  }, [keyword, pos, sections]);
 
   const recent = useMemo(
     () =>

@@ -772,6 +772,49 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('底部消息的表情面板加载完整分类后仍留在视口内（issue #207）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        getState: () => { messages: Record<string, unknown[]> };
+        setState: (state: { messages: Record<string, unknown[]> }) => void;
+      };
+    }>;
+    const { useChat } = await load();
+    const state = useChat.getState();
+    useChat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': Array.from({ length: 40 }, (_, index) => ({
+          _id: `reaction-${index}`,
+          rid: 'room-general',
+          msg: index === 39 ? 'Bottom reaction message' : `Reaction filler ${index}`,
+          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+        })),
+      },
+    });
+  });
+  const message = page.getByText('Bottom reaction message', { exact: true });
+  await expect(message).toBeVisible();
+  await message.scrollIntoViewIfNeeded();
+  await message.hover();
+  await page.getByRole('button', { name: '更多表情' }).click();
+
+  const search = page.getByPlaceholder('搜索表情');
+  const picker = search.locator('xpath=../..');
+  await expect(search).toBeVisible();
+  await expect(picker.locator('[data-emoji-section]').first()).toBeVisible();
+  await expect.poll(async () => {
+    const box = await picker.boundingBox();
+    const viewport = page.viewportSize();
+    return !!box && !!viewport && box.y >= 8 && box.y + box.height <= viewport.height - 8;
+  }).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
 test('文件拖拽离开聊天区或窗口后会取消发送遮罩（issue #194）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
