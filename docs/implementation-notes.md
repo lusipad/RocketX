@@ -967,3 +967,44 @@ Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
 ## Questions for review
 
 - 无。
+
+---
+
+# Implementation notes — M12 Butler API/Codex 共用 engine contract（Issue #174 / P3）
+
+Plan: [`m12-implementation-plan.md`](m12-implementation-plan.md)
+
+## Decisions
+
+- `ButlerEngineState` 作为 P1 session 注册表中的可选 v1 字段，统一记录当前 brain、运行状态、transcript
+  revision、两种 brain 各自的 resume revision，以及 `native`、`transcript`、`incompatible` 三种兼容状态。
+  旧 session 缺失该字段时根据已有 API history 或 Codex thread 安全初始化。
+- API 与 Codex 仍保留各自的 Provider/app-server adapter，但进入和结束回合统一走同一份 task state、来源、步骤、
+  transcript 和 engine lifecycle。成功、失败、停止分别收敛为 `ready`、`failed`、`paused`，不再由两条分支各自
+  决定产品状态。
+- brain 切换时只桥接目标 brain 未见的可见 transcript：API adapter 把它并入 Provider history；Codex adapter
+  把它作为明确分隔的历史转录加入本轮只读输入。若目标 resume point 已落后于当前可见窗口，状态保持
+  `incompatible / transcript-gap`，不伪装成原生续接。
+- Codex 持久化 thread 的 `resume` 失败、提示变化或首次启动导致新建 thread 时，用当前完整可见 transcript
+  回灌首轮输入；`thread/start` 的只读沙箱、审批与 dynamic tools 协议字段保持不变。
+- 停止操作绑定实际运行的 brain，而不是用户刚切换后的设置值；Codex 在 thread 尚未完成 start/resume、还没有
+  turnId 时也会记录停止请求，阻止迟到的 turn 启动。
+- 旧 `builtin:butler / <scope>` 回滚镜像继续只写 transcript/history/thread；`engineState` 仅写新 session 注册表，
+  旧版本不会因不认识 P3 字段而失去现有回滚路径。
+
+## Deviations
+
+- P3 没有把 API 与 Codex 的模型协议强行合并成一个实现；统一的是 RocketX 拥有的 session/engine 产品合同，
+  两种外部运行时继续作为 adapter，避免改变既有 Provider 与 Codex 只读安全边界。
+
+## Surprises
+
+- 旧 `stop()` 根据当前设置读取 brain；运行中的 API 回合若用户先切到 Codex，停止请求会发给错误 adapter，真实
+  API 回合继续执行。P3 改为在回合开始时锁定实际 brain。
+- Codex `thread/resume` 失败时旧实现会静默新建空 thread；界面 transcript 仍在，但模型上下文已经丢失。P3
+  让新 thread 首轮显式接收 fallback transcript，并用 transport 回归锁定协议未被污染。
+- 欢迎语属于界面投影，不计入共享 transcript revision；否则首次切 brain 会把产品欢迎文案误当历史对话回灌。
+
+## Questions for review
+
+- 无。

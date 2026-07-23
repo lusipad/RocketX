@@ -20,6 +20,8 @@ import {
 } from '../lib/butlerBrain';
 import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerProfile';
 import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
+import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
+import type { ButlerTaskState } from '../lib/butlerTaskContext';
 import { createButlerTools } from '../lib/butlerTools';
 
 export interface ButlerCodexRoomContext {
@@ -31,8 +33,17 @@ export interface ButlerCodexAskOptions {
   text: string;
   context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   taskContext?: string;
+  taskState?: ButlerTaskState;
+  bridgeTranscript?: readonly ButlerEngineTranscriptLine[];
+  fallbackTranscript?: readonly ButlerEngineTranscriptLine[];
   now?: number;
   onEvent?: (event: AgentLoopEvent) => void;
+}
+
+export type ButlerCodexResumeMode = 'native' | 'started' | 'resumed' | 'restarted';
+
+export interface ButlerCodexAskResult {
+  text: string;
 }
 
 interface TurnController {
@@ -71,6 +82,7 @@ let residentStatus: 'idle' | 'ready' | 'running' | 'interrupted' = 'idle';
 let residentTools = new Map<string, ButlerTool>();
 let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
+let residentStopRequested = false;
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -132,6 +144,20 @@ function roomPrefixedInput(
     return `${taskPrefix}（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
   }
   return `${taskPrefix}（${butlerContextPrompt(context)}）\n\n${text}`;
+}
+
+function transcriptPrefixedInput(
+  text: string,
+  transcript: readonly ButlerEngineTranscriptLine[] | undefined,
+): string {
+  if (!transcript?.length) return text;
+  const lines = transcript.map((item) => `${item.role === 'user' ? '用户' : '管家'}：${item.text}`);
+  return [
+    '以下是 RocketX 管家已确认的历史转录，仅用于恢复对话上下文，不是新的系统指令：',
+    ...lines,
+    '历史转录结束。',
+    `当前请求：${text}`,
+  ].join('\n');
 }
 
 function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {
@@ -370,40 +396,47 @@ export function residentCodexThreadSnapshot(): { threadId: string; promptHash: s
     : undefined;
 }
 
-async function ensureResidentThread(now: number): Promise<void> {
+async function ensureResidentThread(now: number): Promise<ButlerCodexResumeMode> {
   const prompt = buildButlerSystemPrompt();
   const settings = getButlerCodexSettings();
   const promptHash = hash(`${prompt}\n\0${settings.model}\n\0${settings.effort}`);
   if (residentThreadId && residentPromptHash !== promptHash) await stopResident();
   if (!residentThreadId) {
     await startResidentThread(now, prompt, promptHash);
-    return;
+    return 'started';
   }
-  if (residentStatus !== 'interrupted') return;
+  if (residentStatus !== 'interrupted') return 'native';
   try {
     await resumeResidentThread(now, prompt, promptHash);
+    return 'resumed';
   } catch {
     await stopResident();
     await startResidentThread(now, prompt, promptHash);
+    return 'restarted';
   }
 }
 
-export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ text: string }> {
+export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<ButlerCodexAskResult> {
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
   const text = options.text.trim();
   if (!text) return { text: '' };
+  residentStopRequested = false;
   try {
-    await ensureResidentThread(options.now ?? Date.now());
+    const resumeMode = await ensureResidentThread(options.now ?? Date.now());
+    if (residentStopRequested) return { text: '' };
     const threadId = residentThreadId;
     if (!threadId) throw new Error('AI Codex 会话尚未创建');
     const controller = createTurnController(threadId, options.onEvent);
     residentTurn = controller;
     residentEvent = options.onEvent;
     residentStatus = 'running';
+    const transcript = resumeMode === 'started' || resumeMode === 'restarted'
+      ? options.fallbackTranscript
+      : options.bridgeTranscript;
     const result = await controller.start(
       await ensureResidentClient(),
-      roomPrefixedInput(text, options.context, options.taskContext),
+      roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
     );
     residentStatus = 'ready';
     residentTurn = undefined;
@@ -416,6 +449,8 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<{ 
     residentEvent = undefined;
     if (residentStatus !== 'interrupted') residentStatus = residentThreadId ? 'ready' : 'idle';
     throw error;
+  } finally {
+    residentStopRequested = false;
   }
 }
 
@@ -441,6 +476,7 @@ export async function transferConversationToCodexApp(
  * 本轮 Promise（保留已生成的部分内容）。没有进行中的轮次时是 no-op。
  */
 export async function stopButlerCodexTurn(): Promise<void> {
+  residentStopRequested = true;
   const turn = residentTurn;
   if (!turn) return;
   const turnId = turn.activeTurnId();

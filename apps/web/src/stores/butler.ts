@@ -10,6 +10,17 @@ import {
   type ButlerSource,
   type ButlerSurfaceContext,
 } from '../lib/butlerContext';
+import {
+  completeButlerEngineTurn,
+  failButlerEngineTurn,
+  initializeButlerEngineState,
+  normalizeButlerEngineState,
+  pauseButlerEngineTurn,
+  prepareButlerEngineTurn,
+  type ButlerEngineBrain,
+  type ButlerEngineState,
+  type ButlerEngineTranscriptLine,
+} from '../lib/butlerEngineContract';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
 import {
   butlerTaskPrompt,
@@ -43,6 +54,7 @@ const SESSION_REGISTRY_VERSION = 1;
 const SESSION_REGISTRY_PREFIX = 'session-registry:';
 const DEFAULT_SESSION_ID = 'default';
 const DEFAULT_SESSION_TITLE = '默认对话';
+const WELCOME_TEXT = '我是你的管家。消息、待办、日程、工作项都可以直接问我。';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
 
@@ -89,6 +101,7 @@ export interface ButlerState {
   context: ButlerSurfaceContext | null;
   actionDraft: ButlerActionDraft | null;
   taskState: ButlerTaskState | null;
+  engineState: ButlerEngineState;
   ask: (text: string, context?: ButlerAskContext) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
@@ -126,6 +139,7 @@ interface PersistedButlerSession {
   history: AiMessage[];
   codexThread?: { threadId: string; promptHash: string };
   taskState?: ButlerTaskState;
+  engineState?: ButlerEngineState;
 }
 
 interface PersistedButlerSessionRegistry {
@@ -152,6 +166,8 @@ let hydrateInFlight: { scope: string; promise: Promise<void> } | null = null;
 /** 当前 API 大脑回合的中止控制器（Codex 大脑走 turn/interrupt） */
 let currentAbort: AbortController | undefined;
 let currentTurnFinished: Promise<void> | null = null;
+let currentTurnBrain: ButlerEngineBrain | undefined;
+let currentStopRequested = false;
 
 interface ButlerAppData {
   get<T>(appId: string, key: string): Promise<T | undefined>;
@@ -196,6 +212,7 @@ function normalizeRegistry(
     const updatedAt = Number.isFinite(candidate.updatedAt) ? candidate.updatedAt : butlerNow();
     const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
     const codexThread = candidate.codexThread;
+    const engineState = normalizeButlerEngineState(candidate.engineState);
     sessions.push({
       id: candidate.id,
       title: typeof candidate.title === 'string' && candidate.title.trim()
@@ -209,6 +226,7 @@ function normalizeRegistry(
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
       ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
       ...(candidate.taskState?.manifest?.schemaVersion === 1 ? { taskState: candidate.taskState } : {}),
+      ...(engineState ? { engineState } : {}),
     });
   }
   if (!sessions.length) return undefined;
@@ -250,7 +268,11 @@ function captureActiveSession(
   touchActivity: boolean,
 ): PersistedButlerSessionRegistry {
   const current = activeSession(registry);
-  const { codexThread: _previousCodexThread, ...base } = current;
+  const {
+    codexThread: _previousCodexThread,
+    engineState: _previousEngineState,
+    ...base
+  } = current;
   const state = useButler.getState();
   const codexThread = residentCodexThreadSnapshot();
   const captured: PersistedButlerSession = {
@@ -260,6 +282,7 @@ function captureActiveSession(
     history: trimButlerHistory(state.history),
     ...(codexThread ? { codexThread } : {}),
     ...(state.taskState ? { taskState: state.taskState } : {}),
+    engineState: state.engineState,
   };
   return {
     ...registry,
@@ -339,6 +362,68 @@ function line(role: ButlerLine['role'], text: string): ButlerLine {
   return { id: crypto.randomUUID(), role, text };
 }
 
+function conversationLines(lines: readonly ButlerLine[]): readonly ButlerLine[] {
+  return lines[0]?.role === 'assistant' && lines[0].text === WELCOME_TEXT ? lines.slice(1) : lines;
+}
+
+function engineTranscript(
+  lines: readonly ButlerLine[],
+  engineState?: ButlerEngineState,
+): ButlerEngineTranscriptLine[] {
+  const transcript = conversationLines(lines);
+  const latestRevision = Math.max(engineState?.transcriptRevision ?? 0, transcript.length);
+  const firstRevision = latestRevision - transcript.length + 1;
+  return transcript.map((item, index) => ({
+    revision: firstRevision + index,
+    role: item.role,
+    text: item.text,
+  }));
+}
+
+function initialEngineState(
+  lines: readonly ButlerLine[],
+  activeBrain: ButlerEngineBrain = getButlerBrain(),
+): ButlerEngineState {
+  return initializeButlerEngineState({ activeBrain, transcript: engineTranscript(lines) });
+}
+
+function sessionEngineState(session: PersistedButlerSession): ButlerEngineState {
+  if (session.engineState) {
+    const transcript = engineTranscript(session.lines, session.engineState);
+    const transcriptRevision = transcript.at(-1)?.revision ?? session.engineState.transcriptRevision;
+    if (session.engineState.status === 'running') {
+      return {
+        ...session.engineState,
+        status: 'paused',
+        transcriptRevision,
+        compatibility: { mode: 'transcript', reason: 'interrupted-turn' },
+      };
+    }
+    return { ...session.engineState, transcriptRevision };
+  }
+  const activeBrain: ButlerEngineBrain = session.codexThread
+    ? 'codex'
+    : session.history.length
+      ? 'api'
+      : getButlerBrain();
+  return initialEngineState(session.lines, activeBrain);
+}
+
+function recordLocalTranscript(
+  state: ButlerEngineState,
+  addedLines: number,
+  reason: string,
+): ButlerEngineState {
+  return {
+    ...state,
+    status: 'ready',
+    transcriptRevision: state.transcriptRevision + addedLines,
+    compatibility: state.compatibility.mode === 'incompatible'
+      ? state.compatibility
+      : { mode: 'transcript', reason },
+  };
+}
+
 function normalizeContext(context: ButlerAskContext): ButlerSurfaceContext {
   if ('kind' in context) return context;
   return {
@@ -350,7 +435,7 @@ function normalizeContext(context: ButlerAskContext): ButlerSurfaceContext {
 }
 
 function welcomeLines(): ButlerLine[] {
-  return [line('assistant', '我是你的管家。消息、待办、日程、工作项都可以直接问我。')];
+  return [line('assistant', WELCOME_TEXT)];
 }
 
 function activityFor(event: AgentLoopEvent): string | null {
@@ -390,11 +475,20 @@ export function setButlerNowProvider(provider: () => number): () => void {
 }
 
 export function appendButlerLine(role: ButlerLine['role'], text: string): void {
-  useButler.setState((state) => ({ lines: [...state.lines, line(role, text)] }));
+  useButler.setState((state) => ({
+    lines: [...state.lines, line(role, text)],
+    engineState: recordLocalTranscript(state.engineState, 1, 'external-transcript'),
+  }));
 }
 
 function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
   const session = activeSession(registry);
+  const engineState = sessionEngineState(session);
+  const taskState = session.taskState?.status === 'running'
+    && engineState.status === 'paused'
+    && engineState.compatibility.reason === 'interrupted-turn'
+    ? updateButlerTask(session.taskState, { status: 'paused' }, butlerNow())
+    : session.taskState;
   sessionDirty = false;
   suppressPersistence = true;
   try {
@@ -409,7 +503,8 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       error: null,
       routineDraft: null,
       actionDraft: null,
-      taskState: session.taskState ?? null,
+      taskState: taskState ?? null,
+      engineState,
     });
   } finally {
     suppressPersistence = false;
@@ -432,6 +527,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   context: null,
   actionDraft: null,
   taskState: null,
+  engineState: initialEngineState(welcomeLines()),
 
   hydrate: async () => {
     const user = useAuth.getState().user;
@@ -489,6 +585,7 @@ export const useButler = create<ButlerState>((set, get) => ({
           lines: startedState.lines.slice(-LINES_LIMIT),
           history: trimButlerHistory(startedState.history),
           ...(startedCodexThread ? { codexThread: startedCodexThread } : {}),
+          engineState: startedState.engineState,
         };
         registry = {
           schemaVersion: SESSION_REGISTRY_VERSION,
@@ -530,36 +627,51 @@ export const useButler = create<ButlerState>((set, get) => ({
         steps: [],
         error: null,
         taskState: compiledTask,
+        engineState: recordLocalTranscript(state.engineState, 2, 'local-clarification'),
         ...(context && 'kind' in context ? { context: turnContext } : {}),
       }));
       return;
     }
-    const brain = getButlerBrain();
+    const brain: ButlerEngineBrain = getButlerBrain();
+    const linesBeforeTurn = get().lines;
+    const transcriptBeforeTurn = engineTranscript(linesBeforeTurn, get().engineState);
+    const prepared = prepareButlerEngineTurn({
+      engineState: get().engineState,
+      targetBrain: brain,
+      transcript: transcriptBeforeTurn,
+    });
+    const conversationLineCountBeforeTurn = conversationLines(linesBeforeTurn).length;
     const abort = brain === 'api' ? new AbortController() : undefined;
     currentAbort = abort;
-    const history = brain === 'api'
-      ? trimButlerHistory([...get().history, { role: 'user', content }])
+    const bridgeHistory: AiMessage[] = prepared.bridgeTranscript.map(({ role, text }) => ({ role, content: text }));
+    const runnerHistory = brain === 'api'
+      ? trimButlerHistory([...get().history, ...bridgeHistory, { role: 'user', content }])
       : get().history;
+    const runningTask = updateButlerTask(compiledTask, { status: 'running' }, butlerNow());
     let finishTurn: (() => void) | undefined;
     const turnFinished = new Promise<void>((resolve) => {
       finishTurn = resolve;
     });
     currentTurnFinished = turnFinished;
+    currentTurnBrain = brain;
+    currentStopRequested = false;
     set((state) => ({
       lines: [...state.lines, line('user', content)],
       activity: null,
       steps: [],
-      ...(brain === 'api' ? { history } : {}),
       running: true,
       error: null,
       ...(context && 'kind' in context ? { context: turnContext } : {}),
-      taskState: updateButlerTask(compiledTask, { status: 'running' }, butlerNow()),
+      taskState: runningTask,
+      engineState: prepared.engineState,
     }));
 
     let assistantLineId: string | undefined;
+    let turnOpen = true;
     let turnSources = turnContext?.sources ?? [];
     const toolCallNames = new Map<string, string>();
     const onEvent = (event: AgentLoopEvent) => {
+      if (!turnOpen) return;
       if (event.type === 'content') {
         const id = assistantLineId ?? crypto.randomUUID();
         assistantLineId ??= id;
@@ -586,104 +698,144 @@ export const useButler = create<ButlerState>((set, get) => ({
         const toolName = toolCallNames.get(event.toolCallId);
         turnSources = mergeButlerSources(turnSources, extractButlerSources(toolName, event.content));
         const failed = /^工具(?:调用|执行)失败/.test(event.content);
-        set((state) => ({
-          activity: null,
-          steps: state.steps.map((step) =>
+        set((state) => {
+          const steps = state.steps.map((step) =>
             step.id === event.toolCallId ? { ...step, status: failed ? 'failed' as const : 'done' as const } : step,
-          ),
-          lines: toolName === 'remember'
-            ? [...state.lines, line('assistant', `📌 ${event.content}`)]
-            : assistantLineId
-              ? state.lines.map((item) => item.id === assistantLineId
-                ? { ...item, ...(turnSources.length ? { sources: turnSources } : {}) }
-                : item)
-              : state.lines,
-          taskState: state.taskState
-            ? updateButlerTask(state.taskState, { sources: turnSources }, butlerNow())
-            : null,
-        }));
+          );
+          let lines = state.lines;
+          if (toolName === 'remember') {
+            lines = [...state.lines, line('assistant', `📌 ${event.content}`)];
+          } else if (assistantLineId) {
+            lines = state.lines.map((item) => item.id === assistantLineId
+              ? { ...item, ...(turnSources.length ? { sources: turnSources } : {}) }
+              : item);
+          }
+          return {
+            activity: null,
+            steps,
+            lines,
+            taskState: state.taskState
+              ? updateButlerTask(state.taskState, { sources: turnSources }, butlerNow())
+              : null,
+          };
+        });
       }
     };
 
+    const transcriptRevisionAfter = (lines: readonly ButlerLine[]) => (
+      prepared.engineState.transcriptRevision
+      + Math.max(0, conversationLines(lines).length - conversationLineCountBeforeTurn)
+    );
+    const progressedEngineState = (state: ButlerState, lines: readonly ButlerLine[]) => ({
+      ...state.engineState,
+      transcriptRevision: transcriptRevisionAfter(lines),
+    });
+
     try {
+      let resultText: string;
+      let nextHistory: AiMessage[] | undefined;
       if (brain === 'codex') {
         const availability = codexBrainAvailability();
         if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
         const result = await codexRunner({
           text: content,
           context: turnContext ?? undefined,
-          taskContext: butlerTaskPrompt(compiledTask),
+          taskContext: butlerTaskPrompt(runningTask),
+          taskState: runningTask,
+          bridgeTranscript: prepared.bridgeTranscript,
+          fallbackTranscript: transcriptBeforeTurn,
           now: butlerNow(),
           onEvent,
         });
-        set((state) => ({
-          lines: result.text
-            ? assistantLineId
-              ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text, ...(turnSources.length ? { sources: turnSources } : {}) } : item)
-              : [...state.lines, { ...line('assistant', result.text), ...(turnSources.length ? { sources: turnSources } : {}) }]
-            : state.lines,
-          activity: null,
-          running: false,
-          taskState: state.taskState
-            ? updateButlerTask(state.taskState, { status: 'completed', sources: turnSources }, butlerNow())
-            : null,
-        }));
-        return;
+        resultText = result.text;
+      } else {
+        const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}\n${butlerTaskPrompt(runningTask)}${
+          turnContext
+            ? `\n${butlerContextPrompt(turnContext)}`
+            : ''
+        }`;
+        const result = await loopRunner({
+          messages: [{ role: 'system', content: system }, ...runnerHistory],
+          tools: createButlerTools(),
+          signal: abort?.signal,
+          onEvent,
+        });
+        resultText = result.text;
+        nextHistory = trimButlerHistory([
+          ...result.messages.filter((message) => message.role !== 'system'),
+          { role: 'assistant', content: result.text },
+        ]);
       }
-      const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}\n${butlerTaskPrompt(compiledTask)}${
-        turnContext
-          ? `\n${butlerContextPrompt(turnContext)}`
-          : ''
-      }`;
-      const result = await loopRunner({
-        messages: [{ role: 'system', content: system }, ...history],
-        tools: createButlerTools(),
-        signal: abort?.signal,
-        onEvent,
-      });
-      const nextHistory = trimButlerHistory([
-        ...result.messages.filter((message) => message.role !== 'system'),
-        { role: 'assistant', content: result.text },
-      ]);
-      set((state) => ({
-        lines: result.text
-          ? assistantLineId
-            ? state.lines.map((item) => item.id === assistantLineId ? { ...item, text: result.text, ...(turnSources.length ? { sources: turnSources } : {}) } : item)
-            : [...state.lines, { ...line('assistant', result.text), ...(turnSources.length ? { sources: turnSources } : {}) }]
-          : state.lines,
-        activity: null,
-        history: nextHistory,
-        running: false,
-        taskState: state.taskState
-          ? updateButlerTask(state.taskState, { status: 'completed', sources: turnSources }, butlerNow())
-          : null,
-      }));
-    } catch (error) {
-      // 用户主动停止不是错误：保留已生成的内容，安静收尾
-      if (abort?.signal.aborted) {
-        set((state) => ({
+      turnOpen = false;
+      const stopped = currentStopRequested;
+      set((state) => {
+        let lines = state.lines;
+        if (resultText) {
+          lines = assistantLineId
+            ? state.lines.map((item) => item.id === assistantLineId
+              ? { ...item, text: resultText, ...(turnSources.length ? { sources: turnSources } : {}) }
+              : item)
+            : [...state.lines, { ...line('assistant', resultText), ...(turnSources.length ? { sources: turnSources } : {}) }];
+        }
+        const progressedEngine = progressedEngineState(state, lines);
+        return {
+          lines,
           activity: null,
+          ...(nextHistory ? { history: nextHistory } : {}),
           running: false,
           taskState: state.taskState
-            ? updateButlerTask(state.taskState, { status: 'paused' }, butlerNow())
+            ? updateButlerTask(state.taskState, { status: stopped ? 'paused' : 'completed', sources: turnSources }, butlerNow())
             : null,
-        }));
+          engineState: stopped
+            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: brain })
+            : completeButlerEngineTurn(progressedEngine, {
+              completedBrain: brain,
+              transcriptRevision: progressedEngine.transcriptRevision,
+            }),
+        };
+      });
+    } catch (error) {
+      turnOpen = false;
+      // 用户主动停止不是错误：保留已生成的内容，安静收尾
+      if (currentStopRequested || abort?.signal.aborted) {
+        set((state) => {
+          const progressedEngine = progressedEngineState(state, state.lines);
+          return {
+            activity: null,
+            running: false,
+            taskState: state.taskState
+              ? updateButlerTask(state.taskState, { status: 'paused' }, butlerNow())
+              : null,
+            engineState: pauseButlerEngineTurn(progressedEngine, { pausedBrain: brain }),
+          };
+        });
         return;
       }
       const message = brain === 'codex'
         ? `${friendlyButlerCodexError(error).replace(/[。.]$/, '')}。可在设置页切换为 API 大脑。`
         : friendlyButlerError(error);
-      set((state) => ({
-        activity: null,
-        running: false,
-        error: message,
-        taskState: state.taskState
-          ? updateButlerTask(state.taskState, { status: 'failed', error: message }, butlerNow())
-          : null,
-      }));
+      set((state) => {
+        const progressedEngine = progressedEngineState(state, state.lines);
+        return {
+          activity: null,
+          running: false,
+          error: message,
+          taskState: state.taskState
+            ? updateButlerTask(state.taskState, { status: 'failed', error: message }, butlerNow())
+            : null,
+          engineState: failButlerEngineTurn(progressedEngine, {
+            failedBrain: brain,
+            error: 'turn-failed',
+          }),
+        };
+      });
     } finally {
       if (currentAbort === abort) currentAbort = undefined;
-      if (currentTurnFinished === turnFinished) currentTurnFinished = null;
+      if (currentTurnFinished === turnFinished) {
+        currentTurnFinished = null;
+        currentTurnBrain = undefined;
+        currentStopRequested = false;
+      }
       finishTurn?.();
     }
   },
@@ -720,13 +872,15 @@ export const useButler = create<ButlerState>((set, get) => ({
         ...line('assistant', `✅ ${message}`),
         ...(draft.sources.length ? { sources: draft.sources } : {}),
       }],
+      engineState: recordLocalTranscript(state.engineState, 1, 'local-action-result'),
     }));
   },
 
   stop: async () => {
     if (!get().running) return;
     const turnFinished = currentTurnFinished;
-    if (getButlerBrain() === 'codex') {
+    currentStopRequested = true;
+    if (currentTurnBrain === 'codex') {
       // 服务端中断本轮并就地完成，ask 会沿正常路径收尾
       await stopButlerCodexTurn();
     } else {
@@ -757,6 +911,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       updatedAt: now,
       lines: welcomeLines(),
       history: [],
+      engineState: initialEngineState([], getButlerBrain()),
     };
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...currentRegistry,
@@ -836,19 +991,23 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   dismissRoutineDraft: () => set({ routineDraft: null }),
 
-  reset: () => set({
-    lines: welcomeLines(),
-    sessions: [],
-    activeSessionId: '',
-    activity: null,
-    steps: [],
-    history: [],
-    running: false,
-    error: null,
-    routineDraft: null,
-    context: null,
-    actionDraft: null,
-    taskState: null,
+  reset: () => set(() => {
+    const lines = welcomeLines();
+    return {
+      lines,
+      sessions: [],
+      activeSessionId: '',
+      activity: null,
+      steps: [],
+      history: [],
+      running: false,
+      error: null,
+      routineDraft: null,
+      context: null,
+      actionDraft: null,
+      taskState: null,
+      engineState: initialEngineState(lines),
+    };
   }),
 }));
 
@@ -856,7 +1015,12 @@ setRoutineDraftHandler((draft) => useButler.getState().setRoutineDraft(draft));
 
 // 当前已 hydrate 的 session 发生 transcript 或任务态变化时更新活动时间并防抖落盘。
 useButler.subscribe((state, previous) => {
-  if (state.lines === previous.lines && state.history === previous.history && state.taskState === previous.taskState) return;
+  if (
+    state.lines === previous.lines
+    && state.history === previous.history
+    && state.taskState === previous.taskState
+    && state.engineState === previous.engineState
+  ) return;
   if (suppressPersistence || !persistScope || !sessionRegistry) return;
   sessionDirty = true;
   schedulePersist();
