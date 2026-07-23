@@ -5,6 +5,7 @@ import { renderMarkdownDoc } from '../lib/markdown';
 import PdfView from './PdfView';
 import { toast } from '../stores/toast';
 import { saveFile } from '../lib/download';
+import type { DownloadSourceV1 } from '../lib/downloadHistory';
 
 /** 能直接看的文本类文件：按扩展名判断（服务端返回的 MIME 不一定靠谱） */
 const TEXT_EXT = new Set([
@@ -75,11 +76,13 @@ export default function FilePreview({
   path,
   fileName,
   size,
+  source,
   onClose,
 }: {
   path: string;
   fileName: string;
   size?: number;
+  source?: DownloadSourceV1;
   onClose: () => void;
 }) {
   const ext = extOf(fileName);
@@ -136,7 +139,7 @@ export default function FilePreview({
   const download = async () => {
     setSaving(true);
     try {
-      await saveFile(path, fileName);
+      await saveFile(path, fileName, source);
     } catch (err) {
       toast.error(err, '下载失败');
     } finally {

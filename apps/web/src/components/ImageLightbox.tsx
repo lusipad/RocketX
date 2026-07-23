@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Copy, Download, Loader2, Maximize2, Minus, Plus, ScanText, X } from 'lucide-react';
 import AuthImage from './AuthImage';
 import { saveFile } from '../lib/download';
+import type { DownloadSourceV1 } from '../lib/downloadHistory';
 import { toast } from '../stores/toast';
 import { rest } from '../lib/client';
 import {
@@ -20,10 +21,12 @@ const MAX_ZOOM = 8;
 export default function ImageLightbox({
   path,
   fileName,
+  source,
   onClose,
 }: {
   path: string;
   fileName: string;
+  source?: DownloadSourceV1;
   onClose: () => void;
 }) {
   // zoom = null 表示「适应窗口」（默认）；数值表示手动缩放倍数
@@ -139,7 +142,7 @@ export default function ImageLightbox({
           title="下载"
           aria-label="下载"
           className={btn}
-          onClick={() => void saveFile(path, fileName).catch((err) => toast.error(err, '下载失败'))}
+          onClick={() => void saveFile(path, fileName, source).catch((err) => toast.error(err, '下载失败'))}
         >
           <Download size={16} />
         </button>

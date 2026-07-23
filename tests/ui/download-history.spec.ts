@@ -71,6 +71,11 @@ test('桌面下载页可打开文件、定位目录并只清除记录（issue #1
         fileName: 'RocketX-guide.pdf',
         path: filePath,
         completedAt: Date.parse('2026-07-22T12:00:00.000Z'),
+        source: {
+          rid: 'room-general',
+          roomName: 'General',
+          messageId: 'general-release',
+        },
       }],
     }));
   }, { server: TEST_SERVER, userId: USER_ID, filePath: FILE_PATH });
@@ -81,6 +86,7 @@ test('桌面下载页可打开文件、定位目录并只清除记录（issue #1
   await expect(page.getByRole('heading', { name: '下载' })).toBeVisible();
   await expect(page.getByText('RocketX-guide.pdf', { exact: true })).toBeVisible();
   await expect(page.getByText(FILE_PATH)).toBeVisible();
+  await expect(page.getByText('来源：General', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '打开文件', exact: true }).click();
   const revealButton = page.getByRole('button', { name: '打开所在文件夹', exact: true });
