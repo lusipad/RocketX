@@ -29,3 +29,11 @@ test('Codex 协议权限是附加能力，不移除普通浏览器 URL 默认权
   assert.ok(custom && typeof custom !== 'string');
   assert.ok(custom.allow?.some((scope) => scope.url === 'codex://threads/*'));
 });
+
+test('桌面端允许打开已经下载到本地的文件（issue #183）', () => {
+  const capability = JSON.parse(
+    readFileSync('apps/desktop/src-tauri/capabilities/default.json', 'utf8'),
+  ) as { permissions: Array<string | { identifier: string }> };
+
+  assert.ok(capability.permissions.includes('opener:allow-open-path'));
+});
