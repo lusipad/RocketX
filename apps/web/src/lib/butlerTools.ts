@@ -389,6 +389,17 @@ function capturedMemoryArgs(args: Record<string, unknown>): CapturedMemoryArgs {
   return captured as CapturedMemoryArgs;
 }
 
+function memoryApprovalTimestamp(
+  captured: CapturedMemoryArgs,
+  context: ButlerToolRuntimeContext,
+): number {
+  const approvedAt = context.now?.() ?? Date.now();
+  if (captured.expiresAtTimestamp !== undefined && captured.expiresAtTimestamp <= approvedAt) {
+    throw new Error('expiresAt 已在审批前到期，请重新提交记忆。');
+  }
+  return approvedAt;
+}
+
 function loadMemoryState(): ButlerMemoryState {
   return parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
 }
@@ -792,10 +803,11 @@ export function createButlerTools(): ButlerTool[] {
       preflight: rememberPreflight,
       execute: async (args, { checkpoint, context }) => {
         const captured = capturedMemoryArgs(args);
+        const approvedAt = memoryApprovalTimestamp(captured, context);
         const result = rememberButlerMemory(
           loadMemoryState(),
-          writeInput(args, checkpoint.id, context.now?.() ?? Date.now()),
-          { now: context.now?.() ?? Date.now() },
+          writeInput(args, checkpoint.id, approvedAt),
+          { now: approvedAt },
         );
         if (result.created) saveMemoryState(result.state);
         return result.created
@@ -905,8 +917,9 @@ export function createButlerTools(): ButlerTool[] {
         const legacy = quarantinedLegacy(args);
         if (!legacy) throw new Error('隔离区中未找到该 legacy 记忆。');
         const captured = capturedMemoryArgs(args);
+        const approvedAt = memoryApprovalTimestamp(captured, context);
         const results = importLegacyButlerMemory(loadMemoryState(), [legacy], {
-          now: context.now?.() ?? Date.now(),
+          now: approvedAt,
           mapLegacy: () => ({
             scope: captured.trustedScope,
             kind: memoryKind(args),

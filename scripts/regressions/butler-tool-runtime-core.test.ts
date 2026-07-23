@@ -240,6 +240,58 @@ test('remember 在 approve 前只生成 checkpoint，不直接写长期记忆', 
   }
 });
 
+test('remember 和 legacy import 在审批时拒绝已经到期的记忆', async () => {
+  const invokedAt = Date.UTC(2026, 6, 23, 9, 30);
+  const expiresAt = invokedAt + 60_000;
+  const storage = new MemoryStorage();
+  const restoreStorage = setButlerProfileStorage(storage);
+  const runtime = runtimeHarness(invokedAt);
+  runtime.context.scope = {
+    server: 'https://chat.example',
+    account: 'alice',
+  };
+  try {
+    const remember = tool('remember');
+    const rememberInvoked = await remember.invoke({
+      kind: 'preference',
+      scope: 'account',
+      subject: 'reply-style',
+      value: '默认简短回复',
+      expiresAt: new Date(expiresAt).toISOString(),
+    }, runtime.context);
+    assert.equal(rememberInvoked.status, 'approval-required');
+
+    runtime.context.now = () => expiresAt;
+    const remembered = await remember.approve?.(rememberInvoked.checkpoint!, runtime.context);
+    assert.equal(remembered?.status, 'failed');
+    assert.match(remembered?.error?.message ?? '', /审批前到期/);
+    assert.equal(storedMemoryState(storage).records.length, 0);
+
+    storage.set('rcx-butler-v1:memory', JSON.stringify([
+      { id: 'legacy-expiring', text: '以后默认简短回复', at: invokedAt },
+    ]));
+    runtime.context.now = () => invokedAt;
+    const importLegacy = tool('import_legacy_memory');
+    const importInvoked = await importLegacy.invoke({
+      legacyId: 'legacy-expiring',
+      kind: 'preference',
+      scope: 'account',
+      subject: 'legacy:legacy-expiring',
+      value: '以后默认简短回复',
+      expiresAt: new Date(expiresAt).toISOString(),
+    }, runtime.context);
+    assert.equal(importInvoked.status, 'approval-required');
+
+    runtime.context.now = () => expiresAt;
+    const imported = await importLegacy.approve?.(importInvoked.checkpoint!, runtime.context);
+    assert.equal(imported?.status, 'failed');
+    assert.match(imported?.error?.message ?? '', /审批前到期/);
+    assert.equal(storedMemoryState(storage).records.length, 0);
+  } finally {
+    restoreStorage();
+  }
+});
+
 test('remember 冻结 trusted scope/provenance，approve 前不落盘且重复 approve 保持幂等', async () => {
   const storage = new MemoryStorage();
   const restoreStorage = setButlerProfileStorage(storage);
