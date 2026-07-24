@@ -28,6 +28,17 @@ export const BUTLER_PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页
 export const AZURE_DEVOPS_SERVER_SKILL_NAME = 'azure-devops-server';
 export const AZURE_DEVOPS_SERVER_SKILL_REVISION =
   '293b09774cf9d1ef880a889baf212a9b661e0a75:0cc00597153f26ab6ec7e50197dbae82ffb35206';
+const AZURE_DEVOPS_SERVER_API_SKILL: ButlerSkill = {
+  name: AZURE_DEVOPS_SERVER_SKILL_NAME,
+  description: 'Azure DevOps Server 只读查询：通过 RocketX 托管 CLI 读取项目、代码、工作项、构建、Wiki 和测试数据。',
+  body: `Azure DevOps Server 只读查询
+
+1. 只调用 \`run_azure_devops_server_cli\`，不要直接执行 PowerShell、命令行或网络请求。
+2. 把查询拆成单个 GET 请求，按工具参数传入 \`area\`、\`resource\`、可选的 \`project\`、\`team\`、\`query\` 和 \`apiVersion\`。
+3. 集合级项目列表使用 \`resource: "projects"\`；代码仓库和拉取请求使用 \`area: "git"\`；工作项使用 \`area: "wit"\`；构建使用 \`area: "build"\`。
+4. 需要多步读取时，先用列表或详情请求取得 ID，再发下一次只读请求；所有结论只基于工具返回值。
+5. 不请求写操作，不索取或输出凭据；工具报告能力、版本或认证不足时，明确说明缺失条件。`,
+};
 
 export const DEFAULT_PERSONA = `你是 RocketX 中的 AI，服务于 GTD 与注意力保护。
 
@@ -218,9 +229,10 @@ export function removeSkill(name: string): void {
 }
 
 export function loadButlerSkill(name: string): string {
-  const skill = listSkills().find((item) => item.name === name);
+  const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
+  const skill = skills.find((item) => item.name === name);
   if (skill) return skill.body;
-  return `未找到技能：${name}，可用技能：${listSkills().map((item) => item.name).join('、')}`;
+  return `未找到技能：${name}，可用技能：${skills.map((item) => item.name).join('、')}`;
 }
 
 export function friendlyButlerError(error: unknown): string {
@@ -237,9 +249,10 @@ export function butlerCurrentTimeLine(now: number): string {
 
 export function buildButlerApiSystemPrompt(): string {
   const sections = [getPersona()];
+  const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   sections.push([
     '## 可用技能',
-    ...listSkills().map((skill) => `- ${skill.name}：${skill.description}`),
+    ...skills.map((skill) => `- ${skill.name}：${skill.description}`),
     '需要使用某技能的方法论时，先调用 load_skill 工具取其正文再照做。',
   ].join('\n'));
   sections.push(TOOL_CAPABILITIES);
