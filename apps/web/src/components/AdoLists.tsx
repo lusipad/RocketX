@@ -104,11 +104,21 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
 
   const states = useMemo(() => Array.from(new Set(items.map((w) => w.state))).sort(), [items]);
   const stateOptions = useMemo(
-    () => [DEFAULT_WORK_ITEM_STATE_FILTER, '全部', ...states],
-    [states],
+    () => [
+      DEFAULT_WORK_ITEM_STATE_FILTER,
+      '全部',
+      ...Array.from(
+        new Set(
+          state === DEFAULT_WORK_ITEM_STATE_FILTER || state === '全部'
+            ? states
+            : [state, ...states],
+        ),
+      ),
+    ],
+    [state, states],
   );
 
-  const effectiveState = stateOptions.includes(state) ? state : DEFAULT_WORK_ITEM_STATE_FILTER;
+  const effectiveState = state;
 
   const matched = useMemo(() => {
     const q = keyword.trim().toLowerCase();
