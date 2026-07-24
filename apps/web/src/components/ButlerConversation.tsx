@@ -24,6 +24,7 @@ import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerImagePicker, {
   ButlerImageAttachments,
   ButlerImagePreviews,
+  pasteButlerImages,
 } from './ButlerImagePicker';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
@@ -236,7 +237,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               <ButlerImagePreviews images={images} onChange={setImages} />
               <div className="flex items-center">
                 <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
-                <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 w-full min-w-0 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
+                <input value={input} onChange={(event) => setInput(event.target.value)} onPaste={(event) => void pasteButlerImages(event, images, setImages)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 w-full min-w-0 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
               </div>
             </div>
             {running ? (

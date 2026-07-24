@@ -1,11 +1,26 @@
 import { ImagePlus, X } from 'lucide-react';
-import { useRef } from 'react';
+import { useRef, type ClipboardEvent } from 'react';
 import {
   appendButlerImages,
   type ButlerImageAttachment,
   type ButlerImageInput,
 } from '../lib/butlerImages';
 import { toast } from '../stores/toast';
+
+export async function pasteButlerImages(
+  event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  images: readonly ButlerImageInput[],
+  onChange: (images: ButlerImageInput[]) => void,
+): Promise<void> {
+  const files = Array.from(event.clipboardData.files);
+  if (!files.length) return;
+  event.preventDefault();
+  try {
+    onChange(await appendButlerImages(images, files));
+  } catch (error) {
+    toast.error(error, '粘贴图片失败');
+  }
+}
 
 export function ButlerImageAttachments({
   attachments,
