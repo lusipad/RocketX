@@ -69,7 +69,7 @@ export default function CreateWorkItemDialog({
   const isHierarchy = tpl?.name === '层级工作项';
 
   useEffect(() => {
-    if (!config?.adoBase || config.mode !== 'direct') return;
+    if (!config?.adoBase) return;
     void (async () => {
       try {
         const { directGetProjects } = await import('../lib/adoDirect');
@@ -87,7 +87,7 @@ export default function CreateWorkItemDialog({
   }, [config, defaultProject]);
 
   useEffect(() => {
-    if (!config?.adoBase || config.mode !== 'direct' || !project) return;
+    if (!config?.adoBase || !project) return;
     let cancelled = false;
     setTypesLoading(true);
     setWorkItemTypes([]);
@@ -188,7 +188,7 @@ export default function CreateWorkItemDialog({
     }
   };
 
-  if (!config?.adoBase || config.mode !== 'direct') {
+  if (!config?.adoBase) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
         <div
@@ -200,7 +200,7 @@ export default function CreateWorkItemDialog({
           className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
         >
           <div className="text-[15px] font-semibold text-ink">创建工作项</div>
-          <div className="mt-2 text-sm text-ink-2">请先在设置中配置 ADO 直连</div>
+          <div className="mt-2 text-sm text-ink-2">请先在设置中配置 Azure DevOps 直连</div>
           <div className="mt-4 flex justify-end">
             <button onClick={requestClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover">关闭</button>
           </div>

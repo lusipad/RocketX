@@ -1,4 +1,4 @@
-/** 工作台（Azure DevOps）客户端侧：配置读写 + 经 ado-bridge 的查询 */
+/** 工作台（Azure DevOps）客户端侧：配置读写 + 直连查询 */
 
 import { TimedLruCache } from './timedLruCache';
 
@@ -7,9 +7,6 @@ export const WORKBENCH_CONFIG_KEY = 'rcx-workbench';
 export const ADO_WEB_KEY = 'rcx-ado-web';
 
 export interface WorkbenchConfig {
-  /** direct = 客户端直连 ADO（桌面端推荐）；bridge = 经 ado-bridge 服务 */
-  mode: 'bridge' | 'direct';
-  bridge?: string;
   adoBase?: string;
   pat?: string;
   /** 直连的认证方式（自动探测得出）。ntlm = Windows 集成认证，桌面端默认 */
@@ -17,21 +14,81 @@ export interface WorkbenchConfig {
   account: string;
 }
 
-export function loadWorkbenchConfig(): WorkbenchConfig | null {
+interface StoredWorkbenchConfig {
+  mode?: string;
+  bridge?: string;
+  adoBase?: string;
+  pat?: string;
+  auth?: import('./adoDirect').AdoAuth;
+  account?: string;
+}
+
+function directConfig(config: WorkbenchConfig): import('./adoDirect').DirectConfig | null {
+  if (!config.adoBase) return null;
+  return {
+    adoBase: config.adoBase,
+    pat: config.pat ?? '',
+    auth: config.auth,
+  };
+}
+
+function parseStoredWorkbenchConfig(): { config: WorkbenchConfig | null; issue: string | null } {
   try {
     const raw = localStorage.getItem(WORKBENCH_CONFIG_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as WorkbenchConfig;
-    // 旧版配置没有 mode 字段，视为桥接模式
-    if (!parsed.mode) parsed.mode = 'bridge';
-    return parsed;
+    if (!raw) return { config: null, issue: null };
+    const parsed = JSON.parse(raw) as StoredWorkbenchConfig;
+    if (!parsed || typeof parsed !== 'object') {
+      return { config: null, issue: '工作台配置已损坏，请重新配置。' };
+    }
+
+    const adoBase = typeof parsed.adoBase === 'string'
+      ? parsed.adoBase.trim().replace(/\/+$/, '') || undefined
+      : undefined;
+    const account = typeof parsed.account === 'string' ? parsed.account.trim() : '';
+    const pat = typeof parsed.pat === 'string' ? parsed.pat.trim() || undefined : undefined;
+
+    if (parsed.mode === 'bridge' || (!parsed.mode && typeof parsed.bridge === 'string')) {
+      return {
+        config: null,
+        issue: '旧版 ado-bridge 配置已失效，请改用直连 Azure DevOps。',
+      };
+    }
+    if (parsed.mode !== undefined && parsed.mode !== 'direct') {
+      return {
+        config: null,
+        issue: '无法识别的工作台连接模式；当前只兼容旧版 direct 配置。',
+      };
+    }
+
+    return {
+      config: {
+        adoBase,
+        pat,
+        auth: parsed.auth,
+        account,
+      },
+      issue: null,
+    };
   } catch {
-    return null;
+    return { config: null, issue: '工作台配置已损坏，请重新配置。' };
   }
 }
 
+export function loadWorkbenchConfig(): WorkbenchConfig | null {
+  return parseStoredWorkbenchConfig().config;
+}
+
+export function loadWorkbenchConfigIssue(): string | null {
+  return parseStoredWorkbenchConfig().issue;
+}
+
 export function saveWorkbenchConfig(config: WorkbenchConfig): void {
-  localStorage.setItem(WORKBENCH_CONFIG_KEY, JSON.stringify(config));
+  localStorage.setItem(WORKBENCH_CONFIG_KEY, JSON.stringify({
+    adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
+    pat: config.pat?.trim() || undefined,
+    auth: config.auth,
+    account: config.account.trim(),
+  }));
 }
 
 /** 消息里的 #123 要不要渲染成 ADO 工作项链接，取决于这个是否配过 */
@@ -174,14 +231,14 @@ function cachedEntity<T>(key: string, load: () => Promise<T | null>): Promise<T 
 }
 
 function itemKey(config: WorkbenchConfig, id: number): string {
-  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
-  return `${config.mode}:${endpoint ?? ''}:${config.account}:${id}`;
+  return `ado:${config.adoBase ?? ''}:${config.account}:${id}`;
 }
 
 /** 悬停卡片查询：60s 缓存 + 并发去重；未配置工作台返回 null */
 export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   const config = loadWorkbenchConfig();
-  if (!config) return Promise.resolve(null);
+  const direct = config && directConfig(config);
+  if (!config || !direct) return Promise.resolve(null);
   const key = itemKey(config, id);
 
   const cached = itemCache.get(key);
@@ -190,17 +247,9 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
   const existing = inflight.get(key);
   if (existing) return existing;
 
-  const load =
-    config.mode === 'direct' && config.adoBase
-      ? import('./adoDirect').then((m) =>
-          m.directGetWorkItem(
-            { adoBase: config.adoBase!, pat: config.pat!, auth: config.auth },
-            id,
-          ),
-        )
-      : fetch(`${config.bridge}/api/ado/workitem/${id}`).then(async (res) =>
-          res.ok ? ((await res.json()) as { item: AdoWorkItemInfo }).item : null,
-        );
+  const load = import('./adoDirect').then((m) =>
+    m.directGetWorkItem(direct, id),
+  );
 
   const promise = load
     .then((item) => {
@@ -218,65 +267,29 @@ export function fetchWorkItem(id: number): Promise<AdoWorkItemInfo | null> {
 
 export function fetchPullRequest(id: number): Promise<AdoPullRequestInfo | null> {
   const config = loadWorkbenchConfig();
-  if (!config) return Promise.resolve(null);
-  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
-  const key = `${config.mode}:${endpoint ?? ''}:${config.account}:pr:${id}`;
+  const direct = config && directConfig(config);
+  if (!config || !direct) return Promise.resolve(null);
+  const key = `ado:${config.adoBase}:${config.account}:pr:${id}`;
   return cachedEntity(key, () =>
-    config.mode === 'direct' && config.adoBase
-      ? import('./adoDirect').then((module) =>
-          module.directGetPullRequest(
-            { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth },
-            id,
-          ),
-        )
-      : fetch(`${config.bridge}/api/ado/pullrequest/${id}`).then(async (response) =>
-          response.ok ? ((await response.json()) as { item: AdoPullRequestInfo }).item : null,
-        ),
+    import('./adoDirect').then((module) => module.directGetPullRequest(direct, id)),
   );
 }
 
 export function fetchBuild(project: string, id: number): Promise<AdoBuildInfo | null> {
   const config = loadWorkbenchConfig();
-  if (!config) return Promise.resolve(null);
-  const endpoint = config.mode === 'direct' ? config.adoBase : config.bridge;
-  const key = `${config.mode}:${endpoint ?? ''}:${config.account}:build:${project}:${id}`;
+  const direct = config && directConfig(config);
+  if (!config || !direct) return Promise.resolve(null);
+  const key = `ado:${config.adoBase}:${config.account}:build:${project}:${id}`;
   return cachedEntity(key, () =>
-    config.mode === 'direct' && config.adoBase
-      ? import('./adoDirect').then((module) =>
-          module.directGetBuild(
-            { adoBase: config.adoBase!, pat: config.pat ?? '', auth: config.auth },
-            project,
-            id,
-          ),
-        )
-      : fetch(
-          `${config.bridge}/api/ado/build/${id}?project=${encodeURIComponent(project)}`,
-        ).then(async (response) =>
-          response.ok ? ((await response.json()) as { item: AdoBuildInfo }).item : null,
-        ),
+    import('./adoDirect').then((module) => module.directGetBuild(direct, project, id)),
   );
 }
 
 export async function commentWorkItem(id: number, text: string): Promise<void> {
   const config = loadWorkbenchConfig();
   if (!config) throw new Error('请先在工作台完成连接配置');
-  if (config.mode === 'direct' && config.adoBase) {
-    const { directComment } = await import('./adoDirect');
-    await directComment(
-      { adoBase: config.adoBase, pat: config.pat ?? '', auth: config.auth },
-      id,
-      text,
-      config.account,
-    );
-    return;
-  }
-  const res = await fetch(`${config.bridge}/api/ado/workitem/${id}/comment`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, author: config.account }),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `评论失败（${res.status}）`);
-  }
+  const direct = directConfig(config);
+  if (!direct) throw new Error('请先在工作台配置直连 Azure DevOps');
+  const { directComment } = await import('./adoDirect');
+  await directComment(direct, id, text, config.account);
 }

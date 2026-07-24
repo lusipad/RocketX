@@ -31,6 +31,7 @@
     "createUpdaterArtifacts": true,
     "targets": "all",
     "resources": {
+      "resources/codex-skills/": "codex-skills/",
       "resources/plugins/": "plugins/",
       "target/ocr-resources/ocr/": "ocr/"
     },

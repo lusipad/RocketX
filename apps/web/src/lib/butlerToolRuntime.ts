@@ -67,6 +67,7 @@ export interface ButlerToolSourceRef {
 }
 
 export interface ButlerToolRuntimeContext {
+  turnId?: string;
   taskId?: string;
   callId?: string;
   sessionId?: string;

@@ -10,6 +10,7 @@ import {
 } from '../../apps/web/src/lib/butlerBrain';
 import { setServerBase } from '../../apps/web/src/lib/client';
 import { checkWatchers } from '../../apps/web/src/lib/butlerWatchers';
+import { setButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
 import {
   dueRoutines,
   setRoutineCodexRunner,
@@ -285,22 +286,59 @@ test('选择 Codex 大脑时，runNow 使用独立的 ephemeral runner', async (
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   setCodexBrainUnavailableReason(undefined);
   setButlerBrain('codex');
-  let input = '';
+  let input: { text: string; skillName?: string } | undefined;
   const restoreRunner = setRoutineCodexRunner(async (options) => {
-    input = options.text;
+    input = options;
     return { text: 'Codex 晨报' };
   });
   const restoreWorkflow = await setupWorkflowRuntime('routine-codex-user');
 
   try {
     await useRoutines.getState().runNow('routine-1');
-    assert.match(input, /请按以下方法论执行并直接输出结果/);
+    assert.equal(input?.text, '执行 Today 例行事务“测试例行事务”，直接输出结果。');
+    assert.equal(input?.skillName, 'morning-brief');
+    assert.doesNotMatch(input?.text ?? '', /^晨报|请按以下方法论/);
     assert.equal(useRoutines.getState().routines[0].runs[0].text, 'Codex 晨报');
   } finally {
     restoreRunner();
     restoreNow();
     restorePlatform();
     restoreBrainStorage();
+    restoreWorkflow();
+    resetRoutineStore();
+  }
+});
+
+test('旧的不规范技能在 Codex 例行事务中继续使用 legacy 正文路径', async () => {
+  resetRoutineStore([routine({ skillName: '旧 技能' })]);
+  const storage = new MemoryStorage();
+  storage.set('rcx-butler-v1:skills', JSON.stringify([
+    { name: '旧 技能', description: '迁移前技能。', body: '先查询旧系统，再输出结果。' },
+  ]));
+  const restoreProfile = setButlerProfileStorage(storage);
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restorePlatform = setButlerBrainTauriProvider(() => true);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  setCodexBrainUnavailableReason(undefined);
+  setButlerBrain('codex');
+  let input: { text: string; skillName?: string } | undefined;
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    input = options;
+    return { text: '旧技能结果' };
+  });
+  const restoreWorkflow = await setupWorkflowRuntime('routine-legacy-skill-user');
+
+  try {
+    await useRoutines.getState().runNow('routine-1');
+    assert.equal(input?.skillName, undefined);
+    assert.match(input?.text ?? '', /请按以下方法论执行并直接输出结果/);
+    assert.match(input?.text ?? '', /先查询旧系统，再输出结果/);
+  } finally {
+    restoreRunner();
+    restoreNow();
+    restorePlatform();
+    restoreBrainStorage();
+    restoreProfile();
     restoreWorkflow();
     resetRoutineStore();
   }

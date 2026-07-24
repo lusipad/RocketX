@@ -3,7 +3,6 @@ import test from 'node:test';
 import { directGetWorkItems, directRunSavedQuery } from '../../apps/web/src/lib/adoDirect';
 import { workItemTreeRows } from '../../apps/web/src/lib/workItemTree';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
-import { AdoClient } from '../../services/ado-bridge/src/ado';
 
 const item = (id: number, parentId?: number): WorkItem => ({
   id,
@@ -36,7 +35,7 @@ test('父项可折叠，筛选时仍展示命中项及祖先路径', () => {
   );
 });
 
-test('直连和 ado-bridge 都请求并映射 System.Parent', async () => {
+test('直连工作项请求并映射 System.Parent', async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -65,10 +64,8 @@ test('直连和 ado-bridge 都请求并映射 System.Parent', async () => {
   try {
     const cfg = { adoBase: 'http://ado/DefaultCollection', pat: '', auth: 'none' as const };
     const direct = await directGetWorkItems(cfg, '', 1);
-    const bridge = await new AdoClient({ baseUrl: cfg.adoBase, pat: '' }).getWorkItems('', 1);
     assert.equal(direct[0]?.parentId, 1);
-    assert.equal(bridge[0]?.parentId, 1);
-    assert.equal(calls.filter((url) => url.includes('fields=') && url.includes('System.Parent')).length, 2);
+    assert.equal(calls.filter((url) => url.includes('fields=') && url.includes('System.Parent')).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

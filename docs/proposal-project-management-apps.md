@@ -37,7 +37,8 @@
 | `ado.query` | `ado:read`（新增 APP_PERMISSIONS 项） | 用宿主已配置的连接执行 WIQL / 取工作项批量详情，返回结构化结果 |
 | `ado.update`（二期） | `ado:write`（新增） | 仅支持字段级更新（State/AssignedTo/IterationPath），宿主弹确认 |
 
-- 凭据、限流、缓存都留在宿主（复用 `lib/adoDirect.ts` 与 bridge 两条路径）。
+- 凭据、限流、缓存都留在宿主，查询只复用 `lib/adoDirect.ts` 直连路径；
+  `services/ado-bridge` 仅负责把 Service Hooks 事件投递到 Rocket.Chat。
 - `ado:write` 的每次调用默认走宿主确认弹层（同 Codex 审批的交互习惯），应用不能静默改数据。
 - AI 助手现有的「模型只读、写入走草案确认」原则原样适用。
 

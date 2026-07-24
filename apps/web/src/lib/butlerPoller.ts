@@ -57,7 +57,7 @@ export function resolveIterationProject(workItems: WorkItem[]): string | null {
 
 export async function fetchIterationEndDate(workItems: WorkItem[]): Promise<string | null> {
   const config = loadWorkbenchConfig();
-  if (!config || config.mode !== 'direct' || !config.adoBase) return null;
+  if (!config?.adoBase) return null;
 
   try {
     const project = resolveIterationProject(workItems);

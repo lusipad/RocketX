@@ -10,7 +10,7 @@ import {
   directGetPullRequest,
   directGetPullRequests,
 } from '../../apps/web/src/lib/adoDirect';
-import { fetchPullRequest, parseAdoUrl } from '../../apps/web/src/lib/ado';
+import { parseAdoUrl } from '../../apps/web/src/lib/ado';
 import {
   hierarchyPreview,
   loadLastWorkItemProject,
@@ -20,7 +20,6 @@ import {
   type HierarchyLayout,
 } from '../../apps/web/src/stores/wiTemplates';
 import { pullRequestReviewSummary } from '../../apps/web/src/components/AdoEntityLink';
-import { AdoClient } from '../../services/ado-bridge/src/ado';
 
 (globalThis as Record<string, unknown>).React = React;
 
@@ -414,49 +413,21 @@ test('PR 使用集合级详情接口，构建保持项目作用域', async () =>
   const directCfg = { adoBase: 'http://ado/tfs/DefaultCollection', pat: '', auth: 'none' as const };
   const directPr = await directGetPullRequest(directCfg, 42);
   const directBuild = await directGetBuild(directCfg, 'Road Map', 88);
-  const bridge = new AdoClient({ baseUrl: directCfg.adoBase, pat: '' });
-  const bridgePr = await bridge.getPullRequest(42);
-  const bridgeBuild = await bridge.getBuild('Road Map', 88);
 
-  assert.equal(directPr.webUrl, bridgePr.webUrl);
-  assert.equal(directBuild.webUrl, bridgeBuild.webUrl);
+  assert.equal(
+    directPr.webUrl,
+    'http://ado/tfs/DefaultCollection/Road%20Map/_git/Rocket%20X/pullrequest/42',
+  );
+  assert.equal(
+    directBuild.webUrl,
+    'http://ado/tfs/DefaultCollection/Road%20Map/_build/results?buildId=88',
+  );
   assert.equal(
     requested.filter((url) => url.includes('/_apis/git/pullrequests/42')).length,
-    2,
+    1,
   );
   assert.equal(
     requested.filter((url) => url.includes('/Road%20Map/_apis/build/builds/88')).length,
-    2,
+    1,
   );
-});
-
-test('Web bridge 的 PR 卡片请求不依赖 URL 中的项目或仓库名', async () => {
-  values.set('rcx-workbench', JSON.stringify({
-    mode: 'bridge',
-    bridge: 'http://bridge.example',
-    account: 'alice',
-  }));
-  let requested = '';
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    requested = String(input);
-    return adoJson({
-      item: {
-        id: 77,
-        title: '集合根链接',
-        repo: 'RocketX',
-        project: 'Road Map',
-        creator: 'Alice',
-        creatorUnique: 'alice',
-        reviewers: [],
-        sourceBranch: 'fix/card',
-        targetBranch: 'main',
-        webUrl: 'http://ado/tfs/DefaultCollection/_git/RocketX/pullrequest/77',
-      },
-    });
-  }) as typeof fetch;
-
-  const item = await fetchPullRequest(77);
-
-  assert.equal(requested, 'http://bridge.example/api/ado/pullrequest/77');
-  assert.equal(item?.id, 77);
 });

@@ -549,6 +549,7 @@ const toolLabels: Record<string, string> = {
   list_calendar: '查询日程',
   list_work_items: '查询工作项',
   list_pull_requests: '查询拉取请求',
+  run_azure_devops_server_cli: '运行 Azure DevOps 只读 CLI',
   list_builds: '查询构建',
   recall_memory: '召回记忆',
   load_skill: '加载技能',
@@ -1466,6 +1467,9 @@ export const useButler = create<ButlerState>((set, get) => ({
           now: butlerNow(),
           onEvent,
           toolRuntimeContext: toolRuntimeContextFor,
+          ...(runningTask.manifest.scenario === 'compare-pull-requests'
+            ? { skillName: 'azure-devops-server' }
+            : {}),
         });
         resultText = result.text;
       } else {
@@ -1618,7 +1622,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     upsertRuntimeCheckpoint(checkpoint);
     const workbenchConfig = useWorkbench.getState().config;
     const reason = preflightButlerAction(draft, {
-      adoDirectConfigured: workbenchConfig?.mode === 'direct' && Boolean(workbenchConfig.adoBase),
+      adoDirectConfigured: Boolean(workbenchConfig?.adoBase),
     });
     if (reason) {
       await failButlerToolCheckpoint(checkpoint, {

@@ -68,7 +68,6 @@
   "rocketChat": { "url": "https://chat.example.com" },
   "ado": {
     "url": "http://ado.example.com/tfs/DefaultCollection",
-    "mode": "direct",
     "auth": "pat",
     "webUrl": "http://ado.example.com/tfs/DefaultCollection"
   },
@@ -94,6 +93,8 @@
 要点：
 
 - **凭据永远不进文件。** ADO PAT、AI 密钥和 Rocket.Chat 密码由用户在本机单独填写。
+- ADO 查询只使用 `ado.url` 直连；旧版 `mode: "direct"` 导入时会被忽略，
+  `mode: "bridge"` 已不再支持。`services/ado-bridge` 只接收 Service Hooks 并投递通知。
 - 所有字段可选，缺省字段跳过对应向导步骤，不覆盖本地已有值。
 - 工作项模板默认可直接内联到同一文件；需要独立更新模板时仍可改用
   `"workItemTemplates": { "url": "https://git.example.com/team/rcx-config/raw/templates.json" }`。

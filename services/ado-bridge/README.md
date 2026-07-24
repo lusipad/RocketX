@@ -1,63 +1,69 @@
-# ado-bridge — Azure DevOps Server 2022 集成服务
+# ado-bridge — Azure DevOps Server 2022 通知入口
 
-两个职责：
+这个服务现在只做一件事：
 
-1. **事件桥**：接收 ADO Service Hooks（工作项、PR、推送、构建、发布），
-   转成飞书风格消息卡片发进 Rocket.Chat 频道；
-2. **工作台代理**：为客户端提供工作项、PR、构建、详情与评论接口，
-   PAT 保存在服务端，客户端不接触凭据。
+- 接收 ADO Service Hooks（工作项、PR、推送、构建、发布等）
+- 转成 Rocket.Chat 消息
+- 投递到指定频道或私聊
 
-## 工作台代理配置
-
-`.env` 里配置 `ADO_BASE_URL`（集合地址，如 `http://ado:8080/tfs/DefaultCollection`）
-和 `ADO_PAT`。需授予 Work Items Read & Write、Code Read、Build Read。接口：
-
-- `GET /api/ado/config` → Web 地址与当前 ADO 身份
-- `GET /api/ado/workitems?assignedTo=<邮箱或域账号>` → 未关闭工作项及其 `parentId`（不传时使用 `@Me`）
-- `GET /api/ado/pullrequests` → 与当前用户相关的 PR
-- `GET /api/ado/builds` → 当前用户最近发起的构建
-- `GET /api/ado/workitem/:id` → 工作项详情
-- `GET /api/ado/pullrequest/:id` → 拉取请求详情（ID 在集合内全局查询）
-- `GET /api/ado/build/:id?project=<项目>` → 指定项目的构建详情
-- `POST /api/ado/workitem/:id/comment` → 添加工作项评论
-
-本地联调可用 mock：`node mock/mock-ado.mjs`（端口 8378），
-然后 `ADO_BASE_URL=http://localhost:8378/DefaultCollection ADO_PAT=mock` 启动本服务。
+它不再提供任何 `/api/ado/*` 查询代理，也不再保存 ADO 查询凭据。
 
 ## 准备机器人账号
 
 1. 在 Rocket.Chat 管理后台创建一个专用账号（如 `devops-bot`），加入目标频道；
-2. 用该账号登录 → 我的账户 → 个人访问令牌 → 生成（勾选「忽略双重验证」）；
+2. 用该账号登录 → 我的账户 → 个人访问令牌 → 生成；
 3. 把得到的 `userId` 和 `token` 填入 `.env`（参考 `.env.example`）。
 
 ## 启动
 
 ```bash
-cp .env.example .env   # 填好 RC_AUTH_TOKEN / RC_USER_ID
+cp .env.example .env
 pnpm --filter @rcx/ado-bridge dev
 ```
 
-## 在 Azure DevOps Server 2022 上配置
+## 环境变量
 
-对每个想要通知的项目：
+- `RC_BASE_URL`：Rocket.Chat 地址
+- `RC_AUTH_TOKEN` / `RC_USER_ID`：机器人账号凭据
+- `DEFAULT_CHANNEL`：webhook URL 未指定频道时的默认目标
+- `WEBHOOK_TOKEN`：ADO 回调校验令牌；留空表示不校验
+- `RC_ALIAS`：消息别名，需要 `message-impersonate` 权限
+- `PORT`：监听端口
 
-1. 项目设置 → Service hooks → `+`（创建订阅）；
-2. 服务选择 **Web Hooks**；
-3. 触发事件按需选择：工作项已创建/已更新、拉取请求已创建/已更新、代码已推送、生成完成 等；
-4. URL 填：
+## Azure DevOps Server 2022 配置
 
-   ```
-   http://<桥接服务地址>:8377/webhooks/ado?channel=devops&token=<WEBHOOK_TOKEN>
-   ```
+项目设置 → Service hooks → 新建 **Web Hooks** 订阅，URL 填：
 
-   - `channel`：目标频道名（不带 #），也可以是 `@用户名` 私聊；
-   - `token`：与 `.env` 中 `WEBHOOK_TOKEN` 一致；
-5. 其余保持默认，测试（Test）应返回 200。
+```text
+http://<bridge>:8377/webhooks/ado?channel=devops&token=<WEBHOOK_TOKEN>
+```
 
-不同事件可以建多个订阅、投递到不同频道，比如构建结果进 `#ci`，工作项变更进 `#sprint`。
+- `channel` 可填频道名（不带 `#`）或 `@用户名`
+- `token` 需与服务端 `WEBHOOK_TOKEN` 一致
+
+可以按事件类型拆多个订阅，分别投递到不同频道。
+
+## 保留接口
+
+- `GET /healthz`
+- `POST /webhooks/ado`
 
 ## 支持的事件
 
-已识别并配色的事件：`workitem.created/updated/commented/deleted/restored`、
-`git.push`、`git.pullrequest.created/updated/merged`、PR 评论、`build.complete`
-（失败自动红色）、发布/部署事件。未识别的事件类型也会用 ADO 自带的消息文本兜底投递。
+已识别并配色的事件包括：
+
+- `workitem.created`
+- `workitem.updated`
+- `workitem.commented`
+- `workitem.deleted`
+- `workitem.restored`
+- `git.push`
+- `git.pullrequest.created`
+- `git.pullrequest.updated`
+- `git.pullrequest.merged`
+- `ms.vss-code.git-pullrequest-comment-event`
+- `build.complete`
+- `ms.vss-release.release-created-event`
+- `ms.vss-release.deployment-completed-event`
+
+未识别事件也会回退到 ADO 自带消息文本进行投递。

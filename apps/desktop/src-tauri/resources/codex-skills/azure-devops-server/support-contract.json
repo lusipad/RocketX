@@ -1,0 +1,177 @@
+{
+  "supportMatrix": {
+    "core": "required",
+    "git": "required",
+    "wit": "required",
+    "build": "required",
+    "work": "required",
+    "wiki": "supported",
+    "testplan": "supported",
+    "test": "supported",
+    "release": "conditional",
+    "search": "conditional",
+    "testresults": "conditional"
+  },
+  "requiredReferences": [
+    "azure-devops-server/references/workflow-recipes.md",
+    "azure-devops-server/references/repo-support.md",
+    "azure-devops-server/references/work-item-support.md",
+    "azure-devops-server/references/work-support.md",
+    "azure-devops-server/references/build-support.md",
+    "azure-devops-server/references/release-support.md",
+    "azure-devops-server/references/wiki-support.md",
+    "azure-devops-server/references/search-support.md",
+    "azure-devops-server/references/test-support.md",
+    "azure-devops-server/references/test-results-support.md",
+    "azure-devops-server/references/url-and-resource-areas.md",
+    "azure-devops-server/references/auth-and-configuration.md",
+    "azure-devops-server/references/api-version-matrix.md"
+  ],
+  "readmeIndex": {
+    "en": [
+      "azure-devops-server/references/workflow-recipes.md",
+      "azure-devops-server/references/repo-support.md",
+      "azure-devops-server/references/work-item-support.md",
+      "azure-devops-server/references/work-support.md",
+      "azure-devops-server/references/build-support.md",
+      "azure-devops-server/references/release-support.md",
+      "azure-devops-server/references/wiki-support.md",
+      "azure-devops-server/references/search-support.md",
+      "azure-devops-server/references/test-support.md",
+      "azure-devops-server/references/test-results-support.md",
+      "azure-devops-server/references/url-and-resource-areas.md",
+      "azure-devops-server/references/auth-and-configuration.md",
+      "azure-devops-server/references/api-version-matrix.md"
+    ],
+    "zh-CN": [
+      "azure-devops-server/references/workflow-recipes.md",
+      "azure-devops-server/references/repo-support.md",
+      "azure-devops-server/references/work-item-support.md",
+      "azure-devops-server/references/work-support.md",
+      "azure-devops-server/references/build-support.md",
+      "azure-devops-server/references/release-support.md",
+      "azure-devops-server/references/wiki-support.md",
+      "azure-devops-server/references/search-support.md",
+      "azure-devops-server/references/test-support.md",
+      "azure-devops-server/references/test-results-support.md",
+      "azure-devops-server/references/url-and-resource-areas.md",
+      "azure-devops-server/references/auth-and-configuration.md",
+      "azure-devops-server/references/api-version-matrix.md"
+    ]
+  },
+  "readmeSupportLabels": {
+    "en": {
+      "core": "`core` / projects",
+      "git": "`git`",
+      "wit": "`wit`",
+      "build": "`build`",
+      "work": "`work`",
+      "wiki": "`wiki`",
+      "testplan": "`testplan`",
+      "test": "`test`",
+      "release": "`release`",
+      "search": "`search`",
+      "testresults": "`testresults`"
+    },
+    "zh-CN": {
+      "core": "`core` / projects",
+      "git": "`git`",
+      "wit": "`wit`",
+      "build": "`build`",
+      "work": "`work`",
+      "wiki": "`wiki`",
+      "testplan": "`testplan`",
+      "test": "`test`",
+      "release": "`release`",
+      "search": "`search`",
+      "testresults": "`testresults`"
+    }
+  },
+  "metadataCoverage": {
+    "openaiDefaultPromptMustMention": [
+      "projects",
+      "repos",
+      "work items",
+      "WIQL",
+      "work/team",
+      "builds",
+      "conditional releases",
+      "wikis",
+      "search routes",
+      "test plans",
+      "test results",
+      "pull requests",
+      "PAT",
+      "Windows auth"
+    ],
+    "openaiDefaultPromptMustNotMention": [
+      "advanced security",
+      "MCP-app",
+      "Azure DevOps Services parity"
+    ]
+  },
+  "communityFiles": [
+    "CHANGELOG.md",
+    "SUPPORT.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "issueTemplates": {
+    "bugReportAreas": [
+      "core/projects",
+      "git",
+      "wit",
+      "build",
+      "work",
+      "wiki",
+      "testplan",
+      "test",
+      "release",
+      "search",
+      "testresults",
+      "docs",
+      "installation"
+    ],
+    "featureRequestAreas": [
+      "core/projects",
+      "git",
+      "wit",
+      "build",
+      "work",
+      "wiki",
+      "testplan",
+      "test",
+      "release",
+      "search",
+      "testresults",
+      "docs",
+      "installation",
+      "other"
+    ]
+  },
+  "conditionalSmokeAreas": [
+    "release",
+    "search",
+    "testresults"
+  ],
+  "deferredPolicyLines": {
+    "README.md": "- Deferred: advanced security, MCP-app integrations, and other cloud-only domains",
+    "README.zh-CN.md": "- 暂缓支持：高级安全、MCP-app 集成以及其他云端专有域",
+    "azure-devops-server/SKILL.md": "- Deferred: `advanced security`, `MCP-app` style integrations, and other cloud-only domains"
+  },
+  "deferredDomains": [
+    "advanced security",
+    "MCP-app integrations",
+    "cloud-only domains"
+  ],
+  "smokeHarness": {
+    "optInEnv": "AZURE_DEVOPS_SERVER_SMOKE",
+    "requiredEnv": [
+      "AZURE_DEVOPS_SERVER_COLLECTION_URL",
+      "AZURE_DEVOPS_SERVER_AUTH_MODE",
+      "AZURE_DEVOPS_SERVER_PROJECT"
+    ],
+    "conditionalRequiredEnv": [
+      "AZURE_DEVOPS_SERVER_PAT"
+    ]
+  }
+}

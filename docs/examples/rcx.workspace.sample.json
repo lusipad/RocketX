@@ -4,7 +4,6 @@
   "rocketChat": { "url": "https://chat.example.com" },
   "ado": {
     "url": "http://ado.example.com/tfs/DefaultCollection",
-    "mode": "direct",
     "auth": "ntlm",
     "webUrl": "http://ado.example.com/tfs/DefaultCollection"
   },

@@ -26,12 +26,13 @@ test('诊断报告保留多行日志但再次脱敏', () => {
       authStatus: 'authed',
       chatConnection: 'connected',
       serverOrigin: 'https://chat.example.com',
-      adoMode: 'direct',
+      adoConfigured: true,
     },
     '[info] started\n[error] token=do-not-export',
   );
 
   assert.match(report, /app_version: 1\.2\.3/);
+  assert.match(report, /ado_configured: true/);
   assert.match(report, /\[info\] started\n\[error\]/);
   assert.equal(report.includes('do-not-export'), false);
 });

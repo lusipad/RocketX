@@ -59,9 +59,7 @@ const nativeServiceStarts = new Map<string, Promise<void>>();
 
 function WorkbenchModule() {
   const config = useWorkbench((state) => state.config);
-  const connected = !!(
-    config && (config.mode === 'direct' ? config.adoBase : config.bridge)
-  );
+  const connected = !!config?.adoBase;
   return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
 }
 

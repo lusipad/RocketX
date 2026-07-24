@@ -41,7 +41,6 @@ export function collectCurrentValues(): WorkspaceCurrentValues {
   return {
     serverUrl: getServerBase(),
     adoBase: workbench?.adoBase ?? '',
-    adoMode: workbench?.mode ?? '',
     adoAuth: workbench?.auth ?? '',
     adoWebUrl: adoWebBase() ?? '',
     templatesUrl: templateState.url,
@@ -90,12 +89,9 @@ async function applySelectedFields(
     setServerBase(config.rocketChat.url);
   }
 
-  const adoTouched = ['ado.base', 'ado.mode', 'ado.auth'].some((key) => selected.has(key));
+  const adoTouched = ['ado.base', 'ado.auth'].some((key) => selected.has(key));
   if (adoTouched) {
     const existing = loadWorkbenchConfig();
-    const nextMode = selected.has('ado.mode') && config.ado?.mode
-      ? config.ado.mode
-      : (existing?.mode ?? 'direct');
     const nextBase = selected.has('ado.base') && config.ado?.url
       ? config.ado.url
       : existing?.adoBase;
@@ -103,13 +99,10 @@ async function applySelectedFields(
       ? config.ado.auth
       : existing?.auth;
     const connectionChanged = adoConnectionChanged(existing ?? undefined, {
-      mode: nextMode,
       adoBase: nextBase,
       auth: nextAuth,
     });
     useWorkbench.getState().setConfig({
-      mode: nextMode,
-      bridge: existing?.bridge,
       adoBase: nextBase,
       pat: connectionChanged ? undefined : existing?.pat,
       auth: nextAuth,

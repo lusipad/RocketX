@@ -133,7 +133,9 @@ pub async fn agent_bot_send(
     if !(server_url.starts_with("http://") || server_url.starts_with("https://"))
         || !valid_plain(&server_url, 2048)
         || !valid_plain(&rid, 512)
-        || tmid.as_deref().is_some_and(|value| !valid_plain(value, 512))
+        || tmid
+            .as_deref()
+            .is_some_and(|value| !valid_plain(value, 512))
         || text.is_empty()
         || text.len() > 100_000
     {

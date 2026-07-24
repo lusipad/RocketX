@@ -13,7 +13,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 └──────────────┬───────────────────────────┘
                │ public REST + WebSocket APIs
         ┌──────▼──────┐       ┌──────────────────┐
-        │ Rocket.Chat │◄──────│ optional bridges │
+        │ Rocket.Chat │◄──────│ event / LAN links│
         │ unchanged   │       │ ADO · LAN · IPMSG│
         └─────────────┘       └──────────────────┘
 ```
@@ -72,7 +72,7 @@ pnpm --filter @rcx/desktop dev
 
 On a new desktop installation, **Join a team** can import a non-secret `rcx.workspace.json` from a local file or an anonymously reachable HTTP(S)/Git raw URL. Rocket.Chat, Azure DevOps, AI-provider, template, and update-source defaults are reviewed before they are applied; passwords, PATs, and API keys are always entered locally. URL-based team configuration checks for changes every 24 hours and asks before applying them. Start from the [workspace configuration example](docs/examples/rcx.workspace.sample.json), and see the [configuration guide](docs/proposal-config-provisioning.md) for the field and security rules.
 
-After signing in, open **Butler** to search messages and work data, query Azure DevOps work items, pull requests, and builds, prepare work-item drafts, or run recurring reviews. Butler accepts image attachments from both its full page and room sidebar, and sends them as real multimodal input to the selected API provider or Codex brain. On desktop, Butler can use a local Codex CLI as its brain, and Butler or shared-agent conversations can open a new Codex App chat with the workspace and full context prefilled for the user to confirm and send. Butler and AI Hosting have independent Codex model and reasoning-effort settings under **Settings → AI**. Images referenced by an `@ai` request in a hosted conversation are downloaded into an isolated session cache and passed to Codex as image input. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers remain optional; API keys stay in the operating-system credential store.
+After signing in, open **Butler** to search messages and work data, query Azure DevOps work items, pull requests, and builds, prepare work-item drafts, or run recurring reviews. Butler accepts image attachments from both its full page and room sidebar, and sends them as real multimodal input to the selected API provider or Codex brain. On desktop, Butler uses its directory as a standard Codex workspace, including native Skills and a managed `AGENTS.md` section. The bundled `azure-devops-server` Skill reaches ADO through one host-controlled, read-only CLI tool; `ado-bridge` is only an event-to-chat notification service. Butler or shared-agent conversations can also open a new Codex App chat with the workspace and full context prefilled for the user to confirm and send. Butler and AI Hosting have independent Codex model and reasoning-effort settings under **Settings → AI**. Images referenced by an `@ai` request in a hosted conversation are downloaded into an isolated session cache and passed to Codex as image input. Every write still requires confirmation in the existing creation dialog. DeepSeek and other providers remain optional; API keys stay in the operating-system credential store.
 
 ## Verify changes
 

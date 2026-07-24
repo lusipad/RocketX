@@ -963,27 +963,25 @@ async function main(): Promise<void> {
   );
   check('成员列表翻页使用正确 offset', memberOffsets.join(',') === '0,2');
 
-  console.log('\n[ADO Bridge 身份识别]');
-  const { AdoClient, connectionIdentity } = await import('../services/ado-bridge/src/ado');
-  const bridgeIdentity = connectionIdentity({
-    authenticatedUser: {
-      id: 'guid',
-      providerDisplayName: '张三',
-      properties: { Account: { $value: 'CORP\\zhangsan' } },
-    },
-  });
-  check('优先使用 ADO Account 属性', bridgeIdentity.account === 'CORP\\zhangsan');
-  check('保留 ADO 身份 GUID', bridgeIdentity.id === 'guid');
-  check('缺少 Account 时退回显示名', connectionIdentity({ authenticatedUser: { customDisplayName: '李四' } }).account === '李四');
+  console.log('\n[ADO 直连身份识别]');
+  const { directGetIdentity, directGetWorkItems } = await import('../apps/web/src/lib/adoDirect');
 
   const originalGlobalFetch = globalThis.fetch;
-  const adoBridgeCalls: string[] = [];
+  const adoDirectCalls: string[] = [];
   globalThis.fetch = (async (input: URL | RequestInfo) => {
     const url = String(input);
-    adoBridgeCalls.push(url);
-    const payload = url.includes('/_apis/wit/wiql')
-      ? { workItems: [{ id: 7 }] }
-      : {
+    adoDirectCalls.push(url);
+    const payload = url.includes('/_apis/connectionData')
+      ? {
+          authenticatedUser: {
+            id: 'guid',
+            providerDisplayName: '张三',
+            properties: { Account: { $value: 'CORP\\zhangsan' } },
+          },
+        }
+      : url.includes('/_apis/wit/wiql')
+        ? { workItems: [{ id: 7 }] }
+        : {
           value: [
             {
               id: 7,
@@ -1003,17 +1001,25 @@ async function main(): Promise<void> {
     });
   }) as typeof fetch;
   try {
-    const bridgeItems = await new AdoClient({ baseUrl: 'http://ado.local/DefaultCollection', pat: '' })
-      .getWorkItems('', 1);
-    const detailUrl = adoBridgeCalls.find((url) => url.includes('/_apis/wit/workitems?')) ?? '';
+    const directConfig = {
+      adoBase: 'http://ado.local/DefaultCollection',
+      pat: '',
+      auth: 'none' as const,
+    };
+    const identity = await directGetIdentity(directConfig);
+    check('优先使用 ADO Account 属性', identity.account === 'CORP\\zhangsan');
+    check('保留 ADO 身份 GUID', identity.id === 'guid');
+
+    const directItems = await directGetWorkItems(directConfig, 1);
+    const detailUrl = adoDirectCalls.find((url) => url.includes('/_apis/wit/workitems?')) ?? '';
     check(
-      'Bridge 工作项字段只请求 Server 2022 存在的截止日期字段',
+      '直连工作项字段只请求 Server 2022 存在的截止日期字段',
       detailUrl.includes('Microsoft.VSTS.Scheduling.FinishDate') &&
         !detailUrl.includes('Microsoft.VSTS.Common.DueDate'),
     );
     check(
-      'Bridge 使用 FinishDate 作为截止日期兜底',
-      bridgeItems[0]?.dueDate === '2026-07-31T00:00:00Z',
+      '直连使用 FinishDate 作为截止日期兜底',
+      directItems[0]?.dueDate === '2026-07-31T00:00:00Z',
     );
   } finally {
     globalThis.fetch = originalGlobalFetch;

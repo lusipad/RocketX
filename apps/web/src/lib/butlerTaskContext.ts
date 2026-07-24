@@ -101,11 +101,13 @@ const definitions: readonly ScenarioDefinition[] = [
   {
     id: 'compare-pull-requests',
     matches: [/(?:比较|对比).*(?:PR|拉取请求)/i, /(?:PR|拉取请求).*(?:差异|区别)/i],
-    available: ['可查询已加载的 PR 元数据并保留候选来源'],
-    missing: ['PR diff 与代码内容读取能力不可用'],
-    sourcePlan: [{ tool: 'list_pull_requests', kind: 'pull-request', freshness: 'loaded-snapshot' }],
+    available: ['可通过完整 Azure DevOps Server Skill 与受控只读 CLI 读取 PR 固定快照、变更和必要文件'],
+    missing: [],
+    sourcePlan: [
+      { tool: 'run_azure_devops_server_cli', kind: 'pull-request', freshness: 'query-time' },
+    ],
     prohibitedActions: ['不评论、合并或修改 PR'],
-    recovery: '保留候选 PR；补齐两个编号后可继续只读比较，能力不足时明确停止。',
+    recovery: '按 Skill 固定 iteration 后可重复读取；正文受限或不可用时降级为元数据和文件清单比较。',
     clarification: (input, context) => {
       const count = new Set([...prIds(input), ...(context?.sources.filter((source) => source.kind === 'pull-request').map((source) => source.id) ?? [])]).size;
       return count >= 2 ? { missing: [] } : { missing: ['两个 PR 编号'], question: '请给出要比较的两个 PR 编号。' };

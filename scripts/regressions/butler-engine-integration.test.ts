@@ -91,6 +91,24 @@ async function setupButler() {
   return { butler, brain, auth, appData: backend, cleanup };
 }
 
+test('PR 比较场景显式加载完整 Azure DevOps Server Skill', { concurrency: false }, async () => {
+  const { butler, brain, cleanup } = await setupButler();
+  let capturedSkill: string | undefined;
+  const restoreCodex = butler.setButlerCodexRunner(async (options) => {
+    capturedSkill = options.skillName;
+    return { text: '已按固定快照比较。' };
+  });
+
+  try {
+    brain.setButlerBrain('codex');
+    await butler.useButler.getState().ask('比较 PR #101 和 PR #102');
+    assert.equal(capturedSkill, 'azure-devops-server');
+  } finally {
+    restoreCodex();
+    await cleanup();
+  }
+});
+
 test('API 与 Codex 成功回合映射为同构的公共终态合同', { concurrency: false }, async () => {
   const { butler, brain, cleanup } = await setupButler();
   const context = {

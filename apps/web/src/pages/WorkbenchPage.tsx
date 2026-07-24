@@ -397,7 +397,7 @@ export default function WorkbenchPage() {
   }, []);
 
   const queryConnectionScope = customQueryConnectionScope(config);
-  const queryAdoBase = config?.mode === 'direct' ? config.adoBase ?? '' : '';
+  const queryAdoBase = config?.adoBase ?? '';
   const customQueries = useMemo(
     () => queriesForScope(allCustomQueries, queryConnectionScope, queryAdoBase),
     [allCustomQueries, queryAdoBase, queryConnectionScope],
@@ -405,7 +405,7 @@ export default function WorkbenchPage() {
 
   const activeQueryId = tab.startsWith('query:') ? tab.slice(6) : null;
   const activeQuery = customQueries.find((q) => q.id === activeQueryId);
-  const canUseCustomQueries = config?.mode === 'direct' && !!config.adoBase;
+  const canUseCustomQueries = !!config?.adoBase;
   const queryScope = `${queryConnectionScope}\0${configRevision}`;
   const [queryState, setQueryState] = useState(() =>
     createCustomQueryLoadState<WorkItem[]>(queryScope),
@@ -438,7 +438,7 @@ export default function WorkbenchPage() {
     const move = pendingMove;
     if (!move) return;
     const cfg = useWorkbench.getState().config;
-    if (!cfg || cfg.mode !== 'direct' || !cfg.adoBase) return;
+    if (!cfg?.adoBase) return;
     try {
       const { directUpdateWorkItemState } = await import('../lib/adoDirect');
       const updated = await directUpdateWorkItemState(
@@ -480,7 +480,7 @@ export default function WorkbenchPage() {
 
   const fetchQuery = useCallback(
     async (q: typeof customQueries[0], force = false) => {
-      if (!config || config.mode !== 'direct' || !config.adoBase) return;
+      if (!config?.adoBase) return;
       const scope = `${customQueryConnectionScope(config)}\0${configRevision}`;
       const started = beginCustomQueryLoad(queryStateRef.current, scope, q.id, force);
       if (!started) return;
@@ -555,7 +555,7 @@ export default function WorkbenchPage() {
   const account = config?.account ?? '';
   // 「工作台是否可用」取决于连没连上服务器，而不是用户填没填账号 ——
   // Windows 集成认证下账号是服务器识别的，用户根本不用填
-  const connected = !!(config && (config.mode === 'direct' ? config.adoBase : config.bridge));
+  const connected = !!config?.adoBase;
   // 标题上显示身份：没识别到账号就别硬凑一个空字符串出来
   const adoTitle = account ? `Azure DevOps · ${account}` : 'Azure DevOps';
 

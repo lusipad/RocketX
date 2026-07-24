@@ -20,7 +20,14 @@ import {
   getButlerCodexSettings,
   setCodexBrainUnavailableReason,
 } from '../lib/butlerBrain';
-import { butlerCurrentTimeLine, buildButlerSystemPrompt } from '../lib/butlerProfile';
+import { assertNativeSkillName, ensureButlerWorkspaceFiles } from '../lib/butlerArchive';
+import {
+  butlerCurrentTimeLine,
+  buildButlerCodexBaseInstructions,
+  butlerWorkspaceRevision,
+  getPersona,
+  listSkills,
+} from '../lib/butlerProfile';
 import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
@@ -38,6 +45,7 @@ export interface ButlerCodexRoomContext {
 
 export interface ButlerCodexAskOptions {
   text: string;
+  skillName?: string;
   images?: readonly ButlerImageInput[];
   context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   taskContext?: string;
@@ -77,10 +85,8 @@ type ButlerCodexWorkspaceResolver = () => Promise<string>;
 
 let transportFactory: ButlerCodexTransportFactory = (sessionId, workspaceRoot) =>
   new TauriCodexTransport(sessionId, workspaceRoot);
-let workspaceResolver: ButlerCodexWorkspaceResolver = async () => {
-  const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<string>('butler_home_dir');
-};
+let workspaceResolver: ButlerCodexWorkspaceResolver = () =>
+  ensureButlerWorkspaceFiles(getPersona(), listSkills());
 
 let residentClient: AppServerClient | undefined;
 let residentClientStart: Promise<AppServerClient> | undefined;
@@ -161,7 +167,7 @@ function hash(value: string): string {
 }
 
 function instructions(): string {
-  return buildButlerSystemPrompt();
+  return buildButlerCodexBaseInstructions();
 }
 
 function timePrefixedInput(text: string, now: number): string {
@@ -223,6 +229,51 @@ function transcriptPrefixedInput(
     '历史转录结束。',
     `当前请求：${text}`,
   ].join('\n');
+}
+
+function joinWorkspacePath(root: string, ...segments: string[]): string {
+  const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  return [
+    root.replace(/[\\/]+$/, ''),
+    ...segments.map((segment) => segment.replace(/^[\\/]+|[\\/]+$/g, '')),
+  ].join(separator);
+}
+
+function nativeSkillPath(workspaceRoot: string, skillName: string): string {
+  return joinWorkspacePath(
+    workspaceRoot,
+    '.agents',
+    'skills',
+    assertNativeSkillName(skillName),
+    'SKILL.md',
+  );
+}
+
+async function buildTurnInputs(
+  sessionId: string,
+  workspaceRoot: string,
+  text: string,
+  images: readonly ButlerImageInput[] | undefined,
+  skillName?: string,
+): Promise<UserInput[]> {
+  const nativeSkillName = skillName ? assertNativeSkillName(skillName) : undefined;
+  const content = nativeSkillName ? `$${nativeSkillName}\n\n${text}` : text;
+  const input: UserInput[] = [{
+    type: 'text',
+    text: content,
+    text_elements: [],
+  }];
+  if (nativeSkillName) {
+    input.push({
+      type: 'skill',
+      name: nativeSkillName,
+      path: nativeSkillPath(workspaceRoot, nativeSkillName),
+    });
+  }
+  if (!images?.length) return input;
+  const imagePaths = await imageMaterializer(sessionId, images);
+  input.push(...imagePaths.map((path) => ({ type: 'localImage' as const, path })));
+  return input;
 }
 
 function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {
@@ -327,9 +378,13 @@ async function respondDynamicToolCall(
   const args = record(params.arguments);
   const callId = typeof params.callId === 'string' ? params.callId : crypto.randomUUID();
   const toolCall: AiToolCall = { id: callId, name, arguments: JSON.stringify(args) };
+  const turnId = typeof params.turnId === 'string' ? params.turnId : undefined;
   onEvent?.({ type: 'tool-call', toolCall });
   try {
-    const result = formatButlerToolResult(await tool.invoke(args, runtimeContext?.(toolCall)));
+    const result = formatButlerToolResult(await tool.invoke(args, {
+      ...runtimeContext?.(toolCall),
+      ...(turnId ? { turnId } : {}),
+    }));
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: result });
     // 工具已返回 JSON 字符串，直接透传，避免二次编码。
     return {
@@ -356,7 +411,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
   if (residentClientStart) return residentClientStart;
   const pending = (async () => {
     residentSessionId ??= `butler-${crypto.randomUUID()}`;
-    residentWorkspaceRoot ??= await workspaceResolver();
+    residentWorkspaceRoot = await workspaceResolver();
     const next = new AppServerClient(
       transportFactory(residentSessionId, residentWorkspaceRoot),
       {
@@ -466,9 +521,9 @@ export function residentCodexThreadSnapshot(): { threadId: string; promptHash: s
 }
 
 async function ensureResidentThread(): Promise<ButlerCodexResumeMode> {
-  const prompt = buildButlerSystemPrompt();
+  const prompt = buildButlerCodexBaseInstructions();
   const settings = getButlerCodexSettings();
-  const promptHash = hash(`${prompt}\n\0${settings.model}\n\0${settings.effort}`);
+  const promptHash = hash(`${prompt}\n\0${butlerWorkspaceRevision()}\n\0${settings.model}\n\0${settings.effort}`);
   if (residentThreadId && residentPromptHash !== promptHash) await stopResident();
   if (!residentThreadId) {
     await startResidentThread(prompt, promptHash);
@@ -509,15 +564,15 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
       roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
       now,
     );
-    const imagePaths = options.images?.length
-      ? await imageMaterializer(residentSessionId!, options.images)
-      : [];
     const result = await controller.start(
       await ensureResidentClient(),
-      [
-        { type: 'text' as const, text: prefixedText, text_elements: [] },
-        ...imagePaths.map((path) => ({ type: 'localImage' as const, path })),
-      ],
+      await buildTurnInputs(
+        residentSessionId!,
+        residentWorkspaceRoot!,
+        prefixedText,
+        options.images,
+        options.skillName,
+      ),
     );
     residentStatus = 'ready';
     residentTurn = undefined;
@@ -550,7 +605,7 @@ export async function discardResidentCodexThread(): Promise<void> {
 export async function transferConversationToCodexApp(
   lines: readonly TransferLine[],
 ): Promise<CodexHandoffResult> {
-  const workspaceRoot = residentWorkspaceRoot ?? await workspaceResolver();
+  const workspaceRoot = await workspaceResolver();
   return openCodexNewThread(transferTranscript('管家对话', lines), workspaceRoot);
 }
 
@@ -622,11 +677,13 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     controller = createTurnController(threadId, options.onEvent);
     if (options.signal?.aborted) throw abortError();
     return {
-      text: await controller.start(client, [{
-        type: 'text',
-        text: timePrefixedInput(options.text.trim(), now),
-        text_elements: [],
-      }]),
+      text: await controller.start(client, await buildTurnInputs(
+        sessionId,
+        workspaceRoot,
+        timePrefixedInput(options.text.trim(), now),
+        options.images,
+        options.skillName,
+      )),
     };
   } catch (error) {
     const reason = unavailableReason(error);

@@ -352,9 +352,7 @@ export default function CalendarPage() {
   // 依赖会无限重发。用 ref 记住本次连接已尝试过，失败不再自动重试。
   const wbTriedRef = useRef(false);
   useEffect(() => {
-    const connected = !!(
-      wbConfig && (wbConfig.mode === 'direct' ? wbConfig.adoBase : wbConfig.bridge)
-    );
+    const connected = !!wbConfig?.adoBase;
     if (!connected) {
       wbTriedRef.current = false;
       return;

@@ -413,6 +413,57 @@ function fulfillJson(route: Route, json: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', json });
 }
 
+async function installAdoDirectMock(
+  page: Page,
+  workItem: {
+    id: number;
+    title: string;
+    type: string;
+    state: string;
+    priority: number;
+    project: string;
+    assignedTo: string;
+  },
+) {
+  const rawWorkItem = {
+    id: workItem.id,
+    fields: {
+      'System.Title': workItem.title,
+      'System.WorkItemType': workItem.type,
+      'System.State': workItem.state,
+      'System.TeamProject': workItem.project,
+      'System.AssignedTo': { displayName: workItem.assignedTo },
+      'Microsoft.VSTS.Common.Priority': workItem.priority,
+    },
+  };
+  await page.route('**/ado/**', (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith('/_apis/connectionData')) {
+      return fulfillJson(route, {
+        authenticatedUser: {
+          id: 'ado-user',
+          customDisplayName: 'Test User',
+          properties: { Account: { $value: 'tester' } },
+        },
+      });
+    }
+    if (url.pathname.endsWith('/_apis/wit/wiql')) {
+      return fulfillJson(route, { workItems: [{ id: workItem.id }] });
+    }
+    if (url.pathname.endsWith('/_apis/wit/workitems')) {
+      return fulfillJson(route, { value: [rawWorkItem] });
+    }
+    if (url.pathname.endsWith(`/_apis/wit/workitems/${workItem.id}`)) {
+      return fulfillJson(route, rawWorkItem);
+    }
+    if (url.pathname.endsWith('/_apis/projects')) {
+      return fulfillJson(route, { value: [] });
+    }
+    return fulfillJson(route, { value: [] });
+  });
+}
+
 async function installRocketChatMock(page: Page) {
   const sentMessages: Record<string, unknown>[] = [];
   const uploadedMessages: Record<string, unknown>[] = [];
@@ -980,18 +1031,13 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
     assignedTo: 'Test User',
     webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
   };
-  await page.route('http://bridge.test/api/ado/**', (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/config')) return fulfillJson(route, { webBase: 'http://ado.example', account: 'tester' });
-    if (path.endsWith('/workitems')) return fulfillJson(route, { items: [workItem] });
-    if (path.endsWith('/pullrequests')) return fulfillJson(route, { items: [] });
-    if (path.endsWith('/builds')) return fulfillJson(route, { items: [] });
-    if (path.endsWith('/workitem/128')) return fulfillJson(route, { item: workItem });
-    return fulfillJson(route, { success: true });
-  });
+  await installAdoDirectMock(page, workItem);
   await page.addInitScript(() => {
-    localStorage.setItem('rcx-workbench', JSON.stringify({ mode: 'bridge', bridge: 'http://bridge.test', account: 'tester' }));
-    localStorage.setItem('rcx-ado-web', 'http://ado.example');
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
   });
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -1080,19 +1126,13 @@ test('工作项可创建绑定本地环境的原生讨论', async ({ page }, tes
     assignedTo: 'Test User',
     webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
   };
-  await page.route('http://bridge.test/api/ado/**', (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/config')) return fulfillJson(route, { webBase: 'http://ado.example', account: 'tester' });
-    if (path.endsWith('/workitems')) return fulfillJson(route, { items: [workItem] });
-    if (path.endsWith('/pullrequests')) return fulfillJson(route, { items: [] });
-    if (path.endsWith('/builds')) return fulfillJson(route, { items: [] });
-    if (path.endsWith('/workitem/128')) return fulfillJson(route, { item: workItem });
-    if (path.endsWith('/workitem/128/comment')) return fulfillJson(route, { success: true });
-    return fulfillJson(route, { success: true });
-  });
+  await installAdoDirectMock(page, workItem);
   await page.addInitScript(() => {
-    localStorage.setItem('rcx-workbench', JSON.stringify({ mode: 'bridge', bridge: 'http://bridge.test', account: 'tester' }));
-    localStorage.setItem('rcx-ado-web', 'http://ado.example');
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
       environments: [{

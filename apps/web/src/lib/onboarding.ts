@@ -17,10 +17,7 @@ export interface OnboardingStateV1 {
 export function defaultOnboardingState(
   existingWorkbench?: WorkbenchConfig | null,
 ): OnboardingStateV1 {
-  const configured = !!(
-    existingWorkbench &&
-    (existingWorkbench.mode === 'direct' ? existingWorkbench.adoBase : existingWorkbench.bridge)
-  );
+  const configured = !!existingWorkbench?.adoBase;
   return {
     version: ONBOARDING_VERSION,
     ado: configured ? 'configured' : 'pending',

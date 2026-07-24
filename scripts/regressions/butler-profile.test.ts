@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  AZURE_DEVOPS_SERVER_SKILL_NAME,
+  AZURE_DEVOPS_SERVER_SKILL_REVISION,
   DEFAULT_PERSONA,
+  buildButlerApiSystemPrompt,
+  buildButlerCodexBaseInstructions,
   buildButlerSystemPrompt,
+  butlerWorkspaceRevision,
   getPersona,
   listSkills,
   loadButlerSkill,
@@ -40,12 +45,14 @@ function withMemoryStorage(run: (storage: MemoryStorage) => void): void {
 test('系统提示只注入人设和技能索引，永不内嵌任何记忆事实', () => {
   withMemoryStorage((storage) => {
     const initial = buildButlerSystemPrompt();
+    assert.equal(initial, buildButlerApiSystemPrompt());
     assert.ok(initial.startsWith(DEFAULT_PERSONA));
     assert.doesNotMatch(initial, /## 你记住的事实/);
     assert.match(initial, /## 可用技能/);
     assert.match(initial, /- morning-brief：/);
     assert.match(initial, /- evening-review：/);
     assert.match(initial, /- weekly-report：/);
+    assert.doesNotMatch(initial, /- compare-pull-requests：/);
 
     storage.set('rcx-butler-v1:memory', JSON.stringify([{ id: 'fact-1', text: '老李是李建国', at: 1 }]));
     storage.set('rcx-butler-v2:memory', '{"scopes":{"global":{"entries":[{"id":"fact-2","text":"偏好简短"}]}}}');
@@ -86,6 +93,14 @@ test('人设可覆盖和复位，自定义技能可保存和删除', () => {
       () => saveSkill({ name: 'morning-brief', description: '覆盖', body: '不应保存' }),
       /内置技能不可修改/,
     );
+    assert.throws(
+      () => saveSkill({
+        name: AZURE_DEVOPS_SERVER_SKILL_NAME,
+        description: '覆盖托管 Skill',
+        body: '不应保存',
+      }),
+      /托管技能不可修改/,
+    );
 
     saveSkill({ name: 'release-note', description: '整理发布说明。', body: '# 发布说明' });
     assert.ok(listSkills().some((skill) => skill.name === 'release-note'));
@@ -109,6 +124,49 @@ test('profile 源码不再导出让 legacy memory 变成活动记忆的旧 API',
 test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
   withMemoryStorage(() => {
     assert.match(loadButlerSkill('morning-brief'), /^晨报/);
-    assert.match(loadButlerSkill('missing'), /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report/);
+    assert.match(
+      loadButlerSkill('missing'),
+      /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report/,
+    );
+  });
+});
+
+test('Codex 基础指令依赖工作区原生技能，API 提示继续使用 load_skill', () => {
+  withMemoryStorage((storage) => {
+    setPersona('这个人设只应写入 AGENTS.md。');
+    const codex = buildButlerCodexBaseInstructions();
+    assert.match(codex, /遵守当前工作目录中的 AGENTS\.md/);
+    assert.match(codex, /原生 Agent Skills/);
+    assert.doesNotMatch(codex, /## 可用技能/);
+    assert.doesNotMatch(codex, /morning-brief：/);
+    assert.doesNotMatch(codex, /这个人设只应写入/);
+
+    storage.set('rcx-butler-v1:skills', JSON.stringify([
+      { name: '旧 技能', description: '迁移前技能。', body: '继续兼容。' },
+    ]));
+    assert.match(loadButlerSkill('旧 技能'), /继续兼容/);
+    assert.match(buildButlerCodexBaseInstructions(), /旧 技能：迁移前技能/);
+    assert.throws(
+      () => saveSkill({ name: '新 技能', description: '非法名称。', body: '不应保存。' }),
+      /技能名称必须是/,
+    );
+    assert.throws(
+      () => saveSkill({ name: 'empty-skill', description: '空正文。', body: '   ' }),
+      /技能正文不能为空/,
+    );
+  });
+});
+
+test('人设或技能内容变化都会改变 Butler 工作区版本', () => {
+  withMemoryStorage(() => {
+    const initial = butlerWorkspaceRevision();
+    assert.match(initial, new RegExp(AZURE_DEVOPS_SERVER_SKILL_REVISION));
+    setPersona('新的工作区人设。');
+    const personaChanged = butlerWorkspaceRevision();
+    assert.notEqual(personaChanged, initial);
+
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '先查变更。' });
+    const skillChanged = butlerWorkspaceRevision();
+    assert.notEqual(skillChanged, personaChanged);
   });
 });

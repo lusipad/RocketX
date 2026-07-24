@@ -14,7 +14,7 @@ The production Web client directly uses the following packages. Exact resolved v
 | Lucide React | ISC | <https://lucide.dev/> |
 | PDF.js (`pdfjs-dist`) | Apache-2.0 | <https://mozilla.github.io/pdf.js/> |
 | Tauri JavaScript API and plugins | MIT or Apache-2.0 | <https://github.com/tauri-apps/> |
-| Fastify and `@fastify/cors` (ADO bridge) | MIT | <https://fastify.dev/> |
+| Fastify (ADO notification bridge) | MIT | <https://fastify.dev/> |
 
 Build-time packages such as TypeScript, Vite, Tailwind CSS, pnpm, and their transitive dependencies are governed by their respective licenses and pinned by the lockfile.
 
@@ -30,6 +30,14 @@ pnpm licenses list --prod
 The desktop application uses Tauri and Rust crates including Serde, BLAKE3, Ed25519, encoding_rs, mdns-sd, socket2, keyring, `oar-ocr`, `ort`, and platform integration crates. Exact crate versions and checksums are recorded in `apps/desktop/src-tauri/Cargo.lock`; license metadata is supplied by each crate and its source distribution.
 
 Tauri and most listed Rust ecosystem components use MIT, Apache-2.0, or dual MIT/Apache-2.0 terms. Consumers who redistribute desktop binaries must audit the complete locked dependency graph for their target platform rather than relying only on this summary.
+
+### Bundled Codex Skill
+
+RocketX desktop redistributes the `azure-devops-server` Codex Skill from
+<https://github.com/lusipad/azure-devops-server-skill> at commit
+`293b09774cf9d1ef880a889baf212a9b661e0a75` under the MIT License. The license
+text is packaged as
+`apps/desktop/src-tauri/resources/codex-skills/LICENSE.azure-devops-server.txt`.
 
 ### Bundled local OCR runtime and models
 

@@ -111,7 +111,7 @@ function withinAdoBase(url: URL, adoBase: string): boolean {
 }
 
 export function customQueryConnectionScope(config: WorkbenchConfig | null): string {
-  if (!config || config.mode !== 'direct' || !config.adoBase) return '';
+  if (!config?.adoBase) return '';
   const base = httpUrl(config.adoBase);
   if (!base) return '';
   base.hash = '';
@@ -119,7 +119,7 @@ export function customQueryConnectionScope(config: WorkbenchConfig | null): stri
   base.pathname = base.pathname.replace(/\/+$/, '');
   // account 在 NTLM 模式下可能由身份探测异步回填，不能参与持久化作用域，
   // 否则查询会在回填前被认领、回填后立即从当前连接消失。
-  return `direct\0${base.toString()}\0${config.auth ?? ''}`;
+  return `ado\0${base.toString()}\0${config.auth ?? ''}`;
 }
 
 export function queriesForScope(

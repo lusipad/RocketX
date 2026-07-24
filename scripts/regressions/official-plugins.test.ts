@@ -95,6 +95,7 @@ test('通用宿主拒绝 PATH 查找与目录逃逸并限制 JSON 帧', async ()
   assert.match(host, /hidden_command\(executable\)/);
   assert.match(host, /command\.creation_flags\(0x08000000\)/);
   assert.deepEqual(tauriConfig.bundle?.resources, {
+    'resources/codex-skills/': 'codex-skills/',
     'resources/plugins/': 'plugins/',
     'target/ocr-resources/ocr/': 'ocr/',
   });

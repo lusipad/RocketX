@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const generatedDir = resolve(root, 'apps/web/src/agent/protocol/generated');
+const codexEntry = resolve(root, 'node_modules/@openai/codex/bin/codex.js');
+const compatibilityFile = resolve(root, 'apps/web/src/agent/protocol/compatibility.ts');
 const mode = process.argv[2];
 
 if (mode !== '--write' && mode !== '--check') {
@@ -13,17 +15,10 @@ if (mode !== '--write' && mode !== '--check') {
 }
 
 function runCodex(args) {
-  let executable = 'codex';
-  let commandArgs = args;
-  if (process.platform === 'win32') {
-    const lookup = spawnSync('where.exe', ['codex.cmd'], { encoding: 'utf8' });
-    const shim = lookup.stdout?.split(/\r?\n/).find(Boolean);
-    const entry = shim ? join(dirname(shim), 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : '';
-    if (!entry || !existsSync(entry)) throw new Error('找不到 PATH 中 codex.cmd 对应的官方 Node 入口');
-    executable = process.execPath;
-    commandArgs = [entry, ...args];
+  if (!existsSync(codexEntry)) {
+    throw new Error('缺少仓库锁定的 @openai/codex，请先运行 pnpm install');
   }
-  const result = spawnSync(executable, commandArgs, {
+  const result = spawnSync(process.execPath, [codexEntry, ...args], {
     cwd: root,
     encoding: 'utf8',
   });
@@ -67,6 +62,11 @@ const versionOutput = runCodex(['--version']);
 const cliVersion = /^codex-cli (\S+)$/.exec(versionOutput)?.[1];
 if (!cliVersion) {
   throw new Error(`无法识别 Codex CLI 版本：${versionOutput || '未知版本'}`);
+}
+const compatibilitySource = await readFile(compatibilityFile, 'utf8');
+const expectedVersion = /CODEX_APP_SERVER_VERSION = '([^']+)'/.exec(compatibilitySource)?.[1];
+if (!expectedVersion || cliVersion !== expectedVersion) {
+  throw new Error(`仓库 Codex CLI ${cliVersion} 与 app-server 基线 ${expectedVersion ?? '未知'} 不一致`);
 }
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'rocketx-codex-protocol-'));

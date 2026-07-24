@@ -1,7 +1,7 @@
 /**
  * Azure DevOps Server 2022 直连客户端（不经 ado-bridge）。
  * 桌面端走 Tauri Rust 通道没有 CORS 限制，可直接连内网 ADO；
- * Web 端仅当 ADO 服务器允许跨域时可用，否则请用桥接模式。
+ * Web 端仅当 ADO 服务器允许跨域时可用；Windows 集成认证只在桌面端提供。
  */
 import { ensureHttpOrigin, httpFetch, isTauri } from './http';
 
@@ -82,7 +82,7 @@ async function adoRequest<T>(
     if (cfg.auth === 'ntlm') {
       if (!canUseNtlm) {
         throw new Error(
-          'Windows 集成认证只能在桌面客户端使用（浏览器的跨域规则不允许携带系统凭据）。网页端请填 PAT 或改用桥接模式。',
+          'Windows 集成认证只能在桌面客户端使用（浏览器的跨域规则不允许携带系统凭据）。网页端请填写 PAT。',
         );
       }
       ({ status, text } = await ntlmRequest(url, method, payload, contentType));
@@ -105,7 +105,7 @@ async function adoRequest<T>(
     if (/只能在桌面客户端/.test(raw)) throw err;
     throw new Error(
       /fetch|network|load failed/i.test(raw)
-        ? `无法连接 ${base(cfg)}（网页端受浏览器跨域限制，请用桌面客户端或改用 ado-bridge 模式）`
+        ? `无法连接 ${base(cfg)}（网页端可能受浏览器跨域限制，请改用桌面客户端）`
         : raw,
     );
   }
@@ -641,7 +641,7 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
    * 按用户 GUID 让服务端直接过滤，取代「拉全集合再前端按账号字符串匹配」：
    *  - 待我评审：reviewerId=我 且 active
    *  - 我提的  ：creatorId=我 且 active，工作台不展示已经完成或放弃的 PR
-   * 字符串匹配(matchUser)只留给桥接模式兜底。
+   * 前端的字符串匹配只保留给旧快照展示，不参与服务端查询。
    */
   const me = await directGetMe(cfg);
   const fetchPrs = async (criteria: string) => {

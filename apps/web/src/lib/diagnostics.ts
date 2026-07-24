@@ -42,7 +42,7 @@ export interface DiagnosticSnapshot {
   authStatus: string;
   chatConnection: string;
   serverOrigin: string;
-  adoMode: string;
+  adoConfigured: boolean;
 }
 
 export function buildDiagnosticReport(snapshot: DiagnosticSnapshot, logs: string): string {
@@ -54,7 +54,7 @@ export function buildDiagnosticReport(snapshot: DiagnosticSnapshot, logs: string
     ['auth_status', snapshot.authStatus],
     ['chat_connection', snapshot.chatConnection],
     ['rocket_chat_origin', snapshot.serverOrigin || 'not_configured'],
-    ['ado_mode', snapshot.adoMode],
+    ['ado_configured', String(snapshot.adoConfigured)],
   ];
   const header = fields
     .map(([key, value]) => `${key}: ${sanitizeDiagnosticText(value)}`)

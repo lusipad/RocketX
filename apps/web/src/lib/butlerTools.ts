@@ -45,6 +45,42 @@ import { stripAgentSessionMarker } from '../agent/card';
 const LIMIT = 20;
 const WORK_LIMIT = 100;
 
+export interface ButlerAzureDevOpsServerReadRequest {
+  method: 'GET';
+  collectionUrl: string;
+  authMode: 'pat' | 'default-credentials';
+  pat?: string;
+  area?: string;
+  resource: string;
+  project?: string;
+  team?: string;
+  query?: Record<string, unknown>;
+  apiVersion?: string;
+  serverVersionHint?: string;
+  allowConditionalArea?: boolean;
+}
+
+type ButlerAzureDevOpsServerReadInvoker = (
+  request: ButlerAzureDevOpsServerReadRequest,
+) => Promise<unknown>;
+
+const defaultAzureDevOpsServerReadInvoker: ButlerAzureDevOpsServerReadInvoker = async (request) => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke('butler_azure_devops_server_read', { request });
+};
+
+let azureDevOpsServerReadInvoker = defaultAzureDevOpsServerReadInvoker;
+
+export function setButlerAzureDevOpsServerReadInvoker(
+  invoker: ButlerAzureDevOpsServerReadInvoker,
+): () => void {
+  const previous = azureDevOpsServerReadInvoker;
+  azureDevOpsServerReadInvoker = invoker;
+  return () => {
+    azureDevOpsServerReadInvoker = previous;
+  };
+}
+
 export interface ButlerRoutineDraft {
   checkpointId: string;
   name: string;
@@ -266,6 +302,60 @@ function listPullRequests(args: Record<string, unknown>): string {
         webUrl: pr.webUrl,
       })),
   );
+}
+
+function butlerAzureDevOpsServerConnection(): Pick<
+  ButlerAzureDevOpsServerReadRequest,
+  'collectionUrl' | 'authMode' | 'pat'
+> {
+  const config = useWorkbench.getState().config;
+  if (!config) throw new Error('请先在工作台完成 Azure DevOps 连接配置');
+  if (!config.adoBase) throw new Error('请先在工作台配置 Azure DevOps Server 集合地址');
+  const auth = config.auth ?? (config.pat ? 'pat' : 'ntlm');
+  if (auth === 'ntlm') {
+    return {
+      collectionUrl: config.adoBase,
+      authMode: 'default-credentials',
+    };
+  }
+  if (auth !== 'pat') throw new Error('Azure DevOps Server Skill 只支持 PAT 或 Windows 集成认证');
+  if (!config.pat) throw new Error('Azure DevOps Server PAT 尚未配置');
+  return {
+    collectionUrl: config.adoBase,
+    authMode: 'pat',
+    pat: config.pat,
+  };
+}
+
+function optionalQuery(args: Record<string, unknown>): Record<string, unknown> | undefined {
+  const value = args.query;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+async function runAzureDevOpsServerCli(args: Record<string, unknown>): Promise<string> {
+  const resource = optionalString(args, 'resource');
+  if (!resource) throw new Error('Azure DevOps resource 不能为空');
+  const area = optionalString(args, 'area');
+  const project = optionalString(args, 'project');
+  const team = optionalString(args, 'team');
+  const query = optionalQuery(args);
+  const apiVersion = optionalString(args, 'apiVersion');
+  const serverVersionHint = optionalString(args, 'serverVersionHint');
+  const result = await azureDevOpsServerReadInvoker({
+    method: 'GET',
+    ...butlerAzureDevOpsServerConnection(),
+    ...(area ? { area } : {}),
+    resource,
+    ...(project ? { project } : {}),
+    ...(team ? { team } : {}),
+    ...(query ? { query } : {}),
+    ...(apiVersion ? { apiVersion } : {}),
+    ...(serverVersionHint ? { serverVersionHint } : {}),
+    ...(args.allowConditionalArea === true ? { allowConditionalArea: true } : {}),
+  });
+  return JSON.stringify(result ?? null);
 }
 
 function listBuilds(args: Record<string, unknown>): string {
@@ -725,6 +815,66 @@ export function createButlerTools(): ButlerTool[] {
       effect: 'read',
       capability: 'ado.pull-requests.read',
       execute: async (args) => listPullRequests(args),
+    }),
+    defineButlerTool({
+      name: 'run_azure_devops_server_cli',
+      description: '执行 azure-devops-server Skill 规划出的一个 Azure DevOps Server 只读 CLI 请求。集合地址和凭据由 RocketX 注入；这里只传 Area、Resource、Project、Team、Query 和版本参数。只能 GET，不能写入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          area: {
+            type: 'string',
+            enum: ['build', 'git', 'release', 'search', 'test', 'testplan', 'testresults', 'wiki', 'wit', 'work'],
+            description: 'Azure DevOps REST area；集合级 projects 请求可省略。',
+          },
+          resource: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 2048,
+            description: '相对于所选 area/project/team 的资源路径，例如 projects、repositories、pullrequests/42。',
+          },
+          project: { type: 'string', description: '可选项目名或项目 ID。' },
+          team: { type: 'string', description: 'work area 的可选团队名或团队 ID。' },
+          query: {
+            type: 'object',
+            description: '查询字符串键值；键和值按 Azure Skill 参考文档填写。',
+            additionalProperties: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' },
+                { type: 'null' },
+                {
+                  type: 'array',
+                  items: {
+                    anyOf: [
+                      { type: 'string' },
+                      { type: 'number' },
+                      { type: 'boolean' },
+                      { type: 'null' },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+          apiVersion: { type: 'string', description: '可选 API 版本覆盖；优先遵守 Skill 的版本矩阵。' },
+          serverVersionHint: {
+            type: 'string',
+            enum: ['current', '20.0', '2022.1', '2022', '2020', '2019', '2018', '2017', '2015', 'legacy'],
+            description: '可选 Azure DevOps Server/TFS 版本提示。',
+          },
+          allowConditionalArea: {
+            type: 'boolean',
+            description: '仅在已确认服务器支持 release/search/testresults 时设为 true。',
+          },
+        },
+        required: ['resource'],
+        additionalProperties: false,
+      },
+      effect: 'read',
+      capability: 'ado.server.read',
+      execute: runAzureDevOpsServerCli,
     }),
     defineButlerTool({
       name: 'list_builds',

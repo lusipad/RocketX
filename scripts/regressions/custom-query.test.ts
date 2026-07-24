@@ -17,14 +17,12 @@ const QUERY_ID = 'abcdef01-2345-6789-abcd-ef0123456789';
 
 test('自定义查询只在所属 ADO 连接显示，作用域不复制 PAT', () => {
   const scopeA = customQueryConnectionScope({
-    mode: 'direct',
     adoBase: 'http://ado-a/DefaultCollection/',
     auth: 'pat',
     pat: 'top-secret',
     account: 'alice',
   });
   const scopeB = customQueryConnectionScope({
-    mode: 'direct',
     adoBase: 'http://ado-b/DefaultCollection',
     auth: 'pat',
     pat: 'other-secret',
@@ -58,13 +56,11 @@ test('自定义查询只在所属 ADO 连接显示，作用域不复制 PAT', ()
 
 test('NTLM 自动回填身份不会改变自定义查询作用域', () => {
   const anonymousScope = customQueryConnectionScope({
-    mode: 'direct',
     adoBase: 'http://ado/DefaultCollection',
     auth: 'ntlm',
     account: '',
   });
   const identifiedScope = customQueryConnectionScope({
-    mode: 'direct',
     adoBase: 'http://ado/DefaultCollection',
     auth: 'ntlm',
     account: 'DOMAIN\\alice',
@@ -103,7 +99,6 @@ test('迁移当前连接时保留其他 ADO 连接的旧查询，切回后再认
     const baseA = 'http://ado-a/DefaultCollection';
     const baseB = 'http://ado-b/DefaultCollection';
     const config = (adoBase: string) => ({
-      mode: 'direct' as const,
       adoBase,
       auth: 'ntlm' as const,
       account: '',
@@ -138,7 +133,6 @@ test('迁移当前连接时保留其他 ADO 连接的旧查询，切回后再认
 
 test('已有外部查询链接不会在迁移前短暂显示', () => {
   const scope = customQueryConnectionScope({
-    mode: 'direct',
     adoBase: 'http://ado/DefaultCollection',
     auth: 'ntlm',
     account: 'alice',

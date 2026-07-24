@@ -26,7 +26,7 @@ const cases: Array<{
   {
     scenario: 'compare-pull-requests',
     input: '比较 PR #101 和 PR #102',
-    expectedTool: 'list_pull_requests',
+    expectedTool: 'run_azure_devops_server_cli',
   },
   {
     scenario: 'extract-commitments',

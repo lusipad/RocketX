@@ -1,0 +1,4 @@
+interface:
+  display_name: "Azure DevOps Server"
+  short_description: "Help with Azure DevOps Server workflows"
+  default_prompt: "Use $azure-devops-server to inspect projects, repos, work items, WIQL queries, work/team settings, builds, conditional releases, wikis, search routes, test plans, test results, or inspect and compare pull requests on an Azure DevOps Server collection with PAT or Windows auth."

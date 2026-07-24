@@ -6,11 +6,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "test": "tsx --test src/**/*.test.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.0",
     "@rcx/rc-client": "workspace:*",
     "fastify": "^5.0.0"
   },

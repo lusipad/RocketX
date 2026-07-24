@@ -22,7 +22,6 @@ export interface WorkspaceConfig {
   rocketChat?: { url: string };
   ado?: {
     url?: string;
-    mode?: 'direct' | 'bridge';
     auth?: 'pat' | 'ntlm' | 'none';
     /** 消息里 #123 链接用的 Web 地址；不填时复用 url */
     webUrl?: string;
@@ -140,7 +139,13 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
     const ado: WorkspaceConfig['ado'] = {};
     if (raw.ado.url !== undefined) ado.url = normalizeUrl(raw.ado.url, 'ado.url');
     if (raw.ado.mode !== undefined) {
-      ado.mode = oneOf(raw.ado.mode, ['direct', 'bridge'] as const, 'ado.mode');
+      if (raw.ado.mode === 'direct') {
+        /* 兼容旧配置：写回时不再保留 mode */
+      } else if (raw.ado.mode === 'bridge') {
+        throw new Error('ado.mode=bridge 已移除；请改用直连 Azure DevOps');
+      } else {
+        throw new Error('ado.mode 只兼容旧版 direct；bridge 已移除');
+      }
     }
     if (raw.ado.auth !== undefined) {
       ado.auth = oneOf(raw.ado.auth, ['pat', 'ntlm', 'none'] as const, 'ado.auth');
@@ -254,7 +259,6 @@ export interface WorkspaceField {
 export interface WorkspaceCurrentValues {
   serverUrl?: string;
   adoBase?: string;
-  adoMode?: string;
   adoAuth?: string;
   adoWebUrl?: string;
   templatesUrl?: string;
@@ -308,9 +312,6 @@ export function planWorkspaceFields(
   }
   if (config.ado?.url !== undefined) {
     fields.push(field('ado.base', 'ADO 地址', config.ado.url, current.adoBase ?? '', lastApplied));
-  }
-  if (config.ado?.mode !== undefined) {
-    fields.push(field('ado.mode', 'ADO 连接模式', config.ado.mode, current.adoMode ?? '', lastApplied));
   }
   if (config.ado?.auth !== undefined) {
     fields.push(field('ado.auth', 'ADO 认证方式', config.ado.auth, current.adoAuth ?? '', lastApplied));
@@ -467,14 +468,13 @@ export function aiProviderEndpointChanged(
   );
 }
 
-/** ADO PAT 与连接三元组绑定；地址、模式或认证方式任一变化都必须解绑。 */
+/** ADO PAT 与连接绑定；地址或认证方式任一变化都必须解绑。 */
 export function adoConnectionChanged(
-  current: { mode: string; adoBase?: string; auth?: string } | undefined,
-  incoming: { mode: string; adoBase?: string; auth?: string },
+  current: { adoBase?: string; auth?: string } | undefined,
+  incoming: { adoBase?: string; auth?: string },
 ): boolean {
   return !!current && (
-    current.mode !== incoming.mode
-    || current.adoBase !== incoming.adoBase
+    current.adoBase !== incoming.adoBase
     || current.auth !== incoming.auth
   );
 }

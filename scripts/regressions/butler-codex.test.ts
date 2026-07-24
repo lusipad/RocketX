@@ -11,6 +11,7 @@ import {
   setCodexBrainUnavailableReason,
 } from '../../apps/web/src/lib/butlerBrain';
 import {
+  saveSkill,
   setButlerProfileStorage,
   setPersona,
   type ButlerProfileStorage,
@@ -27,6 +28,7 @@ import {
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
   stopButlerCodexTurn,
+  transferConversationToCodexApp,
 } from '../../apps/web/src/stores/butlerCodex';
 
 class FakeTransport implements CodexTransport {
@@ -166,6 +168,9 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
       /当前时间：/,
       '动态时间不能稳定注入常驻线程 baseInstructions',
     );
+    assert.match(String(threadParams.baseInstructions), /AGENTS\.md/);
+    assert.doesNotMatch(String(threadParams.baseInstructions), /## 可用技能/);
+    assert.doesNotMatch(String(threadParams.baseInstructions), /GTD 与注意力保护/);
     assert.deepEqual(
       (threadParams.dynamicTools as Array<Record<string, unknown>>).map((tool) => tool.name),
       [
@@ -176,6 +181,7 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
         'list_calendar',
         'list_work_items',
         'list_pull_requests',
+        'run_azure_devops_server_cli',
         'list_builds',
         'recall_memory',
         'load_skill',
@@ -240,6 +246,32 @@ test('Codex 管家把用户图片写入当前会话并作为 localImage 输入',
     assert.deepEqual(await asking, { text: '完成。' });
   } finally {
     restoreImages();
+    await restore();
+  }
+});
+
+test('Codex 例行事务使用原生 Agent Skill 输入', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const asking = runButlerCodexEphemeral({
+      text: '生成今天的晨报',
+      skillName: 'morning-brief',
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport, 'workflow-thread');
+    const turnStart = await startTurn(transport, 'workflow-turn');
+    const input = (turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>;
+    assert.match(String(input[0].text), /^\$morning-brief/);
+    assert.deepEqual(input[1], {
+      type: 'skill',
+      name: 'morning-brief',
+      path: 'C:/RocketX/AppData/butler/.agents/skills/morning-brief/SKILL.md',
+    });
+    await completeTurn(transport, 'workflow-thread', 'workflow-turn');
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
     await restore();
   }
 });
@@ -430,6 +462,67 @@ test('人设提示变化会停止旧线程，并在下一问前重建', async ()
     await second;
     assert.equal(transports.length, 2);
   } finally {
+    restoreProfile();
+    await restoreRuntime();
+  }
+});
+
+test('技能内容变化会停止旧线程，并在下一问前重建', async () => {
+  const transports: FakeTransport[] = [];
+  const restoreRuntime = testRuntime(transports);
+  const restoreProfile = setButlerProfileStorage(new MemoryStorage());
+  try {
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '先查变更。' });
+    const first = askButlerCodex({ text: '第一问' });
+    const firstTransport = await transportAt(transports, 0);
+    await initialize(firstTransport);
+    await startThread(firstTransport);
+    await startTurn(firstTransport);
+    await completeTurn(firstTransport);
+    await first;
+
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '先查标签与变更。' });
+    const second = askButlerCodex({ text: '第二问' });
+    assert.equal(firstTransport.stopped, true);
+    const secondTransport = await transportAt(transports, 1);
+    await initialize(secondTransport);
+    await startThread(secondTransport, 'rebuilt-thread');
+    await startTurn(secondTransport, 'rebuilt-turn');
+    await completeTurn(secondTransport, 'rebuilt-thread', 'rebuilt-turn');
+    await second;
+    assert.equal(transports.length, 2);
+  } finally {
+    restoreProfile();
+    await restoreRuntime();
+  }
+});
+
+test('编辑工作区后立即转到 Codex App 会重新严格同步工作区', async () => {
+  const transports: FakeTransport[] = [];
+  const restoreRuntime = testRuntime(transports);
+  const restoreProfile = setButlerProfileStorage(new MemoryStorage());
+  let workspaceResolutions = 0;
+  const restoreWorkspace = setButlerCodexWorkspaceResolver(async () => {
+    workspaceResolutions += 1;
+    return 'C:/RocketX/AppData/butler';
+  });
+  try {
+    const asking = askButlerCodex({ text: '先建立常驻线程' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport);
+    await startTurn(transport);
+    await completeTurn(transport);
+    await asking;
+    assert.equal(workspaceResolutions, 1);
+
+    setPersona('更新后的人设。');
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '先查变更。' });
+    await transferConversationToCodexApp([{ role: 'user', text: '继续处理' }]);
+
+    assert.equal(workspaceResolutions, 2);
+  } finally {
+    restoreWorkspace();
     restoreProfile();
     await restoreRuntime();
   }

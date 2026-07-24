@@ -22,11 +22,7 @@ test('引导状态按服务器和用户隔离，并规范化地址', () => {
 
 test('已有有效 ADO 配置时不强制重复第二步', () => {
   assert.equal(
-    defaultOnboardingState({ mode: 'direct', adoBase: 'http://ado/tfs/c', account: '' }).ado,
-    'configured',
-  );
-  assert.equal(
-    defaultOnboardingState({ mode: 'bridge', bridge: 'http://bridge:8377', account: '' }).ado,
+    defaultOnboardingState({ adoBase: 'http://ado/tfs/c', account: '' }).ado,
     'configured',
   );
   assert.equal(defaultOnboardingState(null).ado, 'pending');

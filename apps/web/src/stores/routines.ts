@@ -8,7 +8,7 @@ import {
   mergeButlerSources,
   type ButlerSource,
 } from '../lib/butlerContext';
-import { butlerCurrentTimeLine, buildButlerSystemPrompt, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
+import { butlerCurrentTimeLine, buildButlerApiSystemPrompt, canUseNativeButlerSkill, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
 import { createButlerTools } from '../lib/butlerTools';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
@@ -332,17 +332,26 @@ export const useRoutines = create<RoutineState>((set, get) => ({
           if (brain === 'codex') {
             const availability = codexBrainAvailability();
             if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
-            value = await routineCodexRunner({
-              text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}`,
-              now: at,
-              signal,
-              onEvent,
-              toolRuntimeContext: runtimeContext,
-            });
+            value = canUseNativeButlerSkill(routine.skillName)
+              ? await routineCodexRunner({
+                text: `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
+                skillName: routine.skillName,
+                now: at,
+                signal,
+                onEvent,
+                toolRuntimeContext: runtimeContext,
+              })
+              : await routineCodexRunner({
+                text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}`,
+                now: at,
+                signal,
+                onEvent,
+                toolRuntimeContext: runtimeContext,
+              });
           } else {
             value = await routineRunner({
               messages: [
-                { role: 'system', content: `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(at)}` },
+                { role: 'system', content: `${buildButlerApiSystemPrompt()}\n\n${butlerCurrentTimeLine(at)}` },
                 { role: 'user', content: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}` },
               ],
               tools: createButlerTools(),
