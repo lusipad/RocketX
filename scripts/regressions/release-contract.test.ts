@@ -73,6 +73,12 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(releaseWorkflow, /verify-release-assets\.mjs/);
   assert.match(releaseWorkflow, /sha256sum -c SHA256SUMS\.txt/);
   assert.match(releaseWorkflow, /--draft=false --latest=false/);
+  assert.match(releaseWorkflow, /STABLE_LATEST_TAG:\s*v0\.28\.0/);
+  assert.match(releaseWorkflow, /gh release edit "\$STABLE_LATEST_TAG" --repo "\$GITHUB_REPOSITORY" --latest/);
+  assert.match(
+    releaseWorkflow,
+    /test "\$\(gh api "repos\/\$GITHUB_REPOSITORY\/releases\/latest" --jq '\.tag_name'\)" = "\$STABLE_LATEST_TAG"/,
+  );
   assert.doesNotMatch(releaseWorkflow, /三平台/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
   const buildJob = desktopWorkflow.match(/\n  build:[\s\S]*?\n  prepare-release:/)?.[0] ?? '';
