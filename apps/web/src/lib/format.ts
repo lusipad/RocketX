@@ -82,7 +82,13 @@ export function sameDay(a: number, b: number): boolean {
 }
 
 /** 系统消息文案（Rocket.Chat 消息的 t 字段） */
-const SYSTEM_MESSAGES: Record<string, (user: string, msg: string) => string> = {
+const ROOM_ROLE_LABELS: Record<string, string> = {
+  owner: '群主',
+  moderator: '管理员',
+  leader: '负责人',
+};
+
+const SYSTEM_MESSAGES: Record<string, (user: string, msg: string, role?: string) => string> = {
   uj: (u) => `${u} 加入了会话`,
   ul: (u) => `${u} 退出了会话`,
   ru: (u, m) => `${u} 将 ${m} 移出了会话`,
@@ -92,7 +98,10 @@ const SYSTEM_MESSAGES: Record<string, (user: string, msg: string) => string> = {
   'room_changed_topic': (u, m) => `${u} 将话题修改为 ${m}`,
   'room_changed_description': (u) => `${u} 修改了会话描述`,
   'room_changed_announcement': (u) => `${u} 修改了群公告`,
-  'subscription-role-added': (u, m) => `${m} 被设置为 ${u}`,
+  'subscription-role-added': (_u, m, role) => {
+    const label = role ? ROOM_ROLE_LABELS[role] : undefined;
+    return label ? `${m} 被设置为${label}` : `${m} 的会话角色已更新`;
+  },
   'ut': (u) => `${u} 加入了讨论`,
   'wm': (u) => `${u}，欢迎加入`,
   // 正常情况下这条会被 DiscussionCard 拦下渲染成卡片，
@@ -100,9 +109,9 @@ const SYSTEM_MESSAGES: Record<string, (user: string, msg: string) => string> = {
   'discussion-created': (u, m) => `${u} 发起了讨论「${m}」`,
 };
 
-export function systemMessageText(t: string, username: string, msg: string): string {
+export function systemMessageText(t: string, username: string, msg: string, role?: string): string {
   const fn = SYSTEM_MESSAGES[t];
-  return fn ? fn(username, msg) : `${username} ${t} ${msg}`.trim();
+  return fn ? fn(username, msg, role) : `${username} ${t} ${msg}`.trim();
 }
 
 /** 字节数 → 人话（消息里的文件卡片和文件面板共用） */

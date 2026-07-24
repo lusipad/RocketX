@@ -68,6 +68,8 @@ export interface RcMessage {
   editedBy?: { _id: string; username: string };
   /** 系统消息类型（uj=加入 ul=离开 discussion-created=建了讨论 等），普通消息无此字段 */
   t?: string;
+  /** subscription-role-added/removed 的房间角色。 */
+  role?: 'owner' | 'moderator' | 'leader';
   tmid?: string;
   tcount?: number;
   /**
