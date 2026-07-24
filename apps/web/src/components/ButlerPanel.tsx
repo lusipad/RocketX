@@ -12,6 +12,7 @@ import ButlerToolApprovals from './ButlerToolApprovals';
 import ButlerImagePicker, {
   ButlerImageAttachments,
   ButlerImagePreviews,
+  pasteButlerImages,
 } from './ButlerImagePicker';
 import PanelShell from './PanelShell';
 import type { ButlerImageInput } from '../lib/butlerImages';
@@ -132,6 +133,7 @@ export default function ButlerPanel() {
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onPaste={(event) => void pasteButlerImages(event, images, setImages)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();

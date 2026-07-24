@@ -255,6 +255,40 @@ test('完整管家页可以发送图片和文字', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('完整管家页可以粘贴图片并发送', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await captureButlerAsks(page);
+
+  const input = page.getByPlaceholder(/例如：搜索张三/);
+  await input.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File(['pasted-image'], 'pasted.png', { type: 'image/png' }));
+    element.dispatchEvent(new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: clipboard,
+    }));
+  });
+  await expect(page.getByAltText('pasted.png')).toBeVisible();
+  await input.fill('分析粘贴的截图');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+
+  const captured = await page.evaluate(() => (
+    (window as Window & { __capturedButlerAsks?: unknown[] }).__capturedButlerAsks
+  ));
+  expect(captured).toEqual([{
+    text: '分析粘贴的截图',
+    context: undefined,
+    images: [{
+      name: 'pasted.png',
+      type: 'image/png',
+      size: 12,
+      dataUrl: 'data:image/png;base64,cGFzdGVkLWltYWdl',
+    }],
+  }]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('房间管家侧栏可以仅发送图片并保留房间上下文', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
@@ -281,6 +315,43 @@ test('房间管家侧栏可以仅发送图片并保留房间上下文', async ({
       type: 'image/webp',
       size: 10,
       dataUrl: 'data:image/webp;base64,cm9vbS1pbWFnZQ==',
+    }],
+  }]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家侧栏可以粘贴图片并保留房间上下文', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  await captureButlerAsks(page);
+
+  const input = page.getByPlaceholder('问问这个房间的讨论…');
+  await input.evaluate((element) => {
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File(['room-paste'], 'room-paste.webp', { type: 'image/webp' }));
+    element.dispatchEvent(new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: clipboard,
+    }));
+  });
+  await expect(page.getByAltText('room-paste.webp')).toBeVisible();
+  await page.locator('form').filter({ has: input })
+    .getByRole('button', { name: '发送', exact: true })
+    .click();
+
+  const captured = await page.evaluate(() => (
+    (window as Window & { __capturedButlerAsks?: unknown[] }).__capturedButlerAsks
+  ));
+  expect(captured).toEqual([{
+    text: '',
+    context: { rid: 'room-general', roomName: 'General' },
+    images: [{
+      name: 'room-paste.webp',
+      type: 'image/webp',
+      size: 10,
+      dataUrl: 'data:image/webp;base64,cm9vbS1wYXN0ZQ==',
     }],
   }]);
   expect(pageErrors).toEqual([]);
