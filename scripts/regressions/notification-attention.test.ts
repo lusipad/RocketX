@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   conversationHasFocus,
+  messageIsNotificationCandidate,
   messageIsFromCurrentUser,
   notificationAttentionPolicy,
 } from '../../apps/web/src/stores/chat';
@@ -55,6 +56,12 @@ test('自己发送的消息同时按登录 ID、当前用户 ID 和用户名识�
     messageIsFromCurrentUser({ _id: 'member-id', username: 'member' }, 'stale-user-id', currentUser),
     false,
   );
+});
+
+test('过期文件清理只更新旧消息，不触发新消息提醒', () => {
+  assert.equal(messageIsNotificationCandidate({ attachments: [{ type: 'removed-file' }] }), false);
+  assert.equal(messageIsNotificationCandidate({ t: 'message_pinned' }), false);
+  assert.equal(messageIsNotificationCandidate({ attachments: [{ type: 'file' }] }), true);
 });
 
 test('用户关闭任务栏闪烁后仍可保留系统通知', () => {
