@@ -836,6 +836,56 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('聊天消息渲染块公式、行内公式和可访问 MathML（issue #218）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        getState: () => { messages: Record<string, unknown[]> };
+        setState: (state: { messages: Record<string, unknown[]> }) => void;
+      };
+    }>;
+    const { useChat } = await load();
+    const state = useChat.getState();
+    useChat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': [
+          ...(state.messages['room-general'] ?? []),
+          {
+            _id: 'formula-218',
+            rid: 'room-general',
+            msg: [
+              '[',
+              'S_{\\text{eff}}=S_{\\max}',
+              ']',
+              '',
+              '[',
+              'F_{\\text{eff}}=P\\times S_{\\text{eff}}',
+              ']',
+              '',
+              '行内公式 $E=mc^2$',
+              '',
+              '```',
+              '$not_math$',
+              '```',
+            ].join('\n'),
+            ts: '2026-07-24T08:00:00.000Z',
+            u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+          },
+        ],
+      },
+    });
+  });
+
+  await expect(page.locator('[data-rocketx-math="display"] .katex')).toHaveCount(2);
+  await expect(page.locator('[data-rocketx-math="inline"] .katex')).toHaveCount(1);
+  await expect(page.locator('[data-rocketx-math] .katex-mathml')).toHaveCount(3);
+  await expect(page.locator('pre').filter({ hasText: '$not_math$' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test('底部消息的表情面板加载完整分类后仍留在视口内（issue #207）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
