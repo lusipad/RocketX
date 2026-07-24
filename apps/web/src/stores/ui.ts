@@ -16,6 +16,7 @@ export const MODULE_ORDER: ModuleKey[] = [
 ];
 
 export const UI_MODULE_STORAGE_KEY = 'rcx-ui';
+export const DEFAULT_WORK_ITEM_STATE_FILTER = '__default_hide_shelved__';
 
 interface ModuleStorage {
   getItem(key: string): string | null;
@@ -26,6 +27,21 @@ function browserStorage(): ModuleStorage | undefined {
   return typeof localStorage === 'undefined' ? undefined : localStorage;
 }
 
+function readPersistedUIValue(storage: ModuleStorage | undefined = browserStorage()): unknown {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(UI_MODULE_STORAGE_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return raw;
+    }
+  } catch {
+    return null;
+  }
+}
+
 export function migratePersistedModule(value: unknown): ModuleKey {
   if (value === 'today' || value === 'ai-assistant') return 'butler-view';
   return typeof value === 'string' && MODULE_ORDER.includes(value) ? value : 'messages';
@@ -34,14 +50,7 @@ export function migratePersistedModule(value: unknown): ModuleKey {
 export function readPersistedModule(storage: ModuleStorage | undefined = browserStorage()): ModuleKey {
   if (!storage) return 'messages';
   try {
-    const raw = storage.getItem(UI_MODULE_STORAGE_KEY);
-    if (!raw) return 'messages';
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw) as unknown;
-    } catch {
-      parsed = raw;
-    }
+    const parsed = readPersistedUIValue(storage);
     const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined;
     const state = record?.state && typeof record.state === 'object'
       ? record.state as Record<string, unknown>
@@ -52,9 +61,31 @@ export function readPersistedModule(storage: ModuleStorage | undefined = browser
   }
 }
 
-function persistModule(module: ModuleKey): void {
+export function readPersistedWorkItemStateFilter(
+  storage: ModuleStorage | undefined = browserStorage(),
+): string {
+  if (!storage) return DEFAULT_WORK_ITEM_STATE_FILTER;
   try {
-    browserStorage()?.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ module }));
+    const parsed = readPersistedUIValue(storage);
+    const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined;
+    const state = record?.state && typeof record.state === 'object'
+      ? record.state as Record<string, unknown>
+      : undefined;
+    const value = record?.workItemStateFilter ?? state?.workItemStateFilter;
+    return typeof value === 'string' && value ? value : DEFAULT_WORK_ITEM_STATE_FILTER;
+  } catch {
+    return DEFAULT_WORK_ITEM_STATE_FILTER;
+  }
+}
+
+function persistUIState(patch: { module?: ModuleKey; workItemStateFilter?: string }): void {
+  try {
+    const storage = browserStorage();
+    if (!storage) return;
+    storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({
+      module: patch.module ?? readPersistedModule(storage),
+      workItemStateFilter: patch.workItemStateFilter ?? readPersistedWorkItemStateFilter(storage),
+    }));
   } catch {
     // 浏览器禁用存储时保持内存态即可。
   }
@@ -124,12 +155,12 @@ export const useUI = create<UIState>((set) => ({
   switcherCommandCenter: false,
   butlerConversationOpen: false,
   workbenchTab: 'overview',
-  workItemStateFilter: '全部',
+  workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
   buildsFailedOnly: false,
   setModule: (m) => {
     if (moduleValidator(m)) {
-      persistModule(m);
+      persistUIState({ module: m });
       set({ module: m });
     }
   },
@@ -145,12 +176,15 @@ export const useUI = create<UIState>((set) => ({
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
   openButlerConversation: () => {
-    persistModule('butler-view');
+    persistUIState({ module: 'butler-view' });
     set({ module: 'butler-view', butlerConversationOpen: true });
   },
   closeButlerConversation: () => set({ butlerConversationOpen: false }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
-  setWorkItemStateFilter: (s) => set({ workItemStateFilter: s }),
+  setWorkItemStateFilter: (s) => {
+    persistUIState({ workItemStateFilter: s });
+    set({ workItemStateFilter: s });
+  },
   setPrTab: (t) => set({ prTab: t }),
   setBuildsFailedOnly: (v) => set({ buildsFailedOnly: v }),
 }));

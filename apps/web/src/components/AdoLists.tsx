@@ -24,7 +24,7 @@ import {
 } from '../stores/workbench';
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
-import { useUI } from '../stores/ui';
+import { DEFAULT_WORK_ITEM_STATE_FILTER, useUI } from '../stores/ui';
 import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 export const TYPE_COLORS: Record<string, string> = {
@@ -102,22 +102,25 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
-  const states = useMemo(
-    () => ['全部', ...Array.from(new Set(items.map((w) => w.state))).sort()],
-    [items],
+  const states = useMemo(() => Array.from(new Set(items.map((w) => w.state))).sort(), [items]);
+  const stateOptions = useMemo(
+    () => [DEFAULT_WORK_ITEM_STATE_FILTER, '全部', ...states],
+    [states],
   );
 
-  const effectiveState = states.includes(state) ? state : '全部';
+  const effectiveState = stateOptions.includes(state) ? state : DEFAULT_WORK_ITEM_STATE_FILTER;
 
   const matched = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     return items.filter(
       (w) =>
-        (effectiveState === '全部' || w.state === effectiveState) &&
+        workItemMatchesFilter(w.state, effectiveState) &&
         (!q || w.title.toLowerCase().includes(q) || String(w.id).includes(q)),
     );
   }, [items, keyword, effectiveState]);
-  const filtering = effectiveState !== '全部' || keyword.trim() !== '';
+  const filtering =
+    (effectiveState !== DEFAULT_WORK_ITEM_STATE_FILTER && effectiveState !== '全部') ||
+    keyword.trim() !== '';
   const rows = useMemo(
     () => workItemTreeRows(items, new Set(matched.map((item) => item.id)), collapsed, filtering),
     [items, matched, collapsed, filtering],
@@ -147,9 +150,9 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
               onChange={(e) => setState(e.target.value)}
               className="h-8 appearance-none rounded-md border border-line bg-surface-4 pr-7 pl-2.5 text-xs text-ink outline-none focus:border-primary"
             >
-              {states.map((s) => (
+              {stateOptions.map((s) => (
                 <option key={s} value={s}>
-                  {s === '全部' ? '全部状态' : s}
+                  {stateFilterLabel(s)}
                 </option>
               ))}
             </select>
@@ -241,6 +244,23 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
       ) : null}
     </>
   );
+}
+
+function workItemMatchesFilter(state: string, filter: string): boolean {
+  if (filter === '全部') return true;
+  if (filter === DEFAULT_WORK_ITEM_STATE_FILTER) return !isDefaultHiddenState(state);
+  return state === filter;
+}
+
+function stateFilterLabel(filter: string): string {
+  if (filter === DEFAULT_WORK_ITEM_STATE_FILTER) return '默认（隐藏搁置）';
+  if (filter === '全部') return '全部状态';
+  return filter;
+}
+
+function isDefaultHiddenState(state: string): boolean {
+  const normalized = state.trim().toLowerCase();
+  return normalized === '搁置' || normalized === '已搁置' || normalized === 'shelved' || normalized === 'on hold';
 }
 
 function PrRow({ pr }: { pr: PullRequest }) {
