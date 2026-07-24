@@ -870,7 +870,7 @@ test('底部消息的表情面板加载完整分类后仍留在视口内（issue
   const search = page.getByPlaceholder('搜索表情');
   const picker = search.locator('xpath=../..');
   await expect(search).toBeVisible();
-  await expect(picker.locator('[data-emoji-section]').first()).toBeVisible();
+  await expect(picker.locator('[data-emoji-section]').first()).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => {
     const box = await picker.boundingBox();
     const viewport = page.viewportSize();

@@ -363,6 +363,7 @@ test('承诺缺少对象时阻止执行，补齐后才保存', async ({ page }) 
   await page.getByLabel('截止日期').fill('2026-07-24');
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
 
+  await expect(page.getByText(/✅ 已记录承诺/)).toBeVisible();
   const [todo] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
   expect(todo).toMatchObject({ committedTo: 'Alice', due: '2026-07-24', done: false });
   expect(pageErrors).toEqual([]);
