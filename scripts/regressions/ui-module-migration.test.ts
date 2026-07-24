@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DEFAULT_WORK_ITEM_STATE_FILTER,
   migratePersistedModule,
   readPersistedModule,
+  readPersistedWorkItemStateFilter,
   UI_MODULE_STORAGE_KEY,
   useUI,
 } from '../../apps/web/src/stores/ui';
@@ -31,6 +33,17 @@ test('退役的模块持久化值启动时迁到管家桌面', () => {
   assert.equal(readPersistedModule(storage), 'butler-view');
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'ai-assistant' } }));
   assert.equal(readPersistedModule(storage), 'butler-view');
+});
+
+test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () => {
+  const storage = new MemoryStorage();
+  assert.equal(readPersistedWorkItemStateFilter(storage), DEFAULT_WORK_ITEM_STATE_FILTER);
+
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ workItemStateFilter: '全部' }));
+  assert.equal(readPersistedWorkItemStateFilter(storage), '全部');
+
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { workItemStateFilter: '活动' } }));
+  assert.equal(readPersistedWorkItemStateFilter(storage), '活动');
 });
 
 test('可编程入口原子打开管家桌面对话，收起只改变表面状态', () => {

@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
+import { DEFAULT_WORK_ITEM_STATE_FILTER } from '../../apps/web/src/stores/ui';
 
 const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
@@ -1051,6 +1052,46 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
+test('我的工作项默认隐藏搁置状态，并记住用户改过的筛选', async ({ page }) => {
+  const workItem = {
+    id: 128,
+    title: 'Temporarily shelved task',
+    type: 'Task',
+    state: '搁置',
+    priority: 2,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+  };
+  await installAdoDirectMock(page, workItem);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /我的工作项/ }).click();
+
+  await expect(page.getByText(workItem.title, { exact: true })).toHaveCount(0);
+  await expect(page.getByText('没有匹配的工作项')).toBeVisible();
+
+  const stateSelect = page.locator('main select').first();
+  await stateSelect.selectOption({ label: '全部状态' });
+  await expect(page.getByText(workItem.title, { exact: true })).toBeVisible();
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-ui') ?? '{}'));
+  expect(stored.workItemStateFilter).toBe('全部');
+
+  await page.reload();
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /我的工作项/ }).click();
+  await expect(page.locator('main select').first()).toHaveValue('全部');
+  await expect(page.getByText(workItem.title, { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test('待办里的网址可以直接点击打开（issue #117）', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rcx-todos', JSON.stringify([{
@@ -1162,6 +1203,39 @@ test('工作项可创建绑定本地环境的原生讨论', async ({ page }, tes
   await dialog.getByRole('checkbox').first().uncheck();
   await dialog.getByRole('button', { name: '创建讨论', exact: true }).click();
   await expect.poll(() => sentMessages.some((message) => message.rid === 'discussion-128')).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('我的工作项默认隐藏搁置状态，切到全部后可见', async ({ page }) => {
+  const workItem = {
+    id: 129,
+    title: 'Paused work item',
+    type: 'Task',
+    state: 'Shelved',
+    priority: 2,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+    webUrl: 'http://ado.example/RocketChatX/_workitems/edit/129',
+  };
+  await installAdoDirectMock(page, workItem);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /我的工作项/ }).click();
+
+  const stateSelect = page.getByRole('combobox');
+  await expect(stateSelect).toHaveValue(DEFAULT_WORK_ITEM_STATE_FILTER);
+  await expect(page.getByText('没有匹配的工作项', { exact: true })).toBeVisible();
+
+  await stateSelect.selectOption('全部');
+  await expect(page.getByText(workItem.title, { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
