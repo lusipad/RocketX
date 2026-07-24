@@ -3,6 +3,7 @@ import type { RcMessage } from '@rcx/rc-client';
 export const ATTACHMENT_ARCHIVE_VERSION = 1;
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
+const MAX_ATTACHMENT_ARCHIVE_SUPPRESSIONS = 2048;
 
 export interface AttachmentArchiveSettingsV1 {
   enabled: boolean;
@@ -36,9 +37,16 @@ export interface ArchivedAttachmentV1 {
   cachedAt: number;
 }
 
+export interface AttachmentArchiveSuppressionV1 {
+  fileId: string;
+  rid: string;
+  deletedAt: number;
+}
+
 export interface AttachmentArchiveV1 {
   version: 1;
   records: ArchivedAttachmentV1[];
+  suppressed?: AttachmentArchiveSuppressionV1[];
 }
 
 export interface RoomArchiveSummary {
@@ -95,17 +103,77 @@ function isArchivedAttachment(value: unknown): value is ArchivedAttachmentV1 {
   );
 }
 
+function isAttachmentArchiveSuppression(value: unknown): value is AttachmentArchiveSuppressionV1 {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<AttachmentArchiveSuppressionV1>;
+  return (
+    typeof record.fileId === 'string' && record.fileId.length > 0 && record.fileId.length <= 512 &&
+    typeof record.rid === 'string' && record.rid.length > 0 && record.rid.length <= 512 &&
+    typeof record.deletedAt === 'number' && Number.isFinite(record.deletedAt) && record.deletedAt >= 0
+  );
+}
+
+function archiveRecordKey(value: Pick<ArchivedAttachmentV1, 'fileId' | 'rid'> | Pick<AttachmentArchiveSuppressionV1, 'fileId' | 'rid'>): string {
+  return `${value.rid}\u0000${value.fileId}`;
+}
+
+function withAttachmentArchiveData(
+  records: ArchivedAttachmentV1[],
+  suppressed: AttachmentArchiveSuppressionV1[] = [],
+): AttachmentArchiveV1 {
+  const byKey = new Map<string, AttachmentArchiveSuppressionV1>();
+  for (const item of suppressed) {
+    const key = archiveRecordKey(item);
+    const previous = byKey.get(key);
+    if (!previous || item.deletedAt > previous.deletedAt) byKey.set(key, item);
+  }
+  const boundedSuppressed = [...byKey.values()]
+    .sort((a, b) => b.deletedAt - a.deletedAt)
+    .slice(0, MAX_ATTACHMENT_ARCHIVE_SUPPRESSIONS);
+  return boundedSuppressed.length > 0
+    ? { version: ATTACHMENT_ARCHIVE_VERSION, records, suppressed: boundedSuppressed }
+    : { version: ATTACHMENT_ARCHIVE_VERSION, records };
+}
+
 export function recordArchivedAttachment(
   current: AttachmentArchiveV1,
   record: ArchivedAttachmentV1,
 ): AttachmentArchiveV1 {
-  return {
-    version: ATTACHMENT_ARCHIVE_VERSION,
-    records: [record, ...current.records.filter((item) => (
+  const key = archiveRecordKey(record);
+  return withAttachmentArchiveData(
+    [record, ...current.records.filter((item) => (
       item.fileId !== record.fileId || item.rid !== record.rid
     ))]
       .sort((a, b) => b.cachedAt - a.cachedAt),
-  };
+    (current.suppressed ?? []).filter((item) => archiveRecordKey(item) !== key),
+  );
+}
+
+export function suppressArchivedAttachments(
+  current: AttachmentArchiveV1,
+  records: Pick<ArchivedAttachmentV1, 'fileId' | 'rid'>[],
+  deletedAt = Date.now(),
+): AttachmentArchiveV1 {
+  if (records.length === 0) return current;
+  const suppressedKeys = new Set(records.map((item) => archiveRecordKey(item)));
+  const suppressed = records.map((record) => ({
+    fileId: record.fileId,
+    rid: record.rid,
+    deletedAt,
+  }));
+  return withAttachmentArchiveData(
+    current.records.filter((item) => !suppressedKeys.has(archiveRecordKey(item))),
+    [...(current.suppressed ?? []), ...suppressed],
+  );
+}
+
+export function isAttachmentArchiveSuppressed(
+  current: AttachmentArchiveV1,
+  value: Pick<AttachmentArchiveCandidate, 'fileId' | 'rid'>,
+): boolean {
+  return (current.suppressed ?? []).some((item) => (
+    item.fileId === value.fileId && item.rid === value.rid
+  ));
 }
 
 export function parseAttachmentArchive(raw: string | null): AttachmentArchiveV1 {
@@ -119,7 +187,12 @@ export function parseAttachmentArchive(raw: string | null): AttachmentArchiveV1 
     for (const record of value.records.slice().reverse()) {
       if (isArchivedAttachment(record)) next = recordArchivedAttachment(next, record);
     }
-    return next;
+    if (!Array.isArray(value.suppressed)) return next;
+    const suppressed: AttachmentArchiveSuppressionV1[] = [];
+    for (const record of value.suppressed) {
+      if (isAttachmentArchiveSuppression(record)) suppressed.push(record);
+    }
+    return withAttachmentArchiveData(next.records, suppressed);
   } catch {
     return emptyAttachmentArchive();
   }
