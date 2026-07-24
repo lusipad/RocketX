@@ -54,8 +54,12 @@ jobs:
           node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory release-assets
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
 
-      - name: 公开 Release
+      - name: 公开 Release 并恢复跨平台 Latest 基线
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.tag }}
-        run: gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          STABLE_LATEST_TAG: v0.28.0
+        run: |
+          gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          gh release edit "$STABLE_LATEST_TAG" --repo "$GITHUB_REPOSITORY" --latest
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$STABLE_LATEST_TAG"
