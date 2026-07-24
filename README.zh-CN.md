@@ -116,7 +116,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
   并构建 Windows 安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
   还会强制核验两位外部开发者证据和真实 README 截图/GIF；
 - **公开发布**：复核草稿后手动运行受保护的 `Publish GitHub Release`；公开工作流以非 Latest
-  方式发布 `v0.30.0`，Windows 用户在公开后从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
+  方式发布 `v0.31.0`，Windows 用户在公开后从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
 - **npm 包（按需）**：公开 SDK/CLI 变更需要 npm 交付时，独立运行受保护的
   `Publish npm packages`，按 SDK → CLI 顺序发布；npm 不阻塞桌面安装包与 GitHub Release；
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
