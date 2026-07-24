@@ -437,7 +437,12 @@ export default function MessageList({ rid }: { rid: string }) {
                   {divider}
                   {unreadDivider}
                   <div className="my-2 text-center text-xs text-ink-3">
-                    {systemMessageText(msg.t, msg.u?.name || msg.u?.username || '', msg.msg)}
+                    {systemMessageText(
+                      msg.t,
+                      msg.u?.name || msg.u?.username || '',
+                      msg.msg,
+                      msg.role,
+                    )}
                   </div>
                 </div>
               );
