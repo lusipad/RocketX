@@ -6,10 +6,12 @@ import {
   attachmentArchiveSettingsKey,
   attachmentArchiveStorageKey,
   emptyAttachmentArchive,
+  isAttachmentArchiveSuppressed,
   parseAttachmentArchive,
   parseAttachmentArchiveSettings,
   planAttachmentArchiveCleanup,
   recordArchivedAttachment,
+  suppressArchivedAttachments,
   type ArchivedAttachmentV1,
   type AttachmentArchiveSettingsV1,
   type AttachmentArchiveV1,
@@ -171,10 +173,13 @@ async function cleanupArchive(
   if (plan.remove.length === 0) return snapshot.archive;
   const result = await removeRecords(current, plan.remove);
   if (result.removed.length === 0) return snapshot.archive;
-  const archive = {
+  const archive: AttachmentArchiveV1 = {
     version: 1 as const,
     records: [...plan.keep, ...result.failed].sort((a, b) => b.cachedAt - a.cachedAt),
   };
+  if (snapshot.archive.suppressed?.length) {
+    archive.suppressed = snapshot.archive.suppressed;
+  }
   persistArchive(current, archive);
   return archive;
 }
@@ -190,7 +195,7 @@ async function archiveMessage(
   const snapshot = readFor(current);
   if (!snapshot.settings.enabled || snapshot.archive.records.some((item) => (
     item.fileId === candidate.fileId && item.rid === candidate.rid
-  ))) return;
+  )) || isAttachmentArchiveSuppressed(snapshot.archive, candidate)) return;
   if (candidate.size !== undefined && candidate.size > snapshot.settings.maxFileBytes) return;
 
   const key = `${current.server}\0${current.userId}\0${candidate.rid}\0${candidate.fileId}`;
@@ -210,7 +215,7 @@ async function archiveMessage(
       return;
     }
     const latest = readFor(current);
-    if (!latest.settings.enabled || metadata.size > latest.settings.maxFileBytes) {
+    if (!latest.settings.enabled || metadata.size > latest.settings.maxFileBytes || isAttachmentArchiveSuppressed(latest.archive, candidate)) {
       await remove(path).catch(() => {});
       return;
     }
@@ -251,15 +256,17 @@ export async function deleteRoomAttachmentArchive(rid: string): Promise<void> {
   if (!isTauri) return;
   const current = owner();
   if (!current) return;
-  const snapshot = readFor(current);
-  const records = snapshot.archive.records.filter((item) => item.rid === rid);
-  if (records.length === 0) return;
-  const { remove } = await import('@tauri-apps/plugin-fs');
-  await remove(await roomDirectory(current, rid), { recursive: true });
-  persistArchive(current, {
-    version: 1,
-    records: snapshot.archive.records.filter((item) => item.rid !== rid),
+  const deletion = queue.then(async () => {
+    if (!sameOwner(owner(), current)) throw new Error('账号已切换，请重试删除本地附件');
+    const snapshot = readFor(current);
+    const records = snapshot.archive.records.filter((item) => item.rid === rid);
+    if (records.length === 0) return;
+    const { remove } = await import('@tauri-apps/plugin-fs');
+    await remove(await roomDirectory(current, rid), { recursive: true });
+    persistArchive(current, suppressArchivedAttachments(snapshot.archive, records));
   });
+  queue = deletion.catch(() => {});
+  await deletion;
 }
 
 export async function openRoomAttachmentArchive(rid: string): Promise<void> {

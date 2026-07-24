@@ -6,9 +6,12 @@ import {
   archiveCandidateOf,
   attachmentArchiveStorageKey,
   emptyAttachmentArchive,
+  isAttachmentArchiveSuppressed,
+  parseAttachmentArchive,
   planAttachmentArchiveCleanup,
   recordArchivedAttachment,
   roomArchiveSummaries,
+  suppressArchivedAttachments,
   type ArchivedAttachmentV1,
 } from '../../apps/web/src/lib/attachmentArchive';
 
@@ -56,4 +59,47 @@ test('清理先移除过期副本，再按最旧优先收敛总配额', () => {
   const plan = planAttachmentArchiveCleanup(state, { ...DEFAULT_ATTACHMENT_ARCHIVE_SETTINGS, enabled: true, retentionDays: 30, maxTotalBytes: 400 }, now);
   assert.deepEqual(plan.remove.map((item) => item.fileId), ['expired', 'old']);
   assert.deepEqual(plan.keep.map((item) => item.fileId), ['new']);
+});
+
+test('手动删除房间后只抑制已删 rid+fileId，同房间新附件仍可归档', () => {
+  let state = emptyAttachmentArchive();
+  state = recordArchivedAttachment(state, archived('f1', 'r1', 100, 1));
+  state = recordArchivedAttachment(state, archived('f2', 'r1', 120, 2));
+  state = recordArchivedAttachment(state, archived('f3', 'r2', 140, 3));
+
+  state = suppressArchivedAttachments(state, state.records.filter((item) => item.rid === 'r1'), 10);
+
+  assert.deepEqual(state.records.map((item) => `${item.rid}:${item.fileId}`), ['r2:f3']);
+  assert.equal(isAttachmentArchiveSuppressed(state, { rid: 'r1', fileId: 'f1' }), true);
+  assert.equal(isAttachmentArchiveSuppressed(state, { rid: 'r1', fileId: 'f2' }), true);
+  assert.equal(isAttachmentArchiveSuppressed(state, { rid: 'r1', fileId: 'f9' }), false);
+  assert.equal(isAttachmentArchiveSuppressed(state, { rid: 'r2', fileId: 'f3' }), false);
+
+  state = recordArchivedAttachment(state, archived('fresh', 'r1', 160, 20));
+  assert.equal(isAttachmentArchiveSuppressed(state, { rid: 'r1', fileId: 'fresh' }), false);
+  assert.deepEqual(state.records.map((item) => `${item.rid}:${item.fileId}`), ['r1:fresh', 'r2:f3']);
+});
+
+test('手动删除抑制向后兼容、拒绝损坏条目且保持有界', () => {
+  const parsed = parseAttachmentArchive(JSON.stringify({
+    version: 1,
+    records: [archived('f1', 'r1', 100, 1)],
+    suppressed: [
+      { rid: 'r1', fileId: 'f1', deletedAt: 1 },
+      { rid: 'r1', fileId: 'f1', deletedAt: 2 },
+      { rid: 'r2', fileId: 'f2', deletedAt: 3 },
+      { rid: '', fileId: 'bad', deletedAt: 4 },
+      { rid: 'r3', fileId: 'bad', deletedAt: 'oops' },
+    ],
+  }));
+  assert.equal(isAttachmentArchiveSuppressed(parsed, { rid: 'r1', fileId: 'f1' }), true);
+  assert.equal(isAttachmentArchiveSuppressed(parsed, { rid: 'r2', fileId: 'f2' }), true);
+  assert.equal((parsed.suppressed ?? []).some((item) => item.fileId === 'bad'), false);
+
+  const bounded = suppressArchivedAttachments(
+    emptyAttachmentArchive(),
+    Array.from({ length: 2_100 }, (_, index) => ({ rid: 'r1', fileId: `f${index}` })),
+    10,
+  );
+  assert.equal(bounded.suppressed?.length, 2_048);
 });
