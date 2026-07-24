@@ -1,9 +1,11 @@
 import { Fragment, type ReactNode } from 'react';
+import MarkdownMath from '../components/MarkdownMath';
 import WorkItemLink from '../components/WorkItemLink';
 import AdoEntityLink from '../components/AdoEntityLink';
 import { adoWebBase, parseAdoUrl } from './ado';
 import Emoji from '../components/Emoji';
 import { kernelRegistry } from '../kernel/registry';
+import { splitBlockMath, splitInlineMath } from './markdownMath';
 
 /**
  * 轻量消息 Markdown 渲染（不引第三方库、不用 dangerouslySetInnerHTML）。
@@ -14,23 +16,39 @@ import { kernelRegistry } from '../kernel/registry';
 
 // URL 排除常见中英文收尾标点，避免「链接，」把标点吃进去
 const URL_CHARS = `[^\\s<>"'一-龥，。；！？）」』】]`;
-const INLINE_RE = new RegExp(
+const INLINE_TEXT_RE = new RegExp(
   [
-    String.raw`(\`[^\`\n]+\`)`, // 1 行内代码
-    String.raw`(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))`, // 2 [文字](链接)
-    String.raw`(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*)`, // 3 粗体
-    String.raw`(~~[^~\n]+~~|~[^~\s][^~\n]*~)`, // 4 删除线
-    String.raw`(\b_[^_\n]+_\b|(?<=^|\s)_[^_\n]+_(?=$|\s))`, // 5 斜体
-    String.raw`(https?:\/\/${URL_CHARS}+)`, // 6 URL
-    // 7 emoji 短代码：前后都不能挨着字母数字，否则 10:30:00 里的 :30: 会被当成 emoji
+    String.raw`(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))`, // 1 [文字](链接)
+    String.raw`(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*)`, // 2 粗体
+    String.raw`(~~[^~\n]+~~|~[^~\s][^~\n]*~)`, // 3 删除线
+    String.raw`(\b_[^_\n]+_\b|(?<=^|\s)_[^_\n]+_(?=$|\s))`, // 4 斜体
+    String.raw`(https?:\/\/${URL_CHARS}+)`, // 5 URL
+    // 6 emoji 短代码：前后都不能挨着字母数字，否则 10:30:00 里的 :30: 会被当成 emoji
     String.raw`((?<![0-9A-Za-z]):[a-zA-Z0-9_+\-]+:(?![0-9A-Za-z]))`,
-    // 8 提及：. 和 - 只允许出现在词字符之间，不能结尾——否则「@zhang.」结尾句号被吞进用户名
+    // 7 提及：. 和 - 只允许出现在词字符之间，不能结尾——否则「@zhang.」结尾句号被吞进用户名
     String.raw`((?<=^|[\s一-鿿，。！？；：、])@\w+(?:[.\-]\w+)*)`,
-    // 9 频道/工作项：同上，「修复了#123.」的句号不该吞进去，否则 #123 认不出是工作项
+    // 8 频道/工作项：同上，「修复了#123.」的句号不该吞进去，否则 #123 认不出是工作项
     String.raw`((?<=^|[\s一-鿿，。！？；：、])#\w+(?:[.\-]\w+)*)`,
   ].join('|'),
   'g',
 );
+
+function isEscaped(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
+    slashCount++;
+  }
+  return slashCount % 2 === 1;
+}
+
+function findInlineCodeEnd(text: string, start: number): number {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === '`' && !isEscaped(text, i)) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 /**
  * 工作项引用的呈现形态：整条消息就只有 #号（或 ADO 工作项链接）→ 富内联卡片；
@@ -61,22 +79,87 @@ function renderInline(
   keyBase: string,
   wi: WiVariant,
 ): ReactNode[] {
+  const linkRe = /\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)/;
   const nodes: ReactNode[] = [];
   let last = 0;
   let i = 0;
-  for (const m of text.matchAll(INLINE_RE)) {
+
+  const pushInlineText = (value: string) => {
+    if (!value) return;
+    for (const segment of splitInlineMath(value)) {
+      if (segment.kind === 'math') {
+        nodes.push(
+          <MarkdownMath key={`${keyBase}-math${i++}`} value={segment.value} display={false} />,
+        );
+      } else {
+        nodes.push(...renderInlineText(segment.value, me, `${keyBase}-s${i++}`, wi));
+      }
+    }
+  };
+
+  while (last < text.length) {
+    const codeStart = text.indexOf('`', last);
+    const protectedSlice = text.slice(last);
+    const linkMatch = linkRe.exec(protectedSlice);
+    const linkStart = linkMatch ? last + linkMatch.index : -1;
+    const nextLinkStart = linkStart === undefined ? -1 : linkStart;
+
+    if (codeStart === -1 && nextLinkStart === -1) {
+      pushInlineText(text.slice(last));
+      break;
+    }
+
+    if (codeStart !== -1 && (nextLinkStart === -1 || codeStart < nextLinkStart)) {
+      if (isEscaped(text, codeStart)) {
+        pushInlineText(text.slice(last, codeStart + 1));
+        last = codeStart + 1;
+        continue;
+      }
+      const codeEnd = findInlineCodeEnd(text, codeStart);
+      if (codeEnd === -1) {
+        pushInlineText(text.slice(last));
+        break;
+      }
+      pushInlineText(text.slice(last, codeStart));
+      nodes.push(
+        <code
+          key={`${keyBase}-c${i++}`}
+          className="rounded bg-fill-active px-1 py-0.5 font-mono text-[0.9em]"
+        >
+          {text.slice(codeStart + 1, codeEnd)}
+        </code>,
+      );
+      last = codeEnd + 1;
+      continue;
+    }
+
+    if (nextLinkStart !== -1 && linkMatch) {
+      pushInlineText(text.slice(last, nextLinkStart));
+      nodes.push(...renderInlineText(linkMatch[0], me, `${keyBase}-l${i++}`, wi));
+      last = nextLinkStart + linkMatch[0].length;
+      continue;
+    }
+  }
+
+  return nodes;
+}
+
+function renderInlineText(
+  text: string,
+  me: string | undefined,
+  keyBase: string,
+  wi: WiVariant,
+): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let i = 0;
+  for (const m of text.matchAll(INLINE_TEXT_RE)) {
     const idx = m.index ?? 0;
     if (idx > last)
       nodes.push(<Fragment key={`${keyBase}-t${i++}`}>{text.slice(last, idx)}</Fragment>);
     const [full] = m;
     const key = `${keyBase}-m${i++}`;
     if (m[1]) {
-      nodes.push(
-        <code key={key} className="rounded bg-fill-active px-1 py-0.5 font-mono text-[0.9em]">
-          {full.slice(1, -1)}
-        </code>,
-      );
-    } else if (m[2]) {
       const label = full.slice(1, full.indexOf(']'));
       const href = full.slice(full.indexOf('(') + 1, -1);
       nodes.push(
@@ -90,15 +173,15 @@ function renderInline(
           {label}
         </a>,
       );
-    } else if (m[3]) {
+    } else if (m[2]) {
       const inner = full.startsWith('**') ? full.slice(2, -2) : full.slice(1, -1);
       nodes.push(<strong key={key}>{inner}</strong>);
-    } else if (m[4]) {
+    } else if (m[3]) {
       const inner = full.startsWith('~~') ? full.slice(2, -2) : full.slice(1, -1);
       nodes.push(<del key={key}>{inner}</del>);
-    } else if (m[5]) {
+    } else if (m[4]) {
       nodes.push(<em key={key}>{full.slice(1, -1)}</em>);
-    } else if (m[6]) {
+    } else if (m[5]) {
       const extension = kernelRegistry.get('entity.link').find((candidate) => candidate.match(full));
       if (extension) {
         nodes.push(extension.render(full, key));
@@ -126,9 +209,9 @@ function renderInline(
           </a>,
         );
       }
-    } else if (m[7]) {
+    } else if (m[6]) {
       nodes.push(<Emoji key={key} code={full} size={18} />);
-    } else if (m[8]) {
+    } else if (m[7]) {
       const username = full.slice(1);
       const isMe = me && (username === me || username === 'all' || username === 'here');
       nodes.push(
@@ -143,7 +226,7 @@ function renderInline(
           {full}
         </span>,
       );
-    } else if (m[9]) {
+    } else if (m[8]) {
       // #纯数字 且配置过工作台 → ADO 工作项链接（悬停出详情卡，可快速评论）
       const adoBase = /^#\d+$/.test(full) ? adoWebBase() : null;
       if (adoBase) {
@@ -417,9 +500,23 @@ function renderWithCodeFences(
           >
             {part.replace(/\n$/, '')}
           </pre>
-        ) : part.trim() ? (
-          <Fragment key={i}>{renderBlocks(part, me, String(i), variant, wi)}</Fragment>
-        ) : null,
+        ) : (
+          <Fragment key={i}>
+            {splitBlockMath(part).map((segment, segmentIndex) =>
+              segment.kind === 'math' ? (
+                <MarkdownMath
+                  key={`${i}-math-${segmentIndex}`}
+                  value={segment.value}
+                  display={segment.display}
+                />
+              ) : segment.value.trim() ? (
+                <Fragment key={`${i}-text-${segmentIndex}`}>
+                  {renderBlocks(segment.value, me, `${i}-${segmentIndex}`, variant, wi)}
+                </Fragment>
+              ) : null,
+            )}
+          </Fragment>
+        ),
       )}
     </>
   );

@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import 'katex/dist/katex-swap.min.css';
 
 /**
  * 主题系统：语义化色板，浅色/深色两套完整主题。
@@ -161,4 +162,20 @@ body {
     background-color 0.15s ease,
     border-color 0.15s ease,
     color 0.15s ease;
+}
+
+.rocketx-math-display {
+  margin: 0.25rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.rocketx-math-display > .katex-display {
+  margin: 0;
+}
+
+.rocketx-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
 }

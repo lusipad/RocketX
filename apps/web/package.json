@@ -23,6 +23,7 @@
     "@tauri-apps/plugin-opener": "^2.0.0",
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.0.0",
+    "katex": "^0.18.1",
     "lucide-react": "^0.460.0",
     "pdfjs-dist": "^6.1.200",
     "pinyin-pro": "^3.28.1",
