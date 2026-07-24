@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AppServerClient, TauriCodexTransport, type ServerRequestPolicy } from '../agent/protocol';
+import { AppServerClient, AppServerRpcError, TauriCodexTransport, type ServerRequestPolicy } from '../agent/protocol';
 import { rocketxThreadName, workspaceLabel } from '../agent/threadName';
 import {
   commandRequestMentionsSensitivePath,
@@ -51,6 +51,12 @@ export interface LocalCodexApproval {
   params: unknown;
 }
 
+interface LocalCodexResumeFailure {
+  clearThread: boolean;
+  message: string;
+  status: Extract<LocalCodexStatus, 'idle' | 'interrupted'>;
+}
+
 interface PersistedLocalCodex {
   workspaceRoot?: string;
   sessionId?: string;
@@ -98,6 +104,26 @@ function record(value: unknown): Record<string, unknown> {
 
 function safeText(value: unknown): string {
   return redactAgentOutput(value instanceof Error ? value.message : String(value)).text;
+}
+
+export function resolveLocalCodexResumeFailure(error: unknown): LocalCodexResumeFailure {
+  if (
+    error instanceof AppServerRpcError
+    && error.method === 'thread/resume'
+    && error.code === -32600
+    && error.rpcMessage.toLowerCase().includes('no rollout found for thread id')
+  ) {
+    return {
+      clearThread: true,
+      message: '上次保存的 Codex 会话已失效，请新建会话。',
+      status: 'idle',
+    };
+  }
+  return {
+    clearThread: false,
+    message: safeText(error),
+    status: 'interrupted',
+  };
 }
 
 function storageKey(scope: string): string {
@@ -403,7 +429,14 @@ export const useLocalCodex = create<LocalCodexState>((set, get) => ({
       trace('status', '已恢复 Codex 会话');
     } catch (error) {
       await stopClient();
-      set({ status: 'interrupted', error: safeText(error) });
+      const failure = resolveLocalCodexResumeFailure(error);
+      set({
+        ...(failure.clearThread ? { threadId: undefined, activeTurnId: undefined } : {}),
+        status: failure.status,
+        error: failure.message,
+      });
+      persist(get());
+      if (failure.clearThread) trace('warning', failure.message);
       throw error;
     }
   },

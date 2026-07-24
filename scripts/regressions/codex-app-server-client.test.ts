@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   AppServerClient,
+  AppServerRpcError,
   CODEX_APP_SERVER_VERSION,
   codexVersionFromUserAgent,
   type CodexTransport,
@@ -101,6 +102,29 @@ test('只对实际调用的方法做响应结构与 method not found 能力校�
   await new Promise((resolve) => setImmediate(resolve));
   transport.line({ id: transport.writes.at(-1)!.id, error: { code: -32601, message: 'Method not found' } });
   await assert.rejects(() => missing, /不支持 RocketX 所需方法：thread\/resume/);
+});
+
+test('RPC 错误保留结构化的 method、code 和 message', async () => {
+  const transport = new FakeTransport();
+  const client = await startClient(transport);
+
+  const failed = client.request('thread/resume', { threadId: 'thread' });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    error: { code: -32600, message: 'no rollout found for thread id thread' },
+  });
+
+  await assert.rejects(
+    () => failed,
+    (error: unknown) => {
+      assert.ok(error instanceof AppServerRpcError);
+      assert.equal(error.method, 'thread/resume');
+      assert.equal(error.code, -32600);
+      assert.match(error.message, /no rollout found for thread id thread/);
+      return true;
+    },
+  );
 });
 
 test('当前时间本地响应，未知和无 UI 的已知请求均安全拒绝', async () => {

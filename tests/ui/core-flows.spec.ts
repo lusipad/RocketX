@@ -1165,6 +1165,46 @@ test('工作项可创建绑定本地环境的原生讨论', async ({ page }, tes
   expect(pageErrors).toEqual([]);
 });
 
+test('工作台设置入口会定向到工作台分组，且在设置页内再次定向也生效', async ({ page }) => {
+  const workItem = {
+    id: 128,
+    title: 'Login failure',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+    webUrl: 'http://ado.example/RocketChatX/_workitems/edit/128',
+  };
+  await installAdoDirectMock(page, workItem);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.getByRole('navigation').getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '账号与状态', exact: true })).toBeVisible();
+
+  await page.getByRole('navigation').getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工作台', exact: true })).toBeVisible();
+  await expect(page.getByText('个人访问令牌（PAT）', { exact: true })).toBeVisible();
+
+  await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'AI', exact: true })).toBeVisible();
+
+  await page.getByRole('navigation').getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '工作台设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工作台', exact: true })).toBeVisible();
+  await expect(page.getByText('个人访问令牌（PAT）', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI', exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('工作项 Discussion 在会话头部显著标明由谁的 AI 托管', async ({ page }, testInfo) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, '#128 Login failure').click();

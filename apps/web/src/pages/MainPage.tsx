@@ -64,6 +64,7 @@ export default function MainPage() {
   const rightPanelOpen = rightPanel !== null;
   const butlerPanelOpen = rightPanel?.kind === 'butler';
   const module = useUI((s) => s.module);
+  const settingsSection = useUI((s) => s.settingsSection);
   const registeredModules = useKernelContributions('nav.module');
   const switcher = useUI((s) => s.switcherOpen);
   const switcherCommandCenter = useUI((s) => s.switcherCommandCenter);
@@ -399,7 +400,7 @@ export default function MainPage() {
       ) : ActiveModule ? (
         <ActiveModule />
       ) : (
-        <SettingsPage />
+        <SettingsPage initialSection={settingsSection} />
       )}
       {(connection === 'reconnecting' || connection === 'connecting') && (
         <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-fill-active px-4 py-1.5 text-xs text-ink shadow-lg">

@@ -508,7 +508,7 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
   await approvals.getByRole('button', { name: '确认执行', exact: true }).click();
 
   await expect(approvals).toHaveCount(0);
-  const completed = await page.evaluate(async () => {
+  await expect.poll(() => page.evaluate(async () => {
     const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       listButlerWorkflowSnapshots: () => Array<{
         key: string;
@@ -522,14 +522,15 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
     return {
       taskStatus: snapshot?.taskState?.status,
       engineStatus: snapshot?.engineState.status,
-      memory: (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
-        .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory') ?? null,
+      memoryWritten: Boolean(
+        (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
+          .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory'),
+      ),
     };
-  });
-  expect(completed).toMatchObject({
+  })).toEqual({
     taskStatus: 'completed',
     engineStatus: 'ready',
+    memoryWritten: true,
   });
-  expect(completed.memory).not.toBeNull();
   expect(pageErrors).toEqual([]);
 });

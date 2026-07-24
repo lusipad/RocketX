@@ -73,6 +73,7 @@ import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
 import { lanOutboxCapability } from '../lan/outbox';
 import { fmtSize } from '../lib/format';
+import { type SettingsSection } from '../stores/ui';
 import { roomArchiveSummaries, type AttachmentArchiveSettingsV1 } from '../lib/attachmentArchive';
 import {
   ATTACHMENT_ARCHIVE_CHANGED,
@@ -87,21 +88,7 @@ import {
 declare const __APP_VERSION__: string;
 const APP_VERSION = __APP_VERSION__;
 
-type Section =
-  | 'account'
-  | 'workspace'
-  | 'appearance'
-  | 'sidebar'
-  | 'message'
-  | 'notification'
-  | 'desktop'
-  | 'shortcuts'
-  | 'workbench'
-  | 'ai'
-  | 'apps'
-  | 'about';
-
-const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
+const SECTIONS: { key: SettingsSection; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与状态', icon: Server },
   { key: 'workspace', label: '工作区', icon: FolderOpen },
   { key: 'appearance', label: '外观', icon: Palette },
@@ -1911,8 +1898,8 @@ function AboutSection() {
   );
 }
 
-export default function SettingsPage({ initialSection = 'account' }: { initialSection?: Section }) {
-  const [section, setSection] = useState<Section>(initialSection);
+export default function SettingsPage({ initialSection = 'account' }: { initialSection?: SettingsSection }) {
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
   const loadPrefs = usePrefs((s) => s.load);
@@ -1922,6 +1909,10 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   useEffect(() => {
     void loadPrefs();
   }, [loadPrefs]);
+
+  useEffect(() => {
+    setSection(initialSection);
+  }, [initialSection]);
 
   const needsPrefs = ['sidebar', 'message', 'notification'].includes(section);
 

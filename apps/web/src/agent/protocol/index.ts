@@ -9,5 +9,5 @@ export {
   type ServerRequestMethod,
   type ServerRequestPolicy,
 } from './serverRequests';
-export { AppServerClient, type AppServerClientOptions, type CodexTransport } from './client';
+export { AppServerClient, AppServerRpcError, type AppServerClientOptions, type CodexTransport } from './client';
 export { TauriCodexTransport } from './tauriTransport';

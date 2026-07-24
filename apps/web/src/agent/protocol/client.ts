@@ -56,6 +56,20 @@ export interface AppServerClientOptions {
   onInterrupted?: (error: Error) => void;
 }
 
+export class AppServerRpcError extends Error {
+  readonly code: number | undefined;
+  readonly method: string;
+  readonly rpcMessage: string;
+
+  constructor(method: string, code: number | undefined, message: string) {
+    super(message);
+    this.name = 'AppServerRpcError';
+    this.method = method;
+    this.code = code;
+    this.rpcMessage = message;
+  }
+}
+
 interface PendingRequest {
   method: keyof ClientMethods;
   resolve: (value: unknown) => void;
@@ -203,11 +217,17 @@ export class AppServerClient {
     this.pending.delete(response.id);
     if (response.error) {
       if (response.error.code === -32601) {
-        pending.reject(new Error(`Codex app-server 不支持 RocketX 所需方法：${pending.method}。`));
+        pending.reject(new AppServerRpcError(
+          pending.method,
+          response.error.code,
+          `Codex app-server 不支持 RocketX 所需方法：${pending.method}。`,
+        ));
         return;
       }
       pending.reject(
-        new Error(
+        new AppServerRpcError(
+          pending.method,
+          response.error.code,
           `Codex app-server 请求失败${response.error.code === undefined ? '' : ` ${response.error.code}`}：${response.error.message ?? '未知错误'}`,
         ),
       );

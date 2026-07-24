@@ -345,6 +345,7 @@ function FavoriteDialog({
 
 export default function WorkbenchPage() {
   const setModule = useUI((s) => s.setModule);
+  const openSettings = useUI((s) => s.openSettings);
   const tab = useUI((s) => s.workbenchTab);
   const setTab = useUI((s) => s.setWorkbenchTab);
   const user = useAuth((s) => s.user);
@@ -707,7 +708,7 @@ export default function WorkbenchPage() {
         )}
 
         <button
-          onClick={() => setModule('settings')}
+          onClick={() => openSettings('workbench')}
           className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
         >
           <Settings size={14} />
@@ -902,7 +903,7 @@ export default function WorkbenchPage() {
               </div>
             ) : (
               <button
-                onClick={() => setModule('settings')}
+                onClick={() => openSettings('workbench')}
                 className="mt-4 flex shrink-0 items-center justify-center gap-2 rounded-lg border border-dashed border-line py-3 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
               >
                 <Wrench size={13} />

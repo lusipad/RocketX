@@ -1,6 +1,20 @@
 import { create } from 'zustand';
 
 export type ModuleKey = string;
+export type SettingsSection =
+  | 'account'
+  | 'workspace'
+  | 'appearance'
+  | 'sidebar'
+  | 'message'
+  | 'notification'
+  | 'desktop'
+  | 'shortcuts'
+  | 'workbench'
+  | 'ai'
+  | 'apps'
+  | 'about';
+const DEFAULT_SETTINGS_SECTION: SettingsSection = 'account';
 
 /** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
@@ -85,6 +99,7 @@ export type ConvFilter =
 
 interface UIState {
   module: ModuleKey;
+  settingsSection: SettingsSection;
   convFilter: ConvFilter;
   /** 选中的自定义分组 id（非空时覆盖 convFilter） */
   activeFolder: string | null;
@@ -102,6 +117,7 @@ interface UIState {
   /** 构建页「只看失败」开关，切走保持 */
   buildsFailedOnly: boolean;
   setModule: (m: ModuleKey) => void;
+  openSettings: (section?: SettingsSection) => void;
   setConvFilter: (f: ConvFilter) => void;
   setActiveFolder: (id: string | null) => void;
   retainUnread: (rid: string | null) => void;
@@ -117,6 +133,7 @@ interface UIState {
 
 export const useUI = create<UIState>((set) => ({
   module: readPersistedModule(),
+  settingsSection: DEFAULT_SETTINGS_SECTION,
   convFilter: 'all',
   activeFolder: null,
   retainedUnreadRid: null,
@@ -130,8 +147,12 @@ export const useUI = create<UIState>((set) => ({
   setModule: (m) => {
     if (moduleValidator(m)) {
       persistModule(m);
-      set({ module: m });
+      set({ module: m, ...(m === 'settings' ? { settingsSection: DEFAULT_SETTINGS_SECTION } : {}) });
     }
+  },
+  openSettings: (section = DEFAULT_SETTINGS_SECTION) => {
+    persistModule('settings');
+    set({ module: 'settings', settingsSection: section });
   },
   setConvFilter: (f) =>
     set({
