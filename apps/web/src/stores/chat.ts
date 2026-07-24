@@ -789,6 +789,13 @@ export function messageIsFromCurrentUser(
     sender.username.toLocaleLowerCase() === currentUser.username.toLocaleLowerCase();
 }
 
+export function messageIsNotificationCandidate(
+  message: Pick<RcMessage, 't' | 'attachments'>,
+): boolean {
+  if (message.t) return false;
+  return !message.attachments?.some((attachment) => attachment.type === 'removed-file');
+}
+
 export function notificationAttentionPolicy(input: {
   subscribed: boolean;
   muted: boolean;
@@ -824,7 +831,7 @@ export function conversationHasFocus(
 
 function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
-  if (!auth || msg.t) return;
+  if (!auth || !messageIsNotificationCandidate(msg)) return;
   const currentUser = useAuth.getState().user;
   const expectedAgentReply = agentReplyNotificationTracker.consume(rid, msg.msg ?? '');
   if (locallySentMids.has(msg._id) || messageIsFromCurrentUser(msg.u, auth.userId, currentUser)) return;

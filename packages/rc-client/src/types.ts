@@ -27,6 +27,8 @@ export interface RcMessageAttachmentField {
 }
 
 export interface RcMessageAttachment {
+  /** 服务端附件类别，例如留存策略清理后的 removed-file。 */
+  type?: string;
   color?: string;
   text?: string;
   title?: string;
