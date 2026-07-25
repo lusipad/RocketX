@@ -6,6 +6,7 @@ import {
   MessageCircle,
   RefreshCw,
   Send,
+  Smartphone,
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
@@ -26,6 +27,11 @@ import {
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
 import { listBriefFeedback, removeBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
+import {
+  briefDeliverySettings,
+  deliverButlerBrief,
+  setBriefDeliveryEnabled,
+} from '../lib/butlerBriefDelivery';
 import { listMutes, removeMute } from '../lib/butlerMutes';
 import {
   acceptButlerProposal,
@@ -150,6 +156,33 @@ export default function ButlerPage() {
   const lastResult = useButlerRoundsRunner((state) => state.lastResult);
   const running = useButlerRoundsRunner((state) => state.running);
   const error = useButlerRoundsRunner((state) => state.error);
+  const [briefSync, setBriefSync] = useState(() => briefDeliverySettings().enabled);
+  const [briefSyncBusy, setBriefSyncBusy] = useState(false);
+
+  const toggleBriefSync = async (): Promise<void> => {
+    if (briefSyncBusy) return;
+    const next = !briefSync;
+    setBriefDeliveryEnabled(next);
+    setBriefSync(next);
+    if (!next) {
+      toast.info('已停止把简报发到 Rocket.Chat');
+      return;
+    }
+    // 开启即投递当前这份（手动语义），让「手机能看到」立刻成立
+    if (!lastResult) {
+      toast.success('已开启：下次简报会发到你和自己的私聊，手机也能看');
+      return;
+    }
+    setBriefSyncBusy(true);
+    try {
+      await deliverButlerBrief(lastResult, { manual: true });
+      toast.success('今天的简报已发到你和自己的私聊，手机打开 Rocket.Chat 就能看');
+    } catch (deliverError) {
+      toast.error(deliverError, '简报投递失败');
+    } finally {
+      setBriefSyncBusy(false);
+    }
+  };
 
   useEffect(() => {
     void runDailyButlerRoundsIfNeeded();
@@ -331,15 +364,31 @@ export default function ButlerPage() {
             <p className="text-xs text-ink-3">{lookedAtLabel(lastRoundsAt)}</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void runButlerRoundsNow()}
-          disabled={running}
-          className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-        >
-          {running ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          再看一圈
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void toggleBriefSync()}
+            disabled={briefSyncBusy}
+            title={briefSync ? '简报会发到你和自己的私聊，任何 Rocket.Chat 客户端可看；点击停止' : '把每天的简报发到你和自己的私聊，手机打开 Rocket.Chat 就能看'}
+            className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
+              briefSync
+                ? 'border-primary/40 bg-primary-light/40 text-primary hover:bg-primary-light/60'
+                : 'border-line bg-surface text-ink-2 hover:bg-fill-hover'
+            }`}
+          >
+            {briefSyncBusy ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+            {briefSync ? '已同步到手机' : '同步到手机'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void runButlerRoundsNow()}
+            disabled={running}
+            className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
+          >
+            {running ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            再看一圈
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 py-5">

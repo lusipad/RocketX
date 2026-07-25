@@ -18,6 +18,7 @@ import {
   type ButlerBriefFeedback,
   type ButlerBriefVerdict,
 } from './butlerBriefFeedback';
+import { deliverButlerBrief } from './butlerBriefDelivery';
 import { mergeButlerSources, type ButlerSource } from './butlerContext';
 import { ledgerFromTodos } from './butlerLedger';
 import { normalizeButlerMemoryScope, parseButlerMemoryState } from './butlerMemory';
@@ -386,6 +387,10 @@ export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Pr
         lastRoundsAt: stored.generatedAt,
         lastResult: stored,
         error: null,
+      });
+      // 开了同步的话顺手投递到 Rocket.Chat（每天至多一条）；失败不打扰本轮结果
+      void deliverButlerBrief(stored).catch((error) => {
+        console.warn('[Butler rounds] 简报投递失败', error);
       });
     } catch (error) {
       // 上一轮仍然有参考价值，失败只增加一行错误，不清空结果。
