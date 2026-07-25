@@ -6,6 +6,7 @@ import { adoWebBase, parseAdoUrl } from './ado';
 import Emoji from '../components/Emoji';
 import { kernelRegistry } from '../kernel/registry';
 import { splitBlockMath, splitInlineMath } from './markdownMath';
+import { URL_CHARS } from './urlText';
 
 /**
  * 轻量消息 Markdown 渲染（不引第三方库、不用 dangerouslySetInnerHTML）。
@@ -14,8 +15,7 @@ import { splitBlockMath, splitInlineMath } from './markdownMath';
  * @提及 与 #频道 高亮、> 引用行、- 列表行。不支持嵌套。
  */
 
-// URL 排除常见中英文收尾标点，避免「链接，」把标点吃进去
-const URL_CHARS = `[^\\s<>"'一-龥，。；！？）」』】]`;
+// URL 字符类见 lib/urlText.ts —— 与结论解析层共用同一份，避免口径漂移
 const INLINE_TEXT_RE = new RegExp(
   [
     String.raw`(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))`, // 1 [文字](链接)
