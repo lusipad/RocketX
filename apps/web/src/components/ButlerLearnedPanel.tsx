@@ -1,5 +1,5 @@
-import { BookOpenText, GraduationCap } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { BookOpenText, GraduationCap, Plus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   parseButlerMemoryState,
   restoreButlerMemory,
@@ -13,9 +13,11 @@ import {
   listSkills,
   readButlerActiveMemoryV2RawJson,
   removeSkill,
+  saveSkill,
   writeButlerActiveMemoryV2RawJson,
   type ButlerSkill,
 } from '../lib/butlerProfile';
+import { parseSkillMarkdown } from '../lib/butlerSkillImport';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 
@@ -41,7 +43,13 @@ function builtInSkillNames(): Set<string> {
 export default function ButlerLearnedPanel() {
   const [memories, setMemories] = useState<ButlerMemoryRecord[]>([]);
   const [skills, setSkills] = useState<ButlerSkill[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importText, setImportText] = useState('');
   const rooms = useChat((state) => state.rooms);
+  const parsed = useMemo(
+    () => (importText.trim() ? parseSkillMarkdown(importText) : null),
+    [importText],
+  );
 
   const refresh = useCallback((): void => {
     setMemories(activeMemories());
@@ -82,6 +90,19 @@ export default function ButlerLearnedPanel() {
       toast.success(`已卸掉技能「${skill.name}」`);
     } catch (error) {
       toast.error(error, '卸载技能失败');
+    }
+  };
+
+  const installSkill = (): void => {
+    if (!parsed?.ok) return;
+    try {
+      saveSkill(parsed.skill);
+      refresh();
+      setImporting(false);
+      setImportText('');
+      toast.success(`已装上技能「${parsed.skill.name}」，对话里让我用它就行`);
+    } catch (error) {
+      toast.error(error, '安装技能失败');
     }
   };
 
@@ -130,7 +151,7 @@ export default function ButlerLearnedPanel() {
             <BookOpenText size={13} />
             会的技能
           </h3>
-          <div className="mt-2 flex flex-wrap gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {skills.map((skill) => (
               <span
                 key={skill.name}
@@ -152,7 +173,66 @@ export default function ButlerLearnedPanel() {
                 )}
               </span>
             ))}
+            <button
+              type="button"
+              onClick={() => setImporting((open) => !open)}
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-1 text-xs text-ink-3 hover:border-primary/40 hover:text-primary"
+            >
+              <Plus size={12} />
+              装新技能
+            </button>
           </div>
+
+          {importing && (
+            <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3">
+              <textarea
+                aria-label="粘贴 SKILL.md 内容"
+                value={importText}
+                onChange={(event) => setImportText(event.target.value)}
+                placeholder={'粘贴一份 SKILL.md：\n---\nname: 技能名\ndescription: 一句话描述\n---\n方法论正文…\n\n（或首行 # 技能名，其后第一段当描述）'}
+                rows={6}
+                className="w-full resize-y rounded-md border border-line bg-surface px-3 py-2 font-mono text-xs leading-5 text-ink outline-none transition focus:border-primary"
+              />
+              {parsed && !parsed.ok ? (
+                <p className="mt-2 text-xs text-danger">{parsed.error}</p>
+              ) : null}
+              {parsed?.ok ? (
+                <div className="mt-2 rounded-md border border-line bg-surface px-3 py-2">
+                  <div className="text-xs font-medium text-ink">
+                    {parsed.skill.name}
+                    <span className="ml-2 font-normal text-ink-2">{parsed.skill.description}</span>
+                  </div>
+                  {/* 技能正文会进入管家的提示词——全文强制可见，确认是唯一的闸 */}
+                  <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-ink-2">
+                    {parsed.skill.body}
+                  </pre>
+                  <p className="mt-2 text-[11px] text-ink-3">
+                    技能正文会成为管家执行时的指示，只装你读过并信任的内容。
+                  </p>
+                </div>
+              ) : null}
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImporting(false);
+                    setImportText('');
+                  }}
+                  className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={installSkill}
+                  disabled={!parsed?.ok}
+                  className="rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover disabled:opacity-50"
+                >
+                  确认安装
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </section>
