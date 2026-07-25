@@ -33,8 +33,8 @@ import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
 import type { ButlerImageInput } from '../lib/butlerImages';
 import {
-  addButlerToolRoundtrip,
   beginButlerTurnTiming,
+  currentButlerTurnTiming,
   type ButlerTurnTimingHandle,
 } from '../lib/butlerTimings';
 import { createButlerTools } from '../lib/butlerTools';
@@ -364,7 +364,7 @@ async function respondDynamicToolCall(
   tools: ReadonlyMap<string, ButlerTool>,
   onEvent?: (event: AgentLoopEvent) => void,
   runtimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext,
-  recordToolRoundtrip?: (tool: string, ms: number) => void,
+  recordToolRoundtrip?: () => ButlerTurnTimingHandle | undefined,
 ): Promise<unknown> {
   if (request.policy !== 'dynamic-tool' || request.method !== 'item/tool/call') {
     if (request.method === 'item/commandExecution/requestApproval' ||
@@ -391,13 +391,15 @@ async function respondDynamicToolCall(
   const toolCall: AiToolCall = { id: callId, name, arguments: JSON.stringify(args) };
   const turnId = typeof params.turnId === 'string' ? params.turnId : undefined;
   onEvent?.({ type: 'tool-call', toolCall });
+  // 在发起时捕获当轮句柄：工具返回时可能已经换轮，句柄自己会丢弃已结束轮的记录。
+  const timing = recordToolRoundtrip?.();
   const invokedAt = Date.now();
   try {
     const result = formatButlerToolResult(await tool.invoke(args, {
       ...runtimeContext?.(toolCall),
       ...(turnId ? { turnId } : {}),
     }));
-    recordToolRoundtrip?.(name, Date.now() - invokedAt);
+    timing?.addToolRoundtrip(name, Date.now() - invokedAt);
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: result });
     // 工具已返回 JSON 字符串，直接透传，避免二次编码。
     return {
@@ -405,7 +407,7 @@ async function respondDynamicToolCall(
       success: true,
     };
   } catch (error) {
-    recordToolRoundtrip?.(name, Date.now() - invokedAt);
+    timing?.addToolRoundtrip(name, Date.now() - invokedAt);
     const message = error instanceof Error ? error.message : String(error);
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: `工具调用失败：${message}` });
     throw error;
@@ -438,7 +440,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
           residentTools,
           residentEvent,
           residentToolRuntimeContext,
-          addButlerToolRoundtrip,
+          currentButlerTurnTiming,
         ),
         onInterrupted: onResidentInterrupted,
       },
@@ -596,7 +598,8 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     residentTurn = undefined;
     residentEvent = undefined;
     residentToolRuntimeContext = undefined;
-    timing.end('completed');
+    // 用户点「停止」时整轮时长是被截断的，不能混进耗时分布。
+    timing.end(residentStopRequested ? 'stopped' : 'completed');
     return { text: result };
   } catch (error) {
     const reason = unavailableReason(error);

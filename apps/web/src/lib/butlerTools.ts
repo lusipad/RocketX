@@ -185,7 +185,9 @@ async function searchMessages(args: Record<string, unknown>): Promise<string> {
       sender: message.u.name || message.u.username,
       ts: new Date(tsMs(message.ts)).toISOString(),
       text: stripAgentSessionMarker(message.msg).slice(0, 200),
-      link: permalinkOf(message.rid, message._id),
+      // 拼不出可用永久链接时整个字段省略：技能已写明「没有 link 就不给链接」，
+      // 给死链比不给链接更糟。
+      ...(permalinkOf(message.rid, message._id) ? { link: permalinkOf(message.rid, message._id) } : {}),
     }));
   return JSON.stringify(rows);
 }

@@ -25,7 +25,7 @@ import {
   useButlerRoundsRunner,
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
-import { listBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
+import { listBriefFeedback, removeBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
 import { listMutes, removeMute } from '../lib/butlerMutes';
 import {
   acceptButlerProposal,
@@ -39,6 +39,7 @@ import { butlerRecapAgoLabel, executeApprovedButlerOperation, useButler } from '
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { dueLabel, todayKey, useTodos } from '../stores/todos';
+import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
 
 function lookedAtLabel(value: string | null): string {
@@ -134,6 +135,8 @@ export default function ButlerPage() {
   const butlerSessions = useButler((state) => state.sessions);
   const activeButlerSessionId = useButler((state) => state.activeSessionId);
   const switchButlerSession = useButler((state) => state.switchSession);
+  const hydrateButler = useButler((state) => state.hydrate);
+  const butlerUserId = useAuth((state) => state.user?._id);
   const deskSessions = butlerSessions.filter((session) => session.lastAsk).slice(0, 5);
   const openSessionConversation = async (sessionId: string): Promise<void> => {
     if (sessionId !== activeButlerSessionId) await switchButlerSession(sessionId);
@@ -151,6 +154,12 @@ export default function ButlerPage() {
   useEffect(() => {
     void runDailyButlerRoundsIfNeeded();
   }, []);
+
+  // 桌面视图不挂 ButlerConversation/ButlerPanel，没有它就拿不到会话列表：
+  // 同日刷新时 runDailyButlerRoundsIfNeeded 会直接 return，「我们手头的事」永远空。
+  useEffect(() => {
+    if (butlerUserId) void hydrateButler();
+  }, [butlerUserId, hydrateButler]);
 
   useEffect(() => {
     setHiddenProposals(new Set());
@@ -572,6 +581,17 @@ export default function ButlerPage() {
                           : <ThumbsUp size={11} className="shrink-0" />}
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <span className="shrink-0">{entry.verdict === 'noise' ? '以后少报' : '继续盯'}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            removeBriefFeedback(entry.title);
+                            setBriefFeedback(listBriefFeedback());
+                            toast.success('已撤销这条反馈');
+                          }}
+                          className="shrink-0 px-1.5 py-1 text-ink-3 hover:text-ink"
+                        >
+                          撤销
+                        </button>
                       </div>
                     ))}
                   </div>

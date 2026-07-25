@@ -60,11 +60,42 @@ export function recordBriefFeedback(
   return entry;
 }
 
-/** 「没用」条目，形态兼容 matchesMute 的 {text} 提示列表。 */
+export function removeBriefFeedback(
+  title: string,
+  storage: ButlerBriefFeedbackStorage | undefined = browserStorage(),
+): void {
+  if (!storage) return;
+  const trimmed = title.trim();
+  storage.setItem(
+    BUTLER_BRIEF_FEEDBACK_KEY,
+    JSON.stringify(listBriefFeedback(storage).filter((entry) => entry.title !== trimmed)),
+  );
+}
+
+/** 「没用」条目的标题列表，用于提示大脑；判定压制请用 isNoisyBriefTitle。 */
 export function noiseBriefFeedback(
   feedback: readonly ButlerBriefFeedback[],
 ): Array<{ text: string }> {
   return feedback
     .filter((entry) => entry.verdict === 'noise')
     .map((entry) => ({ text: entry.title }));
+}
+
+function normalizeTitle(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+/**
+ * per-item 反馈的压制判定：**标题精确相等**，不用 mute 那套双向子串包含。
+ * 👎 是对「这一条」的评价，模糊化会让一次误点连坐掉标题相互包含的其它条目；
+ * 「这一类少提」的泛化语义留给用户显式点「少来这种」（mute）。
+ * 同名条目若又被标过 👍，以 👍 为准（recordBriefFeedback 按标题归并，后点覆盖先点）。
+ */
+export function isNoisyBriefTitle(
+  title: string,
+  feedback: readonly ButlerBriefFeedback[],
+): boolean {
+  const normalized = normalizeTitle(title);
+  if (!normalized) return false;
+  return feedback.some((entry) => entry.verdict === 'noise' && normalizeTitle(entry.title) === normalized);
 }

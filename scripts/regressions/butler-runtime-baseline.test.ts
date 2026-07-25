@@ -12,6 +12,7 @@ import {
 } from '../../apps/web/src/lib/butlerToolRuntime';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
+  butlerSessionRecap,
   flushButlerPersist,
   resetButlerPersistenceForTests,
   setButlerLoopRunner,
@@ -505,11 +506,11 @@ test('场景基线 6/7：创建周报例行任务', async () => {
 test('场景基线 7/7：跨重启续跑', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'partial',
-    capabilityPreflight: '多 session registry 已上线（ae3c88e）：同 scope 下多个调查会话并存、独立 transcript 与 Codex 恢复点，3 天 TTL 已移除；长度截断（lines 200 / history 40）仍在，session 无 recap 摘要与保留策略。',
+    capabilityPreflight: '多 session registry（ae3c88e）+ recap 与保留策略（P1 收口）：多会话并存、独立 transcript 与 Codex 恢复点、3 天 TTL 已移除、「上回说到」派生摘要、deleteSession 与 hydrate 期空会话清理；长度截断（lines 200 / history 40）仍在，跨 session 的任务级续跑仍缺。',
     sources: ['builtin:butler session-registry 持久化', 'useButler.hydrate'],
-    errorAction: '不会跨账号或跨服务器串用历史。',
-    clarification: '恢复时中断轮次降级为 paused，需要用户再发问继续；无「上回说到」recap。',
-    recovery: '刷新或重启后同 scope 恢复全部 session 并接续 transcript、模型历史与 Codex 恢复点，不再受时间截断。',
+    errorAction: '不会跨账号或跨服务器串用历史；有真实提问的会话不会被自动清理。',
+    clarification: '恢复时中断轮次降级为 paused，需要用户再发问继续。',
+    recovery: '刷新或重启后同 scope 恢复全部 session 并接续 transcript、模型历史与 Codex 恢复点，不再受时间截断；回来时「上回说到」给出最后一问与回答。',
   };
 
   storageSet(SERVER_KEY, 'https://chat.example.com');
@@ -540,6 +541,9 @@ test('场景基线 7/7：跨重启续跑', async () => {
     await useButler.getState().hydrate();
     assert.equal(useButler.getState().lines.some((line) => line.text === '调查昨天的问题'), true);
     assert.equal(useButler.getState().taskState?.goal, '调查昨天的问题');
+    // 基线陈述里的 recap 能力必须真实可用，不能只是文字（本文件曾两次断言假能力）
+    assert.equal(butlerSessionRecap(useButler.getState().lines)?.lastAsk, '调查昨天的问题');
+    assert.equal(useButler.getState().sessions[0]?.lastAsk, '调查昨天的问题');
 
     await useButler.getState().ask('补充第二个问题');
     assert.deepEqual(

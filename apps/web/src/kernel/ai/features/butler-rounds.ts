@@ -1,5 +1,9 @@
 import type { LedgerEntry } from '../../../lib/butlerLedger';
-import { noiseBriefFeedback, type ButlerBriefFeedback } from '../../../lib/butlerBriefFeedback';
+import {
+  isNoisyBriefTitle,
+  noiseBriefFeedback,
+  type ButlerBriefFeedback,
+} from '../../../lib/butlerBriefFeedback';
 import { latestBuildsByDefinitionProject } from '../../../lib/butlerBuilds';
 import { matchesMute, type ButlerMute } from '../../../lib/butlerMutes';
 import type { ButlerRecentSentMessage } from '../../../lib/butlerOutbox';
@@ -337,12 +341,23 @@ export function suppressMutedRoundItems(
   return suppressMatchedRoundItems(result, refTitles, mutes, '你说过少提这类');
 }
 
+/** 「没用」压制：标题精确相等才命中（对比 mute 的双向包含，见 isNoisyBriefTitle 注释）。 */
 export function suppressNoiseFeedbackItems(
   result: RoundsResult,
   refTitles: Readonly<Record<string, string>>,
   feedback: readonly ButlerBriefFeedback[],
 ): RoundsResult {
-  return suppressMatchedRoundItems(result, refTitles, noiseBriefFeedback(feedback), '你标过没用');
+  const matched = result.items.filter((item) => isNoisyBriefTitle(refTitles[item.ref] ?? '', feedback));
+  if (matched.length === 0) return result;
+  const matchedRefs = new Set(matched.map((item) => item.ref));
+  return {
+    ...result,
+    items: result.items.filter((item) => !matchedRefs.has(item.ref)),
+    suppressed: [
+      ...result.suppressed,
+      ...matched.map((item) => ({ ref: item.ref, reason: '你标过没用' })),
+    ],
+  };
 }
 
 export async function runButlerRounds(

@@ -699,13 +699,18 @@ const STATUS_BY_NUM: Record<number, string> = {
   3: 'busy',
 };
 
+/**
+ * 订阅里没有就退到 rooms —— 同 roomTypeOf 的理由：未订阅的频道/讨论只有 rooms[rid]
+ * 有值，少了这层兜底 'c'/'p' 会被当成 DM 拼成 `/direct/<rid>`，链接打不开。
+ * 类型是 c/p 却拿不到 name 时返回空，调用方据此放弃给链接（好过给死链）。
+ */
 function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
   const sub = subs[rid];
-  return sub?.t === 'c'
-    ? `channel/${sub.name}`
-    : sub?.t === 'p'
-      ? `group/${sub.name}`
-      : `direct/${rid}`;
+  const room = useChat.getState().rooms[rid];
+  const type = sub?.t ?? room?.t;
+  const name = sub?.name ?? room?.name;
+  if (type === 'c' || type === 'p') return name ? `${type === 'c' ? 'channel' : 'group'}/${name}` : '';
+  return `direct/${rid}`;
 }
 
 /**
@@ -733,7 +738,8 @@ function quoteLinkPrefix(
  * 段名为空，打开是个死链。DM 要用 rid。
  */
 export function permalinkOf(rid: string, mid: string): string {
-  return `${siteUrlSync()}/${roomPath(rid, useChat.getState().subscriptions)}?msg=${mid}`;
+  const path = roomPath(rid, useChat.getState().subscriptions);
+  return path ? `${siteUrlSync()}/${path}?msg=${mid}` : '';
 }
 
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */

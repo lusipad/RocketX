@@ -1845,15 +1845,22 @@ export const useButler = create<ButlerState>((set, get) => ({
     await flushButlerPersist();
     if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     const scope = persistScope;
-    const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
     if (!deletingActive) {
-      const nextRegistry: PersistedButlerSessionRegistry = { ...sessionRegistry, sessions: remaining };
+      const nextRegistry: PersistedButlerSessionRegistry = {
+        ...sessionRegistry,
+        sessions: sessionRegistry.sessions.filter((session) => session.id !== targetId),
+      };
       sessionRegistry = nextRegistry;
       set({ sessions: sessionSummaries(nextRegistry) });
       await queueRegistryWrite(scope, nextRegistry);
       return;
     }
     await discardResidentCodexThread();
+    // 停 app-server 是真实往返，这期间 workflow runtime 可能写过 registry：
+    // 必须用 await 之后的 sessionRegistry 重算，否则会把那些写入整体回滚掉。
+    if (!sessionRegistry || persistScope !== scope) return;
+    if (!sessionRegistry.sessions.some((session) => session.id === targetId)) return;
+    const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
     const nextActive = remaining
       .filter((session) => session.kind !== 'workflow')
       .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];
