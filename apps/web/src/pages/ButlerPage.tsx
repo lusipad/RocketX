@@ -11,6 +11,7 @@ import {
   ThumbsUp,
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
+import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
 import ButlerLearnedPanel from '../components/ButlerLearnedPanel';
 import ButlerRoutines from '../components/ButlerRoutines';
 import ButlerAuditTrail from '../components/ButlerAuditTrail';
@@ -590,6 +591,8 @@ export default function ButlerPage() {
               </div>
             </section>
           )}
+
+          <ButlerErrandRunCard />
 
           <div className="grid gap-4 md:grid-cols-2">
             <LedgerColumn title="我答应的" entries={commitments} today={today} />

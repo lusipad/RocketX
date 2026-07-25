@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { permissionRequestSummary } from '../agent/safety';
+import { codexApprovalSummary } from '../lib/codexApprovalSummary';
 import { getServerBase } from '../lib/client';
 import { isTauri } from '../lib/http';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -28,18 +28,6 @@ const STATUS_LABEL = {
   'waiting-approval': '等待审批',
   interrupted: '已中断',
 } as const;
-
-function approvalSummary(method: string, params: unknown): string {
-  const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
-  if (typeof value.command === 'string') return value.command;
-  if (Array.isArray(value.command)) return value.command.filter((item) => typeof item === 'string').join(' ');
-  if (typeof value.fileChanges === 'object' && value.fileChanges !== null) return Object.keys(value.fileChanges).join('\n');
-  const permissions = permissionRequestSummary(value.permissions ?? value.additionalPermissions);
-  if (permissions.length) return permissions.join('\n');
-  if (typeof value.grantRoot === 'string') return `写入目录：${value.grantRoot}`;
-  if (typeof value.reason === 'string') return value.reason;
-  return method;
-}
 
 export default function CodexPage() {
   const userId = useAuth((state) => state.user?._id ?? 'guest');
@@ -152,7 +140,7 @@ export default function CodexPage() {
               {approvals.map((approval) => (
                 <div key={approval.id} className="rounded-lg border border-warning/40 bg-warning-light/40 p-4">
                   <div className="text-sm font-medium text-ink">等待审批</div>
-                  <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-2 text-xs text-ink-2">{approvalSummary(approval.method, approval.params)}</pre>
+                  <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-2 text-xs text-ink-2">{codexApprovalSummary(approval.method, approval.params)}</pre>
                   <div className="mt-3 flex gap-2">
                     <button onClick={() => resolveApproval(approval.id, true)} className="flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-xs text-white"><Check size={12} />允许本次</button>
                     <button onClick={() => resolveApproval(approval.id, false)} className="flex items-center gap-1 rounded border border-line bg-surface px-3 py-1.5 text-xs text-ink-2"><X size={12} />拒绝</button>

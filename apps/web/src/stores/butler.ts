@@ -34,7 +34,12 @@ import {
   type ButlerWorkflowKind,
 } from '../lib/butlerTaskContext';
 import { normalizeDispatchSpec } from '../agent/dispatchSpec';
-import { dispatchButlerErrand, type ButlerErrandDraft } from '../lib/butlerErrands';
+import {
+  dispatchButlerErrand,
+  type ButlerErrandDraft,
+  type ButlerErrandRun,
+  type DispatchErrandOptions,
+} from '../lib/butlerErrands';
 import type { DispatchTarget } from '../lib/dispatchWorkspaces';
 import { createButlerTools, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
@@ -188,6 +193,8 @@ export interface ButlerState {
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
   errandDraft: ButlerErrandDraft | null;
+  /** 已派出去、正在办的活；管家页据此显示进度与结论 */
+  errandRun: ButlerErrandRun | null;
   runtimeCheckpoints: ButlerToolCheckpoint[];
   workflowRuntimeCheckpoints: ButlerToolCheckpoint[];
   context: ButlerSurfaceContext | null;
@@ -226,8 +233,10 @@ export interface ButlerState {
   dismissToolCheckpoint: (checkpointId: string) => Promise<void>;
   confirmRoutineDraft: () => Promise<void>;
   dismissRoutineDraft: () => Promise<void>;
-  confirmErrandDraft: (target: DispatchTarget) => Promise<void>;
+  confirmErrandDraft: (target: DispatchTarget, options?: DispatchErrandOptions) => Promise<void>;
   dismissErrandDraft: () => Promise<void>;
+  setErrandRun: (run: ButlerErrandRun | null) => void;
+  dismissErrandRun: () => void;
   reset: () => void;
 }
 
@@ -1304,6 +1313,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   error: null,
   routineDraft: null,
   errandDraft: null,
+  errandRun: null,
   runtimeCheckpoints: [],
   workflowRuntimeCheckpoints: [],
   context: null,
@@ -1957,13 +1967,18 @@ export const useButler = create<ButlerState>((set, get) => ({
     await get().dismissToolCheckpoint(draft.checkpointId);
   },
 
-  confirmErrandDraft: async (target) => {
+  confirmErrandDraft: async (target, options) => {
     const draft = get().errandDraft;
     if (!draft) return;
     // 先派发再确认 checkpoint：派发失败时草案留在卡上，用户改选工作区可重试
-    await dispatchButlerErrand(draft.spec, target);
+    const run = await dispatchButlerErrand(draft.spec, target, options);
+    set({ errandRun: run });
     await get().approveToolCheckpoint(draft.checkpointId);
   },
+
+  setErrandRun: (errandRun) => set({ errandRun }),
+
+  dismissErrandRun: () => set({ errandRun: null }),
 
   dismissErrandDraft: async () => {
     const draft = get().errandDraft;
@@ -1984,6 +1999,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       error: null,
       routineDraft: null,
       errandDraft: null,
+      errandRun: null,
       runtimeCheckpoints: [],
       workflowRuntimeCheckpoints: [],
       context: null,

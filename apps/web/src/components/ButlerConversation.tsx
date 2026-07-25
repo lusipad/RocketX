@@ -31,6 +31,7 @@ import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
 import ButlerErrandCard from './ButlerErrandCard';
+import ButlerErrandRunCard from './ButlerErrandRunCard';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerImagePicker, {
   ButlerImageAttachments,
@@ -287,6 +288,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             </div>
           ) : null}
           <div className="ml-10"><ButlerErrandCard /></div>
+          <div className="ml-10"><ButlerErrandRunCard /></div>
           <div className="ml-10"><ButlerActionCard /></div>
         </div>
       </main>

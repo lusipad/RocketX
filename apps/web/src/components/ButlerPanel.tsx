@@ -9,6 +9,7 @@ import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerErrandCard from './ButlerErrandCard';
+import ButlerErrandRunCard from './ButlerErrandRunCard';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import ButlerImagePicker, {
@@ -147,6 +148,7 @@ export default function ButlerPanel() {
           </div>
         ) : null}
         <div className="mt-3"><ButlerErrandCard /></div>
+        <div className="mt-3"><ButlerErrandRunCard /></div>
         <div className="mt-3"><ButlerActionCard /></div>
       </div>
 

@@ -7,7 +7,6 @@ import {
 import { useAgentEnvironments } from '../stores/agentEnvironments';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
-import { useUI } from '../stores/ui';
 import { toast } from '../stores/toast';
 
 /**
@@ -21,8 +20,8 @@ export default function ButlerErrandCard() {
   const environments = useAgentEnvironments((state) => state.environments);
   const lastDispatchEnvironmentId = useAgentEnvironments((state) => state.lastDispatchEnvironmentId);
   const localCodexRoot = useLocalCodex((state) => state.workspaceRoot);
-  const setModule = useUI((state) => state.setModule);
   const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined);
+  const [readOnly, setReadOnly] = useState(false);
   const [dispatching, setDispatching] = useState(false);
 
   const resolution = useMemo(
@@ -48,9 +47,8 @@ export default function ButlerErrandCard() {
     if (!activeTarget || dispatching) return;
     setDispatching(true);
     try {
-      await confirmErrandDraft(activeTarget);
-      // 活已经开跑，把人带到能看进度的地方
-      setModule('codex');
+      // 不跳转：活开跑后你留在管家页，进度与结论由「派出去的活」卡片呈现
+      await confirmErrandDraft(activeTarget, { readOnly });
     } catch (error) {
       toast.error(error, '派发失败');
     } finally {
@@ -108,6 +106,17 @@ export default function ButlerErrandCard() {
           还没有可派的工作区：先去执行间选一个本地目录，或在设置里添加工作区。
         </p>
       )}
+
+      {/* 默认允许改代码——给「修 bug」只读权限等于保证干不完 */}
+      <label className="mt-2 flex items-center gap-2 text-xs text-ink-2">
+        <input
+          type="checkbox"
+          checked={readOnly}
+          onChange={(event) => setReadOnly(event.target.checked)}
+          className="h-3.5 w-3.5 accent-primary"
+        />
+        只调查，不改文件
+      </label>
 
       <div className="mt-3 flex items-center justify-end gap-2">
         <button

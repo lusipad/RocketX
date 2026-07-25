@@ -54,6 +54,7 @@ function stubLocalCodex(initial: Partial<ReturnType<typeof useLocalCodex.getStat
     workspaceRoot: '',
     threadId: undefined,
     status: 'idle',
+    sandboxMode: 'read-only',
     messages: [],
     traces: [],
     approvals: [],
@@ -66,6 +67,10 @@ function stubLocalCodex(initial: Partial<ReturnType<typeof useLocalCodex.getStat
         workspaceRoot: path,
         ...(changed ? { threadId: undefined } : {}),
       });
+    },
+    setSandboxMode: (mode: 'read-only' | 'workspace-write') => {
+      calls.push({ method: 'setSandboxMode', payload: mode });
+      useLocalCodex.setState({ sandboxMode: mode });
     },
     startNew: async () => {
       calls.push({ method: 'startNew' });
@@ -207,9 +212,12 @@ test('confirmErrandDraft：已注册工作区一键派发，规格分框送进�
       path: 'D:/Repos/rocketchatx',
     });
 
-    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'startNew', 'send']);
+    assert.deepEqual(
+      codex.calls.map((call) => call.method),
+      ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send'],
+    );
     assert.equal(codex.calls[0]?.payload, 'D:/Repos/rocketchatx');
-    const sent = codex.calls[2]?.payload ?? '';
+    const sent = codex.calls.at(-1)?.payload ?? '';
     assert.match(sent, /<rocketx_task_spec>/);
     assert.match(sent, /标题：修掉登录页报错/);
     assert.match(sent, /不动依赖版本/);
@@ -295,8 +303,11 @@ test('零配置兜底：pending 目标派发时先落库拿 id 再过白名单�
     const environments = useAgentEnvironments.getState().environments;
     assert.equal(environments.length, 1);
     assert.equal(environments[0]?.path, 'D:/Repos/side-project');
-    // 工作区没变：不清线程、不重启，直接复用现有会话发规格
-    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'send']);
+    // 默认要写权限：沙箱从只读切过来必须重起线程才生效
+    assert.deepEqual(
+      codex.calls.map((call) => call.method),
+      ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send'],
+    );
     assert.equal(useAgentEnvironments.getState().lastDispatchEnvironmentId, environments[0]?.id);
   } finally {
     codex.restore();
@@ -305,10 +316,9 @@ test('零配置兜底：pending 目标派发时先落库拿 id 再过白名单�
   }
 });
 
-test('派出去的活干完了吱一声；线程被换掉后不再报喜', async () => {
+test('派活会按意图设沙箱：要改代码就给写权限，只调查才只读', async () => {
   useButler.getState().reset();
   resetEnvironments();
-  useToast.setState({ toasts: [] });
   const environment = useAgentEnvironments.getState().addEnvironment({
     name: '主仓',
     path: 'D:/Repos/rocketchatx',
@@ -316,51 +326,47 @@ test('派出去的活干完了吱一声；线程被换掉后不再报喜', async
     defaultBaseBranch: '',
     branchPrefix: '',
   });
-  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-watch', status: 'ready' });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-sandbox', status: 'ready', sandboxMode: 'read-only' });
 
   try {
     useButler.setState({
       errandDraft: {
-        checkpointId: 'errand-watch-1',
-        spec: { title: '盯完成的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+        checkpointId: 'errand-sandbox-1',
+        spec: { title: '要改代码的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
       },
       runtimeCheckpoints: [{
-        id: 'errand-watch-1',
+        id: 'errand-sandbox-1',
         toolName: 'draft_errand',
         capability: 'errands.draft',
         status: 'approval-required',
-        params: { title: '盯完成的活' },
-        idempotencyKey: 'errand-watch-1',
+        params: { title: '要改代码的活' },
+        idempotencyKey: 'errand-sandbox-1',
         createdAt: 1,
         updatedAt: 1,
       } as never],
     });
+
+    // 默认（不勾「只调查」）必须拿到写权限——只读会让「修 bug」结构性干不完
     await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
-    assert.equal(useLocalCodex.getState().status, 'running');
+    assert.equal(useLocalCodex.getState().sandboxMode, 'workspace-write');
+    // 沙箱变了必须重起线程才生效
+    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send']);
 
-    // 活干完：running → ready 触发一条带「去看看」的提示
-    useLocalCodex.setState({ status: 'ready' });
-    const doneToast = useToast.getState().toasts.find((item) => item.message.includes('盯完成的活'));
-    assert.ok(doneToast, '完成后必须提示');
-    assert.equal(doneToast.action?.label, '去看看');
-
-    // 只报一次
-    useToast.setState({ toasts: [] });
-    useLocalCodex.setState({ status: 'running' });
-    useLocalCodex.setState({ status: 'ready' });
-    assert.equal(useToast.getState().toasts.length, 0);
+    const run = useButler.getState().errandRun;
+    assert.ok(run, '派发后必须留下在办的活');
+    assert.equal(run.title, '要改代码的活');
+    assert.equal(run.readOnly, false);
+    assert.equal(run.workspaceName, '主仓');
   } finally {
     codex.restore();
     resetEnvironments();
-    useToast.setState({ toasts: [] });
     useButler.getState().reset();
   }
 });
 
-test('线程被换掉后订阅失效，不冒充旧活报结果', async () => {
+test('勾了「只调查」就保持只读，且在办的活如实标注', async () => {
   useButler.getState().reset();
   resetEnvironments();
-  useToast.setState({ toasts: [] });
   const environment = useAgentEnvironments.getState().addEnvironment({
     name: '主仓',
     path: 'D:/Repos/rocketchatx',
@@ -368,35 +374,37 @@ test('线程被换掉后订阅失效，不冒充旧活报结果', async () => {
     defaultBaseBranch: '',
     branchPrefix: '',
   });
-  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-swap', status: 'ready' });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-ro', status: 'ready', sandboxMode: 'read-only' });
 
   try {
     useButler.setState({
       errandDraft: {
-        checkpointId: 'errand-swap-1',
-        spec: { title: '被换线程的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+        checkpointId: 'errand-ro-1',
+        spec: { title: '只看看的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
       },
       runtimeCheckpoints: [{
-        id: 'errand-swap-1',
+        id: 'errand-ro-1',
         toolName: 'draft_errand',
         capability: 'errands.draft',
         status: 'approval-required',
-        params: { title: '被换线程的活' },
-        idempotencyKey: 'errand-swap-1',
+        params: { title: '只看看的活' },
+        idempotencyKey: 'errand-ro-1',
         createdAt: 1,
         updatedAt: 1,
       } as never],
     });
-    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+    await useButler.getState().confirmErrandDraft(
+      { id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' },
+      { readOnly: true },
+    );
 
-    // 用户在执行间手动开了新线程：旧活的完成状态无从谈起
-    useLocalCodex.setState({ threadId: 't-other' });
-    useLocalCodex.setState({ status: 'ready' });
-    assert.equal(useToast.getState().toasts.length, 0);
+    assert.equal(useLocalCodex.getState().sandboxMode, 'read-only');
+    // 沙箱没变、目录没变、线程还在：不必重起
+    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'send']);
+    assert.equal(useButler.getState().errandRun?.readOnly, true);
   } finally {
     codex.restore();
     resetEnvironments();
-    useToast.setState({ toasts: [] });
     useButler.getState().reset();
   }
 });
