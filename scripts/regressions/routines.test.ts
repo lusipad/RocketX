@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import {
-  setButlerBrain,
   setButlerBrainStorage,
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
@@ -14,7 +13,6 @@ import { setButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
 import {
   dueRoutines,
   setRoutineCodexRunner,
-  setRoutineLoopRunner,
   setRoutineNowProvider,
   setRoutineStorage,
   useRoutines,
@@ -30,6 +28,10 @@ import {
   useButler,
 } from '../../apps/web/src/stores/butler';
 import { useChat } from '../../apps/web/src/stores/chat';
+
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => restoreTauriForFile());
 
 const MONDAY_0829 = new Date(2026, 0, 5, 8, 29).getTime();
 const MONDAY_0830 = new Date(2026, 0, 5, 8, 30).getTime();
@@ -177,9 +179,9 @@ test('未登录时 scheduler 不消耗当日触发，登录后仍会执行', asy
     createRcxStore({ backend: createMemoryBackend() }).appData,
   );
   let calls = 0;
-  const restoreRunner = setRoutineLoopRunner(async () => {
+  const restoreRunner = setRoutineCodexRunner(async () => {
     calls += 1;
-    return { text: '登录后晨报', messages: [] };
+    return { text: '登录后晨报' };
   });
   resetButlerPersistenceForTests();
   useButler.getState().reset();
@@ -229,7 +231,7 @@ test('runNow 写入成功记录并裁剪到十条', async () => {
     text: `旧结果 ${index}`,
   }));
   resetRoutineStore([routine({ runs: oldRuns })]);
-  const restoreRunner = setRoutineLoopRunner(async () => ({ text: '晨报结果', messages: [] }));
+  const restoreRunner = setRoutineCodexRunner(async () => ({ text: '晨报结果' }));
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   const restoreWorkflow = await setupWorkflowRuntime('routine-success-user');
 
@@ -246,15 +248,15 @@ test('runNow 写入成功记录并裁剪到十条', async () => {
   }
 });
 
-test('runNow 将未配置 Provider 转成友好错误，并防止重入', async () => {
+test('runNow 将引擎错误转成友好错误，并防止重入', async () => {
   resetRoutineStore([routine()]);
   let calls = 0;
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
-  const restoreRunner = setRoutineLoopRunner(async () => {
+  const restoreRunner = setRoutineCodexRunner(async () => {
     calls += 1;
     await pending;
-    throw new Error('AI Provider 不存在: unconfigured');
+    throw new Error('unexpected boom');
   });
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   const restoreWorkflow = await setupWorkflowRuntime('routine-error-user');
@@ -269,7 +271,7 @@ test('runNow 将未配置 Provider 转成友好错误，并防止重入', async 
     const state = useRoutines.getState();
     assert.equal(state.runningIds.length, 0);
     assert.equal(state.routines[0].runs[0].status, 'error');
-    assert.equal(state.routines[0].runs[0].text, '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。');
+    assert.equal(state.routines[0].runs[0].text, 'Codex 大脑暂时无法回答，请稍后重试。');
   } finally {
     restoreNow();
     restoreRunner();
@@ -285,7 +287,6 @@ test('选择 Codex 大脑时，runNow 使用独立的 ephemeral runner', async (
   const restorePlatform = setButlerBrainTauriProvider(() => true);
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   setCodexBrainUnavailableReason(undefined);
-  setButlerBrain('codex');
   let input: { text: string; skillName?: string } | undefined;
   const restoreRunner = setRoutineCodexRunner(async (options) => {
     input = options;
@@ -320,7 +321,6 @@ test('旧的不规范技能在 Codex 例行事务中继续使用 legacy 正文�
   const restorePlatform = setButlerBrainTauriProvider(() => true);
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   setCodexBrainUnavailableReason(undefined);
-  setButlerBrain('codex');
   let input: { text: string; skillName?: string } | undefined;
   const restoreRunner = setRoutineCodexRunner(async (options) => {
     input = options;
@@ -366,7 +366,7 @@ test('checkWatchers 只保留未回应 @我，构建与新指派不再生成提�
     .some((card) => card.kind === 'mention-stale'), false);
 });
 
-test('manual 与 schedule routine 都应通过同一 workflow，并向 API/Codex runner 传入 toolRuntimeContext factory', async () => {
+test('manual 与 schedule routine 都应通过同一 workflow，并向 runner 传入 toolRuntimeContext factory', async () => {
   const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
   const restorePersistence = setButlerPersistence(appData);
   const storage = new MemoryStorage();
@@ -383,12 +383,7 @@ test('manual 与 schedule routine 都应通过同一 workflow，并向 API/Codex
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   const restoreBrainStorage = setButlerBrainStorage(storage);
   const restoreTauri = setButlerBrainTauriProvider(() => true);
-  let apiToolRuntimeContext: unknown;
   let codexToolRuntimeContext: unknown;
-  const restoreLoopRunner = setRoutineLoopRunner(async (options) => {
-    apiToolRuntimeContext = (options as { toolRuntimeContext?: unknown }).toolRuntimeContext;
-    return { text: 'API 晨报', messages: [] };
-  });
   const restoreCodexRunner = setRoutineCodexRunner(async (options) => {
     codexToolRuntimeContext = (options as { toolRuntimeContext?: unknown }).toolRuntimeContext;
     return { text: 'Codex 晨报' };
@@ -403,27 +398,23 @@ test('manual 与 schedule routine 都应通过同一 workflow，并向 API/Codex
   try {
     await useButler.getState().hydrate();
 
-    setButlerBrain('api');
     await useRoutines.getState().runNow('routine-1');
 
     useRoutines.setState({
       routines: [routine({ lastFiredDate: undefined, runs: [] })],
       runningIds: [],
     });
-    setButlerBrain('codex');
     useRoutines.getState().tick(MONDAY_0830);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const snapshots = listButlerWorkflowSnapshots().filter((snapshot) => snapshot.kind === 'routine');
     assert.equal(snapshots.length, 1);
-    assert.equal(typeof apiToolRuntimeContext, 'function');
     assert.equal(typeof codexToolRuntimeContext, 'function');
     assert.equal(snapshots[0]?.key, 'routine:routine-1');
     assert.equal(snapshots[0]?.triggerReason, 'schedule');
     assert.equal(snapshots[0]?.attempts, 2);
   } finally {
     restoreCodexRunner();
-    restoreLoopRunner();
     restoreTauri();
     restoreBrainStorage();
     restoreNow();

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
   flushButlerPersist,
   resetButlerPersistenceForTests,
-  setButlerLoopRunner,
+  setButlerCodexRunner,
   setButlerNowProvider,
   setButlerPersistence,
   useButler,
@@ -19,7 +20,12 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
-test.after(() => restorePersistence());
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => {
+  restoreTauriForFile();
+  restorePersistence();
+});
 
 function login(userId: string): void {
   useAuth.setState({ user: { _id: userId, username: `user-${userId}` } as never });
@@ -87,10 +93,7 @@ test('超过三天没对话：恢复时仍接续 transcript、模型历史与 Co
 test('三天内的对话正常接续上下文', async () => {
   let now = 20 * DAY;
   const restoreNow = setButlerNowProvider(() => now);
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: '昨天的回复',
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async () => ({ text: '昨天的回复' }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();
@@ -105,7 +108,7 @@ test('三天内的对话正常接续上下文', async () => {
     await useButler.getState().hydrate();
 
     const state = useButler.getState();
-    assert.equal(state.history.at(-1)?.content, '昨天的回复');
+    assert.equal(state.lines.some((line) => line.text === '昨天的回复'), true);
     assert.equal(state.lines.some((line) => /已开启全新上下文/.test(line.text)), false);
   } finally {
     restoreNow();
@@ -114,10 +117,7 @@ test('三天内的对话正常接续上下文', async () => {
 });
 
 test('「新对话」创建独立 session，旧 transcript 可切回恢复', async () => {
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: '旧回复',
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async () => ({ text: '旧回复' }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();

@@ -1130,5 +1130,44 @@ export function createButlerTools(): ButlerTool[] {
         return `已创建并启用例行事务：${name}`;
       },
     }),
+    defineButlerTool({
+      name: 'draft_errand',
+      description: '用户要求改代码、修 bug 或做工程任务时调用；只拟一份任务规格草案供用户过目，绝不自行派发或执行。工作目录由用户在卡上选择，不要也无法在这里指定。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '一句话任务名，60 字以内。' },
+          goal: { type: 'string', description: '要达成什么。写清楚现象与期望结果。' },
+          acceptance: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '完成的判定标准，逐条可核对。',
+          },
+          boundaries: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '明确不要做的事，例如不改数据库结构、不动依赖版本。',
+          },
+          workspaceHint: {
+            type: 'string',
+            description: '你猜测该派给哪个工作区的名字。**只是建议**：用户在卡上从已添加的工作区里自选，猜错无妨，猜不到就省略。',
+          },
+        },
+        required: ['title', 'goal'],
+        additionalProperties: false,
+      },
+      effect: 'write',
+      capability: 'errands.draft',
+      preflight: (args) => ({
+        allowed: true,
+        preview: `拟一份任务规格给你过目：${optionalString(args, 'title') ?? '未命名任务'}`,
+      }),
+      // 审批通过 = 用户在卡上点了「送进执行间」，此时活已经派出去了
+      // （confirmErrandDraft 先派发、成功才 approve）。大脑依然没有手。
+      execute: async (args) => {
+        const title = optionalString(args, 'title') ?? '未命名任务';
+        return `已派发任务：${title}，进度在执行间查看。`;
+      },
+    }),
   ];
 }

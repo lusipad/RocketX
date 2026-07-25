@@ -21,6 +21,38 @@ export const BUTLER_SCENE_PROMPTS: readonly ButlerScenePrompt[] = [
 /** 空状态的一句话能力边界：信任是用「它不会做什么」建立的。 */
 export const BUTLER_BOUNDARY_NOTE = '我只读你本来就能看到的东西；动手之前一定先问你。';
 
+export interface ButlerSlashOption {
+  scene: string;
+  prompt: string;
+}
+
+/**
+ * 输入框里打 `/` 时的候选。
+ *
+ * 「不知道能问它什么」的最好解法不是写说明文档，而是让能力在打字的地方自己出现——
+ * 空状态例句只在对话为空时露一次面，`/` 是随时可用。
+ *
+ * 返回 null 表示当前不该弹菜单（没有以 / 开头，或 / 后面已经带了空格——
+ * 那时用户多半在正常打字，不该再挡着）。
+ */
+export function butlerSlashQuery(input: string): string | null {
+  if (!input.startsWith('/')) return null;
+  const query = input.slice(1);
+  return /\s/.test(query) ? null : query;
+}
+
+/** 场景名与例句都参与匹配；空查询给全部 */
+export function filterButlerSlashOptions(
+  query: string,
+  options: readonly ButlerSlashOption[] = BUTLER_SCENE_PROMPTS,
+): ButlerSlashOption[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [...options];
+  return options.filter((option) =>
+    option.scene.toLocaleLowerCase().includes(needle)
+    || option.prompt.toLocaleLowerCase().includes(needle));
+}
+
 /**
  * 「交给管家」入口的固定提问。
  *

@@ -1,15 +1,14 @@
 import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
-import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
+import type { AgentLoopEvent } from '../kernel/ai/agent-loop';
 import { butlerArchiveStorage } from '../lib/butlerArchive';
-import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
+import { codexBrainAvailability } from '../lib/butlerBrain';
 import {
   extractButlerSources,
   mergeButlerSources,
   type ButlerSource,
 } from '../lib/butlerContext';
-import { butlerCurrentTimeLine, buildButlerApiSystemPrompt, canUseNativeButlerSkill, friendlyButlerError, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
-import { createButlerTools } from '../lib/butlerTools';
+import { canUseNativeButlerSkill, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
 import { pauseButlerWorkflowTask, runButlerWorkflowTask } from './butler';
@@ -69,7 +68,6 @@ interface RoutineState {
 }
 
 let routineStorage: ButlerProfileStorage = butlerArchiveStorage;
-let routineRunner: typeof runAgentLoop = runAgentLoop;
 let routineCodexRunner: typeof runButlerCodexEphemeral = runButlerCodexEphemeral;
 let routineNow = () => Date.now();
 let scheduler: ReturnType<typeof setInterval> | undefined;
@@ -79,14 +77,6 @@ export function setRoutineStorage(storage: ButlerProfileStorage): () => void {
   routineStorage = storage;
   return () => {
     routineStorage = previous;
-  };
-}
-
-export function setRoutineLoopRunner(runner: typeof runAgentLoop): () => void {
-  const previous = routineRunner;
-  routineRunner = runner;
-  return () => {
-    routineRunner = previous;
   };
 }
 
@@ -297,7 +287,6 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (get().runningIds.includes(id)) return;
     set((state) => ({ runningIds: [...state.runningIds, id] }));
     const at = routineNow();
-    const brain = getButlerBrain();
     let admitted = false;
     let run: RoutineRun;
     try {
@@ -328,39 +317,24 @@ export const useRoutines = create<RoutineState>((set, get) => ({
             }
           };
           const runtimeContext = (toolCall: { id: string }) => toolRuntimeContext(toolCall.id, sources);
-          let value: { text: string };
-          if (brain === 'codex') {
-            const availability = codexBrainAvailability();
-            if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
-            value = canUseNativeButlerSkill(routine.skillName)
-              ? await routineCodexRunner({
-                text: `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
-                skillName: routine.skillName,
-                now: at,
-                signal,
-                onEvent,
-                toolRuntimeContext: runtimeContext,
-              })
-              : await routineCodexRunner({
-                text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}`,
-                now: at,
-                signal,
-                onEvent,
-                toolRuntimeContext: runtimeContext,
-              });
-          } else {
-            value = await routineRunner({
-              messages: [
-                { role: 'system', content: `${buildButlerApiSystemPrompt()}\n\n${butlerCurrentTimeLine(at)}` },
-                { role: 'user', content: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}` },
-              ],
-              tools: createButlerTools(),
-              maxRounds: 6,
+          const availability = codexBrainAvailability();
+          if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+          const value = canUseNativeButlerSkill(routine.skillName)
+            ? await routineCodexRunner({
+              text: `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
+              skillName: routine.skillName,
+              now: at,
+              signal,
+              onEvent,
+              toolRuntimeContext: runtimeContext,
+            })
+            : await routineCodexRunner({
+              text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName)}`,
+              now: at,
               signal,
               onEvent,
               toolRuntimeContext: runtimeContext,
             });
-          }
           return {
             value,
             summary: `例行事务“${routine.name}”已完成并投递到 Today。`,
@@ -374,7 +348,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: brain === 'codex' ? friendlyButlerCodexError(error) : friendlyButlerError(error),
+        text: friendlyButlerCodexError(error),
       };
     }
     if (!admitted && options?.triggerReason === 'schedule') {

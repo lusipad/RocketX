@@ -9,9 +9,8 @@ import {
   type ButlerDraftResult,
 } from '../kernel/ai/features/butler-draft';
 import type { AiChatGateway } from '../kernel/ai/features/structured-output';
-import { getAiBus } from '../kernel/ai/runtime';
 import { runButlerCodexEphemeral } from '../stores/butlerCodex';
-import { codexBrainAvailability, getButlerBrain } from './butlerBrain';
+import { codexBrainAvailability } from './butlerBrain';
 
 type ButlerRoundsCodexRunner = typeof runButlerCodexEphemeral;
 
@@ -36,14 +35,11 @@ export function codexEphemeralGateway(signal?: AbortSignal): AiChatGateway {
 }
 
 function selectedButlerGateway(signal?: AbortSignal): AiChatGateway {
-  if (getButlerBrain() === 'codex') {
-    const availability = codexBrainAvailability();
-    if (!availability.available) {
-      throw new Error(`${availability.reason ?? 'Codex 大脑暂不可用'}，可在设置中切换为 API 大脑`);
-    }
-    return codexEphemeralGateway(signal);
+  const availability = codexBrainAvailability();
+  if (!availability.available) {
+    throw new Error(availability.reason ?? 'Codex 暂不可用');
   }
-  return getAiBus();
+  return codexEphemeralGateway(signal);
 }
 
 export async function runRoundsWithBrain(

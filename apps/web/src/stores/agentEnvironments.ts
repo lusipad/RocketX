@@ -37,6 +37,8 @@ interface PersistedAgentEnvironments {
   environments: LocalAgentEnvironment[];
   bindings: WorkItemDiscussionBinding[];
   lastEnvironmentByProject: Record<string, string>;
+  /** 管家派活时默认选中的工作区——「常见路径一次点击就派出去」靠它 */
+  lastDispatchEnvironmentId?: string;
 }
 
 interface AgentEnvironmentState extends PersistedAgentEnvironments {
@@ -45,6 +47,8 @@ interface AgentEnvironmentState extends PersistedAgentEnvironments {
   removeEnvironment: (id: string) => void;
   bindDiscussion: (input: Omit<WorkItemDiscussionBinding, 'id' | 'serverId' | 'hostDeviceId' | 'status' | 'createdAt' | 'updatedAt'>) => WorkItemDiscussionBinding;
   endBinding: (discussionRid: string) => void;
+  /** 记住这次派到了哪个工作区，下次默认选它 */
+  rememberDispatchEnvironment: (environmentId: string) => void;
 }
 
 function id(prefix: string): string {
@@ -78,6 +82,9 @@ function load(): PersistedAgentEnvironments {
       environments: value.environments,
       bindings: value.bindings,
       lastEnvironmentByProject: value.lastEnvironmentByProject ?? {},
+      ...(typeof value.lastDispatchEnvironmentId === 'string'
+        ? { lastDispatchEnvironmentId: value.lastDispatchEnvironmentId }
+        : {}),
     };
   } catch {
     return emptyState();
@@ -91,6 +98,9 @@ function persist(state: PersistedAgentEnvironments): void {
       environments: state.environments,
       bindings: state.bindings,
       lastEnvironmentByProject: state.lastEnvironmentByProject,
+      ...(state.lastDispatchEnvironmentId
+        ? { lastDispatchEnvironmentId: state.lastDispatchEnvironmentId }
+        : {}),
     } satisfies PersistedAgentEnvironments));
   } catch {
     // 浏览器禁用存储时保留内存状态，不阻断聊天。
@@ -265,5 +275,13 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
     const next = { ...get(), bindings };
     persist(next);
     set({ bindings });
+  },
+
+  rememberDispatchEnvironment: (environmentId) => {
+    const id = environmentId.trim();
+    if (!id || get().lastDispatchEnvironmentId === id) return;
+    const next = { ...get(), lastDispatchEnvironmentId: id };
+    persist(next);
+    set({ lastDispatchEnvironmentId: id });
   },
 }));

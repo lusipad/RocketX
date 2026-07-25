@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   codexBrainAvailability,
-  getButlerBrain,
   getButlerCodexSettings,
-  setButlerBrain,
   setButlerBrainStorage,
   setButlerCodexSettings,
   setButlerBrainTauriProvider,
@@ -24,23 +22,6 @@ class MemoryStorage implements ButlerBrainStorage {
   }
 }
 
-test('管家大脑按平台给默认值，并持久化显式选择', () => {
-  const storage = new MemoryStorage();
-  const restoreStorage = setButlerBrainStorage(storage);
-  const restorePlatform = setButlerBrainTauriProvider(() => true);
-  setCodexBrainUnavailableReason(undefined);
-
-  try {
-    assert.equal(getButlerBrain(), 'codex');
-    setButlerBrain('api');
-    assert.equal(storage.get('rcx-butler-v1:brain'), 'api');
-    assert.equal(getButlerBrain(), 'api');
-  } finally {
-    restorePlatform();
-    restoreStorage();
-  }
-});
-
 test('Codex 模型和推理强度可配置，非法存储值安全回退', () => {
   const storage = new MemoryStorage();
   const restoreStorage = setButlerBrainStorage(storage);
@@ -58,17 +39,15 @@ test('Codex 模型和推理强度可配置，非法存储值安全回退', () =>
   }
 });
 
-test('网页端默认 API，并明确说明 Codex 不可用原因', () => {
+test('网页端明说管家在桌面端，而不是留一个残缺的对话框', () => {
   const restoreStorage = setButlerBrainStorage(new MemoryStorage());
   const restorePlatform = setButlerBrainTauriProvider(() => false);
   setCodexBrainUnavailableReason(undefined);
 
   try {
-    assert.equal(getButlerBrain(), 'api');
-    assert.deepEqual(codexBrainAvailability(), {
-      available: false,
-      reason: 'Codex 大脑仅桌面端可用',
-    });
+    const availability = codexBrainAvailability();
+    assert.equal(availability.available, false);
+    assert.match(availability.reason ?? '', /桌面端/);
   } finally {
     restorePlatform();
     restoreStorage();
@@ -78,10 +57,10 @@ test('网页端默认 API，并明确说明 Codex 不可用原因', () => {
 test('桌面端会透传后续 Codex 检测失败原因', () => {
   const restorePlatform = setButlerBrainTauriProvider(() => true);
   try {
-    setCodexBrainUnavailableReason('Codex 大脑不可用：请先登录 Codex。');
+    setCodexBrainUnavailableReason('Codex 不可用：请先登录 Codex。');
     assert.deepEqual(codexBrainAvailability(), {
       available: false,
-      reason: 'Codex 大脑不可用：请先登录 Codex。',
+      reason: 'Codex 不可用：请先登录 Codex。',
     });
   } finally {
     setCodexBrainUnavailableReason(undefined);

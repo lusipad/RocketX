@@ -1,10 +1,13 @@
 import { isTauri } from './http';
 
-const BRAIN_KEY = 'rcx-butler-v1:brain';
+/**
+ * 决策 13：Codex 是管家的唯一大脑。这里只剩「用哪个 Codex 模型 / 多大 effort」
+ * 和「Codex 现在能不能用」，不再有引擎选择——那是用户从来不该关心的事。
+ */
+
 const CODEX_MODEL_KEY = 'rcx-butler-v1:codex-model';
 const CODEX_EFFORT_KEY = 'rcx-butler-v1:codex-effort';
 
-export type ButlerBrainKind = 'api' | 'codex';
 export const BUTLER_CODEX_EFFORTS = ['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export type ButlerCodexEffort = (typeof BUTLER_CODEX_EFFORTS)[number];
 
@@ -29,19 +32,6 @@ let brainStorage: ButlerBrainStorage = localStorageBrain;
 let tauriAvailable = () => isTauri;
 let unavailableReason: string | undefined;
 
-function defaultBrain(): ButlerBrainKind {
-  return tauriAvailable() ? 'codex' : 'api';
-}
-
-export function getButlerBrain(): ButlerBrainKind {
-  const saved = brainStorage.get(BRAIN_KEY);
-  return saved === 'api' || saved === 'codex' ? saved : defaultBrain();
-}
-
-export function setButlerBrain(brain: ButlerBrainKind): void {
-  brainStorage.set(BRAIN_KEY, brain);
-}
-
 export function getButlerCodexSettings(): ButlerCodexSettings {
   const model = brainStorage.get(CODEX_MODEL_KEY)?.trim() ?? '';
   const savedEffort = brainStorage.get(CODEX_EFFORT_KEY);
@@ -59,11 +49,15 @@ export function setButlerCodexSettings(settings: ButlerCodexSettings): void {
 }
 
 export function codexBrainAvailability(): { available: boolean; reason?: string } {
-  if (!tauriAvailable()) return { available: false, reason: 'Codex 大脑仅桌面端可用' };
+  if (!tauriAvailable()) return { available: false, reason: '管家在桌面端。浏览器里可以看简报，但对话与派活需要桌面版。' };
   return unavailableReason ? { available: false, reason: unavailableReason } : { available: true };
 }
 
-/** 运行时发现 Codex CLI 不可用或未登录时，保留可直接呈现给用户的原因。 */
+/**
+ * 运行时发现 Codex CLI 不可用或未登录时，保留可直接呈现给用户的原因。
+ * 决策 13 之前这里会静默切到 API 大脑——用户无从知道自己在用哪个大脑，
+ * 而两者能力不同。现在只记录原因，由 UI 给出可执行的修复指引。
+ */
 export function setCodexBrainUnavailableReason(reason?: string): void {
   unavailableReason = reason;
 }

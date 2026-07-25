@@ -487,6 +487,22 @@ async function stopResident(clearThread = true): Promise<void> {
   }
 }
 
+/**
+ * 关掉 Codex 的原生记忆。
+ *
+ * 原生 memories 是**会话空闲后后台自动提炼、无逐条确认、全局作用域**的，
+ * 而管家对「记忆」的承诺是「确认卡是唯一写入口 + scope 由可信上下文强制捕获」。
+ * 两者同时开着，等于我们的承诺只靠对方默认关闭在守——所以必须显式声明。
+ * 本机 ~/.codex/config.toml 里 [features] memories 就是开着的。
+ *
+ * 失败静默：老版本 app-server 可能没有这个方法，不该因此让管家起不来。
+ */
+function disableCodexNativeMemories(client: AppServerClient, threadId: string): void {
+  void client
+    .request('thread/memoryMode/set', { threadId, mode: 'disabled' })
+    .catch(() => undefined);
+}
+
 async function startResidentThread(prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
@@ -504,6 +520,7 @@ async function startResidentThread(prompt: string, promptHash: string): Promise<
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
   residentStatus = 'ready';
+  disableCodexNativeMemories(client, response.thread.id);
   // 常驻线程也是原生 Codex 线程，起名后在 codex resume / Codex App 里可辨认
   void client
     .request('thread/name/set', { threadId: response.thread.id, name: rocketxThreadName('AI 大脑') })
@@ -528,6 +545,7 @@ async function resumeResidentThread(prompt: string, promptHash: string): Promise
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
   residentStatus = 'ready';
+  disableCodexNativeMemories(client, response.thread.id);
 }
 
 /**

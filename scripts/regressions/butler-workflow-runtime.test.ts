@@ -11,11 +11,15 @@ import {
   type ButlerToolRuntimeContext,
 } from '../../apps/web/src/lib/butlerToolRuntime';
 import { getServerBase, setServerBase } from '../../apps/web/src/lib/client';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import * as butlerStore from '../../apps/web/src/stores/butler';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = butlerStore.setButlerPersistence(appData);
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriProvider = setButlerBrainTauriProvider(() => true);
+test.after(() => restoreTauriProvider());
 const restoreAuditWriter = butlerStore.setButlerToolAuditWriter(async () => undefined);
 const initialServerBase = getServerBase();
 const initialLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -131,10 +135,7 @@ test.afterEach(() => resetGlobalState());
 test('workflow session 复用 Butler 持久化 registry，但不会出现在 interactive sessions picker，完成态可跨重启恢复', async () => {
   setServerBase('https://chat.example');
   login('workflow-shared-user');
-  const restoreRunner = butlerStore.setButlerLoopRunner(async (options) => ({
-    text: '交互会话回复',
-    messages: options.messages,
-  }));
+  const restoreRunner = butlerStore.setButlerCodexRunner(async () => ({ text: '交互会话回复' }));
 
   try {
     await workflowStore.useButler.getState().hydrate();
@@ -306,10 +307,7 @@ test('账号切换不会复用或覆盖另一账号正在执行的同 key workfl
 test('workflow 完成写 registry 时不会覆盖并发产生的 interactive transcript', async () => {
   setServerBase('https://chat.example');
   login('workflow-concurrent-user');
-  const restoreRunner = butlerStore.setButlerLoopRunner(async (options) => ({
-    text: '交互更新已完成',
-    messages: options.messages,
-  }));
+  const restoreRunner = butlerStore.setButlerCodexRunner(async () => ({ text: '交互更新已完成' }));
   await workflowStore.useButler.getState().hydrate();
 
   let releaseWorkflow!: () => void;

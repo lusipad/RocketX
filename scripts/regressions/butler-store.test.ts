@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AiMessage } from '../../apps/web/src/kernel/ai/provider';
-import {
-  setButlerBrain,
-  setButlerBrainStorage,
-  setButlerBrainTauriProvider,
-  type ButlerBrainStorage,
-} from '../../apps/web/src/lib/butlerBrain';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import { parseButlerMemoryState } from '../../apps/web/src/lib/butlerMemory';
 import { setButlerProfileStorage, type ButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
 import { createButlerTools, type ButlerRoutineDraft } from '../../apps/web/src/lib/butlerTools';
@@ -15,25 +10,17 @@ import {
   type ButlerToolCheckpoint,
   type ButlerToolRuntimeContext,
 } from '../../apps/web/src/lib/butlerToolRuntime';
-import { setButlerLoopRunner, setButlerNowProvider, setButlerPersistence, setButlerToolAuditWriter, useButler } from '../../apps/web/src/stores/butler';
+import { setButlerCodexRunner, setButlerNowProvider, setButlerPersistence, setButlerToolAuditWriter, trimButlerHistory, useButler } from '../../apps/web/src/stores/butler';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import { useRoutines } from '../../apps/web/src/stores/routines';
 import { getServerBase, setServerBase } from '../../apps/web/src/lib/client';
 
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => restoreTauriForFile());
+
 function resetStore(): void {
   useButler.getState().reset();
-}
-
-class BrainStorage implements ButlerBrainStorage {
-  private readonly values = new Map<string, string>();
-
-  get(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-
-  set(key: string, value: string): void {
-    this.values.set(key, value);
-  }
 }
 
 class MemoryStorage implements ButlerProfileStorage {
@@ -92,26 +79,16 @@ function storedMemoryRecords(storage: ButlerProfileStorage) {
   return parseButlerMemoryState(storage.get('rcx-butler-v2:memory') ?? '').records;
 }
 
-test('管家连续提问会累积模型历史和展示行', async () => {
+test('管家连续提问会累积展示行', async () => {
   resetStore();
   const replies = ['第一轮回复', '第二轮回复'];
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: replies.shift() ?? '',
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async () => ({ text: replies.shift() ?? '' }));
 
   try {
     await useButler.getState().ask('第一问');
     await useButler.getState().ask('第二问');
 
-    const state = useButler.getState();
-    assert.deepEqual(state.history.map(({ role, content }) => ({ role, content })), [
-      { role: 'user', content: '第一问' },
-      { role: 'assistant', content: '第一轮回复' },
-      { role: 'user', content: '第二问' },
-      { role: 'assistant', content: '第二轮回复' },
-    ]);
-    assert.deepEqual(state.lines.slice(1).map(({ role, text }) => ({ role, text })), [
+    assert.deepEqual(useButler.getState().lines.slice(1).map(({ role, text }) => ({ role, text })), [
       { role: 'user', text: '第一问' },
       { role: 'assistant', text: '第一轮回复' },
       { role: 'user', text: '第二问' },
@@ -123,12 +100,12 @@ test('管家连续提问会累积模型历史和展示行', async () => {
   }
 });
 
-test('API 管家本轮收到图片，但持久历史只保留图片名称', async () => {
+test('管家本轮收到图片，展示行保留附件名称', async () => {
   resetStore();
-  let captured: AiMessage | undefined;
-  const restore = setButlerLoopRunner(async (options) => {
-    captured = options.messages.at(-1);
-    return { text: '看到了。', messages: options.messages };
+  let captured: Array<{ dataUrl: string }> | undefined;
+  const restore = setButlerCodexRunner(async (options) => {
+    captured = options.images?.map(({ dataUrl }) => ({ dataUrl }));
+    return { text: '看到了。' };
   });
 
   try {
@@ -139,22 +116,21 @@ test('API 管家本轮收到图片，但持久历史只保留图片名称', asyn
       dataUrl: 'data:image/png;base64,aW1hZ2U=',
     }]);
 
-    assert.deepEqual(captured?.images, [{ dataUrl: 'data:image/png;base64,aW1hZ2U=' }]);
+    assert.deepEqual(captured, [{ dataUrl: 'data:image/png;base64,aW1hZ2U=' }]);
     assert.equal(useButler.getState().lines.at(-2)?.attachments?.[0]?.name, 'screen.png');
-    assert.equal(useButler.getState().history.some((message) => !!message.images?.length), false);
-    assert.match(useButler.getState().history[0].content, /screen\.png/);
   } finally {
     restore();
     resetStore();
   }
 });
 
-test('管家提示会带入可注入的本地当前时间', async () => {
+test('管家回合会带入可注入的本地当前时间', async () => {
   resetStore();
-  const restoreNow = setButlerNowProvider(() => new Date(2026, 0, 5, 8, 30).getTime());
-  const restoreRunner = setButlerLoopRunner(async (options) => {
-    assert.match(options.messages[0].content, /当前时间：2026-01-05 08:30 周一$/);
-    return { text: '收到。', messages: options.messages };
+  const injectedNow = new Date(2026, 0, 5, 8, 30).getTime();
+  const restoreNow = setButlerNowProvider(() => injectedNow);
+  const restoreRunner = setButlerCodexRunner(async (options) => {
+    assert.equal(options.now, injectedNow);
+    return { text: '收到。' };
   });
 
   try {
@@ -166,23 +142,21 @@ test('管家提示会带入可注入的本地当前时间', async () => {
   }
 });
 
-test('房间上下文只追加到本次 system 提示，不污染展示和历史', async () => {
+test('房间上下文只随本次回合传给引擎，不污染后续回合与展示行', async () => {
   resetStore();
-  const captured: AiMessage[][] = [];
-  const restore = setButlerLoopRunner(async (options) => {
-    captured.push(options.messages);
-    return { text: '收到。', messages: options.messages };
+  const captured: Array<unknown> = [];
+  const restore = setButlerCodexRunner(async (options) => {
+    captured.push(options.context);
+    return { text: '收到。' };
   });
 
   try {
     await useButler.getState().ask('这周方案定了吗？', { rid: 'room-1', roomName: '产品讨论' });
     await useButler.getState().ask('再确认一次。');
 
-    assert.match(captured[0][0].content, /用户当前所在房间：产品讨论/);
-    assert.match(captured[0][0].content, /search_messages 的 roomName 参数限定范围/);
-    assert.doesNotMatch(captured[1][0].content, /用户当前所在房间/);
-    assert.equal(captured[0][1].content, '这周方案定了吗？');
-    assert.equal(useButler.getState().history[0].content, '这周方案定了吗？');
+    assert.equal((captured[0] as { label?: string } | undefined)?.label, '产品讨论');
+    assert.equal(captured[1], undefined);
+    assert.equal(useButler.getState().lines.some((line) => line.text.includes('产品讨论')), false);
   } finally {
     restore();
     resetStore();
@@ -192,7 +166,7 @@ test('房间上下文只追加到本次 system 提示，不污染展示和历史
 test('管家将流式内容和工具活动实时写入展示状态', async () => {
   resetStore();
   const snapshots: Array<{ text: string; activity: string | null }> = [];
-  const restore = setButlerLoopRunner(async (options) => {
+  const restore = setButlerCodexRunner(async (options) => {
     options.onEvent?.({ type: 'content', content: '我先' });
     snapshots.push({ text: useButler.getState().lines.at(-1)?.text ?? '', activity: useButler.getState().activity });
     options.onEvent?.({
@@ -204,7 +178,7 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
     snapshots.push({ text: useButler.getState().lines.at(-1)?.text ?? '', activity: useButler.getState().activity });
     options.onEvent?.({ type: 'tool-result', toolCallId: 'call_1', content: '[]' });
     snapshots.push({ text: useButler.getState().lines.at(-1)?.text ?? '', activity: useButler.getState().activity });
-    return { text: '我先查询。', messages: options.messages };
+    return { text: '我先查询。' };
   });
 
   try {
@@ -228,7 +202,7 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
 
 test('remember 在 ask 流里只留下待审批 checkpoint，不伪造已写入成功消息', async () => {
   resetStore();
-  const restore = setButlerLoopRunner(async (options) => {
+  const restore = setButlerCodexRunner(async (options) => {
     options.onEvent?.({
       type: 'tool-call',
       toolCall: {
@@ -238,7 +212,7 @@ test('remember 在 ask 流里只留下待审批 checkpoint，不伪造已写入�
       },
     });
     options.onEvent?.({ type: 'tool-result', toolCallId: 'remember_1', content: 'approval-required：写入长期记忆；尚未执行。' });
-    return { text: '我会按这个偏好回复。', messages: options.messages };
+    return { text: '我会按这个偏好回复。' };
   });
 
   try {
@@ -283,7 +257,7 @@ test('ask runner 的 toolRuntimeContext 冻结当前 auth 与 room/project sourc
   });
   setServerBase('https://chat.example');
   const captured: ButlerToolRuntimeContext[] = [];
-  const restore = setButlerLoopRunner(async (options) => {
+  const restore = setButlerCodexRunner(async (options) => {
     const first = options.toolRuntimeContext?.({ id: 'remember_1', name: 'remember', arguments: '{}' } as never);
     assert.ok(first);
     captured.push(first);
@@ -301,7 +275,7 @@ test('ask runner 的 toolRuntimeContext 冻结当前 auth 与 room/project sourc
     const second = options.toolRuntimeContext?.({ id: 'remember_2', name: 'remember', arguments: '{}' } as never);
     assert.ok(second);
     captured.push(second);
-    return { text: '收到。', messages: options.messages };
+    return { text: '收到。' };
   });
 
   try {
@@ -424,17 +398,17 @@ test('确认 typed remember checkpoint 后写入 v2 memory，并在对话中追�
   }
 });
 
-test('未配置 Provider 时保留输入并显示友好错误', async () => {
+test('回合失败时保留输入并显示友好错误，不丢用户的问题', async () => {
   resetStore();
-  const restore = setButlerLoopRunner(async () => {
-    throw new Error('AI Provider 不存在: unconfigured');
+  const restore = setButlerCodexRunner(async () => {
+    throw new Error('unexpected boom');
   });
 
   try {
     await useButler.getState().ask('帮我看看今天的情况');
 
     const state = useButler.getState();
-    assert.equal(state.error, '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。');
+    assert.equal(state.error, 'Codex 大脑暂时无法回答，请稍后重试。');
     assert.equal(state.running, false);
     assert.equal(state.lines.at(-1)?.text, '帮我看看今天的情况');
   } finally {
@@ -443,32 +417,30 @@ test('未配置 Provider 时保留输入并显示友好错误', async () => {
   }
 });
 
-test('选择不可用的 Codex 大脑时不静默回退，并提示设置页切换 API', async () => {
+test('非桌面端不静默降级，明说管家在桌面端且不调用引擎', async () => {
   resetStore();
-  const restoreStorage = setButlerBrainStorage(new BrainStorage());
   const restorePlatform = setButlerBrainTauriProvider(() => false);
-  setButlerBrain('codex');
-  let apiCalled = false;
-  const restoreRunner = setButlerLoopRunner(async () => {
-    apiCalled = true;
-    return { text: '不应执行', messages: [] };
+  let runnerCalled = false;
+  const restoreRunner = setButlerCodexRunner(async () => {
+    runnerCalled = true;
+    return { text: '不应执行' };
   });
 
   try {
     await useButler.getState().ask('帮我看看今天的情况');
     const state = useButler.getState();
-    assert.equal(apiCalled, false);
-    assert.equal(state.error, 'Codex 大脑仅桌面端可用。可在设置页切换为 API 大脑。');
+    assert.equal(runnerCalled, false);
+    assert.match(state.error ?? '', /桌面端/);
+    assert.equal(state.lines.at(-1)?.text, '帮我看看今天的情况');
   } finally {
     restoreRunner();
     restorePlatform();
-    restoreStorage();
     resetStore();
   }
 });
 
-test('裁剪历史时不会留下没有对应 assistant 工具调用的 tool 消息', async () => {
-  resetStore();
+test('裁剪历史时不会留下没有对应 assistant 工具调用的 tool 消息', () => {
+  // hydrate 恢复旧会话的 history 时仍走 trimButlerHistory；孤儿 tool 消息会让 provider 报错
   const history: AiMessage[] = [
     {
       role: 'assistant',
@@ -476,26 +448,12 @@ test('裁剪历史时不会留下没有对应 assistant 工具调用的 tool 消
       toolCalls: [{ id: 'call_1', name: 'list_todos', arguments: '{}' }],
     },
     { role: 'tool', toolCallId: 'call_1', content: '[]' },
-    ...Array.from({ length: 37 }, (_, index): AiMessage => ({ role: 'user', content: `旧问题 ${index}` })),
+    ...Array.from({ length: 39 }, (_, index): AiMessage => ({ role: 'user', content: `旧问题 ${index}` })),
   ];
-  useButler.setState({ history });
-  const restore = setButlerLoopRunner(async (options) => ({ text: '新的回复', messages: options.messages }));
-
-  try {
-    await useButler.getState().ask('新问题');
-
-    const next = useButler.getState().history;
-    assert.ok(next.length <= 40);
-    assert.equal(next.some((message) => message.role === 'tool'), false);
-    assert.equal(next.some((message) => message.toolCalls?.some((call) => call.id === 'call_1')), false);
-    assert.deepEqual(next.slice(-2).map(({ role, content }) => ({ role, content })), [
-      { role: 'user', content: '新问题' },
-      { role: 'assistant', content: '新的回复' },
-    ]);
-  } finally {
-    restore();
-    resetStore();
-  }
+  const next = trimButlerHistory(history);
+  assert.ok(next.length <= 40);
+  assert.equal(next.some((message) => message.role === 'tool'), false);
+  assert.equal(next.some((message) => message.toolCalls?.some((call) => call.id === 'call_1')), false);
 });
 
 test('draft_routine 只能落草案，确认后才创建并启用例行事务', async () => {

@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
-import { setButlerBrain, setCodexBrainUnavailableReason } from '../lib/butlerBrain';
+import { setCodexBrainUnavailableReason } from '../lib/butlerBrain';
 import { isTauri } from '../lib/http';
 import { toast } from './toast';
 
-export type CodexRuntimePhase = 'idle' | 'checking' | 'ready' | 'fallback' | 'web';
+export type CodexRuntimePhase = 'idle' | 'checking' | 'ready' | 'unavailable' | 'web';
 
 export interface CodexRuntimeProbe {
   ready: boolean;
@@ -28,14 +28,17 @@ type RuntimeInvoker = <T>(command: string) => Promise<T>;
 let runtimeInvoke: RuntimeInvoker = (command) => invoke(command);
 let desktopAvailable = () => isTauri;
 let probeRevision = 0;
-let fallbackNotified = false;
+let unavailableNotified = false;
 
-function activateFallback(reason: string): void {
-  setButlerBrain('api');
+/**
+ * 决策 13：不再静默切到另一个大脑。Codex 用不了就明说用不了——
+ * 悄悄换一个能力不同的大脑，用户根本无从察觉自己拿到的答案是谁给的。
+ */
+function activateUnavailable(reason: string): void {
   setCodexBrainUnavailableReason(reason);
-  if (!fallbackNotified) {
-    fallbackNotified = true;
-    toast.info('未检测到可用的 Codex，已切换到普通 AI');
+  if (!unavailableNotified) {
+    unavailableNotified = true;
+    toast.info(`管家暂时用不了：${reason}`);
   }
 }
 
@@ -60,7 +63,6 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
       const result = await runtimeInvoke<CodexRuntimeProbe>('codex_runtime_probe');
       if (revision !== probeRevision) return;
       if (result.ready) {
-        setButlerBrain('codex');
         setCodexBrainUnavailableReason(undefined);
         set({
           phase: 'ready',
@@ -72,9 +74,9 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         return;
       }
       const reason = result.reason || 'Codex 暂不可用';
-      activateFallback(reason);
+      activateUnavailable(reason);
       set({
-        phase: 'fallback',
+        phase: 'unavailable',
         version: result.version,
         executablePath: result.executablePath,
         source: result.source,
@@ -83,9 +85,9 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
     } catch (error) {
       if (revision !== probeRevision) return;
       const reason = `Codex 检测失败：${error instanceof Error ? error.message : String(error)}`;
-      activateFallback(reason);
+      activateUnavailable(reason);
       set({
-        phase: 'fallback',
+        phase: 'unavailable',
         version: undefined,
         executablePath: undefined,
         source: undefined,
@@ -113,7 +115,7 @@ export function setCodexRuntimePlatform(provider: () => boolean): () => void {
 
 export function resetCodexRuntimeForTests(): void {
   probeRevision += 1;
-  fallbackNotified = false;
+  unavailableNotified = false;
   setCodexBrainUnavailableReason(undefined);
   useCodexRuntime.setState({
     phase: desktopAvailable() ? 'idle' : 'web',
