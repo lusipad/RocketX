@@ -227,8 +227,11 @@ test('briefRoundPreferences 读取 brief: 前缀偏好记忆，未登录时静�
     useAuth.setState({ user: undefined } as never);
     assert.deepEqual(briefRoundPreferences(10), []);
 
-    useAuth.setState({ user: { _id: 'u1', username: 'user-u1' } } as never);
-    const scope = { server: 'same-origin', account: 'u1' };
+    // 账号 id 必须是**混合大小写**：Rocket.Chat 的 _id 是 17 位混合大小写随机串，
+    // 而记忆写入时 scope 会被强制小写。用全小写的假 id 会掩盖大小写不匹配的真 bug
+    // （curate 偏好曾因此对几乎所有真实用户静默失效）。
+    useAuth.setState({ user: { _id: 'uAbC7dEfG', username: 'user-u1' } } as never);
+    const scope = { server: 'same-origin', account: 'uAbC7dEfG' };
     let state = rememberButlerMemory(
       { schemaVersion: 2, records: [] },
       {

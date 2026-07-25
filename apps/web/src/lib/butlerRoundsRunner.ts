@@ -20,7 +20,7 @@ import {
 } from './butlerBriefFeedback';
 import { mergeButlerSources, type ButlerSource } from './butlerContext';
 import { ledgerFromTodos } from './butlerLedger';
-import { parseButlerMemoryState } from './butlerMemory';
+import { normalizeButlerMemoryScope, parseButlerMemoryState } from './butlerMemory';
 import { addMute, listMutes, type ButlerMute } from './butlerMutes';
 import { readButlerActiveMemoryV2RawJson } from './butlerProfile';
 import {
@@ -170,15 +170,21 @@ useButlerRoundsRunner.setState({
 export function briefRoundPreferences(now = Date.now()): string[] {
   const user = useAuth.getState().user;
   if (!user?._id) return [];
-  const server = getServerBase() || 'same-origin';
   try {
+    // 记忆写入时 scope 的 server/account 会被强制小写（normalizeScopeSegment），
+    // 这里必须用同一套规范化再比——拿 user._id 原值比较时，Rocket.Chat 那个
+    // 混合大小写的 17 位 id 几乎永远匹配不上，偏好等于从来没生效过。
+    const scope = normalizeButlerMemoryScope({
+      server: getServerBase() || 'same-origin',
+      account: user._id,
+    });
     const state = parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
     return state.records
       .filter((record) => record.status === 'active'
         && record.kind === 'preference'
         && record.subject.startsWith('brief:')
-        && record.scope.server === server
-        && record.scope.account === user._id
+        && record.scope.server === scope.server
+        && record.scope.account === scope.account
         && (record.expiresAt == null || record.expiresAt > now))
       .slice(0, BRIEF_PREFERENCE_LIMIT)
       .map((record) => {
