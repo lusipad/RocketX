@@ -14,6 +14,7 @@ import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
 import { butlerRecapAgoLabel, butlerSessionRecap, useButler } from '../stores/butler';
+import { BUTLER_BOUNDARY_NOTE, BUTLER_SCENE_PROMPTS } from '../lib/butlerPrompts';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
@@ -189,6 +190,27 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               {recap.lastReply ? <>，我答到「{recap.lastReply}」</> : null}。接着说就能继续。
             </div>
           ) : null}
+          {!hasConversation && (
+            <div className="rounded-lg border border-line bg-fill-1/50 px-4 py-3">
+              <div className="text-xs text-ink-2">试着这样问我：</div>
+              <div className="mt-2 flex flex-col gap-1.5">
+                {BUTLER_SCENE_PROMPTS.map((item) => (
+                  <button
+                    key={item.scene}
+                    type="button"
+                    // 只填进输入框不直接发送：例句里的人名/编号是占位符，
+                    // 直接发送必然查空（找文件场景还会被追问发送人和日期）。
+                    onClick={() => setInput(item.prompt)}
+                    className="rounded-md px-2 py-1 text-left text-xs text-ink-2 hover:bg-fill-hover hover:text-ink"
+                  >
+                    <span className="mr-2 text-ink-3">{item.scene}</span>
+                    {item.prompt}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2.5 border-t border-line pt-2 text-2xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
+            </div>
+          )}
           {/* 过程显示在它产出的那条回答上方(issue #99):
               最后一行是 assistant 时,步骤插在它前面——先看做了什么,再看结论 */}
           {(() => {

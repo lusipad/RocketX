@@ -12,7 +12,10 @@ export type AgentLoopEvent =
   | { type: 'content'; content: string }
   | { type: 'reasoning'; reasoning: string }
   | { type: 'tool-call'; toolCall: AiToolCall }
-  | { type: 'tool-result'; toolCallId: string; content: string };
+  | { type: 'tool-result'; toolCallId: string; content: string }
+  // 等待期可见化：只有 Codex 路径生产（决策 12，API 大脑冻结）。
+  // 下面的 runAgentLoop 一行不改；展示层对「没有这个事件」优雅降级到原行为。
+  | { type: 'phase'; phase: 'thread-setup' | 'thinking' | 'summarizing'; detail?: string };
 
 export interface AgentLoopGateway {
   chat(capability: 'agent', request: AiChatRequest): AsyncIterable<AiChunk>;

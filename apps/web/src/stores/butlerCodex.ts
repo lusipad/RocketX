@@ -300,6 +300,16 @@ function createTurnController(
         onEvent?.({ type: 'content', content: delta });
         return;
       }
+      // 推理摘要：白捡的「正在想…」通道，协议本来就在发，此前无人消费。
+      if (method === 'item/reasoning/summaryTextDelta') {
+        const delta = typeof params.delta === 'string' ? params.delta : '';
+        if (active && delta) onEvent?.({ type: 'reasoning', reasoning: delta });
+        return;
+      }
+      if (method === 'turn/started') {
+        if (active) onEvent?.({ type: 'phase', phase: 'thinking', detail: '正在想…' });
+        return;
+      }
       if (method !== 'turn/completed' || !active) return;
       const turn = record(params.turn);
       const completedTurnId = typeof turn.id === 'string' ? turn.id : typeof params.turnId === 'string' ? params.turnId : undefined;
@@ -401,6 +411,8 @@ async function respondDynamicToolCall(
     }));
     timing?.addToolRoundtrip(name, Date.now() - invokedAt);
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: result });
+    // 消灭「工具跑完 → 下一段文字之前」的轮间空窗。
+    onEvent?.({ type: 'phase', phase: 'summarizing', detail: '正在整理结果…' });
     // 工具已返回 JSON 字符串，直接透传，避免二次编码。
     return {
       contentItems: [{ type: 'inputText', text: result }],
@@ -567,8 +579,16 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
   try {
     const now = options.now ?? Date.now();
     const setupStartedAt = Date.now();
+    // 这段可能拉起 app-server 进程并 thread/start，是整轮里最长的黑盒；
+    // 事件接线要到下面才建立，所以这里直接用 options.onEvent 播报。
+    options.onEvent?.({ type: 'phase', phase: 'thread-setup', detail: '正在唤醒管家大脑…' });
     const resumeMode = await ensureResidentThread();
     if (residentStopRequested) return { text: '' };
+    options.onEvent?.({
+      type: 'phase',
+      phase: 'thinking',
+      detail: resumeMode === 'started' || resumeMode === 'restarted' ? '正在准备上下文…' : '正在接续上下文…',
+    });
     const threadId = residentThreadId;
     if (!threadId) throw new Error('AI Codex 会话尚未创建');
     timing = beginButlerTurnTiming({ threadSetupMs: Date.now() - setupStartedAt, resumeMode });

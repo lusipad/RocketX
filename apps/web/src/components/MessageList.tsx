@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
-import { ArrowDown, Copy, Download, Share2, Star, Trash2 } from 'lucide-react';
+import { ArrowDown, Bot, Copy, Download, Share2, Star, Trash2 } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
@@ -10,6 +10,12 @@ import MessageItem from './MessageItem';
 import DiscussionCard from './DiscussionCard';
 import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
+import { askButlerAboutMessages } from '../kernel/butler';
+import { useButler } from '../stores/butler';
+import {
+  BUTLER_EXTRACT_COMMITMENTS_PROMPT,
+  BUTLER_SUMMARIZE_PROMPT,
+} from '../lib/butlerPrompts';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import { saveTextFile } from '../lib/exportText';
 import { useKernelContributions } from '../kernel/registry';
@@ -65,6 +71,8 @@ export default function MessageList({ rid }: { rid: string }) {
   const selectMode = useChat((s) => s.selectMode);
   const selectedMids = useChat((s) => s.selectedMids);
   const exitSelectMode = useChat((s) => s.exitSelectMode);
+  // MessageList 是单实例，这里可以放心订阅 running（对比 MessageItem 每条一个实例）
+  const butlerRunning = useButler((s) => s.running);
   const deleteMessage = useChat((s) => s.deleteMessage);
   const toggleStar = useChat((s) => s.toggleStar);
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -279,6 +287,17 @@ export default function MessageList({ rid }: { rid: string }) {
   }
 
   const selectedMessages = list.filter((m) => selectedMids.has(m._id));
+
+  const handOverToButler = (question: string, actionLabel: string): void => {
+    if (!selectedMessages.length) return;
+    const result = askButlerAboutMessages(rid, selectedMessages, question);
+    if (result === 'busy') {
+      toast.error('管家正在忙，等它答完这轮');
+      return;
+    }
+    toast.success(`已把 ${selectedMessages.length} 条消息交给管家：${actionLabel}`);
+    exitSelectMode();
+  };
   const deletableSelected = selectedMessages.filter((message) => message.u._id === myId);
   const copySelected = async () => {
     await navigator.clipboard.writeText(messagesToMarkdown(selectedMessages));
@@ -325,6 +344,24 @@ export default function MessageList({ rid }: { rid: string }) {
             >
               <Download size={13} />
               导出
+            </button>
+            <button
+              onClick={() => handOverToButler(BUTLER_EXTRACT_COMMITMENTS_PROMPT, '提取承诺')}
+              disabled={selectedMessages.length === 0 || butlerRunning}
+              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+              title="让管家从这些消息里提取承诺"
+            >
+              <Bot size={13} />
+              提取承诺
+            </button>
+            <button
+              onClick={() => handOverToButler(BUTLER_SUMMARIZE_PROMPT, '总结这段')}
+              disabled={selectedMessages.length === 0 || butlerRunning}
+              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+              title="让管家总结这段对话"
+            >
+              <Bot size={13} />
+              总结这段
             </button>
             <button
               onClick={() => {

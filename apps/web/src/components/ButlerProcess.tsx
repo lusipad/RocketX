@@ -6,6 +6,13 @@ function stepTime(at: number): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
 }
 
+function stepDuration(step: ButlerStep): string | null {
+  if (step.endedAt == null) return null;
+  const ms = step.endedAt - step.at;
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
 /**
  * AI 回答的执行过程：本轮调用了哪些工具、各自成败。运行中自动展开
  * 实时滚动，结束后收起成一行摘要，可再展开回看。
@@ -37,7 +44,12 @@ export default function ButlerProcess({
             ) : (
               <CheckCircle2 size={13} className="shrink-0 text-success" />
             )}
-            <span className="min-w-0 flex-1 truncate">{step.label}</span>
+            <span className="min-w-0 flex-1 truncate" title={step.detail ?? step.label}>
+              {step.detail ?? step.label}
+            </span>
+            {stepDuration(step) && (
+              <span className="shrink-0 text-2xs text-ink-3">{stepDuration(step)}</span>
+            )}
             <span className="shrink-0 text-2xs text-ink-3">{stepTime(step.at)}</span>
           </div>
         ))}
