@@ -12,6 +12,7 @@ import {
   useButler,
 } from '../../apps/web/src/stores/butler';
 import { useLocalCodex } from '../../apps/web/src/stores/localCodex';
+import { useToast } from '../../apps/web/src/stores/toast';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
@@ -72,6 +73,8 @@ function stubLocalCodex(initial: Partial<ReturnType<typeof useLocalCodex.getStat
     },
     send: async (text: string) => {
       calls.push({ method: 'send', payload: text });
+      // 真实 send 会把回合置为 running；完成通知的订阅依赖这个转换
+      useLocalCodex.setState({ status: 'running' });
     },
   });
   return {
@@ -298,6 +301,102 @@ test('零配置兜底：pending 目标派发时先落库拿 id 再过白名单�
   } finally {
     codex.restore();
     resetEnvironments();
+    useButler.getState().reset();
+  }
+});
+
+test('派出去的活干完了吱一声；线程被换掉后不再报喜', async () => {
+  useButler.getState().reset();
+  resetEnvironments();
+  useToast.setState({ toasts: [] });
+  const environment = useAgentEnvironments.getState().addEnvironment({
+    name: '主仓',
+    path: 'D:/Repos/rocketchatx',
+    adoProjects: [],
+    defaultBaseBranch: '',
+    branchPrefix: '',
+  });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-watch', status: 'ready' });
+
+  try {
+    useButler.setState({
+      errandDraft: {
+        checkpointId: 'errand-watch-1',
+        spec: { title: '盯完成的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+      },
+      runtimeCheckpoints: [{
+        id: 'errand-watch-1',
+        toolName: 'draft_errand',
+        capability: 'errands.draft',
+        status: 'approval-required',
+        params: { title: '盯完成的活' },
+        idempotencyKey: 'errand-watch-1',
+        createdAt: 1,
+        updatedAt: 1,
+      } as never],
+    });
+    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+    assert.equal(useLocalCodex.getState().status, 'running');
+
+    // 活干完：running → ready 触发一条带「去看看」的提示
+    useLocalCodex.setState({ status: 'ready' });
+    const doneToast = useToast.getState().toasts.find((item) => item.message.includes('盯完成的活'));
+    assert.ok(doneToast, '完成后必须提示');
+    assert.equal(doneToast.action?.label, '去看看');
+
+    // 只报一次
+    useToast.setState({ toasts: [] });
+    useLocalCodex.setState({ status: 'running' });
+    useLocalCodex.setState({ status: 'ready' });
+    assert.equal(useToast.getState().toasts.length, 0);
+  } finally {
+    codex.restore();
+    resetEnvironments();
+    useToast.setState({ toasts: [] });
+    useButler.getState().reset();
+  }
+});
+
+test('线程被换掉后订阅失效，不冒充旧活报结果', async () => {
+  useButler.getState().reset();
+  resetEnvironments();
+  useToast.setState({ toasts: [] });
+  const environment = useAgentEnvironments.getState().addEnvironment({
+    name: '主仓',
+    path: 'D:/Repos/rocketchatx',
+    adoProjects: [],
+    defaultBaseBranch: '',
+    branchPrefix: '',
+  });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-swap', status: 'ready' });
+
+  try {
+    useButler.setState({
+      errandDraft: {
+        checkpointId: 'errand-swap-1',
+        spec: { title: '被换线程的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+      },
+      runtimeCheckpoints: [{
+        id: 'errand-swap-1',
+        toolName: 'draft_errand',
+        capability: 'errands.draft',
+        status: 'approval-required',
+        params: { title: '被换线程的活' },
+        idempotencyKey: 'errand-swap-1',
+        createdAt: 1,
+        updatedAt: 1,
+      } as never],
+    });
+    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+
+    // 用户在执行间手动开了新线程：旧活的完成状态无从谈起
+    useLocalCodex.setState({ threadId: 't-other' });
+    useLocalCodex.setState({ status: 'ready' });
+    assert.equal(useToast.getState().toasts.length, 0);
+  } finally {
+    codex.restore();
+    resetEnvironments();
+    useToast.setState({ toasts: [] });
     useButler.getState().reset();
   }
 });

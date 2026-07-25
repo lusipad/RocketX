@@ -1,6 +1,8 @@
 import { renderDispatchSpec, type DispatchSpec } from '../agent/dispatchSpec';
 import { useAgentEnvironments } from '../stores/agentEnvironments';
 import { useLocalCodex } from '../stores/localCodex';
+import { toast } from '../stores/toast';
+import { useUI } from '../stores/ui';
 import { assertRegisteredWorkspace, type DispatchTarget } from './dispatchWorkspaces';
 
 /** 管家拟好、等用户在卡上过目的任务规格草案 */
@@ -54,5 +56,31 @@ export async function dispatchButlerErrand(
   await useLocalCodex.getState().send(renderDispatchSpec(spec));
 
   useAgentEnvironments.getState().rememberDispatchEnvironment(environment.id);
+  watchErrandCompletion(spec.title, useLocalCodex.getState().threadId);
   return { workspaceName: environment.name };
+}
+
+/**
+ * 派出去的活干完了要吱一声——不然用户得自己盯执行间。
+ * 只盯本次派发的线程；换线程、关应用即失效（v1 不做跨重启跟踪）。
+ */
+function watchErrandCompletion(title: string, threadId: string | undefined): void {
+  if (!threadId) return;
+  const unsubscribe = useLocalCodex.subscribe((state, previous) => {
+    if (state.threadId !== threadId) {
+      // 线程换了：这个活的进度已无从谈起，别再报喜
+      unsubscribe();
+      return;
+    }
+    if (previous.status !== 'running' || state.status === 'running') return;
+    unsubscribe();
+    if (state.status === 'ready') {
+      toast.success(`派出去的活「${title}」有结果了`, {
+        label: '去看看',
+        onClick: () => useUI.getState().setModule('codex'),
+      });
+    } else {
+      toast.info(`派出去的活「${title}」停下来了，去执行间看看原因`);
+    }
+  });
 }
