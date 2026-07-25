@@ -197,6 +197,13 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
       ],
     );
 
+    // Codex 原生记忆必须显式关掉：它是会话空闲后后台自动提炼、无逐条确认、
+    // 全局作用域的，与「确认卡是记忆唯一写入口 + scope 由可信上下文强制捕获」
+    // 直接冲突。不显式声明，这条承诺就只靠对方默认值在守。
+    const memoryMode = transport.writes.find((message) => message.method === 'thread/memoryMode/set');
+    assert.ok(memoryMode, '常驻线程必须显式关闭 Codex 原生记忆');
+    assert.deepEqual(memoryMode.params, { threadId: 'butler-thread', mode: 'disabled' });
+
     const turnStart = await startTurn(transport);
     const turnParams = turnStart.params as Record<string, unknown>;
     assert.equal(turnParams.effort, 'medium');

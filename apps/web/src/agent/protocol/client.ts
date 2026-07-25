@@ -6,6 +6,8 @@ import type { ThreadResumeParams } from './generated/v2/ThreadResumeParams';
 import type { ThreadResumeResponse } from './generated/v2/ThreadResumeResponse';
 import type { ThreadSetNameParams } from './generated/v2/ThreadSetNameParams';
 import type { ThreadSetNameResponse } from './generated/v2/ThreadSetNameResponse';
+import type { ThreadMemoryModeSetParams } from './generated/v2/ThreadMemoryModeSetParams';
+import type { ThreadMemoryModeSetResponse } from './generated/v2/ThreadMemoryModeSetResponse';
 import type { ThreadStartParams } from './generated/v2/ThreadStartParams';
 import type { ThreadStartResponse } from './generated/v2/ThreadStartResponse';
 import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
@@ -37,6 +39,10 @@ interface ClientMethods {
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
   'thread/name/set': { params: ThreadSetNameParams; result: ThreadSetNameResponse };
+  'thread/memoryMode/set': {
+    params: ThreadMemoryModeSetParams;
+    result: ThreadMemoryModeSetResponse;
+  };
   'externalAgentConfig/import': {
     params: ExternalAgentConfigImportParams;
     result: ExternalAgentConfigImportResponse;
