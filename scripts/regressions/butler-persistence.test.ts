@@ -9,6 +9,7 @@ import {
 } from '../../apps/web/src/lib/butlerBrain';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
+  butlerSessionRecap,
   flushButlerPersist,
   resetButlerPersistenceForTests,
   setButlerCodexRunner,
@@ -16,6 +17,7 @@ import {
   setButlerNowProvider,
   setButlerPersistence,
   useButler,
+  type ButlerLine,
 } from '../../apps/web/src/stores/butler';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
@@ -353,6 +355,111 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
   } finally {
     await discardResidentCodexThread();
     restoreNow();
+    restore();
+  }
+});
+
+test('删除会话：删非活动只移除，删活动切最近，删最后一个新建默认，重启后仍生效', async () => {
+  let now = 1_000;
+  const restoreNow = setButlerNowProvider(() => now);
+  const restore = setButlerLoopRunner(async (options) => ({
+    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
+    messages: options.messages,
+  }));
+  try {
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    login('delete-user');
+    await useButler.getState().hydrate();
+
+    const firstSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('第一段调查');
+    now = 2_000;
+    await useButler.getState().newConversation();
+    const secondSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('第二段调查');
+    await flushButlerPersist();
+
+    // 删非活动：列表少一个，活动会话不变
+    await useButler.getState().deleteSession(firstSessionId);
+    assert.equal(useButler.getState().sessions.length, 1);
+    assert.equal(useButler.getState().activeSessionId, secondSessionId);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), true);
+
+    // 删除不存在/已删除的 id 是 no-op
+    await useButler.getState().deleteSession(firstSessionId);
+    assert.equal(useButler.getState().sessions.length, 1);
+
+    // 删最后一个活动会话：新建默认会话，transcript 清空为欢迎语
+    now = 3_000;
+    await useButler.getState().deleteSession(secondSessionId);
+    const fallbackId = useButler.getState().activeSessionId;
+    assert.notEqual(fallbackId, secondSessionId);
+    assert.equal(useButler.getState().sessions.length, 1);
+    assert.equal(useButler.getState().sessions[0].title, '新对话');
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), false);
+
+    // 再建一个并删活动的：切到最近的剩余会话
+    now = 4_000;
+    await useButler.getState().newConversation();
+    const thirdSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('第三段调查');
+    await useButler.getState().deleteSession(thirdSessionId);
+    assert.equal(useButler.getState().activeSessionId, fallbackId);
+
+    // 重启后删除仍生效
+    await flushButlerPersist();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await discardResidentCodexThread();
+    await useButler.getState().hydrate();
+    assert.equal(useButler.getState().sessions.length, 1);
+    assert.equal(useButler.getState().sessions.some((session) => session.id === thirdSessionId), false);
+  } finally {
+    await discardResidentCodexThread();
+    restoreNow();
+    restore();
+  }
+});
+
+test('「上回说到」派生：取最后一问与其后回答并截断，会话摘要带 lastAsk 预览', async () => {
+  const lineOf = (role: ButlerLine['role'], text: string): ButlerLine => ({ id: `${role}-${text}`, role, text });
+  assert.equal(butlerSessionRecap([]), null);
+  assert.equal(butlerSessionRecap([lineOf('assistant', '欢迎语')]), null);
+
+  const recap = butlerSessionRecap([
+    lineOf('assistant', '欢迎语'),
+    lineOf('user', '早先的问题'),
+    lineOf('assistant', '早先的回答'),
+    lineOf('user', `比较 #101 和 #102 ${'长'.repeat(60)}`),
+    lineOf('assistant', '先说结论。'),
+    lineOf('assistant', `最终建议：先合 #102。${'详'.repeat(90)}`),
+  ]);
+  assert.ok(recap);
+  assert.equal(recap.lastAsk.length, 41);
+  assert.equal(recap.lastAsk.endsWith('…'), true);
+  assert.equal(recap.lastAsk.startsWith('比较 #101 和 #102'), true);
+  assert.ok(recap.lastReply);
+  assert.equal(recap.lastReply.startsWith('最终建议：先合 #102。'), true);
+  assert.equal(recap.lastReply.endsWith('…'), true);
+
+  const askOnly = butlerSessionRecap([lineOf('user', '还没有回答的问题')]);
+  assert.deepEqual(askOnly, { lastAsk: '还没有回答的问题' });
+
+  const restore = setButlerLoopRunner(async (options) => ({
+    text: '好的',
+    messages: options.messages,
+  }));
+  try {
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    login('recap-user');
+    await useButler.getState().hydrate();
+    await useButler.getState().ask('这个会话在查什么');
+    await flushButlerPersist();
+    assert.equal(useButler.getState().sessions[0].lastAsk, '这个会话在查什么');
+  } finally {
+    await discardResidentCodexThread();
     restore();
   }
 });

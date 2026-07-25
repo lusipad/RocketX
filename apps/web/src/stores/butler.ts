@@ -113,6 +113,13 @@ export interface ButlerSessionSummary {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** 「上回说到」预览：该会话最后一条用户消息（截断），无真实提问时缺省 */
+  lastAsk?: string;
+}
+
+export interface ButlerSessionRecap {
+  lastAsk: string;
+  lastReply?: string;
 }
 
 export interface ButlerWorkflowSnapshot {
@@ -191,6 +198,8 @@ export interface ButlerState {
   newConversation: () => Promise<void>;
   switchSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
+  /** 删除会话：删活动会话时切到最近的其他会话，没有则新建默认会话；workflow 会话不可删。 */
+  deleteSession: (sessionId: string) => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
   approveToolCheckpoint: (checkpointId: string) => Promise<void>;
@@ -295,10 +304,44 @@ function workflowRunKey(scope: string, key: string): string {
   return `${scope}\u0000${key}`;
 }
 
+const RECAP_ASK_LIMIT = 40;
+const RECAP_REPLY_LIMIT = 80;
+
+function recapText(value: string, limit: number): string {
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  return normalized.length > limit ? `${normalized.slice(0, limit)}…` : normalized;
+}
+
+/** 「上回说到」派生：最后一条用户提问 + 它之后的最后一条回答；没有真实提问返回 null。 */
+export function butlerSessionRecap(lines: readonly ButlerLine[]): ButlerSessionRecap | null {
+  let askIndex = -1;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (lines[index].role === 'user' && lines[index].text.trim()) {
+      askIndex = index;
+      break;
+    }
+  }
+  if (askIndex === -1) return null;
+  let reply: string | undefined;
+  for (let index = lines.length - 1; index > askIndex; index--) {
+    if (lines[index].role === 'assistant' && lines[index].text.trim()) {
+      reply = recapText(lines[index].text, RECAP_REPLY_LIMIT);
+      break;
+    }
+  }
+  return {
+    lastAsk: recapText(lines[askIndex].text, RECAP_ASK_LIMIT),
+    ...(reply ? { lastReply: reply } : {}),
+  };
+}
+
 function sessionSummaries(registry: PersistedButlerSessionRegistry): ButlerSessionSummary[] {
   return registry.sessions
     .filter((session) => session.kind !== 'workflow')
-    .map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt }))
+    .map(({ id, title, createdAt, updatedAt, lines }) => {
+      const lastAsk = butlerSessionRecap(lines)?.lastAsk;
+      return { id, title, createdAt, updatedAt, ...(lastAsk ? { lastAsk } : {}) };
+    })
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
 }
 
@@ -1752,6 +1795,56 @@ export const useButler = create<ButlerState>((set, get) => ({
     sessionRegistry = nextRegistry;
     sessionDirty = false;
     set({ sessions: sessionSummaries(nextRegistry) });
+    await queueRegistryWrite(scope, nextRegistry);
+  },
+
+  deleteSession: async (sessionId) => {
+    const targetId = sessionId.trim();
+    if (!targetId) return;
+    await get().hydrate();
+    if (!sessionRegistry || !persistScope) return;
+    const target = sessionRegistry.sessions.find((session) => session.id === targetId);
+    if (!target || target.kind === 'workflow') return;
+    const deletingActive = sessionRegistry.activeSessionId === targetId;
+    if (deletingActive && get().running) await get().stop();
+
+    await flushButlerPersist();
+    if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
+    const scope = persistScope;
+    const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
+    if (!deletingActive) {
+      const nextRegistry: PersistedButlerSessionRegistry = { ...sessionRegistry, sessions: remaining };
+      sessionRegistry = nextRegistry;
+      set({ sessions: sessionSummaries(nextRegistry) });
+      await queueRegistryWrite(scope, nextRegistry);
+      return;
+    }
+    await discardResidentCodexThread();
+    const nextActive = remaining
+      .filter((session) => session.kind !== 'workflow')
+      .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];
+    let nextRegistry: PersistedButlerSessionRegistry;
+    if (nextActive) {
+      nextRegistry = { ...sessionRegistry, activeSessionId: nextActive.id, sessions: remaining };
+    } else {
+      const now = butlerNow();
+      const nextSession: PersistedButlerSession = {
+        id: crypto.randomUUID(),
+        title: '新对话',
+        createdAt: now,
+        updatedAt: now,
+        lines: welcomeLines(),
+        history: [],
+        engineState: initialEngineState([], getButlerBrain()),
+      };
+      nextRegistry = {
+        ...sessionRegistry,
+        activeSessionId: nextSession.id,
+        sessions: [...remaining, nextSession],
+      };
+    }
+    sessionRegistry = nextRegistry;
+    applyActiveSession(nextRegistry);
     await queueRegistryWrite(scope, nextRegistry);
   },
 
