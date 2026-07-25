@@ -26,10 +26,29 @@ test('多选工具条的两个管家入口带禁用态并退出多选', () => {
 
 test('PR 行拆出独立按钮：整行不再是链接，避免按钮点击冒泡开外链', () => {
   const lists = source('apps/web/src/components/AdoLists.tsx');
-  assert.match(lists, /function PrRow\(\{ pr, onAsk \}/);
+  assert.match(lists, /function PrRow\(/);
   assert.match(lists, /askButlerAboutPullRequests\(/);
-  // 外层容器必须是 div；若又变回 <a ... group flex 整行链接>，按钮会失效
-  assert.match(lists, /<div className="group flex items-center border-b/);
+  // 结构不变量：PrRow 的根节点必须是 div。若又变回整行 <a>，行内按钮点击
+  // 会冒泡去开外链（不写死 className，避免样式微调就误红）
+  const body = lists.slice(lists.indexOf('function PrRow('));
+  const jsx = body
+    .slice(body.indexOf('return ('))
+    .split('\n')
+    .filter((row) => !row.trim().startsWith('//')) // 注释里出现的 <a> 不算
+    .join('\n');
+  const rootTag = jsx.match(/<(\w+)/)?.[1];
+  assert.equal(rootTag, 'div', 'PrRow 根节点必须是 div');
+});
+
+test('PR 比较选择态：跨子 tab 保留，凑齐两个才发起，可取消', () => {
+  const lists = source('apps/web/src/components/AdoLists.tsx');
+  // 选择态必须放在 PullRequestList（切子 tab 时不卸载），不是子列表里
+  assert.match(lists, /export function PullRequestList[\s\S]{0,600}useState<PullRequest\[\]>\(\[\]\)/);
+  assert.match(lists, /next\.length < 2/);
+  assert.match(lists, /butlerComparePullRequestsPrompt\(/);
+  // 忙碌时不清空选择，用户不用重选
+  assert.match(lists, /result === 'busy'[\s\S]{0,120}return;/);
+  assert.match(lists, /再选一个就开始比较/);
 });
 
 test('空状态给场景例句与能力边界，且例句只填输入框不直接发送', () => {

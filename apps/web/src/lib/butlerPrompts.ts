@@ -33,3 +33,14 @@ export const BUTLER_EXTRACT_COMMITMENTS_PROMPT =
   '提取这些消息里的承诺：谁答应了什么、什么时候兑现。';
 
 export const BUTLER_SUMMARIZE_PROMPT = '总结这段对话的结论和待办。';
+
+/**
+ * 「和另一个比较」的提问。
+ *
+ * 两个前置条件缺一不可，否则管家会反问「请给出要比较的两个 PR 编号」：
+ * ① 文本命中 /(?:比较|对比).*(?:PR|拉取请求)/；
+ * ② 上下文里有 ≥2 个 pull-request 来源。编号同时写进正文是双保险。
+ */
+export function butlerComparePullRequestsPrompt(first: number, second: number): string {
+  return `比较这两个 PR：#${first} 和 #${second}，说说改动、风险和评审顺序。`;
+}
