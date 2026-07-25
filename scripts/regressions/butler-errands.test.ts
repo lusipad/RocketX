@@ -503,3 +503,16 @@ test('人不在管家页时：等你点头与回话了都要提示，且指回�
     useButler.getState().reset();
   }
 });
+
+test('对话里的卡片必须进 stickToBottom 依赖，否则渲染了也没人看得见', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  const deps = /useStickToBottom\(\[([\s\S]*?)\]\)/.exec(source)?.[1] ?? '';
+  assert.ok(deps, '找不到 stickToBottom 依赖数组');
+  // 真机上漏掉 errandDraft 让「从桌面页派活」整条链路静默失败：
+  // 卡片渲染在消息之后，不触发自动滚动就永远停在视口下方
+  for (const state of ['errandDraft', 'errandRun', 'routineDraft', 'actionDraft']) {
+    assert.ok(deps.includes(state), `${state} 必须在 stickToBottom 依赖里`);
+    assert.ok(source.includes(`state.${state}`), `${state} 必须真的订阅了 store`);
+  }
+});

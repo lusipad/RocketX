@@ -67,6 +67,8 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const askButler = useButler((state) => state.ask);
   const stopButler = useButler((state) => state.stop);
   const routineDraft = useButler((state) => state.routineDraft);
+  const errandDraft = useButler((state) => state.errandDraft);
+  const errandRun = useButler((state) => state.errandRun);
   const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
   const actionDraft = useButler((state) => state.actionDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
@@ -132,11 +134,15 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
     if (userId) void hydrateButler();
   }, [hydrateButler, userId]);
 
+  // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
+  // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     lines,
     activity,
     butlerError,
     routineDraft,
+    errandDraft,
+    errandRun,
     runtimeCheckpoints,
     actionDraft,
     steps,

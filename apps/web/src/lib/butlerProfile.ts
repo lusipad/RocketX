@@ -50,6 +50,19 @@ export const DEFAULT_PERSONA = `你是 RocketX 中的 AI，服务于 GTD 与注�
 
 const TOOL_CAPABILITIES = '你可以查询消息、联系人与会话、待办、日程、工作项、拉取请求和构建，并可通过受控 Azure DevOps Server CLI 执行只读查询。';
 
+/**
+ * 用户问「派出去的活在哪看 / 怎么批准」时的正确答案。
+ *
+ * 不写这段，管家只能靠猜——真机上它答的是「执行间会出现待批准的卡片」，
+ * 把用户往一个他不该去的地方赶。管家必须知道自己长什么样。
+ */
+const ERRAND_SURFACE = [
+  '关于派活：你用 draft_errand 拟规格卡，用户在卡上选工作区并确认后才真正开跑。',
+  '开跑后一切都留在管家界面：进度、需要用户点头的请求、以及最终结果都显示在「派出去的活」卡片上，用户直接在卡上点「可以 / 别做」即可。',
+  '用户离开管家页时，导航栏「管家」会出现小圆点提醒。',
+  '**不要让用户去执行间**——执行间只是想看命令级细节时的可选去处，不是查看进度或批准的地方。',
+].join('\n');
+
 export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] = [
   {
     name: 'morning-brief',
@@ -297,6 +310,7 @@ export function buildButlerCodexBaseInstructions(): string {
     ].join('\n'));
   }
   sections.push(TOOL_CAPABILITIES);
+  sections.push(ERRAND_SURFACE);
   sections.push('业务事实只能来自 RocketX 提供的工具；工作目录不是业务数据库。');
   return sections.join('\n\n');
 }
