@@ -43,6 +43,18 @@
   --text-lg: 1.125rem;     /* 18px —— 页面标题 */
   --text-lg--line-height: 1.75rem;
 
+  /**
+   * `surface` 是 surface-4 的别名 —— 「浮起面」的默认说法。
+   *
+   * 全仓库有 63 处写的是不带数字的 `bg-surface`（卡片、输入框、文本域、面板），
+   * 而此前只定义了 surface-1..4，这个类根本不存在：那 63 处的背景一直是空的，
+   * 静静穿透到底层容器。浅色下两者恰好都是白色所以看不出来，深色下
+   * surface-4(#292c33) 比 surface-3(#212429) 明显更亮，等于整批卡片从不浮起。
+   *
+   * 用 var() 而不是写死值：自定义属性惰性求值，会自动跟随当前主题的 surface-4。
+   */
+  --color-surface: var(--color-surface-4);
+
   /* 语义色（默认值由 :root 覆盖，这里声明让 Tailwind 生成工具类） */
   --color-surface-1: #f2f3f5;
   --color-surface-2: #f5f6f7;
