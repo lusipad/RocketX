@@ -97,11 +97,12 @@ test('通用宿主拒绝 PATH 查找与目录逃逸并限制 JSON 帧', async ()
   assert.deepEqual(tauriConfig.bundle?.resources, {
     'resources/codex-skills/': 'codex-skills/',
     'resources/plugins/': 'plugins/',
+    'target/codex-resources/codex/': 'codex/',
     'target/ocr-resources/ocr/': 'ocr/',
   });
   assert.match(
     (tauriConfig as { build?: { beforeBuildCommand?: string } }).build?.beforeBuildCommand ?? '',
-    /^pnpm -w prepare:sidecars && /,
+    /^pnpm -w prepare:codex && pnpm -w prepare:sidecars && /,
   );
 });
 

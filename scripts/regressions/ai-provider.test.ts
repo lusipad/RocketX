@@ -283,7 +283,7 @@ test('$codex 宿主命令固定 read-only 沙箱且 prompt 只走 stdin', async 
   assert.match(source, /"--sandbox",\s*"read-only"/);
   // --ephemeral/--ignore-user-config 移入 proc::codex_exec_optional_args，
   // 按 CLI 的 exec --help 探测（新版移除参数时不能以退出码 2 挂掉）
-  assert.match(source, /codex_exec_optional_args\(\)\?/);
+  assert.match(source, /codex_exec_optional_args\(&app\)\?/);
   assert.match(source, /\.arg\("-"\)/);
   assert.match(source, /write_all\(prompt\.as_bytes\(\)\)/);
   assert.doesNotMatch(source, /dangerously-bypass-approvals-and-sandbox/);

@@ -8,6 +8,7 @@ const root = resolve(import.meta.dirname, '..');
 const generatedDir = resolve(root, 'apps/web/src/agent/protocol/generated');
 const codexEntry = resolve(root, 'node_modules/@openai/codex/bin/codex.js');
 const compatibilityFile = resolve(root, 'apps/web/src/agent/protocol/compatibility.ts');
+const packageFile = resolve(root, 'package.json');
 const mode = process.argv[2];
 
 if (mode !== '--write' && mode !== '--check') {
@@ -65,7 +66,14 @@ if (!cliVersion) {
 }
 const compatibilitySource = await readFile(compatibilityFile, 'utf8');
 const expectedVersion = /CODEX_APP_SERVER_VERSION = '([^']+)'/.exec(compatibilitySource)?.[1];
-if (!expectedVersion || cliVersion !== expectedVersion) {
+const packageJson = JSON.parse(await readFile(packageFile, 'utf8'));
+const dependencyVersion = packageJson.devDependencies?.['@openai/codex'];
+if (!expectedVersion || dependencyVersion !== expectedVersion) {
+  throw new Error(
+    `根依赖 @openai/codex ${dependencyVersion ?? '未知'} 与 app-server 基线 ${expectedVersion ?? '未知'} 不一致`,
+  );
+}
+if (cliVersion !== expectedVersion) {
   throw new Error(`仓库 Codex CLI ${cliVersion} 与 app-server 基线 ${expectedVersion ?? '未知'} 不一致`);
 }
 

@@ -16,7 +16,7 @@ class FakeTransport implements CodexTransport {
 
   async start(handlers: Parameters<CodexTransport['start']>[0]) {
     this.handlers = handlers;
-    return { processId: 'test-process', version: this.version };
+    return { processId: 'test-process', version: this.version, runtimeSource: 'bundled' };
   }
 
   async write(message: Record<string, unknown>) {

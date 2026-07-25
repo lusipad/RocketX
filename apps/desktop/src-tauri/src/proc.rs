@@ -39,6 +39,7 @@ struct ManagedCodex {
     attachments_dir: PathBuf,
     workspace_root: String,
     version: String,
+    runtime_source: CodexRuntimeSource,
 }
 
 #[derive(Default)]
@@ -53,6 +54,14 @@ pub struct CodexProcessInfo {
     process_id: String,
     version: String,
     runtime_workspace_root: String,
+    runtime_source: CodexRuntimeSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexRuntimeSource {
+    Bundled,
+    System,
 }
 
 #[derive(Serialize)]
@@ -61,6 +70,7 @@ pub struct CodexRuntimeProbe {
     ready: bool,
     version: Option<String>,
     executable_path: Option<String>,
+    source: Option<CodexRuntimeSource>,
     reason: Option<String>,
 }
 
@@ -94,6 +104,7 @@ struct ResolvedCodex {
     program: PathBuf,
     prefix_args: Vec<OsString>,
     display_path: String,
+    source: CodexRuntimeSource,
 }
 
 impl ResolvedCodex {
@@ -129,8 +140,16 @@ fn find_program(name: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-#[cfg(windows)]
-fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
+#[cfg(not(windows))]
+fn find_program(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .map(|directory| directory.join(name))
+        .find(|path| path.is_file())
+}
+
+fn resolved_codex_path(path: &Path, source: CodexRuntimeSource) -> Result<ResolvedCodex, String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("Codex 路径不可用：{error}"))?;
@@ -148,6 +167,7 @@ fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
     if name != "codex.exe" && name != "codex.cmd" && name != "codex" {
         return Err("请选择 codex.exe 或 codex.cmd".to_string());
     }
+    #[cfg(windows)]
     if name == "codex.cmd" {
         let entry = canonical
             .parent()
@@ -170,12 +190,14 @@ fn resolved_codex_path(path: &Path) -> Result<ResolvedCodex, String> {
             program: node,
             prefix_args: vec![entry.into_os_string()],
             display_path: canonical.to_string_lossy().into_owned(),
+            source,
         });
     }
     Ok(ResolvedCodex {
         program: canonical.clone(),
         prefix_args: Vec::new(),
         display_path: canonical.to_string_lossy().into_owned(),
+        source,
     })
 }
 
@@ -210,37 +232,74 @@ fn standard_codex_paths() -> Vec<PathBuf> {
     paths
 }
 
-fn resolve_codex() -> Result<ResolvedCodex, String> {
+#[cfg(not(windows))]
+fn standard_codex_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn bundled_codex_paths(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let executable = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let mut paths = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        paths.push(resource_dir.join("codex").join("bin").join(executable));
+    }
+    paths.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("codex-resources")
+            .join("codex")
+            .join("bin")
+            .join(executable),
+    );
+    paths
+}
+
+fn system_codex_paths() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        if let Some(path) = find_program("codex.cmd") {
-            if let Ok(resolved) = resolved_codex_path(&path) {
+        ["codex.cmd", "codex.exe"]
+            .into_iter()
+            .filter_map(find_program)
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        find_program("codex").into_iter().collect()
+    }
+}
+
+fn resolve_codex_from_candidates(
+    bundled_paths: &[PathBuf],
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+) -> Result<ResolvedCodex, String> {
+    for path in bundled_paths {
+        if path.is_file() {
+            if let Ok(resolved) = resolved_codex_path(path, CodexRuntimeSource::Bundled) {
                 return Ok(resolved);
             }
         }
-        if let Some(path) = find_program("codex.exe") {
-            return resolved_codex_path(&path);
-        }
-        for path in standard_codex_paths() {
-            if path.is_file() {
-                if let Ok(resolved) = resolved_codex_path(&path) {
-                    return Ok(resolved);
-                }
+    }
+    for path in system_paths.iter().chain(standard_paths) {
+        if path.is_file() {
+            if let Ok(resolved) = resolved_codex_path(path, CodexRuntimeSource::System) {
+                return Ok(resolved);
             }
         }
-        return Err("未检测到可用的 Codex".to_string());
     }
-
-    #[cfg(not(windows))]
-    Ok(ResolvedCodex {
-        program: PathBuf::from("codex"),
-        prefix_args: Vec::new(),
-        display_path: "codex".to_string(),
-    })
+    Err("未检测到可用的 Codex".to_string())
 }
 
-pub(crate) fn codex_command() -> Result<Command, String> {
-    Ok(resolve_codex()?.command())
+fn resolve_codex(app: &tauri::AppHandle) -> Result<ResolvedCodex, String> {
+    resolve_codex_from_candidates(
+        &bundled_codex_paths(app),
+        &system_codex_paths(),
+        &standard_codex_paths(),
+    )
+}
+
+pub(crate) fn codex_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    Ok(resolve_codex(app)?.command())
 }
 
 fn version_token(token: &str) -> Option<&str> {
@@ -293,8 +352,8 @@ fn output_preview(value: &str) -> String {
     preview
 }
 
-fn codex_cli_version() -> Result<String, String> {
-    let mut command = codex_command()?;
+fn codex_cli_version(resolved: &ResolvedCodex) -> Result<String, String> {
+    let mut command = resolved.command();
     command.arg("--version");
     let output = command
         .stdin(Stdio::null())
@@ -325,8 +384,8 @@ fn codex_cli_version() -> Result<String, String> {
     Err(format!("无法读取 Codex CLI 版本（{}）", details.join("；")))
 }
 
-fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
-    let mut command = codex_command()?;
+fn codex_command_succeeds(resolved: &ResolvedCodex, args: &[&str]) -> Result<(), String> {
+    let mut command = resolved.command();
     let output = command
         .args(args)
         .stdin(Stdio::null())
@@ -347,8 +406,8 @@ fn codex_command_succeeds(args: &[&str]) -> Result<(), String> {
 
 /// 子命令的 --help 文本，用来探测当前 CLI 版本还认识哪些参数。
 /// 部分包装脚本把用法打到 stderr，两路都收。
-fn subcommand_help(subcommand: &str) -> Result<String, String> {
-    let mut command = codex_command()?;
+fn subcommand_help(resolved: &ResolvedCodex, subcommand: &str) -> Result<String, String> {
+    let mut command = resolved.command();
     let output = command
         .args([subcommand, "--help"])
         .stdin(Stdio::null())
@@ -374,8 +433,11 @@ fn app_server_args_for_help(help: &str) -> Vec<&'static str> {
     }
 }
 
-fn app_server_launch_args() -> Result<Vec<&'static str>, String> {
-    Ok(app_server_args_for_help(&subcommand_help("app-server")?))
+fn app_server_launch_args(resolved: &ResolvedCodex) -> Result<Vec<&'static str>, String> {
+    Ok(app_server_args_for_help(&subcommand_help(
+        resolved,
+        "app-server",
+    )?))
 }
 
 /// `codex exec` 的可选参数同样存在版本漂移：任何一个被新版移除都会让进程
@@ -399,47 +461,56 @@ pub(crate) fn exec_optional_args_for_help(help: &str) -> Vec<&'static str> {
     args
 }
 
-pub(crate) fn codex_exec_optional_args() -> Result<Vec<&'static str>, String> {
-    Ok(exec_optional_args_for_help(&subcommand_help("exec")?))
+pub(crate) fn codex_exec_optional_args(
+    app: &tauri::AppHandle,
+) -> Result<Vec<&'static str>, String> {
+    let resolved = resolve_codex(app)?;
+    Ok(exec_optional_args_for_help(&subcommand_help(
+        &resolved, "exec",
+    )?))
 }
 
 #[tauri::command]
-pub fn codex_runtime_probe() -> CodexRuntimeProbe {
-    let resolved = match resolve_codex() {
+pub fn codex_runtime_probe(app: tauri::AppHandle) -> CodexRuntimeProbe {
+    let resolved = match resolve_codex(&app) {
         Ok(value) => value,
         Err(reason) => {
             return CodexRuntimeProbe {
                 ready: false,
                 version: None,
                 executable_path: None,
+                source: None,
                 reason: Some(reason),
             }
         }
     };
-    let version = match codex_cli_version() {
+    let version = match codex_cli_version(&resolved) {
         Ok(value) => value,
         Err(reason) => {
             return CodexRuntimeProbe {
                 ready: false,
                 version: None,
                 executable_path: Some(resolved.display_path),
+                source: Some(resolved.source),
                 reason: Some(reason),
             }
         }
     };
-    if let Err(reason) = codex_command_succeeds(&["app-server", "--help"]) {
+    if let Err(reason) = codex_command_succeeds(&resolved, &["app-server", "--help"]) {
         return CodexRuntimeProbe {
             ready: false,
             version: Some(version),
             executable_path: Some(resolved.display_path),
+            source: Some(resolved.source),
             reason: Some(format!("Codex 缺少 app-server 能力：{reason}")),
         };
     }
-    if let Err(reason) = codex_command_succeeds(&["login", "status"]) {
+    if let Err(reason) = codex_command_succeeds(&resolved, &["login", "status"]) {
         return CodexRuntimeProbe {
             ready: false,
             version: Some(version),
             executable_path: Some(resolved.display_path),
+            source: Some(resolved.source),
             reason: Some(format!("Codex 尚未登录：{reason}")),
         };
     }
@@ -447,6 +518,7 @@ pub fn codex_runtime_probe() -> CodexRuntimeProbe {
         ready: true,
         version: Some(version),
         executable_path: Some(resolved.display_path),
+        source: Some(resolved.source),
         reason: None,
     }
 }
@@ -1179,7 +1251,8 @@ pub fn codex_app_server_start(
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
     let workspace_root = host_path(&canonical_directory(&workspace_root)?);
-    let version = codex_cli_version()?;
+    let resolved = resolve_codex(&app)?;
+    let version = codex_cli_version(&resolved)?;
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
     let mut processes = state
@@ -1194,11 +1267,12 @@ pub fn codex_app_server_start(
             process_id: process.process_id.clone(),
             version: process.version.clone(),
             runtime_workspace_root: process.workspace_root.clone(),
+            runtime_source: process.runtime_source,
         });
     }
 
-    let launch_args = app_server_launch_args()?;
-    let mut command = codex_command()?;
+    let launch_args = app_server_launch_args(&resolved)?;
+    let mut command = resolved.command();
     command
         .args(&launch_args)
         .current_dir(&workspace_root)
@@ -1234,6 +1308,7 @@ pub fn codex_app_server_start(
         attachments_dir,
         workspace_root: workspace_root.clone(),
         version: version.clone(),
+        runtime_source: resolved.source,
     };
     processes.insert(process_id.clone(), managed);
     drop(processes);
@@ -1245,6 +1320,7 @@ pub fn codex_app_server_start(
         process_id,
         version,
         runtime_workspace_root: workspace_root,
+        runtime_source: resolved.source,
     })
 }
 
@@ -1717,8 +1793,6 @@ pub fn shutdown(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::ResolvedCodex;
     use super::{
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
@@ -1728,6 +1802,11 @@ mod tests {
         safe_attachment_path, validate_butler_azure_devops_server_read_request,
         validate_session_id, verify_update_package, BundledSkillInstallResult,
         BundledSkillOwnership, ButlerAzureDevOpsServerReadRequest, UPDATER_PUBLIC_KEY,
+    };
+    #[cfg(windows)]
+    use super::{
+        resolve_codex_from_candidates, CodexProcessInfo, CodexRuntimeProbe, CodexRuntimeSource,
+        ResolvedCodex,
     };
     use serde_json::json;
     #[cfg(windows)]
@@ -2161,6 +2240,84 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
             config["bundle"]["resources"]["resources/codex-skills/"].as_str(),
             Some("codex-skills/")
         );
+        assert_eq!(
+            config["bundle"]["resources"]["target/codex-resources/codex/"].as_str(),
+            Some("codex/")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_codex_precedes_system_and_standard_candidates() {
+        let root = unique_temp_dir("bundled-codex-priority");
+        let bundled = root.join("bundled").join("codex.exe");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&bundled, &system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let resolved = resolve_codex_from_candidates(
+            std::slice::from_ref(&bundled),
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+        )
+        .unwrap();
+        assert_eq!(resolved.source, CodexRuntimeSource::Bundled);
+        assert_eq!(
+            PathBuf::from(resolved.display_path),
+            PathBuf::from(host_path(&bundled.canonicalize().unwrap()))
+        );
+
+        fs::remove_file(&bundled).unwrap();
+        let fallback = resolve_codex_from_candidates(
+            std::slice::from_ref(&bundled),
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+        )
+        .unwrap();
+        assert_eq!(fallback.source, CodexRuntimeSource::System);
+        assert_eq!(
+            PathBuf::from(fallback.display_path),
+            PathBuf::from(host_path(&system.canonicalize().unwrap()))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_bundled_codex_runs_without_system_candidates_and_reports_source() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("codex-resources")
+            .join("codex")
+            .join("bin")
+            .join("codex.exe");
+        let resolved = resolve_codex_from_candidates(&[bundled], &[], &[])
+            .expect("bundled Codex must resolve");
+        let output = resolved.command().arg("--version").output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("0.144.4"));
+        assert_eq!(resolved.source, CodexRuntimeSource::Bundled);
+
+        let probe = serde_json::to_value(CodexRuntimeProbe {
+            ready: true,
+            version: Some("0.144.4".to_string()),
+            executable_path: Some(resolved.display_path),
+            source: Some(resolved.source),
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(probe["source"], "bundled");
+        let process = serde_json::to_value(CodexProcessInfo {
+            process_id: "test-process".to_string(),
+            version: "0.144.4".to_string(),
+            runtime_workspace_root: "C:\\workspace".to_string(),
+            runtime_source: resolved.source,
+        })
+        .unwrap();
+        assert_eq!(process["runtimeSource"], "bundled");
     }
 
     #[cfg(windows)]
@@ -2174,6 +2331,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
                 r"C:\Users\test\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
             )],
             display_path: r"C:\Users\test\AppData\Roaming\npm\codex.cmd".to_string(),
+            source: CodexRuntimeSource::System,
         };
         let command = resolved.command();
         assert_eq!(
