@@ -226,10 +226,11 @@ test('confirmErrandDraft：已注册工作区一键派发，规格分框送进�
     assert.doesNotMatch(sent, /rocketx_untrusted_evidence/);
     assert.equal(useAgentEnvironments.getState().lastDispatchEnvironmentId, environment.id);
     assert.equal(useButler.getState().errandDraft, null);
-    assert.equal(
-      useButler.getState().lines.some((line) => line.text.includes('已派发任务：修掉登录页报错')),
-      true,
-    );
+    const dispatched = useButler.getState().lines.find((line) => line.text.includes('修掉登录页报错')
+      && line.text.includes('已派出去'));
+    assert.ok(dispatched, '派发后对话里要有一行交代');
+    // 这句会被模型学舌：提「去执行间看」，管家就会反复把用户往执行间赶
+    assert.doesNotMatch(dispatched.text, /执行间/);
   } finally {
     restoreRunner();
     codex.restore();

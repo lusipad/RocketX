@@ -1,6 +1,6 @@
 import { Check, ExternalLink, Loader2, X } from 'lucide-react';
 import { useEffect } from 'react';
-import { errandRunIsCurrent, latestCodexReply } from '../lib/butlerErrands';
+import { currentErrandActivity, errandRunIsCurrent, latestCodexReply } from '../lib/butlerErrands';
 import { codexApprovalSummary } from '../lib/codexApprovalSummary';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
@@ -19,6 +19,8 @@ export default function ButlerErrandRunCard() {
   const status = useLocalCodex((state) => state.status);
   const threadId = useLocalCodex((state) => state.threadId);
   const approvals = useLocalCodex((state) => state.approvals);
+  // 订阅 traces 以便进度变化时重算「它在干什么」
+  const traces = useLocalCodex((state) => state.traces);
   const resolveApproval = useLocalCodex((state) => state.resolveApproval);
   const stopCodex = useLocalCodex((state) => state.stop);
   const codexError = useLocalCodex((state) => state.error);
@@ -47,9 +49,11 @@ export default function ButlerErrandRunCard() {
   const running = current && !settled && (status === 'running' || status === 'starting');
   const waiting = running && approvals.length > 0;
 
+  const activity = running && traces.length ? currentErrandActivity() : undefined;
+
   const statusLabel = (): string => {
     if (waiting) return '等你点头';
-    if (running) return '正在干';
+    if (running) return activity ?? '正在干';
     if (errandRun.outcome === 'stopped') return '停下来了';
     return '回话了';
   };

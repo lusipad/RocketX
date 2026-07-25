@@ -103,6 +103,35 @@ export function errandRunIsCurrent(run: ButlerErrandRun, threadId: string | unde
   return Boolean(threadId) && run.threadId === threadId;
 }
 
+const ACTIVITY_LABELS: Record<string, string> = {
+  fileChange: '正在改文件',
+  commandExecution: '正在跑命令',
+  reasoning: '正在琢磨',
+  agentMessage: '正在回话',
+  webSearch: '正在查资料',
+  mcpToolCall: '正在用工具',
+  todoList: '正在列步骤',
+};
+
+/**
+ * 「它现在在干什么」——从执行间的 trace 反解成人话。
+ *
+ * 卡片上只写「正在干」等于什么也没说，用户还是得去执行间；进度必须
+ * 在管家页就能看见，去执行间才是可选的。
+ */
+export function currentErrandActivity(): string | undefined {
+  const traces = useLocalCodex.getState().traces;
+  for (let index = traces.length - 1; index >= 0; index -= 1) {
+    const trace = traces[index];
+    if (trace.kind !== 'tool') continue;
+    const started = /^开始：(.+)$/.exec(trace.text);
+    if (started) return ACTIVITY_LABELS[started[1]] ?? '正在处理';
+    if (/^完成：/.test(trace.text)) return '正在想下一步';
+    if (trace.text.startsWith('等待审批')) return undefined;
+  }
+  return undefined;
+}
+
 /** 取执行间最后一条回复作为结论——干没干完由用户看内容判断，我们不替它宣布成功。 */
 export function latestCodexReply(): string | undefined {
   const messages = useLocalCodex.getState().messages;

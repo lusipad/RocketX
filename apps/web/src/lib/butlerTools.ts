@@ -1162,11 +1162,14 @@ export function createButlerTools(): ButlerTool[] {
         allowed: true,
         preview: `拟一份任务规格给你过目：${optionalString(args, 'title') ?? '未命名任务'}`,
       }),
-      // 审批通过 = 用户在卡上点了「送进执行间」，此时活已经派出去了
+      // 审批通过 = 用户在卡上点了派发，此时活已经派出去了
       // （confirmErrandDraft 先派发、成功才 approve）。大脑依然没有手。
+      //
+      // 这句返回值会被模型学舌：写「去执行间查看」，管家就会在对话里反复
+      // 把用户往执行间赶——而进度就在管家页的卡片上。管家是唯一实体。
       execute: async (args) => {
         const title = optionalString(args, 'title') ?? '未命名任务';
-        return `已派发任务：${title}，进度在执行间查看。`;
+        return `已派出去：${title}。我盯着，有进展就在这儿告诉你。`;
       },
     }),
   ];
