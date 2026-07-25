@@ -6,6 +6,7 @@ import {
   BUTLER_EXTRACT_COMMITMENTS_PROMPT,
   BUTLER_SCENE_PROMPTS,
   BUTLER_SUMMARIZE_PROMPT,
+  butlerComparePullRequestsPrompt,
 } from '../../apps/web/src/lib/butlerPrompts';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { compileButlerTask } from '../../apps/web/src/lib/butlerTaskContext';
@@ -152,6 +153,33 @@ test('真实入口：转录含找文件关键词时，场景仍是提取承诺�
     resetButlerPersistenceForTests();
     useButler.getState().reset();
   }
+});
+
+test('PR 多选比较：生成的提问命中比较场景，两个前置条件都满足', () => {
+  const prompt = butlerComparePullRequestsPrompt(101, 102);
+  // 前置①：文本命中 /(?:比较|对比).*(?:PR|拉取请求)/
+  const task = compile(prompt, prContext);
+  assert.equal(task.manifest.scenario, 'compare-pull-requests');
+  assert.equal(task.status, 'ready');
+  // 编号写进正文是双保险：即便上下文来源丢失也仍能凑够两个编号
+  const withoutSources = compile(prompt, {
+    kind: 'workbench',
+    label: 'ADO 拉取请求',
+    detail: '无来源',
+    sources: [],
+  });
+  assert.equal(withoutSources.manifest.scenario, 'compare-pull-requests');
+  assert.equal(withoutSources.status, 'ready');
+
+  // 前置②失效的反证：只给一个编号且无来源时应当追问，证明上面不是恒真
+  const single = compile('比较这个 PR：#101。', {
+    kind: 'workbench',
+    label: 'ADO 拉取请求',
+    detail: '无来源',
+    sources: [],
+  });
+  assert.equal(single.manifest.scenario, 'compare-pull-requests');
+  assert.equal(single.status, 'awaiting-clarification');
 });
 
 test('两个入口都用共享常量，不在组件里另写一份文案', () => {

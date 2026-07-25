@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
+  GitCompare,
   GitPullRequest,
   Loader2,
   MessageSquarePlus,
@@ -24,6 +25,7 @@ import {
   type WorkItem,
 } from '../stores/workbench';
 import { askButlerAboutPullRequests } from '../kernel/butler';
+import { butlerComparePullRequestsPrompt } from '../lib/butlerPrompts';
 import { toast } from '../stores/toast';
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
@@ -276,12 +278,24 @@ function isDefaultHiddenState(state: string): boolean {
   return normalized === '搁置' || normalized === '已搁置' || normalized === 'shelved' || normalized === 'on hold';
 }
 
-function PrRow({ pr, onAsk }: { pr: PullRequest; onAsk: (pr: PullRequest) => void }) {
+function PrRow({
+  pr,
+  onAsk,
+  onCompare,
+  comparing,
+}: {
+  pr: PullRequest;
+  onAsk: (pr: PullRequest) => void;
+  onCompare: (pr: PullRequest) => void;
+  comparing: boolean;
+}) {
   const approved = isApproved(pr);
   return (
     // 外层由 <a> 改为 div（照 WorkItemList 的写法）：整行是链接时，
     // 行内按钮的点击会冒泡去开外链，加按钮前必须先拆开。
-    <div className="group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2">
+    <div className={`group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2 ${
+      comparing ? 'bg-primary-light/20' : ''
+    }`}>
     <a
       href={pr.webUrl}
       target="_blank"
@@ -323,6 +337,20 @@ function PrRow({ pr, onAsk }: { pr: PullRequest; onAsk: (pr: PullRequest) => voi
     </a>
       <button
         type="button"
+        onClick={() => onCompare(pr)}
+        title={comparing ? '取消选择' : '选它来比较'}
+        aria-label={comparing ? '取消选择' : '选它来比较'}
+        aria-pressed={comparing}
+        className={`shrink-0 rounded-md p-1.5 hover:bg-fill-hover hover:text-ink focus:opacity-100 ${
+          comparing
+            ? 'text-primary'
+            : 'text-ink-3 md:opacity-0 md:group-hover:opacity-100'
+        }`}
+      >
+        <GitCompare size={14} />
+      </button>
+      <button
+        type="button"
         onClick={() => onAsk(pr)}
         title="让管家看看这个 PR"
         aria-label="让管家看看这个 PR"
@@ -345,12 +373,39 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
   const mine = useMemo(() => myPrsOf(prs, account), [prs, account]);
   const source = tab === 'review' ? review : mine;
 
+  // 比较态放在 PullRequestList 而不是子列表：切「待我评审 / 我提的」时组件不卸载，
+  // 于是可以跨子 tab 选两个 PR 来比较。
+  const [comparing, setComparing] = useState<PullRequest[]>([]);
+
   const askButler = (pr: PullRequest): void => {
     const result = askButlerAboutPullRequests(
       [pr],
       `看看这个 PR：改动重点、风险、我该先看哪里。PR 编号 ${pr.id}。`,
     );
     if (result === 'busy') toast.error('管家正在忙，等它答完这轮');
+  };
+
+  const toggleCompare = (pr: PullRequest): void => {
+    const already = comparing.some((item) => item.id === pr.id);
+    if (already) {
+      setComparing(comparing.filter((item) => item.id !== pr.id));
+      return;
+    }
+    const next = [...comparing, pr];
+    if (next.length < 2) {
+      setComparing(next);
+      return;
+    }
+    const [first, second] = next;
+    const result = askButlerAboutPullRequests(
+      next,
+      butlerComparePullRequestsPrompt(first.id, second.id),
+    );
+    if (result === 'busy') {
+      toast.error('管家正在忙，等它答完这轮');
+      return;
+    }
+    setComparing([]);
   };
 
   const filtered = useMemo(() => {
@@ -388,6 +443,22 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         ))}
       </div>
 
+      {comparing.length === 1 && (
+        <div className="mb-2 flex items-center justify-between rounded-md border border-primary/30 bg-primary-light/20 px-3 py-1.5 text-xs text-ink-2">
+          <span>
+            已选 <span className="font-medium text-ink">!{comparing[0].id}</span> {comparing[0].title}
+            <span className="ml-2 text-ink-3">再选一个就开始比较</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setComparing([])}
+            className="shrink-0 px-1.5 py-0.5 text-ink-3 hover:text-ink"
+          >
+            取消
+          </button>
+        </div>
+      )}
+
       <ListHeader
         keyword={keyword}
         onKeyword={setKeyword}
@@ -406,7 +477,13 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
 
       <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
         {filtered.map((pr) => (
-          <PrRow key={pr.id} pr={pr} onAsk={askButler} />
+          <PrRow
+            key={pr.id}
+            pr={pr}
+            onAsk={askButler}
+            onCompare={toggleCompare}
+            comparing={comparing.some((item) => item.id === pr.id)}
+          />
         ))}
         {filtered.length === 0 && (
           <EmptyRow
