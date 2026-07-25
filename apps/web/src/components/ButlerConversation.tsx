@@ -23,6 +23,7 @@ import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
+import ButlerConclusionActions from './ButlerConclusionActions';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerImagePicker, {
   ButlerImageAttachments,
@@ -229,6 +230,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
                   {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
                   {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
                   {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+                  {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
                   <ButlerMessageActions line={line} disabled={running} />
                 </div>
               </div>

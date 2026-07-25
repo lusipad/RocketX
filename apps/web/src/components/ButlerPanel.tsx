@@ -6,6 +6,7 @@ import { useButler } from '../stores/butler';
 import { renderMarkdown } from '../lib/markdown';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
+import ButlerConclusionActions from './ButlerConclusionActions';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
@@ -98,6 +99,7 @@ export default function ButlerPanel() {
               {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
               {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
               {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+              {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
               <ButlerMessageActions line={line} disabled={running} />
             </div>
           </div>
