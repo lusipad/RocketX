@@ -10,6 +10,7 @@ export interface CodexRuntimeProbe {
   ready: boolean;
   version?: string;
   executablePath?: string;
+  source?: 'bundled' | 'system';
   reason?: string;
 }
 
@@ -17,6 +18,7 @@ interface CodexRuntimeState {
   phase: CodexRuntimePhase;
   version?: string;
   executablePath?: string;
+  source?: 'bundled' | 'system';
   reason?: string;
   probe: () => Promise<void>;
 }
@@ -43,7 +45,13 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
   probe: async () => {
     const revision = ++probeRevision;
     if (!desktopAvailable()) {
-      set({ phase: 'web', version: undefined, executablePath: undefined, reason: undefined });
+      set({
+        phase: 'web',
+        version: undefined,
+        executablePath: undefined,
+        source: undefined,
+        reason: undefined,
+      });
       return;
     }
     set({ phase: 'checking', reason: undefined });
@@ -58,6 +66,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
           phase: 'ready',
           version: result.version,
           executablePath: result.executablePath,
+          source: result.source,
           reason: undefined,
         });
         return;
@@ -68,13 +77,20 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         phase: 'fallback',
         version: result.version,
         executablePath: result.executablePath,
+        source: result.source,
         reason,
       });
     } catch (error) {
       if (revision !== probeRevision) return;
       const reason = `Codex 检测失败：${error instanceof Error ? error.message : String(error)}`;
       activateFallback(reason);
-      set({ phase: 'fallback', version: undefined, executablePath: undefined, reason });
+      set({
+        phase: 'fallback',
+        version: undefined,
+        executablePath: undefined,
+        source: undefined,
+        reason,
+      });
     }
   },
 }));
@@ -103,6 +119,7 @@ export function resetCodexRuntimeForTests(): void {
     phase: desktopAvailable() ? 'idle' : 'web',
     version: undefined,
     executablePath: undefined,
+    source: undefined,
     reason: undefined,
   });
 }

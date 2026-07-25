@@ -6,6 +6,8 @@ import {
   MessageCircle,
   RefreshCw,
   Send,
+  ThumbsDown,
+  ThumbsUp,
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerRoutines from '../components/ButlerRoutines';
@@ -17,11 +19,13 @@ import { ledgerFromTodos, type LedgerEntry } from '../lib/butlerLedger';
 import {
   runButlerRoundsNow,
   runDailyButlerRoundsIfNeeded,
+  markButlerRoundsItemFeedback,
   muteButlerRoundsItem,
   snoozeButlerRoundsItem,
   useButlerRoundsRunner,
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
+import { listBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
 import { listMutes, removeMute } from '../lib/butlerMutes';
 import {
   acceptButlerProposal,
@@ -120,6 +124,7 @@ export default function ButlerPage() {
   const [input, setInput] = useState('');
   const [hiddenProposals, setHiddenProposals] = useState<Set<string>>(() => new Set());
   const [mutes, setMutes] = useState(() => listMutes());
+  const [briefFeedback, setBriefFeedback] = useState(() => listBriefFeedback());
   const [draftingRef, setDraftingRef] = useState<string | null>(null);
   const [proposalOperationKey, setProposalOperationKey] = useState<string | null>(null);
   const [draftCard, setDraftCard] = useState<{ ref: string; text: string; rid?: string } | null>(null);
@@ -230,6 +235,13 @@ export default function ButlerPage() {
     if (!muteButlerRoundsItem(title)) return;
     setMutes(listMutes());
     toast.success('已记住：这类少提');
+  }
+
+  function feedbackItem(ref: string, title: string, verdict: ButlerBriefVerdict): void {
+    if (!markButlerRoundsItemFeedback(ref, title, verdict)) return;
+    setBriefFeedback(listBriefFeedback());
+    if (verdict === 'noise') toast.success('记下了：这类以后少报');
+    else toast.success('记下了：这类会继续盯');
   }
 
   function turnIntoTodo(ref: string): void {
@@ -377,6 +389,24 @@ export default function ButlerPage() {
                               )}
                               <button
                                 type="button"
+                                title="有用，这类继续盯"
+                                aria-label="有用"
+                                onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'useful')}
+                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
+                              >
+                                <ThumbsUp size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                title="没用，这类以后少报"
+                                aria-label="没用"
+                                onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'noise')}
+                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
+                              >
+                                <ThumbsDown size={13} />
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
                                 className="px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
                               >
@@ -500,6 +530,22 @@ export default function ButlerPage() {
                 </div>
               ) : (
                 <p className="py-2 text-center text-sm text-ink-3">这次没有压下的内容。</p>
+              )}
+              {briefFeedback.length > 0 && (
+                <section className="mt-4 border-t border-line pt-3">
+                  <h3 className="text-xs font-medium text-ink-2">你最近的反馈（{briefFeedback.length}）</h3>
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {[...briefFeedback].reverse().slice(0, 10).map((entry) => (
+                      <div key={`${entry.title}:${entry.at}`} className="flex items-center gap-2 text-xs text-ink-3">
+                        {entry.verdict === 'noise'
+                          ? <ThumbsDown size={11} className="shrink-0" />
+                          : <ThumbsUp size={11} className="shrink-0" />}
+                        <span className="min-w-0 flex-1 truncate">{entry.title}</span>
+                        <span className="shrink-0">{entry.verdict === 'noise' ? '以后少报' : '继续盯'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               )}
               {mutes.length > 0 && (
                 <section className="mt-4 border-t border-line pt-3">

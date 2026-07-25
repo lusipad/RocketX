@@ -38,7 +38,11 @@ class FakeTransport implements CodexTransport {
 
   async start(handlers: Parameters<CodexTransport['start']>[0]) {
     this.handlers = handlers;
-    return { processId: 'butler-test-process', version: CODEX_APP_SERVER_VERSION };
+    return {
+      processId: 'butler-test-process',
+      version: CODEX_APP_SERVER_VERSION,
+      runtimeSource: 'bundled',
+    };
   }
 
   async write(message: Record<string, unknown>) {

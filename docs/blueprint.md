@@ -643,6 +643,26 @@ WorkBuddy 式每条自动化各自弹通知的注意力灾难），紧急事项�
   全局 config.toml vs profile）需实测定案，rcx-mcp 桥的进程形态（谁拉起、怎么连回宿主
   数据面）随之确定。
 
+#### 4.7.2b 修订（2026-07-25）：API 大脑冻结，新能力 codex-first（决策 12）
+
+M12 P0 验证充分（dynamic-tools / native-skills / azure adapter 三个 spike 实测 PASS，
+v0.29.1–v0.31.1 连续在 codex 链路交付）后的口径收敛——双脑架构保留，但投入不再对等：
+
+- **API 大脑进入冻结（只修不增）**：AiBus Agent 循环（`kernel/ai/agent-loop.ts`）与大脑
+  开关（`butlerBrain.ts`）原样保留、只做缺陷修复；Web 端与内网 Ollama 零外网路径继续由
+  它承担**既有能力**，不随新 phase 演进。
+- **P1 起新能力只在 Codex 路径实现与验收**：多 session、context compiler、task state、
+  typed runtime、scoped memory、rounds 合流均 codex-first，不再双份实现、双份回归；
+  M12 计划的 P3（双脑共用 engine contract）随之降级为冻结兼容合同
+  （见 `m12-implementation-plan.md` §1.4）。
+- **冻结不是删除**：`agent-loop.ts` 及专属依赖仅约三百行、维护成本≈0；保留它是对
+  codex app-server（experimental API、单一上游）这一单点依赖的对冲。重启条件：内网版 /
+  Web 版出现真实需求，或 codex 上游出现不可接受的破坏性变化。
+- **配套工程决策**：桌面端 codex 二进制从「扫描用户机器」改为「随应用捆绑 pinned 版本，
+  机器扫描降为 fallback」——依赖越深越要把依赖握在自己手里，用户全局升级 codex 不再导致
+  握手失败；捆绑原料已在依赖树（`@openai/codex` 各平台二进制），版本升级从撞运气变成
+  显式变更（升版本 → 重新生成协议类型 → 回归验证）。
+
 #### 4.7.3 落地顺序
 
 1. `AiChunk.toolCalls` 流式解析（openai-compatible + anthropic 两个 provider）+ Agent
@@ -840,6 +860,7 @@ M9 最早在 M7 期间并行插队。四个方向中"内核"与"IM 补全（T �
 | 9 | Agent 运行时（2026-07-17） | **薄适配 codex app-server，不自研**：协议类型用 `generate-ts` 生成、审批/会话/沙箱语义复用；适配层（握手/关联/恢复/server-initiated 请求）按真实工作量排入 M8，CLI 版本锁定 + 已验证版本矩阵；不预先做多 Provider 抽象 |
 | 10 | 管家 2.0 架构（2026-07-17） | **用户可见实体只有一个「管家」**；工具（代码/强类型，审批·审计·脱敏的唯一强制边界）与技能（纯文本方法论）严格分层，人设与记忆走同一条文本管线；例行事务 = 触发器 × 技能 × 投递，对话即配置；正则快速路径保留但未命中输入进 Agent 循环、不再弹去 Codex（§4.7） |
 | 11 | 管家大脑二选一（2026-07-18，自用优先） | **桌面主路径 = Codex 大脑**（会话跑 codex app-server，工具经 rcx-mcp 提供，cwd=管家目录、沙箱只读、不授仓库路径）；**API 大脑**（AiBus 循环）保留承担 Web/内网路径；显式开关不静默回退；Codex 页降级为管家「执行间」，一级导航只留管家（推翻 v0.20.1 独立入口）；rcx-mcp 自 M8 提前（§4.7.2a，Spike D 前置） |
+| 12 | API 大脑冻结，新能力 codex-first（2026-07-25） | 双脑架构保留但**API 大脑冻结（只修不增）**：Web / 内网 Ollama 继续由既有 AiBus 循环承担既有能力、不随新 phase 演进；P1 起多 session / task state / typed runtime 等新能力只在 Codex 路径实现与验收，M12 P3 降级为冻结兼容合同；桌面端 codex 二进制改为随应用捆绑 pinned 版本、机器扫描降为 fallback（§4.7.2b） |
 
 ---
 

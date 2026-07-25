@@ -167,17 +167,21 @@ struct CodexExecResult {
     thread_id: Option<String>,
 }
 
-fn run_codex_once(cache_dir: PathBuf, prompt: String) -> Result<CodexExecResult, String> {
+fn run_codex_once(
+    app: tauri::AppHandle,
+    cache_dir: PathBuf,
+    prompt: String,
+) -> Result<CodexExecResult, String> {
     if prompt.trim().is_empty() || prompt.len() > 100_000 {
         return Err("Codex prompt is empty or too long".to_string());
     }
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
-    let mut command = proc::codex_command()?;
+    let mut command = proc::codex_command(&app)?;
     // --json/--sandbox 是协议与安全必需；其余参数按当前 CLI 的 --help 探测，
     // 避免新版移除参数后 clap 直接以退出码 2 拒绝（与 app-server --stdio 同款问题）
     command.args(["exec", "--json", "--sandbox", "read-only"]);
-    command.args(proc::codex_exec_optional_args()?);
+    command.args(proc::codex_exec_optional_args(&app)?);
     command.arg("-C").arg(&cache_dir).arg("-");
     command
         .stdin(Stdio::piped())
@@ -283,7 +287,7 @@ async fn codex_exec_once(app: tauri::AppHandle, prompt: String) -> Result<CodexE
         .app_cache_dir()
         .map_err(|error| format!("failed to resolve app cache directory: {error}"))?
         .join("codex-once");
-    tauri::async_runtime::spawn_blocking(move || run_codex_once(cache_dir, prompt))
+    tauri::async_runtime::spawn_blocking(move || run_codex_once(app, cache_dir, prompt))
         .await
         .map_err(|error| format!("Codex task failed: {error}"))?
 }

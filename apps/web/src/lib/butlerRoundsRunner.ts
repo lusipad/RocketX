@@ -3,15 +3,26 @@ import {
   isRoundsResult,
   serializeButlerRoundsInput,
   suppressMutedRoundItems,
+  suppressNoiseFeedbackItems,
   type RoundsInput,
   type RoundsResult,
 } from '../kernel/ai/features/butler-rounds';
+import { useAuth } from '../stores/auth';
 import { useTodos, todayKey } from '../stores/todos';
 import { useWorkbench } from '../stores/workbench';
 import { runButlerWorkflowTask } from '../stores/butler';
+import { getServerBase } from './client';
+import {
+  listBriefFeedback,
+  recordBriefFeedback,
+  type ButlerBriefFeedback,
+  type ButlerBriefVerdict,
+} from './butlerBriefFeedback';
 import { mergeButlerSources, type ButlerSource } from './butlerContext';
 import { ledgerFromTodos } from './butlerLedger';
+import { parseButlerMemoryState, recallButlerMemory } from './butlerMemory';
 import { addMute, listMutes, type ButlerMute } from './butlerMutes';
+import { readButlerActiveMemoryV2RawJson } from './butlerProfile';
 import {
   collectRecentSentMessages,
   type RecentSentMessage,
@@ -148,6 +159,27 @@ useButlerRoundsRunner.setState({
   lastResult: initialResult,
 });
 
+/** 用户经 remember 落库的简报偏好（preference 记忆，subject 以 brief: 开头），账号缺失或读取失败时静默为空。 */
+export function briefRoundPreferences(now = Date.now()): string[] {
+  const user = useAuth.getState().user;
+  if (!user?._id) return [];
+  try {
+    const state = parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
+    return recallButlerMemory(
+      state,
+      { server: getServerBase() || 'same-origin', account: user._id },
+      { kind: 'preference', limit: 50, now },
+    )
+      .filter((record) => record.subject.startsWith('brief:'))
+      .map((record) => {
+        const label = record.subject.slice('brief:'.length).trim();
+        return label ? `${label}：${record.value}` : record.value;
+      });
+  } catch {
+    return [];
+  }
+}
+
 export async function collectButlerRoundsInput(now = new Date()): Promise<RoundsInput> {
   await useWorkbench.getState().refresh();
   const { workItems, prs: pullRequests, builds } = useWorkbench.getState();
@@ -163,6 +195,8 @@ export async function collectButlerRoundsInput(now = new Date()): Promise<Rounds
     localTime: localIsoTimestamp(now),
     lastRoundsAt,
     mutes: listMutes(),
+    noiseFeedback: listBriefFeedback(),
+    briefPreferences: briefRoundPreferences(now.getTime()),
     recentSentMessages: collectRecentSentMessages(lastRoundsAt, { now: () => now.getTime() }),
   };
 }
@@ -361,6 +395,24 @@ export function muteButlerRoundsItem(title: string): ButlerMute | null {
   persistResult(stored);
   useButlerRoundsRunner.setState({ lastResult: stored });
   return mute;
+}
+
+/** 简报条目的 有用/没用 反馈：落档案；「没用」当轮立即压制（与静音同族生效、分开记录）。 */
+export function markButlerRoundsItemFeedback(
+  ref: string,
+  title: string,
+  verdict: ButlerBriefVerdict,
+): ButlerBriefFeedback | null {
+  const entry = recordBriefFeedback({ ref, title, verdict });
+  if (!entry || verdict !== 'noise') return entry;
+  const current = useButlerRoundsRunner.getState().lastResult;
+  if (!current) return entry;
+  const result = suppressNoiseFeedbackItems(current.result, current.refTitles, listBriefFeedback());
+  if (result === current.result) return entry;
+  const stored = { ...current, result };
+  persistResult(stored);
+  useButlerRoundsRunner.setState({ lastResult: stored });
+  return entry;
 }
 
 export function visibleButlerRoundItems(stored: StoredRoundsResult | null | undefined): RoundsResult['items'] {

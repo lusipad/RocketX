@@ -1,7 +1,7 @@
 # M12 管家多会话调查与地基收口实施计划（Issue #168 / P0）
 
-蓝图：[`blueprint.md`](blueprint.md) §4.7.2、§4.7.2a、§4.7.4
-当前版本：v0.26.x 工作树基线（2026-07-22）
+蓝图：[`blueprint.md`](blueprint.md) §4.7.2、§4.7.2a、§4.7.2b、§4.7.4
+当前版本：v0.26.x 工作树基线（2026-07-22）；2026-07-25 按决策 12 修订（API 大脑冻结，P3 降级）
 Issue 角色：#168 作为 umbrella；本文件只定义 P0 地基与 P1-P6 架构 phase，不声称后续阶段已实现。
 
 ## 1. 最可能调整的决定
@@ -16,6 +16,9 @@ Issue 角色：#168 作为 umbrella；本文件只定义 P0 地基与 P1-P6 架�
 
 P0 不实现新的多 session UI、context compiler、engine contract、typed tool runtime、scoped memory
 或 rounds/workflows 合流；首个后续代码切片固定为 **P1 多 session / transcript / 去 3 天 TTL**。
+
+2026-07-25 修订（决策 12）：P1 之前插入一个独立工程切片——**桌面端捆绑 pinned codex 二进制**
+（`resolve_codex()` 优先捆绑路径、机器扫描降为 fallback），属于决策 12 的配套工程债，不占架构 phase。
 
 - **Confidence: high**
 - **What would flip it**：如果 #168 被拆成多个更小 umbrella 或用户要求把 P1 直接并入本次交付，那需要重开计划，
@@ -33,7 +36,8 @@ P0 不实现新的多 session UI、context compiler、engine contract、typed to
 
 - 测试环境或同源 Web 部署时，scope 会退化成 `same-origin:<userId>`。
 - 桌面端或显式配置 Rocket.Chat 地址时，scope 是 `<serverBase>:<userId>`。
-- 这仍然只承载**单个 Butler 会话**，不是多 session registry。
+- 2026-07-25 修订：`ae3c88e` 已上线 `session-registry:<scope>` 多 session registry（交互与
+  workflow session 共存一个 registry，旧单会话键保留作回滚镜像），本节的单会话描述仅存历史意义。
 
 文档、测试和后续迁移设计都必须基于这条事实；不能把测试环境的 `same-origin` 误写成产品固定合同。
 
@@ -63,10 +67,10 @@ P1-P6 都必须遵守同一条合同：
 
 | Phase | 目标 | 关键依赖 | 验收摘要 | 非目标 | 主要风险 |
 |---|---|---|---|---|---|
-| P1 | 多 session / transcript / 去 3 天 TTL | P0 scenario baseline、现有单会话持久化事实 | 同账号下可并存多个 Butler session；每个 session 有独立 transcript、标题、最近活动与恢复点；恢复不再依赖 3 天 TTL 切断上下文 | 不做 context compiler、typed runtime、主动 rounds | session key 或 transcript schema 设计失误污染现有 `builtin:butler` 数据 |
+| P1 | 多 session / transcript / 去 3 天 TTL（2026-07-25 重定：主体已由 `ae3c88e` 交付，剩余 = recap「上回说到」+ session 保留策略） | P0 scenario baseline、`ae3c88e` 的 session registry | 已交付：多 session 并存/独立 transcript/新建切换重命名/TTL 移除。剩余验收：session 要点自动合成与「上回说到」呈现（框架 §3.5 环节⑥）；session 删除/归档与 registry 体积控制；长度截断（lines 200/history 40）影响评估 | 不做 context compiler、typed runtime、主动 rounds | registry 单 blob 随 session 数膨胀；recap 合成的调用成本与时机 |
 | P2 | context compiler + manifest + task state | P1 session/transcript 模型 | “找文件 / 比较 PR / 提取承诺 / 跟进草稿 / 构建关联”等任务有结构化任务态、预检与来源 manifest | 不统一 API/Codex engine，不上写动作 | compiler 粒度过粗，导致澄清、来源和错误动作不可追踪 |
-| P3 | API/Codex 共用 engine / session contract | P1 session、P2 task state | API/Codex 共用 session lifecycle、resume、transcript、status 与 task-state contract；不再一条脑一路状态机 | 不做 typed tool approval runtime | 双脑行为继续分叉，后续 phase 无法共用验证 |
-| P4 | typed tool runtime + preflight + approval / checkpoint | P2 compiler、P3 engine contract | 写动作、草案、审批、checkpoint、恢复点进入统一 typed runtime；错误动作和恢复路径可验证 | 不扩长期记忆边界 | 审批点不统一，副作用绕过工具层 |
+| P3（决策 12 降级） | API 大脑冻结兼容合同 | P1 session | API 大脑在新 session registry / transcript 结构下按单 session 模式继续工作，既有回归（`butler-brain` 等）不破；不做 engine 合流，API 脑不获得 P1+ 新能力 | 不做双脑共用 engine contract | 冻结路径被新结构意外破坏而无回归覆盖 |
+| P4 | typed tool runtime + preflight + approval / checkpoint | P2 compiler（决策 12 后仅 Codex 路径） | 写动作、草案、审批、checkpoint、恢复点进入统一 typed runtime；错误动作和恢复路径可验证 | 不扩长期记忆边界 | 审批点不统一，副作用绕过工具层 |
 | P5 | scoped memory | P2 task state、P4 typed runtime | 记忆从“全局文本堆”收敛到有 scope 的别名/偏好/承诺边界；支持跨 session 但不串污染 | 不做主动 rounds | 动态工作数据误写入长期记忆，或 session 间泄漏 |
 | P6 | 主动 rounds / workflows 合流 | P1-P5 稳定 | today / watcher / rounds / workflow 统一挂到同一 Butler task-runtime，上报、追踪与恢复一致 | 不做新导航重构 | 主动执行和手动调查分叉，形成第二套状态机 |
 
@@ -74,10 +78,10 @@ P1-P6 都必须遵守同一条合同：
 
 | 子 Issue | 建议标题 | 依赖 | 验收 | 风险 |
 |---|---|---|---|---|
-| #168-P1 | Butler 多 session transcript 与 TTL 移除 | P0 | 可创建/切换/恢复多个 session；旧单会话自动迁入默认 session；3 天 TTL 不再截断恢复 | 旧数据迁移和新 registry 打架 |
+| #168-P1 | Butler 多 session transcript 与 TTL 移除（主体已交付于 `ae3c88e`；剩余改题为 recap 与保留策略） | P0 | 已达成：可创建/切换/恢复多个 session、旧单会话自动迁入、TTL 不再截断。剩余：recap「上回说到」、session 删除/归档、registry 体积控制 | registry 单 blob 膨胀；recap 时机与成本 |
 | #168-P2 | Butler context compiler、scenario manifest 与 task state | P1 | 七类任务都有结构化预检、来源、澄清、错误动作、恢复态 | compiler 过度硬编码，新增任务难扩展 |
-| #168-P3 | Butler API/Codex 共用 engine 与 session contract | P1, P2 | API/Codex 共用 transcript / task-state / resume 合同 | 双脑历史债务导致 contract 失真 |
-| #168-P4 | Butler typed tool runtime、preflight、approval 与 checkpoint | P2, P3 | 所有写动作/草案/审批都进入 typed runtime；失败后可 checkpoint 恢复 | 审批点遗漏导致副作用越界 |
+| #168-P3 | Butler API 大脑冻结兼容合同（决策 12 降级） | P1 | API 大脑在新 registry 下维持单 session 行为，冻结回归钉住既有能力 | 新结构意外破坏冻结路径 |
+| #168-P4 | Butler typed tool runtime、preflight、approval 与 checkpoint | P2 | 所有写动作/草案/审批都进入 typed runtime（仅 Codex 路径）；失败后可 checkpoint 恢复 | 审批点遗漏导致副作用越界 |
 | #168-P5 | Butler scoped memory 与 alias/commitment 边界 | P2, P4 | 记忆按 scope 治理，动态工作数据不入长期记忆 | 记忆作用域过宽或过窄，影响体验 |
 | #168-P6 | Butler 主动 rounds 与 workflow runtime 合流 | P3, P4, P5 | rounds / watcher / workflows 与手动调查共用同一 runtime 与记录 | 主动流程压垮已有 Today / routine 体验 |
 
@@ -91,11 +95,12 @@ P1-P6 都必须遵守同一条合同：
 | 逾期 WI 跟进草稿 | 部分 | 能列逾期工作项；缺少跟进草案、审批和 checkpoint | `list_work_items` | 不会自动催办或修改工作项 | 不会追问催办对象、口径和投递面 | 可重查；草稿仍需人工整理 |
 | 构建失败关联提交 | 缺口 | 能列失败构建；没有提交/变更关联层 | `list_builds` | 不会自动重试、回滚或动代码 | 不会追问仓库、PR、变更范围 | 可重查失败构建；关联提交要后续 typed runtime |
 | 创建周报例行任务 | 完成 | 已有 `weekly-report` 技能 + `draft_routine` 草案闸门 | `load_skill`、`draft_routine`、`routines` store | 不会绕过确认直接启用 | 技能名/时间/星期非法会直接拒绝 | 可重新生成草案并确认 |
-| 跨重启续跑 | 部分 | 同一 `server scope + userId` 下可恢复共享 Butler 会话；仍受单 session 约束 | `builtin:butler` 持久化、`useButler.hydrate` | 不会跨账号或跨服务器串历史 | 没有多 task state / transcript session | 同 scope 可恢复；超 TTL 仍只回看不续跑 |
+| 跨重启续跑 | 部分 | 多 session registry 已上线（ae3c88e）：多调查会话并存、独立 transcript 与 Codex 恢复点，3 天 TTL 已移除；缺 recap 摘要与保留策略 | `builtin:butler` session-registry、`useButler.hydrate` | 不会跨账号或跨服务器串历史 | 中断轮次恢复为 paused 需再发问；无「上回说到」 | 同 scope 恢复全部 session 并接续，不再受时间截断 |
 
 ## 3. Assumptions
 
-- `docs/blueprint.md` §4.7.2a 的双脑决定仍然有效；高置信，当前代码与回归都按该合同运行。
+- `docs/blueprint.md` §4.7.2a 的双脑架构仍然有效，但按 §4.7.2b（决策 12，2026-07-25）API 大脑
+  已冻结：只修不增，P1 起新能力仅在 Codex 路径实现与验收；高置信。
 - #168 的核心不是换模型，而是把单 Butler 会话演进为可管理的多 session 调查系统；高置信，来自架构审计与任务矩阵。
 - 现有 `createButlerTools()`、`draft_routine`、`remember`、`load_skill`、watcher 和 Today 仍可复用；高置信，本轮没有发现必须推倒重来的底层契约。
 - P0 不新增依赖；高置信，当前只调整测试与文档。
@@ -106,7 +111,8 @@ P1-P6 都必须遵守同一条合同：
 
 - 任何 scenario 做不到都可以记成“部分”或“缺口”，但必须有可执行证据。
 - 任何 phase 都不得把迁移/回滚省略成“后面再看”，因为它是跨 phase 合同。
-- 双脑行为若有分叉，先收敛到共用 session / task-state contract，再修具体执行体验。
+- 双脑行为若有分叉，以 Codex 路径为准；API 大脑只需维持冻结合同（既有回归不破），
+  不追新能力（决策 12）。
 - P1 之前不删除 `builtin:butler` 单会话键，也不删除 `rcx-butler-v1:*` fallback 键。
 
 以下情况必须停止并重新确认：删除旧数据源、把只读调查流变成写路径、默认自动创建工作项/PR/消息、
@@ -140,7 +146,7 @@ P1 开工前先读本文件与 `docs/implementation-notes.md` 的 M12 段，然�
 1. 建多 session / transcript registry，并让旧单会话迁入默认 session。
 2. 去掉 3 天 TTL 截断，把“恢复”交给 transcript / task state，而不是时间阈值。
 3. 在 session 之上做 context compiler、scenario manifest 与 task state。
-4. 再把 API/Codex 收敛到共用 engine/session contract。
-5. 最后才上 typed runtime、scoped memory、rounds/workflow 合流。
+4. 验证 API 大脑冻结兼容合同（既有回归不破），不做 engine 合流（决策 12）。
+5. 最后才上 typed runtime、scoped memory、rounds/workflow 合流（仅 Codex 路径）。
 
 P1 完成前，不得在文档或 UI 中声称 Butler 已具备完整多 session 调查能力。

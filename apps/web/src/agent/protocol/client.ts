@@ -18,6 +18,7 @@ import { serverRequestPolicy } from './serverRequests';
 export interface CodexProcessInfo {
   processId: string;
   version: string;
+  runtimeSource: 'bundled' | 'system';
 }
 
 export interface CodexTransportHandlers {
