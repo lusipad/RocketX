@@ -32,6 +32,11 @@ import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerCon
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
 import type { ButlerImageInput } from '../lib/butlerImages';
+import {
+  addButlerToolRoundtrip,
+  beginButlerTurnTiming,
+  type ButlerTurnTimingHandle,
+} from '../lib/butlerTimings';
 import { createButlerTools } from '../lib/butlerTools';
 import {
   formatButlerToolResult,
@@ -276,7 +281,11 @@ async function buildTurnInputs(
   return input;
 }
 
-function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent) => void): TurnController {
+function createTurnController(
+  threadId: string,
+  onEvent?: (event: AgentLoopEvent) => void,
+  timing?: ButlerTurnTimingHandle,
+): TurnController {
   let active: ActiveTurn | undefined;
 
   return {
@@ -286,6 +295,7 @@ function createTurnController(threadId: string, onEvent?: (event: AgentLoopEvent
       if (method === 'item/agentMessage/delta') {
         const delta = typeof params.delta === 'string' ? params.delta : '';
         if (!active || !delta) return;
+        timing?.markFirstToken();
         active.text += delta;
         onEvent?.({ type: 'content', content: delta });
         return;
@@ -354,6 +364,7 @@ async function respondDynamicToolCall(
   tools: ReadonlyMap<string, ButlerTool>,
   onEvent?: (event: AgentLoopEvent) => void,
   runtimeContext?: (toolCall: AiToolCall) => ButlerToolRuntimeContext,
+  recordToolRoundtrip?: (tool: string, ms: number) => void,
 ): Promise<unknown> {
   if (request.policy !== 'dynamic-tool' || request.method !== 'item/tool/call') {
     if (request.method === 'item/commandExecution/requestApproval' ||
@@ -380,11 +391,13 @@ async function respondDynamicToolCall(
   const toolCall: AiToolCall = { id: callId, name, arguments: JSON.stringify(args) };
   const turnId = typeof params.turnId === 'string' ? params.turnId : undefined;
   onEvent?.({ type: 'tool-call', toolCall });
+  const invokedAt = Date.now();
   try {
     const result = formatButlerToolResult(await tool.invoke(args, {
       ...runtimeContext?.(toolCall),
       ...(turnId ? { turnId } : {}),
     }));
+    recordToolRoundtrip?.(name, Date.now() - invokedAt);
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: result });
     // 工具已返回 JSON 字符串，直接透传，避免二次编码。
     return {
@@ -392,6 +405,7 @@ async function respondDynamicToolCall(
       success: true,
     };
   } catch (error) {
+    recordToolRoundtrip?.(name, Date.now() - invokedAt);
     const message = error instanceof Error ? error.message : String(error);
     onEvent?.({ type: 'tool-result', toolCallId: callId, content: `工具调用失败：${message}` });
     throw error;
@@ -424,6 +438,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
           residentTools,
           residentEvent,
           residentToolRuntimeContext,
+          addButlerToolRoundtrip,
         ),
         onInterrupted: onResidentInterrupted,
       },
@@ -546,13 +561,16 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
   const text = options.text.trim();
   if (!text) return { text: '' };
   residentStopRequested = false;
+  let timing: ButlerTurnTimingHandle | undefined;
   try {
     const now = options.now ?? Date.now();
+    const setupStartedAt = Date.now();
     const resumeMode = await ensureResidentThread();
     if (residentStopRequested) return { text: '' };
     const threadId = residentThreadId;
     if (!threadId) throw new Error('AI Codex 会话尚未创建');
-    const controller = createTurnController(threadId, options.onEvent);
+    timing = beginButlerTurnTiming({ threadSetupMs: Date.now() - setupStartedAt, resumeMode });
+    const controller = createTurnController(threadId, options.onEvent, timing);
     residentTurn = controller;
     residentEvent = options.onEvent;
     residentToolRuntimeContext = options.toolRuntimeContext;
@@ -578,10 +596,12 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     residentTurn = undefined;
     residentEvent = undefined;
     residentToolRuntimeContext = undefined;
+    timing.end('completed');
     return { text: result };
   } catch (error) {
     const reason = unavailableReason(error);
     if (reason) setCodexBrainUnavailableReason(reason);
+    timing?.end('failed');
     residentTurn = undefined;
     residentEvent = undefined;
     residentToolRuntimeContext = undefined;
