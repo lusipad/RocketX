@@ -380,32 +380,35 @@ test('删除会话：删非活动只移除，删活动切最近，删最后一�
     await useButler.getState().ask('第二段调查');
     await flushButlerPersist();
 
-    // 删非活动：列表少一个，活动会话不变
-    await useButler.getState().deleteSession(firstSessionId);
-    assert.equal(useButler.getState().sessions.length, 1);
-    assert.equal(useButler.getState().activeSessionId, secondSessionId);
-    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), true);
-
-    // 删除不存在/已删除的 id 是 no-op
-    await useButler.getState().deleteSession(firstSessionId);
-    assert.equal(useButler.getState().sessions.length, 1);
-
-    // 删最后一个活动会话：新建默认会话，transcript 清空为欢迎语
     now = 3_000;
-    await useButler.getState().deleteSession(secondSessionId);
-    const fallbackId = useButler.getState().activeSessionId;
-    assert.notEqual(fallbackId, secondSessionId);
-    assert.equal(useButler.getState().sessions.length, 1);
-    assert.equal(useButler.getState().sessions[0].title, '新对话');
-    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), false);
-
-    // 再建一个并删活动的：切到最近的剩余会话
-    now = 4_000;
     await useButler.getState().newConversation();
     const thirdSessionId = useButler.getState().activeSessionId;
     await useButler.getState().ask('第三段调查');
+    await flushButlerPersist();
+
+    // 删非活动：列表少一个，活动会话与 transcript 不变
+    await useButler.getState().deleteSession(firstSessionId);
+    assert.equal(useButler.getState().sessions.length, 2);
+    assert.equal(useButler.getState().activeSessionId, thirdSessionId);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第三段调查'), true);
+
+    // 删除不存在/已删除的 id 是 no-op
+    await useButler.getState().deleteSession(firstSessionId);
+    assert.equal(useButler.getState().sessions.length, 2);
+
+    // 删活动会话：切到最近的另一个有内容会话，并恢复它的 transcript
     await useButler.getState().deleteSession(thirdSessionId);
-    assert.equal(useButler.getState().activeSessionId, fallbackId);
+    assert.equal(useButler.getState().activeSessionId, secondSessionId);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第三段调查'), false);
+
+    // 删最后一个会话：新建默认会话，transcript 清空为欢迎语
+    now = 4_000;
+    await useButler.getState().deleteSession(secondSessionId);
+    assert.notEqual(useButler.getState().activeSessionId, secondSessionId);
+    assert.equal(useButler.getState().sessions.length, 1);
+    assert.equal(useButler.getState().sessions[0].title, '新对话');
+    assert.equal(useButler.getState().lines.some((line) => line.text === '第二段调查'), false);
 
     // 重启后删除仍生效
     await flushButlerPersist();
@@ -415,6 +418,57 @@ test('删除会话：删非活动只移除，删活动切最近，删最后一�
     await useButler.getState().hydrate();
     assert.equal(useButler.getState().sessions.length, 1);
     assert.equal(useButler.getState().sessions.some((session) => session.id === thirdSessionId), false);
+    assert.equal(useButler.getState().sessions.some((session) => session.id === secondSessionId), false);
+  } finally {
+    await discardResidentCodexThread();
+    restoreNow();
+    restore();
+  }
+});
+
+test('registry 体积控制：空会话不落盘，有真实提问的会话永不被自动清理', async () => {
+  let now = 1_000;
+  const restoreNow = setButlerNowProvider(() => now);
+  const restore = setButlerLoopRunner(async (options) => ({
+    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
+    messages: options.messages,
+  }));
+  try {
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    login('prune-user');
+    await useButler.getState().hydrate();
+
+    const realSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('有内容的调查');
+    await flushButlerPersist();
+
+    // 连点三次「新对话」：每次都把上一个空会话留在身后
+    now = 2_000;
+    await useButler.getState().newConversation();
+    now = 3_000;
+    await useButler.getState().newConversation();
+    now = 4_000;
+    await useButler.getState().newConversation();
+    const activeEmptyId = useButler.getState().activeSessionId;
+    await flushButlerPersist();
+
+    // 运行期不清理：空会话仍可在界面里被选中（清理与 switchSession 会竞争）
+    assert.equal(useButler.getState().sessions.length, 4);
+
+    // 重启后清理：只剩「有内容的」+「重启时活动的那个空会话」（活动豁免）
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await discardResidentCodexThread();
+    await useButler.getState().hydrate();
+    assert.deepEqual(
+      useButler.getState().sessions.map((session) => session.id).sort(),
+      [activeEmptyId, realSessionId].sort(),
+    );
+
+    // 有真实提问的会话内容原样保留
+    await useButler.getState().switchSession(realSessionId);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '有内容的调查'), true);
   } finally {
     await discardResidentCodexThread();
     restoreNow();

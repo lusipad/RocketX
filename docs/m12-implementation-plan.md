@@ -67,7 +67,7 @@ P1-P6 都必须遵守同一条合同：
 
 | Phase | 目标 | 关键依赖 | 验收摘要 | 非目标 | 主要风险 |
 |---|---|---|---|---|---|
-| P1 | 多 session / transcript / 去 3 天 TTL（2026-07-25 重定：主体已由 `ae3c88e` 交付，剩余 = recap「上回说到」+ session 保留策略） | P0 scenario baseline、`ae3c88e` 的 session registry | 已交付：多 session 并存/独立 transcript/新建切换重命名/TTL 移除。剩余验收：session 要点自动合成与「上回说到」呈现（框架 §3.5 环节⑥）；session 删除/归档与 registry 体积控制；长度截断（lines 200/history 40）影响评估 | 不做 context compiler、typed runtime、主动 rounds | registry 单 blob 随 session 数膨胀；recap 合成的调用成本与时机 |
+| P1 **（2026-07-25 完成）** | 多 session / transcript / 去 3 天 TTL + recap 与保留策略 | P0 scenario baseline、`ae3c88e` 的 session registry | 全部达成：多 session 并存/独立 transcript/新建切换重命名/TTL 移除（`ae3c88e`）；recap「上回说到」+ 切换器预览 + 桌面「我们手头的事」+ `deleteSession`（PR #233 与后续切片）；registry 体积控制见下方 §1.6 评估 | 不做 context compiler、typed runtime、主动 rounds | 已缓解：空会话仅在 hydrate 清理（运行期清理会与 `switchSession` 竞争，回归已钉） |
 | P2 | context compiler + manifest + task state | P1 session/transcript 模型 | “找文件 / 比较 PR / 提取承诺 / 跟进草稿 / 构建关联”等任务有结构化任务态、预检与来源 manifest | 不统一 API/Codex engine，不上写动作 | compiler 粒度过粗，导致澄清、来源和错误动作不可追踪 |
 | P3（决策 12 降级） | API 大脑冻结兼容合同 | P1 session | API 大脑在新 session registry / transcript 结构下按单 session 模式继续工作，既有回归（`butler-brain` 等）不破；不做 engine 合流，API 脑不获得 P1+ 新能力 | 不做双脑共用 engine contract | 冻结路径被新结构意外破坏而无回归覆盖 |
 | P4 | typed tool runtime + preflight + approval / checkpoint | P2 compiler（决策 12 后仅 Codex 路径） | 写动作、草案、审批、checkpoint、恢复点进入统一 typed runtime；错误动作和恢复路径可验证 | 不扩长期记忆边界 | 审批点不统一，副作用绕过工具层 |
@@ -84,6 +84,25 @@ P1-P6 都必须遵守同一条合同：
 | #168-P4 | Butler typed tool runtime、preflight、approval 与 checkpoint | P2 | 所有写动作/草案/审批都进入 typed runtime（仅 Codex 路径）；失败后可 checkpoint 恢复 | 审批点遗漏导致副作用越界 |
 | #168-P5 | Butler scoped memory 与 alias/commitment 边界 | P2, P4 | 记忆按 scope 治理，动态工作数据不入长期记忆 | 记忆作用域过宽或过窄，影响体验 |
 | #168-P6 | Butler 主动 rounds 与 workflow runtime 合流 | P3, P4, P5 | rounds / watcher / workflows 与手动调查共用同一 runtime 与记录 | 主动流程压垮已有 Today / routine 体验 |
+
+### 1.6 registry 体积与长度截断评估（2026-07-25，P1 收口）
+
+**体积事实**：所有 session 存在单个 `session-registry:<scope>` blob 里，每次防抖落盘全量重写。
+上界由既有常量给定：每 session `LINES_LIMIT=200` 行 + `HISTORY_LIMIT=40` 条 + `RUNTIME_CHECKPOINT_LIMIT=50`。
+按每行约 200 字符估算，单 session 约 40–60 KB；50 个 session 约 2–3 MB —— IndexedDB 容量上不构成风险，
+真正的成本是**序列化 CPU**随 session 数线性增长。
+
+**已采取（保守档）**：只在 hydrate 时清理**没有任何用户提问**的非活动会话（反复点「新对话」的产物，
+零内容损失）。有真实对话的会话**永不静默删除**——删除只能由用户经 `deleteSession` 显式执行，
+符合本文件 §4「先保留旧数据」的偏差原则。
+
+**明确不做**：不按数量/时间自动淘汰真实会话；不拆分为 per-session 键。
+**重启条件**：单 scope 常驻 session 数经常超过 ~50，或落盘出现可感知卡顿时，再做 per-session 键拆分
+（届时 registry 只留索引）。在此之前拆键属于过早优化。
+
+**长度截断**：时间截断（3 天 TTL）已随 `ae3c88e` 移除，长度截断仍在且**是刻意保留的**——
+它限定注入模型的上下文规模，与「恢复不被时间切断」不冲突。回看超过 200 行的历史属于独立需求
+（transcript 分页），未列入 P1。
 
 ## 2. 七类真实任务场景基线矩阵
 

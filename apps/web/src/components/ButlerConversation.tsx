@@ -13,17 +13,9 @@ import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
-import { butlerSessionRecap, useButler } from '../stores/butler';
+import { butlerRecapAgoLabel, butlerSessionRecap, useButler } from '../stores/butler';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
-
-function recapAgoLabel(updatedAt: number): string {
-  const minutes = Math.max(1, Math.round((Date.now() - updatedAt) / 60_000));
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.round(hours / 24)} 天前`;
-}
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
@@ -184,7 +176,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           {recap && activeSummary ? (
             <div className="rounded-lg border border-line bg-fill-1 px-3.5 py-2.5 text-xs leading-5 text-ink-2">
               <span className="font-medium text-ink">上回说到</span>
-              （{recapAgoLabel(activeSummary.updatedAt)}）：你问「{recap.lastAsk}」
+              （{butlerRecapAgoLabel(activeSummary.updatedAt)}）：你问「{recap.lastAsk}」
               {recap.lastReply ? <>，我答到「{recap.lastReply}」</> : null}。接着说就能继续。
             </div>
           ) : null}
