@@ -2,7 +2,7 @@
 
 写于 2026-07-25。回答一个问题：**「管家怎么样才算好用、现在差在哪、按什么顺序补」**。
 与 [`ai-design.md`](ai-design.md)（对账员：管家做什么）的分工：本文是好用性的**评价体系与迭代地图**，
-不改变产品定位。与 [`m12-implementation-plan.md`](m12-implementation-plan.md) 的关系：架构 phase 必须
+不改变产品定位。终局设想见 [`vision.md`](vision.md)——本文回答「怎么走」，那份回答「走去哪」。与 [`m12-implementation-plan.md`](m12-implementation-plan.md) 的关系：架构 phase 必须
 在本文的层上找到坐标，答不出「改善哪层判据」的切片往后排。
 
 ## 0. 第一性原理：管家是一种委托
