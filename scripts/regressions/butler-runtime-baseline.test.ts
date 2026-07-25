@@ -505,11 +505,11 @@ test('场景基线 6/7：创建周报例行任务', async () => {
 test('场景基线 7/7：跨重启续跑', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'partial',
-    capabilityPreflight: '同一 server scope + userId 下可恢复共享 Butler 会话，但仍受单 session 与 3 天 TTL 约束。',
-    sources: ['builtin:butler 持久化', 'useButler.hydrate'],
+    capabilityPreflight: '多 session registry 已上线（ae3c88e）：同 scope 下多个调查会话并存、独立 transcript 与 Codex 恢复点，3 天 TTL 已移除；长度截断（lines 200 / history 40）仍在，session 无 recap 摘要与保留策略。',
+    sources: ['builtin:butler session-registry 持久化', 'useButler.hydrate'],
     errorAction: '不会跨账号或跨服务器串用历史。',
-    clarification: '当前不会把恢复点拆成多 task state / transcript session。',
-    recovery: '刷新或重启后可在同 scope 下继续对话；超过 TTL 则只回看不续跑。',
+    clarification: '恢复时中断轮次降级为 paused，需要用户再发问继续；无「上回说到」recap。',
+    recovery: '刷新或重启后同 scope 恢复全部 session 并接续 transcript、模型历史与 Codex 恢复点，不再受时间截断。',
   };
 
   storageSet(SERVER_KEY, 'https://chat.example.com');

@@ -36,7 +36,8 @@ P0 不实现新的多 session UI、context compiler、engine contract、typed to
 
 - 测试环境或同源 Web 部署时，scope 会退化成 `same-origin:<userId>`。
 - 桌面端或显式配置 Rocket.Chat 地址时，scope 是 `<serverBase>:<userId>`。
-- 这仍然只承载**单个 Butler 会话**，不是多 session registry。
+- 2026-07-25 修订：`ae3c88e` 已上线 `session-registry:<scope>` 多 session registry（交互与
+  workflow session 共存一个 registry，旧单会话键保留作回滚镜像），本节的单会话描述仅存历史意义。
 
 文档、测试和后续迁移设计都必须基于这条事实；不能把测试环境的 `same-origin` 误写成产品固定合同。
 
@@ -66,7 +67,7 @@ P1-P6 都必须遵守同一条合同：
 
 | Phase | 目标 | 关键依赖 | 验收摘要 | 非目标 | 主要风险 |
 |---|---|---|---|---|---|
-| P1 | 多 session / transcript / 去 3 天 TTL | P0 scenario baseline、现有单会话持久化事实 | 同账号下可并存多个 Butler session；每个 session 有独立 transcript、标题、最近活动与恢复点；恢复不再依赖 3 天 TTL 切断上下文 | 不做 context compiler、typed runtime、主动 rounds | session key 或 transcript schema 设计失误污染现有 `builtin:butler` 数据 |
+| P1 | 多 session / transcript / 去 3 天 TTL（2026-07-25 重定：主体已由 `ae3c88e` 交付，剩余 = recap「上回说到」+ session 保留策略） | P0 scenario baseline、`ae3c88e` 的 session registry | 已交付：多 session 并存/独立 transcript/新建切换重命名/TTL 移除。剩余验收：session 要点自动合成与「上回说到」呈现（框架 §3.5 环节⑥）；session 删除/归档与 registry 体积控制；长度截断（lines 200/history 40）影响评估 | 不做 context compiler、typed runtime、主动 rounds | registry 单 blob 随 session 数膨胀；recap 合成的调用成本与时机 |
 | P2 | context compiler + manifest + task state | P1 session/transcript 模型 | “找文件 / 比较 PR / 提取承诺 / 跟进草稿 / 构建关联”等任务有结构化任务态、预检与来源 manifest | 不统一 API/Codex engine，不上写动作 | compiler 粒度过粗，导致澄清、来源和错误动作不可追踪 |
 | P3（决策 12 降级） | API 大脑冻结兼容合同 | P1 session | API 大脑在新 session registry / transcript 结构下按单 session 模式继续工作，既有回归（`butler-brain` 等）不破；不做 engine 合流，API 脑不获得 P1+ 新能力 | 不做双脑共用 engine contract | 冻结路径被新结构意外破坏而无回归覆盖 |
 | P4 | typed tool runtime + preflight + approval / checkpoint | P2 compiler（决策 12 后仅 Codex 路径） | 写动作、草案、审批、checkpoint、恢复点进入统一 typed runtime；错误动作和恢复路径可验证 | 不扩长期记忆边界 | 审批点不统一，副作用绕过工具层 |
@@ -77,7 +78,7 @@ P1-P6 都必须遵守同一条合同：
 
 | 子 Issue | 建议标题 | 依赖 | 验收 | 风险 |
 |---|---|---|---|---|
-| #168-P1 | Butler 多 session transcript 与 TTL 移除 | P0 | 可创建/切换/恢复多个 session；旧单会话自动迁入默认 session；3 天 TTL 不再截断恢复 | 旧数据迁移和新 registry 打架 |
+| #168-P1 | Butler 多 session transcript 与 TTL 移除（主体已交付于 `ae3c88e`；剩余改题为 recap 与保留策略） | P0 | 已达成：可创建/切换/恢复多个 session、旧单会话自动迁入、TTL 不再截断。剩余：recap「上回说到」、session 删除/归档、registry 体积控制 | registry 单 blob 膨胀；recap 时机与成本 |
 | #168-P2 | Butler context compiler、scenario manifest 与 task state | P1 | 七类任务都有结构化预检、来源、澄清、错误动作、恢复态 | compiler 过度硬编码，新增任务难扩展 |
 | #168-P3 | Butler API 大脑冻结兼容合同（决策 12 降级） | P1 | API 大脑在新 registry 下维持单 session 行为，冻结回归钉住既有能力 | 新结构意外破坏冻结路径 |
 | #168-P4 | Butler typed tool runtime、preflight、approval 与 checkpoint | P2 | 所有写动作/草案/审批都进入 typed runtime（仅 Codex 路径）；失败后可 checkpoint 恢复 | 审批点遗漏导致副作用越界 |
@@ -94,7 +95,7 @@ P1-P6 都必须遵守同一条合同：
 | 逾期 WI 跟进草稿 | 部分 | 能列逾期工作项；缺少跟进草案、审批和 checkpoint | `list_work_items` | 不会自动催办或修改工作项 | 不会追问催办对象、口径和投递面 | 可重查；草稿仍需人工整理 |
 | 构建失败关联提交 | 缺口 | 能列失败构建；没有提交/变更关联层 | `list_builds` | 不会自动重试、回滚或动代码 | 不会追问仓库、PR、变更范围 | 可重查失败构建；关联提交要后续 typed runtime |
 | 创建周报例行任务 | 完成 | 已有 `weekly-report` 技能 + `draft_routine` 草案闸门 | `load_skill`、`draft_routine`、`routines` store | 不会绕过确认直接启用 | 技能名/时间/星期非法会直接拒绝 | 可重新生成草案并确认 |
-| 跨重启续跑 | 部分 | 同一 `server scope + userId` 下可恢复共享 Butler 会话；仍受单 session 约束 | `builtin:butler` 持久化、`useButler.hydrate` | 不会跨账号或跨服务器串历史 | 没有多 task state / transcript session | 同 scope 可恢复；超 TTL 仍只回看不续跑 |
+| 跨重启续跑 | 部分 | 多 session registry 已上线（ae3c88e）：多调查会话并存、独立 transcript 与 Codex 恢复点，3 天 TTL 已移除；缺 recap 摘要与保留策略 | `builtin:butler` session-registry、`useButler.hydrate` | 不会跨账号或跨服务器串历史 | 中断轮次恢复为 paused 需再发问；无「上回说到」 | 同 scope 恢复全部 session 并接续，不再受时间截断 |
 
 ## 3. Assumptions
 
