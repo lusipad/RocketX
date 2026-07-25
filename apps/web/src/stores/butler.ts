@@ -197,6 +197,12 @@ export interface ButlerState {
     text: string,
     context?: ButlerAskContext,
     images?: readonly ButlerImageInput[],
+    /**
+     * 场景识别只看这段（缺省 = text）。
+     * 入口把证据（消息转录等）拼进正文时必须传它：否则被选消息里的
+     * 「查一下那个文档」会把场景劫持成找文件，管家反问后整轮空转。
+     */
+    intent?: string,
   ) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
@@ -1369,7 +1375,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     }
   },
 
-  ask: async (text, context, images = []) => {
+  ask: async (text, context, images = [], intent) => {
     const displayText = text.trim();
     const content = displayText || (images.length ? '请分析这些图片。' : '');
     const modelContent = images.length
@@ -1380,7 +1386,9 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (get().running) return;
 
     const turnContext = context ? normalizeContext(context) : get().context;
-    const compiledTask = compileButlerTask(content, turnContext, get().taskState, butlerNow());
+    // 分类只吃意图句：证据正文（转录）不参与场景识别，否则聊天内容会劫持场景。
+    const intentText = intent?.trim() || content;
+    const compiledTask = compileButlerTask(intentText, turnContext, get().taskState, butlerNow());
     if (compiledTask.status === 'awaiting-clarification') {
       set((state) => ({
         lines: [

@@ -1,7 +1,7 @@
 import type { RcMessage } from '@rcx/rc-client';
 import { tsMs } from '@rcx/rc-client';
 import type { ComposerCommandContext } from './types';
-import type { ButlerSource, ButlerSurfaceContext } from '../lib/butlerContext';
+import { mergeButlerSources, type ButlerSource, type ButlerSurfaceContext } from '../lib/butlerContext';
 import { stripQuotePrefix } from '../lib/messageText';
 import { stripAgentSessionMarker } from '../agent/card';
 import { useButler } from '../stores/butler';
@@ -62,9 +62,10 @@ function messagesTranscript(messages: readonly RcMessage[]): string {
     .join('\n');
 }
 
+/** 遵守 SOURCE_LIMIT：来源芯片满 8 条后，管家自己查证到的证据就再也挤不进来了。 */
 function messageSources(rid: string, messages: readonly RcMessage[]): ButlerSource[] {
   const room = roomNameOf(rid);
-  return messages.map((message) => ({
+  return mergeButlerSources(messages.map((message) => ({
     kind: 'message' as const,
     id: message._id,
     mid: message._id,
@@ -73,7 +74,7 @@ function messageSources(rid: string, messages: readonly RcMessage[]): ButlerSour
       `${room} · ${message.u?.name || message.u?.username || ''}：${bodyOf(message)}`,
       room,
     ),
-  }));
+  })));
 }
 
 export function runButlerCommand({ rid, params }: ComposerCommandContext): void {
@@ -105,6 +106,10 @@ export function askButlerAboutMessages(
   void useButler.getState().ask(
     `${question}\n\n以下是「${roomName}」里指定的消息：\n${messagesTranscript(messages)}`,
     context,
+    undefined,
+    // 场景识别只看 question：转录里的「查一下那个文档」会把场景劫持成找文件，
+    // 管家转而反问「请补充发送人」，整轮空转（对抗审查实测复现）。
+    question,
   );
   return 'asked';
 }
@@ -132,6 +137,6 @@ export function askButlerAboutPullRequests(
     })),
   };
   useUI.getState().openButlerConversation();
-  void useButler.getState().ask(question, context);
+  void useButler.getState().ask(question, context, undefined, question);
   return 'asked';
 }
