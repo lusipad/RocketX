@@ -194,6 +194,7 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
         'restore_memory',
         'import_legacy_memory',
         'draft_routine',
+        'draft_errand',
       ],
     );
 

@@ -401,7 +401,9 @@ test('场景基线 4/7：逾期 WI 跟进草稿', async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id, 501);
   assert.equal(rows[0].assignedTo, '张三');
-  assert.deepEqual(draftTools, ['draft_routine']);
+  // 草案类工具的白名单：新增一个就要在这里显式承认，避免悄悄多出写入口。
+  // draft_errand 只拟规格给用户过目，真正派发由用户在卡上点，大脑仍然没有手。
+  assert.deepEqual(draftTools.sort(), ['draft_errand', 'draft_routine']);
   assert.equal(baseline.completion, 'partial');
 });
 

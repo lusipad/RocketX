@@ -236,7 +236,7 @@ test('完整管家页可以发送图片和文字', async ({ page }) => {
     buffer: Buffer.from('image-bytes'),
   });
   await expect(page.getByAltText('release.png')).toBeVisible();
-  await page.getByPlaceholder(/例如：搜索张三/).fill('分析这张发布截图');
+  await page.getByPlaceholder(/打 \/ 看看我会什么/).fill('分析这张发布截图');
   await page.getByRole('button', { name: '发送', exact: true }).click();
 
   const captured = await page.evaluate(() => (
@@ -259,7 +259,7 @@ test('完整管家页可以粘贴图片并发送', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await captureButlerAsks(page);
 
-  const input = page.getByPlaceholder(/例如：搜索张三/);
+  const input = page.getByPlaceholder(/打 \/ 看看我会什么/);
   await input.evaluate((element) => {
     const clipboard = new DataTransfer();
     clipboard.items.add(new File(['pasted-image'], 'pasted.png', { type: 'image/png' }));
