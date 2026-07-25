@@ -11,6 +11,7 @@ import {
   ThumbsUp,
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
+import ButlerLearnedPanel from '../components/ButlerLearnedPanel';
 import ButlerRoutines from '../components/ButlerRoutines';
 import ButlerAuditTrail from '../components/ButlerAuditTrail';
 import ButlerSources from '../components/ButlerSources';
@@ -594,6 +595,8 @@ export default function ButlerPage() {
             <LedgerColumn title="我答应的" entries={commitments} today={today} />
             <LedgerColumn title="我在等的" entries={waits} today={today} />
           </div>
+
+          <ButlerLearnedPanel />
 
           <details className="group rounded-xl border border-line bg-surface">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
