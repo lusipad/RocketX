@@ -1,14 +1,17 @@
 import { parseAdoUrl } from './ado';
 import type { ButlerSource } from './butlerContext';
+import { BARE_URL_SOURCE } from './urlText';
 
 export type ButlerConclusionRef = `msg:${string}` | `wi:${number}` | `pr:${number}` | `build:${number}`;
 
 export interface ButlerConclusion {
   /** 从 0 起，用于本地 state key 与无障碍标签 */
   index: number;
-  /** 去掉列表前缀后的原文 */
+  /** 去掉列表前缀后的原文（含 markdown 链接语法），仅供展示与调试 */
   text: string;
-  /** 去链接、去 markdown 记号后的短标题，按钮提示用 */
+  /** 去链接、去 markdown 记号后的完整文本：**写入待办时用这个**，否则标题里会焊着一整条 permalink */
+  plain: string;
+  /** plain 截断后的短标题，按钮提示用 */
   label: string;
   ref: ButlerConclusionRef;
   /** 命中的工具来源。msg/wi 的写动作必须有它 */
@@ -32,7 +35,8 @@ const BULLET_ITEM = /^(\s*)[-*+]\s+(.*)$/;
 const SECTION_HEADING = /^\*\*[^*]+\*\*\s*[:：]?\s*$/;
 
 const MARKDOWN_LINK = /\[([^\]]*)\]\(([^)\s]+)\)/g;
-const BARE_URL = /https?:\/\/[^\s)（）「」]+/g;
+// 与 markdown.tsx 共用同一份字符类：口径不一致会让「界面上可点、解析器认不出」
+const BARE_URL = new RegExp(BARE_URL_SOURCE, 'g');
 const BARE_WORK_ITEM = /(?:^|[^\w#])#(\d+)\b/;
 
 const LABEL_LIMIT = 24;
@@ -47,14 +51,19 @@ function listItemText(row: string): string | null {
   return null;
 }
 
-function plainLabel(text: string): string {
-  const stripped = text
+/** 去链接、去 markdown 记号的洁净文本：写入待办用它，不截断 */
+function plainText(text: string): string {
+  return text
     .replace(MARKDOWN_LINK, '$1')
     .replace(BARE_URL, '')
     .replace(/[*_`~]/g, '')
+    .replace(/\s*·\s*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return stripped.length > LABEL_LIMIT ? `${stripped.slice(0, LABEL_LIMIT)}…` : stripped;
+}
+
+function shortLabel(plain: string): string {
+  return plain.length > LABEL_LIMIT ? `${plain.slice(0, LABEL_LIMIT)}…` : plain;
 }
 
 function sameOrigin(href: string, siteUrl: string): URL | null {
@@ -67,11 +76,20 @@ function sameOrigin(href: string, siteUrl: string): URL | null {
   }
 }
 
+/** 按在文本中出现的位置返回全部链接（markdown 与裸 URL 混排、去重） */
 function hrefsOf(text: string): string[] {
-  const hrefs: string[] = [];
-  for (const match of text.matchAll(MARKDOWN_LINK)) hrefs.push(match[2]);
-  for (const match of text.matchAll(BARE_URL)) hrefs.push(match[0]);
-  return hrefs;
+  const found: Array<{ at: number; href: string }> = [];
+  for (const match of text.matchAll(MARKDOWN_LINK)) {
+    found.push({ at: match.index ?? 0, href: match[2] });
+  }
+  for (const match of text.matchAll(BARE_URL)) {
+    const at = match.index ?? 0;
+    // markdown 链接里的 URL 会被裸 URL 正则再命中一次，位置落在同一区间内则跳过
+    if (found.some((item) => item.href === match[0])) continue;
+    found.push({ at, href: match[0] });
+  }
+  found.sort((left, right) => left.at - right.at);
+  return found.map((item) => item.href);
 }
 
 interface Anchor {
@@ -79,24 +97,42 @@ interface Anchor {
   href?: string;
 }
 
-/** 结论文本自带的归属锚点：技能强制每条带 [原文](link) / [#编号](webUrl)，这里只做反解。 */
+/** 能做的动作越多，越应该成为这条结论的归属对象 */
+const ANCHOR_PRIORITY: Record<string, number> = { msg: 0, wi: 1, pr: 2, build: 3 };
+
+/**
+ * 结论文本自带的归属锚点：技能强制每条带 [原文](link) / [#编号](webUrl)，这里只做反解。
+ *
+ * **按能力优先级挑选而不是取第一个**：承诺类结论常写成
+ * 「张三承诺修完 [#202](工作项) · [原文](permalink)」，取第一个会把归属判给工作项，
+ * 「盯它」（等待台账的唯一入口）就此消失。
+ */
 function anchorOf(text: string, env: ButlerConclusionEnv): Anchor | null {
+  const anchors: Anchor[] = [];
   const hrefs = hrefsOf(text);
   for (const href of hrefs) {
     const permalink = sameOrigin(href, env.siteUrl);
     const mid = permalink?.searchParams.get('msg');
-    if (mid) return { ref: `msg:${mid}`, href };
+    if (mid) {
+      anchors.push({ ref: `msg:${mid}`, href });
+      continue;
+    }
     const entity = parseAdoUrl(href, env.adoBase);
-    if (entity?.kind === 'workitem') return { ref: `wi:${entity.id}`, href };
-    if (entity?.kind === 'pullrequest') return { ref: `pr:${entity.id}`, href };
-    if (entity?.kind === 'build') return { ref: `build:${entity.id}`, href };
+    if (entity?.kind === 'workitem') anchors.push({ ref: `wi:${entity.id}`, href });
+    else if (entity?.kind === 'pullrequest') anchors.push({ ref: `pr:${entity.id}`, href });
+    else if (entity?.kind === 'build') anchors.push({ ref: `build:${entity.id}`, href });
   }
   // 只有整条结论里没有任何链接时才认裸 #编号（与 markdown.tsx 的工作项判定同口径）
   if (hrefs.length === 0 && env.adoBase) {
     const bare = BARE_WORK_ITEM.exec(text);
-    if (bare) return { ref: `wi:${Number(bare[1])}` };
+    if (bare) anchors.push({ ref: `wi:${Number(bare[1])}` });
   }
-  return null;
+  if (anchors.length === 0) return null;
+  return anchors.reduce((best, candidate) => {
+    const bestRank = ANCHOR_PRIORITY[best.ref.split(':', 1)[0]] ?? 9;
+    const rank = ANCHOR_PRIORITY[candidate.ref.split(':', 1)[0]] ?? 9;
+    return rank < bestRank ? candidate : best;
+  });
 }
 
 function findSource(
@@ -142,10 +178,13 @@ export function parseButlerConclusions(
     if (isWorkItem && !source && !anchor.href) continue;
 
     const fallbackWebUrl = !source && anchor.href ? anchor.href : undefined;
+    const plain = plainText(item);
+    if (!plain) continue;
     conclusions.push({
       index: conclusions.length,
       text: item.trim(),
-      label: plainLabel(item),
+      plain,
+      label: shortLabel(plain),
       ref: anchor.ref,
       ...(source ? { source } : {}),
       ...(fallbackWebUrl ? { fallbackWebUrl } : {}),

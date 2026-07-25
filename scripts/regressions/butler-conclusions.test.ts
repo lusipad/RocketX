@@ -124,6 +124,49 @@ test('有序列表与任务列表同样识别，label 去掉链接并截断', ()
   assert.match(conclusions[1].label, /…$/);
 });
 
+test('行内实体链接不得抢走消息归属：句尾 [原文] 仍然赢（能做的动作更多）', () => {
+  const text = `- 张三承诺周五前修完 [#202](${ADO}/p/_workitems/edit/202) · [原文](${permalink('dev', 'm1')})`;
+  const conclusions = parseButlerConclusions(text, {
+    siteUrl: SITE,
+    adoBase: ADO,
+    sources: [
+      { kind: 'work-item', id: '202', label: '#202 修登录闪退' },
+      messageSource('m1', 'room-dev', '研发群 · 张三：周五前修完'),
+    ],
+  });
+  assert.equal(conclusions.length, 1);
+  assert.equal(conclusions[0].ref, 'msg:m1', '取第一个锚点会归给工作项，「盯它」就此消失');
+  assert.equal(conclusions[0].can.watch, true);
+  assert.equal(conclusions[0].source?.rid, 'room-dev');
+});
+
+test('裸 permalink 以中文标点收尾时仍能解析（与 markdown 渲染同口径）', () => {
+  for (const tail of ['，已确认。', '。', '；随后同步', '）']) {
+    const text = `- 张三答应周五给报告 ${permalink('dev', 'm1')}${tail}`;
+    const conclusions = parseButlerConclusions(text, {
+      siteUrl: SITE,
+      adoBase: ADO,
+      sources: [messageSource('m1', 'room-dev', '研发群 · 张三：周五给报告')],
+    });
+    assert.equal(conclusions.length, 1, `尾随「${tail}」时应仍能解析`);
+    assert.equal(conclusions[0].ref, 'msg:m1');
+  }
+});
+
+test('plain 是洁净全文：写待办用它，标题里不会焊着 permalink', () => {
+  const text = `- 张三 · 周五给压测报告 · [原文](${permalink('dev', 'm1')})`;
+  const [conclusion] = parseButlerConclusions(text, {
+    siteUrl: SITE,
+    adoBase: ADO,
+    sources: [messageSource('m1', 'room-dev', '研发群 · 张三：周五给压测报告')],
+  });
+  assert.ok(conclusion);
+  assert.doesNotMatch(conclusion.plain, /https?:|\[|\]|\(/);
+  assert.equal(conclusion.plain, '张三 · 周五给压测报告 · 原文');
+  // text 保留原始 markdown 供展示；plain 才是写入用的
+  assert.match(conclusion.text, /\[原文\]/);
+});
+
 test('senderFromSourceLabel 从机器生成的 label 里取发言人', () => {
   assert.equal(senderFromSourceLabel('研发群 · 张三：周五给压测报告'), '张三');
   assert.equal(senderFromSourceLabel('研发群：没有发言人'), undefined);

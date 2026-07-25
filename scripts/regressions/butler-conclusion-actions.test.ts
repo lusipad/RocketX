@@ -9,6 +9,13 @@ import {
 import type { ButlerConclusion } from '../../apps/web/src/lib/butlerConclusions';
 import { ledgerFromTodos } from '../../apps/web/src/lib/butlerLedger';
 import type { Todo } from '../../apps/web/src/stores/todos';
+import { useChat } from '../../apps/web/src/stores/chat';
+
+// 房间名取自订阅表而不是切 label 字符串（label 里含分隔符会把快照写坏）
+useChat.setState({
+  subscriptions: { 'room-dev': { rid: 'room-dev', fname: '研发群', name: 'dev', t: 'c' } },
+  rooms: { 'room-dev': { _id: 'room-dev', fname: '研发群', name: 'dev', t: 'c' } },
+} as never);
 
 function fakeTodos(seed: Todo[] = []) {
   const todos = [...seed];
@@ -34,6 +41,7 @@ function messageConclusion(text: string, index = 0): ButlerConclusion {
   return {
     index,
     text,
+    plain: text,
     label: text.slice(0, 12),
     ref: 'msg:m1',
     source: {
@@ -134,6 +142,67 @@ test('PR 与构建结论不允许写动作', () => {
   assert.equal(turnConclusionIntoTodo(pr, { todoState: state }), 'unsupported');
   assert.equal(watchConclusion(pr, { who: '张三' }, { todoState: state }), 'unsupported');
   assert.equal(calls.add, 0);
+});
+
+test('用户自建的承诺待办不被静默改写：返回 conflict 而不是覆盖', () => {
+  const { state, todos, calls } = fakeTodos([
+    {
+      id: 'todo-mine',
+      title: '我周五前回复张三',
+      done: false,
+      createdAt: 1,
+      source: 'message',
+      mid: 'm1',
+      rid: 'room-dev',
+      committedTo: '张三',
+      due: '2026-07-31',
+    } as Todo,
+  ]);
+  assert.equal(
+    watchConclusion(messageConclusion('张三答应周五给报告'), { who: '张三' }, { todoState: state }),
+    'conflict',
+  );
+  assert.equal(calls.update, 0);
+  // 台账里不得同时长出承诺条与等待条
+  assert.equal(todos[0].committedTo, '张三');
+  assert.equal(todos[0].waitingFor, undefined);
+  const ledger = ledgerFromTodos(todos, '2026-07-25');
+  assert.equal(ledger.filter((entry) => entry.kind === 'wait').length, 0);
+  assert.equal(ledger.filter((entry) => entry.kind === 'commitment').length, 1);
+});
+
+test('改截止日期不会被幂等短路吃掉，也不会被 already-watching 判定吞掉', () => {
+  const conclusion = messageConclusion('张三答应给报告');
+  const noDue = createConclusionCheckpoint(conclusion, 'wait', '张三', 1);
+  const withDue = createConclusionCheckpoint(conclusion, 'wait', '张三', 1, '2026-08-05');
+  assert.notEqual(noDue.id, withDue.id, 'due 必须进幂等键，否则改日期会被 completed 短路');
+  assert.equal(withDue.params.due, '2026-08-05');
+
+  const { state, todos } = fakeTodos();
+  assert.equal(watchConclusion(conclusion, { who: '张三' }, { todoState: state }), 'created');
+  // 同一个人、新的日期 → 必须是 updated 而不是 already-watching
+  assert.equal(
+    watchConclusion(conclusion, { who: '张三', due: '2026-08-05' }, { todoState: state }),
+    'updated',
+  );
+  assert.equal(todos[0].due, '2026-08-05');
+  // 完全相同才算已在盯
+  assert.equal(
+    watchConclusion(conclusion, { who: '张三', due: '2026-08-05' }, { todoState: state }),
+    'already-watching',
+  );
+});
+
+test('写入待办用洁净文本，标题与摘要里不出现 permalink', () => {
+  const { state, todos } = fakeTodos();
+  const conclusion = {
+    ...messageConclusion('张三 · 周五给压测报告 · 原文'),
+    text: '张三 · 周五给压测报告 · [原文](https://chat.example.com/channel/dev?msg=m1)',
+    plain: '张三 · 周五给压测报告 · 原文',
+  };
+  assert.equal(watchConclusion(conclusion, { who: '张三' }, { todoState: state }), 'created');
+  assert.doesNotMatch(todos[0].title, /https?:|\[原文\]/);
+  assert.doesNotMatch(todos[0].excerpt ?? '', /https?:|\[原文\]/);
 });
 
 test('checkpoint 是待审批的写操作，走既有审批通道', () => {

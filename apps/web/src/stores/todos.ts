@@ -145,32 +145,37 @@ function resolveDesktopId(id: string): string {
   return desktopIds.get(id) ?? id;
 }
 
-/** 最近一次落盘失败：只保留到被 flushTodoWrites 取走一次为止 */
-let pendingWriteError: unknown;
+/**
+ * 最近一次入队任务的结果（未吞异常的那一份）。
+ *
+ * 不用「全局错误闩」：那样别处的落盘失败会被下一个调用方认领，
+ * 成功的动作报失败、失败的动作报成功。调用方在自己 add/update 之后
+ * 立刻取走这个 promise，拿到的就是自己那次写入的结果。
+ */
+let lastEnqueued: Promise<void> = Promise.resolve();
 
 function enqueueDesktop(task: () => Promise<void>): void {
-  desktopQueue = desktopQueue
-    .then(async () => {
-      await desktopReady;
-      await task();
-    })
-    .catch((error) => {
-      pendingWriteError = error;
-      console.warn('[Todos] SQLite 操作失败', error);
-    });
+  const run = desktopQueue.then(async () => {
+    await desktopReady;
+    await task();
+  });
+  // 队列本身要活下去，所以吞掉异常；lastEnqueued 保留原始 promise 供调用方 await
+  desktopQueue = run.catch((error) => {
+    console.warn('[Todos] SQLite 操作失败', error);
+  });
+  lastEnqueued = run;
+  void run.catch(() => undefined);
 }
 
 /**
- * 等待排队中的落盘完成；失败时抛出（只抛一次）。
+ * 等待「刚刚那次」落盘完成；失败时抛出。
  *
- * 一键动作比确认卡更容易连点，调用方需要 await 到真实结果——
+ * 一键动作比确认卡更容易连点，必须 await 到真实结果——
  * 否则会出现「提示已放进等待台账、数据库里其实空白」。
+ * 调用方必须在写操作**之内**调用它，让失败变成 checkpoint 的失败。
  */
-export async function flushTodoWrites(): Promise<void> {
-  await desktopQueue;
-  const error = pendingWriteError;
-  pendingWriteError = undefined;
-  if (error) throw error instanceof Error ? error : new Error(String(error));
+export function awaitLastTodoWrite(): Promise<void> {
+  return lastEnqueued;
 }
 
 /** 今天（本地时区）的 YYYY-MM-DD */
