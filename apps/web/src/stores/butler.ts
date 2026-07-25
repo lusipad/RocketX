@@ -27,6 +27,7 @@ import {
   type ButlerEngineTranscriptLine,
 } from '../lib/butlerEngineContract';
 import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
+import { butlerStepLabel, butlerToolLabel } from '../lib/butlerToolLabels';
 import {
   butlerTaskPrompt,
   compileButlerTask,
@@ -97,8 +98,11 @@ export interface ButlerLine {
 export interface ButlerStep {
   id: string;
   label: string;
+  /** 带脱敏参数摘要的一行，如「搜索消息（发布）」；与 label 相同时不写 */
+  detail?: string;
   status: 'running' | 'done' | 'failed';
   at: number;
+  endedAt?: number;
 }
 
 export interface ButlerRoomContext {
@@ -193,6 +197,12 @@ export interface ButlerState {
     text: string,
     context?: ButlerAskContext,
     images?: readonly ButlerImageInput[],
+    /**
+     * 场景识别只看这段（缺省 = text）。
+     * 入口把证据（消息转录等）拼进正文时必须传它：否则被选消息里的
+     * 「查一下那个文档」会把场景劫持成找文件，管家反问后整轮空转。
+     */
+    intent?: string,
   ) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
   proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
@@ -618,25 +628,6 @@ export function resetButlerPersistenceForTests(): void {
   activeWorkflowRuns.clear();
 }
 
-const toolLabels: Record<string, string> = {
-  search_messages: '搜索消息',
-  list_mentions: '查询 @我',
-  search_people_rooms: '查询联系人和会话',
-  list_todos: '查询待办',
-  list_calendar: '查询日程',
-  list_work_items: '查询工作项',
-  list_pull_requests: '查询拉取请求',
-  run_azure_devops_server_cli: '运行 Azure DevOps 只读 CLI',
-  list_builds: '查询构建',
-  recall_memory: '召回记忆',
-  load_skill: '加载技能',
-  remember: '记录记忆',
-  revoke_memory: '撤销记忆',
-  restore_memory: '恢复记忆',
-  import_legacy_memory: '导入旧记忆',
-  draft_routine: '生成例行事务草案',
-};
-
 function line(role: ButlerLine['role'], text: string): ButlerLine {
   return { id: crypto.randomUUID(), role, text };
 }
@@ -720,7 +711,8 @@ function welcomeLines(): ButlerLine[] {
 }
 
 function activityFor(event: AgentLoopEvent): string | null {
-  if (event.type === 'tool-call') return `正在调用 ${toolLabels[event.toolCall.name] ?? event.toolCall.name}…`;
+  // 保持 label（不带参数摘要）：既有回归逐字断言「正在调用 查询待办…」。
+  if (event.type === 'tool-call') return `正在调用 ${butlerToolLabel(event.toolCall.name)}…`;
   return null;
 }
 
@@ -1383,7 +1375,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     }
   },
 
-  ask: async (text, context, images = []) => {
+  ask: async (text, context, images = [], intent) => {
     const displayText = text.trim();
     const content = displayText || (images.length ? '请分析这些图片。' : '');
     const modelContent = images.length
@@ -1394,7 +1386,9 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (get().running) return;
 
     const turnContext = context ? normalizeContext(context) : get().context;
-    const compiledTask = compileButlerTask(content, turnContext, get().taskState, butlerNow());
+    // 分类只吃意图句：证据正文（转录）不参与场景识别，否则聊天内容会劫持场景。
+    const intentText = intent?.trim() || content;
+    const compiledTask = compileButlerTask(intentText, turnContext, get().taskState, butlerNow());
     if (compiledTask.status === 'awaiting-clarification') {
       set((state) => ({
         lines: [
@@ -1484,22 +1478,36 @@ export const useButler = create<ButlerState>((set, get) => ({
         });
         return;
       }
+      if (event.type === 'phase') {
+        set({ activity: event.detail ?? null });
+        return;
+      }
       if (event.type === 'tool-call') {
         toolCallNames.set(event.toolCall.id, event.toolCall.name);
-        const label = toolLabels[event.toolCall.name] ?? event.toolCall.name;
+        const label = butlerToolLabel(event.toolCall.name);
+        const detail = butlerStepLabel(event.toolCall.name, event.toolCall.arguments);
         set((state) => ({
           activity: activityFor(event),
-          steps: [...state.steps, { id: event.toolCall.id, label, status: 'running' as const, at: butlerNow() }],
+          steps: [...state.steps, {
+            id: event.toolCall.id,
+            label,
+            ...(detail !== label ? { detail } : {}),
+            status: 'running' as const,
+            at: butlerNow(),
+          }],
         }));
         return;
       }
       if (event.type === 'tool-result') {
         const toolName = toolCallNames.get(event.toolCallId);
         turnSources = mergeButlerSources(turnSources, extractButlerSources(toolName, event.content));
-        const failed = /^工具(?:调用|执行)失败/.test(event.content);
+        // 参数无效 / 未知工具 也是失败：漏掉它们会给失败步骤打绿色对勾。
+        const failed = /^(?:工具(?:调用|执行)失败|工具参数无效|未知工具)/.test(event.content);
         set((state) => {
           const steps = state.steps.map((step) =>
-            step.id === event.toolCallId ? { ...step, status: failed ? 'failed' as const : 'done' as const } : step,
+            step.id === event.toolCallId
+              ? { ...step, status: failed ? 'failed' as const : 'done' as const, endedAt: butlerNow() }
+              : step,
           );
           const lines = assistantLineId
             ? state.lines.map((item) => item.id === assistantLineId
@@ -1507,7 +1515,9 @@ export const useButler = create<ButlerState>((set, get) => ({
               : item)
             : state.lines;
           return {
-            activity: null,
+            // 不回落 null：否则工具一返回就退回通用兜底「正在处理请求…」，
+            // Codex 路径随后会发 summarizing 覆盖它。
+            activity: '正在整理结果…',
             steps,
             lines,
             taskState: state.taskState

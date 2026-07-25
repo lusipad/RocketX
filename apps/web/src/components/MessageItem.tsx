@@ -9,6 +9,7 @@ import {
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
 import {
   AlertCircle,
+  Bot,
   Check,
   ClipboardList,
   Copy,
@@ -59,6 +60,7 @@ import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
+import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
 import {
   extractMessageAction,
@@ -576,6 +578,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   );
 
   const displayName = message.u.name || message.u.username;
+  // 忙碌判定读 getState 而不是订阅 running：MessageItem 每条消息一个实例，
+  // 全量订阅 butler store 会变成无谓的重渲染源。
+  const handOverToButler = (): void => {
+    const result = askButlerAboutMessages(message.rid, [message], '这条消息说了什么、需要我做什么？');
+    if (result === 'busy') toast.error('管家正在忙，等它答完这轮');
+  };
   const extractWithAi = async (target: 'todo' | 'workitem') => {
     if (aiExtracting) return;
     const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim();
@@ -686,6 +694,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       icon: aiExtracting ? Loader2 : Sparkles,
       onClick: () => void extractWithAi('workitem'),
     },
+    { label: '交给管家', icon: Bot, onClick: () => handOverToButler() },
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,

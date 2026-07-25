@@ -210,11 +210,13 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
   try {
     await useButler.getState().ask('今天有什么待办？');
 
+    // 工具返回后不回落 null：否则界面退回通用兜底「正在处理请求…」，
+    // 等于把刚建立起来的进度感又丢掉（Codex 路径随后会用 summarizing 覆盖）。
     assert.deepEqual(snapshots, [
       { text: '我先', activity: null },
       { text: '我先', activity: '正在调用 查询待办…' },
       { text: '我先查询。', activity: '正在调用 查询待办…' },
-      { text: '我先查询。', activity: null },
+      { text: '我先查询。', activity: '正在整理结果…' },
     ]);
     assert.equal(useButler.getState().lines.at(-1)?.text, '我先查询。');
     assert.equal(useButler.getState().activity, null);

@@ -207,7 +207,8 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     await completeTurn(transport);
 
     assert.deepEqual(await asking, { text: '完成。' });
-    assert.deepEqual(events, ['content']);
+    // 等待期可见化：线程建立与上下文准备各播报一次，之后才是正文流
+    assert.deepEqual(events, ['phase', 'phase', 'content']);
   } finally {
     await restore();
   }
@@ -348,8 +349,12 @@ test('动态工具仅执行当前线程已注册工具，并按 Spike D 格式�
       id: 75,
       result: { contentItems: [{ type: 'inputText', text: '[]' }], success: true },
     });
-    // 两个调用在同一 tick 到达：tool-call 事件先于异步执行完成的 tool-result。
-    assert.deepEqual(events.map((event) => event.type), ['tool-call', 'tool-call', 'tool-result', 'tool-result']);
+    // 两个调用在同一 tick 到达：tool-call 事件先于异步执行完成的 tool-result；
+    // 每个 tool-result 后跟一条 summarizing，消灭工具返回到下一段文字之间的空窗。
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ['phase', 'phase', 'tool-call', 'tool-call', 'tool-result', 'phase', 'tool-result', 'phase'],
+    );
 
     await completeTurn(transport);
     await asking;

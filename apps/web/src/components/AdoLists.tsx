@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -22,6 +23,8 @@ import {
   type PullRequest,
   type WorkItem,
 } from '../stores/workbench';
+import { askButlerAboutPullRequests } from '../kernel/butler';
+import { toast } from '../stores/toast';
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
 import { DEFAULT_WORK_ITEM_STATE_FILTER, useUI } from '../stores/ui';
@@ -273,14 +276,17 @@ function isDefaultHiddenState(state: string): boolean {
   return normalized === '搁置' || normalized === '已搁置' || normalized === 'shelved' || normalized === 'on hold';
 }
 
-function PrRow({ pr }: { pr: PullRequest }) {
+function PrRow({ pr, onAsk }: { pr: PullRequest; onAsk: (pr: PullRequest) => void }) {
   const approved = isApproved(pr);
   return (
+    // 外层由 <a> 改为 div（照 WorkItemList 的写法）：整行是链接时，
+    // 行内按钮的点击会冒泡去开外链，加按钮前必须先拆开。
+    <div className="group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2">
     <a
       href={pr.webUrl}
       target="_blank"
       rel="noreferrer"
-      className="group flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
+      className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5"
     >
       <GitPullRequest
         size={15}
@@ -315,6 +321,16 @@ function PrRow({ pr }: { pr: PullRequest }) {
       </span>
       <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
     </a>
+      <button
+        type="button"
+        onClick={() => onAsk(pr)}
+        title="让管家看看这个 PR"
+        aria-label="让管家看看这个 PR"
+        className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+      >
+        <Bot size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -328,6 +344,14 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
   const review = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
   const mine = useMemo(() => myPrsOf(prs, account), [prs, account]);
   const source = tab === 'review' ? review : mine;
+
+  const askButler = (pr: PullRequest): void => {
+    const result = askButlerAboutPullRequests(
+      [pr],
+      `看看这个 PR：改动重点、风险、我该先看哪里。PR 编号 ${pr.id}。`,
+    );
+    if (result === 'busy') toast.error('管家正在忙，等它答完这轮');
+  };
 
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
@@ -382,7 +406,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
 
       <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
         {filtered.map((pr) => (
-          <PrRow key={pr.id} pr={pr} />
+          <PrRow key={pr.id} pr={pr} onAsk={askButler} />
         ))}
         {filtered.length === 0 && (
           <EmptyRow

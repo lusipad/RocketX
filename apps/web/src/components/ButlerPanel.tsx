@@ -16,6 +16,7 @@ import ButlerImagePicker, {
 } from './ButlerImagePicker';
 import PanelShell from './PanelShell';
 import type { ButlerImageInput } from '../lib/butlerImages';
+import { BUTLER_BOUNDARY_NOTE, BUTLER_SCENE_PROMPTS } from '../lib/butlerPrompts';
 
 function roomName(
   rid: string,
@@ -64,7 +65,8 @@ export default function ButlerPanel() {
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [lines, activity, error, routineDraft, runtimeCheckpoints, actionDraft]);
+    // steps 也要在依赖里：等待期可见化让过程区实时长高，漏了它侧栏就不贴底
+  }, [lines, steps, activity, error, routineDraft, runtimeCheckpoints, actionDraft]);
 
   if (!rid) return null;
 
@@ -99,7 +101,25 @@ export default function ButlerPanel() {
               <ButlerMessageActions line={line} disabled={running} />
             </div>
           </div>
-        )) : <div className="py-10 text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>}
+        )) : (
+          <div className="py-6">
+            <div className="text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>
+            <div className="mt-3 flex flex-col gap-1">
+              {BUTLER_SCENE_PROMPTS.map((item) => (
+                <button
+                  key={item.scene}
+                  type="button"
+                  onClick={() => setInput(item.prompt)}
+                  className="rounded-md px-2 py-1 text-left text-xs text-ink-2 hover:bg-fill-hover hover:text-ink"
+                >
+                  <span className="mr-1.5 text-ink-3">{item.scene}</span>
+                  {item.prompt}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2.5 border-t border-line pt-2 text-2xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
+          </div>
+        )}
 
         <ButlerProcess steps={steps} running={running} className="mt-2" />
         {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
