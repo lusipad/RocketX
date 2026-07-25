@@ -33,6 +33,9 @@ import {
   type ButlerTaskState,
   type ButlerWorkflowKind,
 } from '../lib/butlerTaskContext';
+import { normalizeDispatchSpec } from '../agent/dispatchSpec';
+import { dispatchButlerErrand, type ButlerErrandDraft } from '../lib/butlerErrands';
+import type { DispatchTarget } from '../lib/dispatchWorkspaces';
 import { createButlerTools, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
   beginButlerToolCheckpoint,
@@ -184,6 +187,7 @@ export interface ButlerState {
   running: boolean;
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
+  errandDraft: ButlerErrandDraft | null;
   runtimeCheckpoints: ButlerToolCheckpoint[];
   workflowRuntimeCheckpoints: ButlerToolCheckpoint[];
   context: ButlerSurfaceContext | null;
@@ -222,6 +226,8 @@ export interface ButlerState {
   dismissToolCheckpoint: (checkpointId: string) => Promise<void>;
   confirmRoutineDraft: () => Promise<void>;
   dismissRoutineDraft: () => Promise<void>;
+  confirmErrandDraft: (target: DispatchTarget) => Promise<void>;
+  dismissErrandDraft: () => Promise<void>;
   reset: () => void;
 }
 
@@ -378,6 +384,22 @@ function normalizeRuntimeCheckpoints(value: unknown): ButlerToolCheckpoint[] {
     }
   }
   return checkpoints;
+}
+
+function errandDraftFrom(checkpoints: readonly ButlerToolCheckpoint[]): ButlerErrandDraft | null {
+  const checkpoint = [...checkpoints]
+    .reverse()
+    .find((item) => item.toolName === 'draft_errand'
+      && (item.status === 'approval-required' || item.status === 'failed'));
+  if (!checkpoint) return null;
+  // 模型给的字段一律过白名单归一化；workspaceHint 只参与选择器排序
+  const spec = normalizeDispatchSpec(checkpoint.params);
+  const hint = checkpoint.params.workspaceHint;
+  return {
+    checkpointId: checkpoint.id,
+    spec,
+    ...(typeof hint === 'string' && hint.trim() ? { workspaceHint: hint.trim() } : {}),
+  };
 }
 
 function routineDraftFrom(checkpoints: readonly ButlerToolCheckpoint[]): ButlerRoutineDraft | null {
@@ -827,9 +849,15 @@ function runtimeContext(callId: string, snapshot: ButlerRuntimeSnapshot = {}): B
     loadCheckpoint: runtimeCheckpoint,
     saveCheckpoint: upsertRuntimeCheckpoint,
     requestApproval: (checkpoint) => {
-      if (checkpoint.toolName !== 'draft_routine') return;
-      const draft = routineDraftFrom([checkpoint]);
-      if (draft) useButler.setState({ routineDraft: draft });
+      if (checkpoint.toolName === 'draft_routine') {
+        const draft = routineDraftFrom([checkpoint]);
+        if (draft) useButler.setState({ routineDraft: draft });
+        return;
+      }
+      if (checkpoint.toolName === 'draft_errand') {
+        const draft = errandDraftFrom([checkpoint]);
+        if (draft) useButler.setState({ errandDraft: draft });
+      }
     },
     writeAudit: writeToolAudit,
   };
@@ -1250,6 +1278,7 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       running: false,
       error: null,
       routineDraft: routineDraftFrom(runtimeCheckpoints),
+      errandDraft: errandDraftFrom(runtimeCheckpoints),
       runtimeCheckpoints,
       workflowRuntimeCheckpoints: workflowCheckpointProjection(registry),
       actionDraft: session.actionDraft ?? null,
@@ -1274,6 +1303,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   running: false,
   error: null,
   routineDraft: null,
+  errandDraft: null,
   runtimeCheckpoints: [],
   workflowRuntimeCheckpoints: [],
   context: null,
@@ -1875,6 +1905,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       return {
         lines,
         routineDraft: state.routineDraft?.checkpointId === checkpoint.id ? null : state.routineDraft,
+        errandDraft: state.errandDraft?.checkpointId === checkpoint.id ? null : state.errandDraft,
         engineState: result.content
           ? recordLocalTranscript(state.engineState, 1, 'local-tool-result')
           : state.engineState,
@@ -1910,6 +1941,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     }
     set((state) => ({
       routineDraft: state.routineDraft?.checkpointId === checkpoint.id ? null : state.routineDraft,
+      errandDraft: state.errandDraft?.checkpointId === checkpoint.id ? null : state.errandDraft,
     }));
   },
 
@@ -1921,6 +1953,20 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   dismissRoutineDraft: async () => {
     const draft = get().routineDraft;
+    if (!draft) return;
+    await get().dismissToolCheckpoint(draft.checkpointId);
+  },
+
+  confirmErrandDraft: async (target) => {
+    const draft = get().errandDraft;
+    if (!draft) return;
+    // 先派发再确认 checkpoint：派发失败时草案留在卡上，用户改选工作区可重试
+    await dispatchButlerErrand(draft.spec, target);
+    await get().approveToolCheckpoint(draft.checkpointId);
+  },
+
+  dismissErrandDraft: async () => {
+    const draft = get().errandDraft;
     if (!draft) return;
     await get().dismissToolCheckpoint(draft.checkpointId);
   },
@@ -1937,6 +1983,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       running: false,
       error: null,
       routineDraft: null,
+      errandDraft: null,
       runtimeCheckpoints: [],
       workflowRuntimeCheckpoints: [],
       context: null,

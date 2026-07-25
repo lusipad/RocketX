@@ -1162,11 +1162,11 @@ export function createButlerTools(): ButlerTool[] {
         allowed: true,
         preview: `拟一份任务规格给你过目：${optionalString(args, 'title') ?? '未命名任务'}`,
       }),
-      // 审批通过 = 用户在卡上点了「派发」。真正起线程由派工 store 负责，
-      // 这里只负责把规格定格下来——大脑依然没有手。
+      // 审批通过 = 用户在卡上点了「送进执行间」，此时活已经派出去了
+      // （confirmErrandDraft 先派发、成功才 approve）。大脑依然没有手。
       execute: async (args) => {
         const title = optionalString(args, 'title') ?? '未命名任务';
-        return `已拟好任务规格：${title}`;
+        return `已派发任务：${title}，进度在执行间查看。`;
       },
     }),
   ];
