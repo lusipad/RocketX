@@ -76,6 +76,20 @@ export const toast = {
   error: (err: unknown, fallback?: string) =>
     useToast.getState().show({ kind: 'error', message: humanError(err, fallback) }),
   info: (message: string) => useToast.getState().show({ kind: 'info', message }),
+  /**
+   * 做完了，并给一次反悔的机会。
+   *
+   * **能撤销的动作就别事前弹确认框**——撤销比确认又快又友好，
+   * 而且不会在用户已经确定的时候拦一道。停留时间比普通提示长，
+   * 让人来得及反应。
+   */
+  undo: (message: string, onUndo: () => void) =>
+    useToast.getState().show({
+      kind: 'success',
+      message,
+      duration: 6000,
+      action: { label: '撤销', onClick: onUndo },
+    }),
   loading: (message: string) => useToast.getState().show({ kind: 'loading', message }),
   update: (id: string, patch: Partial<Omit<Toast, 'id'>>) =>
     useToast.getState().update(id, patch),

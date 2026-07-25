@@ -778,6 +778,19 @@ function runtimeCheckpoint(checkpointId: string): ButlerToolCheckpoint | undefin
   return useButler.getState().runtimeCheckpoints.find((item) => item.id === checkpointId);
 }
 
+/**
+ * 撤销之后忘掉这次审批记录，好让「再做一次」真的能再做。
+ *
+ * executeApprovedButlerOperation 见到 completed 会直接短路返回旧结果——
+ * 那是为了防止同一次点击重复执行。但撤销是**新的意图**：不清掉记录的话，
+ * 用户撤销后再点会拿到「已完成」的假成功，而实际什么都没发生。
+ */
+export function forgetButlerToolCheckpoint(checkpointId: string): void {
+  useButler.setState((state) => ({
+    runtimeCheckpoints: state.runtimeCheckpoints.filter((item) => item.id !== checkpointId),
+  }));
+}
+
 function checkpointClosed(checkpoint: ButlerToolCheckpoint | undefined): boolean {
   return checkpoint?.status === 'completed' || checkpoint?.status === 'cancelled';
 }

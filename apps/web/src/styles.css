@@ -55,6 +55,29 @@
    */
   --color-surface: var(--color-surface-4);
 
+  /**
+   * 分隔线三档。一档打天下时，区块边界与列表内分行同样重，眼睛分不出层级
+   * ——这是「看着廉价」最常见的来源。
+   *
+   * line-strong  区块之间，一屏最多三四次
+   * line         卡片与输入框的边框（默认，即既有的 --color-line）
+   * line-soft    列表项之间、密集信息内部
+   */
+  --color-line-strong: #c9ccd1;
+  --color-line-soft: #eceef1;
+
+  /**
+   * 阴影三档，且**不是纯黑透明**——纯黑阴影在浅底上会发灰发脏。
+   * 这里带一点冷调中性色，与主色同族。
+   *
+   * raise  贴合表面：行内控件、悬停态
+   * card   浮起一层：卡片、气泡
+   * pop    脱离页面：弹层、菜单、toast
+   */
+  --shadow-raise: 0 1px 2px rgba(31, 42, 68, 0.06);
+  --shadow-card: 0 2px 6px -1px rgba(31, 42, 68, 0.08), 0 1px 2px rgba(31, 42, 68, 0.05);
+  --shadow-pop: 0 12px 28px -8px rgba(31, 42, 68, 0.18), 0 2px 6px rgba(31, 42, 68, 0.07);
+
   /* 语义色（默认值由 :root 覆盖，这里声明让 Tailwind 生成工具类） */
   --color-surface-1: #f2f3f5;
   --color-surface-2: #f5f6f7;
@@ -92,6 +115,8 @@
   --color-ink-2: #646a73;
   --color-ink-3: #8f959e;
   --color-line: #dee0e3;
+  --color-line-strong: #c9ccd1;
+  --color-line-soft: #eceef1;
 
   --color-primary-light: #e1eaff;
   --color-bubble-mine: #d6e4ff;
@@ -119,6 +144,13 @@
   --color-ink-2: #a3a8b0;
   --color-ink-3: #757b85;
   --color-line: #33363d;
+  --color-line-strong: #444952;
+  --color-line-soft: #2a2d34;
+
+  /* 深色下阴影要更重才立得住，纯黑在深底上反而看不见层次 */
+  --shadow-raise: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 2px 6px -1px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 12px 28px -8px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
 
   --color-primary: #4e83fd;
   --color-primary-hover: #6b98fe;
