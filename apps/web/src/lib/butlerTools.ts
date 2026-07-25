@@ -36,7 +36,7 @@ import {
 } from './quickSearch';
 import { useAuth } from '../stores/auth';
 import { useCalendar } from '../stores/calendar';
-import { useChat } from '../stores/chat';
+import { permalinkOf, useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
 import { myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
 import { useRoutines } from '../stores/routines';
@@ -185,6 +185,7 @@ async function searchMessages(args: Record<string, unknown>): Promise<string> {
       sender: message.u.name || message.u.username,
       ts: new Date(tsMs(message.ts)).toISOString(),
       text: stripAgentSessionMarker(message.msg).slice(0, 200),
+      link: permalinkOf(message.rid, message._id),
     }));
   return JSON.stringify(rows);
 }

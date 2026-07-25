@@ -52,6 +52,8 @@ test('系统提示只注入人设和技能索引，永不内嵌任何记忆事�
     assert.match(initial, /- morning-brief：/);
     assert.match(initial, /- evening-review：/);
     assert.match(initial, /- weekly-report：/);
+    assert.match(initial, /- pr-comparison：/);
+    assert.match(initial, /- commitment-extraction：/);
     assert.match(initial, /- azure-devops-server：/);
     assert.doesNotMatch(initial, /- compare-pull-requests：/);
 
@@ -125,10 +127,12 @@ test('profile 源码不再导出让 legacy memory 变成活动记忆的旧 API',
 test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
   withMemoryStorage(() => {
     assert.match(loadButlerSkill('morning-brief'), /^晨报/);
+    assert.match(loadButlerSkill('pr-comparison'), /^比较 PR/);
+    assert.match(loadButlerSkill('commitment-extraction'), /^提取承诺/);
     assert.match(loadButlerSkill(AZURE_DEVOPS_SERVER_SKILL_NAME), /run_azure_devops_server_cli/);
     assert.match(
       loadButlerSkill('missing'),
-      /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report、azure-devops-server/,
+      /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report、pr-comparison、commitment-extraction、azure-devops-server/,
     );
   });
 });

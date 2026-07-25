@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { getServerBase, realtime, rest } from '../../apps/web/src/lib/client';
 import { setButlerMentionProvider } from '../../apps/web/src/lib/butlerTools';
+import { loadButlerSkill } from '../../apps/web/src/lib/butlerProfile';
 import { createButlerTools, type ButlerRoutineDraft } from '../../apps/web/src/lib/butlerTools';
 import {
   formatButlerToolResult,
@@ -248,11 +249,11 @@ test('场景基线 1/7：找昨日某人文件', async () => {
 test('场景基线 2/7：比较两个 PR', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'complete',
-    capabilityPreflight: '能按明确编号读取 PR 固定快照、文件变更和受限文本正文。',
+    capabilityPreflight: '能按明确编号读取 PR 固定快照、文件变更和受限文本正文；pr-comparison 技能约束三段式结论模板（差异摘要/冲突与风险/建议）。',
     sources: ['list_pull_requests', 'run_azure_devops_server_cli'],
     errorAction: '不会自动合并、评论或修改 PR。',
-    clarification: '若用户没给出两个 PR 编号，先要求补齐，不能从已加载列表中猜。',
-    recovery: '固定 iteration 可重复读取；正文不可用时降级为元数据与文件清单结论。',
+    clarification: '若用户没给出两个 PR 编号，先要求补齐（技能限定只问一次带证据的封闭题），不能从已加载列表中猜。',
+    recovery: '固定 iteration 可重复读取；正文不可用时降级为元数据与文件清单结论（技能要求显式标注“未读取差异内容”）。',
   };
 
   useWorkbench.setState({
@@ -297,17 +298,20 @@ test('场景基线 2/7：比较两个 PR', async () => {
   assert.equal(names.has('list_pull_request_changes'), false);
   assert.equal(names.has('read_pull_request_file'), false);
   assert.equal(names.has('run_azure_devops_server_cli'), true);
+  // 结论层走技能而非专用工具（延续 83593ce 的收敛 Directive：方法论在技能文本，取数走唯一受控 CLI）
+  assert.match(loadButlerSkill('pr-comparison'), /差异摘要.*冲突与风险.*建议/s);
+  assert.match(loadButlerSkill('pr-comparison'), /未读取差异内容/);
   assert.equal(baseline.completion, 'complete');
 });
 
 test('场景基线 3/7：群聊提取承诺', async () => {
   const baseline: ScenarioBaseline = {
-    completion: 'gap',
-    capabilityPreflight: '当前只能检索原始消息，缺少 commitment/context compiler 与 task-state 结构化提取。',
+    completion: 'partial',
+    capabilityPreflight: 'commitment-extraction 技能提供判定标准与两段式清单模板（谁·事·期限·原文链接）；仍缺 task-state 结构化提取与跨轮追踪（P2）。',
     sources: ['search_messages'],
     errorAction: '不会把群聊里提到的承诺静默写成待办、工作项或记忆。',
-    clarification: '没有“这是承诺/截止时间/负责人”的显式澄清层。',
-    recovery: '可重复搜索原始消息；提取承诺仍需人工判读。',
+    clarification: '范围不明时技能限定只问一次封闭题（哪个群/多久以内）。',
+    recovery: '可重复搜索原始消息；结论按模板可复核，每条带 link 回原文。',
   };
 
   useChat.setState({
@@ -348,9 +352,19 @@ test('场景基线 3/7：群聊提取承诺', async () => {
   const names = toolNames();
 
   assert.equal(rows.length, 2);
+  // 引用即产品：search_messages 每行必须带可回跳原文的 link（permalink 形态 ?msg=<id>，结果按时间倒序不保证行序）
+  const links = rows.map((row) => row.link).sort();
+  assert.deepEqual(
+    links.map((link) => link.replace(/^.*\?msg=/, '')),
+    ['msg-commit-1', 'msg-commit-2'],
+  );
+  for (const link of links) assert.match(link, /\?msg=/);
   assert.equal(names.has('summarize_room'), false);
   assert.equal(names.has('extract_commitments'), false);
-  assert.equal(baseline.completion, 'gap');
+  // 结论层走技能而非专用工具；模板与“宁可漏报不可错报”由技能文本钉住
+  assert.match(loadButlerSkill('commitment-extraction'), /明确承诺.*疑似/s);
+  assert.match(loadButlerSkill('commitment-extraction'), /宁可漏报不可错报/);
+  assert.equal(baseline.completion, 'partial');
 });
 
 test('场景基线 4/7：逾期 WI 跟进草稿', async () => {
