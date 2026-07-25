@@ -189,6 +189,9 @@ function normalizeWriteTimes(input: ButlerMemoryWriteInput, now: number): Pick<B
 }
 
 function dynamicWorkStateDetected(subject: string, value: string, due?: string): boolean {
+  // brief: 前缀是简报关注偏好的命名空间——内容是判断规则而非状态快照，
+  // 天然会同时含对象词与状态词（如「多盯构建失败」），不按动态工作状态拦截。
+  if (subject.startsWith('brief:')) return false;
   const haystack = `${subject}\n${value}\n${due ?? ''}`;
   return DYNAMIC_WORK_OBJECT_PATTERN.test(haystack) && DYNAMIC_WORK_STATE_PATTERN.test(haystack);
 }
