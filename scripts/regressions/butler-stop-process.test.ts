@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { setButlerLoopRunner, useButler } from '../../apps/web/src/stores/butler';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
+import { setButlerCodexRunner, useButler } from '../../apps/web/src/stores/butler';
+
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => restoreTauriForFile());
 
 test('工具调用记录为过程步骤，成功/失败状态可见', async () => {
   useButler.getState().reset();
-  const restore = setButlerLoopRunner(async (options) => {
+  const restore = setButlerCodexRunner(async (options) => {
     options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-1', name: 'list_pull_requests', arguments: '{}' } });
     options.onEvent?.({ type: 'tool-result', toolCallId: 'call-1', content: '[]' });
     options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-2', name: 'list_builds', arguments: '{}' } });
     options.onEvent?.({ type: 'tool-result', toolCallId: 'call-2', content: '工具执行失败：超时' });
-    return { text: '查完了', messages: options.messages };
+    return { text: '查完了' };
   });
   try {
     await useButler.getState().ask('看看 PR 和构建');
@@ -30,18 +35,18 @@ test('工具调用记录为过程步骤，成功/失败状态可见', async () =
   }
 });
 
-test('当前工作面只进入模型上下文，工具来源附着到回答', async () => {
+test('当前工作面只进入引擎上下文，工具来源附着到回答', async () => {
   useButler.getState().reset();
-  let systemPrompt = '';
-  const restore = setButlerLoopRunner(async (options) => {
-    systemPrompt = String(options.messages[0]?.content ?? '');
+  let capturedContext: { label?: string } | undefined;
+  const restore = setButlerCodexRunner(async (options) => {
+    capturedContext = options.context as { label?: string } | undefined;
     options.onEvent?.({ type: 'tool-call', toolCall: { id: 'source-1', name: 'search_messages', arguments: '{}' } });
     options.onEvent?.({
       type: 'tool-result',
       toolCallId: 'source-1',
       content: JSON.stringify([{ _id: 'm1', rid: 'r1', roomName: '发布群', sender: '张三', text: '构建失败了' }]),
     });
-    return { text: '查到一条相关消息。', messages: options.messages };
+    return { text: '查到一条相关消息。' };
   });
   try {
     await useButler.getState().ask('怎么回事', {
@@ -50,7 +55,7 @@ test('当前工作面只进入模型上下文，工具来源附着到回答', as
       detail: '当前 Rocket.Chat 房间',
       sources: [{ kind: 'room', id: 'r1', rid: 'r1', label: '发布群' }],
     });
-    assert.match(systemPrompt, /用户当前工作面：发布群/);
+    assert.equal(capturedContext?.label, '发布群');
     assert.equal(useButler.getState().lines.some((line) => line.role === 'user' && line.text.includes('用户当前工作面')), false);
     assert.deepEqual(useButler.getState().lines.at(-1)?.sources?.map((source) => source.id), ['r1', 'm1']);
   } finally {
@@ -60,20 +65,22 @@ test('当前工作面只进入模型上下文，工具来源附着到回答', as
 
 test('停止回答保留已生成内容，不当错误处理', async () => {
   useButler.getState().reset();
-  const restore = setButlerLoopRunner(async (options) => {
+  // Codex 的停止是服务端中断后回合就地完成：runner 在 stop 发起后正常返回
+  let releaseTurn!: () => void;
+  const restore = setButlerCodexRunner(async (options) => {
     options.onEvent?.({ type: 'content', content: '已经写了一半' });
-    await new Promise<never>((_, reject) => {
-      options.signal?.addEventListener('abort', () =>
-        reject(options.signal?.reason instanceof Error ? options.signal.reason : new Error('中止')),
-      );
+    await new Promise<void>((resolve) => {
+      releaseTurn = resolve;
     });
-    return { text: '', messages: options.messages };
+    return { text: '' };
   });
   try {
     const asking = useButler.getState().ask('写个长回答');
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(useButler.getState().running, true);
-    await useButler.getState().stop();
+    const stopping = useButler.getState().stop();
+    releaseTurn();
+    await stopping;
     await asking;
 
     const state = useButler.getState();
@@ -95,7 +102,7 @@ test('两个管家对话表面都有停止按钮和过程展示', () => {
     assert.match(source, /stop/u, path);
     assert.match(source, /<Square size=/, path);
   }
-  // Codex 大脑的停止走 turn/interrupt 并就地完成本轮
+  // 停止走 turn/interrupt 并就地完成本轮
   const codex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
   assert.match(codex, /export async function stopButlerCodexTurn/);
   assert.match(codex, /'turn\/interrupt'/);

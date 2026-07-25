@@ -11,11 +11,12 @@ import {
   type ButlerToolRuntimeContext,
 } from '../../apps/web/src/lib/butlerToolRuntime';
 import { useAuth } from '../../apps/web/src/stores/auth';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import {
   butlerSessionRecap,
   flushButlerPersist,
   resetButlerPersistenceForTests,
-  setButlerLoopRunner,
+  setButlerCodexRunner,
   setButlerPersistence,
   useButler,
 } from '../../apps/web/src/stores/butler';
@@ -28,6 +29,9 @@ import { useWorkbench } from '../../apps/web/src/stores/workbench';
 const SERVER_KEY = 'rcx-server';
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => restoreTauriForFile());
 const storageShim = new Map<string, string>();
 const localStorageShim = {
   getItem(key: string) {
@@ -517,10 +521,7 @@ test('场景基线 7/7：跨重启续跑', async () => {
 
   storageSet(SERVER_KEY, 'https://chat.example.com');
   login('resume-user');
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: `回复：${String(options.messages.at(-1)?.content ?? '')}`,
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
 
   try {
     await useButler.getState().hydrate();
@@ -549,12 +550,12 @@ test('场景基线 7/7：跨重启续跑', async () => {
 
     await useButler.getState().ask('补充第二个问题');
     assert.deepEqual(
-      useButler.getState().history.slice(-4).map(({ role, content }) => ({ role, content })),
+      useButler.getState().lines.slice(-4).map(({ role, text }) => ({ role, text })),
       [
-        { role: 'user', content: '调查昨天的问题' },
-        { role: 'assistant', content: '回复：调查昨天的问题' },
-        { role: 'user', content: '补充第二个问题' },
-        { role: 'assistant', content: '回复：补充第二个问题' },
+        { role: 'user', text: '调查昨天的问题' },
+        { role: 'assistant', text: '回复：调查昨天的问题' },
+        { role: 'user', text: '补充第二个问题' },
+        { role: 'assistant', text: '回复：补充第二个问题' },
       ],
     );
     assert.equal(baseline.completion, 'partial');
@@ -566,11 +567,11 @@ test('场景基线 7/7：跨重启续跑', async () => {
 test('不完整指代不调用大脑，补齐后把任务合同注入实际回合', async () => {
   login('clarify-user');
   let calls = 0;
-  let systemPrompt = '';
-  const restoreRunner = setButlerLoopRunner(async (options) => {
+  let taskContext = '';
+  const restoreRunner = setButlerCodexRunner(async (options) => {
     calls += 1;
-    systemPrompt = String(options.messages[0]?.content ?? '');
-    return { text: '已完成只读比较。', messages: options.messages };
+    taskContext = String(options.taskContext ?? '');
+    return { text: '已完成只读比较。' };
   });
 
   try {
@@ -582,10 +583,10 @@ test('不完整指代不调用大脑，补齐后把任务合同注入实际回�
     await useButler.getState().ask('PR #101 和 PR #102');
     assert.equal(calls, 1);
     assert.equal(useButler.getState().taskState?.status, 'completed');
-    assert.match(systemPrompt, /"scenario":"compare-pull-requests"/);
-    assert.match(systemPrompt, /"tool":"run_azure_devops_server_cli"/);
-    assert.match(systemPrompt, /"freshness":"query-time"/);
-    assert.match(systemPrompt, /不评论、合并或修改 PR/);
+    assert.match(taskContext, /"scenario":"compare-pull-requests"/);
+    assert.match(taskContext, /"tool":"run_azure_devops_server_cli"/);
+    assert.match(taskContext, /"freshness":"query-time"/);
+    assert.match(taskContext, /不评论、合并或修改 PR/);
   } finally {
     restoreRunner();
   }

@@ -2,18 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
-import {
-  setButlerBrain,
-  setButlerBrainStorage,
-  setButlerBrainTauriProvider,
-} from '../../apps/web/src/lib/butlerBrain';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
   butlerSessionRecap,
   flushButlerPersist,
   resetButlerPersistenceForTests,
   setButlerCodexRunner,
-  setButlerLoopRunner,
   setButlerNowProvider,
   setButlerPersistence,
   useButler,
@@ -22,7 +17,12 @@ import {
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
-test.after(() => restorePersistence());
+// 决策 13：Codex 是唯一大脑；测试环境用 provider 冒充桌面端，runner 全部走 codex 替身
+const restoreTauri = setButlerBrainTauriProvider(() => true);
+test.after(() => {
+  restoreTauri();
+  restorePersistence();
+});
 import {
   discardResidentCodexThread,
   hydrateResidentCodexThread,
@@ -35,10 +35,7 @@ function login(userId: string): void {
 
 test('AI 对话落盘后重启可恢复，账号隔离', async () => {
   login('user-1');
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: '第一轮回复',
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async () => ({ text: '第一轮回复' }));
   try {
     await useButler.getState().hydrate();
     await useButler.getState().ask('第一问');
@@ -57,8 +54,6 @@ test('AI 对话落盘后重启可恢复，账号隔离', async () => {
         { role: 'assistant', text: '第一轮回复' },
       ],
     );
-    assert.equal(restored.history.at(-1)?.content, '第一轮回复');
-
     // 换账号（不重启）：scope 变化走切换分支，不能看到别人的对话
     login('user-2');
     await useButler.getState().hydrate();
@@ -72,13 +67,12 @@ test('回合失败后的 taskState 会覆盖已落盘的 running 状态', async 
   resetButlerPersistenceForTests();
   useButler.getState().reset();
   login('task-failed-user');
-  setButlerBrain('api');
   let rejectTurn!: (reason?: unknown) => void;
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     markStarted = resolve;
   });
-  const restore = setButlerLoopRunner(async () => {
+  const restore = setButlerCodexRunner(async () => {
     markStarted();
     return new Promise<never>((_resolve, reject) => {
       rejectTurn = reject;
@@ -110,15 +104,16 @@ test('停止回合后的 taskState 会覆盖已落盘的 running 状态', async 
   resetButlerPersistenceForTests();
   useButler.getState().reset();
   login('task-paused-user');
-  setButlerBrain('api');
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     markStarted = resolve;
   });
-  const restore = setButlerLoopRunner(async (options) => {
+  // Codex 的停止是服务端中断后回合就地完成：runner 在 stop 发起后正常返回
+  let releaseTurn!: () => void;
+  const restore = setButlerCodexRunner(async () => {
     markStarted();
-    return new Promise<never>((_resolve, reject) => {
-      options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+    return new Promise<{ text: string }>((resolve) => {
+      releaseTurn = () => resolve({ text: '' });
     });
   });
 
@@ -127,7 +122,9 @@ test('停止回合后的 taskState 会覆盖已落盘的 running 状态', async 
     const asking = useButler.getState().ask('调查昨天的问题');
     await started;
     await flushButlerPersist();
-    await useButler.getState().stop();
+    const stopping = useButler.getState().stop();
+    releaseTurn();
+    await stopping;
     await asking;
     assert.equal(useButler.getState().taskState?.status, 'paused');
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
@@ -152,10 +149,7 @@ test('直接入口发问会先 hydrate 当前 session，不丢失已存上下文
     history: [{ role: 'user', content: '已存问题' }],
     lastAt: 1,
   });
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: '直接入口回复',
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async () => ({ text: '直接入口回复' }));
   try {
     await useButler.getState().ask('直接入口问题');
     assert.equal(useButler.getState().lines.some((line) => line.text === '已存问题'), true);
@@ -173,10 +167,7 @@ test('直接入口与页面同时 hydrate 时不会覆盖刚发送的消息', as
     }),
     set: async () => undefined,
   });
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: '并发入口回复',
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async () => ({ text: '并发入口回复' }));
 
   try {
     resetButlerPersistenceForTests();
@@ -215,10 +206,7 @@ test('发问等待 hydrate 时新建 session 不会截断旧 session 的已完�
     }),
     set: async () => undefined,
   });
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: '旧 session 的完整回复',
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async () => ({ text: '旧 session 的完整回复' }));
 
   try {
     resetButlerPersistenceForTests();
@@ -244,14 +232,6 @@ test('发问等待 hydrate 时新建 session 不会截断旧 session 的已完�
 });
 
 test('Codex 回合尚不可中断时新建 session 会等待旧回复完整落盘', async () => {
-  const brainEntries = new Map<string, string>();
-  const restoreBrainStorage = setButlerBrainStorage({
-    get: (key) => brainEntries.get(key) ?? null,
-    set: (key, value) => brainEntries.set(key, value),
-  });
-  const restorePlatform = setButlerBrainTauriProvider(() => true);
-  setButlerBrain('codex');
-
   let signalRunnerStarted: (() => void) | undefined;
   const runnerStarted = new Promise<void>((resolve) => {
     signalRunnerStarted = resolve;
@@ -287,18 +267,13 @@ test('Codex 回合尚不可中断时新建 session 会等待旧回复完整落�
   } finally {
     resetButlerPersistenceForTests();
     restoreRunner();
-    restorePlatform();
-    restoreBrainStorage();
   }
 });
 
 test('多个 session 可创建、重命名、切换，并独立恢复 transcript 与 Codex 恢复点', async () => {
   let now = 1_000;
   const restoreNow = setButlerNowProvider(() => now);
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();
@@ -362,10 +337,7 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
 test('删除会话：删非活动只移除，删活动切最近，删最后一个新建默认，重启后仍生效', async () => {
   let now = 1_000;
   const restoreNow = setButlerNowProvider(() => now);
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();
@@ -429,10 +401,7 @@ test('删除会话：删非活动只移除，删活动切最近，删最后一�
 test('registry 体积控制：空会话不落盘，有真实提问的会话永不被自动清理', async () => {
   let now = 1_000;
   const restoreNow = setButlerNowProvider(() => now);
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();
@@ -500,10 +469,7 @@ test('「上回说到」派生：取最后一问与其后回答并截断，会�
   const askOnly = butlerSessionRecap([lineOf('user', '还没有回答的问题')]);
   assert.deepEqual(askOnly, { lastAsk: '还没有回答的问题' });
 
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: '好的',
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async () => ({ text: '好的' }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();
@@ -529,10 +495,7 @@ test('切换服务器或账号会先保存旧 scope，并且不会串写 session
       removeItem: (key: string) => values.delete(key),
     },
   });
-  const restore = setButlerLoopRunner(async (options) => ({
-    text: `回复：${options.messages.at(-1)?.content ?? ''}`,
-    messages: options.messages,
-  }));
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();

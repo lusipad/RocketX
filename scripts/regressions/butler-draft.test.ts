@@ -12,7 +12,6 @@ import {
   setButlerRoundsCodexRunner,
 } from '../../apps/web/src/lib/butlerRoundsBrain';
 import {
-  setButlerBrain,
   setButlerBrainStorage,
   setButlerBrainTauriProvider,
   type ButlerBrainStorage,
@@ -92,7 +91,6 @@ test('Codex 大脑剥除 JSON 围栏后仍走同一拟稿契约', async () => {
     text: '```json\n{"draft":"我晚一点把结论整理好发你。"}\n```',
   }));
   try {
-    setButlerBrain('codex');
     assert.deepEqual(
       await runDraftWithBrain({ subject: '回复结论', who: '小王' }),
       { draft: '我晚一点把结论整理好发你。' },

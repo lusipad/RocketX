@@ -14,9 +14,10 @@ import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { compileButlerTask } from '../../apps/web/src/lib/butlerTaskContext';
 import type { ButlerSurfaceContext } from '../../apps/web/src/lib/butlerContext';
 import { askButlerAboutMessages } from '../../apps/web/src/kernel/butler';
+import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import {
   resetButlerPersistenceForTests,
-  setButlerLoopRunner,
+  setButlerCodexRunner,
   setButlerPersistence,
   useButler,
 } from '../../apps/web/src/stores/butler';
@@ -25,7 +26,12 @@ import { useChat } from '../../apps/web/src/stores/chat';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
-test.after(() => restorePersistence());
+// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
+const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
+test.after(() => {
+  restoreTauriForFile();
+  restorePersistence();
+});
 
 function compile(input: string, context?: ButlerSurfaceContext) {
   return compileButlerTask(input, context ?? null, null, 1_000);
@@ -116,10 +122,7 @@ test('入口发出的完整正文（提问 + 转录）不会被消息内容劫�
 });
 
 test('真实入口：转录含找文件关键词时，场景仍是提取承诺且不追问', async () => {
-  const restoreRunner = setButlerLoopRunner(async (options) => ({
-    text: '好的',
-    messages: options.messages,
-  }));
+  const restoreRunner = setButlerCodexRunner(async () => ({ text: '好的' }));
   try {
     resetButlerPersistenceForTests();
     useButler.getState().reset();

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  getButlerBrain,
+  codexBrainAvailability,
   setButlerBrainStorage,
+  setButlerBrainTauriProvider,
   type ButlerBrainStorage,
 } from '../../apps/web/src/lib/butlerBrain';
 import {
@@ -26,9 +27,10 @@ class MemoryStorage implements ButlerBrainStorage {
   }
 }
 
-test('桌面启动时 Codex 可用则启用，不可用则只提示一次并回退普通 AI', async () => {
+test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因，绝不静默换大脑', async () => {
   const restoreStorage = setButlerBrainStorage(new MemoryStorage());
   const restorePlatform = setCodexRuntimePlatform(() => true);
+  const restoreBrainPlatform = setButlerBrainTauriProvider(() => true);
   let result: CodexRuntimeProbe = {
     ready: true,
     version: 'codex-cli 1.2.3',
@@ -43,15 +45,16 @@ test('桌面启动时 Codex 可用则启用，不可用则只提示一次并回�
     await useCodexRuntime.getState().probe();
     assert.equal(useCodexRuntime.getState().phase, 'ready');
     assert.equal(useCodexRuntime.getState().source, 'bundled');
-    assert.equal(getButlerBrain(), 'codex');
+    assert.deepEqual(codexBrainAvailability(), { available: true });
     assert.equal(useToast.getState().toasts.length, 0);
 
     result = { ready: false, reason: 'Codex 尚未登录' };
     await useCodexRuntime.getState().probe();
-    assert.equal(useCodexRuntime.getState().phase, 'fallback');
-    assert.equal(getButlerBrain(), 'api');
+    assert.equal(useCodexRuntime.getState().phase, 'unavailable');
+    // 决策 13：不可用就是不可用，原因透传给 UI，没有备胎大脑
+    assert.deepEqual(codexBrainAvailability(), { available: false, reason: 'Codex 尚未登录' });
     assert.equal(useToast.getState().toasts.length, 1);
-    assert.match(useToast.getState().toasts[0]?.message ?? '', /已切换到普通 AI/);
+    assert.match(useToast.getState().toasts[0]?.message ?? '', /Codex 尚未登录/);
 
     await useCodexRuntime.getState().probe();
     assert.equal(useToast.getState().toasts.length, 1);
@@ -59,6 +62,7 @@ test('桌面启动时 Codex 可用则启用，不可用则只提示一次并回�
     resetCodexRuntimeForTests();
     useToast.setState({ toasts: [] });
     restoreInvoker();
+    restoreBrainPlatform();
     restorePlatform();
     restoreStorage();
   }

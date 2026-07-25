@@ -12,11 +12,8 @@ import { testAiProvider } from '../kernel/ai/runtime';
 import {
   BUTLER_CODEX_EFFORTS,
   codexBrainAvailability,
-  getButlerBrain,
   getButlerCodexSettings,
-  setButlerBrain,
   setButlerCodexSettings,
-  type ButlerBrainKind,
   type ButlerCodexSettings,
 } from '../lib/butlerBrain';
 import {
@@ -41,7 +38,7 @@ import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
-import { RadioGroup, Row, Slider } from './SettingControls';
+import { Row, Slider } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -65,7 +62,6 @@ function newProvider(): AiProviderConfig {
  */
 export default function AiSettings() {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
-  const [butlerBrain, setButlerBrainState] = useState<ButlerBrainKind>(getButlerBrain);
   const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
   const [hostingCodex, setHostingCodexState] = useState<ButlerCodexSettings>(getAgentHostingCodexSettings);
   const [persona, setPersonaState] = useState<string>(getPersona);
@@ -211,31 +207,17 @@ export default function AiSettings() {
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行方式</h2>
         <div className="rounded-lg border border-line bg-surface px-4">
-          <Row label="AI 管家大脑" hint="切换后立即对下一次管家提问生效；不会静默降级。">
-            <RadioGroup
-              value={butlerBrain}
-              onChange={(brain) => {
-                setButlerBrain(brain);
-                setButlerBrainState(brain);
-              }}
-              options={[
-                {
-                  key: 'codex',
-                  label: 'Codex（本机，桌面端）',
-                  hint: codexAvailability.available ? '使用本机 ChatGPT 账号模型' : codexAvailability.reason,
-                  disabled: !codexAvailability.available,
-                },
-                {
-                  key: 'api',
-                  label: 'API Provider',
-                  hint: '使用高级 AI 设置里「按能力路由」中 Agent 指向的 Provider',
-                },
-              ]}
-            />
-          </Row>
+          {/* 决策 13：Codex 是管家唯一大脑，没有引擎选择。不可用时明说原因，不静默降级。 */}
+          {!codexAvailability.available && (
+            <Row label="管家状态" hint="管家由本机 Codex 驱动；修复后这里会自动恢复。">
+              <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm leading-6 text-ink">
+                {codexAvailability.reason ?? 'Codex 暂不可用'}
+              </p>
+            </Row>
+          )}
           <Row
             label="人设"
-            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，Codex 大脑会自动换用新线程。"
+            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，管家会自动换用新线程。"
           >
             <textarea
               aria-label="AI 人设"
@@ -261,31 +243,27 @@ export default function AiSettings() {
               </button>
             </div>
           </Row>
-          {butlerBrain === 'codex' && (
-            <>
-              <Row label="管家 Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
-                <input
-                  aria-label="管家 Codex 模型"
-                  value={butlerCodex.model}
-                  onChange={(event) => updateButlerCodex({ model: event.target.value })}
-                  placeholder="例如 gpt-5.4"
-                  className={`${inputCls} max-w-xs`}
-                />
-              </Row>
-              <Row label="管家推理强度" hint="只影响 AI 管家；模型不支持时 Codex 会返回明确错误。">
-                <select
-                  aria-label="管家 Codex 推理强度"
-                  value={butlerCodex.effort}
-                  onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
-                  className={`${inputCls} max-w-xs`}
-                >
-                  {BUTLER_CODEX_EFFORTS.map((effort) => (
-                    <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
-                  ))}
-                </select>
-              </Row>
-            </>
-          )}
+          <Row label="管家 Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
+            <input
+              aria-label="管家 Codex 模型"
+              value={butlerCodex.model}
+              onChange={(event) => updateButlerCodex({ model: event.target.value })}
+              placeholder="例如 gpt-5.4"
+              className={`${inputCls} max-w-xs`}
+            />
+          </Row>
+          <Row label="管家推理强度" hint="只影响 AI 管家；模型不支持时 Codex 会返回明确错误。">
+            <select
+              aria-label="管家 Codex 推理强度"
+              value={butlerCodex.effort}
+              onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
+              className={`${inputCls} max-w-xs`}
+            >
+              {BUTLER_CODEX_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+              ))}
+            </select>
+          </Row>
           <Row label="AI 托管 Codex 模型" hint="只影响聊天中的 AI 托管；留空时跟随 Codex CLI 默认模型。">
             <input
               aria-label="AI 托管 Codex 模型"

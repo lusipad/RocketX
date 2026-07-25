@@ -29,7 +29,6 @@ import {
   type StoredRoundsResult,
 } from '../../apps/web/src/lib/butlerRoundsRunner';
 import {
-  setButlerBrain,
   setButlerBrainStorage,
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
@@ -497,7 +496,6 @@ test('暂停 rounds workflow 会把 AbortSignal 传给 Codex runner', async () =
   useButler.getState().reset();
   resetButlerPersistenceForTests();
   setServerBase('https://chat.example');
-  setButlerBrain('codex');
 
   try {
     await useButler.getState().hydrate();
@@ -523,13 +521,12 @@ test('暂停 rounds workflow 会把 AbortSignal 传给 Codex runner', async () =
   }
 });
 
-test('选中 Codex 但不可用时直接报错，不回退 API', async () => {
+test('非桌面端 rounds 直接报错，不静默降级', async () => {
   const restoreStorage = setButlerBrainStorage(new MemoryStorage());
   const restoreTauri = setButlerBrainTauriProvider(() => false);
   setCodexBrainUnavailableReason(undefined);
   try {
-    setButlerBrain('codex');
-    await assert.rejects(() => runRoundsWithBrain(input()), /仅桌面端可用/);
+    await assert.rejects(() => runRoundsWithBrain(input()), /桌面端/);
   } finally {
     setCodexBrainUnavailableReason(undefined);
     restoreTauri();
@@ -586,11 +583,10 @@ test('一轮失败时保留上一轮结果并暴露可展示错误', async () =>
   setServerBase('https://chat.example');
   try {
     await useButler.getState().hydrate();
-    setButlerBrain('codex');
     await runButlerRoundsNow(new Date('2026-07-19T04:00:00.000Z'));
     const state = useButlerRoundsRunner.getState();
     assert.strictEqual(state.lastResult, previous);
-    assert.match(state.error ?? '', /仅桌面端可用/);
+    assert.match(state.error ?? '', /桌面端/);
     assert.equal(state.running, false);
   } finally {
     useButlerRoundsRunner.setState({
@@ -703,7 +699,6 @@ test('rounds 通过 workflow 固定 kind/triggerReason 持久化前三条来源�
   useButler.getState().reset();
   resetButlerPersistenceForTests();
   setServerBase('https://chat.example');
-  setButlerBrain('codex');
 
   try {
     await useButler.getState().hydrate();

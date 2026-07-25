@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { runAgentLoop, type AgentLoopEvent } from '../kernel/ai/agent-loop';
+import type { AgentLoopEvent } from '../kernel/ai/agent-loop';
 import type { AiMessage, AiToolCall } from '../kernel/ai/provider';
 import {
   butlerImageAttachments,
@@ -7,9 +7,8 @@ import {
   type ButlerImageInput,
 } from '../lib/butlerImages';
 import { getServerBase } from '../lib/client';
-import { codexBrainAvailability, getButlerBrain } from '../lib/butlerBrain';
+import { codexBrainAvailability } from '../lib/butlerBrain';
 import {
-  butlerContextPrompt,
   extractButlerSources,
   mergeButlerSources,
   type ButlerSource,
@@ -22,11 +21,9 @@ import {
   normalizeButlerEngineState,
   pauseButlerEngineTurn,
   prepareButlerEngineTurn,
-  type ButlerEngineBrain,
   type ButlerEngineState,
   type ButlerEngineTranscriptLine,
 } from '../lib/butlerEngineContract';
-import { buildButlerSystemPrompt, butlerCurrentTimeLine, friendlyButlerError } from '../lib/butlerProfile';
 import { butlerStepLabel, butlerToolLabel } from '../lib/butlerToolLabels';
 import {
   butlerTaskPrompt,
@@ -265,10 +262,8 @@ interface PersistedButlerSessionRegistry {
   sessions: PersistedButlerSession[];
 }
 
-type ButlerLoopRunner = typeof runAgentLoop;
 type ButlerCodexRunner = typeof askButlerCodex;
 
-let loopRunner: ButlerLoopRunner = runAgentLoop;
 let codexRunner: ButlerCodexRunner = askButlerCodex;
 let butlerNow = () => Date.now();
 
@@ -282,10 +277,7 @@ let hydrateGeneration = 0;
 let hydrateInFlight: { scope: string; promise: Promise<void> } | null = null;
 const activeWorkflowRuns = new Map<string, Promise<unknown>>();
 const activeWorkflowControllers = new Map<string, AbortController>();
-/** 当前 API 大脑回合的中止控制器（Codex 大脑走 turn/interrupt） */
-let currentAbort: AbortController | undefined;
 let currentTurnFinished: Promise<void> | null = null;
-let currentTurnBrain: ButlerEngineBrain | undefined;
 let currentStopRequested = false;
 
 interface ButlerAppData {
@@ -448,7 +440,7 @@ function normalizeRegistry(
       : undefined;
     let taskState = candidate.taskState?.manifest?.schemaVersion === 1 ? candidate.taskState : undefined;
     if (workflow && engineState?.status === 'running') {
-      engineState = pauseButlerEngineTurn(engineState, { pausedBrain: engineState.activeBrain });
+      engineState = pauseButlerEngineTurn(engineState);
       workflow.paused = true;
     }
     if (workflow && taskState?.status === 'running') {
@@ -654,9 +646,12 @@ function engineTranscript(
 
 function initialEngineState(
   lines: readonly ButlerLine[],
-  activeBrain: ButlerEngineBrain = getButlerBrain(),
+  options?: { resumed?: boolean },
 ): ButlerEngineState {
-  return initializeButlerEngineState({ activeBrain, transcript: engineTranscript(lines) });
+  return initializeButlerEngineState({
+    transcript: engineTranscript(lines),
+    ...(options?.resumed ? { resumed: true } : {}),
+  });
 }
 
 function sessionEngineState(session: PersistedButlerSession): ButlerEngineState {
@@ -673,12 +668,9 @@ function sessionEngineState(session: PersistedButlerSession): ButlerEngineState 
     }
     return { ...session.engineState, transcriptRevision };
   }
-  const activeBrain: ButlerEngineBrain = session.codexThread
-    ? 'codex'
-    : session.history.length
-      ? 'api'
-      : getButlerBrain();
-  return initialEngineState(session.lines, activeBrain);
+  // 没有 engineState 的旧会话：已有 Codex thread 说明这段对话喂过了，从当前进度接着走；
+  // 否则从 0 开始，整段 transcript 会作为 bridge 重新喂给新 thread。
+  return initialEngineState(session.lines, { resumed: Boolean(session.codexThread) });
 }
 
 function recordLocalTranscript(
@@ -721,14 +713,6 @@ export function trimButlerHistory(history: AiMessage[]): AiMessage[] {
   let start = history.length - HISTORY_LIMIT;
   while (history[start]?.role === 'tool') start += 1;
   return history.slice(start);
-}
-
-export function setButlerLoopRunner(runner: ButlerLoopRunner): () => void {
-  const previous = loopRunner;
-  loopRunner = runner;
-  return () => {
-    loopRunner = previous;
-  };
 }
 
 export function setButlerCodexRunner(runner: ButlerCodexRunner): () => void {
@@ -889,7 +873,7 @@ function workflowCheckpointProjection(
 
 function workflowEngineState(session: PersistedButlerSession | undefined): ButlerEngineState {
   if (session) return sessionEngineState(session);
-  return initializeButlerEngineState({ activeBrain: getButlerBrain(), transcript: [] });
+  return initializeButlerEngineState({ transcript: [] });
 }
 
 function workflowSnapshot(session: PersistedButlerSession): ButlerWorkflowSnapshot | undefined {
@@ -1037,7 +1021,6 @@ export function runButlerWorkflowTask<T>(options: ButlerWorkflowRunOptions<T>): 
     const previousEngine = workflowEngineState(previous);
     const prepared = prepareButlerEngineTurn({
       engineState: previousEngine,
-      targetBrain: getButlerBrain(),
       transcript: engineTranscript(previous?.lines ?? [], previousEngine),
     });
     const sessionId = previous?.id ?? crypto.randomUUID();
@@ -1117,9 +1100,8 @@ export function runButlerWorkflowTask<T>(options: ButlerWorkflowRunOptions<T>): 
             completedAt,
           ),
           engineState: pending
-            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: progressedEngine.activeBrain })
+            ? pauseButlerEngineTurn(progressedEngine)
             : completeButlerEngineTurn(progressedEngine, {
-                completedBrain: progressedEngine.activeBrain,
                 transcriptRevision: progressedEngine.transcriptRevision,
               }),
           workflow: { ...workflow, ...(pending ? { paused: true } : {}) },
@@ -1145,9 +1127,8 @@ export function runButlerWorkflowTask<T>(options: ButlerWorkflowRunOptions<T>): 
             failedAt,
           ),
           engineState: paused
-            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: progressedEngine.activeBrain })
+            ? pauseButlerEngineTurn(progressedEngine)
             : failButlerEngineTurn(progressedEngine, {
-                failedBrain: progressedEngine.activeBrain,
                 error: 'workflow-failed',
               }),
           workflow: { ...workflow, ...(paused ? { paused: true } : {}) },
@@ -1185,7 +1166,7 @@ export async function pauseButlerWorkflowTask(
       ...current,
       updatedAt: pausedAt,
       taskState: updateButlerTask(current.taskState!, { status: 'paused' }, pausedAt),
-      engineState: pauseButlerEngineTurn(engineState, { pausedBrain: engineState.activeBrain }),
+      engineState: pauseButlerEngineTurn(engineState),
       workflow: current.workflow ? { ...current.workflow, paused: true } : current.workflow,
     };
   }, binding);
@@ -1216,7 +1197,6 @@ async function settleWorkflowCheckpoint(
       ...(content ? { lines: [...session.lines, line('assistant', content)].slice(-LINES_LIMIT) } : {}),
       taskState: updateButlerTask(session.taskState, { status: 'completed' }, now),
       engineState: completeButlerEngineTurn(progressedEngine, {
-        completedBrain: progressedEngine.activeBrain,
         transcriptRevision: nextRevision,
       }),
       workflow,
@@ -1417,38 +1397,19 @@ export const useButler = create<ButlerState>((set, get) => ({
       }));
       return;
     }
-    const brain: ButlerEngineBrain = getButlerBrain();
     const linesBeforeTurn = get().lines;
     const transcriptBeforeTurn = engineTranscript(linesBeforeTurn, get().engineState);
     const prepared = prepareButlerEngineTurn({
       engineState: get().engineState,
-      targetBrain: brain,
       transcript: transcriptBeforeTurn,
     });
     const conversationLineCountBeforeTurn = conversationLines(linesBeforeTurn).length;
-    const abort = brain === 'api' ? new AbortController() : undefined;
-    currentAbort = abort;
-    const bridgeHistory: AiMessage[] = prepared.bridgeTranscript.map(({ role, text }) => ({ role, content: text }));
-    const runnerHistory = brain === 'api'
-      ? trimButlerHistory([
-          ...get().history,
-          ...bridgeHistory,
-          {
-            role: 'user',
-            content: modelContent,
-            ...(images.length
-              ? { images: images.map(({ dataUrl }) => ({ dataUrl })) }
-              : {}),
-          },
-        ])
-      : get().history;
     const runningTask = updateButlerTask(compiledTask, { status: 'running' }, butlerNow());
     let finishTurn: (() => void) | undefined;
     const turnFinished = new Promise<void>((resolve) => {
       finishTurn = resolve;
     });
     currentTurnFinished = turnFinished;
-    currentTurnBrain = brain;
     currentStopRequested = false;
     set((state) => ({
       lines: [
@@ -1551,48 +1512,24 @@ export const useButler = create<ButlerState>((set, get) => ({
     });
 
     try {
-      let resultText: string;
-      let nextHistory: AiMessage[] | undefined;
-      if (brain === 'codex') {
-        const availability = codexBrainAvailability();
-        if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
-        const result = await codexRunner({
-          text: modelContent,
-          images,
-          context: turnContext ?? undefined,
-          taskContext: butlerTaskPrompt(runningTask),
-          taskState: runningTask,
-          bridgeTranscript: prepared.bridgeTranscript,
-          fallbackTranscript: transcriptBeforeTurn,
-          now: butlerNow(),
-          onEvent,
-          toolRuntimeContext: toolRuntimeContextFor,
-          ...(runningTask.manifest.scenario === 'compare-pull-requests'
-            ? { skillName: 'azure-devops-server' }
-            : {}),
-        });
-        resultText = result.text;
-      } else {
-        const system = `${buildButlerSystemPrompt()}\n\n${butlerCurrentTimeLine(butlerNow())}\n${butlerTaskPrompt(runningTask)}${
-          turnContext
-            ? `\n${butlerContextPrompt(turnContext)}`
-            : ''
-        }`;
-        const result = await loopRunner({
-          messages: [{ role: 'system', content: system }, ...runnerHistory],
-          tools: createButlerTools(),
-          signal: abort?.signal,
-          onEvent,
-          toolRuntimeContext: toolRuntimeContextFor,
-        });
-        resultText = result.text;
-        nextHistory = trimButlerHistory([
-          ...result.messages
-            .filter((message) => message.role !== 'system')
-            .map(({ images: _images, ...message }) => message),
-          { role: 'assistant', content: result.text },
-        ]);
-      }
+      const availability = codexBrainAvailability();
+      if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+      const result = await codexRunner({
+        text: modelContent,
+        images,
+        context: turnContext ?? undefined,
+        taskContext: butlerTaskPrompt(runningTask),
+        taskState: runningTask,
+        bridgeTranscript: prepared.bridgeTranscript,
+        fallbackTranscript: transcriptBeforeTurn,
+        now: butlerNow(),
+        onEvent,
+        toolRuntimeContext: toolRuntimeContextFor,
+        ...(runningTask.manifest.scenario === 'compare-pull-requests'
+          ? { skillName: 'azure-devops-server' }
+          : {}),
+      });
+      const resultText = result.text;
       turnOpen = false;
       const stopped = currentStopRequested;
       set((state) => {
@@ -1608,15 +1545,13 @@ export const useButler = create<ButlerState>((set, get) => ({
         return {
           lines,
           activity: null,
-          ...(nextHistory ? { history: nextHistory } : {}),
           running: false,
           taskState: state.taskState
             ? updateButlerTask(state.taskState, { status: stopped ? 'paused' : 'completed', sources: turnSources }, butlerNow())
             : null,
           engineState: stopped
-            ? pauseButlerEngineTurn(progressedEngine, { pausedBrain: brain })
+            ? pauseButlerEngineTurn(progressedEngine)
             : completeButlerEngineTurn(progressedEngine, {
-              completedBrain: brain,
               transcriptRevision: progressedEngine.transcriptRevision,
             }),
         };
@@ -1624,7 +1559,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     } catch (error) {
       turnOpen = false;
       // 用户主动停止不是错误：保留已生成的内容，安静收尾
-      if (currentStopRequested || abort?.signal.aborted) {
+      if (currentStopRequested) {
         set((state) => {
           const progressedEngine = progressedEngineState(state, state.lines);
           return {
@@ -1633,14 +1568,12 @@ export const useButler = create<ButlerState>((set, get) => ({
             taskState: state.taskState
               ? updateButlerTask(state.taskState, { status: 'paused' }, butlerNow())
               : null,
-            engineState: pauseButlerEngineTurn(progressedEngine, { pausedBrain: brain }),
+            engineState: pauseButlerEngineTurn(progressedEngine),
           };
         });
         return;
       }
-      const message = brain === 'codex'
-        ? `${friendlyButlerCodexError(error).replace(/[。.]$/, '')}。可在设置页切换为 API 大脑。`
-        : friendlyButlerError(error);
+      const message = friendlyButlerCodexError(error);
       set((state) => {
         const progressedEngine = progressedEngineState(state, state.lines);
         return {
@@ -1650,17 +1583,12 @@ export const useButler = create<ButlerState>((set, get) => ({
           taskState: state.taskState
             ? updateButlerTask(state.taskState, { status: 'failed', error: message }, butlerNow())
             : null,
-          engineState: failButlerEngineTurn(progressedEngine, {
-            failedBrain: brain,
-            error: 'turn-failed',
-          }),
+          engineState: failButlerEngineTurn(progressedEngine, { error: 'turn-failed' }),
         };
       });
     } finally {
-      if (currentAbort === abort) currentAbort = undefined;
       if (currentTurnFinished === turnFinished) {
         currentTurnFinished = null;
-        currentTurnBrain = undefined;
         currentStopRequested = false;
       }
       finishTurn?.();
@@ -1772,12 +1700,8 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!get().running) return;
     const turnFinished = currentTurnFinished;
     currentStopRequested = true;
-    if (currentTurnBrain === 'codex') {
-      // 服务端中断本轮并就地完成，ask 会沿正常路径收尾
-      await stopButlerCodexTurn();
-    } else {
-      currentAbort?.abort(new Error('已停止'));
-    }
+    // 服务端中断本轮并就地完成，ask 会沿正常路径收尾
+    await stopButlerCodexTurn();
     set({ activity: null });
     if (turnFinished) await turnFinished;
   },
@@ -1799,7 +1723,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       updatedAt: now,
       lines: welcomeLines(),
       history: [],
-      engineState: initialEngineState([], getButlerBrain()),
+      engineState: initialEngineState([]),
     };
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...currentRegistry,
@@ -1899,7 +1823,7 @@ export const useButler = create<ButlerState>((set, get) => ({
         updatedAt: now,
         lines: welcomeLines(),
         history: [],
-        engineState: initialEngineState([], getButlerBrain()),
+        engineState: initialEngineState([]),
       };
       nextRegistry = {
         ...sessionRegistry,
