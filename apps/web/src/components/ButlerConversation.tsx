@@ -8,13 +8,19 @@ import {
   Square,
   TerminalSquare,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
 import { butlerRecapAgoLabel, butlerSessionRecap, useButler } from '../stores/butler';
-import { BUTLER_BOUNDARY_NOTE, BUTLER_SCENE_PROMPTS } from '../lib/butlerPrompts';
+import {
+  BUTLER_BOUNDARY_NOTE,
+  BUTLER_SCENE_PROMPTS,
+  butlerSlashQuery,
+  filterButlerSlashOptions,
+} from '../lib/butlerPrompts';
+import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
@@ -69,6 +75,17 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
+  // 打 / 唤起能力菜单：选中只填输入框不发送（例句里的人名编号是占位符）
+  const slashQuery = butlerSlashQuery(input);
+  const slashOptions = useMemo(
+    () => (slashQuery === null ? [] : filterButlerSlashOptions(slashQuery)),
+    [slashQuery],
+  );
+  const slash = useSlashMenu(slashOptions);
+  const pickSlashOption = (option: { prompt: string }): void => {
+    setInput(option.prompt);
+    slash.dismiss();
+  };
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
   const activeSummary = sessions.find((session) => session.id === activeSessionId);
@@ -279,13 +296,27 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               <button key={prompt} type="button" onClick={() => void submit(prompt)} disabled={running} className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50">{prompt}</button>
             ))}
           </div>
-          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
+          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="relative flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
+            <ButlerSlashMenu
+              options={slashOptions}
+              activeIndex={slash.activeIndex}
+              onPick={pickSlashOption}
+              onHover={slash.setActiveIndex}
+            />
             <Search size={17} className="ml-2 text-ink-3" />
             <div className="min-w-0 flex-1">
               <ButlerImagePreviews images={images} onChange={setImages} />
               <div className="flex items-center">
                 <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
-                <input value={input} onChange={(event) => setInput(event.target.value)} onPaste={(event) => void pasteButlerImages(event, images, setImages)} placeholder="例如：搜索张三提到的发布问题；查询失败构建；还有哪些需要我处理的 PR…" className="h-10 w-full min-w-0 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3" />
+                <input
+                  value={input}
+                  onChange={(event) => { setInput(event.target.value); slash.reopen(); }}
+                  onKeyDown={(event) => slash.handleKeyDown(event, pickSlashOption)}
+                  onBlur={() => slash.dismiss()}
+                  onPaste={(event) => void pasteButlerImages(event, images, setImages)}
+                  placeholder="问点什么，或者打 / 看看我会什么"
+                  className="h-10 w-full min-w-0 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-3"
+                />
               </div>
             </div>
             {running ? (

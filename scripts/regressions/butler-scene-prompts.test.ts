@@ -7,6 +7,8 @@ import {
   BUTLER_SCENE_PROMPTS,
   BUTLER_SUMMARIZE_PROMPT,
   butlerComparePullRequestsPrompt,
+  butlerSlashQuery,
+  filterButlerSlashOptions,
 } from '../../apps/web/src/lib/butlerPrompts';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { compileButlerTask } from '../../apps/web/src/lib/butlerTaskContext';
@@ -180,6 +182,40 @@ test('PR 多选比较：生成的提问命中比较场景，两个前置条件�
   });
   assert.equal(single.manifest.scenario, 'compare-pull-requests');
   assert.equal(single.status, 'awaiting-clarification');
+});
+
+test('斜杠菜单：只在以 / 开头且未接空格时弹出', () => {
+  assert.equal(butlerSlashQuery('/'), '');
+  assert.equal(butlerSlashQuery('/比较'), '比较');
+  assert.equal(butlerSlashQuery('/PR'), 'PR');
+
+  // 不该弹的几种：普通输入、/ 后面已经打了空格（用户在正常写句子）
+  assert.equal(butlerSlashQuery('比较两个 PR'), null);
+  assert.equal(butlerSlashQuery(''), null);
+  assert.equal(butlerSlashQuery('/比较 这两个'), null);
+  assert.equal(butlerSlashQuery('查一下 /tmp 目录'), null);
+});
+
+test('斜杠候选：场景名与例句都参与匹配，空查询给全部', () => {
+  assert.deepEqual(
+    filterButlerSlashOptions('').map((item) => item.scene),
+    BUTLER_SCENE_PROMPTS.map((item) => item.scene),
+  );
+
+  // 按场景名匹配
+  const byScene = filterButlerSlashOptions('比较');
+  assert.equal(byScene.length, 1);
+  assert.equal(byScene[0].scene, '比较 PR');
+
+  // 按例句内容匹配（用户记得的是「承诺」而不是场景名）
+  const byPrompt = filterButlerSlashOptions('承诺');
+  assert.equal(byPrompt.some((item) => item.scene === '提取承诺'), true);
+
+  // 大小写不敏感
+  assert.deepEqual(filterButlerSlashOptions('pr'), filterButlerSlashOptions('PR'));
+
+  // 匹配不到给空列表（组件据此不渲染菜单）
+  assert.deepEqual(filterButlerSlashOptions('完全不存在的东西'), []);
 });
 
 test('两个入口都用共享常量，不在组件里另写一份文案', () => {
