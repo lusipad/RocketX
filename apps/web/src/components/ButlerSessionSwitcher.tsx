@@ -1,6 +1,13 @@
-import { Check, ChevronDown, MessageSquarePlus, Pencil, X } from 'lucide-react';
+import { Check, ChevronDown, MessageSquarePlus, Pencil, Trash2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useButler } from '../stores/butler';
+import { toast } from '../stores/toast';
+
+function askPreview(lastAsk: string | undefined): string {
+  if (!lastAsk) return '';
+  const text = lastAsk.length > 12 ? `${lastAsk.slice(0, 12)}…` : lastAsk;
+  return ` · ${text}`;
+}
 
 export default function ButlerSessionSwitcher({
   compact = false,
@@ -15,6 +22,7 @@ export default function ButlerSessionSwitcher({
   const switchSession = useButler((state) => state.switchSession);
   const renameSession = useButler((state) => state.renameSession);
   const newConversation = useButler((state) => state.newConversation);
+  const deleteSession = useButler((state) => state.deleteSession);
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0];
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(activeSession?.title ?? '');
@@ -102,6 +110,7 @@ export default function ButlerSessionSwitcher({
               {sessions.map((session) => (
                 <option key={session.id} value={session.id}>
                   {session.title}
+                  {askPreview(session.lastAsk)}
                 </option>
               ))}
             </select>
@@ -135,6 +144,21 @@ export default function ButlerSessionSwitcher({
           >
             <Pencil size={compact ? 14 : 15} />
             {compact ? null : '重命名'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!activeSession) return;
+              if (!confirm(`确定删除会话「${activeSession.title}」吗？删除后不可恢复。`)) return;
+              void deleteSession(activeSession.id).then(() => toast.success('会话已删除'));
+            }}
+            disabled={running || !activeSession}
+            aria-label="删除会话"
+            title="删除会话"
+            className={buttonCls}
+          >
+            <Trash2 size={compact ? 14 : 15} />
+            {compact ? null : '删除'}
           </button>
         </>
       )}

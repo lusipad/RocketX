@@ -13,7 +13,17 @@ import { getServerBase } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
-import { useButler } from '../stores/butler';
+import { butlerSessionRecap, useButler } from '../stores/butler';
+
+const RECAP_GAP_MS = 30 * 60 * 1000;
+
+function recapAgoLabel(updatedAt: number): string {
+  const minutes = Math.max(1, Math.round((Date.now() - updatedAt) / 60_000));
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
@@ -65,6 +75,12 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [transferring, setTransferring] = useState(false);
   const hasConversation = lines.some((item) => item.role === 'user');
+  const sessions = useButler((state) => state.sessions);
+  const activeSessionId = useButler((state) => state.activeSessionId);
+  const activeSummary = sessions.find((session) => session.id === activeSessionId);
+  const recap = hasConversation && activeSummary && Date.now() - activeSummary.updatedAt > RECAP_GAP_MS
+    ? butlerSessionRecap(lines)
+    : null;
   const routineCheckpoint = routineDraft
     ? runtimeCheckpoints.find((item) => item.id === routineDraft.checkpointId)
     : undefined;
@@ -165,6 +181,13 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
 
       <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto min-h-full w-full max-w-5xl space-y-3 rounded-xl border border-line bg-surface p-5 shadow-sm">
+          {recap && activeSummary ? (
+            <div className="rounded-lg border border-line bg-fill-1 px-3.5 py-2.5 text-xs leading-5 text-ink-2">
+              <span className="font-medium text-ink">上回说到</span>
+              （{recapAgoLabel(activeSummary.updatedAt)}）：你问「{recap.lastAsk}」
+              {recap.lastReply ? <>，我答到「{recap.lastReply}」</> : null}。接着说就能继续。
+            </div>
+          ) : null}
           {/* 过程显示在它产出的那条回答上方(issue #99):
               最后一行是 assistant 时,步骤插在它前面——先看做了什么,再看结论 */}
           {(() => {
