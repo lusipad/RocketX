@@ -75,7 +75,8 @@ export const toast = {
     useToast.getState().show({ kind: 'success', message, action }),
   error: (err: unknown, fallback?: string) =>
     useToast.getState().show({ kind: 'error', message: humanError(err, fallback) }),
-  info: (message: string) => useToast.getState().show({ kind: 'info', message }),
+  info: (message: string, action?: Toast['action']) =>
+    useToast.getState().show({ kind: 'info', message, action }),
   /**
    * 做完了，并给一次反悔的机会。
    *

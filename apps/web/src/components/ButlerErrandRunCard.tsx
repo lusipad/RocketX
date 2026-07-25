@@ -1,6 +1,5 @@
 import { Check, ExternalLink, Loader2, X } from 'lucide-react';
-import { useEffect } from 'react';
-import { currentErrandActivity, errandRunIsCurrent, latestCodexReply } from '../lib/butlerErrands';
+import { currentErrandActivity, errandRunIsCurrent } from '../lib/butlerErrands';
 import { codexApprovalSummary } from '../lib/codexApprovalSummary';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
@@ -14,7 +13,6 @@ import { useUI } from '../stores/ui';
  */
 export default function ButlerErrandRunCard() {
   const errandRun = useButler((state) => state.errandRun);
-  const setErrandRun = useButler((state) => state.setErrandRun);
   const dismissErrandRun = useButler((state) => state.dismissErrandRun);
   const status = useLocalCodex((state) => state.status);
   const threadId = useLocalCodex((state) => state.threadId);
@@ -26,23 +24,10 @@ export default function ButlerErrandRunCard() {
   const codexError = useLocalCodex((state) => state.error);
   const setModule = useUI((state) => state.setModule);
 
+  // 状态收敛在 butler store 的 watchErrandRun 里——人不在管家页时这个组件
+  // 根本没挂载，放这儿会让活干完了状态永远不更新
   const current = errandRun ? errandRunIsCurrent(errandRun, threadId) : false;
   const settled = Boolean(errandRun?.outcome);
-
-  // 回合结束就把 Codex 的最终回复收上来定格；线程被换掉则不再冒充它汇报
-  useEffect(() => {
-    if (!errandRun || settled) return;
-    if (!current) {
-      setErrandRun({ ...errandRun, outcome: 'stopped' });
-      return;
-    }
-    if (status === 'running' || status === 'starting') return;
-    setErrandRun({
-      ...errandRun,
-      outcome: status === 'ready' ? 'replied' : 'stopped',
-      ...(latestCodexReply() ? { reply: latestCodexReply() } : {}),
-    });
-  }, [errandRun, settled, current, status, setErrandRun]);
 
   if (!errandRun) return null;
 

@@ -13,6 +13,9 @@ import {
 } from '../../apps/web/src/stores/butler';
 import { useLocalCodex } from '../../apps/web/src/stores/localCodex';
 import { useToast } from '../../apps/web/src/stores/toast';
+// 必须静态 import：tsx 下测试内 await import() 会产生第二个模块实例，
+// 拿到的是另一个 store，断言永远对不上
+import { installModuleValidator, useUI } from '../../apps/web/src/stores/ui';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
@@ -433,6 +436,70 @@ test('工具白名单不放行未知目标：未注册路径直接拒绝', async
   } finally {
     codex.restore();
     resetEnvironments();
+    useButler.getState().reset();
+  }
+});
+
+test('人不在管家页时：等你点头与回话了都要提示，且指回管家页不是执行间', async () => {
+  // 生产环境的模块列表由 kernel 注册；测试里没有 kernel，得放行
+  installModuleValidator(() => true);
+  useButler.getState().reset();
+  resetEnvironments();
+  useToast.setState({ toasts: [] });
+  useUI.getState().setModule('messages');
+  const environment = useAgentEnvironments.getState().addEnvironment({
+    name: '主仓',
+    path: 'D:/Repos/rocketchatx',
+    adoProjects: [],
+    defaultBaseBranch: '',
+    branchPrefix: '',
+  });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-away', status: 'ready', sandboxMode: 'workspace-write' });
+
+  try {
+    useButler.setState({
+      errandDraft: {
+        checkpointId: 'errand-away-1',
+        spec: { title: '离席时的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+      },
+      runtimeCheckpoints: [{
+        id: 'errand-away-1',
+        toolName: 'draft_errand',
+        capability: 'errands.draft',
+        status: 'approval-required',
+        params: { title: '离席时的活' },
+        idempotencyKey: 'errand-away-1',
+        createdAt: 1,
+        updatedAt: 1,
+      } as never],
+    });
+    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+
+    // Codex 请求点头：不提示的话活会一直卡着
+    useLocalCodex.setState({ approvals: [{ id: 'a1', method: 'item/fileChange/requestApproval', params: {}, at: 1 } as never] });
+    const ask = useToast.getState().toasts.find((item) => item.message.includes('等你点个头'));
+    assert.ok(ask, '离席时等审批必须提示');
+    assert.equal(ask.action?.label, '去看看');
+    ask.action?.onClick();
+    assert.equal(useUI.getState().module, 'butler-view', '提示必须指回管家页，不是执行间');
+
+    // 回合结束：状态要收敛，卡片组件没挂载也一样
+    useUI.getState().setModule('messages');
+    useToast.setState({ toasts: [] });
+    useLocalCodex.setState({ approvals: [], messages: [{ id: 'm1', role: 'assistant', text: '改完了', at: 2 } as never] });
+    useLocalCodex.setState({ status: 'ready' });
+
+    const run = useButler.getState().errandRun;
+    assert.equal(run?.outcome, 'replied', '人不在管家页也要收敛 outcome，否则导航角标永远不亮');
+    assert.equal(run?.reply, '改完了');
+    assert.ok(useToast.getState().toasts.some((item) => item.message.includes('回话了')));
+    // 中性措辞：不替 Codex 宣布成功
+    assert.equal(useToast.getState().toasts.some((item) => item.message.includes('完成')), false);
+  } finally {
+    codex.restore();
+    resetEnvironments();
+    useToast.setState({ toasts: [] });
+    useUI.getState().setModule('messages');
     useButler.getState().reset();
   }
 });

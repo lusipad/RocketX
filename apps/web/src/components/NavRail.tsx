@@ -21,6 +21,7 @@ import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
+import { useLocalCodex } from '../stores/localCodex';
 import { captureButlerSurfaceContext } from '../lib/butlerSurface';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
@@ -104,6 +105,19 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       todoOverdue: todos.filter((t) => isOverdue(t, today)).length,
     };
   }, [todos]);
+
+  /**
+   * 管家角标 = 派出去的活需要你。人不在管家页时这是唯一的信号——
+   * 「等你点头」会把活卡死，所以标红；「回话了」只是提醒，标主色。
+   * 正在干的时候不打扰。
+   */
+  const errandRun = useButler((s) => s.errandRun);
+  const codexApprovals = useLocalCodex((s) => s.approvals);
+  const errandBadge: 'waiting' | 'replied' | null = useMemo(() => {
+    if (!errandRun || active === 'butler-view') return null;
+    if (!errandRun.outcome && codexApprovals.length > 0) return 'waiting';
+    return errandRun.outcome ? 'replied' : null;
+  }, [errandRun, codexApprovals.length, active]);
 
   const calendarEvents = useCalendar((s) => s.events);
   /**
@@ -239,6 +253,15 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     ) : hasAlert ? (
                       <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                     ) : null)}
+                  {/* 管家：派出去的活等你点头就标红，干完了标灰点——人不在管家页时的唯一信号 */}
+                  {key === 'butler-view' && errandBadge && (
+                    <span
+                      className={`ml-auto h-2 w-2 rounded-full ${
+                        errandBadge === 'waiting' ? 'bg-danger' : 'bg-primary'
+                      }`}
+                      title={errandBadge === 'waiting' ? '派出去的活等你点头' : '派出去的活回话了'}
+                    />
+                  )}
                   {/* 日历：今天日程数 */}
                   {key === 'calendar' && todayEventCount > 0 && (
                     <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
