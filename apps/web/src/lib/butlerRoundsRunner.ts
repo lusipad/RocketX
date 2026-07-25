@@ -20,7 +20,7 @@ import {
 } from './butlerBriefFeedback';
 import { mergeButlerSources, type ButlerSource } from './butlerContext';
 import { ledgerFromTodos } from './butlerLedger';
-import { parseButlerMemoryState, recallButlerMemory } from './butlerMemory';
+import { parseButlerMemoryState } from './butlerMemory';
 import { addMute, listMutes, type ButlerMute } from './butlerMutes';
 import { readButlerActiveMemoryV2RawJson } from './butlerProfile';
 import {
@@ -36,6 +36,7 @@ import {
   type ButlerRoundTriggerRuntime,
 } from './butlerRoundsTriggers';
 
+const BRIEF_PREFERENCE_LIMIT = 20;
 const LAST_ROUNDS_AT_KEY = 'rcx-butler-v1:rounds-last-at';
 const LAST_RESULT_KEY = 'rcx-butler-v1:rounds-last-result';
 
@@ -159,18 +160,27 @@ useButlerRoundsRunner.setState({
   lastResult: initialResult,
 });
 
-/** 用户经 remember 落库的简报偏好（preference 记忆，subject 以 brief: 开头），账号缺失或读取失败时静默为空。 */
+/**
+ * 用户经 remember 落库的简报偏好（preference 记忆，subject 以 brief: 开头）。
+ *
+ * 直接按记录过滤而不是走 recallButlerMemory：后者要求 scope 完全匹配，
+ * 写在房间/项目 scope 下的偏好会永不召回、静默失效。简报本身是全局的，
+ * 它的关注偏好也按 server+account 全局生效；scope 隔离仍然守住（跨账号/跨服务器不串）。
+ */
 export function briefRoundPreferences(now = Date.now()): string[] {
   const user = useAuth.getState().user;
   if (!user?._id) return [];
+  const server = getServerBase() || 'same-origin';
   try {
     const state = parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
-    return recallButlerMemory(
-      state,
-      { server: getServerBase() || 'same-origin', account: user._id },
-      { kind: 'preference', limit: 50, now },
-    )
-      .filter((record) => record.subject.startsWith('brief:'))
+    return state.records
+      .filter((record) => record.status === 'active'
+        && record.kind === 'preference'
+        && record.subject.startsWith('brief:')
+        && record.scope.server === server
+        && record.scope.account === user._id
+        && (record.expiresAt == null || record.expiresAt > now))
+      .slice(0, BRIEF_PREFERENCE_LIMIT)
       .map((record) => {
         const label = record.subject.slice('brief:'.length).trim();
         return label ? `${label}：${record.value}` : record.value;

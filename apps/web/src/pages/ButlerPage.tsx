@@ -25,7 +25,7 @@ import {
   useButlerRoundsRunner,
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
-import { listBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
+import { listBriefFeedback, removeBriefFeedback, type ButlerBriefVerdict } from '../lib/butlerBriefFeedback';
 import { listMutes, removeMute } from '../lib/butlerMutes';
 import {
   acceptButlerProposal,
@@ -35,10 +35,11 @@ import {
 import { turnButlerBriefItemIntoTodo } from '../lib/butlerBriefActions';
 import { runDraftWithBrain } from '../lib/butlerRoundsBrain';
 import { isProposalHandled } from '../lib/butlerOutbox';
-import { executeApprovedButlerOperation, useButler } from '../stores/butler';
+import { butlerRecapAgoLabel, executeApprovedButlerOperation, useButler } from '../stores/butler';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { dueLabel, todayKey, useTodos } from '../stores/todos';
+import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
 
 function lookedAtLabel(value: string | null): string {
@@ -131,6 +132,16 @@ export default function ButlerPage() {
   const draftTextRef = useRef<HTMLTextAreaElement>(null);
   const conversationOpen = useUI((state) => state.butlerConversationOpen);
   const openConversation = useUI((state) => state.openButlerConversation);
+  const butlerSessions = useButler((state) => state.sessions);
+  const activeButlerSessionId = useButler((state) => state.activeSessionId);
+  const switchButlerSession = useButler((state) => state.switchSession);
+  const hydrateButler = useButler((state) => state.hydrate);
+  const butlerUserId = useAuth((state) => state.user?._id);
+  const deskSessions = butlerSessions.filter((session) => session.lastAsk).slice(0, 5);
+  const openSessionConversation = async (sessionId: string): Promise<void> => {
+    if (sessionId !== activeButlerSessionId) await switchButlerSession(sessionId);
+    openConversation();
+  };
   const closeConversation = useUI((state) => state.closeButlerConversation);
   const setModule = useUI((state) => state.setModule);
   const openRoom = useChat((state) => state.openRoom);
@@ -143,6 +154,12 @@ export default function ButlerPage() {
   useEffect(() => {
     void runDailyButlerRoundsIfNeeded();
   }, []);
+
+  // 桌面视图不挂 ButlerConversation/ButlerPanel，没有它就拿不到会话列表：
+  // 同日刷新时 runDailyButlerRoundsIfNeeded 会直接 return，「我们手头的事」永远空。
+  useEffect(() => {
+    if (butlerUserId) void hydrateButler();
+  }, [butlerUserId, hydrateButler]);
 
   useEffect(() => {
     setHiddenProposals(new Set());
@@ -502,6 +519,28 @@ export default function ButlerPage() {
             )}
           </section>
 
+          {deskSessions.length > 0 && (
+            <section className="rounded-xl border border-line bg-surface p-5">
+              <h2 className="text-sm font-semibold text-ink">我们手头的事</h2>
+              <div className="mt-3 flex flex-col gap-2">
+                {deskSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => void openSessionConversation(session.id)}
+                    className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3.5 py-2.5 text-left hover:border-primary/40"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-ink">{session.title}</div>
+                      <div className="mt-0.5 truncate text-xs text-ink-2">上回说到：{session.lastAsk}</div>
+                    </div>
+                    <span className="shrink-0 text-xs text-ink-3">{butlerRecapAgoLabel(session.updatedAt)}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
           <div className="grid gap-4 md:grid-cols-2">
             <LedgerColumn title="我答应的" entries={commitments} today={today} />
             <LedgerColumn title="我在等的" entries={waits} today={today} />
@@ -542,6 +581,17 @@ export default function ButlerPage() {
                           : <ThumbsUp size={11} className="shrink-0" />}
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <span className="shrink-0">{entry.verdict === 'noise' ? '以后少报' : '继续盯'}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            removeBriefFeedback(entry.title);
+                            setBriefFeedback(listBriefFeedback());
+                            toast.success('已撤销这条反馈');
+                          }}
+                          className="shrink-0 px-1.5 py-1 text-ink-3 hover:text-ink"
+                        >
+                          撤销
+                        </button>
                       </div>
                     ))}
                   </div>

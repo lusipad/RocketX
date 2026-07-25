@@ -89,6 +89,55 @@ test('计时最多保留 200 轮，坏数据被过滤', () => {
   assert.equal(listButlerTurnTimings(storage).length, 1);
 });
 
+test('迟到的工具往返记回它自己那一轮，不算到下一轮头上', () => {
+  const storage = new MemoryStorage();
+  const timeA = clock(1_000);
+  const turnA = beginButlerTurnTiming({ threadSetupMs: 0 }, storage, timeA.now);
+  // 工具发起时捕获句柄（宿主接线的做法），返回时 A 已结束、B 已开始
+  const capturedForA = turnA;
+  turnA.end('stopped');
+  const turnB = beginButlerTurnTiming({ threadSetupMs: 0 }, storage, clock(9_000).now);
+  capturedForA.addToolRoundtrip('late_from_a', 4_000);
+  turnB.addToolRoundtrip('own_of_b', 100);
+  turnB.end('completed');
+
+  const rows = listButlerTurnTimings(storage);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0].toolRoundtrips, []);
+  assert.equal(rows[0].outcome, 'stopped');
+  assert.deepEqual(rows[1].toolRoundtrips, [{ tool: 'own_of_b', ms: 100 }]);
+});
+
+test('用户中止的轮次记为 stopped，被截断的整轮时长不污染 P50/P95', () => {
+  const timings: ButlerTurnTiming[] = [
+    ...[1_000, 1_000, 1_000].map((totalMs, index) => ({
+      at: new Date(index).toISOString(),
+      threadSetupMs: 0,
+      firstTokenMs: 300,
+      toolRoundtrips: [{ tool: 't', ms: 200 }],
+      totalMs,
+      outcome: 'completed' as const,
+    })),
+    {
+      at: new Date(9).toISOString(),
+      threadSetupMs: 0,
+      firstTokenMs: 100,
+      toolRoundtrips: [{ tool: 'cut', ms: 50 }],
+      totalMs: 120,
+      outcome: 'stopped' as const,
+    },
+  ];
+  const summary = butlerTimingsSummary(timings);
+  assert.equal(summary.count, 4);
+  assert.equal(summary.completed, 3);
+  assert.equal(summary.stopped, 1);
+  // 被中止的 120ms 若混进分布，P50 会被拉到 1000 以下
+  assert.equal(summary.p50TotalMs, 1_000);
+  assert.equal(summary.p50FirstTokenMs, 300);
+  // 工具往返是真实测量，仍然计入
+  assert.equal(summary.p95ToolRoundtripMs, 200);
+});
+
 test('汇总给出 P50/P95，failed 轮不进整轮分布但工具耗时仍计入', () => {
   const timings: ButlerTurnTiming[] = [
     ...[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000].map((totalMs, index) => ({

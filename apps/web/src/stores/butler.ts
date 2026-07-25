@@ -122,6 +122,15 @@ export interface ButlerSessionRecap {
   lastReply?: string;
 }
 
+/** recap 呈现用的相对时间标签（分钟/小时/天前） */
+export function butlerRecapAgoLabel(updatedAt: number, now = Date.now()): string {
+  const minutes = Math.max(1, Math.round((now - updatedAt) / 60_000));
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
+
 export interface ButlerWorkflowSnapshot {
   sessionId: string;
   key: string;
@@ -465,7 +474,32 @@ function normalizeRegistry(
   ))
     ? stored.activeSessionId
     : sessions.find((session) => session.kind !== 'workflow')!.id;
-  return { schemaVersion: SESSION_REGISTRY_VERSION, activeSessionId, sessions };
+  return {
+    schemaVersion: SESSION_REGISTRY_VERSION,
+    activeSessionId,
+    sessions: pruneEmptySessions(sessions, activeSessionId),
+  };
+}
+
+/**
+ * registry 体积控制：反复点「新对话」会留下一串只有欢迎语的空会话，它们没有内容却
+ * 参与每次全量重写。这里只丢弃**没有任何用户提问**的非活动交互会话——零内容损失；
+ * 有真实对话的会话永不静默删除，删除只能由用户经 deleteSession 显式执行。
+ * 活动会话豁免：它可能是刚建出来、用户正要提问的那个。
+ *
+ * **只在 hydrate 时清理**：运行期清理会与界面竞争——`switchSession` 先落盘再切换，
+ * 若此时把目标空会话清掉，切换会静默失败（回归 butler-context-freshness 抓到过）。
+ * hydrate 是唯一没有会话处于半途状态的时点。
+ */
+function pruneEmptySessions(
+  sessions: readonly PersistedButlerSession[],
+  activeSessionId: string,
+): PersistedButlerSession[] {
+  return sessions.filter((session) => (
+    session.kind === 'workflow'
+    || session.id === activeSessionId
+    || session.lines.some((line) => line.role === 'user')
+  ));
 }
 
 function defaultSession(legacy?: PersistedButler): PersistedButlerSession {
@@ -1811,15 +1845,22 @@ export const useButler = create<ButlerState>((set, get) => ({
     await flushButlerPersist();
     if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     const scope = persistScope;
-    const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
     if (!deletingActive) {
-      const nextRegistry: PersistedButlerSessionRegistry = { ...sessionRegistry, sessions: remaining };
+      const nextRegistry: PersistedButlerSessionRegistry = {
+        ...sessionRegistry,
+        sessions: sessionRegistry.sessions.filter((session) => session.id !== targetId),
+      };
       sessionRegistry = nextRegistry;
       set({ sessions: sessionSummaries(nextRegistry) });
       await queueRegistryWrite(scope, nextRegistry);
       return;
     }
     await discardResidentCodexThread();
+    // 停 app-server 是真实往返，这期间 workflow runtime 可能写过 registry：
+    // 必须用 await 之后的 sessionRegistry 重算，否则会把那些写入整体回滚掉。
+    if (!sessionRegistry || persistScope !== scope) return;
+    if (!sessionRegistry.sessions.some((session) => session.id === targetId)) return;
+    const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
     const nextActive = remaining
       .filter((session) => session.kind !== 'workflow')
       .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];

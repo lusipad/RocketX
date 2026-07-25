@@ -14,7 +14,8 @@ export interface ButlerTurnTiming {
   firstTokenMs?: number;
   toolRoundtrips: ButlerToolRoundtrip[];
   totalMs: number;
-  outcome: 'completed' | 'failed';
+  /** stopped = 用户主动中止：整轮时长被截断，不能进耗时分布 */
+  outcome: 'completed' | 'failed' | 'stopped';
 }
 
 export interface ButlerTurnTimingHandle {
@@ -50,7 +51,7 @@ function validTiming(value: unknown): value is ButlerTurnTiming {
     && entry.toolRoundtrips.every(validRoundtrip)
     && typeof entry.totalMs === 'number'
     && Number.isFinite(entry.totalMs)
-    && (entry.outcome === 'completed' || entry.outcome === 'failed');
+    && (entry.outcome === 'completed' || entry.outcome === 'failed' || entry.outcome === 'stopped');
 }
 
 export function listButlerTurnTimings(
@@ -79,6 +80,11 @@ function appendTiming(timing: ButlerTurnTiming, storage: ButlerTimingsStorage | 
 }
 
 let activeHandle: ButlerTurnTimingHandle | undefined;
+
+/** 当前进行中的交互轮句柄；调用方在工具**发起时**捕获它，避免迟到的往返记到下一轮头上。 */
+export function currentButlerTurnTiming(): ButlerTurnTimingHandle | undefined {
+  return activeHandle;
+}
 
 /**
  * 开始记录一轮交互问答的分段耗时。单并发（常驻线程一次一轮）；
@@ -119,7 +125,11 @@ export function beginButlerTurnTiming(
   return handle;
 }
 
-/** 记入当前进行中的交互轮；没有进行中的轮时静默丢弃。 */
+/**
+ * 记入当前进行中的交互轮；没有进行中的轮时静默丢弃。
+ * 注意：宿主接线应改用 currentButlerTurnTiming() 在**发起时**捕获句柄——
+ * 这个便捷函数在「上一轮的工具迟到返回」时会记到新一轮头上。
+ */
 export function addButlerToolRoundtrip(tool: string, ms: number): void {
   activeHandle?.addToolRoundtrip(tool, ms);
 }
@@ -133,6 +143,7 @@ function percentile(sorted: readonly number[], q: number): number | undefined {
 export interface ButlerTimingsSummary {
   count: number;
   completed: number;
+  stopped: number;
   p50TotalMs?: number;
   p95TotalMs?: number;
   p50FirstTokenMs?: number;
@@ -145,6 +156,8 @@ export interface ButlerTimingsSummary {
 export function butlerTimingsSummary(
   timings: readonly ButlerTurnTiming[] = listButlerTurnTimings(),
 ): ButlerTimingsSummary {
+  // 只有跑完的轮次进耗时分布：failed 与 stopped 的 totalMs 都是被截断的值，
+  // 混进去会系统性拉低 p50/p95（工具往返耗时是真实测量，仍全部计入）。
   const completed = timings.filter((timing) => timing.outcome === 'completed');
   const totals = completed.map((timing) => timing.totalMs).sort((a, b) => a - b);
   const firstTokens = completed
@@ -154,7 +167,11 @@ export function butlerTimingsSummary(
   const roundtrips = timings
     .flatMap((timing) => timing.toolRoundtrips.map((entry) => entry.ms))
     .sort((a, b) => a - b);
-  const summary: ButlerTimingsSummary = { count: timings.length, completed: completed.length };
+  const summary: ButlerTimingsSummary = {
+    count: timings.length,
+    completed: completed.length,
+    stopped: timings.filter((timing) => timing.outcome === 'stopped').length,
+  };
   const assign = (key: keyof ButlerTimingsSummary, value: number | undefined) => {
     if (value !== undefined) (summary[key] as number) = value;
   };
