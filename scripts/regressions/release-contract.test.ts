@@ -58,7 +58,10 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
     assert.match(workflow, /git cat-file -t/);
   }
   assert.match(npmWorkflow, /git merge-base --is-ancestor/);
-  assert.match(releaseWorkflow, /test "\$release_sha" = "\$\(git rev-parse origin\/main\)"/);
+  // publish 与 desktop 的校验语义刻意不同：构建发生在打 tag 的瞬间，tag 必须
+  // 就是 main 头（下面 desktop.yml 的断言仍是严格等值）；发布则常晚于继续开发，
+  // 只要求 tag 在 main 历史上——v0.32.0 曾因 main 前进 6 个提交被旧校验卡死。
+  assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$release_sha" origin\/main/);
   assert.match(npmWorkflow, /RELEASE_SHA/);
   assert.match(npmWorkflow, /pnpm pack --pack-destination/);
   assert.match(npmWorkflow, /manifest\.gitHead = releaseSha/);
