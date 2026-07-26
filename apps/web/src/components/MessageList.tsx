@@ -55,6 +55,15 @@ export function initialMessageScrollTop({
   return historyLoaded && !didInitialScroll ? scrollHeight : undefined;
 }
 
+export function messagesInMain(
+  messages: readonly RcMessage[],
+  showThreadsInMain: boolean,
+): RcMessage[] {
+  return messages.filter((message) =>
+    showThreadsInMain || !message.tmid || message.tshow === true
+  );
+}
+
 export default function MessageList({ rid }: { rid: string }) {
   const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
@@ -100,7 +109,7 @@ export default function MessageList({ rid }: { rid: string }) {
 
   // 线程回复默认不进主消息流（可在设置里打开）
   const list = useMemo(
-    () => (all ?? []).filter((m) => showThreadsInMain || !m.tmid),
+    () => messagesInMain(all ?? [], showThreadsInMain),
     [all, showThreadsInMain],
   );
 

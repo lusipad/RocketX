@@ -309,7 +309,23 @@ function safeTitleHref(link: string): string | null {
 }
 
 /** 附件卡片：ADO 集成等富文本消息载体 */
-function AttachmentCard({
+function AttachmentDescription({
+  att,
+  message,
+}: {
+  att: RcMessageAttachment;
+  message: RcMessage;
+}) {
+  const description = att.description?.trim();
+  if (!description || message.msg.trim()) return null;
+  return (
+    <div className="mt-1.5 select-text text-sm leading-relaxed break-words whitespace-pre-wrap">
+      <LinkifiedText text={description} />
+    </div>
+  );
+}
+
+export function AttachmentCard({
   att,
   message,
   source,
@@ -327,25 +343,31 @@ function AttachmentCard({
   if (att.image_url) {
     const name = message.file?.name ?? att.title ?? '图片';
     return (
-      <ImageAttachment
-        thumbPath={att.image_url}
-        fullPath={att.title_link ?? att.image_url}
-        name={name}
-        dims={att.image_dimensions}
-        source={source}
-      />
+      <>
+        <ImageAttachment
+          thumbPath={att.image_url}
+          fullPath={att.title_link ?? att.image_url}
+          name={name}
+          dims={att.image_dimensions}
+          source={source}
+        />
+        <AttachmentDescription att={att} message={message} />
+      </>
     );
   }
   // 文件附件（上传的文件）
   if (att.title_link_download && att.title_link) {
     return (
-      <FileAttachment
-        att={att}
-        name={message.file?.name}
-        size={message.file?.size}
-        localPath={message.rocketxLocalPath}
-        source={source}
-      />
+      <>
+        <FileAttachment
+          att={att}
+          name={message.file?.name}
+          size={message.file?.size}
+          localPath={message.rocketxLocalPath}
+          source={source}
+        />
+        <AttachmentDescription att={att} message={message} />
+      </>
     );
   }
   const extensionRenderer = renderers.find((renderer) =>
@@ -616,12 +638,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const replyThreadId = message.tmid;
   const agentSessionCard = parseAgentSessionCard(message.msg ?? '');
   const bareMedia =
     !visibleText &&
     !message.pinned &&
     !!message.attachments?.length &&
-    message.attachments.every((a) => !!a.image_url || !!a.title_link_download);
+    message.attachments.every(
+      (a) => (!!a.image_url || !!a.title_link_download) && !a.description?.trim(),
+    );
 
   const copy = async () => {
     try {
@@ -979,6 +1004,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           >
             <MessageSquareText size={14} />
             {message.tcount} 条回复
+          </button>
+        ) : null}
+
+        {!inThread && replyThreadId ? (
+          <button
+            onClick={() => void openThread(replyThreadId)}
+            className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <MessageSquareText size={14} />
+            查看话题
           </button>
         ) : null}
 
