@@ -194,7 +194,7 @@ export default function AgentPanel() {
                     <span className="truncate">codex resume</span>
                   </button>
                   <button
-                    title="在 Codex App 打开新对话并带入托管记录"
+                    title="在 Codex App 打开新对话并填好托管记录，由你按回车发出"
                     disabled={transferring || session.status === 'running'}
                     onClick={() => {
                       setTransferring(true);
@@ -211,13 +211,13 @@ export default function AgentPanel() {
                                 : 'Codex App 打开失败，完整记录已复制',
                           );
                         })
-                        .catch((error) => toast.error(error, '转移到 Codex 失败'))
+                        .catch((error) => toast.error(error, '在 Codex App 打开失败'))
                         .finally(() => setTransferring(false));
                     }}
                     className="flex shrink-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
                   >
                     {transferring ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
-                    转到 Codex App
+                    在 Codex App 打开
                   </button>
                 </div>
               </div>

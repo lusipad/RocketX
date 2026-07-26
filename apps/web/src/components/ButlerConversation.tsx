@@ -124,7 +124,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             : 'Codex App 打开失败，完整记录已复制',
       );
     } catch (error) {
-      toast.error(error, '转移到 Codex 失败');
+      toast.error(error, '在 Codex App 打开失败');
     } finally {
       setTransferring(false);
     }
@@ -178,11 +178,11 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             type="button"
             onClick={() => void transferToCodex()}
             disabled={running || transferring || !hasConversation}
-            title="在 Codex App 打开新对话并带入当前完整记录"
+            title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
           >
             {transferring ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
-            转到 Codex
+            在 Codex App 打开
           </button>
           <button
             type="button"
