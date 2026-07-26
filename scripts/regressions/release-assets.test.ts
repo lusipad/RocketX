@@ -21,15 +21,10 @@ async function createWindowsReleaseFixture(options: {
   const directory = await mkdtemp(path.join(tmpdir(), 'rocketx-windows-release-'));
   const installer = `RocketX_${version}_x64-setup.exe`;
   const fullInstaller = `RocketX_${version}_full-setup.exe`;
-  const msi = `RocketX_${version}_x64_en-US.msi`;
   const platforms = {
     'windows-x86_64': {
       url: `https://updates.example.com/${installer}`,
       signature: 'windows-signature',
-    },
-    'windows-x86_64-msi': {
-      url: `https://updates.example.com/${msi}`,
-      signature: 'windows-msi-signature',
     },
     ...options.extraPlatforms,
   };
@@ -44,8 +39,6 @@ async function createWindowsReleaseFixture(options: {
     writeFile(path.join(directory, installer), Buffer.alloc(1_024, 1)),
     writeFile(path.join(directory, fullInstaller), Buffer.alloc(1_024, 4)),
     writeFile(path.join(directory, `${installer}.sig`), 'windows-signature'),
-    writeFile(path.join(directory, msi), Buffer.alloc(1_024, 2)),
-    writeFile(path.join(directory, `${msi}.sig`), 'windows-msi-signature'),
     writeFile(path.join(directory, 'latest.json'), updater),
     writeFile(path.join(directory, `rocketx-plugins-${version}.zip`), Buffer.alloc(1_024, 3)),
     ...Object.entries(options.extraAssets ?? {}).map(([name, content]) =>
@@ -107,13 +100,13 @@ test('Windows-only 发布拒绝非 Windows updater 条目', async () => {
   }
 });
 
-test('Windows-only 发布缺少 MSI 签名时失败', async () => {
+test('Windows-only 发布缺少瘦版 updater 签名时失败', async () => {
   const fixture = await createWindowsReleaseFixture();
   try {
-    await rm(path.join(fixture.directory, `RocketX_${fixture.version}_x64_en-US.msi.sig`));
+    await rm(path.join(fixture.directory, `RocketX_${fixture.version}_x64-setup.exe.sig`));
     const result = runVerifier(fixture.directory, fixture.version);
     assert.notEqual(result.status, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /\.msi\\\.sig/);
+    assert.match(`${result.stdout}\n${result.stderr}`, /\.exe\\\.sig/);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }

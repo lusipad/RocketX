@@ -38,11 +38,11 @@
 
 ## 第三刀：full 版（用户 2026-07-26 追加确认）
 
-同时发布 `RocketX_x.y.z_full-setup.exe`：同一个壳 + 捆绑 codex 与 OCR 资源，给离线/懒人场景。
+同时发布 `RocketX_x.y.z_full-setup.exe`：同一个壳，只额外捆绑增强 OCR 资源。两个安装包都要求用户已安装系统 codex，不再分发 `codex.exe`。
 
 **唯一的坑与解法**：updater 的 latest.json 只有一个地址，full 用户自动更新会拉到瘦壳——若资源装在安装目录，会被全量覆盖清掉，静默降级。所以 **full 版把重资源装到不受壳更新影响的位置（LOCALAPPDATA 下约定目录），运行时兜底扫描加上该路径**。壳统一更新（永远只发瘦壳），资源一次性落地，full 用户永不降级。
 
-- Rust 只编译一次，NSIS 多打一份 full 包（仅 release 时，CI check 不打）
+- Rust 只编译一次，NSIS 多打一份只含增强 OCR 的 full 包（仅 release 时，CI check 不打）
 - SHA256SUMS 与 verify-release-assets 的资产清单同步加 full 包
 - MSI 暂只发瘦版，有诉求再说
 

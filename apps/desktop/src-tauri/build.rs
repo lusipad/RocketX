@@ -4,7 +4,6 @@ use std::{
     env, fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::Command,
 };
 use tar::Archive;
 use zip::ZipArchive;
@@ -142,14 +141,8 @@ fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-env-changed=ROCKETX_OCR_CACHE_DIR");
     println!("cargo:rerun-if-env-changed=ROCKETX_OCR_OFFLINE");
-    println!("cargo:rerun-if-env-changed=ROCKETX_BUNDLE_CODEX");
     println!("cargo:rerun-if-env-changed=ROCKETX_BUNDLE_OCR");
 
-    if bundle_resource("ROCKETX_BUNDLE_CODEX") {
-        if let Err(error) = prepare_codex_resources() {
-            panic!("failed to prepare bundled Codex resources: {error}");
-        }
-    }
     if bundle_resource("ROCKETX_BUNDLE_OCR") {
         if let Err(error) = prepare_local_ocr_resources() {
             panic!("failed to prepare local OCR resources: {error}");
@@ -164,37 +157,6 @@ fn bundle_resource(name: &str) -> bool {
         env::var(name).ok().as_deref(),
         Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
     )
-}
-
-fn prepare_codex_resources() -> Result<(), String> {
-    let manifest_dir =
-        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
-    let root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(|| "failed to resolve repository root".to_string())?;
-    let script = root.join("scripts").join("prepare-codex-resource.mjs");
-    println!("cargo:rerun-if-changed={}", script.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        root.join("package.json").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        root.join("pnpm-lock.yaml").display()
-    );
-    let output = Command::new("node")
-        .arg(&script)
-        .current_dir(root)
-        .output()
-        .map_err(|error| format!("failed to run {}: {error}", script.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Err(if stderr.is_empty() { stdout } else { stderr })
 }
 
 fn prepare_local_ocr_resources() -> Result<(), String> {

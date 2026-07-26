@@ -29,7 +29,9 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "resources": {
       "resources/codex-skills/": "codex-skills/",
       "resources/plugins/": "plugins/"

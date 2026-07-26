@@ -227,7 +227,7 @@ export default function AiSettings() {
     : codexRuntime.source === 'system'
       ? '系统'
       : codexRuntime.source === 'bundled'
-        ? '旧版 / full 资源'
+        ? '旧版内置资源'
         : '未检测到';
 
   const saveCodexPath = async () => {

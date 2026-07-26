@@ -84,7 +84,7 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   );
   assert.doesNotMatch(releaseWorkflow, /三平台/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
-  assert.match(desktopWorkflow, /ROCKETX_BUNDLE_CODEX/);
+  assert.doesNotMatch(desktopWorkflow, /ROCKETX_BUNDLE_CODEX/);
   assert.match(desktopWorkflow, /ROCKETX_BUNDLE_OCR/);
   assert.match(desktopWorkflow, /package-full-setup\.ps1/);
   assert.match(desktopWorkflow, /gh release upload[\s\S]*\$fullInstaller/);

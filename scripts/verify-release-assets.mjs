@@ -35,7 +35,6 @@ const fullInstaller = requireMatch(
   new RegExp(`^RocketX_${versionPattern}_full-setup\\.exe$`, 'i'),
 );
 const required = [
-  requireMatch('Windows MSI', new RegExp(`${versionPattern}.*\\.msi$`, 'i')),
   slimInstaller,
   fullInstaller,
   requireMatch('updater metadata', /^latest\.json$/),
@@ -47,7 +46,7 @@ for (const name of required) {
   if (!metadata.isFile() || metadata.size < 1_000) throw new Error(`${name} is empty or unexpectedly small`);
 }
 
-for (const pattern of [/\.exe\.sig$/i, /\.msi\.sig$/i]) {
+for (const pattern of [/\.exe\.sig$/i]) {
   const signature = requireMatch(pattern.source, pattern);
   if ((await stat(path.join(directory, signature))).size === 0) throw new Error(`${signature} is empty`);
 }
