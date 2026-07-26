@@ -63,7 +63,16 @@ export function readAttachmentArchiveSnapshot(): AttachmentArchiveSnapshot {
 }
 
 function persistArchive(current: { server: string; userId: string }, archive: AttachmentArchiveV1): void {
-  localStorage.setItem(attachmentArchiveStorageKey(current.server, current.userId), JSON.stringify(archive));
+  try {
+    localStorage.setItem(attachmentArchiveStorageKey(current.server, current.userId), JSON.stringify(archive));
+  } catch {
+    /**
+     * 存储配额撑爆时绝不能把异常抛给调用方：归档主流程的 catch 会把刚下好的
+     * 文件删掉再排一次重试，于是每个附件都陷入「下载→删除→重试」的死循环，
+     * 而且全程静默。宁可这一条记录没落盘——文件还在，下次能补上。
+     */
+    return;
+  }
   window.dispatchEvent(new CustomEvent(ATTACHMENT_ARCHIVE_CHANGED));
 }
 
@@ -173,13 +182,22 @@ async function cleanupArchive(
   if (plan.remove.length === 0) return snapshot.archive;
   const result = await removeRecords(current, plan.remove);
   if (result.removed.length === 0) return snapshot.archive;
-  const archive: AttachmentArchiveV1 = {
+  const base: AttachmentArchiveV1 = {
     version: 1 as const,
     records: [...plan.keep, ...result.failed].sort((a, b) => b.cachedAt - a.cachedAt),
   };
   if (snapshot.archive.suppressed?.length) {
-    archive.suppressed = snapshot.archive.suppressed;
+    base.suppressed = snapshot.archive.suppressed;
   }
+  /**
+   * 清理掉的要留个墓碑，否则下次打开这个房间又会把它下回来（issue #217）。
+   * 打开房间会重扫最近一页历史，而容量淘汰删的是最旧的一批——两者一重叠就
+   * 变成「下载→挤掉→再下载」的死循环，流量和磁盘都在空转。
+   *
+   * 用户设容量上限和留存期，意思本就是「别占这么多」；自动补回来违背这个意思。
+   * 需要的时候手动点一下仍然能拿到。
+   */
+  const archive = suppressArchivedAttachments(base, result.removed);
   persistArchive(current, archive);
   return archive;
 }

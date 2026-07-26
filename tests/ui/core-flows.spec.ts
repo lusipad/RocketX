@@ -382,9 +382,17 @@ test('桌面附件留存默认关闭，可配置并按房间删除且不会重�
     };
   }, { server: SERVER, userId: ME._id });
   expect(result.archive.records).toEqual([]);
-  expect(result.archive.suppressed).toEqual([
+  /**
+   * 两条墓碑，来源不同但目的一样——都是「别再自动下回来」：
+   * room-general 是用户手动点了「删除本地副本」；
+   * room-expired 的 cachedAt 是 40 天前，超过默认 30 天留存期，被清理带走。
+   * 过期这条早先不留痕，于是下次打开房间又被当成没下过拉回来（issue #217）。
+   */
+  expect(result.archive.suppressed).toEqual(expect.arrayContaining([
     expect.objectContaining({ rid: 'room-general', fileId: 'file-ocr' }),
-  ]);
+    expect.objectContaining({ rid: 'room-expired', fileId: 'file-expired' }),
+  ]));
+  expect(result.archive.suppressed).toHaveLength(2);
   const recursiveRemoveCalls = result.removeCalls.filter((call) => (
     (call.args?.options as { recursive?: boolean } | undefined)?.recursive === true
   ));
