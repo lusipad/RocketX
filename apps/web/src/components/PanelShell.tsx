@@ -63,13 +63,13 @@ export default function PanelShell({
       {resizable && (
         <div
           role="separator"
-          aria-label="调整 AI 面板宽度"
+          aria-label="调整侧栏宽度"
           aria-orientation="vertical"
           aria-valuemin={MIN_BUTLER_PANEL_WIDTH}
           aria-valuemax={MAX_BUTLER_PANEL_WIDTH}
           aria-valuenow={width}
           tabIndex={0}
-          title="拖动调整 AI 面板宽度，双击恢复默认"
+          title="拖动调整侧栏宽度，双击恢复默认"
           onDoubleClick={resetButlerPanelWidth}
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}

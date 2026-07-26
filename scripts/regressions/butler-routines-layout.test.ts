@@ -9,10 +9,12 @@ test('纸底部只读已启用例行事务数量，管理组件本身保留', ()
   assert.match(page, /useRoutines\(\(state\) => state\.routines\)/);
   assert.match(page, /routines\.filter\(\(routine\) => routine\.enabled\)\.length/);
   assert.match(page, /在盯 \{watchedCount\} 件事，结果都会写到这张纸上/);
-  assert.doesNotMatch(page, /<ButlerRoutines \/>/);
-  assert.match(routines, /<details className="group rounded-xl/);
+  assert.match(page, /<ButlerRoutines \/>/);
+  assert.match(page, /aria-label=\{manageOpen \? '收起管家管理' : '打开管家管理'\}/);
+  assert.match(page, /conversationOpen \? \([\s\S]*\) : manageOpen \? \(/);
+  assert.match(routines, /<section aria-label="在盯的事">/);
+  assert.match(routines, /管理例行事务/);
   assert.doesNotMatch(routines, /<details[^>]*\sopen(?:=|\s|>)/);
-  assert.match(routines, /<span>例行事务<\/span>/);
 
   assert.match(routines, /routines\.filter\(\(routine\) => routine\.enabled\)\.map/);
   assert.match(routines, /setRoutineEnabled\(routine\.id, event\.target\.checked\)/);

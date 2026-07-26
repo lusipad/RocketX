@@ -1,9 +1,20 @@
 import { visibleButlerErrands, type ButlerErrandRun } from './butlerErrands';
-import type { StoredRoundsResult } from './butlerRoundsRunner';
+import {
+  readButlerRoundsResultForDate,
+  type StoredRoundsResult,
+} from './butlerRoundsRunner';
 
 export interface ButlerPaperErrandSections {
   approvals: ButlerErrandRun[];
   active: ButlerErrandRun[];
+}
+
+export interface ButlerPaperViewModel {
+  dateKey: string;
+  isToday: boolean;
+  errands: ButlerPaperErrandSections;
+  archived: ButlerErrandRun[];
+  brief: StoredRoundsResult | null;
 }
 
 export function butlerPaperDateKey(date: Date): string {
@@ -57,11 +68,35 @@ export function archivedButlerErrandsForDate(
     .sort((left, right) => (right.archivedAt ?? 0) - (left.archivedAt ?? 0));
 }
 
+export function buildButlerPaperViewModel({
+  dateKey,
+  todayKey,
+  runs,
+  brief,
+}: {
+  dateKey: string;
+  todayKey: string;
+  runs: readonly ButlerErrandRun[];
+  brief: StoredRoundsResult | null;
+}): ButlerPaperViewModel {
+  const isToday = dateKey === todayKey;
+  return {
+    dateKey,
+    isToday,
+    errands: isToday
+      ? partitionButlerPaperErrands(runs)
+      : { approvals: [], active: [] },
+    archived: isToday ? [] : archivedButlerErrandsForDate(runs, dateKey),
+    brief,
+  };
+}
+
 export function butlerBriefForDate(
   brief: StoredRoundsResult | null,
   key: string,
 ): StoredRoundsResult | null {
-  return brief && timestampDateKey(brief.generatedAt) === key ? brief : null;
+  if (brief && timestampDateKey(brief.generatedAt) === key) return brief;
+  return readButlerRoundsResultForDate(key);
 }
 
 export function shouldExpandButlerConversation(rounds: number): boolean {

@@ -195,6 +195,7 @@ test('confirmErrandDraft：已注册工作区用独立 client 派发，规格分
     useButler.setState({
       errandDraft: {
         checkpointId: 'errand-checkpoint-1',
+        roomContext: { rid: 'room-original', roomName: '原房间' },
         spec: {
           title: '修掉登录页报错',
           goal: '修复未捕获异常。',
@@ -213,6 +214,12 @@ test('confirmErrandDraft：已注册工作区用独立 client 派发，规格分
         createdAt: 1,
         updatedAt: 1,
       } as never],
+      context: {
+        kind: 'room',
+        label: '后来切到的房间',
+        detail: '',
+        sources: [{ kind: 'room', id: 'room-later', rid: 'room-later', label: '后来切到的房间' }],
+      },
     });
 
     await useButler.getState().confirmErrandDraft({
@@ -238,6 +245,10 @@ test('confirmErrandDraft：已注册工作区用独立 client 派发，规格分
     assert.equal(useAgentEnvironments.getState().lastDispatchEnvironmentId, environment.id);
     assert.equal(useButler.getState().errandDraft, null);
     assert.equal(useButler.getState().errands[0]?.threadId, 'thread-1');
+    assert.deepEqual(useButler.getState().errands[0]?.roomContext, {
+      rid: 'room-original',
+      roomName: '原房间',
+    });
   } finally {
     codex.restore();
     await useButlerErrandRuns.getState().reset();

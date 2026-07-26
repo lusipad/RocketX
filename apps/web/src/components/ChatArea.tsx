@@ -1,7 +1,8 @@
-import { useEffect, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import {
   AtSign,
   Bot,
+  ChevronDown,
   Files,
   Info,
   MessageCircle,
@@ -92,9 +93,13 @@ export default function ChatArea({
   const [hosting, setHosting] = useState(false);
   const [stoppingHosting, setStoppingHosting] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
-  const ActivePanel = rightPanel
+  const butlerPanelOpen = rightPanel?.kind === 'butler';
+  const ButlerPanel = registeredPanels.find((candidate) => candidate.id === 'butler')?.render;
+  const ActivePanel = rightPanel && !butlerPanelOpen
     ? registeredPanels.find((candidate) => candidate.id === rightPanel.kind)?.render
     : undefined;
+  const butlerLauncherRef = useRef<HTMLButtonElement>(null);
+  const wasButlerPanelOpen = useRef(butlerPanelOpen);
 
   const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
 
@@ -129,6 +134,13 @@ export default function ChatArea({
       window.removeEventListener('drop', clearDragging);
     };
   }, [dragging]);
+
+  useEffect(() => {
+    if (wasButlerPanelOpen.current && !butlerPanelOpen) {
+      butlerLauncherRef.current?.focus();
+    }
+    wasButlerPanelOpen.current = butlerPanelOpen;
+  }, [butlerPanelOpen]);
 
   if (!activeRid) {
     return (
@@ -348,12 +360,6 @@ export default function ChatArea({
               onClick={() => togglePanel({ kind: 'search' })}
             />
             <HeaderButton
-              icon={Bot}
-              label="AI"
-              active={rightPanel?.kind === 'butler'}
-              onClick={() => togglePanel({ kind: 'butler' })}
-            />
-            <HeaderButton
               icon={MoreHorizontal}
               label="更多"
               active={rightPanel?.kind === 'starred'}
@@ -400,7 +406,41 @@ export default function ChatArea({
             onClose={() => setMoreMenu(null)}
           />
         )}
-        <MessageList key={activeRid} rid={activeRid} />
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <MessageList key={activeRid} rid={activeRid} />
+          {butlerPanelOpen ? (
+            <button
+              type="button"
+              aria-label="关闭房间管家浮层"
+              onClick={() => setPanel(null)}
+              className="absolute inset-0 z-20 cursor-default bg-black/15 transition-opacity motion-reduce:transition-none"
+            />
+          ) : null}
+          {butlerPanelOpen && ButlerPanel ? <ButlerPanel /> : null}
+          <button
+            ref={butlerLauncherRef}
+            id="room-butler-launcher"
+            type="button"
+            aria-controls="room-butler-panel"
+            aria-expanded={butlerPanelOpen}
+            aria-label={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
+            title={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
+            onClick={() => togglePanel({ kind: 'butler' })}
+            className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
+          >
+            {butlerPanelOpen ? (
+              <ChevronDown
+                size={22}
+                className="transition-transform duration-150 group-hover:translate-y-0.5 motion-reduce:transition-none"
+              />
+            ) : (
+              <Bot
+                size={21}
+                className="transition-transform duration-150 group-hover:-rotate-6 motion-reduce:transition-none"
+              />
+            )}
+          </button>
+        </div>
         {/* 从讨论卡片/搜索进来但还没加入的公开房间：给出加入入口（issue #19-6）。
             不加入也能看历史，但收不到通知、不在会话列表里。 */}
         {requiresJoin && (

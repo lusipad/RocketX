@@ -37,12 +37,12 @@ export default function ButlerAuditTrail() {
   }, [load]);
 
   return (
-    <section className="mt-4 border-t border-line pt-3">
-      <h3 className="text-xs font-medium text-ink-2">管家动作（最近 {entries.length} 条）</h3>
+    <section aria-label="最近动作">
+      <h2 className="text-sm font-medium text-ink-3">最近动作</h2>
       {entries.length ? (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="mt-2 divide-y divide-line/70">
           {entries.map((entry) => (
-            <div key={entry.id} className="flex items-start justify-between gap-3 text-xs">
+            <div key={entry.id} className="flex items-start justify-between gap-3 py-2 text-xs">
               <div className="min-w-0">
                 <div className={entry.allowed ? 'text-ink-2' : 'text-ink-3'}>{auditLabel(entry.action)}</div>
                 {entry.reason ? <div className="mt-0.5 truncate text-danger">{entry.reason}</div> : null}
