@@ -142,15 +142,28 @@ fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-env-changed=ROCKETX_OCR_CACHE_DIR");
     println!("cargo:rerun-if-env-changed=ROCKETX_OCR_OFFLINE");
+    println!("cargo:rerun-if-env-changed=ROCKETX_BUNDLE_CODEX");
+    println!("cargo:rerun-if-env-changed=ROCKETX_BUNDLE_OCR");
 
-    if let Err(error) = prepare_codex_resources() {
-        panic!("failed to prepare bundled Codex resources: {error}");
+    if bundle_resource("ROCKETX_BUNDLE_CODEX") {
+        if let Err(error) = prepare_codex_resources() {
+            panic!("failed to prepare bundled Codex resources: {error}");
+        }
     }
-    if let Err(error) = prepare_local_ocr_resources() {
-        panic!("failed to prepare local OCR resources: {error}");
+    if bundle_resource("ROCKETX_BUNDLE_OCR") {
+        if let Err(error) = prepare_local_ocr_resources() {
+            panic!("failed to prepare local OCR resources: {error}");
+        }
     }
 
     tauri_build::build();
+}
+
+fn bundle_resource(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
 }
 
 fn prepare_codex_resources() -> Result<(), String> {

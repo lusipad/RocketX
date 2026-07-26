@@ -16,6 +16,12 @@ export interface ImageOcrResult {
   backend: ImageOcrBackend;
 }
 
+export interface ImageOcrRuntimeProbe {
+  backend?: ImageOcrBackend;
+  resourceRoot?: string;
+  reason?: string;
+}
+
 export function desktopLocalOcrAvailable(tauri: boolean): boolean {
   return tauri;
 }
@@ -57,4 +63,9 @@ export async function recognizeImageBlob(blob: Blob): Promise<ImageOcrResult> {
   if (blob.size > 20 * 1024 * 1024) throw new Error('图片过大，OCR 最大支持 20 MB');
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<ImageOcrResult>('image_ocr_recognize', { imageBase64: await blobBase64(blob) });
+}
+
+export async function probeImageOcrRuntime(): Promise<ImageOcrRuntimeProbe> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<ImageOcrRuntimeProbe>('image_ocr_runtime_probe');
 }

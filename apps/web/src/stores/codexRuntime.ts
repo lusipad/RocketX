@@ -10,7 +10,8 @@ export interface CodexRuntimeProbe {
   ready: boolean;
   version?: string;
   executablePath?: string;
-  source?: 'bundled' | 'system';
+  source?: 'manual' | 'bundled' | 'system';
+  reasonCode?: 'not-found' | 'outdated' | 'manual-path' | 'missing-app-server' | 'not-logged-in' | 'unavailable';
   reason?: string;
 }
 
@@ -18,17 +19,40 @@ interface CodexRuntimeState {
   phase: CodexRuntimePhase;
   version?: string;
   executablePath?: string;
-  source?: 'bundled' | 'system';
+  source?: CodexRuntimeProbe['source'];
+  reasonCode?: CodexRuntimeProbe['reasonCode'];
   reason?: string;
   probe: () => Promise<void>;
 }
 
-type RuntimeInvoker = <T>(command: string) => Promise<T>;
+export interface CodexRuntimeStorage {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+}
 
-let runtimeInvoke: RuntimeInvoker = (command) => invoke(command);
+type RuntimeInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+const MANUAL_CODEX_PATH_KEY = 'rcx-codex-runtime-v1:manual-path';
+const browserStorage: CodexRuntimeStorage = {
+  get: (key) => typeof window === 'undefined' ? null : window.localStorage.getItem(key),
+  set: (key, value) => {
+    if (typeof window !== 'undefined') window.localStorage.setItem(key, value);
+  },
+};
+
+let runtimeStorage = browserStorage;
+let runtimeInvoke: RuntimeInvoker = (command, args) => invoke(command, args);
 let desktopAvailable = () => isTauri;
 let probeRevision = 0;
 let unavailableNotified = false;
+
+export function getCodexManualPath(): string {
+  return runtimeStorage.get(MANUAL_CODEX_PATH_KEY)?.trim() ?? '';
+}
+
+export function setCodexManualPath(path: string): void {
+  runtimeStorage.set(MANUAL_CODEX_PATH_KEY, path.trim());
+}
 
 /**
  * 决策 13：不再静默切到另一个大脑。Codex 用不了就明说用不了——
@@ -53,6 +77,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: undefined,
         executablePath: undefined,
         source: undefined,
+        reasonCode: undefined,
         reason: undefined,
       });
       return;
@@ -60,7 +85,9 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
     set({ phase: 'checking', reason: undefined });
     setCodexBrainUnavailableReason('AI 正在准备中…');
     try {
-      const result = await runtimeInvoke<CodexRuntimeProbe>('codex_runtime_probe');
+      const result = await runtimeInvoke<CodexRuntimeProbe>('codex_runtime_probe', {
+        manualPath: getCodexManualPath() || null,
+      });
       if (revision !== probeRevision) return;
       if (result.ready) {
         setCodexBrainUnavailableReason(undefined);
@@ -69,6 +96,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
           version: result.version,
           executablePath: result.executablePath,
           source: result.source,
+          reasonCode: undefined,
           reason: undefined,
         });
         return;
@@ -80,6 +108,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: result.version,
         executablePath: result.executablePath,
         source: result.source,
+        reasonCode: result.reasonCode,
         reason,
       });
     } catch (error) {
@@ -91,6 +120,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: undefined,
         executablePath: undefined,
         source: undefined,
+        reasonCode: 'unavailable',
         reason,
       });
     }
@@ -102,6 +132,14 @@ export function setCodexRuntimeInvoker(invoker: RuntimeInvoker): () => void {
   runtimeInvoke = invoker;
   return () => {
     runtimeInvoke = previous;
+  };
+}
+
+export function setCodexRuntimeStorage(storage: CodexRuntimeStorage): () => void {
+  const previous = runtimeStorage;
+  runtimeStorage = storage;
+  return () => {
+    runtimeStorage = previous;
   };
 }
 
@@ -122,6 +160,7 @@ export function resetCodexRuntimeForTests(): void {
     version: undefined,
     executablePath: undefined,
     source: undefined,
+    reasonCode: undefined,
     reason: undefined,
   });
 }

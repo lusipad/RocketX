@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "target/codex-resources/codex/": "full-resources/codex/",
+      "target/ocr-resources/ocr/": "full-resources/ocr/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/full-installer-hooks.nsh"
+      }
+    }
+  }
+}

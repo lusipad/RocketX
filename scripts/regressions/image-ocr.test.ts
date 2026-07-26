@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   desktopLocalOcrAvailable,
   ocrBackendLabel,
@@ -35,4 +36,17 @@ test('OCR 词框按归一化坐标叠加并限制在图片范围内（issue #153
     width: '100%',
     height: '5%',
   });
+});
+
+test('默认安装包不下载或捆绑增强 OCR，full 构建必须显式开启', async () => {
+  const [configText, buildScript] = await Promise.all([
+    readFile('apps/desktop/src-tauri/tauri.conf.json', 'utf8'),
+    readFile('apps/desktop/src-tauri/build.rs', 'utf8'),
+  ]);
+  const config = JSON.parse(configText) as {
+    bundle: { resources: Record<string, string> };
+  };
+  assert.equal(config.bundle.resources['target/ocr-resources/ocr/'], undefined);
+  assert.match(buildScript, /bundle_resource\("ROCKETX_BUNDLE_OCR"\)/);
+  assert.match(buildScript, /bundle_resource\("ROCKETX_BUNDLE_CODEX"\)/);
 });

@@ -87,12 +87,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ROCKETX_BUNDLE_CODEX: ${{ github.ref_type == 'tag' && '1' || '0' }}
+          ROCKETX_BUNDLE_OCR: ${{ github.ref_type == 'tag' && '1' || '0' }}
         with:
           projectPath: apps/desktop
           # 打标签时创建草稿 Release 并上传安装包
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: ${{ github.ref_type == 'tag' && format('RocketX {0}', github.ref_name) || '' }}
           releaseDraft: true
+
+      - name: 生成并上传 full 安装包（仅发布标签）
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $fullInstaller = ./scripts/package-full-setup.ps1 | Select-Object -Last 1
+          if (-not (Test-Path -LiteralPath $fullInstaller -PathType Leaf)) {
+            throw "Full setup was not generated: $fullInstaller"
+          }
+          gh release upload "$env:GITHUB_REF_NAME" "$fullInstaller" --repo "$env:GITHUB_REPOSITORY" --clobber
 
       - name: 上传构建产物（手动触发时）
         if: github.ref_type != 'tag'

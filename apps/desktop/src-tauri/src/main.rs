@@ -564,6 +564,7 @@ fn main() {
             show_main_window,
             show_message_notification,
             ocr::image_ocr_recognize,
+            ocr::image_ocr_runtime_probe,
             ai_secret_set,
             ai_secret_get,
             ai_secret_delete,
@@ -606,6 +607,7 @@ fn main() {
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(AiKeychainLock(Mutex::new(())))
+        .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))

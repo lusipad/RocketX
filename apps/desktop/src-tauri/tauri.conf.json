@@ -4,9 +4,9 @@
   "version": "0.32.0",
   "identifier": "com.lusipad.rocketx",
   "build": {
-    "beforeDevCommand": "pnpm -w prepare:codex && pnpm -w prepare:sidecars && pnpm --filter @rcx/web dev",
+    "beforeDevCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm -w prepare:codex && pnpm -w prepare:sidecars && pnpm --filter @rcx/web build",
+    "beforeBuildCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web build",
     "frontendDist": "../../web/dist"
   },
   "app": {
@@ -32,9 +32,7 @@
     "targets": "all",
     "resources": {
       "resources/codex-skills/": "codex-skills/",
-      "resources/plugins/": "plugins/",
-      "target/codex-resources/codex/": "codex/",
-      "target/ocr-resources/ocr/": "ocr/"
+      "resources/plugins/": "plugins/"
     },
     "icon": [
       "icons/32x32.png",

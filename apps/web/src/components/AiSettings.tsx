@@ -1,5 +1,5 @@
 import { ChevronDown, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AI_CAPABILITIES,
   loadAiSettings,
@@ -34,6 +34,17 @@ import {
   type PersonalityAxes,
 } from '../lib/butlerPersonality';
 import { isTauri } from '../lib/http';
+import { openExternal } from '../lib/client';
+import {
+  ocrBackendLabel,
+  probeImageOcrRuntime,
+  type ImageOcrRuntimeProbe,
+} from '../lib/imageOcr';
+import {
+  getCodexManualPath,
+  setCodexManualPath,
+  useCodexRuntime,
+} from '../stores/codexRuntime';
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
@@ -70,6 +81,16 @@ export default function AiSettings() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
+  const [manualCodexPath, setManualCodexPathState] = useState(getCodexManualPath);
+  const codexRuntime = useCodexRuntime();
+  const [ocrRuntime, setOcrRuntime] = useState<ImageOcrRuntimeProbe>();
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void probeImageOcrRuntime().then(setOcrRuntime, (error) => {
+      setOcrRuntime({ reason: error instanceof Error ? error.message : String(error) });
+    });
+  }, []);
 
   const updateProvider = (id: string, patch: Partial<AiProviderConfig>) => {
     setSettings((current) => ({
@@ -201,6 +222,18 @@ export default function AiSettings() {
   };
 
   const codexAvailability = codexBrainAvailability();
+  const codexSourceLabel = codexRuntime.source === 'manual'
+    ? '手动指定'
+    : codexRuntime.source === 'system'
+      ? '系统'
+      : codexRuntime.source === 'bundled'
+        ? '旧版 / full 资源'
+        : '未检测到';
+
+  const saveCodexPath = async () => {
+    setCodexManualPath(manualCodexPath);
+    await codexRuntime.probe();
+  };
 
   return (
     <div className="space-y-6">
@@ -210,11 +243,91 @@ export default function AiSettings() {
           {/* 决策 13：Codex 是管家唯一大脑，没有引擎选择。不可用时明说原因，不静默降级。 */}
           {!codexAvailability.available && (
             <Row label="管家状态" hint="管家由本机 Codex 驱动；修复后这里会自动恢复。">
-              <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm leading-6 text-ink">
-                {codexAvailability.reason ?? 'Codex 暂不可用'}
-              </p>
+              <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm leading-6 text-ink">
+                <p>{codexAvailability.reason ?? 'Codex 暂不可用'}</p>
+                {codexRuntime.reasonCode === 'not-found' && (
+                  <div className="mt-2 space-y-2">
+                    <p>这台电脑还没装 Codex。安装后点“重试”即可：</p>
+                    <code className="block rounded bg-fill px-2 py-1 font-mono text-xs">
+                      npm install -g @openai/codex
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => void openExternal('https://help.openai.com/en/articles/11096431')}
+                      className="text-primary hover:underline"
+                    >
+                      查看 Codex 官方安装说明
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void codexRuntime.probe()}
+                  disabled={codexRuntime.phase === 'checking'}
+                  className="mt-2 h-8 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
+                >
+                  {codexRuntime.phase === 'checking' ? '检测中…' : '重试'}
+                </button>
+              </div>
             </Row>
           )}
+          <Row label="Codex 运行时" hint="默认优先使用系统 Codex；手动路径仅在需要固定其他安装时填写。">
+            <div className="space-y-2">
+              <p className="text-sm text-ink-2">
+                {codexSourceLabel}
+                {codexRuntime.version ? ` · ${codexRuntime.version}` : ''}
+                {codexRuntime.executablePath ? ` · ${codexRuntime.executablePath}` : ''}
+              </p>
+              <div className="flex max-w-2xl items-center gap-2">
+                <input
+                  aria-label="手动 Codex 路径"
+                  value={manualCodexPath}
+                  onChange={(event) => setManualCodexPathState(event.target.value)}
+                  placeholder="留空自动检测；例如 C:\Users\me\AppData\Roaming\npm\codex.cmd"
+                  className={inputCls}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveCodexPath()}
+                  disabled={codexRuntime.phase === 'checking'}
+                  className="h-9 shrink-0 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
+                >
+                  应用并检测
+                </button>
+              </div>
+            </div>
+          </Row>
+          <Row label="图片文字识别" hint="瘦版默认使用 Windows 系统识别；增强资源存在时自动切到 PP-OCRv5。">
+            <div className="space-y-2 text-sm text-ink-2">
+              <p>
+                {ocrRuntime?.backend ? ocrBackendLabel(ocrRuntime.backend) : '正在检测识别引擎…'}
+                {ocrRuntime?.resourceRoot ? ` · ${ocrRuntime.resourceRoot}` : ''}
+              </p>
+              {ocrRuntime?.reason && <p className="text-xs leading-5 text-ink-3">{ocrRuntime.reason}</p>}
+              {ocrRuntime?.backend !== 'pp-ocrv5' && (
+                <p className="text-xs leading-5 text-ink-3">
+                  增强版需要 PP-OCRv5 模型和 ONNX Runtime 1.23.2，建议直接安装 RocketX full 版；
+                  手动安装的资源根目录为 %LOCALAPPDATA%\RocketX\resources\ocr。
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => void openExternal('https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0')}
+                    className="text-primary hover:underline"
+                  >
+                    模型下载
+                  </button>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => void openExternal('https://github.com/microsoft/onnxruntime/releases/tag/v1.23.2')}
+                    className="text-primary hover:underline"
+                  >
+                    ONNX Runtime 下载
+                  </button>
+                </p>
+              )}
+            </div>
+          </Row>
           <Row
             label="人设"
             hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，管家会重开一次对话，之前聊过的内容不再带过来。"

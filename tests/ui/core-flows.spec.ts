@@ -32,6 +32,23 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
               : (config ?? { version: 1, rocketChat: { url: 'https://chat.example.com' } });
             return [...new TextEncoder().encode(JSON.stringify(body)), 0];
           }
+          if (command === 'codex_runtime_probe') {
+            return {
+              ready: true,
+              version: '0.145.0',
+              executablePath: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
+              source: 'system',
+            };
+          }
+          if (command === 'image_ocr_runtime_probe') {
+            return {
+              backend: 'windows-media-ocr',
+              reason: '未安装增强 OCR 资源，当前使用 Windows.Media.Ocr；中文识别质量可能较低',
+            };
+          }
+          if (command === 'mcp_config_status' || command === 'agent_bot_config_status') {
+            return { enabled: false };
+          }
           if (command === 'plugin:updater|check') return null;
           return null;
         },
@@ -118,6 +135,23 @@ async function installFullTauriMock(page: Page) {
                 { text: 'OCR', x: 0.3, y: 0.55, width: 0.2, height: 0.18, spaceAfter: false },
               ],
             };
+          }
+          if (command === 'codex_runtime_probe') {
+            return {
+              ready: true,
+              version: '0.145.0',
+              executablePath: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
+              source: 'system',
+            };
+          }
+          if (command === 'image_ocr_runtime_probe') {
+            return {
+              backend: 'windows-media-ocr',
+              reason: '未安装增强 OCR 资源，当前使用 Windows.Media.Ocr；中文识别质量可能较低',
+            };
+          }
+          if (command === 'mcp_config_status' || command === 'agent_bot_config_status') {
+            return { enabled: false };
           }
           if (command === 'plugin:updater|check') return null;
           return null;
@@ -1404,6 +1438,7 @@ test('本机托管时再次点击同一按钮会退出且不会打开错误面�
 });
 
 test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({ page }, testInfo) => {
+  await installFullTauriMock(page);
   await page.addInitScript(() => {
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
@@ -1430,6 +1465,9 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
+  await expect(page.getByText(/系统 · 0\.145\.0 · .*codex\.cmd/)).toBeVisible();
+  await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
+  await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();

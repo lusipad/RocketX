@@ -20,6 +20,7 @@ async function createWindowsReleaseFixture(options: {
   const version = await currentVersion();
   const directory = await mkdtemp(path.join(tmpdir(), 'rocketx-windows-release-'));
   const installer = `RocketX_${version}_x64-setup.exe`;
+  const fullInstaller = `RocketX_${version}_full-setup.exe`;
   const msi = `RocketX_${version}_x64_en-US.msi`;
   const platforms = {
     'windows-x86_64': {
@@ -41,6 +42,7 @@ async function createWindowsReleaseFixture(options: {
 
   await Promise.all([
     writeFile(path.join(directory, installer), Buffer.alloc(1_024, 1)),
+    writeFile(path.join(directory, fullInstaller), Buffer.alloc(1_024, 4)),
     writeFile(path.join(directory, `${installer}.sig`), 'windows-signature'),
     writeFile(path.join(directory, msi), Buffer.alloc(1_024, 2)),
     writeFile(path.join(directory, `${msi}.sig`), 'windows-msi-signature'),
@@ -112,6 +114,36 @@ test('Windows-only 发布缺少 MSI 签名时失败', async () => {
     const result = runVerifier(fixture.directory, fixture.version);
     assert.notEqual(result.status, 0);
     assert.match(`${result.stdout}\n${result.stderr}`, /\.msi\\\.sig/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('Windows-only 发布缺少 full 安装包时失败', async () => {
+  const fixture = await createWindowsReleaseFixture();
+  try {
+    await rm(path.join(fixture.directory, `RocketX_${fixture.version}_full-setup.exe`));
+    const result = runVerifier(fixture.directory, fixture.version);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /full installer/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('自动更新地址必须继续指向瘦版安装包', async () => {
+  const fixture = await createWindowsReleaseFixture({
+    extraPlatforms: {
+      'windows-x86_64': {
+        url: `https://updates.example.com/RocketX_${await currentVersion()}_full-setup.exe`,
+        signature: 'windows-signature',
+      },
+    },
+  });
+  try {
+    const result = runVerifier(fixture.directory, fixture.version);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /slim installer/);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }

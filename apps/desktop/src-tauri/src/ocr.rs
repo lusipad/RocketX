@@ -42,6 +42,14 @@ pub struct ImageOcrResult {
     backend: ImageOcrBackend,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageOcrRuntimeProbe {
+    backend: Option<ImageOcrBackend>,
+    resource_root: Option<String>,
+    reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalOcrAssets {
     det_model: PathBuf,
@@ -184,6 +192,14 @@ fn resource_root_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
             return roots;
         }
     }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(
+            PathBuf::from(local_app_data)
+                .join("RocketX")
+                .join("resources")
+                .join("ocr"),
+        );
+    }
     if let Ok(resource_dir) = app.path().resource_dir() {
         roots.push(resource_dir.join("ocr"));
     }
@@ -248,11 +264,17 @@ fn resolve_local_assets_from_root(root: &Path) -> Result<LocalOcrAssets, String>
 }
 
 fn resolve_local_assets(app: &tauri::AppHandle) -> Result<LocalOcrAssets, String> {
+    resolve_local_assets_with_root(app).map(|(_, assets)| assets)
+}
+
+fn resolve_local_assets_with_root(
+    app: &tauri::AppHandle,
+) -> Result<(PathBuf, LocalOcrAssets), String> {
     let candidates = resource_root_candidates(app);
     let mut errors = Vec::new();
     for root in &candidates {
         match resolve_local_assets_from_root(root) {
-            Ok(assets) => return Ok(assets),
+            Ok(assets) => return Ok((root.clone(), assets)),
             Err(error) => errors.push(format!("{} -> {}", root.display(), error)),
         }
     }
@@ -260,6 +282,38 @@ fn resolve_local_assets(app: &tauri::AppHandle) -> Result<LocalOcrAssets, String
         "本地 PP-OCRv5 资源不可用。已检查：{}",
         errors.join(" | ")
     ))
+}
+
+#[tauri::command]
+pub fn image_ocr_runtime_probe(app: tauri::AppHandle) -> ImageOcrRuntimeProbe {
+    match resolve_local_assets_with_root(&app) {
+        Ok((root, _)) => ImageOcrRuntimeProbe {
+            backend: Some(ImageOcrBackend::PpOcrV5),
+            resource_root: Some(root.to_string_lossy().into_owned()),
+            reason: None,
+        },
+        Err(_reason) => {
+            #[cfg(windows)]
+            {
+                ImageOcrRuntimeProbe {
+                    backend: Some(ImageOcrBackend::WindowsMediaOcr),
+                    resource_root: None,
+                    reason: Some(
+                        "未安装增强 OCR 资源，当前使用 Windows.Media.Ocr；中文识别质量可能较低"
+                            .to_string(),
+                    ),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                ImageOcrRuntimeProbe {
+                    backend: None,
+                    resource_root: None,
+                    reason: Some(_reason),
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -753,12 +807,13 @@ mod tests {
     }
 
     #[test]
-    fn local_pp_ocr_v5_recognizes_bundled_chinese_fixture() {
+    fn local_pp_ocr_v5_recognizes_chinese_fixture_when_resources_are_installed() {
         let bytes = STANDARD
             .decode(include_str!("../tests/fixtures/ocr-chat-20px.png.b64").trim())
             .expect("decode bundled OCR fixture");
-        let assets = resolve_local_assets_from_root(&development_resource_root())
-            .expect("local PP-OCRv5 assets should be prepared by build.rs");
+        let Ok(assets) = resolve_local_assets_from_root(&development_resource_root()) else {
+            return;
+        };
         let result = local_ocr::recognize_with_assets(&assets, &bytes)
             .expect("recognize bundled Chinese OCR fixture");
         assert_eq!(result.backend, ImageOcrBackend::PpOcrV5);

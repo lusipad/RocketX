@@ -27,9 +27,17 @@ function requireMatch(label, pattern) {
 }
 
 const versionPattern = version.replaceAll('.', '\\.');
+const slimInstaller = names.find((name) =>
+  new RegExp(`${versionPattern}.*\\.exe$`, 'i').test(name) && !/_full-setup\.exe$/i.test(name));
+if (!slimInstaller) throw new Error('Missing Windows slim installer asset');
+const fullInstaller = requireMatch(
+  'Windows full installer',
+  new RegExp(`^RocketX_${versionPattern}_full-setup\\.exe$`, 'i'),
+);
 const required = [
   requireMatch('Windows MSI', new RegExp(`${versionPattern}.*\\.msi$`, 'i')),
-  requireMatch('Windows installer', new RegExp(`${versionPattern}.*\\.exe$`, 'i')),
+  slimInstaller,
+  fullInstaller,
   requireMatch('updater metadata', /^latest\.json$/),
   requireMatch('plugins bundle', new RegExp(`rocketx-plugins-${versionPattern}\\.zip$`, 'i')),
 ];
@@ -50,5 +58,9 @@ const platforms = Object.keys(updater.platforms ?? {});
 if (!platforms.includes('windows-x86_64')) throw new Error('latest.json is missing windows-x86_64');
 const nonWindowsPlatform = platforms.find((platform) => !platform.startsWith('windows-'));
 if (nonWindowsPlatform) throw new Error(`latest.json contains non-Windows platform: ${nonWindowsPlatform}`);
+const updaterUrls = Object.values(updater.platforms ?? {}).map((entry) => entry?.url ?? '');
+if (updaterUrls.some((url) => /_full-setup\.exe(?:$|\?)/i.test(url))) {
+  throw new Error('latest.json must keep updating the slim installer, not the full setup');
+}
 
 console.log(`Verified Windows release assets for v${version} (${names.length} files)`);
