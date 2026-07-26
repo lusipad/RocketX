@@ -7,7 +7,7 @@ export default function SummaryPanel() {
   const setPanel = useChat((state) => state.setPanel);
 
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface">
+    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface">
       <header className="flex h-14 items-center gap-2 border-b border-line px-4">
         <Sparkles size={16} className="text-primary" />
         <span className="font-medium text-ink">AI 会话总结</span>

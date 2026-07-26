@@ -401,7 +401,7 @@ export default function ConversationList({
   return (
     <aside
       style={{ width }}
-      className="flex shrink-0 flex-col border-r border-line bg-surface-2"
+      className="flex shrink-0 flex-col border-r border-line-strong bg-surface-2"
     >
       {!avatarOnly && (
         <div className="flex items-center justify-between px-4 pt-4 pb-2">

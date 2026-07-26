@@ -45,7 +45,7 @@ export function AppPanel({ appId }: { appId: string }) {
   const app = appManager().get(appId);
   if (!app || app.manifest.runtime !== 'iframe') return null;
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col border-l border-line bg-surface-3">
+    <aside className="flex w-[360px] shrink-0 flex-col border-l border-line-strong bg-surface-3">
       <div className="h-11 shrink-0 border-b border-line px-3 py-3 text-sm font-medium text-ink">
         {app.manifest.name}
       </div>

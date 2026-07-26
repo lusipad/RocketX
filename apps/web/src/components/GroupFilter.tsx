@@ -274,7 +274,7 @@ export default function GroupFilter({
   };
 
   return (
-    <aside className={`flex shrink-0 flex-col border-r border-line bg-surface-2 ${
+    <aside className={`flex shrink-0 flex-col border-r border-line-strong bg-surface-2 ${
       collapsed ? 'w-12 min-h-0 overflow-x-hidden p-2' : 'w-[150px] px-2 py-3'
     }`}>
       {collapsed ? (

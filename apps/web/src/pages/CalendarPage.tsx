@@ -551,7 +551,7 @@ export default function CalendarPage() {
       </main>
 
       {/* 右侧详情面板 */}
-      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line bg-surface-4">
+      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-strong bg-surface-4">
         {/* 选中日期的日程 */}
         <div className="border-b border-line px-4 py-3">
           <div className="flex items-center justify-between">

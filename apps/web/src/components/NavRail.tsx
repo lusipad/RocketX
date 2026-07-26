@@ -146,7 +146,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   }, [subscriptions]);
 
   return (
-    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line bg-surface-1 px-3 py-3 text-ink">
+    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line-strong bg-surface-1 px-3 py-3 text-ink">
       {/* 头像 + 发起会话 */}
       <div className="flex items-center justify-between px-1 pb-3">
         <button onClick={() => setSelfCard(true)} title="个人信息">

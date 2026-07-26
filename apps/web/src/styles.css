@@ -115,9 +115,9 @@
    * 层次靠留白、字重和一层极淡阴影撑，而不是靠越堆越多的背景色块。
    * 文字保持够黑——干净感来自高对比，不是来自把一切都调浅。
    */
-  --color-surface-1: #efefef;
-  --color-surface-2: #f5f5f5;
-  --color-surface-3: #f7f7f7;
+  --color-surface-1: #e8e8e8;
+  --color-surface-2: #f0f0f0;
+  --color-surface-3: #f8f8f8;
   --color-surface-4: #ffffff;
 
   /* 填充色同走暖调：冷灰的 hover 压在米底上会泛青，一眼看得出是两套色 */
@@ -130,11 +130,19 @@
   --color-ink: #2c2c2c;
   --color-ink-2: #666666;
   --color-ink-3: #9a9a9a;
-  /* 中性灰的线。line-soft 必须比 surface-1 暗，
-     不然侧栏里的分隔线会整条消失 */
-  --color-line: #e3e3e3;
-  --color-line-strong: #d0d0d0;
-  --color-line-soft: #ebebeb;
+  /**
+   * 分区靠线，不靠把背景越堆越多层。
+   *
+   * 上一版两个手段一起弱化了：阶梯只差 2~3%（肉眼无差），线又调淡到 #e3e3e3
+   * ——结果导航栏、分组栏、内容区糊成一片。Typora 正是「颜色接近但有明确的线」。
+   *
+   * line-strong  区域之间（导航/侧栏/内容区的竖线），必须看得见
+   * line         卡片与输入框
+   * line-soft    列表项之间；要比 surface-1 暗，不然侧栏里的分隔线整条消失
+   */
+  --color-line: #dcdcdc;
+  --color-line-strong: #c8c8c8;
+  --color-line-soft: #e4e4e4;
 
   --color-primary-light: #e1eaff;
   --color-bubble-mine: #d6e4ff;

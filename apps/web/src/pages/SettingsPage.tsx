@@ -1927,7 +1927,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line bg-surface-2 p-3">
+      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-surface-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">设置</div>
         {SECTIONS.map(({ key, label, icon: Icon }) => (
           <button
