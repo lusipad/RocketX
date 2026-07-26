@@ -111,29 +111,30 @@
    * 侧栏比内容区暗也是主流做法（Slack / 飞书 / Claude Code 都如此），
    * 顺带把大面积纯白带来的刺眼感降下去。
    *
-   * 基调是**暖中性**而不是冷灰：冷灰（#f7f8fa 这类）在亮屏上大面积铺开会显得
-   * 发青、廉价；往暖里偏一点点接近纸的观感，和纯白卡片放在一起层次也更清楚。
-   * 每档之间拉开到肉眼可辨，3% 的差别等于没分层。
+   * 基调走 Typora 那种**干净的中性灰白**：不带色相偏移（既不发青也不发黄），
+   * 层次靠留白、字重和一层极淡阴影撑，而不是靠越堆越多的背景色块。
+   * 文字保持够黑——干净感来自高对比，不是来自把一切都调浅。
    */
-  --color-surface-1: #e8e7e3;
-  --color-surface-2: #f0efec;
-  --color-surface-3: #f6f5f2;
+  --color-surface-1: #efefef;
+  --color-surface-2: #f5f5f5;
+  --color-surface-3: #f7f7f7;
   --color-surface-4: #ffffff;
 
-  /* 填充色同走暖中性：冷灰的 hover 压在暖底上会泛青，一眼看得出是两套色 */
-  --color-fill-1: #f1f0ed;
-  --color-fill-2: #f6f5f2;
-  --color-fill-hover: #e6e4df;
-  --color-fill-active: #dad7d1;
+  /* 填充色同走暖调：冷灰的 hover 压在米底上会泛青，一眼看得出是两套色 */
+  --color-fill-1: #f2f2f2;
+  --color-fill-2: #f7f7f7;
+  --color-fill-hover: #ebebeb;
+  --color-fill-active: #dedede;
 
-  --color-ink: #23211d;
-  --color-ink-2: #646a73;
-  --color-ink-3: #8f959e;
-  /* 线跟着底色走同一套暖中性，否则冷灰的线压在暖底上会发青。
-     line-soft 必须比 surface-1 暗，不然侧栏里的分隔线会整条消失 */
-  --color-line: #d7d5d0;
-  --color-line-strong: #c1beb8;
-  --color-line-soft: #e2e0db;
+  /* 干净感来自高对比：主文字压到近黑，次要层才好往下分 */
+  --color-ink: #2c2c2c;
+  --color-ink-2: #666666;
+  --color-ink-3: #9a9a9a;
+  /* 中性灰的线。line-soft 必须比 surface-1 暗，
+     不然侧栏里的分隔线会整条消失 */
+  --color-line: #e3e3e3;
+  --color-line-strong: #d0d0d0;
+  --color-line-soft: #ebebeb;
 
   --color-primary-light: #e1eaff;
   --color-bubble-mine: #d6e4ff;

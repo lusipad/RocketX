@@ -45,7 +45,7 @@ export default function ButlerErrandRunCard() {
   };
 
   return (
-    <section className="rounded-xl bg-surface p-5">
+    <section className="rounded-xl bg-surface p-5 shadow-raise">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">

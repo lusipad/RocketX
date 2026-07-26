@@ -111,7 +111,7 @@ export default function ButlerLearnedPanel() {
   const builtIn = builtInSkillNames();
 
   return (
-    <section className="rounded-xl bg-surface p-5">
+    <section className="rounded-xl bg-surface p-5 shadow-raise">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
         <GraduationCap size={16} className="text-primary" />
         管家学到的

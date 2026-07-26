@@ -106,7 +106,7 @@ function LedgerColumn({
   today: string;
 }) {
   return (
-    <section className="min-w-0 rounded-xl bg-surface p-4">
+    <section className="min-w-0 rounded-xl bg-surface p-4 shadow-raise">
       <h2 className="mb-3 text-sm font-semibold text-ink">{title}</h2>
       {entries.length === 0 ? (
         <p className="py-4 text-center text-sm text-ink-3">这里还是空的</p>
@@ -395,7 +395,7 @@ export default function ButlerPage() {
             </div>
           )}
 
-          <section className="rounded-xl bg-surface p-5">
+          <section className="rounded-xl bg-surface p-5 shadow-raise">
             {result ? (
               <>
                 <div className="border-b border-line pb-4">
@@ -562,7 +562,7 @@ export default function ButlerPage() {
           </section>
 
           {deskSessions.length > 0 && (
-            <section className="rounded-xl bg-surface p-5">
+            <section className="rounded-xl bg-surface p-5 shadow-raise">
               <h2 className="text-sm font-semibold text-ink">我们手头的事</h2>
               <div className="mt-3 flex flex-col gap-2">
                 {deskSessions.map((session) => (
@@ -592,7 +592,7 @@ export default function ButlerPage() {
 
           <ButlerLearnedPanel />
 
-          <details className="group rounded-xl bg-surface">
+          <details className="group rounded-xl bg-surface shadow-raise">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
               <span>
                 工作日志 · 看了 {checkedCount} 项，上面说了 {visibleItems.length} 条，压下 {result?.suppressed.length ?? 0} 条

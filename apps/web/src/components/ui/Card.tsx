@@ -15,8 +15,11 @@ import type { HTMLAttributes, ReactNode } from 'react';
 type Tone = 'raised' | 'inset' | 'plain';
 
 const TONE: Record<Tone, string> = {
-  /** 页面背景上的卡片 */
-  raised: 'bg-surface',
+  /**
+   * 页面背景上的卡片。带一层极淡阴影——浅色下卡片(纯白)与页面(#f7f7f7)
+   * 只差 3%，单靠色差撑不住；阴影比边框干净，也不会把界面切碎。
+   */
+  raised: 'bg-surface shadow-raise',
   /** 卡片内部再凹一层：引用块、代码块、列表项 */
   inset: 'bg-surface-2',
   /** 只要间距和圆角，不要背景 */
