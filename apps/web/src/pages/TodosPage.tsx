@@ -221,7 +221,7 @@ export default function TodosPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+        <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
           {list.map((t) => (
             <TodoRow key={t.id} todo={t} onEdit={setEditing} />
           ))}

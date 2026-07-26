@@ -166,7 +166,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           {plusMenu && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setPlusMenu(false)} />
-              <div role="menu" className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+              <div role="menu" className="absolute left-0 z-30 mt-1 w-36 rounded-lg bg-surface-4 shadow-raise py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
                 <button
                   onClick={() => {
                     setPlusMenu(false);

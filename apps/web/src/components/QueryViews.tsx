@@ -176,7 +176,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
         <RiskChips overdue={summary.overdue} stale={summary.stale} unassigned={summary.unassigned} />
       </div>
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id);
           const nodeStats = stats.get(w.id);

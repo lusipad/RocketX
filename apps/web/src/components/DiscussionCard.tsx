@@ -32,7 +32,7 @@ export default function DiscussionCard({ message }: { message: RcMessage }) {
     <div className="px-4 py-1.5">
       <button
         onClick={() => message.drid && void openDiscussion(message.drid)}
-        className="group flex w-full max-w-md items-center gap-3 rounded-lg border border-line bg-surface-4 px-3 py-2.5 text-left transition hover:border-primary hover:bg-fill-hover"
+        className="group flex w-full max-w-md items-center gap-3 rounded-lg bg-surface-4 shadow-raise px-3 py-2.5 text-left transition hover:border-primary hover:bg-fill-hover"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
           <MessagesSquare size={16} />

@@ -90,7 +90,7 @@ export default function CodexPage() {
         {error ? <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
         <div className="mt-6 grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="space-y-4 rounded-xl border border-line bg-surface p-4 shadow-sm">
+          <aside className="space-y-4 rounded-xl bg-surface shadow-raise p-4 shadow-sm">
             <div>
               <div className="text-xs font-medium text-ink-2">本地工作目录</div>
               <button onClick={() => void chooseWorkspace()} disabled={!isTauri || active} title={workspaceRoot} className="mt-2 flex w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-60">
@@ -122,7 +122,7 @@ export default function CodexPage() {
             {showTrace ? <div className="max-h-52 space-y-1 overflow-y-auto rounded bg-fill-1 p-2">{traces.length ? traces.map((trace) => <div key={trace.id} className="text-2xs leading-4 text-ink-3"><span className="mr-1">{new Date(trace.at).toLocaleTimeString()}</span>{trace.text}</div>) : <div className="text-2xs text-ink-3">暂无过程记录</div>}</div> : null}
           </aside>
 
-          <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl border border-line bg-surface shadow-sm">
+          <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl bg-surface shadow-raise shadow-sm">
             <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
               {messages.length === 0 ? (
                 <div className="flex h-full min-h-72 flex-col items-center justify-center text-center">

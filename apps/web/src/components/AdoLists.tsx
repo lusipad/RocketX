@@ -179,7 +179,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id) && !filtering;
           return (
@@ -475,7 +475,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {filtered.map((pr) => (
           <PrRow
             key={pr.id}
@@ -564,7 +564,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {filtered.map((b) => (
           <a
             key={`${b.project}-${b.id}`}

@@ -72,7 +72,7 @@ export default function ReverseMcpSettings() {
   return (
     <section>
       <h2 className="mb-2 text-sm font-semibold text-ink">反向 MCP</h2>
-      <div className="rounded-lg border border-line bg-surface p-4">
+      <div className="rounded-lg bg-surface shadow-raise p-4">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-md bg-primary-light p-2 text-primary">
             <Waypoints size={16} />

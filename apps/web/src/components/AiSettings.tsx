@@ -206,7 +206,7 @@ export default function AiSettings() {
     <div className="space-y-6">
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行方式</h2>
-        <div className="rounded-lg border border-line bg-surface px-4">
+        <div className="rounded-lg bg-surface shadow-raise px-4">
           {/* 决策 13：Codex 是管家唯一大脑，没有引擎选择。不可用时明说原因，不静默降级。 */}
           {!codexAvailability.available && (
             <Row label="管家状态" hint="管家由本机 Codex 驱动；修复后这里会自动恢复。">
@@ -291,7 +291,7 @@ export default function AiSettings() {
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">管家性格</h2>
         <p className="mb-2 text-xs text-ink-3">四条轴的组合覆盖从"极简效率"到"温和关怀"的跨度，影响管家的表达方式。</p>
-        <div className="rounded-lg border border-line bg-surface px-4">
+        <div className="rounded-lg bg-surface shadow-raise px-4">
           {AXIS_META.map((axis) => (
             <Row
               key={axis.key}
@@ -332,7 +332,7 @@ export default function AiSettings() {
 
       <LocalAgentEnvironmentsSettings />
 
-      <details className="group rounded-lg border border-line bg-surface">
+      <details className="group rounded-lg bg-surface shadow-raise">
         <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-ink">高级 AI 设置</div>
@@ -360,7 +360,7 @@ export default function AiSettings() {
             </div>
             <div className="space-y-3">
               {settings.providers.map((provider) => (
-                <div key={provider.id} className="rounded-lg border border-line bg-surface p-4">
+                <div key={provider.id} className="rounded-lg bg-surface shadow-raise p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <input
                       aria-label="Provider 名称"
@@ -464,7 +464,7 @@ export default function AiSettings() {
 
           <section className="mt-6">
             <h2 className="mb-2 text-sm font-semibold text-ink">按能力路由</h2>
-            <div className="divide-y divide-line rounded-lg border border-line bg-surface">
+            <div className="divide-y divide-line rounded-lg bg-surface shadow-raise">
               {AI_CAPABILITIES.map(({ id, label }) => {
                 const route = settings.routes[id];
                 return (

@@ -460,7 +460,7 @@ export default function Composer() {
       {slashQuery !== null && slashCandidates.length > 0 && (
         <div
           ref={slashListRef}
-          className="absolute bottom-full left-4 z-30 mb-1 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]"
+          className="absolute bottom-full left-4 z-30 mb-1 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-lg bg-surface-4 py-1 shadow-pop"
         >
           {slashCandidates.map((c, i) => {
             // 服务器给的是 i18n 键名（Slash_Shrug_Description），得翻成人话
@@ -492,7 +492,7 @@ export default function Composer() {
 
       {/* @ 成员补全弹层 */}
       {mentionQuery !== null && candidates.length > 0 && (
-        <div className="absolute bottom-full left-4 z-30 mb-1 w-64 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+        <div className="absolute bottom-full left-4 z-30 mb-1 w-64 overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop">
           {candidates.map((u, i) => (
             <button
               key={u.username}

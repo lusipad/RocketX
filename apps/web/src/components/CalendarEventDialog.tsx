@@ -121,7 +121,7 @@ export default function CalendarEventDialog({
         aria-modal="true"
         aria-label={dialogTitle}
         tabIndex={-1}
-        className="w-[480px] max-h-[85vh] overflow-y-auto rounded-xl border border-line bg-surface-4 shadow-xl"
+        className="w-[480px] max-h-[85vh] overflow-y-auto rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3.5">

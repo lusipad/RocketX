@@ -73,7 +73,7 @@ export default function AgentBotSettings() {
   return (
     <section>
       <h2 className="mb-2 text-sm font-semibold text-ink">共享 Agent 身份</h2>
-      <div className="rounded-lg border border-line bg-surface p-4">
+      <div className="rounded-lg bg-surface shadow-raise p-4">
         <div className="flex items-start gap-3">
           <div className="rounded-md bg-primary-light p-2 text-primary"><Bot size={16} /></div>
           <div className="min-w-0 flex-1">

@@ -111,7 +111,7 @@ export default function EmojiPicker({
     <div
       ref={ref}
       style={pos ? { position: 'fixed', left: place.x, top: place.y } : undefined}
-      className={`z-50 w-[272px] rounded-lg border border-line bg-surface-4 p-2 shadow-[0_4px_16px_rgba(0,0,0,0.16)] ${className}`}
+      className={`z-50 w-[272px] rounded-lg bg-surface-4 shadow-raise p-2 shadow-[0_4px_16px_rgba(0,0,0,0.16)] ${className}`}
     >
       <div className="mb-2 flex h-7 items-center gap-1.5 rounded-md bg-fill-1 px-2">
         <Search size={12} className="text-ink-3" />

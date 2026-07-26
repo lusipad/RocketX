@@ -208,7 +208,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
       </header>
 
       <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto min-h-full w-full max-w-5xl space-y-3 rounded-xl border border-line bg-surface p-5 shadow-sm">
+        <div className="mx-auto min-h-full w-full max-w-5xl space-y-3 rounded-xl bg-surface shadow-raise p-5 shadow-sm">
           {recap && activeSummary ? (
             <div className="sticky top-0 z-10 rounded-lg border border-line bg-fill-1 px-3.5 py-2.5 text-xs leading-5 text-ink-2 shadow-sm">
               <span className="font-medium text-ink">上回说到</span>
@@ -306,7 +306,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               <button key={prompt} type="button" onClick={() => void submit(prompt)} disabled={running} className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50">{prompt}</button>
             ))}
           </div>
-          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="relative flex items-center gap-2 rounded-xl border border-line bg-surface p-2 shadow-sm focus-within:border-primary">
+          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="relative flex items-center gap-2 rounded-xl bg-surface shadow-raise p-2 shadow-sm focus-within:border-primary">
             <ButlerSlashMenu
               options={slashOptions}
               activeIndex={slash.activeIndex}

@@ -113,7 +113,7 @@ function ImageAttachment({
     return (
       <button
         onClick={() => setManualLoad(true)}
-        className="mt-1.5 flex w-56 items-center gap-2 rounded-lg border border-line bg-surface-4 px-3 py-2.5 text-left transition hover:border-primary"
+        className="mt-1.5 flex w-56 items-center gap-2 rounded-lg bg-surface-4 shadow-raise px-3 py-2.5 text-left transition hover:border-primary"
       >
         <ImageIcon size={16} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{name}</span>
@@ -189,7 +189,7 @@ function FileAttachment({
 
   return (
     <>
-      <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary">
+      <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg bg-surface-4 shadow-raise p-3 transition hover:border-primary">
         <button
           onClick={() => (previewable ? setPreview(true) : void download())}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
@@ -275,7 +275,7 @@ function UrlPreviewCard({ url, meta }: { url: string; meta: Record<string, strin
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="mt-1.5 flex max-w-md gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary"
+      className="mt-1.5 flex max-w-md gap-3 rounded-lg bg-surface-4 shadow-raise p-3 transition hover:border-primary"
     >
       <span className="min-w-0 flex-1">
         <span className="line-clamp-1 text-sm font-medium text-primary">{title}</span>
@@ -352,7 +352,7 @@ function AttachmentCard({
   // 富文本卡片（ADO 事件等）
   return (
     <div
-      className="mt-1.5 max-w-md rounded-lg border border-line bg-surface-4 p-3"
+      className="mt-1.5 max-w-md rounded-lg bg-surface-4 shadow-raise p-3"
       style={{ borderLeft: `3px solid ${att.color ?? '#3370ff'}` }}
     >
       {att.author_name && <div className="mb-1 text-xs text-ink-3">{att.author_name}</div>}
@@ -800,7 +800,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 mine ? 'right-0' : 'left-0'
               }`}
             >
-              <div className="relative flex items-center gap-0.5 rounded-lg border border-line bg-surface-4 p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
+              <div className="relative flex items-center gap-0.5 rounded-lg bg-surface-4 shadow-raise p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
                 {QUICK_EMOJIS.map((e) => (
                   <button
                     key={e.code}

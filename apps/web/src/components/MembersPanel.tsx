@@ -185,7 +185,7 @@ function MemberMenu({
     <>
       {/* 点外面收起来 */}
       <div className="fixed inset-0 z-30" onClick={onClose} />
-      <div className="absolute top-full right-0 z-40 mt-0.5 w-44 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+      <div className="absolute top-full right-0 z-40 mt-0.5 w-44 overflow-hidden rounded-lg bg-surface-4 shadow-raise py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
         {canOwner && (
           <button
             className={item}

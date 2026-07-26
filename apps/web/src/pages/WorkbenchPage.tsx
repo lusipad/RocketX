@@ -146,7 +146,7 @@ function QueryDialog({
         aria-modal="true"
         aria-label="添加自定义查询"
         tabIndex={-1}
-        className="w-[440px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        className="w-[440px] rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
@@ -258,7 +258,7 @@ function FavoriteDialog({
         aria-modal="true"
         aria-label={dialogTitle}
         tabIndex={-1}
-        className="w-[400px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        className="w-[400px] rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
@@ -874,7 +874,7 @@ export default function WorkbenchPage() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-line bg-surface-4">
+              <div className="overflow-hidden rounded-xl bg-surface-4 shadow-raise">
                 {queue.map((item) => (
                   <QueueRow
                     key={item.key}

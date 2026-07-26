@@ -23,7 +23,7 @@ export default function ButlerSlashMenu({
     <div
       role="listbox"
       aria-label="管家能做什么"
-      className="absolute right-0 bottom-[calc(100%+6px)] left-0 z-10 rounded-lg border border-line bg-surface p-1.5 shadow-[var(--shadow-pop)]"
+      className="absolute right-0 bottom-[calc(100%+6px)] left-0 z-10 rounded-lg bg-surface shadow-raise p-1.5 shadow-[var(--shadow-pop)]"
     >
       {options.map((option, index) => (
         <button
