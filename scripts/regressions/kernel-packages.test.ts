@@ -19,6 +19,16 @@ import { createMemoryBackend, createRcxStore } from '../../packages/rcx-store/sr
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+/**
+ * 同 scripts/package-plugins.mjs：裸写 `tar` 时 Git Bash / MSYS2 的 PATH 会先命中
+ * GNU tar，而它把 `C:\...` 里的盘符当成远程主机名，报「Cannot connect to C:」。
+ * CI 用 cmd 跑所以一直是绿的，只有本地开发会挂在这里。
+ */
+const TAR_BIN =
+  process.platform === 'win32'
+    ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    : 'tar';
+
 test('app-sdk 暴露 manifest 单一契约并保留既有校验语义', () => {
   assert.ok(APP_PERMISSIONS.includes('chat:read'));
   assert.ok(EXTENSION_POINTS.includes('message.action'));
@@ -88,7 +98,7 @@ test('app-sdk npm 包只发布可执行 ESM、类型声明和开源说明', asyn
     assert.equal(packed.status, 0, packed.stderr || packed.stdout);
     const archive = (await readdir(destination)).find((file) => file.endsWith('.tgz'));
     assert.ok(archive, 'pnpm pack 应生成 tgz');
-    const listed = spawnSync('tar', ['-tf', join(destination, archive)], { encoding: 'utf8' });
+    const listed = spawnSync(TAR_BIN, ['-tf', join(destination, archive)], { encoding: 'utf8' });
     assert.equal(listed.status, 0, listed.stderr);
     const files = listed.stdout.split(/\r?\n/).filter(Boolean);
     assert.ok(files.includes('package/dist/index.js'));
@@ -101,7 +111,7 @@ test('app-sdk npm 包只发布可执行 ESM、类型声明和开源说明', asyn
     assert.equal(files.some((file) => file.startsWith('package/src/')), false);
     assert.equal(files.some((file) => file.endsWith('.ts') && !file.endsWith('.d.ts')), false);
 
-    const extracted = spawnSync('tar', ['-xf', join(destination, archive), '-C', destination], {
+    const extracted = spawnSync(TAR_BIN, ['-xf', join(destination, archive), '-C', destination], {
       encoding: 'utf8',
     });
     assert.equal(extracted.status, 0, extracted.stderr);
