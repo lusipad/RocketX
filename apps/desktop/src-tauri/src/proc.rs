@@ -29,9 +29,11 @@ const AZURE_DEVOPS_SERVER_UPSTREAM_COMMIT: &str = "293b09774cf9d1ef880a889baf212
 const AZURE_DEVOPS_SERVER_STDOUT_LIMIT: usize = 1024 * 1024;
 const AZURE_DEVOPS_SERVER_STDERR_LIMIT: usize = 32 * 1024;
 const AZURE_DEVOPS_SERVER_TIMEOUT: Duration = Duration::from_secs(60);
-// 0.140.0 是 app-server 的成熟线：已覆盖 RocketX 使用的持久线程、turn/interrupt
-// 与 granular 审批合同；更早版本不进入运行时，避免启动后才暴露协议缺口。
-const MIN_CODEX_VERSION: &str = "0.140.0";
+// 候选下限不是兼容承诺。只有跑过完整语义门禁的版本才进入 verified 列表；
+// 更高版本可在轻量启动探测通过后使用，但必须向用户标记为未验证。
+const CODEX_MINIMUM_CANDIDATE: &str = "0.140.0";
+const CODEX_PROTOCOL_BASELINE: &str = "0.144.4";
+const CODEX_VERIFIED_VERSIONS: &[&str] = &[CODEX_PROTOCOL_BASELINE];
 
 #[derive(Clone)]
 struct ManagedCodex {
@@ -73,6 +75,14 @@ pub enum CodexRuntimeSource {
     System,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexCompatibilityStatus {
+    Verified,
+    UntestedNewer,
+    Blocked,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexRuntimeProbe {
@@ -80,8 +90,37 @@ pub struct CodexRuntimeProbe {
     version: Option<String>,
     executable_path: Option<String>,
     source: Option<CodexRuntimeSource>,
+    protocol_baseline: &'static str,
+    minimum_candidate: &'static str,
+    verified_versions: &'static [&'static str],
+    compatibility_status: CodexCompatibilityStatus,
     reason_code: Option<String>,
     reason: Option<String>,
+}
+
+impl CodexRuntimeProbe {
+    fn new(
+        ready: bool,
+        version: Option<String>,
+        executable_path: Option<String>,
+        source: Option<CodexRuntimeSource>,
+        compatibility_status: CodexCompatibilityStatus,
+        reason_code: Option<String>,
+        reason: Option<String>,
+    ) -> Self {
+        Self {
+            ready,
+            version,
+            executable_path,
+            source,
+            protocol_baseline: CODEX_PROTOCOL_BASELINE,
+            minimum_candidate: CODEX_MINIMUM_CANDIDATE,
+            verified_versions: CODEX_VERIFIED_VERSIONS,
+            compatibility_status,
+            reason_code,
+            reason,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -302,49 +341,58 @@ fn parse_semantic_version(version: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(parsed)
 }
 
-fn ensure_supported_codex_version(version: &str) -> Result<(), String> {
+fn classify_codex_version(version: &str) -> Result<CodexCompatibilityStatus, String> {
     let actual = parse_semantic_version(version)
         .ok_or_else(|| format!("Codex 返回了无法识别的版本 {version}"))?;
-    let minimum =
-        parse_semantic_version(MIN_CODEX_VERSION).expect("minimum Codex version is valid");
-    if actual < minimum {
-        return Err(format!(
-            "找到 Codex {version}，但 RocketX 需要 {MIN_CODEX_VERSION} 或更高版本，请升级"
-        ));
+    if CODEX_VERIFIED_VERSIONS.contains(&version) {
+        return Ok(CodexCompatibilityStatus::Verified);
     }
-    Ok(())
+    let baseline =
+        parse_semantic_version(CODEX_PROTOCOL_BASELINE).expect("Codex protocol baseline is valid");
+    if actual < baseline || (actual == baseline && version.contains('-')) {
+        return Ok(CodexCompatibilityStatus::Blocked);
+    }
+    Ok(CodexCompatibilityStatus::UntestedNewer)
 }
 
-fn resolve_codex_candidate<F>(
+fn unsupported_codex_version_message(version: &str) -> String {
+    format!(
+        "找到 Codex {version}；{CODEX_MINIMUM_CANDIDATE} 仍是候选下限，\
+         当前最低已验证版本为 {CODEX_PROTOCOL_BASELINE}，请升级 Codex"
+    )
+}
+
+fn probe_codex_candidate<F>(
     path: &Path,
     source: CodexRuntimeSource,
     version_probe: &mut F,
-) -> Result<ResolvedCodex, String>
+) -> Result<(ResolvedCodex, CodexCompatibilityStatus), String>
 where
     F: FnMut(&ResolvedCodex) -> Result<String, String>,
 {
     let mut resolved = resolved_codex_path(path, source)?;
     let version = version_probe(&resolved)?;
-    ensure_supported_codex_version(&version)?;
+    let status = classify_codex_version(&version)?;
     resolved.version = version;
-    Ok(resolved)
+    Ok((resolved, status))
 }
 
-fn resolve_codex_from_candidates_with_probe<F>(
+fn probe_resolve_codex_from_candidates_with_probe<F>(
     manual_path: Option<&Path>,
     system_paths: &[PathBuf],
     standard_paths: &[PathBuf],
     bundled_paths: &[PathBuf],
     mut version_probe: F,
-) -> Result<ResolvedCodex, String>
+) -> Result<(ResolvedCodex, CodexCompatibilityStatus), String>
 where
     F: FnMut(&ResolvedCodex) -> Result<String, String>,
 {
     if let Some(path) = manual_path {
-        return resolve_codex_candidate(path, CodexRuntimeSource::Manual, &mut version_probe)
+        return probe_codex_candidate(path, CodexRuntimeSource::Manual, &mut version_probe)
             .map_err(|reason| format!("手动指定的 Codex 不可用：{reason}"));
     }
 
+    let mut blocked = None;
     let mut rejected = Vec::new();
     for (paths, source) in [
         (system_paths, CodexRuntimeSource::System),
@@ -355,17 +403,57 @@ where
             if !path.is_file() {
                 continue;
             }
-            match resolve_codex_candidate(path, source, &mut version_probe) {
-                Ok(resolved) => return Ok(resolved),
+            match probe_codex_candidate(path, source, &mut version_probe) {
+                Ok((resolved, status @ CodexCompatibilityStatus::Verified))
+                | Ok((resolved, status @ CodexCompatibilityStatus::UntestedNewer)) => {
+                    return Ok((resolved, status));
+                }
+                Ok((resolved, CodexCompatibilityStatus::Blocked)) => {
+                    rejected.push(unsupported_codex_version_message(&resolved.version));
+                    if blocked.is_none() {
+                        blocked = Some(resolved);
+                    }
+                }
                 Err(reason) => rejected.push(reason),
             }
         }
+    }
+    if let Some(resolved) = blocked {
+        return Ok((resolved, CodexCompatibilityStatus::Blocked));
     }
     if rejected.is_empty() {
         Err("未检测到可用的 Codex".to_string())
     } else {
         Err(rejected.join("；"))
     }
+}
+
+fn resolve_codex_from_candidates_with_probe<F>(
+    manual_path: Option<&Path>,
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+    bundled_paths: &[PathBuf],
+    version_probe: F,
+) -> Result<ResolvedCodex, String>
+where
+    F: FnMut(&ResolvedCodex) -> Result<String, String>,
+{
+    let (resolved, status) = probe_resolve_codex_from_candidates_with_probe(
+        manual_path,
+        system_paths,
+        standard_paths,
+        bundled_paths,
+        version_probe,
+    )?;
+    if status == CodexCompatibilityStatus::Blocked {
+        let reason = unsupported_codex_version_message(&resolved.version);
+        return Err(if manual_path.is_some() {
+            format!("手动指定的 Codex 不可用：{reason}")
+        } else {
+            reason
+        });
+    }
+    Ok(resolved)
 }
 
 fn resolve_codex_from_candidates(
@@ -596,65 +684,87 @@ pub fn codex_runtime_probe(
     manual_path: Option<String>,
 ) -> CodexRuntimeProbe {
     if let Err(reason) = set_manual_codex_path(&config, manual_path) {
-        return CodexRuntimeProbe {
-            ready: false,
-            version: None,
-            executable_path: None,
-            source: None,
-            reason_code: Some("manual-path".to_string()),
-            reason: Some(reason),
-        };
+        return CodexRuntimeProbe::new(
+            false,
+            None,
+            None,
+            None,
+            CodexCompatibilityStatus::Blocked,
+            Some("manual-path".to_string()),
+            Some(reason),
+        );
     }
-    let resolved = match resolve_codex(&app) {
+    let (resolved, compatibility_status) = match probe_resolve_codex_from_candidates_with_probe(
+        configured_manual_codex_path(&app).as_deref(),
+        &system_codex_paths(),
+        &standard_codex_paths(),
+        &bundled_codex_paths(&app),
+        codex_cli_version,
+    ) {
         Ok(value) => value,
         Err(reason) => {
             let reason_code = if reason.contains("未检测到可用的 Codex") {
                 "not-found"
-            } else if reason.contains(MIN_CODEX_VERSION) {
+            } else if reason.contains(CODEX_PROTOCOL_BASELINE) {
                 "outdated"
             } else if reason.starts_with("手动指定的 Codex") {
                 "manual-path"
             } else {
                 "unavailable"
             };
-            return CodexRuntimeProbe {
-                ready: false,
-                version: None,
-                executable_path: None,
-                source: None,
-                reason_code: Some(reason_code.to_string()),
-                reason: Some(reason),
-            };
+            return CodexRuntimeProbe::new(
+                false,
+                None,
+                None,
+                None,
+                CodexCompatibilityStatus::Blocked,
+                Some(reason_code.to_string()),
+                Some(reason),
+            );
         }
     };
+    if compatibility_status == CodexCompatibilityStatus::Blocked {
+        return CodexRuntimeProbe::new(
+            false,
+            Some(resolved.version.clone()),
+            Some(resolved.display_path.clone()),
+            Some(resolved.source),
+            CodexCompatibilityStatus::Blocked,
+            Some("outdated".to_string()),
+            Some(unsupported_codex_version_message(&resolved.version)),
+        );
+    }
     if let Err(reason) = codex_command_succeeds(&resolved, &["app-server", "--help"]) {
-        return CodexRuntimeProbe {
-            ready: false,
-            version: Some(resolved.version),
-            executable_path: Some(resolved.display_path),
-            source: Some(resolved.source),
-            reason_code: Some("missing-app-server".to_string()),
-            reason: Some(format!("Codex 缺少 app-server 能力：{reason}")),
-        };
+        return CodexRuntimeProbe::new(
+            false,
+            Some(resolved.version),
+            Some(resolved.display_path),
+            Some(resolved.source),
+            CodexCompatibilityStatus::Blocked,
+            Some("missing-app-server".to_string()),
+            Some(format!("Codex 缺少 app-server 能力：{reason}")),
+        );
     }
     if let Err(reason) = codex_command_succeeds(&resolved, &["login", "status"]) {
-        return CodexRuntimeProbe {
-            ready: false,
-            version: Some(resolved.version),
-            executable_path: Some(resolved.display_path),
-            source: Some(resolved.source),
-            reason_code: Some("not-logged-in".to_string()),
-            reason: Some(format!("Codex 尚未登录：{reason}")),
-        };
+        return CodexRuntimeProbe::new(
+            false,
+            Some(resolved.version),
+            Some(resolved.display_path),
+            Some(resolved.source),
+            compatibility_status,
+            Some("not-logged-in".to_string()),
+            Some(format!("Codex 尚未登录：{reason}")),
+        );
     }
-    CodexRuntimeProbe {
-        ready: true,
-        version: Some(resolved.version),
-        executable_path: Some(resolved.display_path),
-        source: Some(resolved.source),
-        reason_code: None,
-        reason: None,
-    }
+    CodexRuntimeProbe::new(
+        true,
+        Some(resolved.version),
+        Some(resolved.display_path),
+        Some(resolved.source),
+        compatibility_status,
+        None,
+        None,
+    )
 }
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
@@ -1932,14 +2042,17 @@ mod tests {
     use super::{
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
-        decode_attachment_request, encode_message, exec_optional_args_for_help, host_path,
+        classify_codex_version, decode_attachment_request, encode_message,
+        exec_optional_args_for_help, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
-        parse_semantic_version, redact_json_secret, resolve_codex_from_candidates_with_probe,
-        resolve_update_package, run_butler_azure_devops_server_read, safe_attachment_path,
+        parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
+        resolve_codex_from_candidates_with_probe, resolve_update_package,
+        run_butler_azure_devops_server_read, safe_attachment_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, BundledSkillInstallResult, BundledSkillOwnership,
-        ButlerAzureDevOpsServerReadRequest, CodexProcessInfo, CodexRuntimeProbe,
-        CodexRuntimeSource, MIN_CODEX_VERSION, UPDATER_PUBLIC_KEY,
+        ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus, CodexProcessInfo,
+        CodexRuntimeProbe, CodexRuntimeSource, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
+        CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
     };
     use serde_json::json;
     #[cfg(windows)]
@@ -2419,6 +2532,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
             PathBuf::from(fallback.display_path),
             PathBuf::from(host_path(&standard.canonicalize().unwrap()))
         );
+
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2470,21 +2584,109 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
     }
 
     #[test]
-    fn codex_minimum_version_is_semantic_and_runtime_sources_serialize() {
+    fn runtime_probe_prefers_supported_candidate_and_keeps_blocked_candidate_details() {
+        let root = unique_temp_dir("runtime-probe-codex-priority");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let (fallback, status) = probe_resolve_codex_from_candidates_with_probe(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.140.0".to_string())
+                } else {
+                    Ok("0.145.0".to_string())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(status, CodexCompatibilityStatus::UntestedNewer);
+        assert_eq!(
+            PathBuf::from(fallback.display_path),
+            PathBuf::from(host_path(&standard.canonicalize().unwrap()))
+        );
+        assert_eq!(fallback.version, "0.145.0");
+
+        let (blocked, blocked_status) = probe_resolve_codex_from_candidates_with_probe(
+            None,
+            std::slice::from_ref(&system),
+            &[],
+            &[],
+            |_| Ok("0.140.0".to_string()),
+        )
+        .unwrap();
+        assert_eq!(blocked_status, CodexCompatibilityStatus::Blocked);
+        assert_eq!(blocked.source, CodexRuntimeSource::System);
+        assert_eq!(blocked.version, "0.140.0");
+        assert_eq!(
+            PathBuf::from(blocked.display_path),
+            PathBuf::from(host_path(&system.canonicalize().unwrap()))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_version_contract_classifies_candidate_baseline_and_newer_versions() {
         assert_eq!(parse_semantic_version("0.140.0"), Some((0, 140, 0)));
         assert_eq!(parse_semantic_version("0.145.0-beta.1"), Some((0, 145, 0)));
         assert_eq!(parse_semantic_version("0.140"), None);
-        assert_eq!(MIN_CODEX_VERSION, "0.140.0");
+        assert_eq!(CODEX_MINIMUM_CANDIDATE, "0.140.0");
+        assert_eq!(CODEX_PROTOCOL_BASELINE, "0.144.4");
+        assert_eq!(CODEX_VERIFIED_VERSIONS, &["0.144.4"]);
+        assert_eq!(
+            classify_codex_version("0.139.9").unwrap(),
+            CodexCompatibilityStatus::Blocked
+        );
+        assert_eq!(
+            classify_codex_version("0.140.0").unwrap(),
+            CodexCompatibilityStatus::Blocked
+        );
+        assert_eq!(
+            classify_codex_version("0.144.4-beta.1").unwrap(),
+            CodexCompatibilityStatus::Blocked
+        );
+        assert_eq!(
+            classify_codex_version("0.144.4").unwrap(),
+            CodexCompatibilityStatus::Verified
+        );
+        assert_eq!(
+            classify_codex_version("0.144.5").unwrap(),
+            CodexCompatibilityStatus::UntestedNewer
+        );
+        assert_eq!(
+            classify_codex_version("0.145.0-beta.1").unwrap(),
+            CodexCompatibilityStatus::UntestedNewer
+        );
+        assert!(classify_codex_version("nightly").is_err());
+    }
+
+    #[test]
+    fn codex_runtime_contract_and_sources_serialize() {
         let probe = serde_json::to_value(CodexRuntimeProbe {
             ready: true,
             version: Some("0.144.4".to_string()),
             executable_path: Some("C:\\Tools\\codex.exe".to_string()),
             source: Some(CodexRuntimeSource::Manual),
+            protocol_baseline: CODEX_PROTOCOL_BASELINE,
+            minimum_candidate: CODEX_MINIMUM_CANDIDATE,
+            verified_versions: CODEX_VERIFIED_VERSIONS,
+            compatibility_status: CodexCompatibilityStatus::Verified,
             reason_code: None,
             reason: None,
         })
         .unwrap();
         assert_eq!(probe["source"], "manual");
+        assert_eq!(probe["protocolBaseline"], "0.144.4");
+        assert_eq!(probe["minimumCandidate"], "0.140.0");
+        assert_eq!(probe["verifiedVersions"], json!(["0.144.4"]));
+        assert_eq!(probe["compatibilityStatus"], "verified");
         assert!(probe["reasonCode"].is_null());
         let process = serde_json::to_value(CodexProcessInfo {
             process_id: "test-process".to_string(),

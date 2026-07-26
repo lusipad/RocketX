@@ -7,9 +7,14 @@ const root = resolve(import.meta.dirname, '..');
 
 function invocation() {
   if (process.platform !== 'win32') return { command: 'codex', args: [] };
+  const pinnedEntry = join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  if (existsSync(pinnedEntry)) return { command: process.execPath, args: [pinnedEntry] };
   const lookup = spawnSync('where.exe', ['codex.cmd'], { encoding: 'utf8' });
-  const shim = lookup.stdout?.split(/\r?\n/).find(Boolean);
-  const entry = shim ? join(dirname(shim), 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : '';
+  const entry = lookup.stdout
+    ?.split(/\r?\n/)
+    .filter(Boolean)
+    .map((shim) => join(dirname(shim), 'node_modules', '@openai', 'codex', 'bin', 'codex.js'))
+    .find(existsSync);
   if (!entry || !existsSync(entry)) throw new Error('找不到 PATH 中 Codex CLI 的官方 Node 入口');
   return { command: process.execPath, args: [entry] };
 }

@@ -75,6 +75,7 @@ import {
   hydrateResidentCodexThread,
   residentCodexThreadSnapshot,
   stopButlerCodexTurn,
+  type ResidentCodexThreadSnapshot,
 } from './butlerCodex';
 import { dispatchButlerErrand, useButlerErrandRuns } from './butlerErrandRuns';
 
@@ -244,7 +245,7 @@ export interface ButlerState {
 interface PersistedButler {
   lines: ButlerLine[];
   history: AiMessage[];
-  codexThread?: { threadId: string; promptHash: string };
+  codexThread?: ResidentCodexThreadSnapshot;
   /** 最后一次对话活动时间，恢复时判断上下文是否过期 */
   lastAt?: number;
 }
@@ -256,7 +257,7 @@ interface PersistedButlerSession {
   updatedAt: number;
   lines: ButlerLine[];
   history: AiMessage[];
-  codexThread?: { threadId: string; promptHash: string };
+  codexThread?: ResidentCodexThreadSnapshot;
   taskState?: ButlerTaskState;
   engineState?: ButlerEngineState;
   runtimeCheckpoints?: ButlerToolCheckpoint[];
@@ -449,6 +450,34 @@ function normalizeWorkflow(value: PersistedButlerSession['workflow']): Persisted
   };
 }
 
+function normalizeCodexThread(
+  value: ResidentCodexThreadSnapshot | undefined,
+): ResidentCodexThreadSnapshot | undefined {
+  if (!value?.threadId || !value.promptHash) return undefined;
+  const createdSource = value.createdWithRuntimeSource;
+  const resumedSource = value.lastResumedWithRuntimeSource;
+  const resumeMode = value.lastResumeMode;
+  return {
+    threadId: value.threadId,
+    promptHash: value.promptHash,
+    ...(typeof value.createdWithCodexVersion === 'string' && value.createdWithCodexVersion
+      ? { createdWithCodexVersion: value.createdWithCodexVersion }
+      : {}),
+    ...(createdSource === 'manual' || createdSource === 'bundled' || createdSource === 'system'
+      ? { createdWithRuntimeSource: createdSource }
+      : {}),
+    ...(typeof value.lastResumedWithCodexVersion === 'string' && value.lastResumedWithCodexVersion
+      ? { lastResumedWithCodexVersion: value.lastResumedWithCodexVersion }
+      : {}),
+    ...(resumedSource === 'manual' || resumedSource === 'bundled' || resumedSource === 'system'
+      ? { lastResumedWithRuntimeSource: resumedSource }
+      : {}),
+    ...(resumeMode === 'native' || resumeMode === 'transcript-rebuilt'
+      ? { lastResumeMode: resumeMode }
+      : {}),
+  };
+}
+
 function normalizeRegistry(
   stored: PersistedButlerSessionRegistry | undefined,
 ): PersistedButlerSessionRegistry | undefined {
@@ -462,7 +491,7 @@ function normalizeRegistry(
     const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
     const workflow = candidate.kind === 'workflow' ? normalizeWorkflow(candidate.workflow) : undefined;
     if (candidate.kind === 'workflow' && !workflow) continue;
-    const codexThread = candidate.codexThread;
+    const codexThread = normalizeCodexThread(candidate.codexThread);
     let engineState = normalizeButlerEngineState(candidate.engineState);
     const runtimeCheckpoints = normalizeRuntimeCheckpoints(candidate.runtimeCheckpoints);
     const actionDraft = normalizeButlerActionDraft(candidate.actionDraft);
@@ -489,7 +518,7 @@ function normalizeRegistry(
         ? candidate.lines.slice(-LINES_LIMIT)
         : workflow ? [] : welcomeLines(),
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
-      ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
+      ...(codexThread ? { codexThread } : {}),
       ...(taskState ? { taskState } : {}),
       ...(engineState ? { engineState } : {}),
       ...(runtimeCheckpoints.length ? { runtimeCheckpoints } : {}),
@@ -537,7 +566,7 @@ function pruneEmptySessions(
 
 function defaultSession(legacy?: PersistedButler): PersistedButlerSession {
   const updatedAt = legacy?.lastAt != null && Number.isFinite(legacy.lastAt) ? legacy.lastAt : butlerNow();
-  const codexThread = legacy?.codexThread;
+  const codexThread = normalizeCodexThread(legacy?.codexThread);
   return {
     id: DEFAULT_SESSION_ID,
     title: DEFAULT_SESSION_TITLE,
@@ -545,7 +574,7 @@ function defaultSession(legacy?: PersistedButler): PersistedButlerSession {
     updatedAt,
     lines: legacy?.lines?.length ? legacy.lines.slice(-LINES_LIMIT) : welcomeLines(),
     history: trimButlerHistory(legacy?.history ?? []),
-    ...(codexThread?.threadId && codexThread.promptHash ? { codexThread } : {}),
+    ...(codexThread ? { codexThread } : {}),
   };
 }
 
@@ -1318,7 +1347,8 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
     suppressPersistence = false;
   }
   if (session.codexThread) {
-    hydrateResidentCodexThread(session.codexThread.threadId, session.codexThread.promptHash);
+    const { threadId, promptHash, ...provenance } = session.codexThread;
+    hydrateResidentCodexThread(threadId, promptHash, provenance);
   }
 }
 

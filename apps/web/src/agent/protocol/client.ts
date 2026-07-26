@@ -20,7 +20,7 @@ import { serverRequestPolicy } from './serverRequests';
 export interface CodexProcessInfo {
   processId: string;
   version: string;
-  runtimeSource: 'bundled' | 'system';
+  runtimeSource: 'manual' | 'bundled' | 'system';
 }
 
 export interface CodexTransportHandlers {
@@ -104,14 +104,19 @@ export class AppServerClient {
   private nextId = 1;
   private pending = new Map<number | string, PendingRequest>();
   private started = false;
+  private currentProcess?: CodexProcessInfo;
 
   constructor(
     private readonly transport: CodexTransport,
     private readonly options: AppServerClientOptions = {},
   ) {}
 
-  async start(): Promise<void> {
-    if (this.started) return;
+  get processInfo(): CodexProcessInfo | undefined {
+    return this.currentProcess;
+  }
+
+  async start(): Promise<CodexProcessInfo> {
+    if (this.started && this.currentProcess) return this.currentProcess;
     const process = await this.transport.start({
       onLine: (line) => this.receiveLine(line),
       onExit: (code) => this.interrupt(new Error(`Codex app-server 已退出${code === null ? '' : `（${code}）`}`)),
@@ -128,8 +133,11 @@ export class AppServerClient {
       });
       assertCodexHandshake(initialized.userAgent, process.version);
       await this.transport.write({ method: 'initialized' });
+      this.currentProcess = process;
       this.started = true;
+      return process;
     } catch (error) {
+      this.currentProcess = undefined;
       await this.transport.stop().catch(() => undefined);
       throw error;
     }
@@ -169,6 +177,7 @@ export class AppServerClient {
 
   async stop(): Promise<void> {
     this.started = false;
+    this.currentProcess = undefined;
     this.rejectPending(new Error('Codex app-server 已停止'));
     await this.transport.stop();
   }
@@ -253,6 +262,7 @@ export class AppServerClient {
 
   private interrupt(error: Error): void {
     this.started = false;
+    this.currentProcess = undefined;
     this.rejectPending(error);
     this.options.onInterrupted?.(error);
   }

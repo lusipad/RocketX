@@ -283,7 +283,13 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
     const firstSessionId = useButler.getState().activeSessionId;
     await useButler.getState().renameSession(firstSessionId, '发布调查');
     await useButler.getState().ask('第一问');
-    hydrateResidentCodexThread('thread-first', 'hash-first');
+    hydrateResidentCodexThread('thread-first', 'hash-first', {
+      createdWithCodexVersion: '0.144.4',
+      createdWithRuntimeSource: 'system',
+      lastResumedWithCodexVersion: '0.145.0',
+      lastResumedWithRuntimeSource: 'manual',
+      lastResumeMode: 'native',
+    });
     await flushButlerPersist();
 
     now = 2_000;
@@ -292,7 +298,11 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
     assert.notEqual(secondSessionId, firstSessionId);
     await useButler.getState().renameSession(secondSessionId, '构建调查');
     await useButler.getState().ask('第二问');
-    hydrateResidentCodexThread('thread-second', 'hash-second');
+    hydrateResidentCodexThread('thread-second', 'hash-second', {
+      createdWithCodexVersion: '0.144.4',
+      createdWithRuntimeSource: 'bundled',
+      lastResumeMode: 'transcript-rebuilt',
+    });
     await flushButlerPersist();
 
     assert.deepEqual(
@@ -306,12 +316,26 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
     await useButler.getState().switchSession(firstSessionId);
     assert.equal(useButler.getState().lines.some((line) => line.text === '第一问'), true);
     assert.equal(useButler.getState().lines.some((line) => line.text === '第二问'), false);
-    assert.deepEqual(residentCodexThreadSnapshot(), { threadId: 'thread-first', promptHash: 'hash-first' });
+    assert.deepEqual(residentCodexThreadSnapshot(), {
+      threadId: 'thread-first',
+      promptHash: 'hash-first',
+      createdWithCodexVersion: '0.144.4',
+      createdWithRuntimeSource: 'system',
+      lastResumedWithCodexVersion: '0.145.0',
+      lastResumedWithRuntimeSource: 'manual',
+      lastResumeMode: 'native',
+    });
 
     await useButler.getState().switchSession(secondSessionId);
     assert.equal(useButler.getState().lines.some((line) => line.text === '第二问'), true);
     assert.equal(useButler.getState().lines.some((line) => line.text === '第一问'), false);
-    assert.deepEqual(residentCodexThreadSnapshot(), { threadId: 'thread-second', promptHash: 'hash-second' });
+    assert.deepEqual(residentCodexThreadSnapshot(), {
+      threadId: 'thread-second',
+      promptHash: 'hash-second',
+      createdWithCodexVersion: '0.144.4',
+      createdWithRuntimeSource: 'bundled',
+      lastResumeMode: 'transcript-rebuilt',
+    });
     assert.deepEqual(
       useButler.getState().sessions.map(({ id, updatedAt }) => ({ id, updatedAt })),
       [
@@ -327,6 +351,13 @@ test('多个 session 可创建、重命名、切换，并独立恢复 transcript
     assert.equal(useButler.getState().activeSessionId, secondSessionId);
     assert.equal(useButler.getState().lines.some((line) => line.text === '第二问'), true);
     assert.equal(useButler.getState().sessions.length, 2);
+    assert.deepEqual(residentCodexThreadSnapshot(), {
+      threadId: 'thread-second',
+      promptHash: 'hash-second',
+      createdWithCodexVersion: '0.144.4',
+      createdWithRuntimeSource: 'bundled',
+      lastResumeMode: 'transcript-rebuilt',
+    });
   } finally {
     await discardResidentCodexThread();
     restoreNow();

@@ -78,12 +78,25 @@ test('共享 Agent 使用独立的 AI 托管 Codex 模型和推理强度设置',
 });
 
 test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
-  const interrupted = interruptSession(session({ codexThreadId: 'codex-thread', activeTurnId: 'turn' }), 1_100);
+  const interrupted = interruptSession(session({
+    codexThreadId: 'codex-thread',
+    activeTurnId: 'turn',
+    createdWithCodexVersion: '0.144.4',
+    createdWithRuntimeSource: 'system',
+    lastResumedWithCodexVersion: '0.145.0',
+    lastResumedWithRuntimeSource: 'manual',
+    lastResumeMode: 'native',
+  }), 1_100);
   assert.equal(interrupted.status, 'interrupted');
   assert.equal(interrupted.activeTurnId, undefined);
   const resumed = resumeSession(interrupted, { userId: 'host', deviceId: 'device-a' }, 1_200);
   assert.equal(resumed.status, 'starting');
   assert.equal(resumed.codexThreadId, 'codex-thread');
+  assert.equal(resumed.createdWithCodexVersion, '0.144.4');
+  assert.equal(resumed.createdWithRuntimeSource, 'system');
+  assert.equal(resumed.lastResumedWithCodexVersion, '0.145.0');
+  assert.equal(resumed.lastResumedWithRuntimeSource, 'manual');
+  assert.equal(resumed.lastResumeMode, 'native');
 });
 
 test('恢复时标记中断，超过孤儿超时则自动结束', () => {

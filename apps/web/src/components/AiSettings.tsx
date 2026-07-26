@@ -229,6 +229,13 @@ export default function AiSettings() {
       : codexRuntime.source === 'bundled'
         ? '旧版内置资源'
         : '未检测到';
+  const codexCompatibilityLabel = codexRuntime.compatibilityStatus === 'verified'
+    ? '已验证'
+    : codexRuntime.compatibilityStatus === 'untested-newer'
+      ? '新版待验证'
+      : codexRuntime.compatibilityStatus === 'blocked'
+        ? '已阻止'
+        : '';
 
   const saveCodexPath = async () => {
     setCodexManualPath(manualCodexPath);
@@ -276,8 +283,20 @@ export default function AiSettings() {
               <p className="text-sm text-ink-2">
                 {codexSourceLabel}
                 {codexRuntime.version ? ` · ${codexRuntime.version}` : ''}
+                {codexCompatibilityLabel ? ` · ${codexCompatibilityLabel}` : ''}
                 {codexRuntime.executablePath ? ` · ${codexRuntime.executablePath}` : ''}
               </p>
+              {codexRuntime.compatibilityStatus === 'untested-newer' && (
+                <p className="text-xs leading-5 text-warning">
+                  当前 Codex 高于已验证基线 {codexRuntime.protocolBaseline}；启动探测已通过，
+                  但尚未完成 RocketX 全量语义认证。
+                </p>
+              )}
+              {codexRuntime.minimumCandidate && codexRuntime.protocolBaseline && (
+                <p className="text-xs leading-5 text-ink-3">
+                  候选下限 {codexRuntime.minimumCandidate} · 已验证基线 {codexRuntime.protocolBaseline}
+                </p>
+              )}
               <div className="flex max-w-2xl items-center gap-2">
                 <input
                   aria-label="手动 Codex 路径"

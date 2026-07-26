@@ -4,6 +4,7 @@ import {
   AppServerClient,
   CODEX_APP_SERVER_VERSION,
   codexVersionFromUserAgent,
+  type CodexProcessInfo,
   type CodexTransport,
 } from '../../apps/web/src/agent/protocol';
 
@@ -11,12 +12,17 @@ class FakeTransport implements CodexTransport {
   writes: Record<string, unknown>[] = [];
   handlers?: Parameters<CodexTransport['start']>[0];
   stopped = false;
+  starts = 0;
 
-  constructor(private readonly version = CODEX_APP_SERVER_VERSION) {}
+  constructor(
+    private readonly version = CODEX_APP_SERVER_VERSION,
+    private readonly runtimeSource: CodexProcessInfo['runtimeSource'] = 'bundled',
+  ) {}
 
   async start(handlers: Parameters<CodexTransport['start']>[0]) {
+    this.starts += 1;
     this.handlers = handlers;
-    return { processId: 'test-process', version: this.version, runtimeSource: 'bundled' };
+    return { processId: 'test-process', version: this.version, runtimeSource: this.runtimeSource };
   }
 
   async write(message: Record<string, unknown>) {
@@ -37,6 +43,14 @@ async function startClient(
   client = new AppServerClient(transport),
   userAgentVersion = CODEX_APP_SERVER_VERSION,
 ) {
+  return (await startClientWithProcess(transport, client, userAgentVersion)).client;
+}
+
+async function startClientWithProcess(
+  transport: FakeTransport,
+  client = new AppServerClient(transport),
+  userAgentVersion = CODEX_APP_SERVER_VERSION,
+) {
   const started = client.start();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(transport.writes[0].method, 'initialize');
@@ -49,9 +63,22 @@ async function startClient(
       platformOs: 'windows',
     },
   });
-  await started;
-  return client;
+  const process = await started;
+  return { client, process };
 }
+
+test('启动返回并缓存实际 Codex 进程来源，手动运行时类型不丢失', async () => {
+  const transport = new FakeTransport(CODEX_APP_SERVER_VERSION, 'manual');
+  const { client, process } = await startClientWithProcess(transport);
+  assert.deepEqual(process, {
+    processId: 'test-process',
+    version: CODEX_APP_SERVER_VERSION,
+    runtimeSource: 'manual',
+  });
+  assert.deepEqual(await client.start(), process);
+  assert.equal(transport.starts, 1);
+  assert.deepEqual(transport.writes.map((message) => message.method), ['initialize', 'initialized']);
+});
 
 test('初始化按握手能力校验，不因协议内容相同的 CLI 补丁版本而拒绝', async () => {
   const transport = new FakeTransport();

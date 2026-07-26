@@ -1,3 +1,5 @@
+import type { CodexProcessInfo } from './protocol/client';
+
 export type AgentSessionStatus =
   | 'starting'
   | 'ready'
@@ -35,6 +37,11 @@ export interface AgentSession {
   approvedMemberIds: string[];
   status: AgentSessionStatus;
   codexThreadId?: string;
+  createdWithCodexVersion?: string;
+  createdWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
+  lastResumedWithCodexVersion?: string;
+  lastResumedWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
+  lastResumeMode?: 'native' | 'transcript-rebuilt';
   leaseMessageId?: string;
   activeTurnId?: string;
   workspaceRoots: string[];
