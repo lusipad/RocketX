@@ -68,7 +68,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
   const stopButler = useButler((state) => state.stop);
   const routineDraft = useButler((state) => state.routineDraft);
   const errandDraft = useButler((state) => state.errandDraft);
-  const errandRun = useButler((state) => state.errandRun);
+  const errands = useButler((state) => state.errands);
   const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
   const actionDraft = useButler((state) => state.actionDraft);
   const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
@@ -142,7 +142,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
     butlerError,
     routineDraft,
     errandDraft,
-    errandRun,
+    errands,
     runtimeCheckpoints,
     actionDraft,
     steps,
@@ -206,6 +206,10 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           </div>
         </div>
       </header>
+
+      <div className="max-h-[45vh] shrink-0 overflow-y-auto px-6 pt-4 empty:hidden">
+        <div className="mx-auto w-full max-w-5xl"><ButlerErrandRunCard /></div>
+      </div>
 
       <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto min-h-full w-full max-w-5xl space-y-3 rounded-xl bg-surface shadow-raise p-5 shadow-sm">
@@ -294,7 +298,6 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             </div>
           ) : null}
           <div className="ml-10"><ButlerErrandCard /></div>
-          <div className="ml-10"><ButlerErrandRunCard /></div>
           <div className="ml-10"><ButlerActionCard /></div>
         </div>
       </main>

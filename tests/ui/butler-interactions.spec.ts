@@ -215,6 +215,36 @@ async function seedWorkflowMemoryApproval(
   });
 }
 
+async function seedErrandSurface(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => Record<string, unknown>;
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await loadStore();
+    const current = useButler.getState() as Record<string, unknown>;
+    const sharedErrand = {
+      id: 'errand-release-checklist',
+      title: '发布前核对清单',
+      threadId: 'thread-errand-release-checklist',
+      workspaceRoot: 'D:/Repos/rocketchatx',
+      workspaceName: '主仓',
+      readOnly: false,
+      startedAt: 1,
+      reply: 'Alice 已确认发布检查清单。',
+      status: 'replied',
+      approvals: [],
+      traces: [],
+    };
+
+    useButler.setState({
+      ...(Array.isArray(current.errands) ? { errands: [sharedErrand] } : {}),
+    });
+  });
+}
+
 test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
   const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
@@ -602,5 +632,25 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
     engineStatus: 'ready',
   });
   expect(completed.memory).not.toBeNull();
+  expect(pageErrors).toEqual([]);
+});
+
+test('派出去的活区在桌面页、完整对话和房间侧栏共享同一份可见状态', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await page.getByRole('button', { name: 'AI', exact: true }).click();
+  await seedErrandSurface(page);
+  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
+
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
+
   expect(pageErrors).toEqual([]);
 });

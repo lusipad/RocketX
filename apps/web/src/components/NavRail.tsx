@@ -21,7 +21,6 @@ import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
-import { useLocalCodex } from '../stores/localCodex';
 import { captureButlerSurfaceContext } from '../lib/butlerSurface';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
@@ -112,13 +111,15 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
    * 「等你点头」会把活卡死，所以标红；「回话了」只是提醒，标主色。
    * 正在干的时候不打扰。
    */
-  const errandRun = useButler((s) => s.errandRun);
-  const codexApprovals = useLocalCodex((s) => s.approvals);
+  const errands = useButler((s) => s.errands);
   const errandBadge: 'waiting' | 'replied' | null = useMemo(() => {
-    if (!errandRun || active === 'butler-view') return null;
-    if (!errandRun.outcome && codexApprovals.length > 0) return 'waiting';
-    return errandRun.outcome ? 'replied' : null;
-  }, [errandRun, codexApprovals.length, active]);
+    if (active === 'butler-view') return null;
+    const visible = errands.filter((errand) => !errand.archivedAt);
+    if (visible.some((errand) => errand.status === 'awaiting-approval')) return 'waiting';
+    return visible.some((errand) => errand.status === 'replied' || errand.status === 'failed')
+      ? 'replied'
+      : null;
+  }, [errands, active]);
 
   const calendarEvents = useCalendar((s) => s.events);
   /**
@@ -251,7 +252,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     ) : hasAlert ? (
                       <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                     ) : null)}
-                  {/* 管家：派出去的活等你点头就标红，干完了标灰点——人不在管家页时的唯一信号 */}
+                  {/* 等审批会卡住所以标红；回话只需提醒，用主色。 */}
                   {key === 'butler-view' && errandBadge && (
                     <span
                       className={`ml-auto h-2 w-2 rounded-full ${

@@ -87,6 +87,9 @@ export default function ButlerPanel() {
       title={<ButlerSessionSwitcher compact label="AI" />}
       resizable
     >
+      <div className="max-h-[45vh] shrink-0 overflow-y-auto px-4 pt-3 empty:hidden">
+        <ButlerErrandRunCard />
+      </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         {hasConversation ? lines.map((line) => (
           <div key={line.id} className={`mb-3 flex gap-2 ${line.role === 'user' ? 'justify-end' : ''}`}>
@@ -148,7 +151,6 @@ export default function ButlerPanel() {
           </div>
         ) : null}
         <div className="mt-3"><ButlerErrandCard /></div>
-        <div className="mt-3"><ButlerErrandRunCard /></div>
         <div className="mt-3"><ButlerActionCard /></div>
       </div>
 
