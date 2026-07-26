@@ -37,7 +37,7 @@ import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
 import { saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
-import { toast } from '../stores/toast';
+import { humanError, toast } from '../stores/toast';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
@@ -619,6 +619,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       return;
     }
     setAiExtracting(true);
+    /**
+     * 菜单里那个「AI 提取中…」是永远看不到的：右键菜单先 onClick 再 onClose，
+     * React 批处理让它在转圈渲染前就卸载了。而实测走 Codex 要十几秒——
+     * 没有这条提示，用户点完看到的是一动不动的界面，只会以为没点上、再点几次。
+     */
+    const toastId = toast.loading('正在读这条消息…');
     try {
       const draft = await extractMessageAction(
         {
@@ -633,8 +639,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       );
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
+      toast.update(toastId, {
+        kind: 'success',
+        message: target === 'todo' ? '待办草稿好了，你过一眼' : '工作项草稿好了，你过一眼',
+      });
     } catch (error) {
-      toast.error(error, 'AI 提取失败');
+      toast.update(toastId, {
+        kind: 'error',
+        message: humanError(error, target === 'todo' ? '没能从这条消息读出待办' : '没能从这条消息读出工作项'),
+      });
     } finally {
       setAiExtracting(false);
     }
