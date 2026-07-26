@@ -629,7 +629,7 @@ function DesktopSection() {
         </div>
       </Row>
       <Row
-        label="局域网直传与离线回灌"
+        label="断网时走局域网，联网后补回服务器"
         hint="广播只用于发现；设备必须先通过 Rocket.Chat 认证通道固定公钥"
       >
         <div className="max-w-md text-sm text-ink-2">
@@ -645,7 +645,7 @@ function DesktopSection() {
                   ? '服务器保留离线原始时间元数据，其他 RocketX 设备也能恢复原时间。'
                   : lanStatus.metadata === 'local-only'
                     ? '服务器未启用消息自定义字段；只有参与原 LAN 会话的设备保留原始时间。'
-                    : '尚未发生离线回灌；首次恢复连接时会探测服务器是否保留原始时间元数据。'}
+                    : '还没有过断网补发。第一次补发时会检查服务器能不能保留原始发送时间。'}
               </div>
             </>
           )}
@@ -932,7 +932,7 @@ function MessageSection() {
         <Toggle checked={prefs.useEmojis} onChange={(v) => void update({ useEmojis: v })} />
       </Row>
 
-      <Row label="话题回复也显示在主会话" hint="开启后线程里的回复会同时出现在消息流中" inline>
+      <Row label="话题回复也显示在主会话" hint="开启后，话题里的回复也会出现在主会话的消息流里" inline>
         <Toggle
           checked={prefs.showThreadsInMainChannel}
           onChange={(v) => void update({ showThreadsInMainChannel: v })}
@@ -1058,24 +1058,24 @@ function NotificationSection() {
               className="mt-2 h-8 w-full max-w-md rounded-md border border-line bg-surface-4 px-2 text-xs text-ink outline-none"
             />
           </Row>
-          <Row label="注意力效果" hint="至少记录 7 天基线和 14 天聚合使用期后判定是否下降 50%">
+          <Row label="看看少打扰了多少" hint="先记 7 天现在的弹窗量做对比，再开 14 天聚合，之后这里会告诉你弹窗少了多少">
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => beginMeasurement('baseline', today)}
                 className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
               >
-                开始基线
+                开始记录对比期
               </button>
               <button
                 onClick={() => beginMeasurement('dogfood', today)}
                 className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
               >
-                开始聚合验证
+                开始记录聚合期
               </button>
               <span className="text-xs text-ink-3">
                 {reduction?.reductionRate == null
-                  ? `基线 ${reduction?.baselineDays ?? 0} 天 · 验证 ${reduction?.dogfoodDays ?? 0} 天`
-                  : `弹窗下降 ${Math.round(reduction.reductionRate * 100)}%${reduction.eligible ? (reduction.targetMet ? ' · 已达标' : ' · 未达标') : ' · 数据积累中'}`}
+                  ? `对比期已记 ${reduction?.baselineDays ?? 0} 天 · 聚合期 ${reduction?.dogfoodDays ?? 0} 天`
+                  : `弹窗比之前少了 ${Math.round(reduction.reductionRate * 100)}%${reduction.eligible ? '' : ' · 天数还不够，先接着用'}`}
               </span>
             </div>
           </Row>
@@ -1367,9 +1367,9 @@ function WorkbenchSection() {
                 className="flex items-start gap-2 border-b border-line px-3 py-2 text-xs last:border-b-0"
               >
                 {s.ok ? (
-                  <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-success" />
+                  <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-success" />
                 ) : (
-                  <XCircle size={13} className="mt-0.5 shrink-0 text-ink-3" />
+                  <XCircle size={14} className="mt-0.5 shrink-0 text-ink-3" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-2xs text-ink-2">{s.url}</div>
@@ -1656,7 +1656,7 @@ function AppsSection() {
               return (
                 <div key={app.manifest.id} className="p-3">
                   <div className="flex items-center gap-3">
-                    <Blocks size={17} className="text-primary" />
+                    <Blocks size={16} className="text-primary" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm text-ink">
                         {app.manifest.name} · v{app.manifest.version}
@@ -1927,7 +1927,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line bg-surface-2 p-3">
+      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-surface-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">设置</div>
         {SECTIONS.map(({ key, label, icon: Icon }) => (
           <button

@@ -164,7 +164,7 @@ export default function FilePreview({
             disabled={saving}
             className="flex h-8 items-center gap-1.5 rounded-md bg-white/10 px-3 text-xs transition hover:bg-white/20 disabled:opacity-50"
           >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             {saving ? '保存中…' : '下载'}
           </button>
           <button
@@ -172,7 +172,7 @@ export default function FilePreview({
             className="flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-white/20"
             title="关闭（Esc）"
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
       </div>

@@ -263,7 +263,7 @@ export function recoverButlerToolCheckpoint(
     updatedAt: now,
     error: {
       kind: 'recovery',
-      message: '上次执行在完成前中断，请核对副作用后再明确重试。',
+      message: '上次做到一半断了。先确认这件事是不是已经做过一半，再决定要不要重来。',
       retryable: true,
     },
   };

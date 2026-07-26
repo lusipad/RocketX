@@ -61,7 +61,15 @@ export function humanError(err: unknown, fallback = '操作失败'): string {
   if (/failed to fetch|network|load failed|error sending request/i.test(raw)) {
     return '网络连接失败，请检查网络或服务器状态';
   }
-  if (/unauthorized|not authorized|401/i.test(raw)) return '没有权限执行此操作';
+  /**
+   * 权限只认 Rocket.Chat 自己报的 status。此前是从文本里匹配「401」，于是
+   * 任何第三方服务的 401 都被翻成「没有权限执行此操作」——AI 没配密钥时
+   * 用户看到的就是这句，完全指向错误方向（issue #229）。
+   */
+  const status = (err as { status?: unknown } | null | undefined)?.status;
+  if (status === 401 || /unauthorized|not authorized/i.test(raw)) {
+    return '没有权限执行此操作';
+  }
   if (/not enough permission/i.test(raw)) return '权限不足（需要管理员授权）';
   if (/enterprise/i.test(raw)) return '该功能需要 Rocket.Chat 企业版';
   if (/rate limit|too many/i.test(raw)) return '操作过于频繁，请稍后再试';
@@ -75,7 +83,8 @@ export const toast = {
     useToast.getState().show({ kind: 'success', message, action }),
   error: (err: unknown, fallback?: string) =>
     useToast.getState().show({ kind: 'error', message: humanError(err, fallback) }),
-  info: (message: string) => useToast.getState().show({ kind: 'info', message }),
+  info: (message: string, action?: Toast['action']) =>
+    useToast.getState().show({ kind: 'info', message, action }),
   /**
    * 做完了，并给一次反悔的机会。
    *

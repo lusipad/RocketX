@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Circle,
+  ExternalLink,
   ListTodo,
   Pencil,
   Plus,
@@ -18,6 +19,7 @@ import { useDayTick } from '../lib/format';
 import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
 import { LinkifiedText } from '../lib/markdown';
+import { adoWebBase } from '../lib/ado';
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
@@ -37,6 +39,14 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
   const overdue = isOverdue(todo);
   // 手动新建的待办没有来源消息，跳转和来源行都不展示
   const hasSource = !!(todo.rid && todo.mid);
+  /**
+   * 从 Azure DevOps 工作项转来的待办。字段（adoWorkItemId / adoProject）一直有，
+   * 只是从来没有人用它开过一个入口——「这条待办是哪来的」于是无从回溯。
+   */
+  const adoWebBaseUrl = adoWebBase();
+  const workItemUrl = todo.adoWorkItemId && adoWebBaseUrl
+    ? `${adoWebBaseUrl}${todo.adoProject ? `/${encodeURIComponent(todo.adoProject)}` : ''}/_workitems/edit/${todo.adoWorkItemId}`
+    : null;
 
   const jump = async () => {
     if (!todo.rid || !todo.mid) return;
@@ -53,9 +63,9 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
         title={todo.done ? '标记为未完成' : '标记为完成'}
       >
         {todo.done ? (
-          <CheckCircle2 size={17} className="text-primary" />
+          <CheckCircle2 size={16} className="text-primary" />
         ) : (
-          <Circle size={17} />
+          <Circle size={16} />
         )}
       </button>
 
@@ -79,6 +89,12 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           {hasSource && (
             <span className="truncate">
               {todo.roomName} · {todo.author}
+            </span>
+          )}
+          {todo.adoWorkItemId && (
+            <span className="truncate">
+              工作项 #{todo.adoWorkItemId}
+              {todo.adoProject ? ` · ${todo.adoProject}` : ''}
             </span>
           )}
           {todo.due && (
@@ -106,6 +122,17 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           >
             <CornerUpRight size={14} />
           </button>
+        )}
+        {workItemUrl && (
+          <a
+            href={workItemUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            title={`打开工作项 #${todo.adoWorkItemId}`}
+          >
+            <ExternalLink size={14} />
+          </a>
         )}
         <button
           onClick={() => onEdit(todo)}
@@ -172,7 +199,7 @@ export default function TodosPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line bg-fill-2 p-3">
+      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-fill-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">待办</div>
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
@@ -215,13 +242,13 @@ export default function TodosPage() {
               onClick={() => setCreating(true)}
               className="flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
             >
-              <Plus size={15} />
+              <Plus size={14} />
               新建待办
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+        <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
           {list.map((t) => (
             <TodoRow key={t.id} todo={t} onEdit={setEditing} />
           ))}

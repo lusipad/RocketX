@@ -57,7 +57,7 @@ export default function LocalAgentEnvironmentsSettings() {
         {environments.map((environment) => {
           const busy = environmentIsBusy(environment.id, bindings);
           return (
-            <div key={environment.id} className="overflow-hidden rounded-lg border border-line bg-surface">
+            <div key={environment.id} className="overflow-hidden rounded-lg bg-surface shadow-raise">
               <div className="flex items-center gap-3 p-4">
                 <div className="rounded-md bg-primary-light p-2 text-primary"><FolderOpen size={16} /></div>
                 <div className="min-w-0 flex-1">

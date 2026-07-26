@@ -408,7 +408,7 @@ test('回合失败时保留输入并显示友好错误，不丢用户的问题',
     await useButler.getState().ask('帮我看看今天的情况');
 
     const state = useButler.getState();
-    assert.equal(state.error, 'Codex 大脑暂时无法回答，请稍后重试。');
+    assert.equal(state.error, '管家这次没答上来，稍后再问一次。');
     assert.equal(state.running, false);
     assert.equal(state.lines.at(-1)?.text, '帮我看看今天的情况');
   } finally {

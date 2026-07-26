@@ -88,7 +88,15 @@ await writeFile(
   `${JSON.stringify({ version, packagedAt: new Date(0).toISOString(), plugins: packaged }, null, 2)}\n`,
 );
 
-const archiveCommand = process.platform === 'win32' ? 'tar.exe' : 'zip';
+/**
+ * Windows 上走绝对路径拿系统自带的 bsdtar。裸写 `tar.exe` 时，Git Bash / MSYS2
+ * 的 PATH 会先命中 GNU tar，而它把 `C:\...` 里的盘符当成远程主机名，
+ * 报「Cannot connect to C:」——CI 用 cmd 跑所以一直是绿的，只有本地会挂。
+ */
+const archiveCommand =
+  process.platform === 'win32'
+    ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    : 'zip';
 const archiveArgs = process.platform === 'win32'
   ? ['-a', '-c', '-f', zipPath, path.basename(packageRoot)]
   : ['-X', '-r', zipPath, path.basename(packageRoot)];

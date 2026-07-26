@@ -124,7 +124,7 @@ export default function FilesPanel() {
                 } ${isTarget ? 'bg-primary-light' : previewable ? 'hover:bg-fill-hover' : ''}`}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-2">
-                  {isImage(f) ? <ImageIcon size={15} /> : <FileText size={15} />}
+                  {isImage(f) ? <ImageIcon size={14} /> : <FileText size={14} />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-ink">{f.name}</div>
@@ -154,7 +154,7 @@ export default function FilesPanel() {
           })}
         {!loading && !error && filtered.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '没有匹配的文件' : '这个会话还没有人传过文件'}
+            {keyword ? '没有匹配的文件' : '这个会话还没有人传过文件。把文件拖进下面的输入框就能发第一个。'}
           </div>
         )}
       </div>

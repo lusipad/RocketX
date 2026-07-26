@@ -185,7 +185,7 @@ function MemberMenu({
     <>
       {/* 点外面收起来 */}
       <div className="fixed inset-0 z-30" onClick={onClose} />
-      <div className="absolute top-full right-0 z-40 mt-0.5 w-44 overflow-hidden rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
+      <div className="absolute top-full right-0 z-40 mt-0.5 w-44 overflow-hidden rounded-lg bg-surface-4 shadow-raise py-1 shadow-[0_4px_16px_rgba(31,35,41,0.12)]">
         {canOwner && (
           <button
             className={item}
@@ -319,7 +319,7 @@ export default function MembersPanel() {
           onClick={() => setAdding(true)}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary"
         >
-          <UserPlus size={15} />
+          <UserPlus size={14} />
         </button>
       </div>
       {adding && <AddMembersDialog onClose={() => setAdding(false)} />}
@@ -360,7 +360,7 @@ export default function MembersPanel() {
                     )}
                     {isMuted(muted, m.username) && (
                       <span className="flex shrink-0 items-center gap-0.5 rounded bg-fill-1 px-1 py-px text-2xs text-ink-3">
-                        <MicOff size={9} />
+                        <MicOff size={12} />
                         已禁言
                       </span>
                     )}
@@ -393,7 +393,7 @@ export default function MembersPanel() {
                         menuFor === m._id ? '' : 'opacity-0 group-hover:opacity-100'
                       }`}
                     >
-                      <MoreHorizontal size={15} />
+                      <MoreHorizontal size={14} />
                     </button>
                     {menuFor === m._id && (
                       <div onClick={(e) => e.stopPropagation()}>

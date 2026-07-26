@@ -84,7 +84,7 @@ export default function AgentPanel() {
           >
             <ChevronLeft size={16} />
           </button>
-          <Bot size={17} className="text-primary" />
+          <Bot size={16} className="text-primary" />
           共享 Agent
         </span>
       }
@@ -133,7 +133,7 @@ export default function AgentPanel() {
             }).catch(() => undefined)}
             className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
           >
-            <Play size={15} /> 开启 AI 托管
+            <Play size={14} /> 开启 AI 托管
           </button>
         </div>
       ) : (
@@ -158,7 +158,7 @@ export default function AgentPanel() {
                     : 'bg-warning-light text-warning'
                 }`}
               >
-                <Shield size={13} />
+                <Shield size={14} />
                 {session.sandboxMode === 'read-only' ? '只读' : '工作区可写'}
               </button>
             </div>
@@ -173,20 +173,20 @@ export default function AgentPanel() {
                 }
                 className="flex items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2"
               >
-                <Users size={13} />
+                <Users size={14} />
                 {session.access === 'host-only' ? '仅自己' : '房间成员'}
               </button>
             </div>
             {session.codexThreadId ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-ink-3">Codex 线程</span>
+                <span className="text-ink-3">Codex 会话</span>
                 <div className="flex min-w-0 items-center gap-1.5">
                   <button
-                    title={`复制 codex resume ${session.codexThreadId}，可在 Codex CLI 里继续该线程`}
+                    title={`复制 codex resume ${session.codexThreadId}，在 Codex 命令行里接着这次对话`}
                     onClick={() => {
                       void navigator.clipboard
                         .writeText(`codex resume ${session.codexThreadId}`)
-                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，避免两端同时写同一线程'));
+                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，两边同时写同一次对话会打架'));
                     }}
                     className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                   >
@@ -194,7 +194,7 @@ export default function AgentPanel() {
                     <span className="truncate">codex resume</span>
                   </button>
                   <button
-                    title="在 Codex App 打开新对话并带入托管记录"
+                    title="在 Codex App 打开新对话并填好托管记录，由你按回车发出"
                     disabled={transferring || session.status === 'running'}
                     onClick={() => {
                       setTransferring(true);
@@ -211,13 +211,13 @@ export default function AgentPanel() {
                                 : 'Codex App 打开失败，完整记录已复制',
                           );
                         })
-                        .catch((error) => toast.error(error, '转移到 Codex 失败'))
+                        .catch((error) => toast.error(error, '在 Codex App 打开失败'))
                         .finally(() => setTransferring(false));
                     }}
                     className="flex shrink-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
                   >
                     {transferring ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
-                    转到 Codex App
+                    在 Codex App 打开
                   </button>
                 </div>
               </div>
@@ -250,7 +250,7 @@ export default function AgentPanel() {
                   onClick={() => void resume(tmid)}
                   className="flex flex-1 items-center justify-center gap-1 rounded border border-primary px-2 py-1.5 text-xs text-primary"
                 >
-                  <Play size={13} /> 恢复
+                  <Play size={14} /> 恢复
                 </button>
               ) : null}
               <button
@@ -286,7 +286,7 @@ export default function AgentPanel() {
               ))}
               {approvals.map((approval) => (
                 <div key={approval.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
-                  <div className="font-medium text-ink">等待宿主审批</div>
+                  <div className="font-medium text-ink">等你在这台电脑上批准</div>
                   <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-ink-3">
                     {approvalSummary(approval.method, approval.params)}
                   </pre>
@@ -310,9 +310,9 @@ export default function AgentPanel() {
           )}
 
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mb-2 text-xs font-medium text-ink-2">本地过程</div>
+            <div className="mb-2 text-xs font-medium text-ink-2">它做了哪些操作</div>
             {traces.length === 0 ? (
-              <div className="py-8 text-center text-xs text-ink-3">等待话题中的 Agent 指令</div>
+              <div className="py-8 text-center text-xs text-ink-3">还没有人下过指令。在这个话题里发一条 @ai 开头的消息，它就开始干活。</div>
             ) : (
               <div className="space-y-2">
                 {traces.map((item) => (

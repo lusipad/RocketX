@@ -477,7 +477,12 @@ const subscribeRoomStreams = createActiveRoomStreams(
   (stream, key) => realtime.subscribe(stream, key),
   (stream, key) => realtime.unsubscribe(stream, key),
 );
-let markReadTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * 按房间各记各的。共用一个 timer 的话，600ms 内切走就会把上一个房间的
+ * 已读请求连根取消，而且永不补发——服务端那边的未读标记就再也下不去了。
+ * 群里有讨论组时最容易撞上：点开群、随手点进讨论，正好在这 600ms 内。
+ */
+const markReadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let receiptTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTypingEmit = 0;
 /** 正在飞的 channels.roles 请求，按房间去重 */
@@ -598,10 +603,15 @@ function applyPendingMemberChanges(
 let receiptsSupported = true;
 
 function scheduleMarkRead(rid: string) {
-  if (markReadTimer) clearTimeout(markReadTimer);
-  markReadTimer = setTimeout(() => {
-    rest.markRead(rid).catch(() => {});
-  }, 600);
+  const pending = markReadTimers.get(rid);
+  if (pending) clearTimeout(pending);
+  markReadTimers.set(
+    rid,
+    setTimeout(() => {
+      markReadTimers.delete(rid);
+      rest.markRead(rid).catch(() => {});
+    }, 600),
+  );
 }
 
 function scheduleReceiptRefresh(rid: string) {

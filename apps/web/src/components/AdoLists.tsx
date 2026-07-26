@@ -12,6 +12,7 @@ import {
   MinusCircle,
   Search,
   XCircle,
+  CalendarPlus,
 } from 'lucide-react';
 import {
   isApproved,
@@ -25,6 +26,8 @@ import {
   type WorkItem,
 } from '../stores/workbench';
 import { askButlerAboutPullRequests } from '../kernel/butler';
+import CalendarEventDialog from './CalendarEventDialog';
+import { todayKey } from '../stores/todos';
 import { butlerComparePullRequestsPrompt } from '../lib/butlerPrompts';
 import { toast } from '../stores/toast';
 import { fmtConvTime } from '../lib/format';
@@ -81,7 +84,7 @@ function ListHeader({
   return (
     <div className="flex items-center justify-between pb-3">
       <div className="flex h-9 w-80 items-center gap-2 rounded-md bg-fill-1 px-3">
-        <Search size={15} className="text-ink-3" />
+        <Search size={14} className="text-ink-3" />
         <input
           value={keyword}
           onChange={(e) => onKeyword(e.target.value)}
@@ -104,6 +107,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
   const [keyword, setKeyword] = useState('');
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   const [discussionItem, setDiscussionItem] = useState<WorkItem | null>(null);
+  const [calendarItem, setCalendarItem] = useState<WorkItem | null>(null);
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
@@ -179,7 +183,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id) && !filtering;
           return (
@@ -236,16 +240,25 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
                   {relTime(w.changedDate)}
                 </span>
-                <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+                <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
               </a>
               <button
                 type="button"
                 onClick={() => setDiscussionItem(w)}
                 title={`为工作项 #${w.id} 创建讨论`}
                 aria-label={`为工作项 #${w.id} 创建讨论`}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+              >
+                <MessageSquarePlus size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCalendarItem(w)}
+                title={`把工作项 #${w.id} 排进日历`}
+                aria-label={`把工作项 #${w.id} 排进日历`}
                 className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
               >
-                <MessageSquarePlus size={15} />
+                <CalendarPlus size={14} />
               </button>
             </div>
           );
@@ -256,6 +269,20 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
       </div>
       {discussionItem ? (
         <CreateWorkItemDiscussionDialog item={discussionItem} onClose={() => setDiscussionItem(null)} />
+      ) : null}
+      {calendarItem ? (
+        <CalendarEventDialog
+          defaultDate={todayKey()}
+          defaultTitle={`#${calendarItem.id} ${calendarItem.title}`}
+          origin={{
+            kind: 'work-item',
+            id: String(calendarItem.id),
+            label: `工作项 #${calendarItem.id}`,
+            ...(calendarItem.project ? { project: calendarItem.project } : {}),
+            ...(calendarItem.webUrl ? { webUrl: calendarItem.webUrl } : {}),
+          }}
+          onClose={() => setCalendarItem(null)}
+        />
       ) : null}
     </>
   );
@@ -282,11 +309,13 @@ function PrRow({
   pr,
   onAsk,
   onCompare,
+  onSchedule,
   comparing,
 }: {
   pr: PullRequest;
   onAsk: (pr: PullRequest) => void;
   onCompare: (pr: PullRequest) => void;
+  onSchedule: (pr: PullRequest) => void;
   comparing: boolean;
 }) {
   const approved = isApproved(pr);
@@ -303,7 +332,7 @@ function PrRow({
       className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5"
     >
       <GitPullRequest
-        size={15}
+        size={14}
         className={`shrink-0 ${approved ? 'text-success' : 'text-[#7f3bf5]'}`}
       />
       <span className="w-12 shrink-0 text-xs text-ink-3">!{pr.id}</span>
@@ -333,7 +362,7 @@ function PrRow({
       <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
         {relTime(pr.createdDate)}
       </span>
-      <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+      <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
     </a>
       <button
         type="button"
@@ -354,9 +383,18 @@ function PrRow({
         onClick={() => onAsk(pr)}
         title="让管家看看这个 PR"
         aria-label="让管家看看这个 PR"
-        className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
       >
         <Bot size={14} />
+      </button>
+      <button
+        type="button"
+        onClick={() => onSchedule(pr)}
+        title={`把 PR #${pr.id} 排进日历`}
+        aria-label={`把 PR #${pr.id} 排进日历`}
+        className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+      >
+        <CalendarPlus size={14} />
       </button>
     </div>
   );
@@ -376,6 +414,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
   // 比较态放在 PullRequestList 而不是子列表：切「待我评审 / 我提的」时组件不卸载，
   // 于是可以跨子 tab 选两个 PR 来比较。
   const [comparing, setComparing] = useState<PullRequest[]>([]);
+  const [calendarPr, setCalendarPr] = useState<PullRequest | null>(null);
 
   const askButler = (pr: PullRequest): void => {
     const result = askButlerAboutPullRequests(
@@ -468,20 +507,21 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         right={
           tab === 'mine' && mine.some(isApproved) ? (
             <span className="flex items-center gap-1 text-xs text-success">
-              <CheckCircle2 size={13} />
+              <CheckCircle2 size={14} />
               {mine.filter(isApproved).length} 个已通过评审
             </span>
           ) : undefined
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {filtered.map((pr) => (
           <PrRow
             key={pr.id}
             pr={pr}
             onAsk={askButler}
             onCompare={toggleCompare}
+            onSchedule={setCalendarPr}
             comparing={comparing.some((item) => item.id === pr.id)}
           />
         ))}
@@ -497,6 +537,19 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
           />
         )}
       </div>
+      {calendarPr ? (
+        <CalendarEventDialog
+          defaultDate={todayKey()}
+          defaultTitle={`PR #${calendarPr.id} ${calendarPr.title}`}
+          origin={{
+            kind: 'pull-request',
+            id: String(calendarPr.id),
+            label: `PR #${calendarPr.id}`,
+            ...(calendarPr.webUrl ? { webUrl: calendarPr.webUrl } : {}),
+          }}
+          onClose={() => setCalendarPr(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -557,14 +610,14 @@ export function BuildList({ builds }: { builds: Build[] }) {
                   : 'border-line text-ink-2 hover:bg-fill-hover'
               }`}
             >
-              <XCircle size={13} />
+              <XCircle size={14} />
               只看失败（{failedCount}）
             </button>
           ) : undefined
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {filtered.map((b) => (
           <a
             key={`${b.project}-${b.id}`}
@@ -597,7 +650,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
             <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
               {relTime(b.finishTime || b.queueTime)}
             </span>
-            <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+            <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
           </a>
         ))}
         {filtered.length === 0 && (

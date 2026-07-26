@@ -153,7 +153,7 @@ export default function CreateWorkItemDiscussionDialog({
           <>
             <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2">取消</button>
             <button onClick={() => void openExisting()} className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white">
-              <ExternalLink size={13} /> 进入已有讨论
+              <ExternalLink size={14} /> 进入已有讨论
             </button>
           </>
         }
@@ -206,7 +206,7 @@ export default function CreateWorkItemDiscussionDialog({
           </select>
           {environmentId ? (
             <span className="mt-1 flex items-center gap-1 truncate text-2xs text-ink-3">
-              <FolderOpen size={11} /> {environments.find((environment) => environment.id === environmentId)?.path}
+              <FolderOpen size={12} /> {environments.find((environment) => environment.id === environmentId)?.path}
             </span>
           ) : null}
           {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“设置 → AI”添加本地环境</span> : null}

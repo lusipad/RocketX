@@ -144,7 +144,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     <>
       <div className="flex items-center justify-between pb-3">
         <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={15} className="text-ink-3" />
+          <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -223,7 +223,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                       className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
                       title={alias ? `当前备注：${alias}` : '给这个人起个备注名'}
                     >
-                      <Tag size={13} />
+                      <Tag size={14} />
                       {alias ? '改备注' : '备注'}
                     </button>
                     <button
@@ -233,7 +233,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                       }}
                       className="flex items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white"
                     >
-                      <MessageCircle size={13} />
+                      <MessageCircle size={14} />
                       {busy === u.username ? '打开中…' : '发消息'}
                     </button>
                   </div>
@@ -292,7 +292,7 @@ function GroupsTab() {
     <>
       <div className="flex items-center justify-between pb-3">
         <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={15} className="text-ink-3" />
+          <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -326,7 +326,7 @@ function GroupsTab() {
           </div>
         ))}
         {groups.length === 0 && (
-          <div className="py-10 text-center text-sm text-ink-3">暂无群组</div>
+          <div className="py-10 text-center text-sm text-ink-3">你还没加入任何群组。点左上角「发起聊天」建一个，或者让同事把你拉进去。</div>
         )}
       </div>
     </>
@@ -345,7 +345,7 @@ export default function ContactsPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line bg-fill-2 p-3">
+      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-fill-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">通讯录</div>
         {TABS.map(({ key, label, icon: Icon }) => (
           <button

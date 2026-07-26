@@ -12,7 +12,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
-  Pin,
+  Star,
   RefreshCw,
   Trash2,
   User,
@@ -32,7 +32,8 @@ const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'all', label: '消息', icon: MessageSquareText },
   { key: 'unread', label: '未读', icon: RefreshCw },
   { key: 'mentions', label: '@我', icon: AtSign },
-  { key: 'favorites', label: '收藏', icon: Pin },
+  // 图钉在本应用里已经代表「置顶」，收藏改用星标，两个概念别共用一个图标
+  { key: 'favorites', label: '收藏', icon: Star },
   { key: 'dm', label: '单聊', icon: User },
   { key: 'multi', label: '多人聊天', icon: UsersRound },
   { key: 'groups', label: '群组', icon: Hash },
@@ -267,14 +268,14 @@ export default function GroupFilter({
       >
         <FolderIcon size={14} className={active ? 'text-primary' : ''} />
         <span className="min-w-0 truncate">{folder.name}</span>
-        {folder.rules?.length ? <Wand2 size={11} className="shrink-0 text-ink-3" /> : null}
+        {folder.rules?.length ? <Wand2 size={12} className="shrink-0 text-ink-3" /> : null}
         {count > 0 && <span className="ml-auto text-2xs text-ink-3">{count}</span>}
       </button>
     );
   };
 
   return (
-    <aside className={`flex shrink-0 flex-col border-r border-line bg-surface-2 ${
+    <aside className={`flex shrink-0 flex-col border-r border-line-strong bg-surface-2 ${
       collapsed ? 'w-12 min-h-0 overflow-x-hidden p-2' : 'w-[150px] px-2 py-3'
     }`}>
       {collapsed ? (
@@ -335,7 +336,7 @@ export default function GroupFilter({
                 onClick={onCollapse}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
-                <PanelLeftClose size={13} />
+                <PanelLeftClose size={14} />
               </button>
               <button
                 title="新建分组"
@@ -343,7 +344,7 @@ export default function GroupFilter({
                 onClick={() => setDialog({ mode: 'create' })}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
-                <FolderPlus size={13} />
+                <FolderPlus size={14} />
               </button>
             </div>
           </div>

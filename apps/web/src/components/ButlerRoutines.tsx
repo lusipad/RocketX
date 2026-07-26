@@ -48,7 +48,7 @@ function RoutineReportCard({
   };
 
   return (
-    <div className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+    <div className="rounded-lg bg-surface-2 shadow-raise px-3 py-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{routine.name}</span>
         <span className="shrink-0 text-xs text-ink-3">
@@ -66,7 +66,7 @@ function RoutineReportCard({
           disabled={running}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50"
         >
-          {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+          {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
         </button>
         {latest ? (
           <button
@@ -109,7 +109,7 @@ export default function ButlerRoutines() {
   };
 
   return (
-    <details className="group rounded-xl border border-line bg-surface">
+    <details className="group rounded-xl bg-surface shadow-raise">
       <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink">
         <span>例行事务</span>
         <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
@@ -174,13 +174,13 @@ export default function ButlerRoutines() {
                 const meta = butlerEventMeta[card.kind];
                 const Icon = meta.icon;
                 return (
-                  <div key={card.id} className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
-                    <Icon size={18} className={`shrink-0 ${meta.color}`} />
+                  <div key={card.id} className="flex items-center gap-3 rounded-lg bg-surface-2 shadow-raise px-4 py-3">
+                    <Icon size={16} className={`shrink-0 ${meta.color}`} />
                     <button type="button" onClick={() => openEventCard(card)} className="min-w-0 flex-1 text-left">
                       <div className="truncate text-sm font-medium text-ink">{card.title}</div>
                       <div className="mt-0.5 truncate text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
                     </button>
-                    <button type="button" title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
+                    <button type="button" title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={14} /></button>
                   </div>
                 );
               })}

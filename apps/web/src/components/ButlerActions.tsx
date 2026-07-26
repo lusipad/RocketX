@@ -43,7 +43,7 @@ export function ButlerMessageActions({ line, disabled = false }: { line: ButlerL
           onClick={() => propose(kind, line.id)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-ink-3 hover:bg-fill-hover hover:text-ink disabled:opacity-40"
         >
-          <Icon size={10} />{label}
+          <Icon size={12} />{label}
         </button>
       ))}
     </div>
@@ -157,7 +157,7 @@ export function ButlerActionCard() {
             rows={3}
             className="mt-2 w-full resize-y rounded-md border border-line bg-surface px-2.5 py-2 text-sm leading-5 text-ink outline-none focus:border-primary"
           />
-        ) : <p className="mt-2 text-sm text-ink-2">把当前 Butler 对话完整交给 Codex App；确认前不会打开或复制任何内容。</p>}
+        ) : <p className="mt-2 text-sm text-ink-2">把当前管家对话完整交给 Codex App；确认前不会打开或复制任何内容。</p>}
         {draft.kind === 'commitment' ? (
           <input
             value={draft.committedTo ?? ''}

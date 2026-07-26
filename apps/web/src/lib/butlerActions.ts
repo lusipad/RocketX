@@ -109,7 +109,7 @@ function actionPreview(draft: ButlerActionDraft): string {
   if (draft.kind === 'todo') return `创建本地待办：${draft.title.trim()}`;
   if (draft.kind === 'commitment') return `记录对 ${draft.committedTo?.trim() || '（未填写）'} 的承诺：${draft.title.trim()}`;
   if (draft.kind === 'ado') return `打开 ADO 工作项草稿：${draft.title.trim()}`;
-  return '把当前 Butler 对话交接到 Codex App';
+  return '把当前管家对话交接到 Codex App';
 }
 
 function actionParams(draft: ButlerActionDraft): Record<string, unknown> {

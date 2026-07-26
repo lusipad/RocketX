@@ -71,6 +71,8 @@ export interface RcMessage {
   /** subscription-role-added/removed 的房间角色。 */
   role?: 'owner' | 'moderator' | 'leader';
   tmid?: string;
+  /** 官方端勾选「同时发送到频道」时为 true；忽略它会让这条回复从主消息流消失。 */
+  tshow?: boolean;
   tcount?: number;
   /**
    * 讨论房间 id。t='discussion-created' 的消息带这个字段 ——

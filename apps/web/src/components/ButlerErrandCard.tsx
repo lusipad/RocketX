@@ -1,4 +1,4 @@
-import { CheckCircle2, FolderGit2, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, FolderGit2, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   dispatchWorkspaceLabel,
@@ -7,8 +7,8 @@ import {
 import { useAgentEnvironments } from '../stores/agentEnvironments';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
-import { useUI } from '../stores/ui';
 import { toast } from '../stores/toast';
+import Button from './ui/Button';
 
 /**
  * 任务规格卡：管家拟好的活，用户在这里逐字过目、选工作区、一键送进执行间。
@@ -21,8 +21,8 @@ export default function ButlerErrandCard() {
   const environments = useAgentEnvironments((state) => state.environments);
   const lastDispatchEnvironmentId = useAgentEnvironments((state) => state.lastDispatchEnvironmentId);
   const localCodexRoot = useLocalCodex((state) => state.workspaceRoot);
-  const setModule = useUI((state) => state.setModule);
   const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined);
+  const [readOnly, setReadOnly] = useState(false);
   const [dispatching, setDispatching] = useState(false);
 
   const resolution = useMemo(
@@ -48,9 +48,8 @@ export default function ButlerErrandCard() {
     if (!activeTarget || dispatching) return;
     setDispatching(true);
     try {
-      await confirmErrandDraft(activeTarget);
-      // 活已经开跑，把人带到能看进度的地方
-      setModule('codex');
+      // 不跳转：活开跑后你留在管家页，进度与结论由「派出去的活」卡片呈现
+      await confirmErrandDraft(activeTarget, { readOnly });
     } catch (error) {
       toast.error(error, '派发失败');
     } finally {
@@ -69,7 +68,7 @@ export default function ButlerErrandCard() {
         <ul className="mt-2 space-y-1">
           {spec.acceptance.map((item) => (
             <li key={item} className="flex items-start gap-1.5 text-sm text-ink-2">
-              <CheckCircle2 size={15} className="mt-1 shrink-0 text-success" />
+              <CheckCircle2 size={14} className="mt-1 shrink-0 text-success" />
               <span>{item}</span>
             </li>
           ))}
@@ -79,7 +78,7 @@ export default function ButlerErrandCard() {
         <ul className="mt-2 space-y-1">
           {spec.boundaries.map((item) => (
             <li key={item} className="flex items-start gap-1.5 text-sm text-ink-2">
-              <XCircle size={15} className="mt-1 shrink-0 text-danger/70" />
+              <XCircle size={14} className="mt-1 shrink-0 text-danger/70" />
               <span>{item}</span>
             </li>
           ))}
@@ -88,7 +87,7 @@ export default function ButlerErrandCard() {
 
       {resolution.options.length ? (
         <label className="mt-3 flex items-center gap-2 text-sm text-ink-2">
-          <FolderGit2 size={15} className="shrink-0 text-ink-3" />
+          <FolderGit2 size={14} className="shrink-0 text-ink-3" />
           <span className="shrink-0">派到</span>
           <select
             aria-label="派活目标工作区"
@@ -109,24 +108,29 @@ export default function ButlerErrandCard() {
         </p>
       )}
 
+      {/* 默认允许改代码——给「修 bug」只读权限等于保证干不完 */}
+      <label className="mt-2 flex items-center gap-2 text-xs text-ink-2">
+        <input
+          type="checkbox"
+          checked={readOnly}
+          onChange={(event) => setReadOnly(event.target.checked)}
+          className="h-3.5 w-3.5 accent-primary"
+        />
+        只调查，不改文件
+      </label>
+
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => void dismissErrandDraft()}
-          disabled={dispatching}
-          className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-        >
+        <Button variant="secondary" onClick={() => void dismissErrandDraft()} disabled={dispatching}>
           取消
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
+          loading={dispatching}
+          disabled={!activeTarget}
           onClick={() => void dispatchNow()}
-          disabled={!activeTarget || dispatching}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
         >
-          {dispatching ? <Loader2 size={14} className="animate-spin" /> : null}
           {dispatching ? '正在派发…' : '送进执行间开跑'}
-        </button>
+        </Button>
       </div>
     </div>
   );

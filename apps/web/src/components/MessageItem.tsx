@@ -31,6 +31,7 @@ import {
   Star,
   Sparkles,
   Trash2,
+  CalendarPlus,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
@@ -56,10 +57,13 @@ import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import ForwardDialog from './ForwardDialog';
 import TodoDialog from './TodoDialog';
+import { todayKey } from '../stores/todos';
+import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
+import { butlerBrainGateway } from '../lib/butlerRoundsBrain';
 import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
 import {
@@ -113,7 +117,7 @@ function ImageAttachment({
     return (
       <button
         onClick={() => setManualLoad(true)}
-        className="mt-1.5 flex w-56 items-center gap-2 rounded-lg border border-line bg-surface-4 px-3 py-2.5 text-left transition hover:border-primary"
+        className="mt-1.5 flex w-56 items-center gap-2 rounded-lg bg-surface-4 shadow-raise px-3 py-2.5 text-left transition hover:border-primary"
       >
         <ImageIcon size={16} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{name}</span>
@@ -189,14 +193,14 @@ function FileAttachment({
 
   return (
     <>
-      <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary">
+      <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg bg-surface-4 shadow-raise p-3 transition hover:border-primary">
         <button
           onClick={() => (previewable ? setPreview(true) : void download())}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
           title={previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载'}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
-            <FileIcon size={18} />
+            <FileIcon size={16} />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-ink">{name}</span>
@@ -217,7 +221,7 @@ function FileAttachment({
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
           title={localPath ? '打开本地文件' : '下载'}
         >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={15} />}
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
         </button>
       </div>
       {preview && (
@@ -275,7 +279,7 @@ function UrlPreviewCard({ url, meta }: { url: string; meta: Record<string, strin
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="mt-1.5 flex max-w-md gap-3 rounded-lg border border-line bg-surface-4 p-3 transition hover:border-primary"
+      className="mt-1.5 flex max-w-md gap-3 rounded-lg bg-surface-4 shadow-raise p-3 transition hover:border-primary"
     >
       <span className="min-w-0 flex-1">
         <span className="line-clamp-1 text-sm font-medium text-primary">{title}</span>
@@ -306,7 +310,23 @@ function safeTitleHref(link: string): string | null {
 }
 
 /** 附件卡片：ADO 集成等富文本消息载体 */
-function AttachmentCard({
+function AttachmentDescription({
+  att,
+  message,
+}: {
+  att: RcMessageAttachment;
+  message: RcMessage;
+}) {
+  const description = att.description?.trim();
+  if (!description || message.msg.trim()) return null;
+  return (
+    <div className="mt-1.5 select-text text-sm leading-relaxed break-words whitespace-pre-wrap">
+      <LinkifiedText text={description} />
+    </div>
+  );
+}
+
+export function AttachmentCard({
   att,
   message,
   source,
@@ -324,25 +344,31 @@ function AttachmentCard({
   if (att.image_url) {
     const name = message.file?.name ?? att.title ?? '图片';
     return (
-      <ImageAttachment
-        thumbPath={att.image_url}
-        fullPath={att.title_link ?? att.image_url}
-        name={name}
-        dims={att.image_dimensions}
-        source={source}
-      />
+      <>
+        <ImageAttachment
+          thumbPath={att.image_url}
+          fullPath={att.title_link ?? att.image_url}
+          name={name}
+          dims={att.image_dimensions}
+          source={source}
+        />
+        <AttachmentDescription att={att} message={message} />
+      </>
     );
   }
   // 文件附件（上传的文件）
   if (att.title_link_download && att.title_link) {
     return (
-      <FileAttachment
-        att={att}
-        name={message.file?.name}
-        size={message.file?.size}
-        localPath={message.rocketxLocalPath}
-        source={source}
-      />
+      <>
+        <FileAttachment
+          att={att}
+          name={message.file?.name}
+          size={message.file?.size}
+          localPath={message.rocketxLocalPath}
+          source={source}
+        />
+        <AttachmentDescription att={att} message={message} />
+      </>
     );
   }
   const extensionRenderer = renderers.find((renderer) =>
@@ -352,7 +378,7 @@ function AttachmentCard({
   // 富文本卡片（ADO 事件等）
   return (
     <div
-      className="mt-1.5 max-w-md rounded-lg border border-line bg-surface-4 p-3"
+      className="mt-1.5 max-w-md rounded-lg bg-surface-4 shadow-raise p-3"
       style={{ borderLeft: `3px solid ${att.color ?? '#3370ff'}` }}
     >
       {att.author_name && <div className="mb-1 text-xs text-ink-3">{att.author_name}</div>}
@@ -546,6 +572,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [createWi, setCreateWi] = useState(false);
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiTodo, setAiTodo] = useState<TodoPrefill | null>(null);
@@ -593,14 +620,17 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     }
     setAiExtracting(true);
     try {
-      const draft = await extractMessageAction({
-        rid: message.rid,
-        mid: message._id,
-        roomName,
-        author: displayName,
-        text,
-        sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
-      });
+      const draft = await extractMessageAction(
+        {
+          rid: message.rid,
+          mid: message._id,
+          roomName,
+          author: displayName,
+          text,
+          sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
+        },
+        butlerBrainGateway(),
+      );
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
     } catch (error) {
@@ -612,12 +642,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const replyThreadId = message.tmid;
   const agentSessionCard = parseAgentSessionCard(message.msg ?? '');
   const bareMedia =
     !visibleText &&
     !message.pinned &&
     !!message.attachments?.length &&
-    message.attachments.every((a) => !!a.image_url || !!a.title_link_download);
+    message.attachments.every(
+      (a) => (!!a.image_url || !!a.title_link_download) && !a.description?.trim(),
+    );
 
   const copy = async () => {
     try {
@@ -672,6 +705,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         if (inTodo) setModule('todos');
         else setTodoOpen(true);
       },
+    },
+    {
+      label: '加到日历',
+      icon: CalendarPlus,
+      onClick: () => setCalendarOpen(true),
     },
     {
       label: message.pinned ? '取消置顶' : '置顶',
@@ -800,7 +838,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 mine ? 'right-0' : 'left-0'
               }`}
             >
-              <div className="relative flex items-center gap-0.5 rounded-lg border border-line bg-surface-4 p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
+              <div className="relative flex items-center gap-0.5 rounded-lg bg-surface-4 shadow-raise p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
                 {QUICK_EMOJIS.map((e) => (
                   <button
                     key={e.code}
@@ -819,11 +857,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     setPicker(picker ? null : { x: r.left, y: r.bottom + 4 });
                   }}
                 >
-                  <SmilePlus size={15} />
+                  <SmilePlus size={14} />
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
                 <button title="回复" className={hoverBtn} onClick={() => setReplyTo(message)}>
-                  <Reply size={15} />
+                  <Reply size={14} />
                 </button>
                 {!inThread && (
                   <button
@@ -831,11 +869,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     className={hoverBtn}
                     onClick={() => void openThread(message.tmid ?? message._id)}
                   >
-                    <MessageSquareText size={15} />
+                    <MessageSquareText size={14} />
                   </button>
                 )}
                 <button title="转发" className={hoverBtn} onClick={() => setForwarding(true)}>
-                  <Share2 size={15} />
+                  <Share2 size={14} />
                 </button>
                 <button
                   title="更多"
@@ -845,7 +883,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     setMenu({ x: rect.left, y: rect.bottom + 4 });
                   }}
                 >
-                  {copied ? <Check size={15} className="text-success" /> : <MoreHorizontal size={15} />}
+                  {copied ? <Check size={14} className="text-success" /> : <MoreHorizontal size={14} />}
                 </button>
               </div>
             </div>
@@ -915,16 +953,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           )}
           {/* 发送状态：发送中 / 失败可重试 */}
           {message.pending && (
-            <Loader2 size={13} className="mb-1 shrink-0 animate-spin text-ink-3" />
+            <Loader2 size={14} className="mb-1 shrink-0 animate-spin text-ink-3" />
           )}
           {message.rocketxOffline && !message.pending && !message.failed && (
             <span
               className="mb-0.5 shrink-0 text-2xs text-ink-3"
-              title="已通过可信局域网投递，等待 Rocket.Chat 恢复后回灌"
+              title="已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次"
             >
               {message.rocketxLanBytesPerSecond
                 ? `局域网直传 · ${fmtSize(message.rocketxLanBytesPerSecond)}/s`
-                : '局域网 · 待回灌'}
+                : '局域网已送达 · 待补发'}
             </span>
           )}
           {message.failed && (
@@ -968,8 +1006,18 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             onClick={() => void openThread(message._id)}
             className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
           >
-            <MessageSquareText size={13} />
+            <MessageSquareText size={14} />
             {message.tcount} 条回复
+          </button>
+        ) : null}
+
+        {!inThread && replyThreadId ? (
+          <button
+            onClick={() => void openThread(replyThreadId)}
+            className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <MessageSquareText size={14} />
+            查看话题
           </button>
         ) : null}
 
@@ -991,6 +1039,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
+      {calendarOpen && (
+        <CalendarEventDialog
+          defaultDate={todayKey()}
+          defaultTitle={visibleText.slice(0, 60) || (message.file?.name ? `[文件] ${message.file.name}` : '')}
+          origin={{
+            kind: 'message',
+            id: message._id,
+            mid: message._id,
+            rid: message.rid,
+            label: `${roomName} · ${displayName}`,
+          }}
+          onClose={() => setCalendarOpen(false)}
+        />
+      )}
       {todoOpen && (
         <TodoDialog
           source={{

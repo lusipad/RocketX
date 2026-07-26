@@ -3,8 +3,62 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   initialMessageScrollTop,
+  nextMessageScrollState,
   shouldShowUnreadDivider,
 } from '../../apps/web/src/components/MessageList';
+
+test('内容撑高但滚动位置未动时保持贴底', () => {
+  assert.deepEqual(
+    nextMessageScrollState({
+      stickToBottom: true,
+      previousScrollHeight: 1000,
+      previousScrollTop: 400,
+      scrollHeight: 1300,
+      scrollTop: 400,
+      clientHeight: 600,
+    }),
+    { nearBottom: false, stickToBottom: true },
+  );
+});
+
+test('滚动位置变化时按当前位置判定贴底', () => {
+  assert.deepEqual(
+    nextMessageScrollState({
+      stickToBottom: true,
+      previousScrollHeight: 1000,
+      previousScrollTop: 400,
+      scrollHeight: 1300,
+      scrollTop: 500,
+      clientHeight: 600,
+    }),
+    { nearBottom: false, stickToBottom: false },
+  );
+  assert.deepEqual(
+    nextMessageScrollState({
+      stickToBottom: false,
+      previousScrollHeight: 1000,
+      previousScrollTop: 300,
+      scrollHeight: 1000,
+      scrollTop: 400,
+      clientHeight: 600,
+    }),
+    { nearBottom: true, stickToBottom: true },
+  );
+});
+
+test('已经离开底部时内容撑高不会恢复贴底', () => {
+  assert.deepEqual(
+    nextMessageScrollState({
+      stickToBottom: false,
+      previousScrollHeight: 1000,
+      previousScrollTop: 200,
+      scrollHeight: 1300,
+      scrollTop: 200,
+      clientHeight: 600,
+    }),
+    { nearBottom: false, stickToBottom: false },
+  );
+});
 
 test('首次打开会话始终以列表底部为初始位置', () => {
   assert.equal(

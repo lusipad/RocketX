@@ -9,6 +9,7 @@ import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
 import ButlerErrandCard from './ButlerErrandCard';
+import ButlerErrandRunCard from './ButlerErrandRunCard';
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import ButlerImagePicker, {
@@ -128,7 +129,7 @@ export default function ButlerPanel() {
         {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
         {activity || running ? (
           <div className="mt-3 flex items-center gap-2 text-sm text-ink-3">
-            <Loader2 size={15} className="animate-spin" />{activity ?? '正在处理请求…'}
+            <Loader2 size={14} className="animate-spin" />{activity ?? '正在处理请求…'}
           </div>
         ) : null}
 
@@ -147,6 +148,7 @@ export default function ButlerPanel() {
           </div>
         ) : null}
         <div className="mt-3"><ButlerErrandCard /></div>
+        <div className="mt-3"><ButlerErrandRunCard /></div>
         <div className="mt-3"><ButlerActionCard /></div>
       </div>
 

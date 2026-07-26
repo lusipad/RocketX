@@ -94,7 +94,7 @@ function QuickComment({
           disabled={!comment.trim() || sending}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary text-white transition hover:bg-primary-hover disabled:opacity-40"
         >
-          {sent ? <Check size={11} /> : <SendHorizontal size={11} />}
+          {sent ? <Check size={12} /> : <SendHorizontal size={12} />}
         </button>
       </span>
       {sent && <span className="mt-1 block text-xs text-success">已评论</span>}
@@ -125,7 +125,7 @@ function HoverCard({
       style={{ left, top }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      className="fixed z-50 w-[330px] rounded-xl border border-line bg-surface-4 p-4 shadow-[0_8px_24px_rgba(31,35,41,0.16)]"
+      className="fixed z-50 w-[330px] rounded-xl bg-surface-4 shadow-raise p-4 shadow-[0_8px_24px_rgba(31,35,41,0.16)]"
     >
       {info === 'loading' ? (
         <div className="py-4 text-center text-sm text-ink-3">加载中…</div>
@@ -146,7 +146,7 @@ function HoverCard({
               title="在 Azure DevOps 中打开"
               className="ml-auto text-ink-3 hover:text-primary"
             >
-              <ExternalLink size={13} />
+              <ExternalLink size={14} />
             </a>
           </div>
           <div

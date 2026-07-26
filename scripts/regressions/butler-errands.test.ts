@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
@@ -13,6 +14,10 @@ import {
 } from '../../apps/web/src/stores/butler';
 import { useLocalCodex } from '../../apps/web/src/stores/localCodex';
 import { useToast } from '../../apps/web/src/stores/toast';
+// 必须静态 import：tsx 下测试内 await import() 会产生第二个模块实例，
+// 拿到的是另一个 store，断言永远对不上
+import { installModuleValidator, useUI } from '../../apps/web/src/stores/ui';
+import { useCalendar } from '../../apps/web/src/stores/calendar';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
@@ -54,6 +59,7 @@ function stubLocalCodex(initial: Partial<ReturnType<typeof useLocalCodex.getStat
     workspaceRoot: '',
     threadId: undefined,
     status: 'idle',
+    sandboxMode: 'read-only',
     messages: [],
     traces: [],
     approvals: [],
@@ -66,6 +72,10 @@ function stubLocalCodex(initial: Partial<ReturnType<typeof useLocalCodex.getStat
         workspaceRoot: path,
         ...(changed ? { threadId: undefined } : {}),
       });
+    },
+    setSandboxMode: (mode: 'read-only' | 'workspace-write') => {
+      calls.push({ method: 'setSandboxMode', payload: mode });
+      useLocalCodex.setState({ sandboxMode: mode });
     },
     startNew: async () => {
       calls.push({ method: 'startNew' });
@@ -207,9 +217,12 @@ test('confirmErrandDraft：已注册工作区一键派发，规格分框送进�
       path: 'D:/Repos/rocketchatx',
     });
 
-    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'startNew', 'send']);
+    assert.deepEqual(
+      codex.calls.map((call) => call.method),
+      ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send'],
+    );
     assert.equal(codex.calls[0]?.payload, 'D:/Repos/rocketchatx');
-    const sent = codex.calls[2]?.payload ?? '';
+    const sent = codex.calls.at(-1)?.payload ?? '';
     assert.match(sent, /<rocketx_task_spec>/);
     assert.match(sent, /标题：修掉登录页报错/);
     assert.match(sent, /不动依赖版本/);
@@ -218,10 +231,11 @@ test('confirmErrandDraft：已注册工作区一键派发，规格分框送进�
     assert.doesNotMatch(sent, /rocketx_untrusted_evidence/);
     assert.equal(useAgentEnvironments.getState().lastDispatchEnvironmentId, environment.id);
     assert.equal(useButler.getState().errandDraft, null);
-    assert.equal(
-      useButler.getState().lines.some((line) => line.text.includes('已派发任务：修掉登录页报错')),
-      true,
-    );
+    const dispatched = useButler.getState().lines.find((line) => line.text.includes('修掉登录页报错')
+      && line.text.includes('已派出去'));
+    assert.ok(dispatched, '派发后对话里要有一行交代');
+    // 这句会被模型学舌：提「去执行间看」，管家就会反复把用户往执行间赶
+    assert.doesNotMatch(dispatched.text, /执行间/);
   } finally {
     restoreRunner();
     codex.restore();
@@ -295,8 +309,11 @@ test('零配置兜底：pending 目标派发时先落库拿 id 再过白名单�
     const environments = useAgentEnvironments.getState().environments;
     assert.equal(environments.length, 1);
     assert.equal(environments[0]?.path, 'D:/Repos/side-project');
-    // 工作区没变：不清线程、不重启，直接复用现有会话发规格
-    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'send']);
+    // 默认要写权限：沙箱从只读切过来必须重起线程才生效
+    assert.deepEqual(
+      codex.calls.map((call) => call.method),
+      ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send'],
+    );
     assert.equal(useAgentEnvironments.getState().lastDispatchEnvironmentId, environments[0]?.id);
   } finally {
     codex.restore();
@@ -305,10 +322,9 @@ test('零配置兜底：pending 目标派发时先落库拿 id 再过白名单�
   }
 });
 
-test('派出去的活干完了吱一声；线程被换掉后不再报喜', async () => {
+test('派活会按意图设沙箱：要改代码就给写权限，只调查才只读', async () => {
   useButler.getState().reset();
   resetEnvironments();
-  useToast.setState({ toasts: [] });
   const environment = useAgentEnvironments.getState().addEnvironment({
     name: '主仓',
     path: 'D:/Repos/rocketchatx',
@@ -316,51 +332,47 @@ test('派出去的活干完了吱一声；线程被换掉后不再报喜', async
     defaultBaseBranch: '',
     branchPrefix: '',
   });
-  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-watch', status: 'ready' });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-sandbox', status: 'ready', sandboxMode: 'read-only' });
 
   try {
     useButler.setState({
       errandDraft: {
-        checkpointId: 'errand-watch-1',
-        spec: { title: '盯完成的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+        checkpointId: 'errand-sandbox-1',
+        spec: { title: '要改代码的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
       },
       runtimeCheckpoints: [{
-        id: 'errand-watch-1',
+        id: 'errand-sandbox-1',
         toolName: 'draft_errand',
         capability: 'errands.draft',
         status: 'approval-required',
-        params: { title: '盯完成的活' },
-        idempotencyKey: 'errand-watch-1',
+        params: { title: '要改代码的活' },
+        idempotencyKey: 'errand-sandbox-1',
         createdAt: 1,
         updatedAt: 1,
       } as never],
     });
+
+    // 默认（不勾「只调查」）必须拿到写权限——只读会让「修 bug」结构性干不完
     await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
-    assert.equal(useLocalCodex.getState().status, 'running');
+    assert.equal(useLocalCodex.getState().sandboxMode, 'workspace-write');
+    // 沙箱变了必须重起线程才生效
+    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'setSandboxMode', 'startNew', 'send']);
 
-    // 活干完：running → ready 触发一条带「去看看」的提示
-    useLocalCodex.setState({ status: 'ready' });
-    const doneToast = useToast.getState().toasts.find((item) => item.message.includes('盯完成的活'));
-    assert.ok(doneToast, '完成后必须提示');
-    assert.equal(doneToast.action?.label, '去看看');
-
-    // 只报一次
-    useToast.setState({ toasts: [] });
-    useLocalCodex.setState({ status: 'running' });
-    useLocalCodex.setState({ status: 'ready' });
-    assert.equal(useToast.getState().toasts.length, 0);
+    const run = useButler.getState().errandRun;
+    assert.ok(run, '派发后必须留下在办的活');
+    assert.equal(run.title, '要改代码的活');
+    assert.equal(run.readOnly, false);
+    assert.equal(run.workspaceName, '主仓');
   } finally {
     codex.restore();
     resetEnvironments();
-    useToast.setState({ toasts: [] });
     useButler.getState().reset();
   }
 });
 
-test('线程被换掉后订阅失效，不冒充旧活报结果', async () => {
+test('勾了「只调查」就保持只读，且在办的活如实标注', async () => {
   useButler.getState().reset();
   resetEnvironments();
-  useToast.setState({ toasts: [] });
   const environment = useAgentEnvironments.getState().addEnvironment({
     name: '主仓',
     path: 'D:/Repos/rocketchatx',
@@ -368,35 +380,37 @@ test('线程被换掉后订阅失效，不冒充旧活报结果', async () => {
     defaultBaseBranch: '',
     branchPrefix: '',
   });
-  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-swap', status: 'ready' });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-ro', status: 'ready', sandboxMode: 'read-only' });
 
   try {
     useButler.setState({
       errandDraft: {
-        checkpointId: 'errand-swap-1',
-        spec: { title: '被换线程的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+        checkpointId: 'errand-ro-1',
+        spec: { title: '只看看的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
       },
       runtimeCheckpoints: [{
-        id: 'errand-swap-1',
+        id: 'errand-ro-1',
         toolName: 'draft_errand',
         capability: 'errands.draft',
         status: 'approval-required',
-        params: { title: '被换线程的活' },
-        idempotencyKey: 'errand-swap-1',
+        params: { title: '只看看的活' },
+        idempotencyKey: 'errand-ro-1',
         createdAt: 1,
         updatedAt: 1,
       } as never],
     });
-    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+    await useButler.getState().confirmErrandDraft(
+      { id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' },
+      { readOnly: true },
+    );
 
-    // 用户在执行间手动开了新线程：旧活的完成状态无从谈起
-    useLocalCodex.setState({ threadId: 't-other' });
-    useLocalCodex.setState({ status: 'ready' });
-    assert.equal(useToast.getState().toasts.length, 0);
+    assert.equal(useLocalCodex.getState().sandboxMode, 'read-only');
+    // 沙箱没变、目录没变、线程还在：不必重起
+    assert.deepEqual(codex.calls.map((call) => call.method), ['setWorkspaceRoot', 'send']);
+    assert.equal(useButler.getState().errandRun?.readOnly, true);
   } finally {
     codex.restore();
     resetEnvironments();
-    useToast.setState({ toasts: [] });
     useButler.getState().reset();
   }
 });
@@ -426,4 +440,124 @@ test('工具白名单不放行未知目标：未注册路径直接拒绝', async
     resetEnvironments();
     useButler.getState().reset();
   }
+});
+
+test('人不在管家页时：等你点头与回话了都要提示，且指回管家页不是执行间', async () => {
+  // 生产环境的模块列表由 kernel 注册；测试里没有 kernel，得放行
+  installModuleValidator(() => true);
+  useButler.getState().reset();
+  resetEnvironments();
+  useToast.setState({ toasts: [] });
+  useUI.getState().setModule('messages');
+  const environment = useAgentEnvironments.getState().addEnvironment({
+    name: '主仓',
+    path: 'D:/Repos/rocketchatx',
+    adoProjects: [],
+    defaultBaseBranch: '',
+    branchPrefix: '',
+  });
+  const codex = stubLocalCodex({ workspaceRoot: 'D:/Repos/rocketchatx', threadId: 't-away', status: 'ready', sandboxMode: 'workspace-write' });
+
+  try {
+    useButler.setState({
+      errandDraft: {
+        checkpointId: 'errand-away-1',
+        spec: { title: '离席时的活', goal: '', acceptance: [], boundaries: [], evidence: [] },
+      },
+      runtimeCheckpoints: [{
+        id: 'errand-away-1',
+        toolName: 'draft_errand',
+        capability: 'errands.draft',
+        status: 'approval-required',
+        params: { title: '离席时的活' },
+        idempotencyKey: 'errand-away-1',
+        createdAt: 1,
+        updatedAt: 1,
+      } as never],
+    });
+    await useButler.getState().confirmErrandDraft({ id: environment.id, name: '主仓', path: 'D:/Repos/rocketchatx' });
+
+    // Codex 请求点头：不提示的话活会一直卡着
+    useLocalCodex.setState({ approvals: [{ id: 'a1', method: 'item/fileChange/requestApproval', params: {}, at: 1 } as never] });
+    const ask = useToast.getState().toasts.find((item) => item.message.includes('等你点个头'));
+    assert.ok(ask, '离席时等审批必须提示');
+    assert.equal(ask.action?.label, '去看看');
+    ask.action?.onClick();
+    assert.equal(useUI.getState().module, 'butler-view', '提示必须指回管家页，不是执行间');
+
+    // 回合结束：状态要收敛，卡片组件没挂载也一样
+    useUI.getState().setModule('messages');
+    useToast.setState({ toasts: [] });
+    useLocalCodex.setState({ approvals: [], messages: [{ id: 'm1', role: 'assistant', text: '改完了', at: 2 } as never] });
+    useLocalCodex.setState({ status: 'ready' });
+
+    const run = useButler.getState().errandRun;
+    assert.equal(run?.outcome, 'replied', '人不在管家页也要收敛 outcome，否则导航角标永远不亮');
+    assert.equal(run?.reply, '改完了');
+    assert.ok(useToast.getState().toasts.some((item) => item.message.includes('回话了')));
+    // 中性措辞：不替 Codex 宣布成功
+    assert.equal(useToast.getState().toasts.some((item) => item.message.includes('完成')), false);
+  } finally {
+    codex.restore();
+    resetEnvironments();
+    useToast.setState({ toasts: [] });
+    useUI.getState().setModule('messages');
+    useButler.getState().reset();
+  }
+});
+
+test('对话里的卡片必须进 stickToBottom 依赖，否则渲染了也没人看得见', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  const deps = /useStickToBottom\(\[([\s\S]*?)\]\)/.exec(source)?.[1] ?? '';
+  assert.ok(deps, '找不到 stickToBottom 依赖数组');
+  // 真机上漏掉 errandDraft 让「从桌面页派活」整条链路静默失败：
+  // 卡片渲染在消息之后，不触发自动滚动就永远停在视口下方
+  for (const state of ['errandDraft', 'errandRun', 'routineDraft', 'actionDraft']) {
+    assert.ok(deps.includes(state), `${state} 必须在 stickToBottom 依赖里`);
+    assert.ok(source.includes(`state.${state}`), `${state} 必须真的订阅了 store`);
+  }
+});
+
+test('日程记得住出处：消息来源存成 ButlerSource，跳转复用同一套导航', () => {
+  const before = useCalendar.getState().events.length;
+  const id = useCalendar.getState().add({
+    title: '周五评审',
+    date: '2026-07-31',
+    allDay: true,
+    color: '#3370ff',
+    source: 'manual',
+    origin: {
+      kind: 'message',
+      id: 'm-abc',
+      mid: 'm-abc',
+      rid: 'r-dev',
+      label: '研发群 · 张三',
+    },
+  });
+  try {
+    const saved = useCalendar.getState().events.find((event) => event.id === id);
+    assert.ok(saved, '日程要建出来');
+    // 出处用管家那套统一模型：一个字段通吃七种来源，跳转交给 openButlerSource
+    assert.equal(saved.origin?.kind, 'message');
+    assert.equal(saved.origin?.mid, 'm-abc');
+    assert.equal(saved.origin?.rid, 'r-dev');
+    assert.equal(saved.origin?.label, '研发群 · 张三');
+  } finally {
+    useCalendar.getState().remove(id);
+    assert.equal(useCalendar.getState().events.length, before);
+  }
+});
+
+test('工作项与 PR 都能排进日历，出处按各自类型存好', () => {
+  const source = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
+  // 入口存在
+  assert.match(source, /把工作项 #\$\{w\.id\} 排进日历/);
+  assert.match(source, /把 PR #\$\{pr\.id\} 排进日历/);
+  // 出处按各自的 ButlerSource 类型存——跳转靠 openButlerSource 分派，写错 kind 就跳不回去
+  assert.match(source, /kind: 'work-item'/);
+  assert.match(source, /kind: 'pull-request'/);
+  // 两者都带 webUrl，没有 webUrl 时 openButlerSource 才退回工作台
+  assert.match(source, /calendarItem\.webUrl \? \{ webUrl: calendarItem\.webUrl \}/);
+  assert.match(source, /calendarPr\.webUrl \? \{ webUrl: calendarPr\.webUrl \}/);
 });

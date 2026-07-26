@@ -210,7 +210,7 @@ function renderInlineText(
         );
       }
     } else if (m[6]) {
-      nodes.push(<Emoji key={key} code={full} size={18} />);
+      nodes.push(<Emoji key={key} code={full} size={16} />);
     } else if (m[7]) {
       const username = full.slice(1);
       const isMe = me && (username === me || username === 'all' || username === 'here');

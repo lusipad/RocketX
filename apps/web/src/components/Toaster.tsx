@@ -30,7 +30,7 @@ export default function Toaster() {
         return (
           <div
             key={t.id}
-            className="pointer-events-auto flex min-w-72 max-w-md items-start gap-2.5 rounded-lg border border-line bg-surface-4 px-3.5 py-3 shadow-[0_6px_20px_rgba(0,0,0,0.16)]"
+            className="pointer-events-auto flex min-w-72 max-w-md items-start gap-2.5 rounded-lg bg-surface-4 px-3.5 py-3 shadow-pop"
           >
             <Icon
               size={16}

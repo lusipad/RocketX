@@ -10,7 +10,14 @@ test('对话类页面打开时停在最新内容，滚上去阅读时不被拽�
 
   // 管家桌面对话：对话流 + 发送后强制回底
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
-  assert.match(conversation, /useStickToBottom\(\[\s*lines,\s*activity,\s*butlerError,\s*routineDraft,\s*runtimeCheckpoints,\s*actionDraft,\s*steps,\s*\]\)/);
+  // 按「必须包含」而不是「必须恰好等于」断言：焊死整个数组既挡不住漏加
+  // （2026-07-26 漏掉 errandDraft，让从桌面页派活整条链路静默失败），
+  // 又让每次新增卡片都误伤一条无关的滚动测试。
+  const conversationDeps = /useStickToBottom\(\[([\s\S]*?)\]\)/.exec(conversation)?.[1] ?? '';
+  assert.ok(conversationDeps, '找不到管家对话的 stickToBottom 依赖数组');
+  for (const dep of ['lines', 'activity', 'butlerError', 'routineDraft', 'runtimeCheckpoints', 'actionDraft', 'steps']) {
+    assert.ok(conversationDeps.includes(dep), `管家对话的贴底依赖漏了 ${dep}`);
+  }
   assert.match(conversation, /<main ref=\{scrollRef\} onScroll=\{onScroll\}/);
   assert.match(conversation, /stickToBottom\.current = true/);
 

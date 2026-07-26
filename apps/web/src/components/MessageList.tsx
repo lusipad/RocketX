@@ -55,6 +55,40 @@ export function initialMessageScrollTop({
   return historyLoaded && !didInitialScroll ? scrollHeight : undefined;
 }
 
+export function nextMessageScrollState({
+  stickToBottom,
+  previousScrollHeight,
+  previousScrollTop,
+  scrollHeight,
+  scrollTop,
+  clientHeight,
+}: {
+  stickToBottom: boolean;
+  previousScrollHeight: number;
+  previousScrollTop: number;
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+}): { nearBottom: boolean; stickToBottom: boolean } {
+  const nearBottom = scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX;
+  const grew = scrollHeight > previousScrollHeight;
+  const movedByUser = scrollTop !== previousScrollTop;
+  // 高度增长但滚动位置未动时，事件来自内容重排，不能覆盖用户此前的贴底意图。
+  return {
+    nearBottom,
+    stickToBottom: grew && !movedByUser ? stickToBottom : nearBottom,
+  };
+}
+
+export function messagesInMain(
+  messages: readonly RcMessage[],
+  showThreadsInMain: boolean,
+): RcMessage[] {
+  return messages.filter((message) =>
+    showThreadsInMain || !message.tmid || message.tshow === true
+  );
+}
+
 export default function MessageList({ rid }: { rid: string }) {
   const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
@@ -79,6 +113,8 @@ export default function MessageList({ rid }: { rid: string }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const lastScrollHeight = useRef(0);
+  const lastScrollTop = useRef(0);
   const activeRidRef = useRef(rid);
   activeRidRef.current = rid;
   const settleScrollFrame = useRef<number | null>(null);
@@ -100,7 +136,7 @@ export default function MessageList({ rid }: { rid: string }) {
 
   // 线程回复默认不进主消息流（可在设置里打开）
   const list = useMemo(
-    () => (all ?? []).filter((m) => showThreadsInMain || !m.tmid),
+    () => messagesInMain(all ?? [], showThreadsInMain),
     [all, showThreadsInMain],
   );
 
@@ -109,6 +145,8 @@ export default function MessageList({ rid }: { rid: string }) {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
+    lastScrollHeight.current = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
     setShowJump(false);
     setNewCount(0);
 
@@ -124,6 +162,8 @@ export default function MessageList({ rid }: { rid: string }) {
         if (!current) return;
         current.scrollTop = current.scrollHeight;
         stickToBottom.current = true;
+        lastScrollHeight.current = current.scrollHeight;
+        lastScrollTop.current = current.scrollTop;
         setShowJump(false);
         setNewCount(0);
       });
@@ -133,8 +173,18 @@ export default function MessageList({ rid }: { rid: string }) {
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-    stickToBottom.current = nearBottom;
+    const scrollState = nextMessageScrollState({
+      stickToBottom: stickToBottom.current,
+      previousScrollHeight: lastScrollHeight.current,
+      previousScrollTop: lastScrollTop.current,
+      scrollHeight: el.scrollHeight,
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+    });
+    stickToBottom.current = scrollState.stickToBottom;
+    lastScrollHeight.current = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
+    const { nearBottom } = scrollState;
     setShowJump(!nearBottom);
     if (nearBottom) setNewCount(0);
 
@@ -326,7 +376,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
-              <Copy size={13} />
+              <Copy size={14} />
               复制
             </button>
             <button
@@ -334,7 +384,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
-              <Share2 size={13} />
+              <Share2 size={14} />
               转发
             </button>
             <button
@@ -342,7 +392,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
-              <Download size={13} />
+              <Download size={14} />
               导出
             </button>
             <button
@@ -351,7 +401,7 @@ export default function MessageList({ rid }: { rid: string }) {
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
               title="让管家从这些消息里提取承诺"
             >
-              <Bot size={13} />
+              <Bot size={14} />
               提取承诺
             </button>
             <button
@@ -360,7 +410,7 @@ export default function MessageList({ rid }: { rid: string }) {
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
               title="让管家总结这段对话"
             >
-              <Bot size={13} />
+              <Bot size={14} />
               总结这段
             </button>
             <button

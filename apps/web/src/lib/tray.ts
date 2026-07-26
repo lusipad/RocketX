@@ -1,4 +1,5 @@
 import { isTauri } from './http';
+import { hasUnreadAttention, type UnreadSubscription } from './unread';
 
 type Timer = ReturnType<typeof setInterval>;
 
@@ -8,17 +9,11 @@ export type TrayFlasher = {
 };
 
 export function hasTrayAttention(
-  subscriptions: Readonly<
-    Record<string, { disableNotifications?: boolean; unread?: number; alert?: boolean }>
-  >,
+  subscriptions: Readonly<Record<string, UnreadSubscription>>,
   enabled = true,
 ): boolean {
   if (!enabled) return false;
-  return Object.values(subscriptions).some(
-    (subscription) =>
-      !subscription.disableNotifications &&
-      ((subscription.unread ?? 0) > 0 || subscription.alert === true),
-  );
+  return hasUnreadAttention(subscriptions);
 }
 
 type TrayConversation = {

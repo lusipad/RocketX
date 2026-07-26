@@ -45,6 +45,7 @@ import {
   type ParsedCustomQuery,
 } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
+import { totalUnread } from '../lib/unread';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { ConfirmDialog, useDialogBehavior } from '../components/Dialog';
@@ -96,9 +97,9 @@ function QueueRow({
         <span className="max-w-[40%] shrink-0 truncate text-2xs text-ink-3">{item.meta}</span>
       )}
       {item.href ? (
-        <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+        <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
       ) : (
-        <ChevronRight size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+        <ChevronRight size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
       )}
     </>
   );
@@ -146,12 +147,12 @@ function QueryDialog({
         aria-modal="true"
         aria-label="添加自定义查询"
         tabIndex={-1}
-        className="w-[440px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        className="w-[440px] rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <span className="text-[15px] font-semibold text-ink">添加自定义查询</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink">
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭添加自定义查询">
             <XCircle size={16} />
           </button>
         </header>
@@ -258,12 +259,12 @@ function FavoriteDialog({
         aria-modal="true"
         aria-label={dialogTitle}
         tabIndex={-1}
-        className="w-[400px] rounded-xl border border-line bg-surface-4 shadow-xl"
+        className="w-[400px] rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <span className="text-[15px] font-semibold text-ink">{dialogTitle}</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink"><XCircle size={16} /></button>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭收藏编辑"><XCircle size={16} /></button>
         </header>
         <div className="space-y-4 p-5">
           <div>
@@ -542,14 +543,7 @@ export default function WorkbenchPage() {
   const hour = now.getHours();
   const greeting = hour < 6 ? '夜深了' : hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好';
 
-  const unreadTotal = useMemo(
-    () =>
-      Object.values(subscriptions).reduce(
-        (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
-        0,
-      ),
-    [subscriptions],
-  );
+  const unreadTotal = useMemo(() => totalUnread(subscriptions), [subscriptions]);
   const todayEvents = useMemo(() => eventsForDate(calendarEvents, today), [calendarEvents, today]);
 
   const account = config?.account ?? '';
@@ -631,7 +625,7 @@ export default function WorkbenchPage() {
         disabled={loading}
         className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
       >
-        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+        <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
         刷新
       </button>
     </div>
@@ -639,7 +633,7 @@ export default function WorkbenchPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="flex w-[180px] shrink-0 flex-col border-r border-line bg-fill-2 p-3">
+      <aside className="flex w-[180px] shrink-0 flex-col border-r border-line-strong bg-fill-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">工作台</div>
         {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
           <button
@@ -689,7 +683,7 @@ export default function WorkbenchPage() {
                   }}
                   className="absolute top-1 right-1 hidden h-5 w-5 items-center justify-center rounded text-ink-3 hover:text-danger group-hover:flex"
                 >
-                  <Trash2 size={11} />
+                  <Trash2 size={12} />
                 </button>
               </div>
             ))}
@@ -740,7 +734,7 @@ export default function WorkbenchPage() {
                         }`}
                         title={`${label}视图`}
                       >
-                        <Icon size={13} />
+                        <Icon size={14} />
                         {label}
                       </button>
                     );
@@ -752,7 +746,7 @@ export default function WorkbenchPage() {
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
                 >
                   <RefreshCw
-                    size={13}
+                    size={14}
                     className={
                       visibleQueryState.loading[activeQuery.id] !== undefined
                         ? 'animate-spin'
@@ -767,7 +761,7 @@ export default function WorkbenchPage() {
                   rel="noreferrer"
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
                 >
-                  <ExternalLink size={13} />
+                  <ExternalLink size={14} />
                   在 ADO 中打开
                 </a>
               </div>
@@ -874,7 +868,7 @@ export default function WorkbenchPage() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-line bg-surface-4">
+              <div className="overflow-hidden rounded-xl bg-surface-4 shadow-raise">
                 {queue.map((item) => (
                   <QueueRow
                     key={item.key}
@@ -905,18 +899,18 @@ export default function WorkbenchPage() {
                 onClick={() => setModule('settings')}
                 className="mt-4 flex shrink-0 items-center justify-center gap-2 rounded-lg border border-dashed border-line py-3 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
               >
-                <Wrench size={13} />
+                <Wrench size={14} />
                 连接 Azure DevOps，把工作项、PR、构建也汇总到这里
               </button>
             )}
           </div>
 
           {/* -------- 右栏：日程 + 收藏 -------- */}
-          <aside className="flex w-[280px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-surface-4 px-4 py-6">
+          <aside className="flex w-[280px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line-strong bg-surface-4 px-4 py-6">
             <section>
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
-                  <Calendar size={15} className="text-primary" />
+                  <Calendar size={14} className="text-primary" />
                   <span className="text-sm font-semibold text-ink">今天日程</span>
                 </div>
                 <button
@@ -924,7 +918,7 @@ export default function WorkbenchPage() {
                   className="flex items-center gap-0.5 text-2xs text-ink-3 transition hover:text-primary"
                 >
                   日历
-                  <ChevronRight size={11} />
+                  <ChevronRight size={12} />
                 </button>
               </div>
               {todayEvents.length === 0 ? (
@@ -962,7 +956,7 @@ export default function WorkbenchPage() {
             <section className="border-t border-line pt-4">
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
-                  <Bookmark size={15} className="text-primary" />
+                  <Bookmark size={14} className="text-primary" />
                   <span className="text-sm font-semibold text-ink">收藏夹</span>
                 </div>
                 <button
@@ -1010,7 +1004,7 @@ export default function WorkbenchPage() {
                           }}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-primary"
                         >
-                          <Pencil size={10} />
+                          <Pencil size={12} />
                         </button>
                         <button
                           onClick={(e) => {
@@ -1021,7 +1015,7 @@ export default function WorkbenchPage() {
                           }}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-danger"
                         >
-                          <Trash2 size={10} />
+                          <Trash2 size={12} />
                         </button>
                       </div>
                     </a>

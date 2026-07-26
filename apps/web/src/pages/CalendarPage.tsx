@@ -8,7 +8,9 @@ import {
   Plus,
   Repeat,
 
+  CornerUpRight,
 } from 'lucide-react';
+import { openButlerSource } from '../lib/butlerSourceNavigation';
 import {
   useCalendar,
   monthGrid,
@@ -273,6 +275,7 @@ function EventItem({
   onClick: () => void;
   onToggle?: () => void;
 }) {
+  const origin = item.type === 'event' ? (item.raw as CalendarEvent).origin : undefined;
   return (
     <button
       onClick={onClick}
@@ -305,22 +308,43 @@ function EventItem({
         <div className="flex items-center gap-2 text-2xs text-ink-3">
           {item.time && (
             <span className="flex items-center gap-0.5">
-              <Clock size={10} /> {item.time}
+              <Clock size={12} /> {item.time}
             </span>
           )}
           {item.repeat && (
             <span className="flex items-center gap-0.5">
-              <Repeat size={10} /> 重复
+              <Repeat size={12} /> 重复
             </span>
           )}
           {item.type === 'todo' && (
             <span className="flex items-center gap-0.5">
-              <ListTodo size={10} /> 待办
+              <ListTodo size={12} /> 待办
+            </span>
+          )}
+          {/* 有出处就让它能回去——一条日程脱离上下文就成了「这是啥来着」 */}
+          {origin && (
+            <span
+              role="button"
+              tabIndex={0}
+              title={`回到出处：${origin.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                void openButlerSource(origin);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                event.stopPropagation();
+                void openButlerSource(origin);
+              }}
+              className="flex max-w-40 items-center gap-0.5 truncate text-primary hover:underline"
+            >
+              <CornerUpRight size={12} className="shrink-0" /> {origin.label}
             </span>
           )}
           {item.type === 'workitem' && (
             <span className="flex items-center gap-0.5">
-              <CircleDot size={10} /> ADO 工作项
+              <CircleDot size={12} /> ADO 工作项
             </span>
           )}
           {item.overdue && (
@@ -364,6 +388,8 @@ export default function CalendarPage() {
   }, [wbConfig, wbLastRefresh, wbRefresh]);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
+  // 翻页单位跟着视图走：写死「上一个月」在周/日视图里就是错的
+  const viewUnit = view === 'month' ? '个月' : view === 'week' ? '周' : '天';
   const next = useCalendar((s) => s.next);
   const goToday = useCalendar((s) => s.today);
 
@@ -442,6 +468,8 @@ export default function CalendarPage() {
             <div className="flex items-center gap-0.5">
               <button
                 onClick={prev}
+                title={`上一${viewUnit}`}
+                aria-label={`上一${viewUnit}`}
                 className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
               >
                 <ChevronLeft size={16} />
@@ -454,6 +482,8 @@ export default function CalendarPage() {
               </button>
               <button
                 onClick={next}
+                title={`下一${viewUnit}`}
+                aria-label={`下一${viewUnit}`}
                 className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
               >
                 <ChevronRight size={16} />
@@ -551,7 +581,7 @@ export default function CalendarPage() {
       </main>
 
       {/* 右侧详情面板 */}
-      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line bg-surface-4">
+      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-strong bg-surface-4">
         {/* 选中日期的日程 */}
         <div className="border-b border-line px-4 py-3">
           <div className="flex items-center justify-between">

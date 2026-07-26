@@ -7,9 +7,9 @@ export default function SummaryPanel() {
   const setPanel = useChat((state) => state.setPanel);
 
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface">
+    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface">
       <header className="flex h-14 items-center gap-2 border-b border-line px-4">
-        <Sparkles size={17} className="text-primary" />
+        <Sparkles size={16} className="text-primary" />
         <span className="font-medium text-ink">AI 会话总结</span>
         <button onClick={() => setPanel(null)} className="ml-auto rounded p-1.5 text-ink-3 hover:bg-fill-hover"><X size={16} /></button>
       </header>
@@ -23,7 +23,7 @@ export default function SummaryPanel() {
           </div>
         )}
         {summary.truncated && (
-          <div className="mb-3 flex gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-warning"><AlertTriangle size={15} className="shrink-0" />摘要不包含上限之外的更早未读消息。</div>
+          <div className="mb-3 flex gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-warning"><AlertTriangle size={14} className="shrink-0" />摘要不包含上限之外的更早未读消息。</div>
         )}
         {summary.error && (
           <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{summary.error}</div>

@@ -136,7 +136,7 @@ export default function ImageLightbox({
           <Plus size={16} />
         </button>
         <button title="适应窗口 (0)" aria-label="适应窗口 (0)" className={btn} onClick={fit}>
-          <Maximize2 size={15} />
+          <Maximize2 size={14} />
         </button>
         <button
           title="下载"
@@ -171,7 +171,7 @@ export default function ImageLightbox({
           </button>
         )}
         <button title="关闭 (Esc)" aria-label="关闭 (Esc)" className={btn} onClick={onClose}>
-          <X size={18} />
+          <X size={16} />
         </button>
       </div>
 

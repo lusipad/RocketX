@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { permissionRequestSummary } from '../agent/safety';
+import { codexApprovalSummary } from '../lib/codexApprovalSummary';
 import { getServerBase } from '../lib/client';
 import { isTauri } from '../lib/http';
 import { useStickToBottom } from '../lib/stickToBottom';
@@ -28,18 +28,6 @@ const STATUS_LABEL = {
   'waiting-approval': '等待审批',
   interrupted: '已中断',
 } as const;
-
-function approvalSummary(method: string, params: unknown): string {
-  const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
-  if (typeof value.command === 'string') return value.command;
-  if (Array.isArray(value.command)) return value.command.filter((item) => typeof item === 'string').join(' ');
-  if (typeof value.fileChanges === 'object' && value.fileChanges !== null) return Object.keys(value.fileChanges).join('\n');
-  const permissions = permissionRequestSummary(value.permissions ?? value.additionalPermissions);
-  if (permissions.length) return permissions.join('\n');
-  if (typeof value.grantRoot === 'string') return `写入目录：${value.grantRoot}`;
-  if (typeof value.reason === 'string') return value.reason;
-  return method;
-}
 
 export default function CodexPage() {
   const userId = useAuth((state) => state.user?._id ?? 'guest');
@@ -102,7 +90,7 @@ export default function CodexPage() {
         {error ? <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
         <div className="mt-6 grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="space-y-4 rounded-xl border border-line bg-surface p-4 shadow-sm">
+          <aside className="space-y-4 rounded-xl bg-surface shadow-raise p-4 shadow-sm">
             <div>
               <div className="text-xs font-medium text-ink-2">本地工作目录</div>
               <button onClick={() => void chooseWorkspace()} disabled={!isTauri || active} title={workspaceRoot} className="mt-2 flex w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-60">
@@ -126,15 +114,15 @@ export default function CodexPage() {
               {status === 'idle' && threadId ? <button onClick={() => void resume().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white hover:bg-primary-hover"><Play size={14} />恢复会话</button> : null}
               {(status === 'idle' || status === 'interrupted') ? <button onClick={() => void startNew().catch(() => undefined)} disabled={!workspaceRoot} className={`${threadId ? 'border border-line bg-surface-2 text-ink' : 'bg-primary text-white'} flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-fill-hover disabled:opacity-50`}><Plus size={14} />新建会话</button> : null}
               {status === 'interrupted' && threadId ? <button onClick={() => void resume().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-primary px-3 py-2 text-sm text-primary"><Play size={14} />重新连接</button> : null}
-              {active ? <button onClick={() => void stop().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm text-ink-2 hover:bg-fill-hover"><Square size={13} />停止进程</button> : null}
+              {active ? <button onClick={() => void stop().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm text-ink-2 hover:bg-fill-hover"><Square size={14} />停止进程</button> : null}
             </div>
 
-            {threadId ? <div className="truncate border-t border-line pt-4 text-2xs text-ink-3" title={threadId}>线程：{threadId}</div> : null}
-            <button onClick={() => setShowTrace((value) => !value)} className="w-full text-left text-xs text-primary">{showTrace ? '隐藏' : '查看'}本地过程（{traces.length}）</button>
+            {threadId ? <div className="truncate border-t border-line pt-4 text-2xs text-ink-3" title={threadId}>会话编号：{threadId}</div> : null}
+            <button onClick={() => setShowTrace((value) => !value)} className="w-full text-left text-xs text-primary">{showTrace ? '隐藏' : '查看'}它做了哪些操作（{traces.length}）</button>
             {showTrace ? <div className="max-h-52 space-y-1 overflow-y-auto rounded bg-fill-1 p-2">{traces.length ? traces.map((trace) => <div key={trace.id} className="text-2xs leading-4 text-ink-3"><span className="mr-1">{new Date(trace.at).toLocaleTimeString()}</span>{trace.text}</div>) : <div className="text-2xs text-ink-3">暂无过程记录</div>}</div> : null}
           </aside>
 
-          <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl border border-line bg-surface shadow-sm">
+          <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl bg-surface shadow-raise shadow-sm">
             <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
               {messages.length === 0 ? (
                 <div className="flex h-full min-h-72 flex-col items-center justify-center text-center">
@@ -144,7 +132,7 @@ export default function CodexPage() {
                 </div>
               ) : messages.map((message) => (
                 <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>
-                  {message.role === 'assistant' ? <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={15} /></div> : null}
+                  {message.role === 'assistant' ? <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={14} /></div> : null}
                   <div className={`max-w-[82%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>{message.text}</div>
                 </div>
               ))}
@@ -152,7 +140,7 @@ export default function CodexPage() {
               {approvals.map((approval) => (
                 <div key={approval.id} className="rounded-lg border border-warning/40 bg-warning-light/40 p-4">
                   <div className="text-sm font-medium text-ink">等待审批</div>
-                  <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-2 text-xs text-ink-2">{approvalSummary(approval.method, approval.params)}</pre>
+                  <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-2 text-xs text-ink-2">{codexApprovalSummary(approval.method, approval.params)}</pre>
                   <div className="mt-3 flex gap-2">
                     <button onClick={() => resolveApproval(approval.id, true)} className="flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-xs text-white"><Check size={12} />允许本次</button>
                     <button onClick={() => resolveApproval(approval.id, false)} className="flex items-center gap-1 rounded border border-line bg-surface px-3 py-1.5 text-xs text-ink-2"><X size={12} />拒绝</button>

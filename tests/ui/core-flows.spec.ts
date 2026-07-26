@@ -1424,8 +1424,8 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await page.getByText('高级 AI 设置', { exact: true }).click();
   // 高级设置按保存方式分组：Provider/路由归「保存 AI 配置」，外部集成即时生效
   await expect(page.getByRole('heading', { name: '模型 Provider' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '按能力路由' })).toBeVisible();
-  await expect(page.getByText('保存上方 Provider 与能力路由', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '每项功能用哪个模型' })).toBeVisible();
+  await expect(page.getByText('保存上面的模型来源和分配', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

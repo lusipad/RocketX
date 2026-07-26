@@ -27,7 +27,7 @@ function TypeDot({ type }: { type: string }) {
 }
 
 function Empty() {
-  return <div className="py-12 text-center text-sm text-ink-3">查询没有返回工作项</div>;
+  return <div className="py-12 text-center text-sm text-ink-3">这个查询现在一条都没有。可能筛选条件太窄——去 Azure DevOps 里改改这个查询。</div>;
 }
 
 /**
@@ -176,7 +176,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
         <RiskChips overdue={summary.overdue} stale={summary.stale} unassigned={summary.unassigned} />
       </div>
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line bg-surface-4">
+      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id);
           const nodeStats = stats.get(w.id);

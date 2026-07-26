@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Bell,
+  CalendarCheck,
+  CheckCircle2,
   ChevronDown,
   Loader2,
   MessageCircle,
@@ -11,6 +13,8 @@ import {
   ThumbsUp,
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
+import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
+import Button from '../components/ui/Button';
 import ButlerLearnedPanel from '../components/ButlerLearnedPanel';
 import ButlerRoutines from '../components/ButlerRoutines';
 import ButlerAuditTrail from '../components/ButlerAuditTrail';
@@ -94,6 +98,12 @@ function ledgerDue(entry: LedgerEntry, today: string): { label: string; color: s
   return { label: '没设日期', color: 'text-ink-3' };
 }
 
+/** 空状态得说清「怎么让它不空」——两栏的填法不一样，不能共用一句 */
+const LEDGER_EMPTY: Record<string, string> = {
+  我答应的: '还没记下你答应过谁。在消息上右键「标记为待办」，填上答应给谁，就会出现在这里。',
+  我在等的: '还没有在等谁。管家给结论时点「等他回」，就会进这里。',
+};
+
 function LedgerColumn({
   title,
   entries,
@@ -104,16 +114,18 @@ function LedgerColumn({
   today: string;
 }) {
   return (
-    <section className="min-w-0 rounded-xl border border-line bg-surface p-4">
+    <section className="min-w-0 rounded-xl bg-surface p-4 shadow-raise">
       <h2 className="mb-3 text-sm font-semibold text-ink">{title}</h2>
       {entries.length === 0 ? (
-        <p className="py-4 text-center text-sm text-ink-3">这里还是空的</p>
+        <p className="px-2 py-4 text-center text-xs leading-5 text-ink-3">
+          {LEDGER_EMPTY[title] ?? '这里还是空的'}
+        </p>
       ) : (
         <div className="flex flex-col gap-2">
           {entries.map((entry) => {
             const due = ledgerDue(entry, today);
             return (
-              <div key={`${entry.kind}:${entry.todoId}`} className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+              <div key={`${entry.kind}:${entry.todoId}`} className="rounded-lg bg-surface-2 px-3 py-2.5">
                 <div className="text-sm font-medium text-ink">{entry.title}</div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-ink-2">{entry.who}</span>
@@ -249,8 +261,8 @@ export default function ButlerPage() {
       if (outcome === 'needs-who') return;
       if (outcome === 'missing-ref') toast.info('这项已经找不到了');
       else if (outcome === 'already-applied') toast.info('这项已经处理过了');
-      else if (proposal.kind === 'close-wait') toast.success('已销账');
-      else toast.success('已入账');
+      else if (proposal.kind === 'close-wait') toast.success('已从「我在等的」里移除');
+      else toast.success('已记进「我答应的」');
       hideProposal(key);
     } catch (error) {
       toast.error(error, '建议执行失败，可明确重试');
@@ -295,13 +307,41 @@ export default function ButlerPage() {
     else toast.success('记下了：这类会继续盯');
   }
 
+  /**
+   * 简报条目背后的待办 id。`ledger:` 与 `todo:` 两种前缀都直接带 id——
+   * 这类条目「本来就是待办」，所以不该给「转任务」，而该给真正能了结它的动作。
+   */
+  function todoIdOf(ref: string): string | null {
+    const [kind, id = ''] = ref.split(':', 2);
+    if ((kind !== 'ledger' && kind !== 'todo') || !id) return null;
+    return todos.some((todo) => todo.id === id && !todo.done) ? id : null;
+  }
+
+  function completeTodo(ref: string): void {
+    const id = todoIdOf(ref);
+    if (!id) return;
+    const title = refTitles.get(ref) ?? '这件事';
+    useTodos.getState().toggle(id);
+    toast.undo(`已完成「${title}」`, () => useTodos.getState().toggle(id));
+  }
+
+  /** 逾期条目最常见的处理不是「完成」也不是「稍后」，而是「就今天」 */
+  function scheduleToday(ref: string): void {
+    const id = todoIdOf(ref);
+    if (!id) return;
+    const previous = todos.find((todo) => todo.id === id)?.due;
+    const today = todayKey();
+    useTodos.getState().update(id, { due: today });
+    toast.undo('已改到今天', () => useTodos.getState().update(id, { due: previous }));
+  }
+
   function turnIntoTodo(ref: string): void {
     const outcome = turnButlerBriefItemIntoTodo(ref, refTitles.get(ref) ?? '相关事项', {
       message: lastResult?.refMessages?.[ref],
     });
-    if (outcome === 'already-exists') toast.info('已在待办池');
-    else if (outcome === 'created') toast.success('已转到待办池');
-    else toast.info('这条暂时不能转任务');
+    if (outcome === 'already-exists') toast.info('这条已经在待办里了');
+    else if (outcome === 'created') toast.success('已记成待办，在「待办」里能看到');
+    else toast.info('这条转不成待办');
   }
 
   async function draftReply(item: NonNullable<typeof result>['items'][number]): Promise<void> {
@@ -366,29 +406,22 @@ export default function ButlerPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant={briefSync ? 'primary' : 'secondary'}
+            icon={Smartphone}
+            loading={briefSyncBusy}
             onClick={() => void toggleBriefSync()}
-            disabled={briefSyncBusy}
             title={briefSync ? '简报会发到你和自己的私聊，任何 Rocket.Chat 客户端可看；点击停止' : '把每天的简报发到你和自己的私聊，手机打开 Rocket.Chat 就能看'}
-            className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
-              briefSync
-                ? 'border-primary/40 bg-primary-light/40 text-primary hover:bg-primary-light/60'
-                : 'border-line bg-surface text-ink-2 hover:bg-fill-hover'
-            }`}
           >
-            {briefSyncBusy ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
             {briefSync ? '已同步到手机' : '同步到手机'}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            icon={RefreshCw}
+            loading={running}
             onClick={() => void runButlerRoundsNow()}
-            disabled={running}
-            className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
           >
-            {running ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             再看一圈
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -400,7 +433,7 @@ export default function ButlerPage() {
             </div>
           )}
 
-          <section className="rounded-xl border border-line bg-surface p-5">
+          <section className="rounded-xl bg-surface p-5 shadow-raise">
             {result ? (
               <>
                 <div className="border-b border-line pb-4">
@@ -412,7 +445,7 @@ export default function ButlerPage() {
                 {visibleItems.length > 0 ? (
                   <div className="mt-4 flex flex-col gap-3">
                     {visibleItems.map((item, index) => (
-                      <article key={`${item.ref}:${index}`} className="rounded-lg border border-line bg-surface-2 p-4">
+                      <article key={`${item.ref}:${index}`} className="rounded-lg bg-surface-2 p-4">
                         <div className="flex items-start gap-3">
                           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-white">
                             {index + 1}
@@ -426,59 +459,81 @@ export default function ButlerPage() {
                             <ButlerSources sources={roundSources(item.ref, lastResult)} />
                             <div className="mt-3 flex flex-wrap items-center gap-2">
                               {canTurnIntoTodo(item.ref) && (
-                                <button
-                                  type="button"
+                                <Button
+                                  size="sm"
                                   onClick={() => turnIntoTodo(item.ref)}
-                                  className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
                                 >
-                                  转任务
-                                </button>
+                                  记成待办
+                                </Button>
                               )}
-                              <button
-                                type="button"
+                              {todoIdOf(item.ref) && (
+                                <Button
+                                  size="sm"
+                                  icon={CheckCircle2}
+                                  onClick={() => completeTodo(item.ref)}
+                                >
+                                  完成
+                                </Button>
+                              )}
+                              {todoIdOf(item.ref) && todos.find((todo) => todo.id === todoIdOf(item.ref))?.due !== today && (
+                                <Button
+                                  size="sm"
+                                  icon={CalendarCheck}
+                                  onClick={() => scheduleToday(item.ref)}
+                                >
+                                  就今天
+                                </Button>
+                              )}
+                              {/* 只从这份简报里收起，不碰待办本身。原文案「稍后」会被读成
+                                  「稍后处理这件事」，跟旁边真的改期的「就今天」撞在一起 */}
+                              <Button
+                                size="sm"
+                                title="从这份简报里收起。不改待办；下次我再看一圈时它若还在，还会提"
                                 onClick={() => {
-                                  if (snoozeButlerRoundsItem(item.ref)) toast.info('这轮先放一放');
+                                  if (snoozeButlerRoundsItem(item.ref)) toast.info('已从这份简报收起，下次我再看一圈还在的话会提');
                                 }}
-                                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
                               >
-                                稍后
-                              </button>
+                                先收起
+                              </Button>
                               {lastResult?.refPeople?.[item.ref] && (
-                                <button
-                                  type="button"
-                                  onClick={() => void draftReply(item)}
+                                <Button
+                                  size="sm"
+                                  loading={draftingRef === item.ref}
                                   disabled={draftingRef !== null}
-                                  className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover disabled:opacity-50"
+                                  onClick={() => void draftReply(item)}
                                 >
-                                  {draftingRef === item.ref && <Loader2 size={12} className="animate-spin" />}
                                   帮我拟一句
-                                </button>
+                                </Button>
                               )}
-                              <button
-                                type="button"
-                                title="有用，这类继续盯"
-                                aria-label="有用"
+                              {/* 左边是「怎么处理这件事」，右边是「这条报得对不对」——
+                                  两类语义平铺成一行时，光看图标猜不出点了会发生什么 */}
+                              <span className="ml-auto text-2xs text-ink-3">这条报得好吗</span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                icon={ThumbsUp}
+                                title="这类以后继续盯"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'useful')}
-                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
                               >
-                                <ThumbsUp size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                title="没用，这类以后少报"
-                                aria-label="没用"
+                                有用
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                icon={ThumbsDown}
+                                title="这条不该报，同类以后少提；这件事本身还会盯着"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'noise')}
-                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
                               >
-                                <ThumbsDown size={13} />
-                              </button>
-                              <button
-                                type="button"
+                                报错了
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="这件事以后完全不出现；可在下面「我记着少提的」里删掉恢复"
                                 onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
-                                className="px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
                               >
-                                少来这种
-                              </button>
+                                这件事别再提
+                              </Button>
                             </div>
                             {draftCard?.ref === item.ref && (
                               <div className="mt-3 rounded-lg border border-primary/25 bg-surface p-3">
@@ -538,14 +593,19 @@ export default function ButlerPage() {
                       <p className="mt-1 text-xs leading-5 text-ink-2">{proposal.reason}</p>
                       <ButlerSources sources={roundSources(proposal.ref, lastResult)} />
                       <div className="mt-3 flex gap-2">
-                        <button
-                          type="button"
-                          disabled={proposalOperationKey === key}
+                        {/* 动词必须跟下面两栏的名字对上：「我答应的」「我在等的」。
+                            原本写「入账 / 销账」——记账黑话，而且跟栏名一个字都不沾 */}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={proposalOperationKey === key}
+                          title={proposal.kind === 'close-wait'
+                            ? '对方已经回应，从「我在等的」里移除；待办本身不删'
+                            : '把这条记进「我答应的」，同时进待办'}
                           onClick={() => void acceptProposal(proposal, key)}
-                          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50"
                         >
-                          {proposalOperationKey === key ? '执行中…' : proposal.kind === 'close-wait' ? '销账' : '入账'}
-                        </button>
+                          {proposal.kind === 'close-wait' ? '了结它' : '记下来'}
+                        </Button>
                         <button
                           type="button"
                           disabled={proposalOperationKey === key}
@@ -570,7 +630,7 @@ export default function ButlerPage() {
           </section>
 
           {deskSessions.length > 0 && (
-            <section className="rounded-xl border border-line bg-surface p-5">
+            <section className="rounded-xl bg-surface p-5 shadow-raise">
               <h2 className="text-sm font-semibold text-ink">我们手头的事</h2>
               <div className="mt-3 flex flex-col gap-2">
                 {deskSessions.map((session) => (
@@ -578,7 +638,7 @@ export default function ButlerPage() {
                     key={session.id}
                     type="button"
                     onClick={() => void openSessionConversation(session.id)}
-                    className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3.5 py-2.5 text-left hover:border-primary/40"
+                    className="flex items-center gap-3 rounded-lg bg-surface-2 px-3.5 py-2.5 text-left hover:border-primary/40"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-ink">{session.title}</div>
@@ -591,6 +651,8 @@ export default function ButlerPage() {
             </section>
           )}
 
+          <ButlerErrandRunCard />
+
           <div className="grid gap-4 md:grid-cols-2">
             <LedgerColumn title="我答应的" entries={commitments} today={today} />
             <LedgerColumn title="我在等的" entries={waits} today={today} />
@@ -598,10 +660,10 @@ export default function ButlerPage() {
 
           <ButlerLearnedPanel />
 
-          <details className="group rounded-xl border border-line bg-surface">
+          <details className="group rounded-xl bg-surface shadow-raise">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
               <span>
-                工作日志 · 看了 {checkedCount} 项，上面说了 {visibleItems.length} 条，压下 {result?.suppressed.length ?? 0} 条
+                工作日志 · 这轮看了 {checkedCount} 项，报给你 {visibleItems.length} 条，替你挡掉 {result?.suppressed.length ?? 0} 条
               </span>
               <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
             </summary>
@@ -629,8 +691,8 @@ export default function ButlerPage() {
                     {[...briefFeedback].reverse().slice(0, 10).map((entry) => (
                       <div key={`${entry.title}:${entry.at}`} className="flex items-center gap-2 text-xs text-ink-3">
                         {entry.verdict === 'noise'
-                          ? <ThumbsDown size={11} className="shrink-0" />
-                          : <ThumbsUp size={11} className="shrink-0" />}
+                          ? <ThumbsDown size={12} className="shrink-0" />
+                          : <ThumbsUp size={12} className="shrink-0" />}
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <span className="shrink-0">{entry.verdict === 'noise' ? '以后少报' : '继续盯'}</span>
                         <button
@@ -689,7 +751,7 @@ export default function ButlerPage() {
           >
             <MessageCircle size={14} />展开对话
           </button>
-          <form onSubmit={submitQuestion} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 focus-within:border-primary/50">
+          <form onSubmit={submitQuestion} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 focus-within:border-primary/50">
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -703,7 +765,7 @@ export default function ButlerPage() {
               aria-label="发送"
               className="rounded-md bg-primary p-2 text-white hover:bg-primary-hover disabled:opacity-40"
             >
-              <Send size={15} />
+              <Send size={14} />
             </button>
           </form>
         </div>

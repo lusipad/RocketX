@@ -131,7 +131,7 @@ function AllDayCell({
               className="flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
               title={done ? '标记为未完成' : '标记完成'}
             >
-              {done && <Check size={9} strokeWidth={3} />}
+              {done && <Check size={12} strokeWidth={3} />}
             </span>
             <span className={`min-w-0 flex-1 truncate ${done ? 'line-through' : ''}`}>
               {e.title}
@@ -219,7 +219,7 @@ function DayColumn({
                   className="mt-px flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
                   title={done ? '标记为未完成' : '标记完成'}
                 >
-                  {done && <Check size={9} strokeWidth={3} />}
+                  {done && <Check size={12} strokeWidth={3} />}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className={`block truncate font-medium ${done ? 'line-through' : ''}`}>

@@ -21,7 +21,9 @@ import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
+import { useLocalCodex } from '../stores/localCodex';
 import { captureButlerSurfaceContext } from '../lib/butlerSurface';
+import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -105,6 +107,19 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     };
   }, [todos]);
 
+  /**
+   * 管家角标 = 派出去的活需要你。人不在管家页时这是唯一的信号——
+   * 「等你点头」会把活卡死，所以标红；「回话了」只是提醒，标主色。
+   * 正在干的时候不打扰。
+   */
+  const errandRun = useButler((s) => s.errandRun);
+  const codexApprovals = useLocalCodex((s) => s.approvals);
+  const errandBadge: 'waiting' | 'replied' | null = useMemo(() => {
+    if (!errandRun || active === 'butler-view') return null;
+    if (!errandRun.outcome && codexApprovals.length > 0) return 'waiting';
+    return errandRun.outcome ? 'replied' : null;
+  }, [errandRun, codexApprovals.length, active]);
+
   const calendarEvents = useCalendar((s) => s.events);
   /**
    * 日历角标 = 今天的日程 + 今天到期的待办。
@@ -119,20 +134,17 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     );
   }, [calendarEvents, todos]);
 
-  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
-  const { unreadTotal, hasAlert } = useMemo(() => {
-    let unreadTotal = 0;
-    let hasAlert = false;
-    for (const s of Object.values(subscriptions)) {
-      if (s.open === false || s.disableNotifications) continue;
-      unreadTotal += s.unread || 0;
-      if (s.alert) hasAlert = true;
-    }
-    return { unreadTotal, hasAlert };
-  }, [subscriptions]);
+  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（口径见 lib/unread）
+  const { unreadTotal, hasAlert } = useMemo(
+    () => ({
+      unreadTotal: totalUnread(subscriptions),
+      hasAlert: Object.values(subscriptions).some((s) => countsTowardUnread(s) && s.alert),
+    }),
+    [subscriptions],
+  );
 
   return (
-    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line bg-surface-1 px-3 py-3 text-ink">
+    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line-strong bg-surface-1 px-3 py-3 text-ink">
       {/* 头像 + 发起会话 */}
       <div className="flex items-center justify-between px-1 pb-3">
         <button onClick={() => setSelfCard(true)} title="个人信息">
@@ -147,12 +159,12 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
             aria-expanded={plusMenu}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
-            <Plus size={19} />
+            <Plus size={16} />
           </button>
           {plusMenu && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setPlusMenu(false)} />
-              <div role="menu" className="absolute left-0 z-30 mt-1 w-36 rounded-lg border border-line bg-surface-4 py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
+              <div role="menu" className="absolute left-0 z-30 mt-1 w-36 rounded-lg bg-surface-4 shadow-raise py-1 shadow-[0_4px_16px_rgba(31,35,41,0.16)]">
                 <button
                   onClick={() => {
                     setPlusMenu(false);
@@ -160,7 +172,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <MessageCirclePlus size={15} className="text-ink-2" />
+                  <MessageCirclePlus size={14} className="text-ink-2" />
                   发起聊天
                 </button>
                 <button
@@ -170,7 +182,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <UsersRound size={15} className="text-ink-2" />
+                  <UsersRound size={14} className="text-ink-2" />
                   创建群组
                 </button>
                 <button
@@ -180,7 +192,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <Users size={15} className="text-ink-2" />
+                  <Users size={14} className="text-ink-2" />
                   创建团队
                 </button>
               </div>
@@ -216,7 +228,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     }
                     setModule(key);
                   }}
-                  title={key === 'butler-view' && active !== 'butler-view' ? '把当前页面交给管家' : label}
+                  title={key === 'butler-view' && active !== 'butler-view' ? '打开管家，并带上你现在这一页' : label}
                   className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                     isActive
                       ? 'bg-fill-active font-medium text-ink'
@@ -239,6 +251,15 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     ) : hasAlert ? (
                       <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                     ) : null)}
+                  {/* 管家：派出去的活等你点头就标红，干完了标灰点——人不在管家页时的唯一信号 */}
+                  {key === 'butler-view' && errandBadge && (
+                    <span
+                      className={`ml-auto h-2 w-2 rounded-full ${
+                        errandBadge === 'waiting' ? 'bg-danger' : 'bg-primary'
+                      }`}
+                      title={errandBadge === 'waiting' ? '派出去的活等你点头' : '派出去的活回话了'}
+                    />
+                  )}
                   {/* 日历：今天日程数 */}
                   {key === 'calendar' && todayEventCount > 0 && (
                     <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">
@@ -269,7 +290,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           onClick={onOpenShortcuts}
           className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
         >
-          <Keyboard size={15} />
+          <Keyboard size={14} />
           快捷键
         </button>
         <button
@@ -280,14 +301,14 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
         >
-          <Settings size={15} />
+          <Settings size={14} />
           设置
         </button>
         <button
           onClick={() => setConfirmLogout(true)}
           className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-danger"
         >
-          <LogOut size={15} />
+          <LogOut size={14} />
           退出登录
         </button>
       </div>

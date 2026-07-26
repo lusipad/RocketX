@@ -96,7 +96,7 @@ function PullRequestLink({
         rel="noreferrer"
         className="mx-0.5 inline-flex max-w-xs items-center gap-1.5 rounded-md border border-line bg-fill-1 px-2 py-1 align-middle text-xs no-underline transition hover:border-primary"
       >
-        <GitPullRequest size={13} className="shrink-0 text-[#7f3bf5]" />
+        <GitPullRequest size={14} className="shrink-0 text-[#7f3bf5]" />
         <span className="shrink-0 text-ink-3">!{item.id}</span>
         <span className="truncate text-ink">{item.title}</span>
       </a>
@@ -108,7 +108,7 @@ function PullRequestLink({
         <span className="block h-1 rounded-t-lg bg-[#7f3bf5]" />
         <span className="px-3 pb-2 pt-1.5">
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
-            <GitPullRequest size={13} className="shrink-0 text-[#7f3bf5]" />
+            <GitPullRequest size={14} className="shrink-0 text-[#7f3bf5]" />
             <span className="shrink-0">PR !{item.id}</span>
             <span className="shrink-0">·</span>
             <span className="min-w-0 flex-1 truncate">{item.project}/{item.repo}</span>
@@ -158,7 +158,7 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
         rel="noreferrer"
         className="mx-0.5 inline-flex max-w-xs items-center gap-1.5 rounded-md border border-line bg-fill-1 px-2 py-1 align-middle text-xs no-underline transition hover:border-primary"
       >
-        <BuildIcon build={item} size={13} />
+        <BuildIcon build={item} size={14} />
         <span className="shrink-0 text-ink-3">{item.buildNumber}</span>
         <span className="truncate text-ink">{item.definition}</span>
       </a>
@@ -170,7 +170,7 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
         <span className="block h-1 rounded-t-lg bg-primary" />
         <span className="px-3 pb-2 pt-1.5">
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
-            <BuildIcon build={item} size={13} />
+            <BuildIcon build={item} size={14} />
             <span>构建 {item.buildNumber}</span>
             <span>·</span>
             <span className="min-w-0 flex-1 truncate">{item.project}</span>

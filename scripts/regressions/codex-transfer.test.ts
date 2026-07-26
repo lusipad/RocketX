@@ -70,7 +70,9 @@ test('转移走 Codex App 官方新对话 deep link，不再创建列表可见�
 
   const page = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   assert.match(page, /transferConversationToCodexApp/);
-  assert.match(page, /转到 Codex/);
+  // 不焊死按钮上的字：要守的是「入口在，而且明说了得用户自己按回车」。
+  // 官方 deep link 只预填不发送，措辞一旦含糊就会有人以为任务已经跑起来了（issue #201）。
+  assert.match(page, /完整记录已填入，请确认后发送/);
 
   // 群托管同样交给 Codex App：会话消息装载 + 官方 deep link + 面板入口
   const shared = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
@@ -79,7 +81,7 @@ test('转移走 Codex App 官方新对话 deep link，不再创建列表可见�
   assert.match(shared, /openCodexNewThread/);
   assert.doesNotMatch(shared, /externalAgentConfig/);
   const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
-  assert.match(panel, /转到 Codex App/);
+  assert.match(panel, /transferToCodexApp/);
   assert.match(panel, /完整记录已填入，请确认后发送/);
 
   const capability = readFileSync('apps/desktop/src-tauri/capabilities/default.json', 'utf8');

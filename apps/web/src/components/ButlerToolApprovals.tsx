@@ -26,7 +26,7 @@ export default function ButlerToolApprovals({ compact = false }: { compact?: boo
         return (
           <div key={checkpoint.id} className="rounded-lg border border-primary/30 bg-primary-light/40 p-3">
             <div className="text-xs font-medium text-primary">
-              {checkpoint.status === 'failed' ? '操作失败，可明确重试' : '写操作等待确认'}
+              {checkpoint.status === 'failed' ? '这次没做成，可以再试一次' : '管家想改点东西，等你确认'}
             </div>
             <div className={`mt-1 text-ink ${compact ? 'text-xs' : 'text-sm'}`}>{checkpoint.preview}</div>
             {checkpoint.error ? <div className="mt-1 text-xs text-danger">{checkpoint.error.message}</div> : null}
@@ -37,7 +37,7 @@ export default function ButlerToolApprovals({ compact = false }: { compact?: boo
                 onClick={() => void dismiss(checkpoint.id)}
                 className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
               >
-                取消
+                不执行
               </button>
               <button
                 type="button"
@@ -49,7 +49,7 @@ export default function ButlerToolApprovals({ compact = false }: { compact?: boo
                 className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover disabled:opacity-50"
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : null}
-                {checkpoint.status === 'failed' ? '明确重试' : '确认执行'}
+                {checkpoint.status === 'failed' ? '再试一次' : '确认执行'}
               </button>
             </div>
           </div>

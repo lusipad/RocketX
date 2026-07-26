@@ -195,18 +195,18 @@ function codexTrace(text: string): void {
 function unavailableReason(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message : String(error);
   if (/Codex CLI 不可用|找不到 PATH 中 Codex|ENOENT|not recognized as an internal/i.test(message)) {
-    return 'Codex 大脑不可用：未检测到 Codex CLI，请先安装并登录。';
+    return '管家用不了：这台电脑上没找到 Codex，装好并登录后会自动恢复。';
   }
-  if (/未登录|login|auth/i.test(message)) return 'Codex 大脑不可用：请先登录 Codex。';
+  if (/未登录|login|auth/i.test(message)) return '管家用不了：Codex 还没登录，登录一次就好。';
   return undefined;
 }
 
 export function friendlyButlerCodexError(error: unknown): string {
   const availability = codexBrainAvailability();
-  if (!availability.available) return availability.reason ?? 'Codex 大脑暂不可用';
+  if (!availability.available) return availability.reason ?? '管家暂时用不了';
   const reason = unavailableReason(error);
   if (reason) return reason;
-  return 'Codex 大脑暂时无法回答，请稍后重试。';
+  return '管家这次没答上来，稍后再问一次。';
 }
 
 function roomPrefixedInput(
@@ -523,7 +523,7 @@ async function startResidentThread(prompt: string, promptHash: string): Promise<
   disableCodexNativeMemories(client, response.thread.id);
   // 常驻线程也是原生 Codex 线程，起名后在 codex resume / Codex App 里可辨认
   void client
-    .request('thread/name/set', { threadId: response.thread.id, name: rocketxThreadName('AI 大脑') })
+    .request('thread/name/set', { threadId: response.thread.id, name: rocketxThreadName('管家') })
     .catch(() => undefined);
 }
 
@@ -589,7 +589,7 @@ async function ensureResidentThread(): Promise<ButlerCodexResumeMode> {
 
 export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<ButlerCodexAskResult> {
   const availability = codexBrainAvailability();
-  if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
+  if (!availability.available) throw new Error(availability.reason ?? '管家暂时用不了');
   const text = options.text.trim();
   if (!text) return { text: '' };
   residentStopRequested = false;
@@ -599,7 +599,7 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     const setupStartedAt = Date.now();
     // 这段可能拉起 app-server 进程并 thread/start，是整轮里最长的黑盒；
     // 事件接线要到下面才建立，所以这里直接用 options.onEvent 播报。
-    options.onEvent?.({ type: 'phase', phase: 'thread-setup', detail: '正在唤醒管家大脑…' });
+    options.onEvent?.({ type: 'phase', phase: 'thread-setup', detail: '正在唤醒管家…' });
     const resumeMode = await ensureResidentThread();
     if (residentStopRequested) return { text: '' };
     options.onEvent?.({
@@ -693,7 +693,7 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     : new Error('Butler 临时会话已暂停');
   if (options.signal?.aborted) throw abortError();
   const availability = codexBrainAvailability();
-  if (!availability.available) throw new Error(availability.reason ?? 'Codex 大脑暂不可用');
+  if (!availability.available) throw new Error(availability.reason ?? '管家暂时用不了');
   const tools = createButlerTools();
   const registeredTools = new Map(tools.map((tool) => [tool.name, tool]));
   const sessionId = `butler-routine-${crypto.randomUUID()}`;

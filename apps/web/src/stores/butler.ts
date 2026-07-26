@@ -34,7 +34,16 @@ import {
   type ButlerWorkflowKind,
 } from '../lib/butlerTaskContext';
 import { normalizeDispatchSpec } from '../agent/dispatchSpec';
-import { dispatchButlerErrand, type ButlerErrandDraft } from '../lib/butlerErrands';
+import {
+  dispatchButlerErrand,
+  latestCodexReply,
+  type ButlerErrandDraft,
+  type ButlerErrandRun,
+  type DispatchErrandOptions,
+} from '../lib/butlerErrands';
+import { useLocalCodex } from './localCodex';
+import { toast } from './toast';
+import { useUI } from './ui';
 import type { DispatchTarget } from '../lib/dispatchWorkspaces';
 import { createButlerTools, type ButlerRoutineDraft } from '../lib/butlerTools';
 import {
@@ -188,6 +197,8 @@ export interface ButlerState {
   error: string | null;
   routineDraft: ButlerRoutineDraft | null;
   errandDraft: ButlerErrandDraft | null;
+  /** 已派出去、正在办的活；管家页据此显示进度与结论 */
+  errandRun: ButlerErrandRun | null;
   runtimeCheckpoints: ButlerToolCheckpoint[];
   workflowRuntimeCheckpoints: ButlerToolCheckpoint[];
   context: ButlerSurfaceContext | null;
@@ -226,8 +237,10 @@ export interface ButlerState {
   dismissToolCheckpoint: (checkpointId: string) => Promise<void>;
   confirmRoutineDraft: () => Promise<void>;
   dismissRoutineDraft: () => Promise<void>;
-  confirmErrandDraft: (target: DispatchTarget) => Promise<void>;
+  confirmErrandDraft: (target: DispatchTarget, options?: DispatchErrandOptions) => Promise<void>;
   dismissErrandDraft: () => Promise<void>;
+  setErrandRun: (run: ButlerErrandRun | null) => void;
+  dismissErrandRun: () => void;
   reset: () => void;
 }
 
@@ -384,6 +397,64 @@ function normalizeRuntimeCheckpoints(value: unknown): ButlerToolCheckpoint[] {
     }
   }
   return checkpoints;
+}
+
+let errandWatcher: (() => void) | undefined;
+
+/**
+ * 盯住派出去的活。
+ *
+ * **状态收敛必须在这儿，不能放进卡片组件**：人不在管家页时组件根本没挂载，
+ * 活干完了 `outcome` 永远不会更新，导航角标也就永远不亮。
+ *
+ * 人不在管家页时补一条提示——尤其「等你点头」，那是会把活卡死的情况。
+ * 提示一律指回管家页，不指执行间（管家是唯一实体）。
+ */
+function watchErrandRun(run: ButlerErrandRun): void {
+  errandWatcher?.();
+  let notifiedApproval = false;
+  const stop = () => {
+    errandWatcher?.();
+    errandWatcher = undefined;
+  };
+  const awayFromButler = () => useUI.getState().module !== 'butler-view';
+  const goLook = { label: '去看看', onClick: () => useUI.getState().setModule('butler-view') };
+
+  errandWatcher = useLocalCodex.subscribe((state, previous) => {
+    const current = useButler.getState().errandRun;
+    // 活被换掉或已定格：这次订阅完成使命
+    if (!current || current.threadId !== run.threadId || current.outcome) {
+      stop();
+      return;
+    }
+    // 用户在执行间手动开了新会话：旧活的状态无从谈起，不冒充它汇报
+    if (state.threadId && state.threadId !== run.threadId) {
+      useButler.setState({ errandRun: { ...current, outcome: 'stopped' } });
+      stop();
+      return;
+    }
+    if (state.approvals.length > previous.approvals.length && !notifiedApproval) {
+      notifiedApproval = true;
+      if (awayFromButler()) toast.info(`「${current.title}」等你点个头`, goLook);
+    }
+    if (
+      (previous.status === 'running' || previous.status === 'starting')
+      && state.status !== 'running'
+      && state.status !== 'starting'
+    ) {
+      const reply = latestCodexReply();
+      useButler.setState({
+        errandRun: {
+          ...current,
+          outcome: state.status === 'ready' ? 'replied' : 'stopped',
+          ...(reply ? { reply } : {}),
+        },
+      });
+      // 中性措辞：干没干完由用户看内容定夺，不替 Codex 宣布成功
+      if (awayFromButler()) toast.info(`「${current.title}」回话了`, goLook);
+      stop();
+    }
+  });
 }
 
 function errandDraftFrom(checkpoints: readonly ButlerToolCheckpoint[]): ButlerErrandDraft | null {
@@ -1304,6 +1375,7 @@ export const useButler = create<ButlerState>((set, get) => ({
   error: null,
   routineDraft: null,
   errandDraft: null,
+  errandRun: null,
   runtimeCheckpoints: [],
   workflowRuntimeCheckpoints: [],
   context: null,
@@ -1675,7 +1747,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const draft = get().actionDraft;
     if (!draft) return { allowed: false, reason: '没有待执行的动作草案' };
     const existing = runtimeCheckpoint(draft.checkpointId);
-    if (!existing) return { allowed: false, reason: '动作 checkpoint 不存在' };
+    if (!existing) return { allowed: false, reason: '这个动作已经不在了，重新问一次管家吧' };
     const checkpoint = updateButlerActionCheckpoint(existing, draft, butlerNow());
     upsertRuntimeCheckpoint(checkpoint);
     const workbenchConfig = useWorkbench.getState().config;
@@ -1957,12 +2029,22 @@ export const useButler = create<ButlerState>((set, get) => ({
     await get().dismissToolCheckpoint(draft.checkpointId);
   },
 
-  confirmErrandDraft: async (target) => {
+  confirmErrandDraft: async (target, options) => {
     const draft = get().errandDraft;
     if (!draft) return;
     // 先派发再确认 checkpoint：派发失败时草案留在卡上，用户改选工作区可重试
-    await dispatchButlerErrand(draft.spec, target);
+    const run = await dispatchButlerErrand(draft.spec, target, options);
+    set({ errandRun: run });
+    watchErrandRun(run);
     await get().approveToolCheckpoint(draft.checkpointId);
+  },
+
+  setErrandRun: (errandRun) => set({ errandRun }),
+
+  dismissErrandRun: () => {
+    errandWatcher?.();
+    errandWatcher = undefined;
+    set({ errandRun: null });
   },
 
   dismissErrandDraft: async () => {
@@ -1984,6 +2066,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       error: null,
       routineDraft: null,
       errandDraft: null,
+      errandRun: null,
       runtimeCheckpoints: [],
       workflowRuntimeCheckpoints: [],
       context: null,
