@@ -364,6 +364,8 @@ export default function CalendarPage() {
   }, [wbConfig, wbLastRefresh, wbRefresh]);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
+  // 翻页单位跟着视图走：写死「上一个月」在周/日视图里就是错的
+  const viewUnit = view === 'month' ? '个月' : view === 'week' ? '周' : '天';
   const next = useCalendar((s) => s.next);
   const goToday = useCalendar((s) => s.today);
 
@@ -442,6 +444,8 @@ export default function CalendarPage() {
             <div className="flex items-center gap-0.5">
               <button
                 onClick={prev}
+                title={`上一${viewUnit}`}
+                aria-label={`上一${viewUnit}`}
                 className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
               >
                 <ChevronLeft size={16} />
@@ -454,6 +458,8 @@ export default function CalendarPage() {
               </button>
               <button
                 onClick={next}
+                title={`下一${viewUnit}`}
+                aria-label={`下一${viewUnit}`}
                 className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
               >
                 <ChevronRight size={16} />

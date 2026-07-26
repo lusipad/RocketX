@@ -187,7 +187,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           <button
             type="button"
             onClick={() => useUI.getState().setModule('codex')}
-            title="执行间"
+            title="打开执行间：看管家跑了哪些命令"
             aria-label="执行间"
             className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
           >

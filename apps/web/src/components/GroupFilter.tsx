@@ -12,7 +12,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
-  Pin,
+  Star,
   RefreshCw,
   Trash2,
   User,
@@ -32,7 +32,8 @@ const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
   { key: 'all', label: '消息', icon: MessageSquareText },
   { key: 'unread', label: '未读', icon: RefreshCw },
   { key: 'mentions', label: '@我', icon: AtSign },
-  { key: 'favorites', label: '收藏', icon: Pin },
+  // 图钉在本应用里已经代表「置顶」，收藏改用星标，两个概念别共用一个图标
+  { key: 'favorites', label: '收藏', icon: Star },
   { key: 'dm', label: '单聊', icon: User },
   { key: 'multi', label: '多人聊天', icon: UsersRound },
   { key: 'groups', label: '群组', icon: Hash },

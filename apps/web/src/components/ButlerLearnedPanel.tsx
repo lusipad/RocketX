@@ -138,7 +138,7 @@ export default function ButlerLearnedPanel() {
                 onClick={() => forget(record)}
                 className="shrink-0 px-1.5 py-1 text-xs text-ink-3 hover:text-danger"
               >
-                忘掉
+                让它忘掉
               </button>
             </div>
           ))}

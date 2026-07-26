@@ -920,11 +920,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           {message.rocketxOffline && !message.pending && !message.failed && (
             <span
               className="mb-0.5 shrink-0 text-2xs text-ink-3"
-              title="已通过可信局域网投递，等待 Rocket.Chat 恢复后回灌"
+              title="已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次"
             >
               {message.rocketxLanBytesPerSecond
                 ? `局域网直传 · ${fmtSize(message.rocketxLanBytesPerSecond)}/s`
-                : '局域网 · 待回灌'}
+                : '局域网已送达 · 待补发'}
             </span>
           )}
           {message.failed && (

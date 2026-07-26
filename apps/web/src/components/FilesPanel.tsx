@@ -154,7 +154,7 @@ export default function FilesPanel() {
           })}
         {!loading && !error && filtered.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '没有匹配的文件' : '这个会话还没有人传过文件'}
+            {keyword ? '没有匹配的文件' : '这个会话还没有人传过文件。把文件拖进下面的输入框就能发第一个。'}
           </div>
         )}
       </div>

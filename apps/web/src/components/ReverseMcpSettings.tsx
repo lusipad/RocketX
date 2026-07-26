@@ -22,7 +22,7 @@ export default function ReverseMcpSettings() {
     }
     invoke<McpStatus>('mcp_config_status')
       .then(setStatus)
-      .catch((error) => toast.error(error, '读取反向 MCP 状态失败'))
+      .catch((error) => toast.error(error, '读取让外部 AI 工具读你的聊天 状态失败'))
       .finally(() => setBusy(false));
   }, []);
 
@@ -44,7 +44,7 @@ export default function ReverseMcpSettings() {
       if (status.enabled) {
         await invoke('mcp_config_disable');
         setStatus((current) => ({ ...current, enabled: false, serverUrl: undefined, userId: undefined }));
-        toast.success('反向 MCP 已停用，系统凭据已删除');
+        toast.success('已关闭，凭据已从系统里删除');
       } else {
         const auth = loadStoredAuth();
         const serverUrl = getServerBase();
@@ -60,10 +60,10 @@ export default function ReverseMcpSettings() {
           serverUrl,
           userId: auth.userId,
         }));
-        toast.success('反向 MCP 已启用，Rocket.Chat token 仅保存在系统凭据库');
+        toast.success('已开启：外部 AI 工具现在能只读你的聊天；凭据只存在系统凭据库里');
       }
     } catch (error) {
-      toast.error(error, '更新反向 MCP 失败');
+      toast.error(error, '开关没改成');
     } finally {
       setBusy(false);
     }
@@ -71,7 +71,7 @@ export default function ReverseMcpSettings() {
 
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold text-ink">反向 MCP</h2>
+      <h2 className="mb-2 text-sm font-semibold text-ink">让外部 AI 工具读你的聊天</h2>
       <div className="rounded-lg bg-surface shadow-raise p-4">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-md bg-primary-light p-2 text-primary">

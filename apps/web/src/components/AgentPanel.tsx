@@ -179,14 +179,14 @@ export default function AgentPanel() {
             </div>
             {session.codexThreadId ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-ink-3">Codex 线程</span>
+                <span className="text-ink-3">Codex 会话</span>
                 <div className="flex min-w-0 items-center gap-1.5">
                   <button
-                    title={`复制 codex resume ${session.codexThreadId}，可在 Codex CLI 里继续该线程`}
+                    title={`复制 codex resume ${session.codexThreadId}，在 Codex 命令行里接着这次对话`}
                     onClick={() => {
                       void navigator.clipboard
                         .writeText(`codex resume ${session.codexThreadId}`)
-                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，避免两端同时写同一线程'));
+                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，两边同时写同一次对话会打架'));
                     }}
                     className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                   >
@@ -286,7 +286,7 @@ export default function AgentPanel() {
               ))}
               {approvals.map((approval) => (
                 <div key={approval.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
-                  <div className="font-medium text-ink">等待宿主审批</div>
+                  <div className="font-medium text-ink">等你在这台电脑上批准</div>
                   <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-ink-3">
                     {approvalSummary(approval.method, approval.params)}
                   </pre>
@@ -310,9 +310,9 @@ export default function AgentPanel() {
           )}
 
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mb-2 text-xs font-medium text-ink-2">本地过程</div>
+            <div className="mb-2 text-xs font-medium text-ink-2">它做了哪些操作</div>
             {traces.length === 0 ? (
-              <div className="py-8 text-center text-xs text-ink-3">等待话题中的 Agent 指令</div>
+              <div className="py-8 text-center text-xs text-ink-3">还没有人下过指令。在这个话题里发一条 @ai 开头的消息，它就开始干活。</div>
             ) : (
               <div className="space-y-2">
                 {traces.map((item) => (

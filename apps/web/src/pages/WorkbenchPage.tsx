@@ -151,7 +151,7 @@ function QueryDialog({
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <span className="text-[15px] font-semibold text-ink">添加自定义查询</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink">
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭添加自定义查询">
             <XCircle size={16} />
           </button>
         </header>
@@ -263,7 +263,7 @@ function FavoriteDialog({
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <span className="text-[15px] font-semibold text-ink">{dialogTitle}</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink"><XCircle size={16} /></button>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭收藏编辑"><XCircle size={16} /></button>
         </header>
         <div className="space-y-4 p-5">
           <div>

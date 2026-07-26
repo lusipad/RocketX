@@ -217,7 +217,7 @@ export default function AiSettings() {
           )}
           <Row
             label="人设"
-            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，管家会自动换用新线程。"
+            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，管家会重开一次对话，之前聊过的内容不再带过来。"
           >
             <textarea
               aria-label="AI 人设"
@@ -336,7 +336,7 @@ export default function AiSettings() {
         <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-ink">高级 AI 设置</div>
-            <div className="mt-0.5 text-xs text-ink-3">模型 Provider、能力路由与外部集成</div>
+            <div className="mt-0.5 text-xs text-ink-3">模型来源、各功能用哪个模型、外部集成</div>
           </div>
           <ChevronDown size={16} className="shrink-0 text-ink-3 transition-transform group-open:rotate-180" />
         </summary>
@@ -463,7 +463,7 @@ export default function AiSettings() {
           </section>
 
           <section className="mt-6">
-            <h2 className="mb-2 text-sm font-semibold text-ink">按能力路由</h2>
+            <h2 className="mb-2 text-sm font-semibold text-ink">每项功能用哪个模型</h2>
             <div className="divide-y divide-line rounded-lg bg-surface shadow-raise">
               {AI_CAPABILITIES.map(({ id, label }) => {
                 const route = settings.routes[id];
@@ -505,7 +505,7 @@ export default function AiSettings() {
             >
               {busy === 'save' ? '保存中…' : '保存 AI 配置'}
             </button>
-            <span className="text-xs text-ink-3">保存上方 Provider 与能力路由</span>
+            <span className="text-xs text-ink-3">保存上面的模型来源和分配</span>
           </div>
 
           <div className="mt-8 space-y-6 border-t border-line pt-5">

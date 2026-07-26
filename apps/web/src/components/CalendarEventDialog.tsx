@@ -128,7 +128,7 @@ export default function CalendarEventDialog({
           <span className="text-[15px] font-semibold text-ink">
             {dialogTitle}
           </span>
-          <button onClick={onClose} className="text-ink-3 transition hover:text-ink">
+          <button onClick={onClose} className="text-ink-3 transition hover:text-ink" title="关闭" aria-label="关闭日程编辑">
             <X size={16} />
           </button>
         </header>

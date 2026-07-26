@@ -27,7 +27,7 @@ function TypeDot({ type }: { type: string }) {
 }
 
 function Empty() {
-  return <div className="py-12 text-center text-sm text-ink-3">查询没有返回工作项</div>;
+  return <div className="py-12 text-center text-sm text-ink-3">这个查询现在一条都没有。可能筛选条件太窄——去 Azure DevOps 里改改这个查询。</div>;
 }
 
 /**

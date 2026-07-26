@@ -275,7 +275,7 @@ export default function ChatArea({
               {!agentPresence ? (
                 <button
                   aria-label="开启 AI 托管"
-                  title="让本机 AI 从当前会话继续提供服务"
+                  title="让这台电脑上的 AI 接手这个会话：它会读历史消息，只有被 @ai 点名才回复，改文件要你批准"
                   disabled={hosting}
                   onClick={() => void startHosting()}
                   className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-primary-light hover:text-primary"

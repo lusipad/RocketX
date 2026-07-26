@@ -98,6 +98,12 @@ function ledgerDue(entry: LedgerEntry, today: string): { label: string; color: s
   return { label: '没设日期', color: 'text-ink-3' };
 }
 
+/** 空状态得说清「怎么让它不空」——两栏的填法不一样，不能共用一句 */
+const LEDGER_EMPTY: Record<string, string> = {
+  我答应的: '还没记下你答应过谁。在消息上右键「标记为待办」，填上答应给谁，就会出现在这里。',
+  我在等的: '还没有在等谁。管家给结论时点「等他回」，就会进这里。',
+};
+
 function LedgerColumn({
   title,
   entries,
@@ -111,7 +117,9 @@ function LedgerColumn({
     <section className="min-w-0 rounded-xl bg-surface p-4 shadow-raise">
       <h2 className="mb-3 text-sm font-semibold text-ink">{title}</h2>
       {entries.length === 0 ? (
-        <p className="py-4 text-center text-sm text-ink-3">这里还是空的</p>
+        <p className="px-2 py-4 text-center text-xs leading-5 text-ink-3">
+          {LEDGER_EMPTY[title] ?? '这里还是空的'}
+        </p>
       ) : (
         <div className="flex flex-col gap-2">
           {entries.map((entry) => {

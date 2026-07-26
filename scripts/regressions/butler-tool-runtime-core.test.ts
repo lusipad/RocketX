@@ -589,7 +589,11 @@ test('失败 checkpoint 只能在显式再次 approve 后重试，recover 与 ca
     }));
     const recovered = recoverButlerToolCheckpoint(running, runtime.context.now?.());
     assert.equal(recovered.status, 'failed');
-    assert.match(String(recovered.error?.message), /中断/);
+    // 断言意图而不是字面：这条消息会显示给用户，措辞会随文案打磨变化，
+    // 但「上次没做完、要你先确认」这个意思必须在
+    assert.equal(recovered.error?.kind, 'recovery');
+    assert.equal(recovered.error?.retryable, true);
+    assert.match(String(recovered.error?.message), /断|没做完|一半/);
 
     const cancelled = await cancelButlerToolCheckpoint(recovered, runtime.context);
     assert.equal(cancelled.status, 'cancelled');

@@ -62,7 +62,7 @@ export default function AgentBotSettings() {
       await invoke('agent_bot_config_delete');
       setStatus({ enabled: false });
       setToken('');
-      toast.success('Agent Bot 已删除，后续回复由宿主账号代发');
+      toast.success('Bot 已删除，之后用你自己的账号代发');
     } catch (error) {
       toast.error(error, '删除 Agent Bot 失败');
     } finally {
@@ -78,10 +78,10 @@ export default function AgentBotSettings() {
           <div className="rounded-md bg-primary-light p-2 text-primary"><Bot size={16} /></div>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-ink">
-              {status.enabled ? `Bot @${status.username}` : '未配置 Bot，使用宿主账号代发'}
+              {status.enabled ? `Bot @${status.username}` : '没配 Bot，用你自己的账号代发'}
             </div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              推荐由管理员创建专用 Bot 账号。Bot token 只进系统凭据库；状态卡和审批权限仍属于宿主。
+              推荐由管理员创建专用 Bot 账号。Bot token 只进系统凭据库；状态卡和批准权限仍然在你这台电脑上。
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <input

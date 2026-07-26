@@ -326,7 +326,7 @@ function GroupsTab() {
           </div>
         ))}
         {groups.length === 0 && (
-          <div className="py-10 text-center text-sm text-ink-3">暂无群组</div>
+          <div className="py-10 text-center text-sm text-ink-3">你还没加入任何群组。点左上角「发起聊天」建一个，或者让同事把你拉进去。</div>
         )}
       </div>
     </>
