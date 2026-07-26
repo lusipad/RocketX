@@ -4,6 +4,7 @@ import { codexApprovalSummary } from '../lib/codexApprovalSummary';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
 import { useUI } from '../stores/ui';
+import Button from './ui/Button';
 
 /**
  * 在办的活：管家替你去执行间干活，进度、点头与结论都留在管家页。
@@ -82,22 +83,12 @@ export default function ButlerErrandRunCard() {
                 {codexApprovalSummary(approval.method, approval.params)}
               </pre>
               <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => resolveApproval(approval.id, true)}
-                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover"
-                >
-                  <Check size={12} />
+                <Button variant="primary" size="sm" icon={Check} onClick={() => resolveApproval(approval.id, true)}>
                   可以
-                </button>
-                <button
-                  type="button"
-                  onClick={() => resolveApproval(approval.id, false)}
-                  className="inline-flex items-center gap-1 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-2 hover:bg-fill-hover"
-                >
-                  <X size={12} />
+                </Button>
+                <Button variant="secondary" size="sm" icon={X} onClick={() => resolveApproval(approval.id, false)}>
                   别做
-                </button>
+                </Button>
               </div>
             </div>
           ))}
@@ -119,30 +110,13 @@ export default function ButlerErrandRunCard() {
       ) : null}
 
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => setModule('codex')}
-          className="inline-flex items-center gap-1 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-2 hover:bg-fill-hover"
-        >
-          <ExternalLink size={12} />
+        <Button variant="ghost" size="sm" icon={ExternalLink} onClick={() => setModule('codex')}>
           看细节
-        </button>
+        </Button>
         {running ? (
-          <button
-            type="button"
-            onClick={() => void stopCodex()}
-            className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-2 hover:bg-fill-hover"
-          >
-            叫停
-          </button>
+          <Button variant="secondary" size="sm" onClick={() => void stopCodex()}>叫停</Button>
         ) : (
-          <button
-            type="button"
-            onClick={dismissErrandRun}
-            className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-2 hover:bg-fill-hover"
-          >
-            知道了
-          </button>
+          <Button variant="secondary" size="sm" onClick={dismissErrandRun}>知道了</Button>
         )}
       </div>
     </section>

@@ -43,7 +43,7 @@ export function ButlerMessageActions({ line, disabled = false }: { line: ButlerL
           onClick={() => propose(kind, line.id)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-ink-3 hover:bg-fill-hover hover:text-ink disabled:opacity-40"
         >
-          <Icon size={10} />{label}
+          <Icon size={12} />{label}
         </button>
       ))}
     </div>

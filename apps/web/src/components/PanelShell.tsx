@@ -101,7 +101,7 @@ export default function PanelShell({
             onClick={() => setPanel(null)}
             className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
           >
-            <X size={17} />
+            <X size={16} />
           </button>
         </header>
         {children}

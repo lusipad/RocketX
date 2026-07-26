@@ -73,7 +73,7 @@ export default function ContextMenu({
             danger ? 'text-danger' : 'text-ink'
           }`}
         >
-          {Icon && <Icon size={15} className={danger ? 'text-danger' : 'text-ink-2'} />}
+          {Icon && <Icon size={14} className={danger ? 'text-danger' : 'text-ink-2'} />}
           {label}
         </button>
       ))}

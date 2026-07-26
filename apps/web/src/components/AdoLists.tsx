@@ -81,7 +81,7 @@ function ListHeader({
   return (
     <div className="flex items-center justify-between pb-3">
       <div className="flex h-9 w-80 items-center gap-2 rounded-md bg-fill-1 px-3">
-        <Search size={15} className="text-ink-3" />
+        <Search size={14} className="text-ink-3" />
         <input
           value={keyword}
           onChange={(e) => onKeyword(e.target.value)}
@@ -236,7 +236,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
                   {relTime(w.changedDate)}
                 </span>
-                <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+                <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
               </a>
               <button
                 type="button"
@@ -245,7 +245,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 aria-label={`为工作项 #${w.id} 创建讨论`}
                 className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
               >
-                <MessageSquarePlus size={15} />
+                <MessageSquarePlus size={14} />
               </button>
             </div>
           );
@@ -303,7 +303,7 @@ function PrRow({
       className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5"
     >
       <GitPullRequest
-        size={15}
+        size={14}
         className={`shrink-0 ${approved ? 'text-success' : 'text-[#7f3bf5]'}`}
       />
       <span className="w-12 shrink-0 text-xs text-ink-3">!{pr.id}</span>
@@ -333,7 +333,7 @@ function PrRow({
       <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
         {relTime(pr.createdDate)}
       </span>
-      <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+      <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
     </a>
       <button
         type="button"
@@ -468,7 +468,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         right={
           tab === 'mine' && mine.some(isApproved) ? (
             <span className="flex items-center gap-1 text-xs text-success">
-              <CheckCircle2 size={13} />
+              <CheckCircle2 size={14} />
               {mine.filter(isApproved).length} 个已通过评审
             </span>
           ) : undefined
@@ -557,7 +557,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
                   : 'border-line text-ink-2 hover:bg-fill-hover'
               }`}
             >
-              <XCircle size={13} />
+              <XCircle size={14} />
               只看失败（{failedCount}）
             </button>
           ) : undefined
@@ -597,7 +597,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
             <span className="w-16 shrink-0 text-right text-2xs text-ink-3">
               {relTime(b.finishTime || b.queueTime)}
             </span>
-            <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+            <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
           </a>
         ))}
         {filtered.length === 0 && (

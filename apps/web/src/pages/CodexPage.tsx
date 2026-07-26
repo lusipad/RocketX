@@ -114,7 +114,7 @@ export default function CodexPage() {
               {status === 'idle' && threadId ? <button onClick={() => void resume().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white hover:bg-primary-hover"><Play size={14} />恢复会话</button> : null}
               {(status === 'idle' || status === 'interrupted') ? <button onClick={() => void startNew().catch(() => undefined)} disabled={!workspaceRoot} className={`${threadId ? 'border border-line bg-surface-2 text-ink' : 'bg-primary text-white'} flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-fill-hover disabled:opacity-50`}><Plus size={14} />新建会话</button> : null}
               {status === 'interrupted' && threadId ? <button onClick={() => void resume().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-primary px-3 py-2 text-sm text-primary"><Play size={14} />重新连接</button> : null}
-              {active ? <button onClick={() => void stop().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm text-ink-2 hover:bg-fill-hover"><Square size={13} />停止进程</button> : null}
+              {active ? <button onClick={() => void stop().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm text-ink-2 hover:bg-fill-hover"><Square size={14} />停止进程</button> : null}
             </div>
 
             {threadId ? <div className="truncate border-t border-line pt-4 text-2xs text-ink-3" title={threadId}>线程：{threadId}</div> : null}
@@ -132,7 +132,7 @@ export default function CodexPage() {
                 </div>
               ) : messages.map((message) => (
                 <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>
-                  {message.role === 'assistant' ? <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={15} /></div> : null}
+                  {message.role === 'assistant' ? <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary"><Bot size={14} /></div> : null}
                   <div className={`max-w-[82%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-sm leading-6 ${message.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>{message.text}</div>
                 </div>
               ))}

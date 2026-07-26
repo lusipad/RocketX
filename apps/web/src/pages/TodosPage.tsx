@@ -53,9 +53,9 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
         title={todo.done ? '标记为未完成' : '标记为完成'}
       >
         {todo.done ? (
-          <CheckCircle2 size={17} className="text-primary" />
+          <CheckCircle2 size={16} className="text-primary" />
         ) : (
-          <Circle size={17} />
+          <Circle size={16} />
         )}
       </button>
 
@@ -215,7 +215,7 @@ export default function TodosPage() {
               onClick={() => setCreating(true)}
               className="flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
             >
-              <Plus size={15} />
+              <Plus size={14} />
               新建待办
             </button>
           </div>

@@ -196,7 +196,7 @@ function FileAttachment({
           title={previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载'}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
-            <FileIcon size={18} />
+            <FileIcon size={16} />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-ink">{name}</span>
@@ -217,7 +217,7 @@ function FileAttachment({
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
           title={localPath ? '打开本地文件' : '下载'}
         >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={15} />}
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
         </button>
       </div>
       {preview && (
@@ -819,11 +819,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     setPicker(picker ? null : { x: r.left, y: r.bottom + 4 });
                   }}
                 >
-                  <SmilePlus size={15} />
+                  <SmilePlus size={14} />
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
                 <button title="回复" className={hoverBtn} onClick={() => setReplyTo(message)}>
-                  <Reply size={15} />
+                  <Reply size={14} />
                 </button>
                 {!inThread && (
                   <button
@@ -831,11 +831,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     className={hoverBtn}
                     onClick={() => void openThread(message.tmid ?? message._id)}
                   >
-                    <MessageSquareText size={15} />
+                    <MessageSquareText size={14} />
                   </button>
                 )}
                 <button title="转发" className={hoverBtn} onClick={() => setForwarding(true)}>
-                  <Share2 size={15} />
+                  <Share2 size={14} />
                 </button>
                 <button
                   title="更多"
@@ -845,7 +845,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     setMenu({ x: rect.left, y: rect.bottom + 4 });
                   }}
                 >
-                  {copied ? <Check size={15} className="text-success" /> : <MoreHorizontal size={15} />}
+                  {copied ? <Check size={14} className="text-success" /> : <MoreHorizontal size={14} />}
                 </button>
               </div>
             </div>
@@ -915,7 +915,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           )}
           {/* 发送状态：发送中 / 失败可重试 */}
           {message.pending && (
-            <Loader2 size={13} className="mb-1 shrink-0 animate-spin text-ink-3" />
+            <Loader2 size={14} className="mb-1 shrink-0 animate-spin text-ink-3" />
           )}
           {message.rocketxOffline && !message.pending && !message.failed && (
             <span
@@ -968,7 +968,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             onClick={() => void openThread(message._id)}
             className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
           >
-            <MessageSquareText size={13} />
+            <MessageSquareText size={14} />
             {message.tcount} 条回复
           </button>
         ) : null}

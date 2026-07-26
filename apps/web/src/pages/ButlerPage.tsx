@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
+import Button from '../components/ui/Button';
 import ButlerLearnedPanel from '../components/ButlerLearnedPanel';
 import ButlerRoutines from '../components/ButlerRoutines';
 import ButlerAuditTrail from '../components/ButlerAuditTrail';
@@ -367,29 +368,22 @@ export default function ButlerPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant={briefSync ? 'primary' : 'secondary'}
+            icon={Smartphone}
+            loading={briefSyncBusy}
             onClick={() => void toggleBriefSync()}
-            disabled={briefSyncBusy}
             title={briefSync ? '简报会发到你和自己的私聊，任何 Rocket.Chat 客户端可看；点击停止' : '把每天的简报发到你和自己的私聊，手机打开 Rocket.Chat 就能看'}
-            className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
-              briefSync
-                ? 'border-primary/40 bg-primary-light/40 text-primary hover:bg-primary-light/60'
-                : 'border-line bg-surface text-ink-2 hover:bg-fill-hover'
-            }`}
           >
-            {briefSyncBusy ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
             {briefSync ? '已同步到手机' : '同步到手机'}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            icon={RefreshCw}
+            loading={running}
             onClick={() => void runButlerRoundsNow()}
-            disabled={running}
-            className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
           >
-            {running ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             再看一圈
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -427,59 +421,56 @@ export default function ButlerPage() {
                             <ButlerSources sources={roundSources(item.ref, lastResult)} />
                             <div className="mt-3 flex flex-wrap items-center gap-2">
                               {canTurnIntoTodo(item.ref) && (
-                                <button
-                                  type="button"
+                                <Button
+                                  size="sm"
                                   onClick={() => turnIntoTodo(item.ref)}
-                                  className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
                                 >
                                   转任务
-                                </button>
+                                </Button>
                               )}
-                              <button
-                                type="button"
+                              <Button
+                                size="sm"
                                 onClick={() => {
                                   if (snoozeButlerRoundsItem(item.ref)) toast.info('这轮先放一放');
                                 }}
-                                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover"
                               >
                                 稍后
-                              </button>
+                              </Button>
                               {lastResult?.refPeople?.[item.ref] && (
-                                <button
-                                  type="button"
-                                  onClick={() => void draftReply(item)}
+                                <Button
+                                  size="sm"
+                                  loading={draftingRef === item.ref}
                                   disabled={draftingRef !== null}
-                                  className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-fill-hover disabled:opacity-50"
+                                  onClick={() => void draftReply(item)}
                                 >
-                                  {draftingRef === item.ref && <Loader2 size={12} className="animate-spin" />}
                                   帮我拟一句
-                                </button>
+                                </Button>
                               )}
-                              <button
-                                type="button"
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                iconOnly
+                                icon={ThumbsUp}
                                 title="有用，这类继续盯"
                                 aria-label="有用"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'useful')}
-                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
-                              >
-                                <ThumbsUp size={13} />
-                              </button>
-                              <button
-                                type="button"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                iconOnly
+                                icon={ThumbsDown}
                                 title="没用，这类以后少报"
                                 aria-label="没用"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'noise')}
-                                className="px-1.5 py-1 text-ink-3 hover:text-ink"
-                              >
-                                <ThumbsDown size={13} />
-                              </button>
-                              <button
-                                type="button"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
-                                className="px-1.5 py-1 text-xs text-ink-3 hover:text-ink"
                               >
                                 少来这种
-                              </button>
+                              </Button>
                             </div>
                             {draftCard?.ref === item.ref && (
                               <div className="mt-3 rounded-lg border border-primary/25 bg-surface p-3">
@@ -632,8 +623,8 @@ export default function ButlerPage() {
                     {[...briefFeedback].reverse().slice(0, 10).map((entry) => (
                       <div key={`${entry.title}:${entry.at}`} className="flex items-center gap-2 text-xs text-ink-3">
                         {entry.verdict === 'noise'
-                          ? <ThumbsDown size={11} className="shrink-0" />
-                          : <ThumbsUp size={11} className="shrink-0" />}
+                          ? <ThumbsDown size={12} className="shrink-0" />
+                          : <ThumbsUp size={12} className="shrink-0" />}
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <span className="shrink-0">{entry.verdict === 'noise' ? '以后少报' : '继续盯'}</span>
                         <button
@@ -706,7 +697,7 @@ export default function ButlerPage() {
               aria-label="发送"
               className="rounded-md bg-primary p-2 text-white hover:bg-primary-hover disabled:opacity-40"
             >
-              <Send size={15} />
+              <Send size={14} />
             </button>
           </form>
         </div>

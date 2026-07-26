@@ -148,7 +148,7 @@ export default function ButlerLearnedPanel() {
       {skills.length > 0 && (
         <div className="mt-3">
           <h3 className="flex items-center gap-1.5 text-xs font-medium text-ink-2">
-            <BookOpenText size={13} />
+            <BookOpenText size={14} />
             会的技能
           </h3>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">

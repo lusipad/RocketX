@@ -85,7 +85,7 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
 
         {replyTo && (
           <div className="mx-5 mb-1 flex items-center gap-1.5 truncate rounded bg-fill-1 px-2.5 py-1.5 text-xs text-ink-3">
-            <Reply size={13} className="shrink-0" />
+            <Reply size={14} className="shrink-0" />
             <span className="truncate">
               将作为回复发送 · {replyTo.u.name || replyTo.u.username}：
               {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg ?? '')) || '[卡片消息]'}

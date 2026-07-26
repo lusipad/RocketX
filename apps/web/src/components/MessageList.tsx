@@ -326,7 +326,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
-              <Copy size={13} />
+              <Copy size={14} />
               复制
             </button>
             <button
@@ -334,7 +334,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
-              <Share2 size={13} />
+              <Share2 size={14} />
               转发
             </button>
             <button
@@ -342,7 +342,7 @@ export default function MessageList({ rid }: { rid: string }) {
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
-              <Download size={13} />
+              <Download size={14} />
               导出
             </button>
             <button
@@ -351,7 +351,7 @@ export default function MessageList({ rid }: { rid: string }) {
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
               title="让管家从这些消息里提取承诺"
             >
-              <Bot size={13} />
+              <Bot size={14} />
               提取承诺
             </button>
             <button
@@ -360,7 +360,7 @@ export default function MessageList({ rid }: { rid: string }) {
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
               title="让管家总结这段对话"
             >
-              <Bot size={13} />
+              <Bot size={14} />
               总结这段
             </button>
             <button

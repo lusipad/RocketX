@@ -163,7 +163,7 @@ function ActionRow({
         danger ? 'text-danger' : 'text-ink'
       }`}
     >
-      <Icon size={15} className={danger ? '' : 'text-ink-2'} />
+      <Icon size={14} className={danger ? '' : 'text-ink-2'} />
       {label}
     </button>
   );
@@ -328,13 +328,13 @@ export default function RoomInfoPanel() {
               <div className="flex flex-wrap gap-1.5 border-b border-line px-4 py-2.5">
                 {info?.ro && (
                   <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
-                    <MessageSquareOff size={10} />
+                    <MessageSquareOff size={12} />
                     只读群：仅群主和管理员可发言
                   </span>
                 )}
                 {info?.archived && (
                   <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
-                    <Archive size={10} />
+                    <Archive size={12} />
                     已归档
                   </span>
                 )}

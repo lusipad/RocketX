@@ -233,10 +233,10 @@ function ConversationItem({
                   @
                 </span>
               )}
-              {conv.muted && <BellOff size={11} className="shrink-0 text-ink-3" />}
+              {conv.muted && <BellOff size={12} className="shrink-0 text-ink-3" />}
             </span>
             <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-3">
-              {conv.favorite && <Pin size={10} className="text-primary" />}
+              {conv.favorite && <Pin size={12} className="text-primary" />}
               {viewMode !== 'condensed' && fmtConvTime(conv.lastTs)}
               {/* 不显示头像时未读角标挪到右侧 */}
               {!showAvatar && conv.unread > 0 && (
@@ -412,7 +412,7 @@ export default function ConversationList({
               title={newAction.label}
               className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
             >
-              <Plus size={15} />
+              <Plus size={14} />
             </button>
           )}
         </div>

@@ -170,7 +170,7 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
               >
                 {u.name || u.username}
                 <button onClick={() => toggle(u)} className="hover:text-danger">
-                  <X size={11} />
+                  <X size={12} />
                 </button>
               </span>
             ))}
@@ -304,7 +304,7 @@ export function CreateGroupDialog({
               >
                 {u.name || u.username}
                 <button onClick={() => toggle(u)} className="hover:text-danger">
-                  <X size={11} />
+                  <X size={12} />
                 </button>
               </span>
             ))}

@@ -49,7 +49,7 @@ function HeaderButton({
             : 'cursor-not-allowed text-ink-2 opacity-60'
       }`}
     >
-      <Icon size={17} />
+      <Icon size={16} />
     </button>
   );
 }
@@ -268,7 +268,7 @@ export default function ChatArea({
                   }`}
                   title="查看群成员"
                 >
-                  <Users size={13} />
+                  <Users size={14} />
                   {memberCount}
                 </button>
               ) : null}
@@ -280,7 +280,7 @@ export default function ChatArea({
                   onClick={() => void startHosting()}
                   className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-primary-light hover:text-primary"
                 >
-                  <Bot size={13} />
+                  <Bot size={14} />
                   {hosting ? '正在开启…' : 'AI 托管'}
                 </button>
               ) : null}
@@ -298,7 +298,7 @@ export default function ChatArea({
                     {agentBusy ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-50" /> : null}
                     <span className={`relative inline-flex h-2 w-2 rounded-full ${agentPresence.status === 'interrupted' ? 'bg-ink-3' : agentPresence.status === 'waiting-approval' ? 'bg-warning' : 'bg-primary'}`} />
                   </span>
-                  <Bot size={13} className="shrink-0" />
+                  <Bot size={14} className="shrink-0" />
                   <span className="shrink-0 font-semibold">@{agentPresence.username} 的 AI</span>
                   <span className="h-3 w-px shrink-0 bg-primary/25" />
                   <span className="shrink-0 text-2xs font-medium">{stoppingHosting ? '正在关闭' : agentStatus}</span>

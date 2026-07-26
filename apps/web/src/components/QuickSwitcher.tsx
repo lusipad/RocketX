@@ -719,7 +719,7 @@ export default function QuickSwitcher({
               onClick={askButlerFromSearch}
               className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
             >
-              <Sparkles size={13} />问管家
+              <Sparkles size={14} />问管家
             </button>
           )}
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>
@@ -748,7 +748,7 @@ export default function QuickSwitcher({
                 : 'text-ink-2 hover:bg-fill-hover'
             }`}
           >
-            <SlidersHorizontal size={13} />
+            <SlidersHorizontal size={14} />
             筛选{activeFilterCount > 0 ? ` ${activeFilterCount}` : ''}
           </button>
         </div>
@@ -1018,7 +1018,7 @@ export default function QuickSwitcher({
                     <span className="flex items-baseline gap-2">
                       <span className="text-xs font-medium text-ink">{m.u.name || m.u.username}</span>
                       <span className="flex items-center gap-0.5 text-2xs text-ink-3">
-                        <Hash size={10} />
+                        <Hash size={12} />
                         {roomName(m.rid)}
                       </span>
                       <span className="ml-auto shrink-0 text-2xs text-ink-3">
@@ -1078,7 +1078,7 @@ export default function QuickSwitcher({
                   }`}
                 >
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-3">
-                    <FileText size={15} />
+                    <FileText size={14} />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">

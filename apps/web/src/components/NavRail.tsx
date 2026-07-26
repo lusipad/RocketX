@@ -161,7 +161,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
             aria-expanded={plusMenu}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
-            <Plus size={19} />
+            <Plus size={16} />
           </button>
           {plusMenu && (
             <>
@@ -174,7 +174,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <MessageCirclePlus size={15} className="text-ink-2" />
+                  <MessageCirclePlus size={14} className="text-ink-2" />
                   发起聊天
                 </button>
                 <button
@@ -184,7 +184,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <UsersRound size={15} className="text-ink-2" />
+                  <UsersRound size={14} className="text-ink-2" />
                   创建群组
                 </button>
                 <button
@@ -194,7 +194,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
                 >
-                  <Users size={15} className="text-ink-2" />
+                  <Users size={14} className="text-ink-2" />
                   创建团队
                 </button>
               </div>
@@ -292,7 +292,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           onClick={onOpenShortcuts}
           className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
         >
-          <Keyboard size={15} />
+          <Keyboard size={14} />
           快捷键
         </button>
         <button
@@ -303,14 +303,14 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
         >
-          <Settings size={15} />
+          <Settings size={14} />
           设置
         </button>
         <button
           onClick={() => setConfirmLogout(true)}
           className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-danger"
         >
-          <LogOut size={15} />
+          <LogOut size={14} />
           退出登录
         </button>
       </div>

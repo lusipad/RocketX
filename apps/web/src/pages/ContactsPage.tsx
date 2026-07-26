@@ -144,7 +144,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
     <>
       <div className="flex items-center justify-between pb-3">
         <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={15} className="text-ink-3" />
+          <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -223,7 +223,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                       className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
                       title={alias ? `当前备注：${alias}` : '给这个人起个备注名'}
                     >
-                      <Tag size={13} />
+                      <Tag size={14} />
                       {alias ? '改备注' : '备注'}
                     </button>
                     <button
@@ -233,7 +233,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                       }}
                       className="flex items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white"
                     >
-                      <MessageCircle size={13} />
+                      <MessageCircle size={14} />
                       {busy === u.username ? '打开中…' : '发消息'}
                     </button>
                   </div>
@@ -292,7 +292,7 @@ function GroupsTab() {
     <>
       <div className="flex items-center justify-between pb-3">
         <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={15} className="text-ink-3" />
+          <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}

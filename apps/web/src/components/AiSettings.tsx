@@ -376,7 +376,7 @@ export default function AiSettings() {
                       onClick={() => void remove(provider.id)}
                       className="ml-auto rounded p-2 text-ink-3 hover:bg-fill-hover hover:text-danger"
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">

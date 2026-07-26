@@ -135,7 +135,7 @@ export default function FolderRulesDialog({
           onClick={() => setLocal((rs) => [...rs, { mode: 'prefix', value: '' }])}
           className="flex items-center gap-1 text-xs text-primary hover:underline"
         >
-          <Plus size={13} />
+          <Plus size={14} />
           添加规则（多条之间是「或」）
         </button>
 

@@ -167,7 +167,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
       <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line bg-surface px-6 py-4">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold text-ink">
-            <Bot size={20} className="text-primary" />管家
+            <Bot size={16} className="text-primary" />管家
           </h1>
           <p className="mt-1 text-xs text-ink-3">直接告诉我你想了解什么，我会先查证据再回答。</p>
           {context ? <div className="mt-2 inline-flex rounded-full bg-primary-light px-2.5 py-1 text-xs text-primary">当前工作面：{context.label}</div> : null}
@@ -181,7 +181,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             title="在 Codex App 打开新对话并带入当前完整记录"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover disabled:opacity-50"
           >
-            {transferring ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />}
+            {transferring ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
             转到 Codex
           </button>
           <button
@@ -191,7 +191,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             aria-label="执行间"
             className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
           >
-            <TerminalSquare size={13} />执行间
+            <TerminalSquare size={14} />执行间
           </button>
           <button
             type="button"
@@ -199,7 +199,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             aria-label="收起对话"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover"
           >
-            <ChevronDown size={13} />收起
+            <ChevronDown size={14} />收起
           </button>
           <div className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-3">
             {config ? 'ADO 已连接' : 'ADO 未配置'} · {getServerBase() ? 'Rocket.Chat 已连接' : '当前站点'}
@@ -248,7 +248,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               <div key={line.id} className={`flex gap-3 ${line.role === 'user' ? 'justify-end' : ''}`}>
                 {line.role === 'assistant' ? (
                   <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary">
-                    <Bot size={15} />
+                    <Bot size={14} />
                   </div>
                 ) : null}
                 <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-6 ${line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'}`}>
@@ -272,9 +272,9 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             <div className="ml-10 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{butlerError}</div>
           ) : null}
           {activity ? (
-            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />{activity}</div>
+            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin" />{activity}</div>
           ) : running ? (
-            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={15} className="animate-spin" />正在处理请求…</div>
+            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin" />正在处理请求…</div>
           ) : null}
 
           <div className="ml-10"><ButlerToolApprovals /></div>
@@ -313,7 +313,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
               onPick={pickSlashOption}
               onHover={slash.setActiveIndex}
             />
-            <Search size={17} className="ml-2 text-ink-3" />
+            <Search size={16} className="ml-2 text-ink-3" />
             <div className="min-w-0 flex-1">
               <ButlerImagePreviews images={images} onChange={setImages} />
               <div className="flex items-center">
@@ -331,7 +331,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
             </div>
             {running ? (
               <button type="button" onClick={() => void stopButler()} className="flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink hover:bg-fill-hover">
-                <Square size={13} />停止
+                <Square size={14} />停止
               </button>
             ) : (
               <button type="submit" disabled={!input.trim() && !images.length} className="flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm text-white hover:bg-primary-hover disabled:opacity-50"><Send size={14} />发送</button>

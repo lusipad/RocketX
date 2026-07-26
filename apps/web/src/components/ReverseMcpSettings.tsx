@@ -75,7 +75,7 @@ export default function ReverseMcpSettings() {
       <div className="rounded-lg border border-line bg-surface p-4">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-md bg-primary-light p-2 text-primary">
-            <Waypoints size={17} />
+            <Waypoints size={16} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-3">

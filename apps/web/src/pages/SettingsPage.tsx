@@ -1367,9 +1367,9 @@ function WorkbenchSection() {
                 className="flex items-start gap-2 border-b border-line px-3 py-2 text-xs last:border-b-0"
               >
                 {s.ok ? (
-                  <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-success" />
+                  <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-success" />
                 ) : (
-                  <XCircle size={13} className="mt-0.5 shrink-0 text-ink-3" />
+                  <XCircle size={14} className="mt-0.5 shrink-0 text-ink-3" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-2xs text-ink-2">{s.url}</div>
@@ -1656,7 +1656,7 @@ function AppsSection() {
               return (
                 <div key={app.manifest.id} className="p-3">
                   <div className="flex items-center gap-3">
-                    <Blocks size={17} className="text-primary" />
+                    <Blocks size={16} className="text-primary" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm text-ink">
                         {app.manifest.name} · v{app.manifest.version}

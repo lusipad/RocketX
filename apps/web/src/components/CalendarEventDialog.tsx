@@ -129,7 +129,7 @@ export default function CalendarEventDialog({
             {dialogTitle}
           </span>
           <button onClick={onClose} className="text-ink-3 transition hover:text-ink">
-            <X size={18} />
+            <X size={16} />
           </button>
         </header>
 

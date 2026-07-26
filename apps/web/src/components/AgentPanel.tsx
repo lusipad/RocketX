@@ -84,7 +84,7 @@ export default function AgentPanel() {
           >
             <ChevronLeft size={16} />
           </button>
-          <Bot size={17} className="text-primary" />
+          <Bot size={16} className="text-primary" />
           共享 Agent
         </span>
       }
@@ -133,7 +133,7 @@ export default function AgentPanel() {
             }).catch(() => undefined)}
             className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
           >
-            <Play size={15} /> 开启 AI 托管
+            <Play size={14} /> 开启 AI 托管
           </button>
         </div>
       ) : (
@@ -158,7 +158,7 @@ export default function AgentPanel() {
                     : 'bg-warning-light text-warning'
                 }`}
               >
-                <Shield size={13} />
+                <Shield size={14} />
                 {session.sandboxMode === 'read-only' ? '只读' : '工作区可写'}
               </button>
             </div>
@@ -173,7 +173,7 @@ export default function AgentPanel() {
                 }
                 className="flex items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2"
               >
-                <Users size={13} />
+                <Users size={14} />
                 {session.access === 'host-only' ? '仅自己' : '房间成员'}
               </button>
             </div>
@@ -250,7 +250,7 @@ export default function AgentPanel() {
                   onClick={() => void resume(tmid)}
                   className="flex flex-1 items-center justify-center gap-1 rounded border border-primary px-2 py-1.5 text-xs text-primary"
                 >
-                  <Play size={13} /> 恢复
+                  <Play size={14} /> 恢复
                 </button>
               ) : null}
               <button

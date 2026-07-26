@@ -124,7 +124,7 @@ export default function FilesPanel() {
                 } ${isTarget ? 'bg-primary-light' : previewable ? 'hover:bg-fill-hover' : ''}`}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-2">
-                  {isImage(f) ? <ImageIcon size={15} /> : <FileText size={15} />}
+                  {isImage(f) ? <ImageIcon size={14} /> : <FileText size={14} />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-ink">{f.name}</div>

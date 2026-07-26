@@ -31,18 +31,18 @@ export default function ButlerProcess({
   return (
     <details open={running} className={`group rounded-lg border border-line bg-fill-1/50 ${className}`}>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs text-ink-3 transition hover:text-ink-2">
-        <ChevronDown size={13} className="transition-transform group-open:rotate-180" />
+        <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
         过程 · {steps.length} 步{failed > 0 ? ` · ${failed} 步失败` : ''}
       </summary>
       <div className="space-y-1 border-t border-line px-3 py-2">
         {steps.map((step) => (
           <div key={step.id} className="flex items-center gap-2 text-xs text-ink-2">
             {step.status === 'running' ? (
-              <Loader2 size={13} className="shrink-0 animate-spin text-primary" />
+              <Loader2 size={14} className="shrink-0 animate-spin text-primary" />
             ) : step.status === 'failed' ? (
-              <XCircle size={13} className="shrink-0 text-danger" />
+              <XCircle size={14} className="shrink-0 text-danger" />
             ) : (
-              <CheckCircle2 size={13} className="shrink-0 text-success" />
+              <CheckCircle2 size={14} className="shrink-0 text-success" />
             )}
             <span className="min-w-0 flex-1 truncate" title={step.detail ?? step.label}>
               {step.detail ?? step.label}

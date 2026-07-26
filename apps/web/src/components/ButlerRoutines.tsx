@@ -66,7 +66,7 @@ function RoutineReportCard({
           disabled={running}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50"
         >
-          {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+          {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
         </button>
         {latest ? (
           <button
@@ -175,12 +175,12 @@ export default function ButlerRoutines() {
                 const Icon = meta.icon;
                 return (
                   <div key={card.id} className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
-                    <Icon size={18} className={`shrink-0 ${meta.color}`} />
+                    <Icon size={16} className={`shrink-0 ${meta.color}`} />
                     <button type="button" onClick={() => openEventCard(card)} className="min-w-0 flex-1 text-left">
                       <div className="truncate text-sm font-medium text-ink">{card.title}</div>
                       <div className="mt-0.5 truncate text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
                     </button>
-                    <button type="button" title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={15} /></button>
+                    <button type="button" title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={14} /></button>
                   </div>
                 );
               })}

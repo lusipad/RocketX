@@ -94,7 +94,7 @@ function QuickComment({
           disabled={!comment.trim() || sending}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary text-white transition hover:bg-primary-hover disabled:opacity-40"
         >
-          {sent ? <Check size={11} /> : <SendHorizontal size={11} />}
+          {sent ? <Check size={12} /> : <SendHorizontal size={12} />}
         </button>
       </span>
       {sent && <span className="mt-1 block text-xs text-success">已评论</span>}
@@ -146,7 +146,7 @@ function HoverCard({
               title="在 Azure DevOps 中打开"
               className="ml-auto text-ink-3 hover:text-primary"
             >
-              <ExternalLink size={13} />
+              <ExternalLink size={14} />
             </a>
           </div>
           <div

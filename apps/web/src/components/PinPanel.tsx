@@ -71,7 +71,7 @@ export default function PinPanel() {
                   onClick={() => void togglePin(m)}
                   className="flex h-6 w-6 items-center justify-center rounded bg-surface-4 text-ink-3 transition hover:bg-fill-hover hover:text-danger"
                 >
-                  <PinOff size={13} />
+                  <PinOff size={14} />
                 </button>
               }
             />

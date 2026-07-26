@@ -72,7 +72,7 @@ export default function StarredPanel() {
                   onClick={() => void toggleStar(m)}
                   className="flex h-6 w-6 items-center justify-center rounded bg-surface-4 text-ink-3 transition hover:bg-fill-hover hover:text-danger"
                 >
-                  <StarOff size={13} />
+                  <StarOff size={14} />
                 </button>
               }
             />

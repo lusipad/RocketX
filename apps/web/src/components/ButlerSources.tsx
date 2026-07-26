@@ -14,7 +14,7 @@ export default function ButlerSources({ sources }: { sources?: ButlerSource[] })
           onClick={() => void openSource(source)}
           className="flex max-w-full items-center gap-1 rounded-full border border-line bg-surface px-2 py-0.5 text-left text-2xs text-ink-2 hover:border-primary/40 hover:text-primary"
         >
-          <ExternalLink size={10} className="shrink-0" />
+          <ExternalLink size={12} className="shrink-0" />
           <span className="truncate">{source.label}</span>
         </button>
       ))}

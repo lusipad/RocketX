@@ -267,7 +267,7 @@ export default function GroupFilter({
       >
         <FolderIcon size={14} className={active ? 'text-primary' : ''} />
         <span className="min-w-0 truncate">{folder.name}</span>
-        {folder.rules?.length ? <Wand2 size={11} className="shrink-0 text-ink-3" /> : null}
+        {folder.rules?.length ? <Wand2 size={12} className="shrink-0 text-ink-3" /> : null}
         {count > 0 && <span className="ml-auto text-2xs text-ink-3">{count}</span>}
       </button>
     );
@@ -335,7 +335,7 @@ export default function GroupFilter({
                 onClick={onCollapse}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
-                <PanelLeftClose size={13} />
+                <PanelLeftClose size={14} />
               </button>
               <button
                 title="新建分组"
@@ -343,7 +343,7 @@ export default function GroupFilter({
                 onClick={() => setDialog({ mode: 'create' })}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
-                <FolderPlus size={13} />
+                <FolderPlus size={14} />
               </button>
             </div>
           </div>

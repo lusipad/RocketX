@@ -132,21 +132,21 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
 
             <div className="mt-9 space-y-5">
               <div className="flex gap-3">
-                <MessageSquareText className="mt-0.5 shrink-0 text-primary-light" size={19} />
+                <MessageSquareText className="mt-0.5 shrink-0 text-primary-light" size={16} />
                 <div>
                   <div className="text-sm font-medium">Rocket.Chat 保持不变</div>
                   <p className="mt-1 text-xs leading-5 text-white/60">消息和账号仍由原服务器管理，团队无需迁移历史，也不被新的服务端绑定。</p>
                 </div>
               </div>
               <div className="flex gap-3">
-                <BrainCircuit className="mt-0.5 shrink-0 text-primary-light" size={19} />
+                <BrainCircuit className="mt-0.5 shrink-0 text-primary-light" size={16} />
                 <div>
                   <div className="text-sm font-medium">保护注意力，而不是放大噪声</div>
                   <p className="mt-1 text-xs leading-5 text-white/60">通知聚合、今日收件箱和 AI 管家把信息变成可处理的承诺，由人决定何时关注。</p>
                 </div>
               </div>
               <div className="flex gap-3">
-                <ShieldCheck className="mt-0.5 shrink-0 text-primary-light" size={19} />
+                <ShieldCheck className="mt-0.5 shrink-0 text-primary-light" size={16} />
                 <div>
                   <div className="text-sm font-medium">AI 行动有边界</div>
                   <p className="mt-1 text-xs leading-5 text-white/60">本地能力优先，权限与来源可见；Agent 可以帮助执行，但写入和危险操作必须经过确认。</p>
@@ -206,7 +206,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 disabled={!url.trim() || busy}
                 className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {busy ? <Loader2 size={15} className="animate-spin" /> : <ArrowRight size={15} />}
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
                 {busy ? '正在读取团队配置…' : '读取团队配置'}
               </button>
 
@@ -260,7 +260,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 disabled={busy}
                 className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {busy ? <Loader2 size={15} className="animate-spin" /> : <ArrowRight size={15} />}
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
                 {busy ? '正在验证 Rocket.Chat…' : '确认并继续'}
               </button>
               <button

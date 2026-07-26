@@ -305,22 +305,22 @@ function EventItem({
         <div className="flex items-center gap-2 text-2xs text-ink-3">
           {item.time && (
             <span className="flex items-center gap-0.5">
-              <Clock size={10} /> {item.time}
+              <Clock size={12} /> {item.time}
             </span>
           )}
           {item.repeat && (
             <span className="flex items-center gap-0.5">
-              <Repeat size={10} /> 重复
+              <Repeat size={12} /> 重复
             </span>
           )}
           {item.type === 'todo' && (
             <span className="flex items-center gap-0.5">
-              <ListTodo size={10} /> 待办
+              <ListTodo size={12} /> 待办
             </span>
           )}
           {item.type === 'workitem' && (
             <span className="flex items-center gap-0.5">
-              <CircleDot size={10} /> ADO 工作项
+              <CircleDot size={12} /> ADO 工作项
             </span>
           )}
           {item.overdue && (

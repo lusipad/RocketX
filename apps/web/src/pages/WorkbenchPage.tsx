@@ -96,9 +96,9 @@ function QueueRow({
         <span className="max-w-[40%] shrink-0 truncate text-2xs text-ink-3">{item.meta}</span>
       )}
       {item.href ? (
-        <ExternalLink size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+        <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
       ) : (
-        <ChevronRight size={13} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
+        <ChevronRight size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
       )}
     </>
   );
@@ -631,7 +631,7 @@ export default function WorkbenchPage() {
         disabled={loading}
         className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
       >
-        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+        <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
         刷新
       </button>
     </div>
@@ -689,7 +689,7 @@ export default function WorkbenchPage() {
                   }}
                   className="absolute top-1 right-1 hidden h-5 w-5 items-center justify-center rounded text-ink-3 hover:text-danger group-hover:flex"
                 >
-                  <Trash2 size={11} />
+                  <Trash2 size={12} />
                 </button>
               </div>
             ))}
@@ -740,7 +740,7 @@ export default function WorkbenchPage() {
                         }`}
                         title={`${label}视图`}
                       >
-                        <Icon size={13} />
+                        <Icon size={14} />
                         {label}
                       </button>
                     );
@@ -752,7 +752,7 @@ export default function WorkbenchPage() {
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
                 >
                   <RefreshCw
-                    size={13}
+                    size={14}
                     className={
                       visibleQueryState.loading[activeQuery.id] !== undefined
                         ? 'animate-spin'
@@ -767,7 +767,7 @@ export default function WorkbenchPage() {
                   rel="noreferrer"
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
                 >
-                  <ExternalLink size={13} />
+                  <ExternalLink size={14} />
                   在 ADO 中打开
                 </a>
               </div>
@@ -905,7 +905,7 @@ export default function WorkbenchPage() {
                 onClick={() => setModule('settings')}
                 className="mt-4 flex shrink-0 items-center justify-center gap-2 rounded-lg border border-dashed border-line py-3 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
               >
-                <Wrench size={13} />
+                <Wrench size={14} />
                 连接 Azure DevOps，把工作项、PR、构建也汇总到这里
               </button>
             )}
@@ -916,7 +916,7 @@ export default function WorkbenchPage() {
             <section>
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
-                  <Calendar size={15} className="text-primary" />
+                  <Calendar size={14} className="text-primary" />
                   <span className="text-sm font-semibold text-ink">今天日程</span>
                 </div>
                 <button
@@ -924,7 +924,7 @@ export default function WorkbenchPage() {
                   className="flex items-center gap-0.5 text-2xs text-ink-3 transition hover:text-primary"
                 >
                   日历
-                  <ChevronRight size={11} />
+                  <ChevronRight size={12} />
                 </button>
               </div>
               {todayEvents.length === 0 ? (
@@ -962,7 +962,7 @@ export default function WorkbenchPage() {
             <section className="border-t border-line pt-4">
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
-                  <Bookmark size={15} className="text-primary" />
+                  <Bookmark size={14} className="text-primary" />
                   <span className="text-sm font-semibold text-ink">收藏夹</span>
                 </div>
                 <button
@@ -1010,7 +1010,7 @@ export default function WorkbenchPage() {
                           }}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-primary"
                         >
-                          <Pencil size={10} />
+                          <Pencil size={12} />
                         </button>
                         <button
                           onClick={(e) => {
@@ -1021,7 +1021,7 @@ export default function WorkbenchPage() {
                           }}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-danger"
                         >
-                          <Trash2 size={10} />
+                          <Trash2 size={12} />
                         </button>
                       </div>
                     </a>

@@ -75,7 +75,7 @@ export default function AgentBotSettings() {
       <h2 className="mb-2 text-sm font-semibold text-ink">共享 Agent 身份</h2>
       <div className="rounded-lg border border-line bg-surface p-4">
         <div className="flex items-start gap-3">
-          <div className="rounded-md bg-primary-light p-2 text-primary"><Bot size={17} /></div>
+          <div className="rounded-md bg-primary-light p-2 text-primary"><Bot size={16} /></div>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-ink">
               {status.enabled ? `Bot @${status.username}` : '未配置 Bot，使用宿主账号代发'}

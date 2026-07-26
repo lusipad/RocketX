@@ -1,4 +1,4 @@
-import { CheckCircle2, FolderGit2, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, FolderGit2, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   dispatchWorkspaceLabel,
@@ -8,6 +8,7 @@ import { useAgentEnvironments } from '../stores/agentEnvironments';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
 import { toast } from '../stores/toast';
+import Button from './ui/Button';
 
 /**
  * 任务规格卡：管家拟好的活，用户在这里逐字过目、选工作区、一键送进执行间。
@@ -67,7 +68,7 @@ export default function ButlerErrandCard() {
         <ul className="mt-2 space-y-1">
           {spec.acceptance.map((item) => (
             <li key={item} className="flex items-start gap-1.5 text-sm text-ink-2">
-              <CheckCircle2 size={15} className="mt-1 shrink-0 text-success" />
+              <CheckCircle2 size={14} className="mt-1 shrink-0 text-success" />
               <span>{item}</span>
             </li>
           ))}
@@ -77,7 +78,7 @@ export default function ButlerErrandCard() {
         <ul className="mt-2 space-y-1">
           {spec.boundaries.map((item) => (
             <li key={item} className="flex items-start gap-1.5 text-sm text-ink-2">
-              <XCircle size={15} className="mt-1 shrink-0 text-danger/70" />
+              <XCircle size={14} className="mt-1 shrink-0 text-danger/70" />
               <span>{item}</span>
             </li>
           ))}
@@ -86,7 +87,7 @@ export default function ButlerErrandCard() {
 
       {resolution.options.length ? (
         <label className="mt-3 flex items-center gap-2 text-sm text-ink-2">
-          <FolderGit2 size={15} className="shrink-0 text-ink-3" />
+          <FolderGit2 size={14} className="shrink-0 text-ink-3" />
           <span className="shrink-0">派到</span>
           <select
             aria-label="派活目标工作区"
@@ -119,23 +120,17 @@ export default function ButlerErrandCard() {
       </label>
 
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => void dismissErrandDraft()}
-          disabled={dispatching}
-          className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-        >
+        <Button variant="secondary" onClick={() => void dismissErrandDraft()} disabled={dispatching}>
           取消
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
+          loading={dispatching}
+          disabled={!activeTarget}
           onClick={() => void dispatchNow()}
-          disabled={!activeTarget || dispatching}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
         >
-          {dispatching ? <Loader2 size={14} className="animate-spin" /> : null}
           {dispatching ? '正在派发…' : '送进执行间开跑'}
-        </button>
+        </Button>
       </div>
     </div>
   );

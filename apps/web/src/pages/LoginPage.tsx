@@ -98,7 +98,7 @@ export default function LoginPage() {
           {teamServer ? (
             <div className="rounded-lg border border-line bg-fill-1 px-3 py-2.5">
               <div className="flex items-center gap-2 text-sm text-ink-2">
-                <Building2 size={15} className="text-primary" />
+                <Building2 size={14} className="text-primary" />
                 <span className="font-medium">{workspace.name || '团队工作区'}</span>
               </div>
               <div className="mt-1 flex items-center justify-between gap-3 text-xs text-ink-3">
