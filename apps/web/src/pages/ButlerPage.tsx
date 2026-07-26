@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Bell,
+  CalendarCheck,
+  CheckCircle2,
   ChevronDown,
   Loader2,
   MessageCircle,
@@ -297,6 +299,34 @@ export default function ButlerPage() {
     else toast.success('记下了：这类会继续盯');
   }
 
+  /**
+   * 简报条目背后的待办 id。`ledger:` 与 `todo:` 两种前缀都直接带 id——
+   * 这类条目「本来就是待办」，所以不该给「转任务」，而该给真正能了结它的动作。
+   */
+  function todoIdOf(ref: string): string | null {
+    const [kind, id = ''] = ref.split(':', 2);
+    if ((kind !== 'ledger' && kind !== 'todo') || !id) return null;
+    return todos.some((todo) => todo.id === id && !todo.done) ? id : null;
+  }
+
+  function completeTodo(ref: string): void {
+    const id = todoIdOf(ref);
+    if (!id) return;
+    const title = refTitles.get(ref) ?? '这件事';
+    useTodos.getState().toggle(id);
+    toast.undo(`已完成「${title}」`, () => useTodos.getState().toggle(id));
+  }
+
+  /** 逾期条目最常见的处理不是「完成」也不是「稍后」，而是「就今天」 */
+  function scheduleToday(ref: string): void {
+    const id = todoIdOf(ref);
+    if (!id) return;
+    const previous = todos.find((todo) => todo.id === id)?.due;
+    const today = todayKey();
+    useTodos.getState().update(id, { due: today });
+    toast.undo('已改到今天', () => useTodos.getState().update(id, { due: previous }));
+  }
+
   function turnIntoTodo(ref: string): void {
     const outcome = turnButlerBriefItemIntoTodo(ref, refTitles.get(ref) ?? '相关事项', {
       message: lastResult?.refMessages?.[ref],
@@ -426,6 +456,24 @@ export default function ButlerPage() {
                                   onClick={() => turnIntoTodo(item.ref)}
                                 >
                                   转任务
+                                </Button>
+                              )}
+                              {todoIdOf(item.ref) && (
+                                <Button
+                                  size="sm"
+                                  icon={CheckCircle2}
+                                  onClick={() => completeTodo(item.ref)}
+                                >
+                                  完成
+                                </Button>
+                              )}
+                              {todoIdOf(item.ref) && todos.find((todo) => todo.id === todoIdOf(item.ref))?.due !== today && (
+                                <Button
+                                  size="sm"
+                                  icon={CalendarCheck}
+                                  onClick={() => scheduleToday(item.ref)}
+                                >
+                                  就今天
                                 </Button>
                               )}
                               <Button
