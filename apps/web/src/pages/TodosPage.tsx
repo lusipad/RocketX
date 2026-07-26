@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Circle,
+  ExternalLink,
   ListTodo,
   Pencil,
   Plus,
@@ -18,6 +19,7 @@ import { useDayTick } from '../lib/format';
 import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
 import { LinkifiedText } from '../lib/markdown';
+import { adoWebBase } from '../lib/ado';
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
@@ -37,6 +39,14 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
   const overdue = isOverdue(todo);
   // 手动新建的待办没有来源消息，跳转和来源行都不展示
   const hasSource = !!(todo.rid && todo.mid);
+  /**
+   * 从 Azure DevOps 工作项转来的待办。字段（adoWorkItemId / adoProject）一直有，
+   * 只是从来没有人用它开过一个入口——「这条待办是哪来的」于是无从回溯。
+   */
+  const adoWebBaseUrl = adoWebBase();
+  const workItemUrl = todo.adoWorkItemId && adoWebBaseUrl
+    ? `${adoWebBaseUrl}${todo.adoProject ? `/${encodeURIComponent(todo.adoProject)}` : ''}/_workitems/edit/${todo.adoWorkItemId}`
+    : null;
 
   const jump = async () => {
     if (!todo.rid || !todo.mid) return;
@@ -81,6 +91,12 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
               {todo.roomName} · {todo.author}
             </span>
           )}
+          {todo.adoWorkItemId && (
+            <span className="truncate">
+              工作项 #{todo.adoWorkItemId}
+              {todo.adoProject ? ` · ${todo.adoProject}` : ''}
+            </span>
+          )}
           {todo.due && (
             <span
               className={`rounded px-1.5 py-0.5 ${
@@ -106,6 +122,17 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           >
             <CornerUpRight size={14} />
           </button>
+        )}
+        {workItemUrl && (
+          <a
+            href={workItemUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+            title={`打开工作项 #${todo.adoWorkItemId}`}
+          >
+            <ExternalLink size={14} />
+          </a>
         )}
         <button
           onClick={() => onEdit(todo)}
