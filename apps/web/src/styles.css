@@ -101,9 +101,19 @@
 /* ---- 浅色主题（默认） ---- */
 :root,
 :root[data-theme='light'] {
-  --color-surface-1: #eceef1;
-  --color-surface-2: #f7f8fa;
-  --color-surface-3: #ffffff;
+  /**
+   * 浅色阶梯整体下压一档，让**卡片成为最亮的一层**。
+   *
+   * 此前 surface-3(内容区) 与 surface-4(卡片) 同为 #ffffff——卡片和它所在的
+   * 页面一样白，只能靠边框才看得出来。要走「靠背景差浮起、不画边框」这条路，
+   * 白必须留给卡片，页面底得让出来。
+   *
+   * 侧栏比内容区暗也是主流做法（Slack / 飞书 / Claude Code 都如此），
+   * 顺带把大面积纯白带来的刺眼感降下去。
+   */
+  --color-surface-1: #e9ebee;
+  --color-surface-2: #f0f1f3;
+  --color-surface-3: #f7f8fa;
   --color-surface-4: #ffffff;
 
   --color-fill-1: #f2f3f5;
@@ -114,9 +124,11 @@
   --color-ink: #1f2329;
   --color-ink-2: #646a73;
   --color-ink-3: #8f959e;
-  --color-line: #dee0e3;
-  --color-line-strong: #c9ccd1;
-  --color-line-soft: #eceef1;
+  /* 阶梯下压后，线也得跟着压：line-soft 原是 #eceef1，比新的 surface-1 还亮，
+     侧栏里的分隔线会整条消失 */
+  --color-line: #d8dade;
+  --color-line-strong: #c2c6cb;
+  --color-line-soft: #e3e5e9;
 
   --color-primary-light: #e1eaff;
   --color-bubble-mine: #d6e4ff;
