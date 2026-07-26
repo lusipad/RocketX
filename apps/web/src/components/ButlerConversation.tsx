@@ -6,7 +6,6 @@ import {
   Send,
   Share2,
   Square,
-  TerminalSquare,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { getServerBase } from '../lib/client';
@@ -25,7 +24,6 @@ import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
 const RECAP_GAP_MS = 30 * 60 * 1000;
 import { transferConversationToCodexApp } from '../stores/butlerCodex';
 import { toast } from '../stores/toast';
-import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
@@ -54,7 +52,7 @@ function routineDaysLabel(days?: number[]): string {
   return days.map((day) => `周${'日一二三四五六'[day] ?? day}`).join('、');
 }
 
-export default function ButlerConversation({ onCollapse }: { onCollapse: () => void }) {
+export default function ButlerConversation({ onBackToPaper }: { onBackToPaper: () => void }) {
   const userId = useAuth((state) => state.user?._id);
   const config = useWorkbench((state) => state.config);
   const lastRefresh = useWorkbench((state) => state.lastRefresh);
@@ -186,20 +184,11 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
           </button>
           <button
             type="button"
-            onClick={() => useUI.getState().setModule('codex')}
-            title="打开执行间：看管家跑了哪些命令"
-            aria-label="执行间"
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
-          >
-            <TerminalSquare size={14} />执行间
-          </button>
-          <button
-            type="button"
-            onClick={onCollapse}
-            aria-label="收起对话"
+            onClick={onBackToPaper}
+            aria-label="回到纸"
             className="flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:bg-fill-hover"
           >
-            <ChevronDown size={14} />收起
+            <ChevronDown size={14} />回到纸
           </button>
           <div className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-ink-3">
             {config ? 'ADO 已连接' : 'ADO 未配置'} · {getServerBase() ? 'Rocket.Chat 已连接' : '当前站点'}

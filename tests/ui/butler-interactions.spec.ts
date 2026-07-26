@@ -8,7 +8,7 @@ async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
   await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
   await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
   return state;
 }
@@ -245,6 +245,240 @@ async function seedErrandSurface(page: Page): Promise<void> {
   });
 }
 
+async function seedPaperSections(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { errands: Array<Record<string, unknown>>; lines: Array<Record<string, unknown>> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const loadRounds = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
+      useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await loadButler();
+    const { useButlerRoundsRunner } = await loadRounds();
+    const now = Date.now();
+    const errands = [
+      {
+        id: 'approval-run',
+        title: '批准发布检查',
+        threadId: 'thread-approval',
+        workspaceRoot: 'D:/Repos/rocketchatx',
+        workspaceName: '主仓',
+        readOnly: false,
+        startedAt: now - 60_000,
+        status: 'awaiting-approval',
+        approvals: [{
+          id: 'approval-command',
+          method: 'item/commandExecution/requestApproval',
+          policy: 'actionable',
+          params: { command: 'pnpm test' },
+          at: now,
+        }],
+        traces: [],
+      },
+      {
+        id: 'running-run',
+        title: '实现纸面进度',
+        threadId: 'thread-running',
+        workspaceRoot: 'D:/Repos/rocketchatx',
+        workspaceName: '主仓',
+        readOnly: false,
+        startedAt: now - 3 * 60_000,
+        status: 'running',
+        activity: '正在核对组件',
+        approvals: [],
+        plan: [
+          { step: '锁定回归', status: 'completed' },
+          { step: '补齐行内进度', status: 'inProgress' },
+        ],
+        traces: [
+          { id: 'trace-1', at: now - 1_000, kind: 'tool', text: '开始：fileChange' },
+          { id: 'trace-2', at: now, kind: 'tool', text: '完成：fileChange' },
+        ],
+      },
+      {
+        id: 'replied-run',
+        title: '汇总回归结论',
+        threadId: 'thread-replied',
+        workspaceRoot: 'D:/Repos/rocketchatx',
+        workspaceName: '主仓',
+        readOnly: true,
+        startedAt: now - 5 * 60_000,
+        status: 'replied',
+        reply: '三层回归均已通过。',
+        approvals: [],
+        traces: [],
+      },
+    ];
+    (window as Window & { __paperApprovalActions?: unknown[] }).__paperApprovalActions = [];
+    (window as Window & { __paperStopActions?: unknown[] }).__paperStopActions = [];
+    useButler.setState({
+      errands,
+      running: false,
+      activity: null,
+      resolveErrandApproval: async (runId: string, approvalId: string, approved: boolean) => {
+        (window as Window & { __paperApprovalActions?: unknown[] }).__paperApprovalActions?.push({
+          runId,
+          approvalId,
+          approved,
+        });
+        const state = useButler.getState();
+        useButler.setState({
+          errands: state.errands.map((run) => run.id === runId
+            ? { ...run, status: 'running', approvals: [] }
+            : run),
+        });
+      },
+      archiveErrand: async (runId: string) => {
+        const state = useButler.getState();
+        useButler.setState({ errands: state.errands.filter((run) => run.id !== runId) });
+      },
+      stopErrand: async (runId: string) => {
+        (window as Window & { __paperStopActions?: unknown[] }).__paperStopActions?.push(runId);
+      },
+      ask: async (text: string) => {
+        const state = useButler.getState();
+        useButler.setState({
+          lines: [
+            ...state.lines,
+            { id: `paper-user-${Date.now()}`, role: 'user', text },
+            { id: `paper-answer-${Date.now()}`, role: 'assistant', text: '先核对请求来源与影响范围。' },
+          ],
+        });
+      },
+    });
+    useButlerRoundsRunner.setState({
+      lastRoundsAt: new Date().toISOString(),
+      lastResult: {
+        generatedAt: new Date().toISOString(),
+        checkedCount: 1,
+        refTitles: { 'todo:brief': '今天的简报条目' },
+        result: {
+          headline: '今天',
+          summary: '摘要',
+          items: [{
+            ref: 'todo:brief',
+            why: '这件事今天需要你知道。',
+            suggestedAction: '先看结论。',
+          }],
+          proposals: [],
+          suppressed: [],
+        },
+      },
+    });
+  });
+}
+
+async function seedYesterdayPaper(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const loadRounds = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
+      useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await loadButler();
+    const { useButlerRoundsRunner } = await loadRounds();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(12, 0, 0, 0);
+    useButler.setState({
+      errands: [{
+        id: 'archived-yesterday',
+        title: '昨天收下的活',
+        threadId: 'thread-yesterday',
+        workspaceRoot: 'D:/Repos/rocketchatx',
+        workspaceName: '主仓',
+        readOnly: false,
+        startedAt: yesterday.getTime() - 60_000,
+        status: 'replied',
+        reply: '昨天已经收好。',
+        approvals: [],
+        traces: [],
+        archivedAt: yesterday.getTime(),
+      }],
+    });
+    useButlerRoundsRunner.setState({
+      lastRoundsAt: yesterday.toISOString(),
+      lastResult: {
+        generatedAt: yesterday.toISOString(),
+        checkedCount: 1,
+        refTitles: { 'todo:yesterday': '昨天的简报' },
+        result: {
+          headline: '昨天',
+          summary: '摘要',
+          items: [{ ref: 'todo:yesterday', why: '这是昨天留下的记录。' }],
+          proposals: [],
+          suppressed: [],
+        },
+      },
+    });
+  });
+}
+
+async function seedDispatchDraft(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { errands: Array<Record<string, unknown>> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const loadEnvironments = new Function('return import("/src/stores/agentEnvironments.ts")') as () => Promise<{
+      useAgentEnvironments: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await loadButler();
+    const { useAgentEnvironments } = await loadEnvironments();
+    useAgentEnvironments.setState({
+      environments: [{
+        id: 'paper-workspace',
+        name: '主仓',
+        path: 'D:/Repos/rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'codex/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      lastDispatchEnvironmentId: 'paper-workspace',
+    });
+    useButler.setState({
+      errandDraft: {
+        spec: {
+          title: '派出后回到纸',
+          goal: '验证同一份 store',
+          acceptance: ['纸上出现新行'],
+          boundaries: [],
+          evidence: [],
+        },
+        checkpointId: 'dispatch-paper',
+      },
+      confirmErrandDraft: async () => {
+        const state = useButler.getState();
+        useButler.setState({
+          errandDraft: null,
+          errands: [...state.errands, {
+            id: 'dispatched-paper',
+            title: '派出后回到纸',
+            threadId: 'thread-dispatched',
+            workspaceRoot: 'D:/Repos/rocketchatx',
+            workspaceName: '主仓',
+            readOnly: false,
+            startedAt: Date.now(),
+            status: 'running',
+            activity: '正在建立会话',
+            approvals: [],
+            traces: [],
+          }],
+        });
+      },
+    });
+  });
+}
+
 test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
   const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
@@ -402,17 +636,15 @@ test('取消待办草案不会产生本地副作用', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('取消动作会在管家页留下可见审计记录', async ({ page }) => {
+test('取消动作后回到纸不会伪造在办项', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
   await page.getByRole('button', { name: '转待办', exact: true }).click();
   await page.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '收起对话', exact: true }).click();
-  await page.getByText(/^工作日志 ·/).click();
-
-  await expect(page.getByText('待办 · 已取消', { exact: true })).toBeVisible();
-  await expect(page.getByText('待办 · 已提议', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '回到纸', exact: true }).click();
+  await expect(page.getByRole('region', { name: '在办' })).toHaveCount(0);
+  await expect(page.getByLabel('管家空状态')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -507,7 +739,7 @@ test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
 
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -516,7 +748,7 @@ test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
 test('可新建、重命名并切换独立的管家会话', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '展开对话', exact: true }).click();
+  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
   await seedButlerAnswer(page);
 
   const sessionSelect = page.getByLabel('管家会话');
@@ -635,22 +867,143 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
   expect(pageErrors).toEqual([]);
 });
 
-test('派出去的活区在桌面页、完整对话和房间侧栏共享同一份可见状态', async ({ page }) => {
+test('在办活在纸、完整对话和房间窄纸共享同一份可见状态', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
   await page.getByRole('button', { name: 'AI', exact: true }).click();
   await seedErrandSurface(page);
-  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('管家活状态')).toHaveText('0 件等你 · 1 在办');
+  await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: '展开对话', exact: true }).click();
-  await expect(page.getByText('派出去的活', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
+  expect(pageErrors).toEqual([]);
+});
+
+test('纸的三区按数据渲染，空区不占位置，审批原文与动作可用', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedPaperSections(page);
+
+  await expect(page.getByRole('region', { name: '等你点头' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
+  await expect(page.getByText(/pnpm test/)).toBeVisible();
+
+  await page.getByRole('button', { name: '为什么？', exact: true }).click();
+  await expect(page.getByLabel('纸上问答')).toContainText('pnpm test');
+  await page.getByRole('button', { name: '让它跑', exact: true }).click();
+  expect(await page.evaluate(() => (
+    (window as Window & { __paperApprovalActions?: unknown[] }).__paperApprovalActions
+  ))).toEqual([{ runId: 'approval-run', approvalId: 'approval-command', approved: true }]);
+  await expect(page.getByRole('region', { name: '等你点头' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('在办行内展开当前进度，回话结论展开后可以收下', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedPaperSections(page);
+
+  const runningRow = page.getByRole('button', { name: /实现纸面进度/ });
+  await runningRow.click();
+  await expect(runningRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByLabel('实现纸面进度 的 TODO')).toContainText('锁定回归');
+  await expect(page.getByLabel('实现纸面进度 的 TODO')).toContainText('补齐行内进度');
+  const processTail = page.getByLabel('实现纸面进度 的过程尾巴');
+  await expect(processTail).toContainText('过程尾巴');
+  await expect(processTail).toContainText('完成：fileChange');
+  await expect(page.getByRole('button', { name: 'codex resume thread-running', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '叫停', exact: true }).last().click();
+  expect(await page.evaluate(() => (
+    (window as Window & { __paperStopActions?: unknown[] }).__paperStopActions
+  ))).toEqual(['running-run']);
+
+  await page.getByRole('button', { name: /汇总回归结论/ }).click();
+  await expect(page.getByText('三层回归均已通过。', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '收下', exact: true }).click();
+  await expect(page.getByText('汇总回归结论', { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('翻到昨天只读显示当天简报与收下的活，再往前为空时诚实说明', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedYesterdayPaper(page);
+
+  await page.getByRole('button', { name: '前一天', exact: true }).click();
+  await expect(page.getByRole('region', { name: '收下的活' })).toContainText('昨天收下的活');
+  await expect(page.getByRole('region', { name: '今天' })).toContainText('昨天的简报');
+  await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: '前一天', exact: true }).click();
+  await expect(page.getByText('这天没有留下记录', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('纸上连续第 3 轮自动升级完整对话并保留前两轮', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedPaperSections(page);
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { lines: Array<Record<string, unknown>> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    useButler.setState({
+      errands: [],
+      ask: async (text: string) => {
+        const state = useButler.getState();
+        useButler.setState({
+          lines: [
+            ...state.lines,
+            { id: `user-${text}`, role: 'user', text },
+            { id: `assistant-${text}`, role: 'assistant', text: `答：${text}` },
+          ],
+        });
+      },
+    });
+  });
+
+  const input = page.getByRole('textbox', { name: '跟管家说件事' });
+  for (const question of ['第一轮', '第二轮']) {
+    await input.fill(question);
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await expect(page.getByLabel('纸上问答')).toContainText(`答：${question}`);
+  }
+  await input.fill('第三轮');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+
+  await expect(page.getByRole('button', { name: '回到纸', exact: true })).toBeVisible();
+  await expect(page.getByText('第一轮', { exact: true })).toBeVisible();
+  await expect(page.getByText('第二轮', { exact: true })).toBeVisible();
+  await expect(page.getByText('第三轮', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('规格卡派出后回到纸就在在办区出现新行', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedDispatchDraft(page);
+  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+
+  await expect(page.getByText('任务规格', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '派出去', exact: true }).click();
+  await page.getByRole('button', { name: '回到纸', exact: true }).click();
+
+  await expect(page.getByRole('region', { name: '在办' })).toContainText('派出后回到纸');
   expect(pageErrors).toEqual([]);
 });

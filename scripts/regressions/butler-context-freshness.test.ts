@@ -149,14 +149,11 @@ test('「新对话」创建独立 session，旧 transcript 可切回恢复', asy
   }
 });
 
-test('两个管家对话表面共用 session 切换器', () => {
-  for (const path of [
-    'apps/web/src/components/ButlerConversation.tsx',
-    'apps/web/src/components/ButlerPanel.tsx',
-  ]) {
-    const source = readFileSync(path, 'utf8');
-    assert.match(source, /ButlerSessionSwitcher/, path);
-  }
+test('完整对话层保留 session 切换器，房间窄纸不重复会话管理', () => {
+  const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  const panel = readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8');
+  assert.match(conversation, /ButlerSessionSwitcher/);
+  assert.doesNotMatch(panel, /ButlerSessionSwitcher/);
   const switcher = readFileSync('apps/web/src/components/ButlerSessionSwitcher.tsx', 'utf8');
   assert.match(switcher, /switchSession/);
   assert.match(switcher, /renameSession/);

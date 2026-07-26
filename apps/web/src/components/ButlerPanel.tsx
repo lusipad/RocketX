@@ -1,25 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, Loader2, SendHorizontal, Square } from 'lucide-react';
+import { SendHorizontal, Square } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { partitionButlerPaperErrands } from '../lib/butlerPaper';
+import type { ButlerImageInput } from '../lib/butlerImages';
+import { BUTLER_BOUNDARY_NOTE, BUTLER_SCENE_PROMPTS } from '../lib/butlerPrompts';
 import { useAuth } from '../stores/auth';
-import { useChat } from '../stores/chat';
 import { useButler } from '../stores/butler';
-import { renderMarkdown } from '../lib/markdown';
-import ButlerProcess from './ButlerProcess';
-import ButlerSources from './ButlerSources';
-import ButlerConclusionActions from './ButlerConclusionActions';
-import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
-import ButlerErrandCard from './ButlerErrandCard';
-import ButlerErrandRunCard from './ButlerErrandRunCard';
-import ButlerSessionSwitcher from './ButlerSessionSwitcher';
-import ButlerToolApprovals from './ButlerToolApprovals';
+import { useChat } from '../stores/chat';
+import ButlerErrandRunCard, { ButlerErrandStatusLine } from './ButlerErrandRunCard';
 import ButlerImagePicker, {
-  ButlerImageAttachments,
   ButlerImagePreviews,
   pasteButlerImages,
 } from './ButlerImagePicker';
+import ButlerInlineExchange from './ButlerInlineExchange';
 import PanelShell from './PanelShell';
-import type { ButlerImageInput } from '../lib/butlerImages';
-import { BUTLER_BOUNDARY_NOTE, BUTLER_SCENE_PROMPTS } from '../lib/butlerPrompts';
 
 function roomName(
   rid: string,
@@ -29,51 +22,30 @@ function roomName(
   return subscription?.fname || subscription?.name || room?.fname || room?.name || rid;
 }
 
-function routineDaysLabel(days?: number[]): string {
-  if (!days?.length) return '每天';
-  return days.map((day) => `周${'日一二三四五六'[day] ?? day}`).join('、');
-}
-
 export default function ButlerPanel() {
   const rid = useChat((state) => state.activeRid);
   const subscription = useChat((state) => (state.activeRid ? state.subscriptions[state.activeRid] : undefined));
   const room = useChat((state) => (state.activeRid ? state.rooms[state.activeRid] : undefined));
   const lines = useButler((state) => state.lines);
+  const errands = useButler((state) => state.errands);
   const activity = useButler((state) => state.activity);
   const running = useButler((state) => state.running);
-  const error = useButler((state) => state.error);
-  const routineDraft = useButler((state) => state.routineDraft);
-  const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
-  const actionDraft = useButler((state) => state.actionDraft);
-  const steps = useButler((state) => state.steps);
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
-  const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
-  const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrate = useButler((state) => state.hydrate);
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const sections = useMemo(() => partitionButlerPaperErrands(errands), [errands]);
   const hasConversation = lines.some((line) => line.role === 'user');
-  const routineCheckpoint = routineDraft
-    ? runtimeCheckpoints.find((item) => item.id === routineDraft.checkpointId)
-    : undefined;
 
-  // 恢复本账号保存的对话记录（与管家桌面对话共用同一份）
   useEffect(() => {
     if (userId) void hydrate();
   }, [hydrate, userId]);
 
-  useLayoutEffect(() => {
-    const element = scrollRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
-    // steps 也要在依赖里：等待期可见化让过程区实时长高，漏了它侧栏就不贴底
-  }, [lines, steps, activity, error, routineDraft, runtimeCheckpoints, actionDraft]);
-
   if (!rid) return null;
 
-  const submit = async () => {
+  const submit = async (): Promise<void> => {
     const text = input.trim();
     if ((!text && !images.length) || running) return;
     const submittedImages = images;
@@ -83,41 +55,29 @@ export default function ButlerPanel() {
   };
 
   return (
-    <PanelShell
-      title={<ButlerSessionSwitcher compact label="AI" />}
-      resizable
-    >
-      <div className="max-h-[45vh] shrink-0 overflow-y-auto px-4 pt-3 empty:hidden">
-        <ButlerErrandRunCard />
-      </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-        {hasConversation ? lines.map((line) => (
-          <div key={line.id} className={`mb-3 flex gap-2 ${line.role === 'user' ? 'justify-end' : ''}`}>
-            {line.role === 'assistant' ? (
-              <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary-light text-primary">
-                <Bot size={14} />
-              </div>
-            ) : null}
-            <div className={`max-w-[84%] rounded-xl px-3 py-2 text-sm leading-6 ${
-              line.role === 'user' ? 'bg-primary text-white' : 'bg-fill-1 text-ink'
-            }`}>
-              {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
-              {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
-              {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
-              {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
-              <ButlerMessageActions line={line} disabled={running} />
-            </div>
+    <PanelShell title="AI" resizable>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+        <ButlerErrandStatusLine sections={sections} />
+        {errands.some((errand) => !errand.archivedAt) ? (
+          <div className="mt-4">
+            <ButlerErrandRunCard compact />
           </div>
-        )) : (
-          <div className="py-6">
-            <div className="text-center text-sm leading-6 text-ink-3">问我当前房间的讨论，或任何消息、待办、日程、工作项。</div>
+        ) : null}
+
+        {hasConversation ? (
+          <div className="mt-5">
+            <ButlerInlineExchange lines={lines} running={running} activity={activity} />
+          </div>
+        ) : errands.every((errand) => errand.archivedAt) ? (
+          <div className="mt-7">
+            <p className="text-sm leading-6 text-ink-3">问我当前房间的讨论，或跟我说件要办的事。</p>
             <div className="mt-3 flex flex-col gap-1">
               {BUTLER_SCENE_PROMPTS.map((item) => (
                 <button
                   key={item.scene}
                   type="button"
                   onClick={() => setInput(item.prompt)}
-                  className="rounded-md px-2 py-1 text-left text-xs text-ink-2 hover:bg-fill-hover hover:text-ink"
+                  className="px-2 py-1 text-left text-xs text-ink-2 hover:text-ink"
                 >
                   <span className="mr-1.5 text-ink-3">{item.scene}</span>
                   {item.prompt}
@@ -126,37 +86,12 @@ export default function ButlerPanel() {
             </div>
             <div className="mt-2.5 border-t border-line pt-2 text-xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
           </div>
-        )}
-
-        <ButlerProcess steps={steps} running={running} className="mt-2" />
-        {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
-        {activity || running ? (
-          <div className="mt-3 flex items-center gap-2 text-sm text-ink-3">
-            <Loader2 size={14} className="animate-spin" />{activity ?? '正在处理请求…'}
-          </div>
         ) : null}
-
-        <div className="mt-3"><ButlerToolApprovals compact /></div>
-
-        {routineDraft ? (
-          <div className="mt-3 rounded-lg border border-primary/30 bg-primary-light/40 p-3">
-            <div className="text-xs font-medium text-primary">例行事务草案</div>
-            <div className="mt-1 font-medium text-ink">{routineDraft.name}</div>
-            <div className="mt-1 text-xs text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
-            {routineCheckpoint?.error ? <div className="mt-1 text-xs text-danger">{routineCheckpoint.error.message}</div> : null}
-            <div className="mt-3 flex justify-end gap-2">
-              <button onClick={() => void dismissRoutineDraft()} className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover">取消</button>
-              <button onClick={() => void confirmRoutineDraft()} className="rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover">确认启用</button>
-            </div>
-          </div>
-        ) : null}
-        <div className="mt-3"><ButlerErrandCard /></div>
-        <div className="mt-3"><ButlerActionCard /></div>
       </div>
 
-      <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="shrink-0 border-t border-line p-3">
+      <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="shrink-0 px-3 pb-3">
         <ButlerImagePreviews images={images} onChange={setImages} />
-        <div className="flex items-end gap-2 rounded-md border border-line px-2 focus-within:border-primary">
+        <div className="flex items-end gap-2 border-b border-line px-1 focus-within:border-primary">
           <ButlerImagePicker images={images} onChange={setImages} disabled={running} compact />
           <textarea
             value={input}
@@ -177,12 +112,17 @@ export default function ButlerPanel() {
               type="button"
               title="停止回答"
               onClick={() => void stop()}
-              className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded border border-line text-ink hover:bg-fill-hover"
+              className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center text-ink hover:text-primary"
             >
               <Square size={12} />
             </button>
           ) : (
-            <button type="submit" aria-label="发送" disabled={!input.trim() && !images.length} className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40">
+            <button
+              type="submit"
+              aria-label="发送"
+              disabled={!input.trim() && !images.length}
+              className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center text-primary hover:text-primary-hover disabled:text-ink-3/40"
+            >
               <SendHorizontal size={14} />
             </button>
           )}

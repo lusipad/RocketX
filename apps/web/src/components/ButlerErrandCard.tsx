@@ -10,10 +10,6 @@ import { useLocalCodex } from '../stores/localCodex';
 import { toast } from '../stores/toast';
 import Button from './ui/Button';
 
-/**
- * 任务规格卡：管家拟好的活，用户在这里逐字过目、选工作区、一键送进执行间。
- * 这张卡就是派活的闸——规格上卡前经过白名单归一化，目标只能从已注册工作区里选。
- */
 export default function ButlerErrandCard() {
   const errandDraft = useButler((state) => state.errandDraft);
   const confirmErrandDraft = useButler((state) => state.confirmErrandDraft);
@@ -48,7 +44,7 @@ export default function ButlerErrandCard() {
     if (!activeTarget || dispatching) return;
     setDispatching(true);
     try {
-      // 不跳转：活开跑后你留在管家页，进度与结论由「派出去的活」卡片呈现
+      // 不跳转，避免派出动作把用户从当前对话带走。
       await confirmErrandDraft(activeTarget, { readOnly });
     } catch (error) {
       toast.error(error, '派发失败');
@@ -104,7 +100,7 @@ export default function ButlerErrandCard() {
         </label>
       ) : (
         <p className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink-2">
-          还没有可派的工作区：先去执行间选一个本地目录，或在设置里添加工作区。
+          还没有可派的工作区，请先在设置里添加本地工作区。
         </p>
       )}
 
@@ -129,7 +125,7 @@ export default function ButlerErrandCard() {
           disabled={!activeTarget}
           onClick={() => void dispatchNow()}
         >
-          {dispatching ? '正在派发…' : '送进执行间开跑'}
+          {dispatching ? '正在派发…' : '派出去'}
         </Button>
       </div>
     </div>

@@ -1,16 +1,16 @@
+import { CheckCircle2, CircleDotDashed, MessageSquareText, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { codexApprovalSummary } from '../lib/codexApprovalSummary';
-import { visibleButlerErrands, type ButlerErrandRun } from '../lib/butlerErrands';
+import {
+  partitionButlerPaperErrands,
+  type ButlerPaperErrandSections,
+} from '../lib/butlerPaper';
+import type { ButlerErrandRun } from '../lib/butlerErrands';
 import { useButler } from '../stores/butler';
 import { toast } from '../stores/toast';
-import Button from './ui/Button';
 
 function elapsedMinutes(startedAt: number, now: number): number {
   return Math.max(0, Math.floor((now - startedAt) / 60_000));
-}
-
-function conclusionPreview(text: string): string {
-  return text.split(/\r?\n/).slice(0, 2).join('\n');
 }
 
 function approvalQuestion(errand: ButlerErrandRun, request: string): string {
@@ -19,21 +19,55 @@ function approvalQuestion(errand: ButlerErrandRun, request: string): string {
     '',
     request,
     '',
-    '为什么要跑这个？',
+    '为什么需要这项操作？',
   ].join('\n');
 }
 
-/** 三个管家表面共用这一块；活的状态与操作不依赖组件是否挂载。 */
-export default function ButlerErrandRunCard() {
-  const errands = useButler((state) => state.errands);
+function activeProgress(errand: ButlerErrandRun): string {
+  if (errand.status === 'running') return errand.activity ?? '正在处理';
+  if (errand.status === 'replied') return '回话了';
+  return '停下来了';
+}
+
+function ActiveIcon({ errand }: { errand: ButlerErrandRun }) {
+  if (errand.status === 'running') return <CircleDotDashed size={15} className="text-primary" />;
+  if (errand.status === 'replied') return <MessageSquareText size={15} className="text-primary" />;
+  return <XCircle size={15} className="text-ink-3" />;
+}
+
+export function ButlerErrandStatusLine({
+  sections,
+}: {
+  sections: ButlerPaperErrandSections;
+}) {
+  return (
+    <div className="text-xs text-ink-3" aria-label="管家活状态">
+      {sections.approvals.length} 件等你 · {sections.active.length} 在办
+    </div>
+  );
+}
+
+export default function ButlerErrandRunCard({
+  runs,
+  compact = false,
+  archived = false,
+  onAsk,
+}: {
+  runs?: readonly ButlerErrandRun[];
+  compact?: boolean;
+  archived?: boolean;
+  onAsk?: (question: string) => void | Promise<void>;
+}) {
+  const storeErrands = useButler((state) => state.errands);
   const resolveErrandApproval = useButler((state) => state.resolveErrandApproval);
+  const stopErrand = useButler((state) => state.stopErrand);
   const archiveErrand = useButler((state) => state.archiveErrand);
   const askButler = useButler((state) => state.ask);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [now, setNow] = useState(Date.now());
-  const sorted = useMemo(() => visibleButlerErrands(errands), [errands]);
-  const hasRunning = sorted.some((errand) =>
-    errand.status === 'running' || errand.status === 'awaiting-approval');
+  const errands = runs ?? storeErrands;
+  const sections = useMemo(() => partitionButlerPaperErrands(errands), [errands]);
+  const hasRunning = sections.active.some((errand) => errand.status === 'running');
 
   useEffect(() => {
     if (!hasRunning) return undefined;
@@ -41,10 +75,20 @@ export default function ButlerErrandRunCard() {
     return () => clearInterval(timer);
   }, [hasRunning]);
 
-  if (!sorted.length) return null;
+  if (!errands.length) return null;
+
+  const toggleExpanded = (runId: string): void => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  };
 
   const copyResumeCommand = async (threadId: string): Promise<void> => {
     try {
+      if (!threadId || !navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(`codex resume ${threadId}`);
       toast.success('已复制，去终端粘贴就能看全过程');
     } catch (error) {
@@ -52,113 +96,179 @@ export default function ButlerErrandRunCard() {
     }
   };
 
-  return (
-    <section className="rounded-xl bg-surface p-4 shadow-raise" aria-label="派出去的活">
-      <h2 className="text-sm font-semibold text-ink">派出去的活</h2>
-      <div className="mt-3 flex flex-col gap-3">
-        {sorted.map((errand) => {
-          const waiting = errand.status === 'awaiting-approval';
-          const running = errand.status === 'running';
-          const replied = errand.status === 'replied' || errand.status === 'failed';
-          const isExpanded = expanded.has(errand.id);
-          const conclusion = errand.reply ?? errand.error ?? '这个活没留下结论。';
-
-          return (
-            <article key={errand.id} className="rounded-lg bg-surface-2 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-ink-3">
-                    {waiting ? '等你点头' : running ? '正在干' : '回话了'}
-                  </div>
-                  <div className="mt-1 truncate text-sm font-medium text-ink">{errand.title}</div>
-                </div>
-                {running ? (
-                  <span className="shrink-0 text-xs text-ink-3">
-                    派出去 {elapsedMinutes(errand.startedAt, now)} 分钟
-                  </span>
-                ) : null}
+  if (archived) {
+    return (
+      <section aria-label="收下的活">
+        <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-ink`}>收下的活</h2>
+        <div className="mt-3 space-y-4">
+          {errands.map((errand) => (
+            <article key={errand.id} className="border-l-2 border-line pl-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                <CheckCircle2 size={14} className="text-ink-3" />
+                {errand.title}
               </div>
+              <div className="mt-1 whitespace-pre-wrap text-xs leading-5 text-ink-2">
+                {errand.reply ?? errand.error ?? '这个活没留下结论。'}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
 
-              {waiting ? (
-                <div className="mt-3 flex flex-col gap-2">
+  return (
+    <div className={compact ? 'space-y-5' : 'space-y-8'}>
+      {sections.approvals.length > 0 ? (
+        <section aria-label="等你点头">
+          <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-danger`}>等你点头</h2>
+          <div className="mt-3 space-y-5 border-l-2 border-danger pl-4">
+            {sections.approvals.map((errand) => (
+              <article key={errand.id}>
+                <h3 className="text-sm font-medium text-ink">{errand.title}</h3>
+                <div className="mt-2 space-y-3">
                   {errand.approvals.map((approval) => {
                     const request = codexApprovalSummary(approval.method, approval.params);
                     return (
-                      <div key={approval.id} className="rounded-lg bg-warning/10 p-3">
-                        <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-surface p-2 font-mono text-[11px] leading-5 text-ink-2">
+                      <div key={approval.id}>
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-ink-2">
                           {request}
                         </pre>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={() => resolveErrandApproval(errand.id, approval.id, true)}
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                          <button
+                            type="button"
+                            className="text-danger hover:underline"
+                            onClick={() => void resolveErrandApproval(errand.id, approval.id, true)}
                           >
                             让它跑
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => resolveErrandApproval(errand.id, approval.id, false)}
+                          </button>
+                          <button
+                            type="button"
+                            className="text-danger hover:underline"
+                            onClick={() => void resolveErrandApproval(errand.id, approval.id, false)}
                           >
                             这次不行
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void askButler(approvalQuestion(errand, request))}
+                          </button>
+                          <button
+                            type="button"
+                            className="text-danger hover:underline"
+                            onClick={() => void (onAsk ?? askButler)(approvalQuestion(errand, request))}
                           >
-                            为什么要跑这个？
-                          </Button>
+                            为什么？
+                          </button>
                         </div>
                       </div>
                     );
                   })}
+                  <button
+                    type="button"
+                    className="text-xs text-danger hover:underline"
+                    onClick={() => void stopErrand(errand.id)}
+                  >
+                    叫停
+                  </button>
                 </div>
-              ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
-              {running ? (
-                <p className="mt-2 truncate text-sm text-ink-2">{errand.activity ?? '正在处理'}</p>
-              ) : null}
+      {sections.active.length > 0 ? (
+        <section aria-label="在办">
+          <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-ink`}>在办</h2>
+          <div className="mt-3 divide-y divide-line/60 border-l-2 border-primary/70 pl-4">
+            {sections.active.map((errand) => {
+              const isExpanded = expanded.has(errand.id);
+              const replied = errand.status === 'replied' || errand.status === 'failed';
+              const conclusion = errand.reply ?? errand.error ?? '这个活没留下结论。';
 
-              {replied ? (
-                <>
-                  <div className={`mt-2 whitespace-pre-wrap text-sm leading-6 text-ink-2 ${isExpanded ? '' : 'line-clamp-2'}`}>
-                    {isExpanded ? conclusion : conclusionPreview(conclusion)}
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void copyResumeCommand(errand.threadId)}
-                      className="font-mono text-[11px] text-ink-3 hover:text-ink"
-                      title={`复制 codex resume ${errand.threadId}`}
-                    >
-                      codex resume {errand.threadId.slice(0, 8)}
-                    </button>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setExpanded((current) => {
-                          const next = new Set(current);
-                          if (next.has(errand.id)) next.delete(errand.id);
-                          else next.add(errand.id);
-                          return next;
-                        })}
-                      >
-                        {isExpanded ? '只看摘要' : '看完整结论'}
-                      </Button>
-                      <Button variant="primary" size="sm" onClick={() => archiveErrand(errand.id)}>
-                        收下
-                      </Button>
+              return (
+                <article key={errand.id} className="py-3 first:pt-0 last:pb-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpanded(errand.id)}
+                    aria-expanded={isExpanded}
+                    className="flex w-full min-w-0 items-center gap-2 text-left"
+                  >
+                    <ActiveIcon errand={errand} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{errand.title}</span>
+                    <span className="shrink-0 text-xs text-ink-2">{activeProgress(errand)}</span>
+                    <span className="shrink-0 text-xs text-ink-3">
+                      {elapsedMinutes(errand.startedAt, now)} 分钟
+                    </span>
+                    {replied ? (
+                      <span className="shrink-0 text-xs text-primary">看结论并收下</span>
+                    ) : null}
+                  </button>
+
+                  {isExpanded ? (
+                    <div className="ml-6 mt-3 text-xs leading-5 text-ink-2">
+                      {replied ? (
+                        <>
+                          <div className="whitespace-pre-wrap">{conclusion}</div>
+                          <button
+                            type="button"
+                            className="mt-3 text-primary hover:underline"
+                            onClick={() => void archiveErrand(errand.id)}
+                          >
+                            收下
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div>{errand.activity ?? '正在处理'}</div>
+                          {errand.plan?.length ? (
+                            <ol className="mt-3 space-y-1" aria-label={`${errand.title} 的 TODO`}>
+                              {errand.plan.map((item, index) => (
+                                <li key={`${item.step}-${index}`} className="flex gap-2">
+                                  <span aria-hidden="true">
+                                    {item.status === 'completed' ? '✓' : item.status === 'inProgress' ? '→' : '○'}
+                                  </span>
+                                  <span className={item.status === 'completed' ? 'text-ink-3 line-through' : ''}>
+                                    {item.step}
+                                  </span>
+                                </li>
+                              ))}
+                            </ol>
+                          ) : null}
+                          {errand.traces.length > 0 ? (
+                            <div className="mt-3 text-ink-3" aria-label={`${errand.title} 的过程尾巴`}>
+                              <div className="mb-1">过程尾巴</div>
+                              <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5">
+                                {errand.traces.slice(-6).map((trace) => trace.text).join('\n')}
+                              </pre>
+                            </div>
+                          ) : null}
+                          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                            <button
+                              type="button"
+                              className="text-danger hover:underline"
+                              onClick={() => void stopErrand(errand.id)}
+                            >
+                              叫停
+                            </button>
+                            {errand.threadId ? (
+                              <button
+                                type="button"
+                                className="font-mono text-[11px] text-ink-3 hover:text-ink"
+                                title={`复制 codex resume ${errand.threadId}`}
+                                onClick={() => void copyResumeCommand(errand.threadId)}
+                              >
+                                codex resume {errand.threadId}
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
                     </div>
-                  </div>
-                </>
-              ) : null}
-            </article>
-          );
-        })}
-      </div>
-    </section>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }

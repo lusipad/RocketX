@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('例行事务整体迁入管家桌面并默认折叠', () => {
+test('纸底部只读已启用例行事务数量，管理组件本身保留', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
   const routines = readFileSync('apps/web/src/components/ButlerRoutines.tsx', 'utf8');
 
-  assert.match(page, /<ButlerRoutines \/>/);
-  assert.ok(page.indexOf('<ButlerRoutines />') > page.indexOf('工作日志'));
+  assert.match(page, /useRoutines\(\(state\) => state\.routines\)/);
+  assert.match(page, /routines\.filter\(\(routine\) => routine\.enabled\)\.length/);
+  assert.match(page, /在盯 \{watchedCount\} 件事，结果都会写到这张纸上/);
+  assert.doesNotMatch(page, /<ButlerRoutines \/>/);
   assert.match(routines, /<details className="group rounded-xl/);
   assert.doesNotMatch(routines, /<details[^>]*\sopen(?:=|\s|>)/);
   assert.match(routines, /<span>例行事务<\/span>/);

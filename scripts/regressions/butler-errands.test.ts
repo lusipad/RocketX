@@ -542,6 +542,56 @@ test('人不在管家页时：等你点头与回话了都要提示，且指回�
   }
 });
 
+test('派活原样消费 turn plan，并能按自己的 turnId 单独叫停', async () => {
+  await useButlerErrandRuns.getState().reset();
+  useButler.getState().reset();
+  resetEnvironments();
+  const environment = useAgentEnvironments.getState().addEnvironment({
+    name: '主仓',
+    path: 'D:/Repos/rocketchatx',
+    adoProjects: [],
+    defaultBaseBranch: '',
+    branchPrefix: '',
+  });
+  const codex = stubErrandClients();
+
+  try {
+    const run = await useButlerErrandRuns.getState().dispatchErrand(
+      { title: '实现纸面进度', goal: '', acceptance: [], boundaries: [], evidence: [] },
+      { id: environment.id, name: environment.name, path: environment.path },
+    );
+    codex.notify(0, 'turn/plan/updated', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      explanation: null,
+      plan: [
+        { step: '锁定回归', status: 'completed' },
+        { step: '补齐行内进度', status: 'inProgress' },
+        { step: '跑 UI 冒烟', status: 'pending' },
+      ],
+    });
+
+    assert.deepEqual(useButler.getState().errands[0]?.plan, [
+      { step: '锁定回归', status: 'completed' },
+      { step: '补齐行内进度', status: 'inProgress' },
+      { step: '跑 UI 冒烟', status: 'pending' },
+    ]);
+
+    await useButler.getState().stopErrand(run.id);
+    assert.deepEqual(
+      codex.clients[0]?.calls.find((call) => call.method === 'turn/interrupt')?.params,
+      { threadId: 'thread-1', turnId: 'turn-1' },
+    );
+    assert.equal(useButler.getState().errands[0]?.status, 'failed');
+    assert.equal(useButler.getState().errands[0]?.error, '已叫停');
+  } finally {
+    codex.restore();
+    await useButlerErrandRuns.getState().reset();
+    resetEnvironments();
+    useButler.getState().reset();
+  }
+});
+
 test('对话里的草案卡要跟随到底，派出去的活区则独立放在消息滚动区外', async () => {
   const { readFileSync } = await import('node:fs');
   const source = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
@@ -815,13 +865,13 @@ test('决策14刀1：派活不再借 localCodex 单线程，因此第二件活�
   );
 });
 
-test('决策14刀1：活区按优先级列表渲染，回话后的动作是“收下”而不是“收起”', () => {
+test('决策14刀1.5：活按等审批与在办分区，回话后的动作是“收下”而不是“收起”', () => {
   const source = readErrandListSurfaceSource();
   assert.match(source, /\berrands\b/, '活区应基于 errands 列表渲染');
-  assert.match(source, /visibleButlerErrands/, '活区应按统一优先级排序：等你点头 > 正在干 > 回话了');
+  assert.match(source, /partitionButlerPaperErrands/, '纸应把等审批与其余在办活分成两个空区可隐藏的区');
   assert.match(source, /\bmap\(/, '列表渲染至少要支持两件以上并行的活');
   assert.match(source, /等你点头/);
-  assert.match(source, /正在干/);
+  assert.match(source, /在办/);
   assert.match(source, /回话了/);
   assert.match(source, /收下/, '回话后的活应要求用户“收下”归档');
   assert.doesNotMatch(source, /收起/, '“收起”会把 GTD 收件箱语义变成临时藏起来');

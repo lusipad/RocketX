@@ -70,7 +70,10 @@ test('WELCOME_TEXT 未被改动：它同时被剥离逻辑、动作条与多个�
   assert.match(store, /lines\[0\]\.text === WELCOME_TEXT/);
 });
 
-test('管家面板滚动依赖包含 steps，等待期可见化才会贴底', () => {
+test('房间管家是纸的窄版：状态行、同一活列表和输入框', () => {
   const panel = source('apps/web/src/components/ButlerPanel.tsx');
-  assert.match(panel, /\}, \[lines, steps, activity, error/);
+  assert.match(panel, /<ButlerErrandStatusLine sections=\{sections\} \/>/);
+  assert.match(panel, /<ButlerErrandRunCard compact \/>/);
+  assert.match(panel, /placeholder="问问这个房间的讨论…"/);
+  assert.doesNotMatch(panel, /ButlerRounds|今天<\/h2>/);
 });

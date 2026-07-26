@@ -22,6 +22,11 @@ export interface ButlerErrandTrace {
   text: string;
 }
 
+export interface ButlerErrandPlanStep {
+  step: string;
+  status: 'pending' | 'inProgress' | 'completed';
+}
+
 export interface ButlerErrandApproval {
   id: string;
   method: string;
@@ -42,6 +47,7 @@ export interface ButlerErrandRun {
   activity?: string;
   approvals: ButlerErrandApproval[];
   traces: ButlerErrandTrace[];
+  plan?: ButlerErrandPlanStep[];
   reply?: string;
   error?: string;
   /** 收下只在内存标记，跨重启恢复留给刀 2。 */

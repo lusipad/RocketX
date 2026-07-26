@@ -24,6 +24,7 @@ import {
   BUTLER_ERRAND_LIMIT,
   BUTLER_ERRAND_TRACE_LIMIT,
   type ButlerErrandApproval,
+  type ButlerErrandPlanStep,
   type ButlerErrandRun,
   type ButlerErrandTrace,
   type DispatchErrandOptions,
@@ -50,6 +51,7 @@ interface ButlerErrandRuntime {
   workspaceRoot: string;
   sandboxMode: SandboxMode;
   threadId?: string;
+  activeTurnId?: string;
 }
 
 interface ButlerErrandRunsState {
@@ -61,6 +63,7 @@ interface ButlerErrandRunsState {
     options?: DispatchErrandOptions,
   ) => Promise<ButlerErrandRun>;
   resolveApproval: (runId: string, approvalId: string, approved: boolean) => Promise<void>;
+  stopErrand: (runId: string) => Promise<void>;
   archiveErrand: (runId: string) => Promise<void>;
   reset: () => Promise<void>;
 }
@@ -107,6 +110,17 @@ function record(value: unknown): Record<string, unknown> {
 
 function safeText(value: unknown): string {
   return redactAgentOutput(value instanceof Error ? value.message : String(value)).text;
+}
+
+function planSteps(value: unknown): ButlerErrandPlanStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const step = record(item);
+    const text = typeof step.step === 'string' ? step.step.trim() : '';
+    const status = step.status;
+    if (!text || (status !== 'pending' && status !== 'inProgress' && status !== 'completed')) return [];
+    return [{ step: text, status }];
+  });
 }
 
 function runItemKey(runId: string, itemId: string): string {
@@ -306,12 +320,22 @@ function onNotification(runId: string, method: string, value: unknown): void {
   }
 
   if (method === 'turn/started') {
+    const turn = record(params.turn);
+    if (typeof turn.id === 'string') runtime.activeTurnId = turn.id;
     updateRun(runId, (run) => ({
       ...run,
       status: run.approvals.length > 0 ? 'awaiting-approval' : 'running',
       activity: run.activity ?? '正在处理',
     }));
     traceRun(runId, 'status', 'Codex 正在处理指令');
+    return;
+  }
+
+  if (method === 'turn/plan/updated') {
+    updateRun(runId, (run) => ({
+      ...run,
+      plan: planSteps(params.plan),
+    }));
     return;
   }
 
@@ -440,7 +464,7 @@ async function startErrandRun(
     threadId: threadResponse.thread.id,
     name: rocketxThreadName('派活', `${spec.title} · ${workspaceLabel(workspaceRoot)}`),
   }).catch(() => undefined);
-  await appServer.request('turn/start', {
+  const turnResponse = await appServer.request('turn/start', {
     ...(codexSettings.model ? { model: codexSettings.model } : {}),
     ...(codexSettings.effort === 'default' ? {} : { effort: codexSettings.effort }),
     threadId: threadResponse.thread.id,
@@ -451,6 +475,7 @@ async function startErrandRun(
     approvalsReviewer: 'user',
     sandboxPolicy: sandboxPolicy(runtime.sandboxMode, workspaceRoot),
   });
+  runtime.activeTurnId = turnResponse.turn.id;
   updateRun(runId, (run) => ({
     ...run,
     status: 'running',
@@ -512,6 +537,7 @@ export const useButlerErrandRuns = create<ButlerErrandRunsState>((set, get) => (
       activity: '正在建立会话',
       approvals: [],
       traces: [],
+      plan: [],
     };
     runtimes.set(runId, {
       sessionId: id('errand-session'),
@@ -580,6 +606,40 @@ export const useButlerErrandRuns = create<ButlerErrandRunsState>((set, get) => (
     });
     waiter.resolve(decision);
     traceRun(runId, 'status', accepted ? '已允许请求' : '已拒绝请求');
+  },
+
+  stopErrand: async (runId) => {
+    const run = get().runs.find((item) => item.id === runId);
+    if (!run || (run.status !== 'running' && run.status !== 'awaiting-approval')) return;
+    const runtime = runtimes.get(runId);
+    const pending = clientStarts.get(runId);
+    const client = clients.get(runId) ?? (pending ? await pending.catch(() => undefined) : undefined);
+    const activeTurnId = runtime?.activeTurnId;
+    const partial = activeTurnId
+      ? redactAgentOutput(turnBuffers.get(runItemKey(runId, activeTurnId))?.text.trim() ?? '')
+      : { text: '', redacted: 0 };
+
+    rejectApprovalWaiters(runId, new Error('这件活已叫停'));
+    runtimes.delete(runId);
+    if (client && runtime?.threadId && activeTurnId) {
+      await client.request('turn/interrupt', {
+        threadId: runtime.threadId,
+        turnId: activeTurnId,
+      }).catch(() => undefined);
+    }
+    markRunTerminal(
+      runId,
+      {
+        ...(partial.text
+          ? { reply: partial.redacted ? `${partial.text}\n\n（已脱敏 ${partial.redacted} 处）` : partial.text }
+          : {}),
+        error: '已叫停',
+        activity: undefined,
+      },
+      'failed',
+    );
+    traceRun(runId, 'status', '你叫停了这件活');
+    await stopClient(runId).catch(() => undefined);
   },
 
   archiveErrand: async (runId) => {

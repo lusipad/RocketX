@@ -92,18 +92,24 @@ test('停止回答保留已生成内容，不当错误处理', async () => {
   }
 });
 
-test('两个管家对话表面都有停止按钮和过程展示', () => {
-  for (const path of [
-    'apps/web/src/components/ButlerConversation.tsx',
-    'apps/web/src/components/ButlerPanel.tsx',
-  ]) {
-    const source = readFileSync(path, 'utf8');
-    assert.match(source, /ButlerProcess/, path);
-    assert.match(source, /stop/u, path);
-    assert.match(source, /<Square size=/, path);
+test('完整对话展示过程，纸与窄纸都能停止当前回答', () => {
+  const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  const panel = readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8');
+  const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
+  assert.match(conversation, /ButlerProcess/);
+  for (const source of [conversation, panel, page]) {
+    assert.match(source, /stop/u);
+    assert.match(source, /<Square size=/);
   }
+  assert.doesNotMatch(panel, /ButlerProcess/);
   // 停止走 turn/interrupt 并就地完成本轮
   const codex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
   assert.match(codex, /export async function stopButlerCodexTurn/);
   assert.match(codex, /'turn\/interrupt'/);
+  const errandCard = readFileSync('apps/web/src/components/ButlerErrandRunCard.tsx', 'utf8');
+  const errandRuns = readFileSync('apps/web/src/stores/butlerErrandRuns.ts', 'utf8');
+  assert.match(errandCard, /stopErrand/);
+  assert.match(errandCard, />\s*叫停\s*</u);
+  assert.match(errandRuns, /stopErrand: async/);
+  assert.match(errandRuns, /'turn\/interrupt'/);
 });

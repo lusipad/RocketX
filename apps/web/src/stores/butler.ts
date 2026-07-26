@@ -234,6 +234,7 @@ export interface ButlerState {
   dismissRoutineDraft: () => Promise<void>;
   confirmErrandDraft: (target: DispatchTarget, options?: DispatchErrandOptions) => Promise<void>;
   resolveErrandApproval: (errandId: string, approvalId: string, approved: boolean) => Promise<void>;
+  stopErrand: (errandId: string) => Promise<void>;
   archiveErrand: (errandId: string) => Promise<void>;
   dismissErrandDraft: () => Promise<void>;
   reset: () => void;
@@ -1976,6 +1977,10 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   resolveErrandApproval: async (errandId, approvalId, approved) => {
     await useButlerErrandRuns.getState().resolveApproval(errandId, approvalId, approved);
+  },
+
+  stopErrand: async (errandId) => {
+    await useButlerErrandRuns.getState().stopErrand(errandId);
   },
 
   archiveErrand: async (errandId) => {
