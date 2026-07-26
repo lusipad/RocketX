@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
@@ -546,4 +547,17 @@ test('日程记得住出处：消息来源存成 ButlerSource，跳转复用同�
     useCalendar.getState().remove(id);
     assert.equal(useCalendar.getState().events.length, before);
   }
+});
+
+test('工作项与 PR 都能排进日历，出处按各自类型存好', () => {
+  const source = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
+  // 入口存在
+  assert.match(source, /把工作项 #\$\{w\.id\} 排进日历/);
+  assert.match(source, /把 PR #\$\{pr\.id\} 排进日历/);
+  // 出处按各自的 ButlerSource 类型存——跳转靠 openButlerSource 分派，写错 kind 就跳不回去
+  assert.match(source, /kind: 'work-item'/);
+  assert.match(source, /kind: 'pull-request'/);
+  // 两者都带 webUrl，没有 webUrl 时 openButlerSource 才退回工作台
+  assert.match(source, /calendarItem\.webUrl \? \{ webUrl: calendarItem\.webUrl \}/);
+  assert.match(source, /calendarPr\.webUrl \? \{ webUrl: calendarPr\.webUrl \}/);
 });
