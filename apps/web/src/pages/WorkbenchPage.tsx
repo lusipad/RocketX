@@ -45,6 +45,7 @@ import {
   type ParsedCustomQuery,
 } from '../stores/customQueries';
 import { fmtConvTime } from '../lib/format';
+import { totalUnread } from '../lib/unread';
 import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { ConfirmDialog, useDialogBehavior } from '../components/Dialog';
@@ -542,14 +543,7 @@ export default function WorkbenchPage() {
   const hour = now.getHours();
   const greeting = hour < 6 ? '夜深了' : hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好';
 
-  const unreadTotal = useMemo(
-    () =>
-      Object.values(subscriptions).reduce(
-        (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
-        0,
-      ),
-    [subscriptions],
-  );
+  const unreadTotal = useMemo(() => totalUnread(subscriptions), [subscriptions]);
   const todayEvents = useMemo(() => eventsForDate(calendarEvents, today), [calendarEvents, today]);
 
   const account = config?.account ?? '';

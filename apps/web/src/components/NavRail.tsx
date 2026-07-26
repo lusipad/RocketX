@@ -23,6 +23,7 @@ import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
 import { useLocalCodex } from '../stores/localCodex';
 import { captureButlerSurfaceContext } from '../lib/butlerSurface';
+import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -133,17 +134,14 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     );
   }, [calendarEvents, todos]);
 
-  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（免打扰会话不计入）
-  const { unreadTotal, hasAlert } = useMemo(() => {
-    let unreadTotal = 0;
-    let hasAlert = false;
-    for (const s of Object.values(subscriptions)) {
-      if (s.open === false || s.disableNotifications) continue;
-      unreadTotal += s.unread || 0;
-      if (s.alert) hasAlert = true;
-    }
-    return { unreadTotal, hasAlert };
-  }, [subscriptions]);
+  // 消息模块角标：@/私聊未读总数，否则有新消息显示红点（口径见 lib/unread）
+  const { unreadTotal, hasAlert } = useMemo(
+    () => ({
+      unreadTotal: totalUnread(subscriptions),
+      hasAlert: Object.values(subscriptions).some((s) => countsTowardUnread(s) && s.alert),
+    }),
+    [subscriptions],
+  );
 
   return (
     <nav className="flex w-[210px] shrink-0 flex-col border-r border-line-strong bg-surface-1 px-3 py-3 text-ink">

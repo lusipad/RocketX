@@ -321,3 +321,39 @@ test('讨论加载失败不能覆盖期间发生的新导航', async () => {
 
   assert.equal(useChat.getState().activeRid, 'new-room');
 });
+
+/**
+ * #134：群里有讨论组就一直顶着未读。
+ * 根因不在讨论本身，而在「点开群、随手点进讨论」这个 600ms 内的连续动作——
+ * 已读请求此前共用一个 timer，后一次会把前一次连根取消且永不补发。
+ */
+test('点开父群后马上点进群内讨论，两边的未读都要清掉', async () => {
+  const readCalls: string[] = [];
+  const parent: RcRoom = { _id: 'parent-room', t: 'p', name: 'parent-room' };
+  rest.getSubscriptions = async () => [subscription('parent-room'), subscription()];
+  rest.getRooms = async () => [parent, discussion];
+  rest.getHistory = (async () => []) as typeof rest.getHistory;
+  rest.getMembers = async () => [];
+  rest.markRead = (async (rid) => {
+    readCalls.push(rid);
+  }) as typeof rest.markRead;
+  useChat.setState({
+    subscriptions: {
+      'parent-room': subscription('parent-room'),
+      [discussion._id]: subscription(),
+    },
+    rooms: { 'parent-room': parent, [discussion._id]: discussion },
+    messages: {},
+    historyLoaded: {},
+    hasMore: {},
+    members: {},
+    memberErrors: {},
+    activeRid: null,
+  });
+
+  await useChat.getState().openRoom('parent-room');
+  await useChat.getState().openRoom(discussion._id);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  assert.deepEqual([...readCalls].sort(), ['discussion-room', 'parent-room']);
+});

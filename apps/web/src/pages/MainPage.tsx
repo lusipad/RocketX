@@ -14,6 +14,7 @@ import {
   setTrayAttention,
   setTrayTooltip,
 } from '../lib/tray';
+import { totalUnread } from '../lib/unread';
 import NavRail from '../components/NavRail';
 import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
@@ -252,13 +253,10 @@ export default function MainPage() {
     void chat.openRoom(next.rid);
   };
 
-  // 标题栏未读数 + 任务栏角标（免打扰会话不计入）。
+  // 标题栏未读数 + 任务栏角标（免打扰和已隐藏的会话不计入，口径见 lib/unread）。
   // 角标是群聊消息的次级提示主体：不弹窗，但任务栏图标上有数字（读完自动清）
   useEffect(() => {
-    const total = Object.values(subscriptions).reduce(
-      (n, s) => n + (s.disableNotifications ? 0 : s.unread || 0),
-      0,
-    );
+    const total = totalUnread(subscriptions);
     document.title = total > 0 ? `(${total > 99 ? '99+' : total}) RocketChat X` : 'RocketChat X';
     void setTaskbarBadge(total);
     void setTrayAttention(hasTrayAttention(subscriptions, unreadAlert));
