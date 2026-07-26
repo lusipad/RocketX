@@ -481,9 +481,9 @@ export default function Composer() {
               >
                 <span className="flex items-baseline gap-1.5">
                   <span className="font-medium text-ink">/{c.command}</span>
-                  {params && <span className="truncate text-2xs text-ink-3">{params}</span>}
+                  {params && <span className="truncate text-xs text-ink-3">{params}</span>}
                 </span>
-                {desc && <span className="truncate text-2xs text-ink-3">{desc}</span>}
+                {desc && <span className="truncate text-xs text-ink-3">{desc}</span>}
               </button>
             );
           })}
@@ -521,7 +521,7 @@ export default function Composer() {
               </span>
               <span className="min-w-0 truncate text-xs text-ink-3">@{u.username}</span>
               {u.isRemote && (
-                <span className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-2xs text-ink-3">
+                <span className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-xs text-ink-3">
                   非群成员
                 </span>
               )}

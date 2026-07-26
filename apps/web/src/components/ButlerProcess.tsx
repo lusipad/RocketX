@@ -48,9 +48,9 @@ export default function ButlerProcess({
               {step.detail ?? step.label}
             </span>
             {stepDuration(step) && (
-              <span className="shrink-0 text-2xs text-ink-3">{stepDuration(step)}</span>
+              <span className="shrink-0 text-xs text-ink-3">{stepDuration(step)}</span>
             )}
-            <span className="shrink-0 text-2xs text-ink-3">{stepTime(step.at)}</span>
+            <span className="shrink-0 text-xs text-ink-3">{stepTime(step.at)}</span>
           </div>
         ))}
       </div>

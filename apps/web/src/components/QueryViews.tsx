@@ -76,7 +76,7 @@ export function WorkItemBoard({
           }`}
         >
           <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
-            <span className={`rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(column.state)}`}>
+            <span className={`rounded px-1.5 py-0.5 text-xs ${stateBadgeClass(column.state)}`}>
               {column.state}
             </span>
             <span className="text-xs text-ink-3">{column.items.length}</span>
@@ -98,7 +98,7 @@ export function WorkItemBoard({
                   }`}
                 >
                   <div className="line-clamp-2 text-sm break-words text-ink">{w.title}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-ink-3">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
                     <TypeDot type={w.type} />
                     <span>#{w.id}</span>
                     {w.priority !== undefined && (
@@ -129,7 +129,7 @@ export function WorkItemBoard({
 function RiskChips({ overdue, stale, unassigned }: { overdue: number; stale: number; unassigned: number }) {
   if (overdue + stale + unassigned === 0) return null;
   return (
-    <span className="flex shrink-0 items-center gap-1 text-2xs">
+    <span className="flex shrink-0 items-center gap-1 text-xs">
       {overdue > 0 && (
         <span className="rounded bg-danger/10 px-1.5 py-0.5 font-medium text-danger">逾期 {overdue}</span>
       )}
@@ -223,7 +223,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
                         style={{ width: `${nodePercent}%` }}
                       />
                     </span>
-                    <span className="w-12 text-right text-2xs text-ink-3">
+                    <span className="w-12 text-right text-xs text-ink-3">
                       {nodeStats.done}/{nodeStats.total}
                     </span>
                   </span>
@@ -235,10 +235,10 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
                     unassigned={nodeStats.unassigned}
                   />
                 )}
-                <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${stateBadgeClass(w.state)}`}>
+                <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${stateBadgeClass(w.state)}`}>
                   {w.state}
                 </span>
-                <span className="w-24 shrink-0 truncate text-right text-2xs text-ink-3" title={w.assignedTo}>
+                <span className="w-24 shrink-0 truncate text-right text-xs text-ink-3" title={w.assignedTo}>
                   {w.assignedTo ?? '未分配'}
                 </span>
               </a>

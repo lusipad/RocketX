@@ -269,7 +269,7 @@ export default function GroupFilter({
         <FolderIcon size={14} className={active ? 'text-primary' : ''} />
         <span className="min-w-0 truncate">{folder.name}</span>
         {folder.rules?.length ? <Wand2 size={12} className="shrink-0 text-ink-3" /> : null}
-        {count > 0 && <span className="ml-auto text-2xs text-ink-3">{count}</span>}
+        {count > 0 && <span className="ml-auto text-xs text-ink-3">{count}</span>}
       </button>
     );
   };
@@ -359,7 +359,7 @@ export default function GroupFilter({
                   <Icon size={14} className={active ? 'text-primary' : ''} />
                   {label}
                   {count > 0 && (
-                    <span className={`ml-auto text-2xs ${
+                    <span className={`ml-auto text-xs ${
                       highlight ? 'font-medium text-danger' : 'text-ink-3'
                     }`}>
                       {count > 99 ? '99+' : count}
@@ -371,12 +371,12 @@ export default function GroupFilter({
 
             {/* 自定义分组：可拖拽会话进来 */}
             {folders.length > 0 && (
-              <div className="mt-2 px-2 pb-1 text-2xs text-ink-3">我的分组</div>
+              <div className="mt-2 px-2 pb-1 text-xs text-ink-3">我的分组</div>
             )}
             {folders.map((folder) => renderFolderButton(folder, false))}
 
             {folders.length === 0 && (
-              <div className="mt-2 px-2 text-2xs text-ink-3">暂无自定义分组</div>
+              <div className="mt-2 px-2 text-xs text-ink-3">暂无自定义分组</div>
             )}
           </div>
         </>

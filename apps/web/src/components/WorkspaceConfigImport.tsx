@@ -208,19 +208,19 @@ function FieldRow({
         <div className="flex items-center gap-2">
           <span className="text-sm text-ink">{field.label}</span>
           {field.unchanged ? (
-            <span className="rounded bg-fill-2 px-1.5 py-0.5 text-2xs text-ink-3">与本地一致</span>
+            <span className="rounded bg-fill-2 px-1.5 py-0.5 text-xs text-ink-3">与本地一致</span>
           ) : field.overridden ? (
-            <span className="rounded bg-warning/10 px-1.5 py-0.5 text-2xs text-warning">
+            <span className="rounded bg-warning/10 px-1.5 py-0.5 text-xs text-warning">
               本地已修改，默认保留
             </span>
           ) : (
-            <span className="rounded bg-primary-light px-1.5 py-0.5 text-2xs text-primary">
+            <span className="rounded bg-primary-light px-1.5 py-0.5 text-xs text-primary">
               {field.current ? '将更新' : '将写入'}
             </span>
           )}
         </div>
         {!field.unchanged && (
-          <div className="mt-1 space-y-0.5 font-mono text-2xs break-all text-ink-3">
+          <div className="mt-1 space-y-0.5 font-mono text-xs break-all text-ink-3">
             {field.current && <div className="line-through">{field.current}</div>}
             <div className="text-ink-2">{field.incoming}</div>
           </div>
@@ -359,7 +359,7 @@ export function WorkspaceConfigSection() {
             上次导入：{source.name || '未命名配置'} ·{' '}
             {new Date(source.importedAt).toLocaleString()}
           </div>
-          {source.url && <div className="mt-0.5 truncate font-mono text-2xs text-ink-3">{source.url}</div>}
+          {source.url && <div className="mt-0.5 truncate font-mono text-xs text-ink-3">{source.url}</div>}
           {source.url && (
             <label className="mt-2 flex cursor-pointer items-center gap-2">
               <input

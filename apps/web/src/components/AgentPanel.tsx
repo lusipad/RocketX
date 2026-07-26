@@ -239,7 +239,7 @@ export default function AgentPanel() {
               />
               <span>
                 <span className="font-medium text-ink">进入本房间时自动开启托管</span>
-                <span className="mt-0.5 block text-2xs text-ink-3">
+                <span className="mt-0.5 block text-xs text-ink-3">
                   仅在这台设备生效；已有其他人托管时不会抢占。
                 </span>
               </span>

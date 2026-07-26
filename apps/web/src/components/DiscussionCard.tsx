@@ -39,7 +39,7 @@ export default function DiscussionCard({ message }: { message: RcMessage }) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="shrink-0 rounded bg-primary-light px-1 py-px text-2xs text-primary">
+            <span className="shrink-0 rounded bg-primary-light px-1 py-px text-xs text-primary">
               讨论
             </span>
             <span className="truncate text-sm font-medium text-ink">{name}</span>

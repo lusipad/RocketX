@@ -234,7 +234,7 @@ export default function ButlerConversation({ onCollapse }: { onCollapse: () => v
                   </button>
                 ))}
               </div>
-              <div className="mt-2.5 border-t border-line pt-2 text-2xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
+              <div className="mt-2.5 border-t border-line pt-2 text-xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
             </div>
           )}
           {/* 过程显示在它产出的那条回答上方(issue #99):

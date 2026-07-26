@@ -121,7 +121,7 @@ export default function ButlerPanel() {
                 </button>
               ))}
             </div>
-            <div className="mt-2.5 border-t border-line pt-2 text-2xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
+            <div className="mt-2.5 border-t border-line pt-2 text-xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
           </div>
         )}
 

@@ -108,10 +108,10 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
               ) : (
                 <>
                   <FileText size={22} className="mb-1 text-ink-3" />
-                  <span className="max-w-full truncate px-2 text-2xs text-ink-2">
+                  <span className="max-w-full truncate px-2 text-xs text-ink-2">
                     {file.name}
                   </span>
-                  <span className="text-2xs text-ink-3">{fmtSize(file.size)}</span>
+                  <span className="text-xs text-ink-3">{fmtSize(file.size)}</span>
                 </>
               )}
             </div>

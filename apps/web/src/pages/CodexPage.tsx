@@ -97,7 +97,7 @@ export default function CodexPage() {
                 <FolderOpen size={14} className="shrink-0 text-primary" />
                 <span className="truncate">{workspaceRoot || '选择项目目录'}</span>
               </button>
-              <p className="mt-2 text-2xs leading-4 text-ink-3">该目录会直接作为本机 Codex 工作目录，并按当前账号记住。</p>
+              <p className="mt-2 text-xs leading-4 text-ink-3">该目录会直接作为本机 Codex 工作目录，并按当前账号记住。</p>
             </div>
 
             <div className="border-t border-line pt-4">
@@ -107,7 +107,7 @@ export default function CodexPage() {
                   <Shield size={12} />{sandboxMode === 'read-only' ? '只读' : '工作区可写'}
                 </button>
               </div>
-              <p className="mt-2 text-2xs leading-4 text-ink-3">请只选择允许 Codex 读取的目录；网络默认关闭，写入模式仅允许当前工作区。</p>
+              <p className="mt-2 text-xs leading-4 text-ink-3">请只选择允许 Codex 读取的目录；网络默认关闭，写入模式仅允许当前工作区。</p>
             </div>
 
             <div className="space-y-2 border-t border-line pt-4">
@@ -117,9 +117,9 @@ export default function CodexPage() {
               {active ? <button onClick={() => void stop().catch(() => undefined)} className="flex w-full items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm text-ink-2 hover:bg-fill-hover"><Square size={14} />停止进程</button> : null}
             </div>
 
-            {threadId ? <div className="truncate border-t border-line pt-4 text-2xs text-ink-3" title={threadId}>会话编号：{threadId}</div> : null}
+            {threadId ? <div className="truncate border-t border-line pt-4 text-xs text-ink-3" title={threadId}>会话编号：{threadId}</div> : null}
             <button onClick={() => setShowTrace((value) => !value)} className="w-full text-left text-xs text-primary">{showTrace ? '隐藏' : '查看'}它做了哪些操作（{traces.length}）</button>
-            {showTrace ? <div className="max-h-52 space-y-1 overflow-y-auto rounded bg-fill-1 p-2">{traces.length ? traces.map((trace) => <div key={trace.id} className="text-2xs leading-4 text-ink-3"><span className="mr-1">{new Date(trace.at).toLocaleTimeString()}</span>{trace.text}</div>) : <div className="text-2xs text-ink-3">暂无过程记录</div>}</div> : null}
+            {showTrace ? <div className="max-h-52 space-y-1 overflow-y-auto rounded bg-fill-1 p-2">{traces.length ? traces.map((trace) => <div key={trace.id} className="text-xs leading-4 text-ink-3"><span className="mr-1">{new Date(trace.at).toLocaleTimeString()}</span>{trace.text}</div>) : <div className="text-xs text-ink-3">暂无过程记录</div>}</div> : null}
           </aside>
 
           <main className="flex min-h-[520px] min-w-0 flex-col rounded-xl bg-surface shadow-raise shadow-sm">

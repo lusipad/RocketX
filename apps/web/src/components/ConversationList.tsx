@@ -227,7 +227,7 @@ function ConversationItem({
               </span>
               {conv.userMentions > 0 && (
                 <span
-                  className="shrink-0 rounded bg-danger px-1 text-2xs font-medium text-white"
+                  className="shrink-0 rounded bg-danger px-1 text-xs font-medium text-white"
                   title="有人 @ 了你"
                 >
                   @
@@ -235,7 +235,7 @@ function ConversationItem({
               )}
               {conv.muted && <BellOff size={12} className="shrink-0 text-ink-3" />}
             </span>
-            <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-3">
+            <span className="flex shrink-0 items-center gap-1 text-xs text-ink-3">
               {conv.favorite && <Pin size={12} className="text-primary" />}
               {viewMode !== 'condensed' && fmtConvTime(conv.lastTs)}
               {/* 不显示头像时未读角标挪到右侧 */}
@@ -458,7 +458,7 @@ export default function ConversationList({
               {showHeaders && (
                 <button
                   onClick={() => toggleCollapse(section.key)}
-                  className="flex w-full items-center gap-1 px-2 py-1.5 text-2xs font-medium text-ink-3 transition hover:text-ink-2"
+                  className="flex w-full items-center gap-1 px-2 py-1.5 text-xs font-medium text-ink-3 transition hover:text-ink-2"
                 >
                   {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                   {section.label}

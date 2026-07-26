@@ -354,12 +354,12 @@ export default function MembersPanel() {
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-sm text-ink">{mName}</span>
                     {roles[0] && (
-                      <span className="shrink-0 rounded bg-primary-light px-1 py-px text-2xs text-primary">
+                      <span className="shrink-0 rounded bg-primary-light px-1 py-px text-xs text-primary">
                         {ROLE_LABELS[roles[0]]}
                       </span>
                     )}
                     {isMuted(muted, m.username) && (
-                      <span className="flex shrink-0 items-center gap-0.5 rounded bg-fill-1 px-1 py-px text-2xs text-ink-3">
+                      <span className="flex shrink-0 items-center gap-0.5 rounded bg-fill-1 px-1 py-px text-xs text-ink-3">
                         <MicOff size={12} />
                         已禁言
                       </span>

@@ -86,7 +86,7 @@ function QueueRow({
         style={{ background: item.color }}
       />
       <span
-        className="w-20 shrink-0 truncate text-2xs"
+        className="w-20 shrink-0 truncate text-xs"
         style={{ color: item.color }}
         title={item.label}
       >
@@ -94,7 +94,7 @@ function QueueRow({
       </span>
       <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.title}</span>
       {item.meta && (
-        <span className="max-w-[40%] shrink-0 truncate text-2xs text-ink-3">{item.meta}</span>
+        <span className="max-w-[40%] shrink-0 truncate text-xs text-ink-3">{item.meta}</span>
       )}
       {item.href ? (
         <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
@@ -177,14 +177,14 @@ function QueryDialog({
               placeholder="粘贴浏览器地址栏里的查询页面链接"
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
-            <p className="mt-1.5 text-2xs text-ink-3">
+            <p className="mt-1.5 text-xs text-ink-3">
               在 Azure DevOps 打开一个已存查询，复制浏览器地址栏的链接粘贴到这里
             </p>
             {url.trim() && !parsed && (
-              <p className="mt-1 text-2xs text-danger">无法从链接中解析出查询 ID</p>
+              <p className="mt-1 text-xs text-danger">无法从链接中解析出查询 ID</p>
             )}
             {parsed && (
-              <p className="mt-1 text-2xs text-success">
+              <p className="mt-1 text-xs text-success">
                 已识别查询 {parsed.queryId.slice(0, 8)}…
                 {parsed.project ? ` (${parsed.project})` : ''}
               </p>
@@ -276,7 +276,7 @@ function FavoriteDialog({
               autoFocus
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
-            {urlInvalid && <p className="mt-1 text-2xs text-danger">请输入以 http:// 或 https:// 开头的链接</p>}
+            {urlInvalid && <p className="mt-1 text-xs text-danger">请输入以 http:// 或 https:// 开头的链接</p>}
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-ink-2">链接</label>
@@ -657,7 +657,7 @@ export default function WorkbenchPage() {
 
         {canUseCustomQueries && customQueries.length > 0 && (
           <>
-            <div className="mt-4 mb-1 px-2 text-2xs font-medium text-ink-3">自定义查询</div>
+            <div className="mt-4 mb-1 px-2 text-xs font-medium text-ink-3">自定义查询</div>
             {customQueries.map((q) => (
               <div key={q.id} className="group relative">
                 <button
@@ -915,7 +915,7 @@ export default function WorkbenchPage() {
                 </div>
                 <button
                   onClick={() => setModule('calendar')}
-                  className="flex items-center gap-0.5 text-2xs text-ink-3 transition hover:text-primary"
+                  className="flex items-center gap-0.5 text-xs text-ink-3 transition hover:text-primary"
                 >
                   日历
                   <ChevronRight size={12} />
@@ -941,7 +941,7 @@ export default function WorkbenchPage() {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs text-ink">{e.title}</span>
-                        <span className="block text-2xs text-ink-3">
+                        <span className="block text-xs text-ink-3">
                           {e.allDay
                             ? '全天'
                             : `${e.startTime ?? ''}${e.endTime ? ` - ${e.endTime}` : ''}`}
@@ -991,7 +991,7 @@ export default function WorkbenchPage() {
                       >
                         {fav.icon || <ExternalLink size={14} style={{ color: fav.color }} />}
                       </div>
-                      <span className="w-full truncate text-center text-2xs text-ink">
+                      <span className="w-full truncate text-center text-xs text-ink">
                         {fav.title}
                       </span>
 

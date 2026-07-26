@@ -42,7 +42,7 @@ export default function ButlerSlashMenu({
           }`}
         >
           <span className="shrink-0 text-xs font-medium text-ink">{option.scene}</span>
-          <span className="min-w-0 flex-1 truncate text-2xs text-ink-3">{option.prompt}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-ink-3">{option.prompt}</span>
         </button>
       ))}
     </div>

@@ -507,7 +507,7 @@ export default function ButlerPage() {
                               )}
                               {/* 左边是「怎么处理这件事」，右边是「这条报得对不对」——
                                   两类语义平铺成一行时，光看图标猜不出点了会发生什么 */}
-                              <span className="ml-auto text-2xs text-ink-3">这条报得好吗</span>
+                              <span className="ml-auto text-xs text-ink-3">这条报得好吗</span>
                               <Button
                                 variant="ghost"
                                 size="sm"

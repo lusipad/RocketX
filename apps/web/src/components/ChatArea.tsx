@@ -301,9 +301,9 @@ export default function ChatArea({
                   <Bot size={14} className="shrink-0" />
                   <span className="shrink-0 font-semibold">@{agentPresence.username} 的 AI</span>
                   <span className="h-3 w-px shrink-0 bg-primary/25" />
-                  <span className="shrink-0 text-2xs font-medium">{stoppingHosting ? '正在关闭' : agentStatus}</span>
+                  <span className="shrink-0 text-xs font-medium">{stoppingHosting ? '正在关闭' : agentStatus}</span>
                   {agentPresence.environmentName ? (
-                    <span className="hidden min-w-0 truncate border-l border-primary/20 pl-1.5 text-2xs text-ink-3 2xl:inline">
+                    <span className="hidden min-w-0 truncate border-l border-primary/20 pl-1.5 text-xs text-ink-3 2xl:inline">
                       {agentPresence.environmentName}
                     </span>
                   ) : null}
@@ -320,7 +320,7 @@ export default function ChatArea({
                 className="flex items-center gap-1 truncate text-xs text-ink-3 hover:text-primary"
                 title="回到主会话"
               >
-                <span className="rounded bg-primary-light px-1 text-2xs text-primary">讨论</span>
+                <span className="rounded bg-primary-light px-1 text-xs text-primary">讨论</span>
                 来自 {parentRoom?.fname || parentRoom?.name || '主会话'}
               </button>
             ) : (

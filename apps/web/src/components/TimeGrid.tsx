@@ -116,7 +116,7 @@ function AllDayCell({
           <button
             key={e.id}
             onClick={() => onPick(e)}
-            className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-2xs text-white transition ${
+            className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-xs text-white transition ${
               done ? 'opacity-50' : ''
             }`}
             style={{ background: e.color }}
@@ -142,7 +142,7 @@ function AllDayCell({
       {dayTodos.map((t) => (
         <div
           key={t.id}
-          className={`truncate rounded px-1.5 py-0.5 text-2xs ${
+          className={`truncate rounded px-1.5 py-0.5 text-xs ${
             isOverdue(t) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
           }`}
           title="来自待办"
@@ -207,7 +207,7 @@ function DayColumn({
             >
               <button
                 onClick={() => onPick(p.event)}
-                className="flex h-full w-full items-start gap-1 px-1 py-0.5 text-left text-2xs leading-tight text-white"
+                className="flex h-full w-full items-start gap-1 px-1 py-0.5 text-left text-xs leading-tight text-white"
               >
                 <span
                   role="checkbox"
@@ -299,7 +299,7 @@ export default function TimeGrid({
           const isToday = dateKey(d) === today;
           return (
             <div key={dateKey(d)} className="flex-1 py-2 text-center">
-              <div className="text-2xs text-ink-3">周{DAY_NAMES[d.getDay()]}</div>
+              <div className="text-xs text-ink-3">周{DAY_NAMES[d.getDay()]}</div>
               <div
                 className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-sm ${
                   isToday ? 'bg-primary font-medium text-white' : 'text-ink'
@@ -316,7 +316,7 @@ export default function TimeGrid({
           顶得高低不齐、也对不上左侧刻度。抽成一行后所有列时间轴从同一 Y 起、与刻度对齐。 */}
       {hasAllDay && (
         <div className="flex shrink-0 border-b border-line bg-fill-1">
-          <div className="flex w-12 shrink-0 items-center justify-end pr-1 text-2xs text-ink-3">
+          <div className="flex w-12 shrink-0 items-center justify-end pr-1 text-xs text-ink-3">
             全天
           </div>
           <div className="flex flex-1">
@@ -341,7 +341,7 @@ export default function TimeGrid({
             {Array.from({ length: END_HOUR - START_HOUR }, (_, i) => (
               <div
                 key={i}
-                className="absolute right-1 -translate-y-1/2 text-2xs text-ink-3"
+                className="absolute right-1 -translate-y-1/2 text-xs text-ink-3"
                 style={{ top: i * HOUR_HEIGHT }}
               >
                 {i > 0 ? `${String(START_HOUR + i).padStart(2, '0')}:00` : ''}

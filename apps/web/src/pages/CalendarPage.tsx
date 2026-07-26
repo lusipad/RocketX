@@ -226,7 +226,7 @@ function MonthCell({
               e.stopPropagation();
               it.onClick();
             }}
-            className={`flex w-full items-center gap-1 rounded px-1 py-px text-left text-2xs leading-tight transition hover:bg-fill-active ${
+            className={`flex w-full items-center gap-1 rounded px-1 py-px text-left text-xs leading-tight transition hover:bg-fill-active ${
               it.done ? 'opacity-50' : ''
             }`}
           >
@@ -259,7 +259,7 @@ function MonthCell({
           </button>
         ))}
         {items.length > MAX && (
-          <div className="px-1 text-2xs text-ink-3">还有 {items.length - MAX} 项</div>
+          <div className="px-1 text-xs text-ink-3">还有 {items.length - MAX} 项</div>
         )}
       </div>
     </div>
@@ -305,7 +305,7 @@ function EventItem({
         <div className={`text-sm ${item.done ? 'text-ink-3 line-through' : 'text-ink'}`}>
           {item.title}
         </div>
-        <div className="flex items-center gap-2 text-2xs text-ink-3">
+        <div className="flex items-center gap-2 text-xs text-ink-3">
           {item.time && (
             <span className="flex items-center gap-0.5">
               <Clock size={12} /> {item.time}
@@ -689,7 +689,7 @@ export default function CalendarPage() {
                     <span className="min-w-0 flex-1 truncate text-xs text-ink">
                       {t.note || t.excerpt}
                     </span>
-                    <span className="shrink-0 text-2xs text-ink-3">{t.due}</span>
+                    <span className="shrink-0 text-xs text-ink-3">{t.due}</span>
                   </button>
                 ))}
               </div>
