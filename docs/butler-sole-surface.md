@@ -31,7 +31,7 @@
 | 1 | `errandRun` 单例 → `errands` 列表；每活自持 AppServerClient（仿 sharedAgent per-tmid 模式），不再借 localCodex 的线程；per-errand 审批与 watch；三表面列表渲染 + 排序 + 收下归档 | 无 |
 | 2 | 跨重启恢复：errand 元数据（id/title/threadId/状态）落 localStorage，重启后「失联的活」可一键 `thread/resume` 接回 | 刀 1 |
 | 3 | TODO list 进度：消费 `update_plan` 工具调用（item 流里的 function_call），活卡展开渲染计划与完成态 | 刀 1 |
-| 4 | 简报吸收 automation：读 automation 线程的结论，聚合进今日简报段落 | 无 |
+| 4 | **感知规则 v1**（简报吸收 automation 扩容而来）：管家主动看三类事，分析结果聚合进今日简报。①「@我必析」——收到 @ 后台分析消息上下文，产出「他要你干什么 + 建议动作」；②「新 issue 必析」——接住 automation 已在跑的每小时 issue 处理，结论进简报；③「群讨论汇总」——定时对活跃群产出「今天聊了什么、有没有落到你头上的事」。三条规则独立开关（默认开 ①②、关 ③）。**主动看不主动干**：分析全走 read-only 临时会话；要动手（回复/发消息）必须转成规格卡走审批。出口只有简报，不新增弹窗——@ 的 RC 原生通知照旧，管家的增值是「你点开时分析已经在了」 | 刀 1（建议动作转规格卡） |
 | 5 | 执行间退役：`localCodex.hydrate` 迁到 app 启动（或随 localCodex 一起删）；删 CodexPage 与 AgentPanel 本机路径；nav 注册、快捷键序列、butlerSurface 标签清理；改三处焊死断言（core-flows:1219、navigation-entry、codex-thread-name、im-usability 的 MODULE_ORDER） | 1–3 全落地后 |
 
 刀 5 必须最后：新呈现全部站住之前，厨房的门不拆。
