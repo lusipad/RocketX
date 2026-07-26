@@ -480,9 +480,9 @@ export default function ButlerPage() {
                                   「稍后处理这件事」，跟旁边真的改期的「就今天」撞在一起 */}
                               <Button
                                 size="sm"
-                                title="从这份简报里收起。不改待办；下次巡视时这件事若还在，还会再提"
+                                title="从这份简报里收起。不改待办；下次我再看一圈时它若还在，还会提"
                                 onClick={() => {
-                                  if (snoozeButlerRoundsItem(item.ref)) toast.info('已从这份简报收起，下次巡视还在的话会再提');
+                                  if (snoozeButlerRoundsItem(item.ref)) toast.info('已从这份简报收起，下次我再看一圈还在的话会提');
                                 }}
                               >
                                 先收起

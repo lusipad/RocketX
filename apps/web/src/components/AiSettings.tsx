@@ -347,8 +347,8 @@ export default function AiSettings() {
               <div>
                 <h2 className="text-sm font-semibold text-ink">模型 Provider</h2>
                 <p className="mt-0.5 text-xs leading-5 text-ink-3">
-                  供会话总结、晨报、翻译等能力使用；「AI 运行方式」选 API 时也作为
-                  AI 大脑。桌面端密钥只保存到系统钥匙串。
+                  供会话总结、消息翻译等功能使用。管家不走这里——它由本机 Codex 驱动。
+                  桌面端密钥只保存到系统钥匙串。
                 </p>
               </div>
               <button
