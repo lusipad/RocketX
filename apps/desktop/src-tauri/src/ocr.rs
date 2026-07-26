@@ -1,10 +1,15 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_ENCODED_IMAGE_BYTES: usize = 28 * 1024 * 1024;
+// 压缩文件大小无法约束解码内存；在分配像素缓冲前挡住会造成 GB 级峰值的尺寸。
+const MAX_DECODE_PIXELS: u64 = 80_000_000;
+// PP-OCRv5 检测模型内部本就会 resize，超过 4096² 不会提升精度，只会增加内存占用。
+const MAX_OCR_PIXELS: u64 = 16_777_216;
 const LOCAL_OCR_LANGUAGE: &str = "zh-Hans,en";
 const MODEL_VERSION_DIR: &str = "models/ppocrv5-oar-v0.3.0";
 const ORT_VERSION_DIR: &str = "onnxruntime/1.23.2";
@@ -87,6 +92,57 @@ fn decode_image_bytes(encoded: &str) -> Result<Vec<u8>, String> {
         return Err("图片过大，OCR 最大支持 20 MB".to_string());
     }
     Ok(bytes)
+}
+
+fn validate_decode_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("无法读取图片尺寸".to_string());
+    }
+    if u64::from(width) * u64::from(height) > MAX_DECODE_PIXELS {
+        return Err(format!(
+            "图片太大了（{width}×{height}），认不了。先裁一下要识别的部分再试。"
+        ));
+    }
+    Ok(())
+}
+
+fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let dimensions = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_dimensions()?;
+    validate_decode_dimensions(dimensions.0, dimensions.1)?;
+    Ok(dimensions)
+}
+
+fn ocr_image_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels <= MAX_OCR_PIXELS {
+        return (width, height);
+    }
+    let scale = (MAX_OCR_PIXELS as f64 / pixels as f64).sqrt();
+    (
+        (width as f64 * scale).floor().max(1.0) as u32,
+        (height as f64 * scale).floor().max(1.0) as u32,
+    )
+}
+
+fn prepare_ocr_image(
+    bytes: &[u8],
+) -> Result<image::RgbImage, Box<dyn std::error::Error + Send + Sync>> {
+    image_dimensions(bytes)?;
+    let image = image::load_from_memory(bytes)?.to_rgb8();
+    let target = ocr_image_dimensions(image.width(), image.height());
+    if target == image.dimensions() {
+        return Ok(image);
+    }
+    let resized = image::imageops::resize(
+        &image,
+        target.0,
+        target.1,
+        image::imageops::FilterType::Triangle,
+    );
+    drop(image);
+    Ok(resized)
 }
 
 fn versioned_model_dir(root: &Path) -> PathBuf {
@@ -212,6 +268,7 @@ pub async fn image_ocr_recognize(
     image_base64: String,
 ) -> Result<ImageOcrResult, String> {
     let bytes = decode_image_bytes(&image_base64)?;
+    image_dimensions(&bytes).map_err(|error| error.to_string())?;
 
     #[cfg(windows)]
     {
@@ -248,18 +305,23 @@ pub async fn image_ocr_recognize(
 
 mod local_ocr {
     use super::{
-        normalized_word, resolve_local_assets, ImageOcrBackend, ImageOcrResult, ImageOcrWord,
-        LocalOcrAssets, LOCAL_OCR_LANGUAGE,
+        normalized_word, prepare_ocr_image, resolve_local_assets, ImageOcrBackend, ImageOcrResult,
+        ImageOcrWord, LocalOcrAssets, LOCAL_OCR_LANGUAGE,
     };
     use oar_ocr::oarocr::{OAROCRBuilder, OAROCRResult, OAROCR};
     use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
 
     static ORT_INIT: OnceLock<Result<(), String>> = OnceLock::new();
     static LOCAL_OCR: OnceLock<Mutex<Option<CachedLocalOcr>>> = OnceLock::new();
+    static IDLE_REAPER_STARTED: OnceLock<()> = OnceLock::new();
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
     struct CachedLocalOcr {
         assets: LocalOcrAssets,
         engine: OAROCR,
+        last_used: Instant,
     }
 
     pub fn recognize(
@@ -275,7 +337,7 @@ mod local_ocr {
         bytes: &[u8],
     ) -> Result<ImageOcrResult, Box<dyn std::error::Error + Send + Sync>> {
         ensure_ort_initialized(&assets)?;
-        let image = image::load_from_memory(bytes)?.to_rgb8();
+        let image = prepare_ocr_image(bytes)?;
         let result = predict_with_cached_ocr(assets, image)?;
         Ok(normalize_result(result))
     }
@@ -310,22 +372,54 @@ mod local_ocr {
         image: image::RgbImage,
     ) -> Result<OAROCRResult, Box<dyn std::error::Error + Send + Sync>> {
         let cache = LOCAL_OCR.get_or_init(|| Mutex::new(None));
+        start_idle_reaper();
         let mut cache = cache.lock().map_err(|_| "PP-OCRv5 本地 OCR 缓存锁已损坏")?;
         if cache.as_ref().map(|cached| &cached.assets) != Some(assets) {
             *cache = Some(CachedLocalOcr {
                 assets: assets.clone(),
                 engine: build_engine(assets)?,
+                last_used: Instant::now(),
             });
         }
-        cache
-            .as_ref()
-            .expect("cached OCR initialized")
-            .engine
-            .predict(vec![image])?
+        let cached = cache.as_mut().expect("cached OCR initialized");
+        cached.last_used = Instant::now();
+        let result = cached.engine.predict(vec![image])?;
+        cached.last_used = Instant::now();
+        result
             .into_iter()
             .next()
             .ok_or_else(|| "PP-OCRv5 未返回识别结果".into())
     }
+
+    fn start_idle_reaper() {
+        IDLE_REAPER_STARTED.get_or_init(|| {
+            tauri::async_runtime::spawn(async {
+                loop {
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        std::thread::sleep(IDLE_CHECK_INTERVAL)
+                    })
+                    .await;
+                    let Some(cache) = LOCAL_OCR.get() else {
+                        continue;
+                    };
+                    let Ok(mut cache) = cache.lock() else {
+                        continue;
+                    };
+                    if cache
+                        .as_ref()
+                        .is_some_and(|cached| cached.last_used.elapsed() >= IDLE_TIMEOUT)
+                    {
+                        *cache = None;
+                    }
+                }
+            });
+        });
+    }
+
+    // 识别阶段的 logits 是 (batch, 宽/8, 词表) 的 f32，PP-OCRv5 词表有 18385 类，
+    // 张量宽度上限 3200——批大小取默认值时单次就能要走近 2GB，而 ONNX Runtime 的
+    // arena 拿到手就不还给操作系统。oar-ocr 自己的文档对 CPU 推理推荐 16。
+    const REGION_BATCH_SIZE: usize = 16;
 
     fn build_engine(
         assets: &LocalOcrAssets,
@@ -333,6 +427,7 @@ mod local_ocr {
         OAROCRBuilder::new(&assets.det_model, &assets.rec_model, &assets.dict_path)
             .with_text_line_orientation_classification(&assets.orientation_model)
             .return_word_box(true)
+            .region_batch_size(REGION_BATCH_SIZE)
             .build()
             .map_err(Into::into)
     }
@@ -563,8 +658,9 @@ mod windows_ocr {
 mod tests {
     use super::{
         development_resource_root, fallback_backend_for_local_failure, has_visual_word_gap,
-        local_ocr, normalized_word, resolve_local_assets_from_root, versioned_model_dir,
-        versioned_runtime_dir, ImageOcrBackend, ImageOcrResult,
+        local_ocr, normalized_word, ocr_image_dimensions, resolve_local_assets_from_root,
+        validate_decode_dimensions, versioned_model_dir, versioned_runtime_dir, ImageOcrBackend,
+        ImageOcrResult, MAX_OCR_PIXELS,
     };
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::path::Path;
@@ -604,6 +700,24 @@ mod tests {
             Some(ImageOcrBackend::WindowsMediaOcr)
         );
         assert_eq!(fallback_backend_for_local_failure(false), None);
+    }
+
+    #[test]
+    fn rejects_image_above_decode_pixel_limit() {
+        let error =
+            validate_decode_dimensions(10_000, 8_001).expect_err("oversized image should fail");
+        assert_eq!(
+            error,
+            "图片太大了（10000×8001），认不了。先裁一下要识别的部分再试。"
+        );
+    }
+
+    #[test]
+    fn scales_image_above_ocr_pixel_limit_without_changing_aspect_ratio() {
+        let (width, height) = ocr_image_dimensions(8_192, 4_096);
+        assert!(u64::from(width) * u64::from(height) <= MAX_OCR_PIXELS);
+        assert!(width < 8_192);
+        assert_eq!(u64::from(width) * 4_096, u64::from(height) * 8_192);
     }
 
     #[test]
