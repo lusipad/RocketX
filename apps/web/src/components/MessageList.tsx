@@ -55,6 +55,31 @@ export function initialMessageScrollTop({
   return historyLoaded && !didInitialScroll ? scrollHeight : undefined;
 }
 
+export function nextMessageScrollState({
+  stickToBottom,
+  previousScrollHeight,
+  previousScrollTop,
+  scrollHeight,
+  scrollTop,
+  clientHeight,
+}: {
+  stickToBottom: boolean;
+  previousScrollHeight: number;
+  previousScrollTop: number;
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+}): { nearBottom: boolean; stickToBottom: boolean } {
+  const nearBottom = scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX;
+  const grew = scrollHeight > previousScrollHeight;
+  const movedByUser = scrollTop !== previousScrollTop;
+  // 高度增长但滚动位置未动时，事件来自内容重排，不能覆盖用户此前的贴底意图。
+  return {
+    nearBottom,
+    stickToBottom: grew && !movedByUser ? stickToBottom : nearBottom,
+  };
+}
+
 export function messagesInMain(
   messages: readonly RcMessage[],
   showThreadsInMain: boolean,
@@ -88,6 +113,8 @@ export default function MessageList({ rid }: { rid: string }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const lastScrollHeight = useRef(0);
+  const lastScrollTop = useRef(0);
   const activeRidRef = useRef(rid);
   activeRidRef.current = rid;
   const settleScrollFrame = useRef<number | null>(null);
@@ -118,6 +145,8 @@ export default function MessageList({ rid }: { rid: string }) {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
+    lastScrollHeight.current = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
     setShowJump(false);
     setNewCount(0);
 
@@ -133,6 +162,8 @@ export default function MessageList({ rid }: { rid: string }) {
         if (!current) return;
         current.scrollTop = current.scrollHeight;
         stickToBottom.current = true;
+        lastScrollHeight.current = current.scrollHeight;
+        lastScrollTop.current = current.scrollTop;
         setShowJump(false);
         setNewCount(0);
       });
@@ -142,8 +173,18 @@ export default function MessageList({ rid }: { rid: string }) {
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-    stickToBottom.current = nearBottom;
+    const scrollState = nextMessageScrollState({
+      stickToBottom: stickToBottom.current,
+      previousScrollHeight: lastScrollHeight.current,
+      previousScrollTop: lastScrollTop.current,
+      scrollHeight: el.scrollHeight,
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+    });
+    stickToBottom.current = scrollState.stickToBottom;
+    lastScrollHeight.current = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
+    const { nearBottom } = scrollState;
     setShowJump(!nearBottom);
     if (nearBottom) setNewCount(0);
 
