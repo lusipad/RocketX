@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ButlerSource } from '../lib/butlerContext';
 
 export interface RepeatRule {
   type: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'weekday' | 'custom';
@@ -31,6 +32,13 @@ export interface CalendarEvent {
    * 所以存的是「哪些天已完成」的日期列表，而不是一个布尔值。
    */
   doneDates?: string[];
+  /**
+   * 这条日程是从哪来的——某条消息、某个工作项、某个 PR。
+   *
+   * 复用管家那套 ButlerSource：一个字段通吃七种来源，跳转直接交给
+   * openButlerSource，不必为每种来源各写一套。手动新建的日程没有它。
+   */
+  origin?: ButlerSource;
   createdAt: number;
 }
 

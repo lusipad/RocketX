@@ -16,6 +16,7 @@ import { useToast } from '../../apps/web/src/stores/toast';
 // 必须静态 import：tsx 下测试内 await import() 会产生第二个模块实例，
 // 拿到的是另一个 store，断言永远对不上
 import { installModuleValidator, useUI } from '../../apps/web/src/stores/ui';
+import { useCalendar } from '../../apps/web/src/stores/calendar';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
@@ -514,5 +515,35 @@ test('对话里的卡片必须进 stickToBottom 依赖，否则渲染了也没�
   for (const state of ['errandDraft', 'errandRun', 'routineDraft', 'actionDraft']) {
     assert.ok(deps.includes(state), `${state} 必须在 stickToBottom 依赖里`);
     assert.ok(source.includes(`state.${state}`), `${state} 必须真的订阅了 store`);
+  }
+});
+
+test('日程记得住出处：消息来源存成 ButlerSource，跳转复用同一套导航', () => {
+  const before = useCalendar.getState().events.length;
+  const id = useCalendar.getState().add({
+    title: '周五评审',
+    date: '2026-07-31',
+    allDay: true,
+    color: '#3370ff',
+    source: 'manual',
+    origin: {
+      kind: 'message',
+      id: 'm-abc',
+      mid: 'm-abc',
+      rid: 'r-dev',
+      label: '研发群 · 张三',
+    },
+  });
+  try {
+    const saved = useCalendar.getState().events.find((event) => event.id === id);
+    assert.ok(saved, '日程要建出来');
+    // 出处用管家那套统一模型：一个字段通吃七种来源，跳转交给 openButlerSource
+    assert.equal(saved.origin?.kind, 'message');
+    assert.equal(saved.origin?.mid, 'm-abc');
+    assert.equal(saved.origin?.rid, 'r-dev');
+    assert.equal(saved.origin?.label, '研发群 · 张三');
+  } finally {
+    useCalendar.getState().remove(id);
+    assert.equal(useCalendar.getState().events.length, before);
   }
 });

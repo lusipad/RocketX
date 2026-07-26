@@ -9,6 +9,7 @@ import {
   type RepeatRule,
 } from '../stores/calendar';
 import { toast } from '../stores/toast';
+import type { ButlerSource } from '../lib/butlerContext';
 import { useDialogBehavior } from './Dialog';
 
 const COLORS = [
@@ -27,19 +28,24 @@ export default function CalendarEventDialog({
   existing,
   defaultDate,
   defaultStart,
+  defaultTitle,
+  origin,
   onClose,
 }: {
   existing?: CalendarEvent;
   defaultDate?: string;
   /** 在时间轴上点某个小时新建时带进来（如 '14:00'） */
   defaultStart?: string;
+  defaultTitle?: string;
+  /** 从消息/工作项/PR 建日程时带上出处，之后能一键跳回去 */
+  origin?: ButlerSource;
   onClose: () => void;
 }) {
   const add = useCalendar((s) => s.add);
   const update = useCalendar((s) => s.update);
   const remove = useCalendar((s) => s.remove);
 
-  const [title, setTitle] = useState(existing?.title ?? '');
+  const [title, setTitle] = useState(existing?.title ?? defaultTitle ?? '');
   const [desc, setDesc] = useState(existing?.description ?? '');
   const [date, setDate] = useState(existing?.date ?? defaultDate ?? '');
   const [startTime, setStartTime] = useState(existing?.startTime ?? defaultStart ?? '');
@@ -49,7 +55,12 @@ export default function CalendarEventDialog({
   );
   // 日历里绝大多数日程是有时间的（会议、1v1），全天事件（生日、假期）是少数。
   // 默认全天等于逼每个人都多点一下。
-  const [allDay, setAllDay] = useState(existing?.allDay ?? false);
+  /**
+   * 从消息/工作项加日程时只知道「哪天」，不知道几点——默认全天，否则
+   * 非全天必须填开始时间，「创建」一直是灰的，用户以为功能坏了。
+   * 在时间轴上点某个小时进来（有 defaultStart）时仍是定时日程。
+   */
+  const [allDay, setAllDay] = useState(existing?.allDay ?? (!!origin && !defaultStart));
   const [color, setColor] = useState(existing?.color ?? randomColor());
   const [repeatEnabled, setRepeatEnabled] = useState(!!existing?.repeat);
   const [repeatType, setRepeatType] = useState<RepeatRule['type']>(existing?.repeat?.type ?? 'weekly');
@@ -93,6 +104,8 @@ export default function CalendarEventDialog({
       color,
       repeat,
       source: 'manual' as const,
+      // 编辑既有日程时保留它原来的出处，别让重新保存把来源抹掉
+      ...((existing?.origin ?? origin) ? { origin: existing?.origin ?? origin } : {}),
     };
 
     if (isEdit) {

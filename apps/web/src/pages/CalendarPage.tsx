@@ -8,7 +8,9 @@ import {
   Plus,
   Repeat,
 
+  CornerUpRight,
 } from 'lucide-react';
+import { openButlerSource } from '../lib/butlerSourceNavigation';
 import {
   useCalendar,
   monthGrid,
@@ -273,6 +275,7 @@ function EventItem({
   onClick: () => void;
   onToggle?: () => void;
 }) {
+  const origin = item.type === 'event' ? (item.raw as CalendarEvent).origin : undefined;
   return (
     <button
       onClick={onClick}
@@ -316,6 +319,27 @@ function EventItem({
           {item.type === 'todo' && (
             <span className="flex items-center gap-0.5">
               <ListTodo size={12} /> 待办
+            </span>
+          )}
+          {/* 有出处就让它能回去——一条日程脱离上下文就成了「这是啥来着」 */}
+          {origin && (
+            <span
+              role="button"
+              tabIndex={0}
+              title={`回到出处：${origin.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                void openButlerSource(origin);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                event.stopPropagation();
+                void openButlerSource(origin);
+              }}
+              className="flex max-w-40 items-center gap-0.5 truncate text-primary hover:underline"
+            >
+              <CornerUpRight size={12} className="shrink-0" /> {origin.label}
             </span>
           )}
           {item.type === 'workitem' && (

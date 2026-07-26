@@ -31,6 +31,7 @@ import {
   Star,
   Sparkles,
   Trash2,
+  CalendarPlus,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
@@ -56,6 +57,8 @@ import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import ForwardDialog from './ForwardDialog';
 import TodoDialog from './TodoDialog';
+import { todayKey } from '../stores/todos';
+import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
@@ -546,6 +549,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [createWi, setCreateWi] = useState(false);
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiTodo, setAiTodo] = useState<TodoPrefill | null>(null);
@@ -672,6 +676,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         if (inTodo) setModule('todos');
         else setTodoOpen(true);
       },
+    },
+    {
+      label: '加到日历',
+      icon: CalendarPlus,
+      onClick: () => setCalendarOpen(true),
     },
     {
       label: message.pinned ? '取消置顶' : '置顶',
@@ -991,6 +1000,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
+      {calendarOpen && (
+        <CalendarEventDialog
+          defaultDate={todayKey()}
+          defaultTitle={visibleText.slice(0, 60) || (message.file?.name ? `[文件] ${message.file.name}` : '')}
+          origin={{
+            kind: 'message',
+            id: message._id,
+            mid: message._id,
+            rid: message.rid,
+            label: `${roomName} · ${displayName}`,
+          }}
+          onClose={() => setCalendarOpen(false)}
+        />
+      )}
       {todoOpen && (
         <TodoDialog
           source={{
