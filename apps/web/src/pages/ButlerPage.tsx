@@ -446,30 +446,34 @@ export default function ButlerPage() {
                                   帮我拟一句
                                 </Button>
                               )}
+                              {/* 左边是「怎么处理这件事」，右边是「这条报得对不对」——
+                                  两类语义平铺成一行时，光看图标猜不出点了会发生什么 */}
+                              <span className="ml-auto text-2xs text-ink-3">这条报得好吗</span>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                iconOnly
                                 icon={ThumbsUp}
-                                title="有用，这类继续盯"
-                                aria-label="有用"
+                                title="这类以后继续盯"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'useful')}
-                              />
+                              >
+                                有用
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                iconOnly
                                 icon={ThumbsDown}
-                                title="没用，这类以后少报"
-                                aria-label="没用"
+                                title="这条不该报；同类以后少提"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'noise')}
-                              />
+                              >
+                                没用
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                title="把这件事加入静音清单，以后不再出现"
                                 onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
                               >
-                                少来这种
+                                别再提
                               </Button>
                             </div>
                             {draftCard?.ref === item.ref && (
