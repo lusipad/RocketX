@@ -1747,7 +1747,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const draft = get().actionDraft;
     if (!draft) return { allowed: false, reason: '没有待执行的动作草案' };
     const existing = runtimeCheckpoint(draft.checkpointId);
-    if (!existing) return { allowed: false, reason: '动作 checkpoint 不存在' };
+    if (!existing) return { allowed: false, reason: '这个动作已经不在了，重新问一次管家吧' };
     const checkpoint = updateButlerActionCheckpoint(existing, draft, butlerNow());
     upsertRuntimeCheckpoint(checkpoint);
     const workbenchConfig = useWorkbench.getState().config;

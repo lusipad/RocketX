@@ -239,7 +239,7 @@ export default function AiSettings() {
                 disabled={persona === DEFAULT_PERSONA && savedPersona === DEFAULT_PERSONA}
                 className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
               >
-                恢复默认
+                恢复默认人设
               </button>
             </div>
           </Row>

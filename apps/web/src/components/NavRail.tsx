@@ -230,7 +230,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     }
                     setModule(key);
                   }}
-                  title={key === 'butler-view' && active !== 'butler-view' ? '把当前页面交给管家' : label}
+                  title={key === 'butler-view' && active !== 'butler-view' ? '打开管家，并带上你现在这一页' : label}
                   className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                     isActive
                       ? 'bg-fill-active font-medium text-ink'

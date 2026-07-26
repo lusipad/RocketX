@@ -271,7 +271,7 @@ test('runNow 将引擎错误转成友好错误，并防止重入', async () => {
     const state = useRoutines.getState();
     assert.equal(state.runningIds.length, 0);
     assert.equal(state.routines[0].runs[0].status, 'error');
-    assert.equal(state.routines[0].runs[0].text, 'Codex 大脑暂时无法回答，请稍后重试。');
+    assert.equal(state.routines[0].runs[0].text, '管家这次没答上来，稍后再问一次。');
   } finally {
     restoreNow();
     restoreRunner();

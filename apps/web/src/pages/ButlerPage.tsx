@@ -253,8 +253,8 @@ export default function ButlerPage() {
       if (outcome === 'needs-who') return;
       if (outcome === 'missing-ref') toast.info('这项已经找不到了');
       else if (outcome === 'already-applied') toast.info('这项已经处理过了');
-      else if (proposal.kind === 'close-wait') toast.success('已销账');
-      else toast.success('已入账');
+      else if (proposal.kind === 'close-wait') toast.success('已从「我在等的」里移除');
+      else toast.success('已记进「我答应的」');
       hideProposal(key);
     } catch (error) {
       toast.error(error, '建议执行失败，可明确重试');
@@ -331,9 +331,9 @@ export default function ButlerPage() {
     const outcome = turnButlerBriefItemIntoTodo(ref, refTitles.get(ref) ?? '相关事项', {
       message: lastResult?.refMessages?.[ref],
     });
-    if (outcome === 'already-exists') toast.info('已在待办池');
-    else if (outcome === 'created') toast.success('已转到待办池');
-    else toast.info('这条暂时不能转任务');
+    if (outcome === 'already-exists') toast.info('这条已经在待办里了');
+    else if (outcome === 'created') toast.success('已记成待办，在「待办」里能看到');
+    else toast.info('这条转不成待办');
   }
 
   async function draftReply(item: NonNullable<typeof result>['items'][number]): Promise<void> {
@@ -455,7 +455,7 @@ export default function ButlerPage() {
                                   size="sm"
                                   onClick={() => turnIntoTodo(item.ref)}
                                 >
-                                  转任务
+                                  记成待办
                                 </Button>
                               )}
                               {todoIdOf(item.ref) && (
@@ -513,18 +513,18 @@ export default function ButlerPage() {
                                 variant="ghost"
                                 size="sm"
                                 icon={ThumbsDown}
-                                title="这条不该报；同类以后少提"
+                                title="这条不该报，同类以后少提；这件事本身还会盯着"
                                 onClick={() => feedbackItem(item.ref, refTitles.get(item.ref) ?? '相关事项', 'noise')}
                               >
-                                没用
+                                报错了
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                title="把这件事加入静音清单，以后不再出现"
+                                title="这件事以后完全不出现；可在下面「我记着少提的」里删掉恢复"
                                 onClick={() => muteItem(refTitles.get(item.ref) ?? '相关事项')}
                               >
-                                别再提
+                                这件事别再提
                               </Button>
                             </div>
                             {draftCard?.ref === item.ref && (
@@ -585,14 +585,19 @@ export default function ButlerPage() {
                       <p className="mt-1 text-xs leading-5 text-ink-2">{proposal.reason}</p>
                       <ButlerSources sources={roundSources(proposal.ref, lastResult)} />
                       <div className="mt-3 flex gap-2">
-                        <button
-                          type="button"
-                          disabled={proposalOperationKey === key}
+                        {/* 动词必须跟下面两栏的名字对上：「我答应的」「我在等的」。
+                            原本写「入账 / 销账」——记账黑话，而且跟栏名一个字都不沾 */}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={proposalOperationKey === key}
+                          title={proposal.kind === 'close-wait'
+                            ? '对方已经回应，从「我在等的」里移除；待办本身不删'
+                            : '把这条记进「我答应的」，同时进待办'}
                           onClick={() => void acceptProposal(proposal, key)}
-                          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50"
                         >
-                          {proposalOperationKey === key ? '执行中…' : proposal.kind === 'close-wait' ? '销账' : '入账'}
-                        </button>
+                          {proposal.kind === 'close-wait' ? '了结它' : '记下来'}
+                        </Button>
                         <button
                           type="button"
                           disabled={proposalOperationKey === key}
@@ -650,7 +655,7 @@ export default function ButlerPage() {
           <details className="group rounded-xl bg-surface shadow-raise">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
               <span>
-                工作日志 · 看了 {checkedCount} 项，上面说了 {visibleItems.length} 条，压下 {result?.suppressed.length ?? 0} 条
+                工作日志 · 这轮看了 {checkedCount} 项，报给你 {visibleItems.length} 条，替你挡掉 {result?.suppressed.length ?? 0} 条
               </span>
               <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
             </summary>

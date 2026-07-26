@@ -117,7 +117,7 @@ export default function ButlerErrandRunCard() {
         {running ? (
           <Button variant="secondary" size="sm" onClick={() => void stopCodex()}>叫停</Button>
         ) : (
-          <Button variant="secondary" size="sm" onClick={dismissErrandRun}>知道了</Button>
+          <Button variant="secondary" size="sm" title="从管家页收起这次派活；结论在执行间里还翻得到" onClick={dismissErrandRun}>收起</Button>
         )}
       </div>
     </section>

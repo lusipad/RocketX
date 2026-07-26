@@ -41,6 +41,24 @@ function userFacingText(source: string, isJsx: boolean): string[] {
   )) {
     out.push(match[1]);
   }
+  /**
+   * 抛出去的错误消息最终会显示在对话里、例行事务报告里、审批卡上。
+   * 它们大多写在 .ts 而不是 .tsx，此前完全不在扫描范围内——
+   * 「Codex 大脑不可用」这类文案就是从这个缺口漏到用户面前的。
+   */
+  for (const match of withoutComments.matchAll(
+    /new Error\(\s*['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
+  )) {
+    // 「字段名 + 无效/不受支持/必须是」是解析持久化数据时的内部断言，
+    // 只在数据损坏时抛给开发者看。把它翻成人话只会让排查变难。
+    if (/^[a-z][\w.]* .*(无效|不受支持|必须是)/i.test(match[1])) continue;
+    out.push(match[1]);
+  }
+  for (const match of withoutComments.matchAll(
+    /\b(?:detail|reason|message|preview|summary)\s*:\s*['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
+  )) {
+    out.push(match[1]);
+  }
   return out.filter(Boolean);
 }
 
