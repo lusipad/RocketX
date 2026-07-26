@@ -13,6 +13,15 @@ async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
   return state;
 }
 
+async function openRoomButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
+  const state = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '打开房间管家', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toBeVisible();
+  return state;
+}
+
 async function seedButlerAnswer(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
@@ -233,6 +242,7 @@ async function seedErrandSurface(page: Page): Promise<void> {
       workspaceName: '主仓',
       readOnly: false,
       startedAt: 1,
+      roomContext: { rid: 'room-general', roomName: 'General' },
       reply: 'Alice 已确认发布检查清单。',
       status: 'replied',
       approvals: [],
@@ -500,7 +510,7 @@ test('完整管家页可以发送图片和文字', async ({ page }) => {
     buffer: Buffer.from('image-bytes'),
   });
   await expect(page.getByAltText('release.png')).toBeVisible();
-  await page.getByPlaceholder(/打 \/ 看看我会什么/).fill('分析这张发布截图');
+  await page.getByPlaceholder('继续说……').fill('分析这张发布截图');
   await page.getByRole('button', { name: '发送', exact: true }).click();
 
   const captured = await page.evaluate(() => (
@@ -523,7 +533,7 @@ test('完整管家页可以粘贴图片并发送', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await captureButlerAsks(page);
 
-  const input = page.getByPlaceholder(/打 \/ 看看我会什么/);
+  const input = page.getByPlaceholder('继续说……');
   await input.evaluate((element) => {
     const clipboard = new DataTransfer();
     clipboard.items.add(new File(['pasted-image'], 'pasted.png', { type: 'image/png' }));
@@ -553,10 +563,8 @@ test('完整管家页可以粘贴图片并发送', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('房间管家侧栏可以仅发送图片并保留房间上下文', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
-  await page.getByRole('button', { name: 'AI', exact: true }).click();
+test('房间管家浮层可以仅发送图片并保留房间上下文', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
   await captureButlerAsks(page);
 
   await page.getByLabel('选择管家图片').setInputFiles({
@@ -584,10 +592,8 @@ test('房间管家侧栏可以仅发送图片并保留房间上下文', async ({
   expect(pageErrors).toEqual([]);
 });
 
-test('房间管家侧栏可以粘贴图片并保留房间上下文', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
-  await page.getByRole('button', { name: 'AI', exact: true }).click();
+test('房间管家浮层可以粘贴图片并保留房间上下文', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
   await captureButlerAsks(page);
 
   const input = page.getByPlaceholder('问问这个房间的讨论…');
@@ -731,10 +737,8 @@ test('ADO 未配置时在进入执行态和打开创建表单前完成能力预�
   expect(pageErrors).toEqual([]);
 });
 
-test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
-  await page.getByRole('button', { name: 'AI', exact: true }).click();
+test('房间管家浮层与管家页共享同一份会话', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
   await seedButlerAnswer(page);
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
 
@@ -742,6 +746,35 @@ test('房间 AI 侧栏与管家页共享同一份会话', async ({ page }) => {
   await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
 
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家浮层不会带入后续无房间来源的全局回执', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    const roomSource = {
+      kind: 'room',
+      id: 'room-general',
+      rid: 'room-general',
+      label: 'General',
+    };
+    useButler.setState({
+      lines: [
+        { id: 'room-question', role: 'user', text: 'General 这轮问答', sources: [roomSource] },
+        { id: 'global-receipt', role: 'assistant', text: '📌 全局记忆已经写入' },
+      ],
+      running: false,
+      error: null,
+    });
+  });
+
+  const panel = page.getByRole('dialog', { name: '房间管家' });
+  await expect(panel).toContainText('General 这轮问答');
+  await expect(panel.getByText('📌 全局记忆已经写入', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -867,11 +900,8 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
   expect(pageErrors).toEqual([]);
 });
 
-test('在办活在纸、完整对话和房间窄纸共享同一份可见状态', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-
-  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
-  await page.getByRole('button', { name: 'AI', exact: true }).click();
+test('在办活在纸、完整对话和房间浮层共享同一份可见状态', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
   await seedErrandSurface(page);
   await expect(page.getByLabel('管家活状态')).toHaveText('0 件等你 · 1 在办');
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
@@ -882,6 +912,7 @@ test('在办活在纸、完整对话和房间窄纸共享同一份可见状态',
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await page.getByText('1 件在办', { exact: true }).click();
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
@@ -898,9 +929,12 @@ test('纸的三区按数据渲染，空区不占位置，审批原文与动作�
   await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
   await expect(page.getByText(/pnpm test/)).toBeVisible();
 
-  await page.getByRole('button', { name: '为什么？', exact: true }).click();
+  await page.getByRole('button', {
+    name: '追问批准发布检查为什么需要审批',
+    exact: true,
+  }).click();
   await expect(page.getByLabel('纸上问答')).toContainText('pnpm test');
-  await page.getByRole('button', { name: '让它跑', exact: true }).click();
+  await page.getByRole('button', { name: '允许批准发布检查', exact: true }).click();
   expect(await page.evaluate(() => (
     (window as Window & { __paperApprovalActions?: unknown[] }).__paperApprovalActions
   ))).toEqual([{ runId: 'approval-run', approvalId: 'approval-command', approved: true }]);
@@ -915,23 +949,29 @@ test('在办行内展开当前进度，回话结论展开后可以收下', async
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await seedPaperSections(page);
 
-  const runningRow = page.getByRole('button', { name: /实现纸面进度/ });
+  const runningRow = page.getByRole('button', { name: '展开实现纸面进度', exact: true });
   await runningRow.click();
-  await expect(runningRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('button', {
+    name: '折叠实现纸面进度',
+    exact: true,
+  })).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByLabel('实现纸面进度 的 TODO')).toContainText('锁定回归');
   await expect(page.getByLabel('实现纸面进度 的 TODO')).toContainText('补齐行内进度');
   const processTail = page.getByLabel('实现纸面进度 的过程尾巴');
   await expect(processTail).toContainText('过程尾巴');
   await expect(processTail).toContainText('完成：fileChange');
-  await expect(page.getByRole('button', { name: 'codex resume thread-running', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '叫停', exact: true }).last().click();
+  await expect(page.getByRole('button', {
+    name: '复制 codex resume thread-running',
+    exact: true,
+  })).toBeVisible();
+  await page.getByRole('button', { name: '叫停实现纸面进度', exact: true }).click();
   expect(await page.evaluate(() => (
     (window as Window & { __paperStopActions?: unknown[] }).__paperStopActions
   ))).toEqual(['running-run']);
 
-  await page.getByRole('button', { name: /汇总回归结论/ }).click();
+  await page.getByRole('button', { name: '展开汇总回归结论', exact: true }).click();
   await expect(page.getByText('三层回归均已通过。', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '收下', exact: true }).click();
+  await page.getByRole('button', { name: '收下汇总回归结论', exact: true }).click();
   await expect(page.getByText('汇总回归结论', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
@@ -943,7 +983,7 @@ test('翻到昨天只读显示当天简报与收下的活，再往前为空时�
 
   await page.getByRole('button', { name: '前一天', exact: true }).click();
   await expect(page.getByRole('region', { name: '收下的活' })).toContainText('昨天收下的活');
-  await expect(page.getByRole('region', { name: '今天' })).toContainText('昨天的简报');
+  await expect(page.getByRole('region', { name: '那天' })).toContainText('昨天的简报');
   await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toHaveCount(0);
 
   await page.getByRole('button', { name: '前一天', exact: true }).click();

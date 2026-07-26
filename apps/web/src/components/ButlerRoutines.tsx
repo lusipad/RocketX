@@ -48,7 +48,7 @@ function RoutineReportCard({
   };
 
   return (
-    <div className="rounded-lg bg-surface-2 shadow-raise px-3 py-2.5">
+    <div className="border-b border-line/70 py-2.5 last:border-b-0">
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{routine.name}</span>
         <span className="shrink-0 text-xs text-ink-3">
@@ -64,9 +64,9 @@ function RoutineReportCard({
           aria-label={`立即生成${routine.name}`}
           onClick={() => void handleRunNow()}
           disabled={running}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink hover:bg-fill-hover disabled:opacity-50"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-50"
         >
-          {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+          {running ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Play size={14} />}
         </button>
         {latest ? (
           <button
@@ -74,14 +74,14 @@ function RoutineReportCard({
             aria-expanded={expanded}
             aria-label={expanded ? `收起${routine.name}报告` : `展开${routine.name}报告`}
             onClick={() => setExpanded((value) => !value)}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-fill-hover hover:text-ink"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
           >
-            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
           </button>
         ) : null}
       </div>
       {latest && expanded ? (
-        <div className="mt-3 border-t border-line pt-3">
+        <div className="mt-2 border-l border-line pl-4">
           {latest.status === 'ok'
             ? <div className="text-sm leading-6 text-ink">{renderMarkdown(latest.text)}</div>
             : <p className="text-sm leading-6 text-danger">{latest.text}</p>}
@@ -109,19 +109,21 @@ export default function ButlerRoutines() {
   };
 
   return (
-    <details className="group rounded-xl bg-surface shadow-raise">
-      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink">
-        <span>例行事务</span>
-        <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="border-t border-line p-4">
+    <section aria-label="在盯的事">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="text-sm font-medium text-ink-3">在盯的事</h2>
+        <span className="text-[11px] text-ink-3">
+          {routines.filter((routine) => routine.enabled).length} 项启用
+        </span>
+      </div>
+      <div className="mt-3">
         {routines.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-sm text-ink-3">
+          <div className="py-4 text-sm text-ink-3">
             还没有例行事务。打开对话后，直接告诉我时间和要做的事。
             <button
               type="button"
               onClick={() => useUI.getState().openButlerConversation()}
-              className="ml-2 font-medium text-primary hover:underline"
+              className="ml-2 text-primary hover:underline"
             >
               去创建
             </button>
@@ -138,19 +140,19 @@ export default function ButlerRoutines() {
                 />
               ))}
               {routines.every((routine) => !routine.enabled) && (
-                <div className="rounded-lg border border-dashed border-line px-4 py-4 text-center text-xs text-ink-3">
+                <div className="py-3 text-xs text-ink-3">
                   所有例行事务都已停用，可在下方管理中开启。
                 </div>
               )}
             </div>
-            <details className="group/manage mt-3 rounded-md border border-line">
-              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink-2">
+            <details className="group/manage mt-3 border-t border-line">
+              <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 transition hover:text-ink-2">
                 管理例行事务
-                <ChevronDown size={14} className="transition-transform group-open/manage:rotate-180" />
+                <ChevronDown size={14} className="transition-transform motion-reduce:transition-none group-open/manage:rotate-180" />
               </summary>
-              <div className="divide-y divide-line border-t border-line">
+              <div className="divide-y divide-line/70 border-t border-line">
                 {routines.map((routine) => (
-                  <label key={routine.id} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink">
+                  <label key={routine.id} className="flex cursor-pointer items-center gap-2 py-2 text-sm text-ink">
                     <input
                       className="accent-primary"
                       type="checkbox"
@@ -168,19 +170,19 @@ export default function ButlerRoutines() {
 
         {eventCards.length > 0 && (
           <section className="mt-4 border-t border-line pt-4">
-            <h3 className="text-sm font-semibold text-ink">提醒</h3>
+            <h3 className="text-xs font-medium text-ink-3">提醒</h3>
             <div className="mt-2 space-y-2">
               {eventCards.map((card) => {
                 const meta = butlerEventMeta[card.kind];
                 const Icon = meta.icon;
                 return (
-                  <div key={card.id} className="flex items-center gap-3 rounded-lg bg-surface-2 shadow-raise px-4 py-3">
+                  <div key={card.id} className="flex items-center gap-3 border-b border-line/70 py-2.5 last:border-b-0">
                     <Icon size={16} className={`shrink-0 ${meta.color}`} />
                     <button type="button" onClick={() => openEventCard(card)} className="min-w-0 flex-1 text-left">
                       <div className="truncate text-sm font-medium text-ink">{card.title}</div>
                       <div className="mt-0.5 truncate text-xs text-ink-3">{card.detail} · {displayTime(card.at)}</div>
                     </button>
-                    <button type="button" title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={14} /></button>
+                    <button type="button" aria-label={`关闭提醒${card.title}`} title="关闭提醒" onClick={() => dismissCard(card.id)} className="rounded p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={14} /></button>
                   </div>
                 );
               })}
@@ -188,6 +190,6 @@ export default function ButlerRoutines() {
           </section>
         )}
       </div>
-    </details>
+    </section>
   );
 }

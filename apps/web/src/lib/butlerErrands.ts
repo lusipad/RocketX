@@ -6,6 +6,8 @@ export interface ButlerErrandDraft {
   spec: DispatchSpec;
   /** 模型对目标工作区的猜测，只参与选择器排序 */
   workspaceHint?: string;
+  /** 草案产生时所在的房间，避免用户切换页面后把活归到别的房间。 */
+  roomContext?: { rid: string; roomName: string };
   checkpointId: string;
 }
 
@@ -50,6 +52,7 @@ export interface ButlerErrandRun {
   plan?: ButlerErrandPlanStep[];
   reply?: string;
   error?: string;
+  roomContext?: { rid: string; roomName: string };
   /** 收下只在内存标记，跨重启恢复留给刀 2。 */
   archivedAt?: number;
 }
@@ -57,6 +60,7 @@ export interface ButlerErrandRun {
 export interface DispatchErrandOptions {
   /** 只调查不改文件。默认 false——派活多半是要动手，只读会让活结构性干不完。 */
   readOnly?: boolean;
+  roomContext?: { rid: string; roomName: string };
 }
 
 const ACTIVITY_LABELS: Record<string, string> = {

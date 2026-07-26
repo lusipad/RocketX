@@ -22,6 +22,8 @@ import {
   visibleButlerRoundItems,
   type StoredRoundsResult,
 } from '../../apps/web/src/lib/butlerRoundsRunner';
+import { getServerBase } from '../../apps/web/src/lib/client';
+import { useAuth } from '../../apps/web/src/stores/auth';
 import type { Todo } from '../../apps/web/src/stores/todos';
 
 class MemoryStorage implements ButlerProposalHandledStorage, Storage {
@@ -170,8 +172,11 @@ test('简报转任务按 adoWorkItemId 与 mid 防重', () => {
 
 test('稍后会写进当轮持久化结果，伪造下一轮后条目重新可见', () => {
   const previousState = useButlerRoundsRunner.getState();
+  const previousUser = useAuth.getState().user;
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const storage = new MemoryStorage();
+  const accountId = 'stage3b-rounds-user';
+  const storageKey = `rcx-butler-v1:rounds-last-result:${getServerBase() || 'same-origin'}:${accountId}`;
   const stored = {
     generatedAt: '2026-07-19T04:00:00.000Z',
     checkedCount: 1,
@@ -186,6 +191,7 @@ test('稍后会写进当轮持久化结果，伪造下一轮后条目重新可�
   } satisfies StoredRoundsResult;
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
   try {
+    useAuth.setState({ user: { _id: accountId, username: accountId } as never });
     useButlerRoundsRunner.setState({
       lastRoundsAt: stored.generatedAt,
       lastResult: stored,
@@ -194,12 +200,13 @@ test('稍后会写进当轮持久化结果，伪造下一轮后条目重新可�
     });
     assert.equal(snoozeButlerRoundsItem('msg:m42'), true);
     assert.deepEqual(visibleButlerRoundItems(useButlerRoundsRunner.getState().lastResult), []);
-    const persisted = JSON.parse(storage.getItem('rcx-butler-v1:rounds-last-result') ?? '{}') as StoredRoundsResult;
+    const persisted = JSON.parse(storage.getItem(storageKey) ?? '{}') as StoredRoundsResult;
     assert.deepEqual(persisted.snoozedRefs, ['msg:m42']);
 
     const nextRound = { ...stored, generatedAt: '2026-07-20T04:00:00.000Z' };
     assert.equal(visibleButlerRoundItems(nextRound).length, 1);
   } finally {
+    useAuth.setState({ user: previousUser } as never);
     useButlerRoundsRunner.setState(previousState);
     if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
     else Reflect.deleteProperty(globalThis, 'localStorage');

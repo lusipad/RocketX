@@ -1258,7 +1258,7 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
-  await expect(page.getByText('直接告诉我你想了解什么，我会先查证据再回答。')).toBeVisible();
+  await expect(page.getByText('我是你的管家。消息、待办、日程、工作项都可以直接问我。')).toBeVisible();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '在 Codex App 打开', exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -1269,8 +1269,7 @@ test('管家纸上输入先即席回答，进入完整对话再回纸仍保留�
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await page.getByRole('textbox', { name: '跟管家说件事' }).fill('记住这段桌面对话');
   await page.getByRole('button', { name: '发送', exact: true }).click();
-  await expect(page.getByLabel('纸上问答')).toBeVisible();
-  await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
 
   await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
   await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();

@@ -538,6 +538,7 @@ export const useButlerErrandRuns = create<ButlerErrandRunsState>((set, get) => (
       approvals: [],
       traces: [],
       plan: [],
+      ...(options?.roomContext ? { roomContext: options.roomContext } : {}),
     };
     runtimes.set(runId, {
       sessionId: id('errand-session'),

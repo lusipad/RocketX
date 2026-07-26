@@ -836,6 +836,21 @@ function runtimeScope(context?: ButlerSurfaceContext | null): ButlerToolScope | 
   };
 }
 
+function roomContextFromSurfaceContext(
+  context: ButlerSurfaceContext | null | undefined,
+): { rid: string; roomName: string } | undefined {
+  const source = context?.sources.find((item) => item.kind === 'room' && (item.rid || item.id))
+    ?? context?.sources.find((item) => item.rid);
+  const rid = source?.rid ?? (source?.kind === 'room' ? source.id : undefined);
+  if (!rid || !source) return undefined;
+  const roomName = context?.kind === 'room'
+    ? context.label
+    : source.kind === 'message'
+      ? source.label.split('：', 1)[0] || rid
+      : rid;
+  return { rid, roomName };
+}
+
 function runtimeSources(sources: readonly ButlerSource[] | undefined): ButlerToolSourceRef[] {
   return (sources ?? []).slice(0, 8).map(({ kind, id, rid, project }) => ({
     kind,
@@ -865,7 +880,12 @@ function runtimeContext(callId: string, snapshot: ButlerRuntimeSnapshot = {}): B
       }
       if (checkpoint.toolName === 'draft_errand') {
         const draft = errandDraftFrom([checkpoint]);
-        if (draft) useButler.setState({ errandDraft: draft });
+        const roomContext = roomContextFromSurfaceContext(context);
+        if (draft) {
+          useButler.setState({
+            errandDraft: roomContext ? { ...draft, roomContext } : draft,
+          });
+        }
       }
     },
     writeAudit: writeToolAudit,
@@ -1457,6 +1477,7 @@ export const useButler = create<ButlerState>((set, get) => ({
         {
           ...line('user', displayText || '[图片]'),
           ...(images.length ? { attachments: butlerImageAttachments(images) } : {}),
+          ...(turnContext?.sources.length ? { sources: turnContext.sources } : {}),
         },
       ],
       activity: null,
@@ -1971,7 +1992,11 @@ export const useButler = create<ButlerState>((set, get) => ({
     const draft = get().errandDraft;
     if (!draft) return;
     // 先派发再确认 checkpoint：派发失败时草案留在卡上，用户改选工作区可重试
-    await dispatchButlerErrand(draft.spec, target, options);
+    const roomContext = draft.roomContext ?? roomContextFromSurfaceContext(get().context);
+    await dispatchButlerErrand(draft.spec, target, {
+      ...options,
+      ...(roomContext ? { roomContext } : {}),
+    });
     await get().approveToolCheckpoint(draft.checkpointId);
   },
 

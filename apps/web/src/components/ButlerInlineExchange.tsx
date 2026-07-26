@@ -25,8 +25,8 @@ export default function ButlerInlineExchange({
   const answer = lines.slice(questionIndex + 1).find((line) => line.role === 'assistant');
 
   return (
-    <div className="border-l-2 border-primary/45 bg-fill-1/45 px-4 py-3" aria-label="纸上问答">
-      <div className="text-xs leading-5 text-ink-3">{question.text}</div>
+    <div className="border-l border-primary/45 pl-4" aria-label="纸上问答">
+      <div className="text-xs leading-5 text-ink-3">你：{question.text}</div>
       {answer ? (
         <div className="mt-1.5 text-sm leading-6 text-ink">
           {answer.text.startsWith('📌') ? answer.text : renderMarkdown(answer.text)}
@@ -34,7 +34,7 @@ export default function ButlerInlineExchange({
         </div>
       ) : running || activity ? (
         <div className="mt-2 flex items-center gap-2 text-xs text-ink-3">
-          <Loader2 size={13} className="animate-spin" />
+          <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
           {activity ?? '正在处理请求…'}
         </div>
       ) : null}

@@ -1,4 +1,4 @@
-import { BookOpenText, GraduationCap, Plus } from 'lucide-react';
+import { BookOpenText, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   parseButlerMemoryState,
@@ -111,98 +111,97 @@ export default function ButlerLearnedPanel() {
   const builtIn = builtInSkillNames();
 
   return (
-    <section className="rounded-xl bg-surface p-5 shadow-raise">
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
-        <GraduationCap size={16} className="text-primary" />
-        管家学到的
-      </h2>
+    <div className="space-y-8">
+      {memories.length > 0 ? (
+        <section aria-label="记住的">
+          <h2 className="text-sm font-medium text-ink-3">记住的</h2>
+          <div className="mt-2 divide-y divide-line/70">
+            {memories.map((record) => (
+              <div key={record.id} className="flex min-w-0 items-center gap-2 py-2.5">
+                <span className="shrink-0 text-[11px] text-ink-3">{KIND_LABELS[record.kind]}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">
+                  {record.subject}
+                  <span className="text-ink-3"> = </span>
+                  {record.value}
+                  {record.due ? <span className="text-ink-3">（{record.due}）</span> : null}
+                </span>
+                {scopeLabel(record) ? (
+                  <span className="hidden shrink-0 text-[11px] text-ink-3 sm:inline">{scopeLabel(record)}</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => forget(record)}
+                  aria-label={`忘掉${record.subject}`}
+                  title="让管家忘掉"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-danger/10 hover:text-danger"
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
-      {memories.length > 0 && (
-        <div className="mt-3 flex flex-col gap-1.5">
-          {memories.map((record) => (
-            <div key={record.id} className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2">
-              <span className="shrink-0 rounded bg-fill px-1.5 py-0.5 text-[11px] text-ink-2">
-                {KIND_LABELS[record.kind]}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm text-ink">
-                {record.subject}
-                <span className="text-ink-3"> = </span>
-                {record.value}
-                {record.due ? <span className="text-ink-3">（{record.due}）</span> : null}
-              </span>
-              {scopeLabel(record) ? (
-                <span className="shrink-0 text-[11px] text-ink-3">{scopeLabel(record)}</span>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => forget(record)}
-                className="shrink-0 px-1.5 py-1 text-xs text-ink-3 hover:text-danger"
-              >
-                让它忘掉
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {skills.length > 0 && (
-        <div className="mt-3">
-          <h3 className="flex items-center gap-1.5 text-xs font-medium text-ink-2">
-            <BookOpenText size={14} />
-            会的技能
-          </h3>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {skills.length > 0 ? (
+        <section aria-label="会的本事">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-1.5 text-sm font-medium text-ink-3">
+              <BookOpenText size={14} aria-hidden="true" />
+              会的本事
+            </h2>
+            <button
+              type="button"
+              onClick={() => setImporting((open) => !open)}
+              aria-expanded={importing}
+              aria-label={importing ? '收起技能安装' : '安装新技能'}
+              className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-primary"
+            >
+              <Plus size={12} aria-hidden="true" />
+              装新技能
+            </button>
+          </div>
+          <div className="mt-2 divide-y divide-line/70">
             {skills.map((skill) => (
-              <span
-                key={skill.name}
-                title={skill.description}
-                className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs text-ink-2"
-              >
-                {skill.name}
+              <div key={skill.name} className="flex min-w-0 items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink">{skill.name}</div>
+                  <div className="mt-0.5 truncate text-[11px] text-ink-3">{skill.description}</div>
+                </div>
                 {builtIn.has(skill.name) ? (
-                  <span className="text-[10px] text-ink-3">内置</span>
+                  <span className="shrink-0 text-[10px] text-ink-3">内置</span>
                 ) : (
                   <button
                     type="button"
                     onClick={() => dropSkill(skill)}
                     aria-label={`卸载技能 ${skill.name}`}
-                    className="ml-0.5 text-ink-3 hover:text-danger"
+                    title="卸载技能"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-danger/10 hover:text-danger"
                   >
-                    ×
+                    <Trash2 size={13} aria-hidden="true" />
                   </button>
                 )}
-              </span>
+              </div>
             ))}
-            <button
-              type="button"
-              onClick={() => setImporting((open) => !open)}
-              className="inline-flex items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-1 text-xs text-ink-3 hover:border-primary/40 hover:text-primary"
-            >
-              <Plus size={12} />
-              装新技能
-            </button>
           </div>
 
-          {importing && (
-            <div className="mt-3 rounded-lg bg-surface-2 p-3">
+          {importing ? (
+            <div className="mt-3 border-l border-primary/40 pl-4">
               <textarea
                 aria-label="粘贴 SKILL.md 内容"
                 value={importText}
                 onChange={(event) => setImportText(event.target.value)}
                 placeholder={'粘贴一份 SKILL.md：\n---\nname: 技能名\ndescription: 一句话描述\n---\n方法论正文…\n\n（或首行 # 技能名，其后第一段当描述）'}
                 rows={6}
-                className="w-full resize-y rounded-md border border-line bg-surface px-3 py-2 font-mono text-xs leading-5 text-ink outline-none transition focus:border-primary"
+                className="w-full resize-y border-b border-line bg-transparent px-0 py-2 font-mono text-xs leading-5 text-ink outline-none transition-colors focus:border-primary"
               />
-              {parsed && !parsed.ok ? (
-                <p className="mt-2 text-xs text-danger">{parsed.error}</p>
-              ) : null}
+              {parsed && !parsed.ok ? <p className="mt-2 text-xs text-danger">{parsed.error}</p> : null}
               {parsed?.ok ? (
-                <div className="mt-2 rounded-md border border-line bg-surface px-3 py-2">
+                <div className="mt-3">
                   <div className="text-xs font-medium text-ink">
                     {parsed.skill.name}
                     <span className="ml-2 font-normal text-ink-2">{parsed.skill.description}</span>
                   </div>
-                  {/* 技能正文会进入管家的提示词——全文强制可见，确认是唯一的闸 */}
                   <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-ink-2">
                     {parsed.skill.body}
                   </pre>
@@ -211,14 +210,14 @@ export default function ButlerLearnedPanel() {
                   </p>
                 </div>
               ) : null}
-              <div className="mt-2 flex items-center justify-end gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     setImporting(false);
                     setImportText('');
                   }}
-                  className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink hover:bg-fill-hover"
+                  className="h-7 rounded px-2 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink"
                 >
                   取消
                 </button>
@@ -226,15 +225,15 @@ export default function ButlerLearnedPanel() {
                   type="button"
                   onClick={installSkill}
                   disabled={!parsed?.ok}
-                  className="rounded-md bg-primary px-2.5 py-1 text-xs text-white hover:bg-primary-hover disabled:opacity-50"
+                  className="h-7 rounded bg-primary px-2.5 text-xs text-white hover:bg-primary-hover disabled:opacity-40"
                 >
                   确认安装
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      )}
-    </section>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
   );
 }

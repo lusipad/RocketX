@@ -62,8 +62,7 @@ export default function MainPage() {
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const rightPanel = useChat((s) => s.rightPanel);
-  const rightPanelOpen = rightPanel !== null;
-  const butlerPanelOpen = rightPanel?.kind === 'butler';
+  const layoutPanelOpen = rightPanel !== null && rightPanel.kind !== 'butler';
   const module = useUI((s) => s.module);
   const registeredModules = useKernelContributions('nav.module');
   const switcher = useUI((s) => s.switcherOpen);
@@ -97,7 +96,7 @@ export default function MainPage() {
   const resetConversationWidth = useImLayout((s) => s.resetConversationWidth);
   const setGroupCollapsed = useImLayout((s) => s.setGroupCollapsed);
   const ActiveModule = registeredModules.find((candidate) => candidate.id === module)?.render;
-  const wasRightPanelOpen = useRef(rightPanelOpen);
+  const wasLayoutPanelOpen = useRef(layoutPanelOpen);
 
   useEffect(() => {
     void init().then(() => useToday.getState().refreshMentions());
@@ -171,13 +170,12 @@ export default function MainPage() {
     conversationPanelState.panelCollapsed,
     dragWidth,
     maxConversationWidth,
-    butlerPanelOpen,
   );
 
   useEffect(() => {
-    const wasOpen = wasRightPanelOpen.current;
-    wasRightPanelOpen.current = rightPanelOpen;
-    if (!wasOpen && rightPanelOpen) {
+    const wasOpen = wasLayoutPanelOpen.current;
+    wasLayoutPanelOpen.current = layoutPanelOpen;
+    if (!wasOpen && layoutPanelOpen) {
       setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, {
         type: 'panel-open',
         groupCollapsed,
@@ -186,11 +184,11 @@ export default function MainPage() {
         type: 'panel-open',
         groupCollapsed: conversationWidth <= COMPACT_CONVERSATION_WIDTH,
       }));
-    } else if (wasOpen && !rightPanelOpen) {
+    } else if (wasOpen && !layoutPanelOpen) {
       setGroupFilterPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
       setConversationPanelState((state) => nextGroupFilterPanelState(state, { type: 'panel-close' }));
     }
-  }, [conversationWidth, groupCollapsed, rightPanelOpen]);
+  }, [conversationWidth, groupCollapsed, layoutPanelOpen]);
 
   const clearConversationPanelNarrowing = () => {
     setConversationPanelState((state) => nextGroupFilterPanelState(state, { type: 'manual-change' }));
@@ -355,43 +353,41 @@ export default function MainPage() {
       {module === 'messages' ? (
         <>
           <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
-          <ConversationList width={conversationWidth} avatarOnly={butlerPanelOpen} />
-          {!butlerPanelOpen && (
-            <div
-              role="separator"
-              aria-label="调整会话列表宽度"
-              aria-orientation="vertical"
-              aria-valuemin={MIN_CONVERSATION_WIDTH}
-              aria-valuemax={maxConversationWidth}
-              aria-valuenow={Math.round(conversationWidth)}
-              tabIndex={0}
-              title="拖动调整会话列表宽度，双击恢复默认"
-              onDoubleClick={() => {
+          <ConversationList width={conversationWidth} />
+          <div
+            role="separator"
+            aria-label="调整会话列表宽度"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_CONVERSATION_WIDTH}
+            aria-valuemax={maxConversationWidth}
+            aria-valuenow={Math.round(conversationWidth)}
+            tabIndex={0}
+            title="拖动调整会话列表宽度，双击恢复默认"
+            onDoubleClick={() => {
+              clearConversationPanelNarrowing();
+              resetConversationWidth();
+            }}
+            onPointerDown={onResizePointerDown}
+            onPointerMove={onResizePointerMove}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                event.preventDefault();
+                const delta = event.key === 'ArrowLeft' ? -10 : 10;
+                clearConversationPanelNarrowing();
+                setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
+              } else if (event.key === 'Home') {
+                event.preventDefault();
                 clearConversationPanelNarrowing();
                 resetConversationWidth();
-              }}
-              onPointerDown={onResizePointerDown}
-              onPointerMove={onResizePointerMove}
-              onPointerUp={finishResize}
-              onPointerCancel={finishResize}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-                  event.preventDefault();
-                  const delta = event.key === 'ArrowLeft' ? -10 : 10;
-                  clearConversationPanelNarrowing();
-                  setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
-                } else if (event.key === 'Home') {
-                  event.preventDefault();
-                  clearConversationPanelNarrowing();
-                  resetConversationWidth();
-                }
-              }}
-              style={{ touchAction: 'none' }}
-              className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
-            >
-              <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
-            </div>
-          )}
+              }
+            }}
+            style={{ touchAction: 'none' }}
+            className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
+          >
+            <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
+          </div>
           <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
         </>
       ) : ActiveModule ? (

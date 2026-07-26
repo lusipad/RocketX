@@ -124,6 +124,9 @@ interface UIState {
   switcherOpen: boolean;
   switcherCommandCenter: boolean;
   butlerConversationOpen: boolean;
+  butlerManageOpen: boolean;
+  /** 管家正在看的纸；null 表示今天。只保留在本次运行内。 */
+  butlerPaperDate: string | null;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -140,6 +143,10 @@ interface UIState {
   openCommandCenter: () => void;
   openButlerConversation: () => void;
   closeButlerConversation: () => void;
+  openButlerManage: () => void;
+  closeButlerManage: () => void;
+  openButlerPaper: (date?: string) => void;
+  setButlerPaperDate: (date: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
   setPrTab: (t: 'review' | 'mine') => void;
@@ -154,6 +161,8 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   butlerConversationOpen: false,
+  butlerManageOpen: false,
+  butlerPaperDate: null,
   workbenchTab: 'overview',
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
@@ -177,9 +186,24 @@ export const useUI = create<UIState>((set) => ({
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
   openButlerConversation: () => {
     persistUIState({ module: 'butler-view' });
-    set({ module: 'butler-view', butlerConversationOpen: true });
+    set({ module: 'butler-view', butlerConversationOpen: true, butlerManageOpen: false });
   },
   closeButlerConversation: () => set({ butlerConversationOpen: false }),
+  openButlerManage: () => {
+    persistUIState({ module: 'butler-view' });
+    set({ module: 'butler-view', butlerManageOpen: true, butlerConversationOpen: false });
+  },
+  closeButlerManage: () => set({ butlerManageOpen: false }),
+  openButlerPaper: (date) => {
+    persistUIState({ module: 'butler-view' });
+    set({
+      module: 'butler-view',
+      butlerPaperDate: date ?? null,
+      butlerConversationOpen: false,
+      butlerManageOpen: false,
+    });
+  },
+  setButlerPaperDate: (date) => set({ butlerPaperDate: date }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => {
     persistUIState({ workItemStateFilter: s });

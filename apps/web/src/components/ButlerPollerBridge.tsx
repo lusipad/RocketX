@@ -1,13 +1,19 @@
 import { useEffect } from 'react';
 import { useAuth } from '../stores/auth';
 import { startButlerPoller, stopButlerPoller } from '../lib/butlerPoller';
-import { startButlerRoundsTriggers, stopButlerRoundsTriggers } from '../lib/butlerRoundsRunner';
+import {
+  hydrateButlerRoundsForCurrentAccount,
+  startButlerRoundsTriggers,
+  stopButlerRoundsTriggers,
+} from '../lib/butlerRoundsRunner';
 
 export default function ButlerPollerBridge() {
   const authed = useAuth((s) => s.status === 'authed');
+  const accountId = useAuth((s) => s.user?._id);
 
   useEffect(() => {
-    if (authed) {
+    hydrateButlerRoundsForCurrentAccount();
+    if (authed && accountId) {
       startButlerRoundsTriggers();
       startButlerPoller();
       return () => {
@@ -15,7 +21,7 @@ export default function ButlerPollerBridge() {
         stopButlerRoundsTriggers();
       };
     }
-  }, [authed]);
+  }, [accountId, authed]);
 
   return null;
 }

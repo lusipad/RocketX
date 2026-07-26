@@ -24,6 +24,7 @@ import {
   setButlerRoundsCodexRunner,
 } from '../../apps/web/src/lib/butlerRoundsBrain';
 import {
+  hydrateButlerRoundsForCurrentAccount,
   runButlerRoundsNow,
   useButlerRoundsRunner,
   type StoredRoundsResult,
@@ -569,18 +570,19 @@ test('一轮失败时保留上一轮结果并暴露可展示错误', async () =>
       suppressed: [],
     },
   } satisfies StoredRoundsResult;
-  useButlerRoundsRunner.setState({
-    lastRoundsAt: previous.generatedAt,
-    lastResult: previous,
-    running: false,
-    error: null,
-  });
   const restoreStorage = setButlerBrainStorage(storage);
   const restoreTauri = setButlerBrainTauriProvider(() => false);
   useAuth.setState({ user: { _id: 'rounds-error-user', username: 'rounds-error' } as never });
   useButler.getState().reset();
   resetButlerPersistenceForTests();
   setServerBase('https://chat.example');
+  hydrateButlerRoundsForCurrentAccount();
+  useButlerRoundsRunner.setState({
+    lastRoundsAt: previous.generatedAt,
+    lastResult: previous,
+    running: false,
+    error: null,
+  });
   try {
     await useButler.getState().hydrate();
     await runButlerRoundsNow(new Date('2026-07-19T04:00:00.000Z'));

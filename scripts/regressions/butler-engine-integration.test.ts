@@ -129,7 +129,7 @@ test('成功回合映射为公共终态合同：证据、步骤、任务状态�
 
     assert.deepEqual(normalizeSnapshot(butler.useButler.getState() as never), {
       lines: [
-        { role: 'user', text: '统一问题', sources: [] },
+        { role: 'user', text: '统一问题', sources: ['r1'] },
         { role: 'assistant', text: '统一答复', sources: ['r1', 'm1'] },
       ],
       steps: [{ label: '搜索消息', status: 'done' }],

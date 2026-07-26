@@ -40,6 +40,8 @@ import {
 const BRIEF_PREFERENCE_LIMIT = 20;
 const LAST_ROUNDS_AT_KEY = 'rcx-butler-v1:rounds-last-at';
 const LAST_RESULT_KEY = 'rcx-butler-v1:rounds-last-result';
+const RESULT_HISTORY_KEY = 'rcx-butler-v1:rounds-history';
+const RESULT_HISTORY_LIMIT = 31;
 
 export interface StoredRoundsResult {
   result: RoundsResult;
@@ -60,8 +62,20 @@ interface ButlerRoundsRunnerState {
   error: string | null;
 }
 
+type StoredRoundsHistory = Record<string, StoredRoundsResult>;
+
 function browserStorage(): Storage | undefined {
   return typeof localStorage === 'undefined' ? undefined : localStorage;
+}
+
+function roundsStorageScope(): string | undefined {
+  const account = useAuth.getState().user?._id;
+  if (!account) return undefined;
+  return `${getServerBase() || 'same-origin'}:${account}`;
+}
+
+function roundsStorageKey(prefix: string, scope = roundsStorageScope()): string | undefined {
+  return scope ? `${prefix}:${scope}` : undefined;
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {
@@ -86,41 +100,107 @@ function isRecentMessageRecord(value: unknown): value is Record<string, RecentSe
   });
 }
 
-function loadLastResult(): StoredRoundsResult | null {
+function butlerRoundsDateKey(value: string | number | Date): string | null {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function isStoredRoundsResult(value: unknown): value is StoredRoundsResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const parsed = value as StoredRoundsResult;
+  return typeof parsed.generatedAt === 'string'
+    && !Number.isNaN(new Date(parsed.generatedAt).getTime())
+    && !!butlerRoundsDateKey(parsed.generatedAt)
+    && isRoundsResult(parsed.result)
+    && Number.isInteger(parsed.checkedCount)
+    && parsed.checkedCount >= 0
+    && isStringRecord(parsed.refTitles)
+    && (parsed.refMessages === undefined || isRecentMessageRecord(parsed.refMessages))
+    && (parsed.refPeople === undefined || isStringRecord(parsed.refPeople))
+    && (parsed.refRids === undefined || isStringRecord(parsed.refRids))
+    && (parsed.snoozedRefs === undefined || (
+      Array.isArray(parsed.snoozedRefs)
+      && parsed.snoozedRefs.every((ref) => typeof ref === 'string')
+    ))
+    && (parsed.triggerReason === undefined || (
+      typeof parsed.triggerReason === 'string' && !!parsed.triggerReason.trim()
+    ));
+}
+
+function loadLastResult(scope = roundsStorageScope()): StoredRoundsResult | null {
   try {
-    const raw = browserStorage()?.getItem(LAST_RESULT_KEY);
+    const key = roundsStorageKey(LAST_RESULT_KEY, scope);
+    if (!key) return null;
+    const raw = browserStorage()?.getItem(key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredRoundsResult;
-    if (
-      !parsed ||
-      typeof parsed.generatedAt !== 'string' ||
-      Number.isNaN(new Date(parsed.generatedAt).getTime()) ||
-      !isRoundsResult(parsed.result) ||
-      !Number.isInteger(parsed.checkedCount) ||
-      parsed.checkedCount < 0 ||
-      !isStringRecord(parsed.refTitles)
-      || (parsed.refMessages !== undefined && !isRecentMessageRecord(parsed.refMessages))
-      || (parsed.refPeople !== undefined && !isStringRecord(parsed.refPeople))
-      || (parsed.refRids !== undefined && !isStringRecord(parsed.refRids))
-      || (parsed.snoozedRefs !== undefined && (
-        !Array.isArray(parsed.snoozedRefs)
-        || parsed.snoozedRefs.some((ref) => typeof ref !== 'string')
-      ))
-      || (parsed.triggerReason !== undefined && (
-        typeof parsed.triggerReason !== 'string' || !parsed.triggerReason.trim()
-      ))
-    ) return null;
-    return parsed;
+    const parsed = JSON.parse(raw) as unknown;
+    return isStoredRoundsResult(parsed) ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function persistResult(stored: StoredRoundsResult): void {
+function trimRoundsHistory(history: StoredRoundsHistory): StoredRoundsHistory {
+  return Object.fromEntries(
+    Object.entries(history)
+      .filter(([, stored]) => isStoredRoundsResult(stored))
+      .sort(([, left], [, right]) => right.generatedAt.localeCompare(left.generatedAt))
+      .slice(0, RESULT_HISTORY_LIMIT),
+  );
+}
+
+function loadRoundsHistory(scope = roundsStorageScope()): StoredRoundsHistory {
+  try {
+    const storageKey = roundsStorageKey(RESULT_HISTORY_KEY, scope);
+    if (!storageKey) return {};
+    const raw = browserStorage()?.getItem(storageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return trimRoundsHistory(Object.fromEntries(
+      Object.entries(parsed).flatMap(([key, value]) => {
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(key)
+          || !isStoredRoundsResult(value)
+          || butlerRoundsDateKey(value.generatedAt) !== key
+        ) return [];
+        return [[key, value] as const];
+      }),
+    ));
+  } catch {
+    return {};
+  }
+}
+
+export function readButlerRoundsResultForDate(key: string): StoredRoundsResult | null {
+  const history = loadRoundsHistory();
+  if (history[key]) return history[key];
+  const latest = loadLastResult();
+  return latest && butlerRoundsDateKey(latest.generatedAt) === key ? latest : null;
+}
+
+function persistResult(stored: StoredRoundsResult, scope = roundsStorageScope()): void {
   try {
     const storage = browserStorage();
-    storage?.setItem(LAST_RESULT_KEY, JSON.stringify(stored));
-    storage?.setItem(LAST_ROUNDS_AT_KEY, stored.generatedAt);
+    const lastResultKey = roundsStorageKey(LAST_RESULT_KEY, scope);
+    const lastRoundsAtKey = roundsStorageKey(LAST_ROUNDS_AT_KEY, scope);
+    const historyKey = roundsStorageKey(RESULT_HISTORY_KEY, scope);
+    if (!storage || !lastResultKey || !lastRoundsAtKey || !historyKey) return;
+    storage.setItem(lastResultKey, JSON.stringify(stored));
+    storage.setItem(lastRoundsAtKey, stored.generatedAt);
+    const key = butlerRoundsDateKey(stored.generatedAt);
+    if (key) {
+      const history = trimRoundsHistory({
+        ...loadRoundsHistory(scope),
+        [key]: stored,
+      });
+      storage.setItem(historyKey, JSON.stringify(history));
+    }
   } catch {
     // 存储失败不该让一轮已经生成的结果消失。
   }
@@ -155,11 +235,24 @@ export const useButlerRoundsRunner = create<ButlerRoundsRunnerState>(() => ({
   error: null,
 }));
 
-const initialResult = loadLastResult();
+let activeRoundsScope = roundsStorageScope();
+const initialResult = loadLastResult(activeRoundsScope);
 useButlerRoundsRunner.setState({
   lastRoundsAt: initialResult?.generatedAt ?? null,
   lastResult: initialResult,
 });
+
+export function hydrateButlerRoundsForCurrentAccount(): void {
+  const scope = roundsStorageScope();
+  if (scope === activeRoundsScope) return;
+  activeRoundsScope = scope;
+  const result = loadLastResult(scope);
+  useButlerRoundsRunner.setState({
+    lastRoundsAt: result?.generatedAt ?? null,
+    lastResult: result,
+    error: null,
+  });
+}
 
 /**
  * 用户经 remember 落库的简报偏好（preference 记忆，subject 以 brief: 开头）。
@@ -198,6 +291,7 @@ export function briefRoundPreferences(now = Date.now()): string[] {
 }
 
 export async function collectButlerRoundsInput(now = new Date()): Promise<RoundsInput> {
+  hydrateButlerRoundsForCurrentAccount();
   await useWorkbench.getState().refresh();
   const { workItems, prs: pullRequests, builds } = useWorkbench.getState();
   const { todos } = useTodos.getState();
@@ -347,7 +441,9 @@ export function butlerRoundsSources(input: RoundsInput, refs?: readonly string[]
 }
 
 export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Promise<void> {
+  hydrateButlerRoundsForCurrentAccount();
   if (activeRun) return activeRun;
+  const runScope = roundsStorageScope();
   const task = (async () => {
     useButlerRoundsRunner.setState({ running: true, error: null });
     try {
@@ -382,12 +478,14 @@ export function runButlerRoundsNow(now = new Date(), triggerReason?: string): Pr
         triggerReason: reason,
         ...resultDisplaySnapshot(input),
       } satisfies StoredRoundsResult;
-      persistResult(stored);
-      useButlerRoundsRunner.setState({
-        lastRoundsAt: stored.generatedAt,
-        lastResult: stored,
-        error: null,
-      });
+      persistResult(stored, runScope);
+      if (roundsStorageScope() === runScope) {
+        useButlerRoundsRunner.setState({
+          lastRoundsAt: stored.generatedAt,
+          lastResult: stored,
+          error: null,
+        });
+      }
       // 开了同步的话顺手投递到 Rocket.Chat（每天至多一条）；失败不打扰本轮结果
       void deliverButlerBrief(stored).catch((error) => {
         console.warn('[Butler rounds] 简报投递失败', error);

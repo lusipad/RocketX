@@ -51,16 +51,15 @@ test('PR 比较选择态：跨子 tab 保留，凑齐两个才发起，可取消
   assert.match(lists, /再选一个就开始比较/);
 });
 
-test('空状态给场景例句与能力边界，且例句只填输入框不直接发送', () => {
-  for (const path of [
-    'apps/web/src/components/ButlerConversation.tsx',
-    'apps/web/src/components/ButlerPanel.tsx',
-  ]) {
-    const text = source(path);
-    assert.match(text, /BUTLER_SCENE_PROMPTS/, path);
-    assert.match(text, /BUTLER_BOUNDARY_NOTE/, path);
-    assert.match(text, /onClick=\{\(\) => setInput\(item\.prompt\)\}/, path);
-  }
+test('完整对话折叠场景例句，房间窄版只保留短空态', () => {
+  const conversation = source('apps/web/src/components/ButlerConversation.tsx');
+  const panel = source('apps/web/src/components/ButlerPanel.tsx');
+
+  assert.match(conversation, /<details[\s\S]*BUTLER_SCENE_PROMPTS/);
+  assert.match(conversation, /BUTLER_BOUNDARY_NOTE/);
+  assert.match(conversation, /onClick=\{\(\) => setInput\(item\.prompt\)\}/);
+  assert.doesNotMatch(panel, /BUTLER_SCENE_PROMPTS|BUTLER_BOUNDARY_NOTE/);
+  assert.match(panel, /这个房间还没有管家记录/);
 });
 
 test('WELCOME_TEXT 未被改动：它同时被剥离逻辑、动作条与多个回归硬编码依赖', () => {
@@ -70,10 +69,60 @@ test('WELCOME_TEXT 未被改动：它同时被剥离逻辑、动作条与多个�
   assert.match(store, /lines\[0\]\.text === WELCOME_TEXT/);
 });
 
-test('房间管家是纸的窄版：状态行、同一活列表和输入框', () => {
+test('房间管家是纸的房间浮层：状态行、同一在办列表和输入框', () => {
   const panel = source('apps/web/src/components/ButlerPanel.tsx');
   assert.match(panel, /<ButlerErrandStatusLine sections=\{sections\} \/>/);
-  assert.match(panel, /<ButlerErrandRunCard compact \/>/);
+  assert.match(panel, /const roomContext = useMemo/);
+  assert.match(panel, /const roomLines = useMemo/);
+  assert.match(panel, /const roomErrands = useMemo/);
+  assert.match(panel, /<ButlerErrandRunCard runs=\{roomErrands\} compact \/>/);
+  assert.match(panel, /<ButlerInlineExchange[\s\S]*lines=\{roomLines\}/);
   assert.match(panel, /placeholder="问问这个房间的讨论…"/);
+  assert.match(panel, /id="room-butler-panel"[\s\S]*role="dialog"/);
+  assert.match(panel, /latestRoomExchange\(butlerLines, rid\)/);
+  assert.match(panel, /setPanel\(null\);[\s\S]{0,100}openButlerPaper\(\)/);
+  assert.match(panel, /\{roomRunning \? \(/);
+  assert.match(panel, /disabled=\{running \|\| \(!input\.trim\(\) && !images\.length\)\}/);
   assert.doesNotMatch(panel, /ButlerRounds|今天<\/h2>/);
+});
+
+test('日历把选中日期作为纸面索引，不新建另一套历史页', () => {
+  const calendar = source('apps/web/src/pages/CalendarPage.tsx');
+  const ui = source('apps/web/src/stores/ui.ts');
+
+  assert.match(calendar, /aria-label="打开这天的纸"/);
+  assert.match(calendar, /openButlerPaper\(selectedDate \?\? today\)/);
+  assert.match(ui, /openButlerPaper: \(date\?: string\) => void/);
+  assert.match(ui, /butlerPaperDate: date \?\? null/);
+  assert.match(ui, /butlerConversationOpen: false/);
+  assert.match(ui, /butlerManageOpen: false/);
+});
+
+test('在办项是可折叠行，快操作有 aria-label，完整对话入口与底层 codex 注册分层保留', () => {
+  const errands = source('apps/web/src/components/ButlerErrandRunCard.tsx');
+  const runtime = source('apps/web/src/kernel/runtime.tsx');
+
+  assert.match(errands, /const \[expanded, setExpanded\] = useState<Set<string>>\(\(\) => new Set\(\)\)/);
+  assert.match(errands, /aria-expanded=\{isExpanded\}/);
+  assert.match(errands, /aria-label=\{isExpanded \? `折叠.*` : `展开.*`\}/);
+  assert.match(errands, /aria-label=\{`叫停\$\{errand\.title\}`\}/);
+  assert.match(errands, /aria-label=\{`收下\$\{errand\.title\}`\}/);
+  assert.match(errands, /aria-label=\{`复制 codex resume \$\{errand\.threadId\}`\}/);
+
+  assert.match(runtime, /\['codex', 'Codex', CodexPage, TerminalSquare\]/);
+  assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
+});
+
+test('今天事项默认折叠，纸面与输入区使用正确的表面层级', () => {
+  const page = source('apps/web/src/pages/ButlerPage.tsx');
+  const todaySection = /<section aria-label="今天">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
+
+  assert.match(todaySection, /<details/);
+  assert.doesNotMatch(todaySection, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.match(todaySection, /group-open:rotate-90/);
+  assert.match(page, /className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-surface-3"/);
+  assert.match(
+    page,
+    /className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 transition-colors focus-within:border-primary"/,
+  );
 });
