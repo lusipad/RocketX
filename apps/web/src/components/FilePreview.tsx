@@ -177,7 +177,9 @@ export default function FilePreview({
         </div>
       </div>
 
-      <div className="mx-auto mb-4 flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden rounded-xl bg-surface-4">
+      {/* 高度跟着内容走：原本恒为 flex-1，两行字的文件也铺满整屏，
+          大片空白看着像加载失败。长文件仍由 max-h-full + 内部滚动兜住。 */}
+      <div className="mx-auto mb-4 flex min-h-24 max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-surface-4">
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={16} className="animate-spin" />
