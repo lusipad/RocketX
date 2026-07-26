@@ -521,7 +521,7 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
         rows={Math.min(6, Math.max(2, value.split('\n').length))}
         className="w-full resize-none rounded-md border border-primary bg-surface-4 px-2.5 py-1.5 text-sm outline-none"
       />
-      <div className="mt-0.5 text-2xs text-ink-3">Enter 保存 · Esc 取消</div>
+      <div className="mt-0.5 text-xs text-ink-3">Enter 保存 · Esc 取消</div>
     </div>
   );
 }
@@ -960,7 +960,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             )}
           </div>
           {grouped && (
-            <span className="pb-0.5 text-2xs text-ink-3 opacity-0 transition group-hover:opacity-100">
+            <span className="pb-0.5 text-xs text-ink-3 opacity-0 transition group-hover:opacity-100">
               {time}
             </span>
           )}
@@ -970,7 +970,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           )}
           {message.rocketxOffline && !message.pending && !message.failed && (
             <span
-              className="mb-0.5 shrink-0 text-2xs text-ink-3"
+              className="mb-0.5 shrink-0 text-xs text-ink-3"
               title="已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次"
             >
               {message.rocketxLanBytesPerSecond
@@ -1001,7 +1001,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         {/* 已读回执：只在自己最后一条消息下显示（飞书交互） */}
         {mine && !message.pending && !message.failed && receipt?.mid === message._id && (
           <span
-            className="mt-0.5 text-2xs text-ink-3"
+            className="mt-0.5 text-xs text-ink-3"
             title={receipt.users.map((u) => u.name || u.username).join('、')}
           >
             {roomType === 'd'

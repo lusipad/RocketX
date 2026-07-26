@@ -32,7 +32,11 @@
    * 这里整体上调一档，并把档位收敛到 5 个。改 token 而不是改三百多处 className：
    * 组件里的 text-xs / text-sm 全部自动跟着变大。
    */
-  --text-2xs: 0.75rem;     /* 12px —— 角标、次要计数，最小不再低于此 */
+  /* 12px —— 只给角标、徽章、键帽这类被形状卡住尺寸的地方。
+     成句的文字一律从 text-xs 起步：12px 的中文在 1080p 上笔画会糊成一团，
+     而它和 text-xs 只差 1px，当「次要文字」用等于凭空多一个没有视觉区别的
+     档位，选哪个全凭手感。规则由 scripts/regressions/ui-type-scale.test.ts 守。 */
+  --text-2xs: 0.75rem;
   --text-2xs--line-height: 1.125rem;
   --text-xs: 0.8125rem;    /* 13px（原 12px）—— 元信息、时间、标签 */
   --text-xs--line-height: 1.25rem;

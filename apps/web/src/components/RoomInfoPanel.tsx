@@ -327,13 +327,13 @@ export default function RoomInfoPanel() {
             {(info?.ro || info?.archived) && (
               <div className="flex flex-wrap gap-1.5 border-b border-line px-4 py-2.5">
                 {info?.ro && (
-                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
+                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-2">
                     <MessageSquareOff size={12} />
                     只读群：仅群主和管理员可发言
                   </span>
                 )}
                 {info?.archived && (
-                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-2xs text-ink-2">
+                  <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-2">
                     <Archive size={12} />
                     已归档
                   </span>
@@ -380,7 +380,7 @@ export default function RoomInfoPanel() {
             {/* 管理操作：只有群主 / 管理员 / 系统管理员看得见 */}
             {canManage && (
               <>
-                <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-2xs text-ink-3">
+                <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
                   群管理
                 </div>
                 <ActionRow

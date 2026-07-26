@@ -205,7 +205,7 @@ export default function CreateWorkItemDiscussionDialog({
             })}
           </select>
           {environmentId ? (
-            <span className="mt-1 flex items-center gap-1 truncate text-2xs text-ink-3">
+            <span className="mt-1 flex items-center gap-1 truncate text-xs text-ink-3">
               <FolderOpen size={12} /> {environments.find((environment) => environment.id === environmentId)?.path}
             </span>
           ) : null}

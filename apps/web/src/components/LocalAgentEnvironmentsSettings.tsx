@@ -63,7 +63,7 @@ export default function LocalAgentEnvironmentsSettings() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <div className="truncate text-sm font-medium text-ink">{environment.name}</div>
-                    <span className={`shrink-0 rounded px-2 py-0.5 text-2xs ${busy ? 'bg-warning-light text-warning' : 'bg-success-light text-success'}`}>
+                    <span className={`shrink-0 rounded px-2 py-0.5 text-xs ${busy ? 'bg-warning-light text-warning' : 'bg-success-light text-success'}`}>
                       {busy ? '使用中' : environment.enabled ? '可用' : '已停用'}
                     </span>
                   </div>
@@ -94,7 +94,7 @@ export default function LocalAgentEnvironmentsSettings() {
                 </summary>
                 <div className="space-y-3 px-4 pb-4 pt-2">
                   <div className="flex items-end gap-3">
-                    <label className="min-w-0 flex-1 text-2xs text-ink-3">
+                    <label className="min-w-0 flex-1 text-xs text-ink-3">
                       目录名称
                       <input
                         aria-label="环境名称"
@@ -114,7 +114,7 @@ export default function LocalAgentEnvironmentsSettings() {
                     </label>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <label className="text-2xs text-ink-3 sm:col-span-1">
+                    <label className="text-xs text-ink-3 sm:col-span-1">
                       ADO 项目（逗号分隔）
                       <input
                         value={environment.adoProjects.join(', ')}
@@ -123,7 +123,7 @@ export default function LocalAgentEnvironmentsSettings() {
                         className={`mt-1 ${inputCls}`}
                       />
                     </label>
-                    <label className="text-2xs text-ink-3">
+                    <label className="text-xs text-ink-3">
                       基础分支
                       <input
                         value={environment.defaultBaseBranch}
@@ -132,7 +132,7 @@ export default function LocalAgentEnvironmentsSettings() {
                         className={`mt-1 ${inputCls}`}
                       />
                     </label>
-                    <label className="text-2xs text-ink-3">
+                    <label className="text-xs text-ink-3">
                       任务分支前缀
                       <input
                         value={environment.branchPrefix}
