@@ -45,20 +45,21 @@ export default function ButlerErrandRunCard() {
   };
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-5">
+    <section className="rounded-xl bg-surface p-5">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
             <span>派出去的活</span>
+            {/* 状态用颜色说话，不用底色块——底色块一多，界面就成了拼贴 */}
             <span
-              className={`rounded-full px-2 py-0.5 text-[11px] font-normal ${
+              className={`text-xs font-normal ${
                 waiting
-                  ? 'bg-warning/15 text-warning'
+                  ? 'text-warning'
                   : running
-                    ? 'bg-primary-light/60 text-primary'
+                    ? 'text-primary'
                     : errandRun.outcome === 'stopped'
-                      ? 'bg-fill text-ink-2'
-                      : 'bg-success/15 text-success'
+                      ? 'text-ink-3'
+                      : 'text-success'
               }`}
             >
               {statusLabel()}
@@ -77,7 +78,7 @@ export default function ButlerErrandRunCard() {
       {approvals.length > 0 && current ? (
         <div className="mt-3 flex flex-col gap-2">
           {approvals.map((approval) => (
-            <div key={approval.id} className="rounded-lg border border-warning/40 bg-warning/10 p-3">
+            <div key={approval.id} className="rounded-lg bg-warning/10 p-3">
               <div className="text-xs font-medium text-ink">要做这件事，你看行吗</div>
               <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-2 text-[11px] leading-5 text-ink-2">
                 {codexApprovalSummary(approval.method, approval.params)}
@@ -96,7 +97,7 @@ export default function ButlerErrandRunCard() {
       ) : null}
 
       {errandRun.reply ? (
-        <div className="mt-3 rounded-lg border border-line bg-surface-2 px-3 py-2">
+        <div className="mt-3 rounded-lg bg-surface-2 px-3 py-2">
           <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-ink">
             {errandRun.reply}
           </div>

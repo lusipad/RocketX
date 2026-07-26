@@ -106,7 +106,7 @@ function LedgerColumn({
   today: string;
 }) {
   return (
-    <section className="min-w-0 rounded-xl border border-line bg-surface p-4">
+    <section className="min-w-0 rounded-xl bg-surface p-4">
       <h2 className="mb-3 text-sm font-semibold text-ink">{title}</h2>
       {entries.length === 0 ? (
         <p className="py-4 text-center text-sm text-ink-3">这里还是空的</p>
@@ -115,7 +115,7 @@ function LedgerColumn({
           {entries.map((entry) => {
             const due = ledgerDue(entry, today);
             return (
-              <div key={`${entry.kind}:${entry.todoId}`} className="rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+              <div key={`${entry.kind}:${entry.todoId}`} className="rounded-lg bg-surface-2 px-3 py-2.5">
                 <div className="text-sm font-medium text-ink">{entry.title}</div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-ink-2">{entry.who}</span>
@@ -395,7 +395,7 @@ export default function ButlerPage() {
             </div>
           )}
 
-          <section className="rounded-xl border border-line bg-surface p-5">
+          <section className="rounded-xl bg-surface p-5">
             {result ? (
               <>
                 <div className="border-b border-line pb-4">
@@ -407,7 +407,7 @@ export default function ButlerPage() {
                 {visibleItems.length > 0 ? (
                   <div className="mt-4 flex flex-col gap-3">
                     {visibleItems.map((item, index) => (
-                      <article key={`${item.ref}:${index}`} className="rounded-lg border border-line bg-surface-2 p-4">
+                      <article key={`${item.ref}:${index}`} className="rounded-lg bg-surface-2 p-4">
                         <div className="flex items-start gap-3">
                           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-white">
                             {index + 1}
@@ -562,7 +562,7 @@ export default function ButlerPage() {
           </section>
 
           {deskSessions.length > 0 && (
-            <section className="rounded-xl border border-line bg-surface p-5">
+            <section className="rounded-xl bg-surface p-5">
               <h2 className="text-sm font-semibold text-ink">我们手头的事</h2>
               <div className="mt-3 flex flex-col gap-2">
                 {deskSessions.map((session) => (
@@ -570,7 +570,7 @@ export default function ButlerPage() {
                     key={session.id}
                     type="button"
                     onClick={() => void openSessionConversation(session.id)}
-                    className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3.5 py-2.5 text-left hover:border-primary/40"
+                    className="flex items-center gap-3 rounded-lg bg-surface-2 px-3.5 py-2.5 text-left hover:border-primary/40"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-ink">{session.title}</div>
@@ -592,7 +592,7 @@ export default function ButlerPage() {
 
           <ButlerLearnedPanel />
 
-          <details className="group rounded-xl border border-line bg-surface">
+          <details className="group rounded-xl bg-surface">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm text-ink-2">
               <span>
                 工作日志 · 看了 {checkedCount} 项，上面说了 {visibleItems.length} 条，压下 {result?.suppressed.length ?? 0} 条
@@ -683,7 +683,7 @@ export default function ButlerPage() {
           >
             <MessageCircle size={14} />展开对话
           </button>
-          <form onSubmit={submitQuestion} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 focus-within:border-primary/50">
+          <form onSubmit={submitQuestion} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 focus-within:border-primary/50">
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}

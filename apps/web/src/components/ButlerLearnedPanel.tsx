@@ -111,7 +111,7 @@ export default function ButlerLearnedPanel() {
   const builtIn = builtInSkillNames();
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-5">
+    <section className="rounded-xl bg-surface p-5">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
         <GraduationCap size={16} className="text-primary" />
         管家学到的
@@ -120,7 +120,7 @@ export default function ButlerLearnedPanel() {
       {memories.length > 0 && (
         <div className="mt-3 flex flex-col gap-1.5">
           {memories.map((record) => (
-            <div key={record.id} className="flex items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2">
+            <div key={record.id} className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2">
               <span className="shrink-0 rounded bg-fill px-1.5 py-0.5 text-[11px] text-ink-2">
                 {KIND_LABELS[record.kind]}
               </span>
@@ -184,7 +184,7 @@ export default function ButlerLearnedPanel() {
           </div>
 
           {importing && (
-            <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3">
+            <div className="mt-3 rounded-lg bg-surface-2 p-3">
               <textarea
                 aria-label="粘贴 SKILL.md 内容"
                 value={importText}
