@@ -63,6 +63,7 @@ import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
+import { butlerBrainGateway } from '../lib/butlerRoundsBrain';
 import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
 import {
@@ -619,14 +620,17 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     }
     setAiExtracting(true);
     try {
-      const draft = await extractMessageAction({
-        rid: message.rid,
-        mid: message._id,
-        roomName,
-        author: displayName,
-        text,
-        sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
-      });
+      const draft = await extractMessageAction(
+        {
+          rid: message.rid,
+          mid: message._id,
+          roomName,
+          author: displayName,
+          text,
+          sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
+        },
+        butlerBrainGateway(),
+      );
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
     } catch (error) {

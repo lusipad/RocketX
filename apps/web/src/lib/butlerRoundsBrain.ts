@@ -34,7 +34,15 @@ export function codexEphemeralGateway(signal?: AbortSignal): AiChatGateway {
   };
 }
 
-function selectedButlerGateway(signal?: AbortSignal): AiChatGateway {
+/**
+ * 需要 AI 想一下的功能都从这里取通道，别各自去接 AiBus。
+ *
+ * 决策 13 之后 Codex 是唯一的大脑，管家层只管时机、呈现和闸门。
+ * 内置那个 provider 从来没有密钥，走 AiBus 的功能会闷头发出请求、
+ * 拿回 401，再被 toast 改写成「没有权限执行此操作」——用户完全被
+ * 指向错误方向（issue #229）。从这里取通道就没有这一路。
+ */
+export function butlerBrainGateway(signal?: AbortSignal): AiChatGateway {
   const availability = codexBrainAvailability();
   if (!availability.available) {
     throw new Error(availability.reason ?? 'Codex 暂不可用');
@@ -46,11 +54,11 @@ export async function runRoundsWithBrain(
   input: RoundsInput,
   signal?: AbortSignal,
 ): Promise<RoundsResult> {
-  return runButlerRounds(input, selectedButlerGateway(signal));
+  return runButlerRounds(input, butlerBrainGateway(signal));
 }
 
 export async function runDraftWithBrain(input: ButlerDraftInput): Promise<ButlerDraftResult> {
-  return runButlerDraft(input, selectedButlerGateway());
+  return runButlerDraft(input, butlerBrainGateway());
 }
 
 export function setButlerRoundsCodexRunner(runner: ButlerRoundsCodexRunner): () => void {
