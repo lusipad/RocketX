@@ -32,7 +32,10 @@ jobs:
           git fetch origin main --tags
           test "$(git cat-file -t "refs/tags/$INPUT_TAG")" = "tag"
           release_sha="$(git rev-parse "refs/tags/$INPUT_TAG^{commit}")"
-          test "$release_sha" = "$(git rev-parse origin/main)"
+          # 要求 tag 在 main 的历史上（防发野提交），而不是等于 main 头——
+          # 后者会让「打完 tag 继续开发」的正常节奏永远发不了版：只要 main
+          # 有新提交，已构建好的 tag 就被卡死。v0.32.0 就是这么被拦下的。
+          git merge-base --is-ancestor "$release_sha" origin/main
           git checkout --detach "$release_sha"
 
       - uses: actions/setup-node@v7
