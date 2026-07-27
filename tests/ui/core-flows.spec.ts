@@ -38,6 +38,10 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
               version: '0.145.0',
               executablePath: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
               source: 'system',
+              protocolBaseline: '0.144.4',
+              minimumCandidate: '0.140.0',
+              verifiedVersions: ['0.144.4'],
+              compatibilityStatus: 'untested-newer',
             };
           }
           if (command === 'image_ocr_runtime_probe') {
@@ -142,6 +146,10 @@ async function installFullTauriMock(page: Page) {
               version: '0.145.0',
               executablePath: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
               source: 'system',
+              protocolBaseline: '0.144.4',
+              minimumCandidate: '0.140.0',
+              verifiedVersions: ['0.144.4'],
+              compatibilityStatus: 'untested-newer',
             };
           }
           if (command === 'image_ocr_runtime_probe') {
@@ -1464,7 +1472,9 @@ test('AI 配置默认只突出工作目录，复杂选项按需展开', async ({
   await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
-  await expect(page.getByText(/系统 · 0\.145\.0 · .*codex\.cmd/)).toBeVisible();
+  await expect(page.getByText(/系统 · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
+  await expect(page.getByText(/当前 Codex 高于已验证基线 0\.144\.4/)).toBeVisible();
+  await expect(page.getByText('候选下限 0.140.0 · 已验证基线 0.144.4', { exact: true })).toBeVisible();
   await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 工作目录' })).toBeVisible();

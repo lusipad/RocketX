@@ -1,4 +1,7 @@
 export const CODEX_APP_SERVER_VERSION = '0.144.4' as const;
+export const CODEX_PROTOCOL_BASELINE = CODEX_APP_SERVER_VERSION;
+export const CODEX_MINIMUM_CANDIDATE = '0.140.0' as const;
+export const CODEX_VERIFIED_VERSIONS = [CODEX_PROTOCOL_BASELINE] as const;
 
 const VERSION_PATTERN = /(?:Codex Desktop|rocketx)\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/;
 

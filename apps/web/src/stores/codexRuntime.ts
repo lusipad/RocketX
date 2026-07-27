@@ -5,12 +5,17 @@ import { isTauri } from '../lib/http';
 import { toast } from './toast';
 
 export type CodexRuntimePhase = 'idle' | 'checking' | 'ready' | 'unavailable' | 'web';
+export type CodexCompatibilityStatus = 'verified' | 'untested-newer' | 'blocked';
 
 export interface CodexRuntimeProbe {
   ready: boolean;
   version?: string;
   executablePath?: string;
   source?: 'manual' | 'bundled' | 'system';
+  protocolBaseline: string;
+  minimumCandidate: string;
+  verifiedVersions: string[];
+  compatibilityStatus: CodexCompatibilityStatus;
   reasonCode?: 'not-found' | 'outdated' | 'manual-path' | 'missing-app-server' | 'not-logged-in' | 'unavailable';
   reason?: string;
 }
@@ -20,6 +25,10 @@ interface CodexRuntimeState {
   version?: string;
   executablePath?: string;
   source?: CodexRuntimeProbe['source'];
+  protocolBaseline?: string;
+  minimumCandidate?: string;
+  verifiedVersions?: string[];
+  compatibilityStatus?: CodexCompatibilityStatus;
   reasonCode?: CodexRuntimeProbe['reasonCode'];
   reason?: string;
   probe: () => Promise<void>;
@@ -77,6 +86,10 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: undefined,
         executablePath: undefined,
         source: undefined,
+        protocolBaseline: undefined,
+        minimumCandidate: undefined,
+        verifiedVersions: undefined,
+        compatibilityStatus: undefined,
         reasonCode: undefined,
         reason: undefined,
       });
@@ -89,13 +102,17 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         manualPath: getCodexManualPath() || null,
       });
       if (revision !== probeRevision) return;
-      if (result.ready) {
+      if (result.ready && result.compatibilityStatus !== 'blocked') {
         setCodexBrainUnavailableReason(undefined);
         set({
           phase: 'ready',
           version: result.version,
           executablePath: result.executablePath,
           source: result.source,
+          protocolBaseline: result.protocolBaseline,
+          minimumCandidate: result.minimumCandidate,
+          verifiedVersions: [...result.verifiedVersions],
+          compatibilityStatus: result.compatibilityStatus,
           reasonCode: undefined,
           reason: undefined,
         });
@@ -108,6 +125,10 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: result.version,
         executablePath: result.executablePath,
         source: result.source,
+        protocolBaseline: result.protocolBaseline,
+        minimumCandidate: result.minimumCandidate,
+        verifiedVersions: [...result.verifiedVersions],
+        compatibilityStatus: result.compatibilityStatus,
         reasonCode: result.reasonCode,
         reason,
       });
@@ -120,6 +141,10 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         version: undefined,
         executablePath: undefined,
         source: undefined,
+        protocolBaseline: undefined,
+        minimumCandidate: undefined,
+        verifiedVersions: undefined,
+        compatibilityStatus: undefined,
         reasonCode: 'unavailable',
         reason,
       });
@@ -160,6 +185,10 @@ export function resetCodexRuntimeForTests(): void {
     version: undefined,
     executablePath: undefined,
     source: undefined,
+    protocolBaseline: undefined,
+    minimumCandidate: undefined,
+    verifiedVersions: undefined,
+    compatibilityStatus: undefined,
     reasonCode: undefined,
     reason: undefined,
   });

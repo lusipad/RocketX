@@ -588,10 +588,16 @@ test('resume 失败重建线程时，重建后首轮 turn input 带 fallbackTran
     await first;
 
     const snapshot = residentCodexThreadSnapshot();
-    assert.deepEqual(snapshot, { threadId: 'persisted-thread', promptHash: snapshot?.promptHash });
+    assert.deepEqual(snapshot, {
+      threadId: 'persisted-thread',
+      promptHash: snapshot?.promptHash,
+      createdWithCodexVersion: CODEX_APP_SERVER_VERSION,
+      createdWithRuntimeSource: 'bundled',
+    });
 
     await resetButlerCodexRuntime();
-    hydrateResidentCodexThread(snapshot!.threadId, snapshot!.promptHash);
+    const { threadId, promptHash, ...provenance } = snapshot!;
+    hydrateResidentCodexThread(threadId, promptHash, provenance);
 
     asking = askButlerCodex({
       text: '第二问',
@@ -628,6 +634,15 @@ test('resume 失败重建线程时，重建后首轮 turn input 带 fallbackTran
     await completeTurn(rebuiltTransport, 'rebuilt-thread', 'rebuilt-turn');
 
     assert.deepEqual(await asking, { text: '完成。' });
+    assert.deepEqual(residentCodexThreadSnapshot(), {
+      threadId: 'rebuilt-thread',
+      promptHash,
+      createdWithCodexVersion: CODEX_APP_SERVER_VERSION,
+      createdWithRuntimeSource: 'bundled',
+      lastResumedWithCodexVersion: CODEX_APP_SERVER_VERSION,
+      lastResumedWithRuntimeSource: 'bundled',
+      lastResumeMode: 'transcript-rebuilt',
+    });
   } finally {
     await Promise.allSettled(asking ? [asking] : []);
     await restore();

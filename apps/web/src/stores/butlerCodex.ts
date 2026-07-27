@@ -1,6 +1,7 @@
 import {
   AppServerClient,
   TauriCodexTransport,
+  type CodexProcessInfo,
   type CodexTransport,
   type ServerRequestPolicy,
 } from '../agent/protocol';
@@ -65,6 +66,19 @@ export interface ButlerCodexAskOptions {
 
 export type ButlerCodexResumeMode = 'native' | 'started' | 'resumed' | 'restarted';
 
+export interface ResidentCodexThreadProvenance {
+  createdWithCodexVersion?: string;
+  createdWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
+  lastResumedWithCodexVersion?: string;
+  lastResumedWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
+  lastResumeMode?: 'native' | 'transcript-rebuilt';
+}
+
+export interface ResidentCodexThreadSnapshot extends ResidentCodexThreadProvenance {
+  threadId: string;
+  promptHash: string;
+}
+
 export interface ButlerCodexAskResult {
   text: string;
 }
@@ -99,6 +113,7 @@ let residentSessionId: string | undefined;
 let residentWorkspaceRoot: string | undefined;
 let residentThreadId: string | undefined;
 let residentPromptHash: string | undefined;
+let residentThreadProvenance: ResidentCodexThreadProvenance = {};
 let residentStatus: 'idle' | 'ready' | 'running' | 'interrupted' = 'idle';
 let residentTools = new Map<string, ButlerTool>();
 let residentTurn: TurnController | undefined;
@@ -483,6 +498,7 @@ async function stopResident(clearThread = true): Promise<void> {
   if (clearThread) {
     residentThreadId = undefined;
     residentPromptHash = undefined;
+    residentThreadProvenance = {};
     residentTools = new Map();
   }
 }
@@ -503,7 +519,11 @@ function disableCodexNativeMemories(client: AppServerClient, threadId: string): 
     .catch(() => undefined);
 }
 
-async function startResidentThread(prompt: string, promptHash: string): Promise<void> {
+async function startResidentThread(
+  prompt: string,
+  promptHash: string,
+  resumeMode?: 'transcript-rebuilt',
+): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
   const tools = createButlerTools();
@@ -519,6 +539,16 @@ async function startResidentThread(prompt: string, promptHash: string): Promise<
   });
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
+  const process = client.processInfo!;
+  residentThreadProvenance = {
+    createdWithCodexVersion: process.version,
+    createdWithRuntimeSource: process.runtimeSource,
+    ...(resumeMode ? {
+      lastResumedWithCodexVersion: process.version,
+      lastResumedWithRuntimeSource: process.runtimeSource,
+      lastResumeMode: resumeMode,
+    } : {}),
+  };
   residentStatus = 'ready';
   disableCodexNativeMemories(client, response.thread.id);
   // 常驻线程也是原生 Codex 线程，起名后在 codex resume / Codex App 里可辨认
@@ -544,6 +574,13 @@ async function resumeResidentThread(prompt: string, promptHash: string): Promise
   });
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
+  const process = client.processInfo!;
+  residentThreadProvenance = {
+    ...residentThreadProvenance,
+    lastResumedWithCodexVersion: process.version,
+    lastResumedWithRuntimeSource: process.runtimeSource,
+    lastResumeMode: 'native',
+  };
   residentStatus = 'ready';
   disableCodexNativeMemories(client, response.thread.id);
 }
@@ -553,17 +590,22 @@ async function resumeResidentThread(prompt: string, promptHash: string): Promise
  * thread/resume 路径把上下文从 Codex 会话库里恢复回来；resume 失败时
  * 原有兜底会自动开新线程。本次运行已有活线程时不覆盖。
  */
-export function hydrateResidentCodexThread(threadId: string, promptHash: string): void {
+export function hydrateResidentCodexThread(
+  threadId: string,
+  promptHash: string,
+  provenance: ResidentCodexThreadProvenance = {},
+): void {
   if (residentThreadId || !threadId || !promptHash) return;
   residentThreadId = threadId;
   residentPromptHash = promptHash;
+  residentThreadProvenance = { ...provenance };
   residentStatus = 'interrupted';
 }
 
 /** 当前常驻线程快照，供对话持久化一并保存 */
-export function residentCodexThreadSnapshot(): { threadId: string; promptHash: string } | undefined {
+export function residentCodexThreadSnapshot(): ResidentCodexThreadSnapshot | undefined {
   return residentThreadId && residentPromptHash
-    ? { threadId: residentThreadId, promptHash: residentPromptHash }
+    ? { threadId: residentThreadId, promptHash: residentPromptHash, ...residentThreadProvenance }
     : undefined;
 }
 
@@ -582,7 +624,7 @@ async function ensureResidentThread(): Promise<ButlerCodexResumeMode> {
     return 'resumed';
   } catch {
     await stopResident();
-    await startResidentThread(prompt, promptHash);
+    await startResidentThread(prompt, promptHash, 'transcript-rebuilt');
     return 'restarted';
   }
 }

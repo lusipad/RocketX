@@ -659,6 +659,8 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       session = {
         ...session,
         codexThreadId: response.thread.id,
+        createdWithCodexVersion: appServer.processInfo!.version,
+        createdWithRuntimeSource: appServer.processInfo!.runtimeSource,
         status: 'ready',
         updatedAt: Date.now(),
       };
@@ -863,6 +865,9 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const resumed: AgentSession = {
       ...resuming,
       codexThreadId: response.thread.id,
+      lastResumedWithCodexVersion: appServer.processInfo!.version,
+      lastResumedWithRuntimeSource: appServer.processInfo!.runtimeSource,
+      lastResumeMode: 'native',
       status: 'ready',
       updatedAt: Date.now(),
     };
