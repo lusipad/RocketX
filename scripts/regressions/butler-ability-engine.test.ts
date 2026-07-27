@@ -146,6 +146,11 @@ test('模板装载复制 prompt/trigger，重复装载返回同一实例', () =>
 
 test('room-digest 装载时替换房间占位，并保留预检所需参数', () => {
   resetRoutineStore();
+  assert.equal(useRoutines.getState().loadTemplate('room-digest'), undefined);
+  assert.equal(
+    useRoutines.getState().loadTemplate('room-digest', { rooms: [] }),
+    undefined,
+  );
   const loaded = useRoutines.getState().loadTemplate('room-digest', {
     rooms: ['发布群', '研发群'],
   });
@@ -232,12 +237,13 @@ test('旧格式晨报和晚间回顾迁移后保留 id 与用户改过的时间'
   }
 });
 
-test('new-mentions 预检无新事时不调用 runner，也不留下运行记录', async () => {
+test('new-mentions 预检无新事时定时静默跳过，手动检查留下明确结果', async () => {
   let runnerCalls = 0;
   const restoreRunner = setRoutineCodexRunner(async () => {
     runnerCalls += 1;
     return { text: '不应生成' };
   });
+  const restoreNow = setRoutineNowProvider(() => NOW);
   useChat.setState({
     subscriptions: {
       'room-1': { rid: 'room-1', name: '测试群', userMentions: 0 },
@@ -253,10 +259,18 @@ test('new-mentions 预检无新事时不调用 runner，也不留下运行记录
   })]);
 
   try {
-    await useRoutines.getState().runNow('routine-1');
+    await useRoutines.getState().runNow('routine-1', { triggerReason: 'schedule' });
     assert.equal(runnerCalls, 0);
     assert.equal(useRoutines.getState().routines[0]?.runs.length, 1);
     assert.deepEqual(useRoutines.getState().runningIds, []);
+
+    await useRoutines.getState().runNow('routine-1');
+    assert.equal(runnerCalls, 0);
+    assert.equal(useRoutines.getState().routines[0]?.runs.length, 2);
+    assert.equal(
+      useRoutines.getState().routines[0]?.runs[0]?.text,
+      '当前没有新的 @ 需要整理。',
+    );
 
     useChat.setState({
       subscriptions: {
@@ -269,8 +283,9 @@ test('new-mentions 预检无新事时不调用 runner，也不留下运行记录
     } as never);
     await useRoutines.getState().runNow('routine-1');
     assert.equal(runnerCalls, 0);
-    assert.equal(useRoutines.getState().routines[0]?.runs.length, 1);
+    assert.equal(useRoutines.getState().routines[0]?.runs.length, 3);
   } finally {
+    restoreNow();
     restoreRunner();
     useChat.setState({ subscriptions: {}, rooms: {}, messages: {} } as never);
     resetRoutineStore();

@@ -471,6 +471,7 @@ test('watcher 检测应写入 watcher workflow sources，且 disable routine 会
     assert.deepEqual(watcher.sources, [
       { kind: 'room', id: 'room-1', rid: 'room-1', label: '发布群' },
     ]);
+    assert.equal(useRoutines.getState().eventCards[0]?.rid, 'room-1');
 
     const blocked = new Promise<never>(() => undefined);
     const workflowRun = runButlerWorkflowTask({

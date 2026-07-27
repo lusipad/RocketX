@@ -381,6 +381,47 @@ async function seedPaperSections(page: Page): Promise<void> {
   });
 }
 
+async function seedAutomationPaper(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
+      useRoutines: {
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useRoutines } = await load();
+    const now = Date.now();
+    useRoutines.setState({
+      routines: [{
+        id: 'builtin-morning-brief',
+        name: '晨报',
+        templateId: 'morning-brief',
+        precheck: 'none',
+        trigger: { kind: 'daily', time: '08:30' },
+        prompt: '测试晨报',
+        delivery: 'today',
+        enabled: true,
+        createdAt: now - 60_000,
+        runs: [{
+          id: 'morning-run',
+          at: now,
+          status: 'ok',
+          text: '**先回应**\n- Alice 的发布检查清单。',
+        }],
+      }],
+      eventCards: [{
+        id: 'event:mention:room-general',
+        kind: 'mention-stale',
+        rid: 'room-general',
+        title: '@我未回应：General（3小时前）',
+        detail: '当前仍有 2 条 @我 未处理。',
+        at: now,
+      }],
+      runningIds: [],
+      hydrated: true,
+    });
+  });
+}
+
 async function seedYesterdayPaper(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
@@ -650,7 +691,9 @@ test('取消动作后回到纸不会伪造在办项', async ({ page }) => {
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '回到纸', exact: true }).click();
   await expect(page.getByRole('region', { name: '在办' })).toHaveCount(0);
-  await expect(page.getByLabel('管家空状态')).toBeVisible();
+  await expect(
+    page.getByLabel('管家空状态').or(page.getByRole('region', { name: '今日整理状态' })),
+  ).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -749,6 +792,45 @@ test('房间管家浮层与管家页共享同一份会话', async ({ page }) => 
   expect(pageErrors).toEqual([]);
 });
 
+test('房间管家全屏后直接进入同一段完整对话', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await page.getByRole('button', { name: '全屏打开完整对话', exact: true }).click();
+
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家可以拖动调宽并在重新打开后保留宽度', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+  const panel = page.getByRole('dialog', { name: '房间管家' });
+  const resizer = page.getByRole('separator', { name: '调整房间管家宽度' });
+  const before = await panel.boundingBox();
+  const handle = await resizer.boundingBox();
+  expect(before).not.toBeNull();
+  expect(handle).not.toBeNull();
+
+  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle!.x - 80, handle!.y + handle!.height / 2, { steps: 4 });
+  await page.mouse.up();
+
+  const resized = await panel.boundingBox();
+  expect(resized).not.toBeNull();
+  expect(resized!.width).toBeGreaterThan(before!.width + 60);
+
+  await page.getByRole('button', { name: '关闭房间管家', exact: true }).click();
+  await page.getByRole('button', { name: '打开房间管家', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toBeVisible();
+  const reopened = await panel.boundingBox();
+  expect(reopened).not.toBeNull();
+  expect(Math.abs(reopened!.width - resized!.width)).toBeLessThanOrEqual(1);
+  expect(pageErrors).toEqual([]);
+});
+
 test('房间管家浮层不会带入后续无房间来源的全局回执', async ({ page }) => {
   const { pageErrors } = await openRoomButlerFromGeneral(page);
   await page.evaluate(async () => {
@@ -771,10 +853,51 @@ test('房间管家浮层不会带入后续无房间来源的全局回执', async
       error: null,
     });
   });
-
   const panel = page.getByRole('dialog', { name: '房间管家' });
   await expect(panel).toContainText('General 这轮问答');
   await expect(panel.getByText('📌 全局记忆已经写入', { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家浮层保留本房间全部问答并隔离其他房间', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    const generalSource = {
+      kind: 'room',
+      id: 'room-general',
+      rid: 'room-general',
+      label: 'General',
+    };
+    const alphaSource = {
+      kind: 'room',
+      id: 'room-alpha',
+      rid: 'room-alpha',
+      label: 'Project Alpha',
+    };
+    useButler.setState({
+      lines: [
+        { id: 'general-question-1', role: 'user', text: 'General 第一问', sources: [generalSource] },
+        { id: 'general-answer-1', role: 'assistant', text: 'General 第一答', sources: [generalSource] },
+        { id: 'alpha-question', role: 'user', text: 'Alpha 的问题', sources: [alphaSource] },
+        { id: 'alpha-answer', role: 'assistant', text: 'Alpha 的回答', sources: [alphaSource] },
+        { id: 'general-question-2', role: 'user', text: 'General 第二问', sources: [generalSource] },
+        { id: 'general-answer-2', role: 'assistant', text: 'General 第二答', sources: [generalSource] },
+      ],
+      running: false,
+      error: null,
+    });
+  });
+  const panel = page.getByRole('dialog', { name: '房间管家' });
+  await expect(panel.getByText('你：General 第一问', { exact: true })).toBeVisible();
+  await expect(panel.getByText('General 第一答', { exact: true })).toBeVisible();
+  await expect(panel.getByText('你：General 第二问', { exact: true })).toBeVisible();
+  await expect(panel.getByText('General 第二答', { exact: true })).toBeVisible();
+  await expect(panel.getByText('你：Alpha 的问题', { exact: true })).toHaveCount(0);
+  await expect(panel.getByText('Alpha 的回答', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -941,6 +1064,95 @@ test('纸的三区按数据渲染，空区不占位置，审批原文与动作�
   await expect(page.getByRole('region', { name: '等你点头' })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('每日整理失败或运行时不会被画成空纸', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
+      useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButlerRoundsRunner } = await load();
+    useButlerRoundsRunner.setState({
+      lastResult: null,
+      running: false,
+      error: '测试整理失败',
+    });
+  });
+
+  await expect(page.getByRole('region', { name: '今日整理状态' }))
+    .toContainText('今天的整理没有完成');
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toBeVisible();
+  await expect(page.getByLabel('管家空状态')).toHaveCount(0);
+
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
+      useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButlerRoundsRunner } = await load();
+    useButlerRoundsRunner.setState({ running: true, error: null });
+  });
+
+  await expect(page.getByRole('region', { name: '今日整理状态' }))
+    .toContainText('正在整理今天');
+  await expect(page.getByLabel('管家空状态')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('自动整理结果和超时提醒直接回到纸面，提醒能跳回对应房间', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await seedAutomationPaper(page);
+
+  const automation = page.getByRole('region', { name: '消息与提醒' });
+  await expect(automation).toContainText('晨报');
+  await expect(automation).toContainText('@我未回应：General（3小时前）');
+  await expect(page.getByLabel('晨报摘要')).toBeVisible();
+  await expect(page.getByLabel('晨报摘要')).toContainText('Alice 的发布检查清单');
+  await expect(page.getByLabel('管家空状态')).toHaveCount(0);
+
+  await page.getByRole('button', { name: '展开晨报报告', exact: true }).click();
+  await expect(automation).toContainText('Alice 的发布检查清单');
+
+  await page.getByRole('button', { name: '查看 General 的 @我', exact: true }).click();
+  await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('未开启的自动整理在纸底可发现，消息能力有真实装载与选房入口', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+
+  await page.getByRole('button', { name: '自动整理未开启，打开设置', exact: true }).click();
+  const routines = page.getByRole('region', { name: '在盯的事' });
+  await expect(routines).toContainText('晨报');
+  await expect(routines).toContainText('晚间回顾');
+  await expect(routines).toContainText('有人 @ 我，先帮我看');
+  await expect(routines).toContainText('群里聊了什么，晚上给我一份');
+
+  await page.getByRole('button', {
+    name: '开启有人 @ 我，先帮我看',
+    exact: true,
+  }).click();
+  await expect(page.getByRole('checkbox', {
+    name: '启用有人 @ 我，先帮我看',
+    exact: true,
+  })).toBeChecked();
+
+  await page.getByRole('button', {
+    name: '选择房间以开启群里聊了什么，晚上给我一份',
+    exact: true,
+  }).click();
+  await expect(page.getByText('至少选择一个房间', { exact: true })).toBeVisible();
+  await page.getByRole('checkbox', { name: '汇总 General', exact: true }).check();
+  await page.getByRole('button', { name: '开启房间汇总', exact: true }).click();
+  await expect(page.getByRole('checkbox', {
+    name: '启用群里聊了什么，晚上给我一份',
+    exact: true,
+  })).toBeChecked();
   expect(pageErrors).toEqual([]);
 });
 

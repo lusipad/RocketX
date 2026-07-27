@@ -1,6 +1,8 @@
 export interface ButlerEventCard {
   id: string;
   kind: 'mention-stale';
+  /** 旧持久化记录可能没有 rid；新提醒必须保留它，才能准确跳回房间。 */
+  rid?: string;
   title: string;
   detail: string;
   at: number;

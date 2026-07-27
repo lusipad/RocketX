@@ -55,6 +55,9 @@ test('房间管家使用右下浮动入口和覆盖层，其他右侧面板仍�
   assert.match(butlerPanel, /id="room-butler-panel"/);
   assert.match(butlerPanel, /role="dialog"/);
   assert.match(butlerPanel, /只看 \{roomContext\?\.roomName \?\? '这个房间'\}/);
+  assert.match(butlerPanel, /aria-label="调整房间管家宽度"/);
+  assert.match(butlerPanel, /useImLayout/);
+  assert.match(butlerPanel, /openButlerConversation\(\)/);
   assert.match(butlerPanel, /aria-label="关闭房间管家"/);
-  assert.doesNotMatch(butlerPanel, /PanelShell|resizable/);
+  assert.doesNotMatch(butlerPanel, /PanelShell/);
 });

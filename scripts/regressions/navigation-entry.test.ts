@@ -13,7 +13,9 @@ test('纸和对话层都收起执行间入口，模块与快捷通路仍保留',
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
   assert.doesNotMatch(runtime, /TodayPage|AiAssistantPage|'today'|'ai-assistant'/);
   assert.match(runtime, /\['codex', 'Codex', CodexPage, TerminalSquare\]/);
-  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'butler-view', 'todos', 'calendar', 'downloads'\]\);/);
+  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'todos', 'calendar', 'downloads'\]\);/);
+  assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
+  assert.match(navRail, /id: 'butler',[\s\S]*?ariaLabel: '管家',[\s\S]*?BUTLER_MODULE_IDS\.has\(module\.key\)/);
   assert.doesNotMatch(navRail, /AI_MODULE_IDS|'today'|'ai-assistant'/);
   assert.match(navRail, /const HIDDEN_MODULE_IDS = new Set\(\['codex'\]\);/);
   assert.match(navRail, /const visibleModules = modules\.filter\(\(module\) => !HIDDEN_MODULE_IDS\.has\(module\.key\)\);/);
