@@ -315,6 +315,12 @@ function watcherSnapshot(seenKeys: string[]): ButlerWatcherSnapshot {
   };
 }
 
+function emptyPrecheckResult(routine: Routine): string {
+  return routine.precheck === 'new-mentions'
+    ? '当前没有新的 @ 需要整理。'
+    : '选定房间从上次整理后没有新消息。';
+}
+
 async function recordWatcherWorkflow(events: readonly ReturnType<typeof checkWatchers>[number][]): Promise<void> {
   if (!events.length) return;
   const sources = mergeButlerSources(events.map((event) => ({
@@ -445,8 +451,26 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     const routine = get().routines.find((item) => item.id === id);
     if (!routine) return;
     const at = routineNow();
-    if (!shouldRunRoutine(routine, at)) return;
+    const precheckPassed = shouldRunRoutine(routine, at);
+    if (!precheckPassed && options?.triggerReason === 'schedule') return;
     if (get().runningIds.includes(id)) return;
+    if (!precheckPassed) {
+      const run: RoutineRun = {
+        id: crypto.randomUUID(),
+        at,
+        status: 'ok',
+        text: emptyPrecheckResult(routine),
+      };
+      let routines: Routine[] = [];
+      set((state) => {
+        routines = state.routines.map((item) => item.id === id
+          ? { ...item, runs: [run, ...item.runs].slice(0, RUN_LIMIT) }
+          : item);
+        return { routines };
+      });
+      persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+      return;
+    }
     set((state) => ({ runningIds: [...state.runningIds, id] }));
     let admitted = false;
     let run: RoutineRun;
@@ -542,7 +566,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       || await recordWatcherWorkflow(watched).then(() => true).catch(() => false);
     const retainedCards = get().eventCards.filter((card) => card.kind === 'mention-stale');
     if (watched.length > 0 || retainedCards.length !== get().eventCards.length) {
-      const watchedCards = watched.map(({ dedupeKey: _dedupeKey, rid: _rid, ...card }) => card);
+      const watchedCards = watched.map(({ dedupeKey: _dedupeKey, ...card }) => card);
       const watchedIds = new Set(watchedCards.map((card) => card.id));
       const eventCards = [
         ...watchedCards,

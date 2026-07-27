@@ -3,6 +3,7 @@ import {
   readButlerRoundsResultForDate,
   type StoredRoundsResult,
 } from './butlerRoundsRunner';
+import type { Todo } from '../stores/todos';
 
 export interface ButlerPaperErrandSections {
   approvals: ButlerErrandRun[];
@@ -13,6 +14,7 @@ export interface ButlerPaperViewModel {
   dateKey: string;
   isToday: boolean;
   errands: ButlerPaperErrandSections;
+  todos: Todo[];
   archived: ButlerErrandRun[];
   brief: StoredRoundsResult | null;
 }
@@ -68,15 +70,33 @@ export function archivedButlerErrandsForDate(
     .sort((left, right) => (right.archivedAt ?? 0) - (left.archivedAt ?? 0));
 }
 
+export function visibleButlerTodos(todos: readonly Todo[]): Todo[] {
+  return [...todos]
+    .filter((todo) => !todo.done)
+    .sort((left, right) => {
+      if (left.due && right.due) {
+        const byDue = left.due.localeCompare(right.due);
+        if (byDue !== 0) return byDue;
+      } else if (left.due) {
+        return -1;
+      } else if (right.due) {
+        return 1;
+      }
+      return right.createdAt - left.createdAt;
+    });
+}
+
 export function buildButlerPaperViewModel({
   dateKey,
   todayKey,
   runs,
+  todos,
   brief,
 }: {
   dateKey: string;
   todayKey: string;
   runs: readonly ButlerErrandRun[];
+  todos: readonly Todo[];
   brief: StoredRoundsResult | null;
 }): ButlerPaperViewModel {
   const isToday = dateKey === todayKey;
@@ -86,6 +106,7 @@ export function buildButlerPaperViewModel({
     errands: isToday
       ? partitionButlerPaperErrands(runs)
       : { approvals: [], active: [] },
+    todos: isToday ? visibleButlerTodos(todos) : [],
     archived: isToday ? [] : archivedButlerErrandsForDate(runs, dateKey),
     brief,
   };

@@ -1,10 +1,22 @@
-import { ArrowUpRight, Bot, SendHorizontal, Square, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Bot, Maximize2, SendHorizontal, Square, X } from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import {
+  MAX_BUTLER_PANEL_WIDTH,
+  MIN_BUTLER_PANEL_WIDTH,
+  clampButlerPanelWidth,
+} from '../lib/imLayout';
 import { partitionButlerPaperErrands } from '../lib/butlerPaper';
 import type { ButlerImageInput } from '../lib/butlerImages';
 import { useAuth } from '../stores/auth';
 import { useButler, type ButlerLine } from '../stores/butler';
 import { useChat } from '../stores/chat';
+import { useImLayout } from '../stores/imLayout';
 import { useUI } from '../stores/ui';
 import ButlerErrandRunCard, { ButlerErrandStatusLine } from './ButlerErrandRunCard';
 import ButlerImagePicker, {
@@ -34,15 +46,26 @@ export default function ButlerPanel() {
   const stop = useButler((state) => state.stop);
   const hydrate = useButler((state) => state.hydrate);
   const setPanel = useChat((state) => state.setPanel);
+  const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
+  const setButlerPanelWidth = useImLayout((state) => state.setButlerPanelWidth);
+  const resetButlerPanelWidth = useImLayout((state) => state.resetButlerPanelWidth);
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const resizeStart = useRef<{
+    x: number;
+    width: number;
+    currentWidth: number;
+    moved: boolean;
+  } | null>(null);
+  const panelWidth = dragWidth ?? savedWidth;
   const roomContext = useMemo(
     () => (rid ? { rid, roomName: roomName(rid, subscription, room) } : null),
     [rid, room, subscription],
   );
-  const roomLines = useMemo(
-    () => (rid ? latestRoomExchange(butlerLines, rid) : []),
+  const roomExchanges = useMemo(
+    () => (rid ? roomConversationExchanges(butlerLines, rid) : []),
     [butlerLines, rid],
   );
   const roomErrands = useMemo(
@@ -50,7 +73,7 @@ export default function ButlerPanel() {
     [butlerErrands, rid],
   );
   const sections = useMemo(() => partitionButlerPaperErrands(roomErrands), [roomErrands]);
-  const hasConversation = roomLines.some((line) => line.role === 'user');
+  const hasConversation = roomExchanges.some((exchange) => exchange.some((line) => line.role === 'user'));
   const roomRunning = running && !!rid && contextHasRoomSource(butlerContext, rid);
 
   useEffect(() => {
@@ -68,14 +91,72 @@ export default function ButlerPanel() {
     await ask(text, roomContext ?? { rid, roomName: roomName(rid, subscription, room) }, submittedImages);
   };
 
+  const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeStart.current = {
+      x: event.clientX,
+      width: panelWidth,
+      currentWidth: panelWidth,
+      moved: false,
+    };
+    setDragWidth(panelWidth);
+  };
+
+  const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = resizeStart.current;
+    if (!start) return;
+    const next = clampButlerPanelWidth(start.width + start.x - event.clientX);
+    if (next !== start.width) start.moved = true;
+    start.currentWidth = next;
+    setDragWidth(next);
+  };
+
+  const finishResize = (): void => {
+    const start = resizeStart.current;
+    if (start?.moved) setButlerPanelWidth(start.currentWidth);
+    resizeStart.current = null;
+    setDragWidth(null);
+  };
+
   return (
     <aside
       id="room-butler-panel"
       role="dialog"
       aria-modal="false"
       aria-label="房间管家"
-      className="absolute top-4 right-3 bottom-28 z-30 flex w-[min(420px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-line-strong bg-surface shadow-[0_24px_64px_-24px_rgba(0,0,0,0.78),0_8px_20px_-12px_rgba(0,0,0,0.55)]"
+      style={{ width: `min(${panelWidth}px, calc(100% - 1.5rem))` }}
+      className="absolute top-4 right-3 bottom-28 z-30 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-surface shadow-[0_24px_64px_-24px_rgba(0,0,0,0.78),0_8px_20px_-12px_rgba(0,0,0,0.55)]"
     >
+      <div
+        role="separator"
+        aria-label="调整房间管家宽度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_BUTLER_PANEL_WIDTH}
+        aria-valuemax={MAX_BUTLER_PANEL_WIDTH}
+        aria-valuenow={panelWidth}
+        tabIndex={0}
+        title="拖动调整宽度，双击恢复默认"
+        onDoubleClick={resetButlerPanelWidth}
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={finishResize}
+        onPointerCancel={finishResize}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            setButlerPanelWidth(panelWidth + (event.key === 'ArrowLeft' ? 10 : -10));
+          } else if (event.key === 'Home') {
+            event.preventDefault();
+            resetButlerPanelWidth();
+          }
+        }}
+        style={{ touchAction: 'none' }}
+        className="group absolute inset-y-0 left-0 z-10 flex w-2 cursor-col-resize items-stretch justify-center outline-none"
+      >
+        <span className="my-auto h-10 w-px rounded-full bg-line-strong transition-colors group-hover:bg-primary group-focus:bg-primary" />
+      </div>
+
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft bg-surface px-4 py-3.5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-light text-primary">
@@ -93,13 +174,13 @@ export default function ButlerPanel() {
             type="button"
             onClick={() => {
               setPanel(null);
-              useUI.getState().openButlerPaper();
+              useUI.getState().openButlerConversation();
             }}
-            aria-label="查看全部管家事项"
-            title="查看全部管家事项"
+            aria-label="全屏打开完整对话"
+            title="全屏打开完整对话"
             className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
           >
-            <ArrowUpRight size={15} />
+            <Maximize2 size={15} />
           </button>
           <button
             type="button"
@@ -126,12 +207,15 @@ export default function ButlerPanel() {
         ) : null}
 
         {hasConversation ? (
-          <div className="mt-6">
-            <ButlerInlineExchange
-              lines={roomLines}
-              running={roomRunning}
-              activity={roomRunning ? activity : null}
-            />
+          <div className="mt-6 space-y-5">
+            {roomExchanges.map((exchange, index) => (
+              <ButlerInlineExchange
+                key={exchange[0]?.id ?? index}
+                lines={exchange}
+                running={roomRunning && index === roomExchanges.length - 1}
+                activity={roomRunning && index === roomExchanges.length - 1 ? activity : null}
+              />
+            ))}
           </div>
         ) : roomErrands.every((errand) => errand.archivedAt) ? (
           <div className="mt-6 border-l border-line pl-3">
@@ -194,26 +278,30 @@ function lineHasRoomSource(line: ButlerLine, rid: string): boolean {
   return line.sources?.some((source) => source.rid === rid || (source.kind === 'room' && source.id === rid)) ?? false;
 }
 
-function latestRoomExchange(lines: readonly ButlerLine[], rid: string): ButlerLine[] {
-  let relatedIndex = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (lineHasRoomSource(lines[index], rid)) {
-      relatedIndex = index;
-      break;
+function roomConversationExchanges(lines: readonly ButlerLine[], rid: string): ButlerLine[][] {
+  const exchanges: ButlerLine[][] = [];
+  let exchange: ButlerLine[] = [];
+
+  for (const line of lines) {
+    if (line.role === 'user' && exchange.length) {
+      exchanges.push(exchange);
+      exchange = [];
     }
+    exchange.push(line);
   }
-  if (relatedIndex < 0) return [];
+  if (exchange.length) exchanges.push(exchange);
 
-  let start = relatedIndex;
-  while (start > 0 && lines[start].role !== 'user') start -= 1;
-  if (lines[start].role !== 'user') start = relatedIndex;
-
-  let end = start + 1;
-  while (end < lines.length && lines[end].role !== 'user') end += 1;
-  return lines.slice(start, end).filter((line, index) => {
-    if (index === 0 && line.role === 'user') return true;
-    if (line.sources?.length) return lineHasRoomSource(line, rid);
-    return line.role !== 'assistant' || !/^(?:📌|✅)/u.test(line.text.trim());
+  return exchanges.flatMap((candidate) => {
+    const relatedIndex = candidate.findIndex((line) => lineHasRoomSource(line, rid));
+    if (relatedIndex < 0) return [];
+    const userIndex = candidate.findIndex((line) => line.role === 'user');
+    const start = userIndex >= 0 && userIndex <= relatedIndex ? userIndex : relatedIndex;
+    const related = candidate.slice(start).filter((line, index) => {
+      if (index === 0 && line.role === 'user') return true;
+      if (line.sources?.length) return lineHasRoomSource(line, rid);
+      return line.role !== 'assistant' || !/^(?:📌|✅)/u.test(line.text.trim());
+    });
+    return related.some((line) => line.role === 'user') ? [related] : [];
   });
 }
 

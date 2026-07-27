@@ -2,21 +2,31 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('纸底部只读已启用例行事务数量，管理组件本身保留', () => {
+test('自动整理可在纸底发现和配置，运行结果与提醒回到纸面', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
   const routines = readFileSync('apps/web/src/components/ButlerRoutines.tsx', 'utf8');
 
   assert.match(page, /useRoutines\(\(state\) => state\.routines\)/);
+  assert.match(page, /useRoutines\(\(state\) => state\.eventCards\)/);
   assert.match(page, /routines\.filter\(\(routine\) => routine\.enabled\)\.length/);
-  assert.match(page, /在盯 \{watchedCount\} 件事，结果都会写到这张纸上/);
+  assert.match(page, /自动整理未开启/);
+  assert.match(page, /aria-label="消息与提醒"/);
+  assert.match(page, /routineReports/);
+  assert.match(page, /eventCards\.map/);
+  assert.match(page, /openRoom\(card\.rid\)/);
+  assert.match(page, /onDismissEvent\(card\.id\)/);
+  assert.match(page, /renderMarkdown\(report\.run\.text\)/);
+  assert.match(page, /automationPreview\(report\.run\.text\)/);
+  assert.match(page, /aria-label=\{`\$\{report\.routine\.name\}摘要`\}/);
   assert.match(page, /<ButlerRoutines \/>/);
   assert.match(page, /aria-label=\{manageOpen \? '收起管家管理' : '打开管家管理'\}/);
   assert.match(page, /conversationOpen \? \([\s\S]*\) : manageOpen \? \(/);
   assert.match(routines, /<section aria-label="在盯的事">/);
-  assert.match(routines, /管理例行事务/);
-  assert.doesNotMatch(routines, /<details[^>]*\sopen(?:=|\s|>)/);
-
-  assert.match(routines, /routines\.filter\(\(routine\) => routine\.enabled\)\.map/);
+  assert.match(routines, /BUTLER_ABILITY_TEMPLATES/);
+  assert.match(routines, /loadRoutineTemplate/);
+  assert.match(routines, /selectedDigestRooms/);
+  assert.match(routines, /至少选择一个房间/);
+  assert.match(routines, /openRoom\(card\.rid\)/);
   assert.match(routines, /setRoutineEnabled\(routine\.id, event\.target\.checked\)/);
   assert.match(routines, /runningIds\.includes\(routine\.id\)/);
   assert.match(routines, /onRunNow=\{runRoutineNow\}/);

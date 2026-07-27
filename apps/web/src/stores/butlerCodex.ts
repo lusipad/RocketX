@@ -325,13 +325,38 @@ function createTurnController(
         if (active) onEvent?.({ type: 'phase', phase: 'thinking', detail: '正在想…' });
         return;
       }
+      if (method === 'error' && active) {
+        const errorTurnId = typeof params.turnId === 'string' ? params.turnId : undefined;
+        if (active.turnId && errorTurnId && active.turnId !== errorTurnId) return;
+        if (params.willRetry === true) {
+          onEvent?.({ type: 'phase', phase: 'thinking', detail: '连接中断，正在重试…' });
+          return;
+        }
+        const turnError = record(params.error);
+        const message = typeof turnError.message === 'string' && turnError.message.trim()
+          ? turnError.message.trim()
+          : 'Codex 本轮失败';
+        const current = active;
+        active = undefined;
+        current.reject(new Error(message));
+        return;
+      }
       if (method !== 'turn/completed' || !active) return;
       const turn = record(params.turn);
       const completedTurnId = typeof turn.id === 'string' ? turn.id : typeof params.turnId === 'string' ? params.turnId : undefined;
       if (active.turnId && completedTurnId && active.turnId !== completedTurnId) return;
       const current = active;
       active = undefined;
-      current.resolve(current.text.trim());
+      if (turn.status === 'failed') {
+        const turnError = record(turn.error);
+        current.reject(new Error(
+          typeof turnError.message === 'string' && turnError.message.trim()
+            ? turnError.message.trim()
+            : 'Codex 本轮失败',
+        ));
+      } else {
+        current.resolve(current.text.trim());
+      }
     },
 
     interrupt: (error) => {

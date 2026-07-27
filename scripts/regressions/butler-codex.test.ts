@@ -734,6 +734,90 @@ test('thread 已就绪但 turn/start 尚未发送时，stop 仍阻止迟到 turn
   }
 });
 
+test('Codex 发出不再重试的 error 后，本轮必须结束而不是一直停在正在想', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  let asking: Promise<{ text: string }> | undefined;
+  try {
+    asking = askButlerCodex({ text: '你是什么模型' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport);
+    await startTurn(transport);
+    transport.line({
+      method: 'error',
+      params: {
+        threadId: 'butler-thread',
+        turnId: 'butler-turn',
+        willRetry: false,
+        error: {
+          message: '响应流连接失败',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+          additionalDetails: null,
+        },
+      },
+    });
+
+    await assert.rejects(
+      Promise.race([
+        asking,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('终态 error 后 turn 仍未结束')),
+          80,
+        )),
+      ]),
+      /响应流连接失败/,
+    );
+  } finally {
+    await stopButlerCodexTurn();
+    await Promise.allSettled(asking ? [asking] : []);
+    await restore();
+  }
+});
+
+test('Codex 声明仍会重试的 error 保持本轮，直到收到真正终态', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const phases: string[] = [];
+  try {
+    let settled = false;
+    const asking = askButlerCodex({
+      text: '继续重试',
+      onEvent: (event) => {
+        if (event.type === 'phase' && event.detail) phases.push(event.detail);
+      },
+    });
+    void asking.finally(() => {
+      settled = true;
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport);
+    await startTurn(transport);
+    transport.line({
+      method: 'error',
+      params: {
+        threadId: 'butler-thread',
+        turnId: 'butler-turn',
+        willRetry: true,
+        error: {
+          message: '响应流连接失败',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+          additionalDetails: null,
+        },
+      },
+    });
+    await tick();
+
+    assert.equal(settled, false);
+    assert.equal(phases.at(-1), '连接中断，正在重试…');
+    await completeTurn(transport);
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    await restore();
+  }
+});
+
 test('ephemeral workflow 收到暂停信号时中断当前 Codex turn 并停止 transport', async () => {
   const transports: FakeTransport[] = [];
   const restore = testRuntime(transports);

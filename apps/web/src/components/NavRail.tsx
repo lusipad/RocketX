@@ -21,6 +21,7 @@ import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
+import { useRoutines } from '../stores/routines';
 import { captureButlerSurfaceContext } from '../lib/butlerSurface';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
@@ -40,11 +41,13 @@ const MODULE_META: Record<string, {
   workbench: { label: '工作台', icon: LayoutGrid },
 };
 
-const PRIMARY_MODULE_IDS = new Set(['messages', 'butler-view', 'todos', 'calendar', 'downloads']);
+const PRIMARY_MODULE_IDS = new Set(['messages', 'todos', 'calendar', 'downloads']);
+const BUTLER_MODULE_IDS = new Set(['butler-view']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
 const HIDDEN_MODULE_IDS = new Set(['codex']);
 const KNOWN_CORE_MODULE_IDS = new Set([
   ...PRIMARY_MODULE_IDS,
+  ...BUTLER_MODULE_IDS,
   ...WORK_MODULE_IDS,
   'codex',
 ]);
@@ -68,12 +71,33 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     })),
   ];
   const visibleModules = modules.filter((module) => !HIDDEN_MODULE_IDS.has(module.key));
-  const moduleGroups = [
-    visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
-    visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
-    visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
-    visibleModules.filter((module) => module.owner !== 'core'),
-  ].filter((group) => group.length > 0);
+  const moduleSections = [
+    {
+      id: 'primary',
+      ariaLabel: '个人事务',
+      modules: visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
+    },
+    {
+      id: 'butler',
+      ariaLabel: '管家',
+      modules: visibleModules.filter((module) => BUTLER_MODULE_IDS.has(module.key)),
+    },
+    {
+      id: 'work',
+      ariaLabel: '工作区',
+      modules: visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
+    },
+    {
+      id: 'core',
+      ariaLabel: '其他工具',
+      modules: visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
+    },
+    {
+      id: 'apps',
+      ariaLabel: '应用',
+      modules: visibleModules.filter((module) => module.owner !== 'core'),
+    },
+  ].filter((section) => section.modules.length > 0);
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
@@ -112,14 +136,16 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
    * 正在干的时候不打扰。
    */
   const errands = useButler((s) => s.errands);
+  const butlerEventCards = useRoutines((s) => s.eventCards);
   const errandBadge: 'waiting' | 'replied' | null = useMemo(() => {
     if (active === 'butler-view') return null;
     const visible = errands.filter((errand) => !errand.archivedAt);
     if (visible.some((errand) => errand.status === 'awaiting-approval')) return 'waiting';
     return visible.some((errand) => errand.status === 'replied' || errand.status === 'failed')
+      || butlerEventCards.length > 0
       ? 'replied'
       : null;
-  }, [errands, active]);
+  }, [active, butlerEventCards.length, errands]);
 
   const calendarEvents = useCalendar((s) => s.events);
   /**
@@ -213,12 +239,13 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
 
       {/* 模块列表 */}
       <div className="flex flex-1 flex-col gap-0.5">
-        {moduleGroups.map((group, groupIndex) => (
-          <div
-            key={group[0].key}
-            className={groupIndex === 0 ? 'flex flex-col gap-0.5' : 'mt-2 flex flex-col gap-0.5 border-t border-line pt-2'}
+        {moduleSections.map((section, sectionIndex) => (
+          <section
+            key={section.id}
+            aria-label={section.ariaLabel}
+            className={sectionIndex === 0 ? 'flex flex-col gap-0.5' : 'mt-2 flex flex-col gap-0.5 border-t border-line pt-2'}
           >
-            {group.map(({ key, label, icon: Icon }) => {
+            {section.modules.map(({ key, label, icon: Icon }) => {
               const isActive = key === active;
               return (
                 <button
@@ -258,7 +285,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                       className={`ml-auto h-2 w-2 rounded-full ${
                         errandBadge === 'waiting' ? 'bg-danger' : 'bg-primary'
                       }`}
-                      title={errandBadge === 'waiting' ? '派出去的活等你点头' : '派出去的活回话了'}
+                      title={errandBadge === 'waiting' ? '派出去的活等你点头' : '管家有新结果或提醒'}
                     />
                   )}
                   {/* 日历：今天日程数 */}
@@ -281,7 +308,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                 </button>
               );
             })}
-          </div>
+          </section>
         ))}
       </div>
 

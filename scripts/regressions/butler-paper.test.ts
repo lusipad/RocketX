@@ -4,6 +4,7 @@ import type { ButlerErrandRun } from '../../apps/web/src/lib/butlerErrands';
 import type { StoredRoundsResult } from '../../apps/web/src/lib/butlerRoundsRunner';
 import { getServerBase } from '../../apps/web/src/lib/client';
 import { useAuth } from '../../apps/web/src/stores/auth';
+import type { Todo } from '../../apps/web/src/stores/todos';
 import {
   archivedButlerErrandsForDate,
   buildButlerPaperViewModel,
@@ -13,6 +14,7 @@ import {
   partitionButlerPaperErrands,
   shiftButlerPaperDate,
   shouldExpandButlerConversation,
+  visibleButlerTodos,
 } from '../../apps/web/src/lib/butlerPaper';
 
 class MemoryStorage {
@@ -63,6 +65,21 @@ function errand(
   };
 }
 
+function todo(
+  id: string,
+  createdAt: number,
+  due?: string,
+  done = false,
+): Todo {
+  return {
+    id,
+    title: id,
+    done,
+    due,
+    createdAt,
+  };
+}
+
 test('纸把等审批与其余在办活分区，并排除已经收下的活', () => {
   const sections = partitionButlerPaperErrands([
     errand('running-old', 'running', 1),
@@ -73,6 +90,42 @@ test('纸把等审批与其余在办活分区，并排除已经收下的活', ()
 
   assert.deepEqual(sections.approvals.map((run) => run.id), ['approval']);
   assert.deepEqual(sections.active.map((run) => run.id), ['running-old', 'replied']);
+});
+
+test('今日纸直接投影真实未完成待办，截止日优先且历史纸不泄露实时状态', () => {
+  const todos = [
+    todo('无期限-旧', 1),
+    todo('明天到期', 2, '2026-07-27'),
+    todo('无期限-新', 3),
+    todo('今天到期', 4, '2026-07-26'),
+    todo('已经完成', 5, '2026-07-25', true),
+  ];
+
+  assert.deepEqual(
+    visibleButlerTodos(todos).map((item) => item.id),
+    ['今天到期', '明天到期', '无期限-新', '无期限-旧'],
+  );
+
+  const todayPaper = buildButlerPaperViewModel({
+    dateKey: '2026-07-26',
+    todayKey: '2026-07-26',
+    runs: [],
+    todos,
+    brief: null,
+  });
+  assert.deepEqual(
+    todayPaper.todos.map((item) => item.id),
+    ['今天到期', '明天到期', '无期限-新', '无期限-旧'],
+  );
+
+  const historyPaper = buildButlerPaperViewModel({
+    dateKey: '2026-07-25',
+    todayKey: '2026-07-26',
+    runs: [],
+    todos,
+    brief: null,
+  });
+  assert.deepEqual(historyPaper.todos, []);
 });
 
 test('旧纸只显示所选本地日期收下的活', () => {
@@ -119,6 +172,7 @@ test('历史简报按日期从快照读取，纸面投影不会泄露今天的�
       dateKey: '2026-07-25',
       todayKey: '2026-07-26',
       runs: [errand('running-today', 'running', Date.now())],
+      todos: [],
       brief,
     });
 

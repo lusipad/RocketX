@@ -885,9 +885,13 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
 
 test('打开管家页后可返回消息', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
-  await expect(page.getByRole('navigation').getByRole('button', { name: '今日', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('navigation').getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
-  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  const navigation = page.getByRole('navigation');
+  await expect(navigation.getByRole('button', { name: '今日', exact: true })).toHaveCount(0);
+  await expect(navigation.getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
+  await expect(navigation.getByRole('region', { name: '个人事务' }).getByRole('button', { name: /^管家/ })).toHaveCount(0);
+  const butlerSection = navigation.getByRole('region', { name: '管家' });
+  await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
+  await butlerSection.getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('heading', { name: /\d+月\d+日 周/ })).toBeVisible();
   await expect(page.getByRole('button', { name: '查看完整对话' })).toBeVisible();
   await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toBeVisible();
@@ -1094,7 +1098,7 @@ test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126
   expect(pageErrors).toEqual([]);
 });
 
-test('消息待办可记录承诺对象，管家纸不另造台账区', async ({ page }) => {
+test('消息待办可记录承诺对象，并直接投影到管家纸', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
   await page.getByText('Welcome to General', { exact: true }).click({ button: 'right' });
@@ -1111,7 +1115,13 @@ test('消息待办可记录承诺对象，管家纸不另造台账区', async ({
   expect(saved).toMatchObject({ committedTo: '张三' });
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('heading', { name: '我答应的', exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('管家空状态')).toBeVisible();
+  await expect(page.getByRole('region', { name: '待办' })).toBeVisible();
+  await expect(page.getByText('Welcome to General', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('管家空状态')).toHaveCount(0);
+  await page.getByRole('button', { name: '完成待办：Welcome to General' }).click();
+  await expect(page.getByRole('region', { name: '待办' })).toHaveCount(0);
+  const [completed] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
+  expect(completed).toMatchObject({ done: true, committedTo: '张三' });
   expect(pageErrors).toEqual([]);
 });
 
