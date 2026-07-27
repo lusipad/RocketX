@@ -60,7 +60,7 @@ export default function ButlerPanel() {
     moved: boolean;
   } | null>(null);
   const panelWidth = dragWidth ?? savedWidth;
-  const roomContext = useMemo(
+  const roomContext = useMemo<{ rid: string; roomName: string } | null>(
     () => (rid ? { rid, roomName: roomName(rid, subscription, room) } : null),
     [rid, room, subscription],
   );
@@ -75,6 +75,18 @@ export default function ButlerPanel() {
   const sections = useMemo(() => partitionButlerPaperErrands(roomErrands), [roomErrands]);
   const hasConversation = roomExchanges.some((exchange) => exchange.some((line) => line.role === 'user'));
   const roomRunning = running && !!rid && contextHasRoomSource(butlerContext, rid);
+  const openFullConversation = (): void => {
+    if (roomContext) {
+      useButler.getState().setContext({
+        kind: 'room',
+        label: roomContext.roomName,
+        detail: '当前 Rocket.Chat 房间',
+        sources: [{ kind: 'room', id: roomContext.rid, rid: roomContext.rid, label: roomContext.roomName }],
+      });
+    }
+    setPanel(null);
+    useUI.getState().openButlerConversation();
+  };
 
   useEffect(() => {
     if (userId) void hydrate();
@@ -172,10 +184,7 @@ export default function ButlerPanel() {
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={() => {
-              setPanel(null);
-              useUI.getState().openButlerConversation();
-            }}
+            onClick={openFullConversation}
             aria-label="全屏打开完整对话"
             title="全屏打开完整对话"
             className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"

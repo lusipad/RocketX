@@ -804,6 +804,16 @@ test('房间管家全屏后直接进入同一段完整对话', async ({ page }) 
   expect(pageErrors).toEqual([]);
 });
 
+test('房间管家全屏即使还没问过也保留当前房间上下文', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+
+  await page.getByRole('button', { name: '全屏打开完整对话', exact: true }).click();
+
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+  await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test('房间管家可以拖动调宽并在重新打开后保留宽度', async ({ page }) => {
   const { pageErrors } = await openRoomButlerFromGeneral(page);
   const panel = page.getByRole('dialog', { name: '房间管家' });
