@@ -1289,6 +1289,10 @@ test('管家纸上输入先即席回答，进入完整对话再回纸仍保留�
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
 
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
+
   await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
   await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '回到纸', exact: true }).click();
