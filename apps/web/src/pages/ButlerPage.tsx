@@ -204,7 +204,6 @@ export default function ButlerPage() {
   const today = butlerPaperDateKey(new Date());
   const [briefOffset, setBriefOffset] = useState(0);
   const [input, setInput] = useState('');
-  const [paperRounds, setPaperRounds] = useState(0);
   const [inlineRange, setInlineRange] = useState<{
     start: number;
     end: number | null;
@@ -212,13 +211,16 @@ export default function ButlerPage() {
   const conversationOpen = useUI((state) => state.butlerConversationOpen);
   const manageOpen = useUI((state) => state.butlerManageOpen);
   const paperDate = useUI((state) => state.butlerPaperDate);
+  const paperConversation = useUI((state) => state.butlerPaperConversation);
   const setSelectedDate = useUI((state) => state.setButlerPaperDate);
+  const setPaperConversation = useUI((state) => state.setButlerPaperConversation);
   const setModule = useUI((state) => state.setModule);
   const openConversationStore = useUI((state) => state.openButlerConversation);
   const openManage = useUI((state) => state.openButlerManage);
   const closeConversation = useUI((state) => state.closeButlerConversation);
   const closeManage = useUI((state) => state.closeButlerManage);
   const lines = useButler((state) => state.lines);
+  const activeSessionId = useButler((state) => state.activeSessionId);
   const errands = useButler((state) => state.errands);
   const butlerRunning = useButler((state) => state.running);
   const butlerActivity = useButler((state) => state.activity);
@@ -285,9 +287,32 @@ export default function ButlerPage() {
   const paperEventCards = isToday ? eventCards : [];
   const visibleBriefItems = briefItems.slice(briefOffset, briefOffset + BRIEF_PAGE_SIZE);
   const remainingBriefItems = Math.max(0, briefItems.length - briefOffset - BRIEF_PAGE_SIZE);
-  const inlineLines = inlineRange === null
+  const paperConversationMatches = paperConversation?.date === selectedDate
+    && paperConversation.sessionId === activeSessionId;
+  const retainedQuestionIndex = paperConversationMatches
+    && paperConversation.questionId
+    ? lines.findIndex((line) => line.id === paperConversation.questionId)
+    : -1;
+  const retainedQuestionEnd = retainedQuestionIndex < 0
+    ? -1
+    : lines.findIndex(
+      (line, index) => index > retainedQuestionIndex && line.role === 'user',
+    );
+  const retainedInlineLines = retainedQuestionIndex < 0
     ? []
-    : lines.slice(inlineRange.start, inlineRange.end ?? undefined);
+    : lines.slice(
+      retainedQuestionIndex,
+      retainedQuestionEnd < 0 ? undefined : retainedQuestionEnd,
+    );
+  const inlineLines = !paperConversationMatches
+    ? []
+    : inlineRange === null
+      ? retainedInlineLines
+      : lines.slice(inlineRange.start, inlineRange.end ?? undefined);
+  const inlineQuestion = [...inlineLines].reverse().find((line) => line.role === 'user');
+  const inlineError = inlineQuestion?.id === paperConversation?.questionId
+    ? paperConversation?.error ?? null
+    : null;
   const paperEmpty = sections.approvals.length === 0
     && sections.active.length === 0
     && paperTodos.length === 0
@@ -309,23 +334,63 @@ export default function ButlerPage() {
     setBriefOffset(0);
   }, [selectedDate]);
 
-  const askFromPaper = async (question: string): Promise<void> => {
+  const askFromPaper = async (question: string, advanceRound = true): Promise<void> => {
     const text = question.trim();
     if (!text || butlerRunning) return;
-    const nextRound = paperRounds + 1;
-    setPaperRounds(nextRound);
+    await hydrateButler();
+    if (useButler.getState().running) return;
+    const sessionId = useButler.getState().activeSessionId;
+    const previousPaperConversation = useUI.getState().butlerPaperConversation;
+    const previousRound = (
+      previousPaperConversation?.date === selectedDate
+        && previousPaperConversation.sessionId === sessionId
+        ? previousPaperConversation.rounds
+        : 0
+    );
+    const nextRound = advanceRound ? previousRound + 1 : Math.max(previousRound, 1);
+    setPaperConversation({
+      date: selectedDate,
+      sessionId,
+      rounds: nextRound,
+      questionId: previousPaperConversation?.date === selectedDate
+        && previousPaperConversation.sessionId === sessionId
+        ? previousPaperConversation.questionId
+        : null,
+      error: null,
+    });
     setInput('');
+    const start = useButler.getState().lines.length;
     if (shouldExpandButlerConversation(nextRound)) {
       openConversationStore();
       await askButler(text);
+      const submittedQuestion = useButler.getState().lines
+        .slice(start)
+        .find((line) => line.role === 'user');
+      setPaperConversation({
+        date: selectedDate,
+        sessionId,
+        rounds: nextRound,
+        questionId: submittedQuestion?.id ?? null,
+        error: useButler.getState().error,
+      });
       return;
     }
-    const start = lines.length;
     setInlineRange({ start, end: null });
     try {
       await askButler(text);
     } finally {
-      const end = useButler.getState().lines.length;
+      const latestLines = useButler.getState().lines;
+      const end = latestLines.length;
+      const submittedQuestion = latestLines
+        .slice(start)
+        .find((line) => line.role === 'user');
+      setPaperConversation({
+        date: selectedDate,
+        sessionId,
+        rounds: nextRound,
+        questionId: submittedQuestion?.id ?? null,
+        error: useButler.getState().error,
+      });
       setInlineRange((current) => (
         current?.start === start ? { start, end } : current
       ));
@@ -644,7 +709,7 @@ export default function ButlerPage() {
                 </section>
               ) : null}
 
-              {inlineRange !== null && inlineLines.length > 0 ? (
+              {inlineLines.length > 0 ? (
                 <section aria-label="临时问答">
                   <h2 className="text-base font-semibold text-ink">临时问答</h2>
                   <div className="mt-3">
@@ -652,12 +717,16 @@ export default function ButlerPage() {
                       lines={inlineLines}
                       running={butlerRunning}
                       activity={butlerActivity}
+                      error={inlineError}
+                      onRetry={inlineQuestion
+                        ? () => { void askFromPaper(inlineQuestion.text, false); }
+                        : undefined}
                     />
                   </div>
                 </section>
               ) : null}
 
-              {paperEmpty && inlineRange === null ? (
+              {paperEmpty && inlineLines.length === 0 ? (
                 <section className="pt-10 text-center" aria-label="管家空状态">
                   <p className="text-base text-ink-2">今天还没有事。</p>
                   <p className="mt-2 text-sm text-ink-3">有事直接说，没事就让这张纸空着。</p>

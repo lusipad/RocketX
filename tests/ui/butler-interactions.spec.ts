@@ -806,6 +806,13 @@ test('房间管家全屏后直接进入同一段完整对话', async ({ page }) 
 
 test('房间管家全屏即使还没问过也保留当前房间上下文', async ({ page }) => {
   const { pageErrors } = await openRoomButlerFromGeneral(page);
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    useButler.setState({ context: null });
+  });
 
   await page.getByRole('button', { name: '全屏打开完整对话', exact: true }).click();
 
@@ -838,6 +845,24 @@ test('房间管家可以拖动调宽并在重新打开后保留宽度', async ({
   const reopened = await panel.boundingBox();
   expect(reopened).not.toBeNull();
   expect(Math.abs(reopened!.width - resized!.width)).toBeLessThanOrEqual(1);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家宽度支持键盘调整与 Home 恢复默认', async ({ page }) => {
+  const { pageErrors } = await openRoomButlerFromGeneral(page);
+  const panel = page.getByRole('dialog', { name: '房间管家' });
+  const resizer = page.getByRole('separator', { name: '调整房间管家宽度' });
+  const initial = await panel.boundingBox();
+  expect(initial).not.toBeNull();
+
+  await resizer.focus();
+  await resizer.press('ArrowLeft');
+  await expect.poll(async () => (await panel.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(initial!.width);
+
+  await resizer.press('Home');
+  await expect.poll(async () => Math.round((await panel.boundingBox())?.width ?? 0))
+    .toBe(Math.round(initial!.width));
   expect(pageErrors).toEqual([]);
 });
 
@@ -1163,6 +1188,138 @@ test('未开启的自动整理在纸底可发现，消息能力有真实装载�
     name: '启用群里聊了什么，晚上给我一份',
     exact: true,
   })).toBeChecked();
+
+  await page.reload();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('button', { name: '打开管家管理', exact: true }).click();
+  await page.getByText('管理例行事务', { exact: true }).click();
+  await expect(page.getByRole('checkbox', {
+    name: '启用有人 @ 我，先帮我看',
+    exact: true,
+  })).toBeChecked();
+  await expect(page.getByRole('checkbox', {
+    name: '启用群里聊了什么，晚上给我一份',
+    exact: true,
+  })).toBeChecked();
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
+      useRoutines: {
+        getState: () => {
+          routines: Array<{ templateId?: string; params?: { rooms?: string[] } }>;
+        };
+      };
+    }>;
+    const { useRoutines } = await load();
+    return useRoutines.getState().routines
+      .find((routine) => routine.templateId === 'room-digest')
+      ?.params?.rooms ?? [];
+  })).toContain('General');
+  expect(pageErrors).toEqual([]);
+});
+
+test('纸上临时问答失败时原位解释并可重新发送', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { lines: Array<Record<string, unknown>> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    let attempts = 0;
+    useButler.setState({
+      activeSessionId: '',
+      errands: [],
+      error: null,
+      running: false,
+      hydrate: async () => {
+        useButler.setState({ activeSessionId: 'hydrated-session' });
+      },
+      ask: async (text: string) => {
+        attempts += 1;
+        const state = useButler.getState();
+        useButler.setState(attempts === 1 ? {
+          lines: [...state.lines, { id: 'failed-question', role: 'user', text }],
+          error: 'Codex 暂时不可用，请检查登录状态。',
+          running: false,
+        } : {
+          lines: [
+            ...state.lines,
+            { id: 'retry-question', role: 'user', text },
+            { id: 'retry-answer', role: 'assistant', text: `已恢复：${text}` },
+          ],
+          error: null,
+          running: false,
+        });
+      },
+    });
+  });
+
+  await page.getByRole('textbox', { name: '跟管家说件事' }).fill('帮我看看今天');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  const exchange = page.getByRole('region', { name: '临时问答' });
+  await expect(exchange).toContainText('Codex 暂时不可用，请检查登录状态。');
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
+      useUI: {
+        getState: () => {
+          butlerPaperConversation: { sessionId: string } | null;
+        };
+      };
+    }>;
+    const { useUI } = await load();
+    return useUI.getState().butlerPaperConversation?.sessionId ?? null;
+  })).toBe('hydrated-session');
+
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { lines: Array<Record<string, unknown>> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    useButler.setState({
+      lines: [
+        ...useButler.getState().lines,
+        { id: 'later-question', role: 'user', text: '完整对话里的后续问题' },
+        { id: 'later-answer', role: 'assistant', text: '后续回答' },
+      ],
+      error: null,
+    });
+  });
+  await expect(exchange).toContainText('Codex 暂时不可用，请检查登录状态。');
+
+  await page.getByRole('button', { name: '重新发送临时问答', exact: true }).click();
+  await expect(exchange).toContainText('已恢复：帮我看看今天');
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
+      useUI: {
+        getState: () => {
+          butlerPaperConversation: { rounds: number } | null;
+        };
+      };
+    }>;
+    const { useUI } = await load();
+    return useUI.getState().butlerPaperConversation?.rounds ?? 0;
+  })).toBe(1);
+  expect(pageErrors).toEqual([]);
+});
+
+test('纸上临时问答只属于发起当天，不会跨日期串到新纸', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+
+  await page.getByRole('textbox', { name: '跟管家说件事' }).fill('只留在今天');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('只留在今天');
+
+  await page.getByRole('button', { name: '前一天', exact: true }).click();
+  await expect(page.getByRole('region', { name: '临时问答' })).toHaveCount(0);
+  await page.getByRole('button', { name: '后一天', exact: true }).click();
+  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('只留在今天');
   expect(pageErrors).toEqual([]);
 });
 

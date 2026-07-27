@@ -268,20 +268,7 @@ pub async fn butler_todo_overdue(
     today: String,
 ) -> Result<Vec<Todo>, String> {
     run_db(db.connection(), move |connection| {
-        validate_date(&today)?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {TODO_COLUMNS} FROM todos \
-                 WHERE done = 0 AND due IS NOT NULL AND due < ?1 \
-                 ORDER BY due ASC, created_at DESC"
-            ))
-            .map_err(|error| format!("无法准备逾期待办查询：{error}"))?;
-        let todos = collect_todos(
-            statement
-                .query_map(params![today], row_to_todo)
-                .map_err(|error| format!("无法查询逾期待办：{error}"))?,
-        );
-        todos
+        overdue_todos(connection, &today)
     })
     .await
 }
@@ -496,6 +483,23 @@ fn list_todos(connection: &Connection, filter: TodoFilter) -> Result<Vec<Todo>, 
     todos
 }
 
+fn overdue_todos(connection: &Connection, today: &str) -> Result<Vec<Todo>, String> {
+    validate_date(today)?;
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {TODO_COLUMNS} FROM todos \
+             WHERE done = 0 AND due IS NOT NULL AND due < ?1 \
+             ORDER BY due ASC, created_at DESC"
+        ))
+        .map_err(|error| format!("无法准备逾期待办查询：{error}"))?;
+    let todos = collect_todos(
+        statement
+            .query_map(params![today], row_to_todo)
+            .map_err(|error| format!("无法查询逾期待办：{error}"))?,
+    );
+    todos
+}
+
 fn collect_todos(
     rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Todo>>,
 ) -> Result<Vec<Todo>, String> {
@@ -682,4 +686,109 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory Butler database");
+        migrate(&mut connection).expect("migrate Butler database");
+        connection
+    }
+
+    fn new_todo(title: &str, due: Option<&str>) -> NewTodo {
+        NewTodo {
+            source: None,
+            rid: None,
+            mid: None,
+            ado_work_item_id: None,
+            ado_project: None,
+            title: title.to_string(),
+            note: Some("保留这条备注".to_string()),
+            room_name: None,
+            author: None,
+            done: None,
+            priority: None,
+            due: due.map(str::to_string),
+            done_at: None,
+            committed_to: Some("Alice".to_string()),
+            waiting_for: None,
+        }
+    }
+
+    #[test]
+    fn todo_crud_filters_overdue_and_preserves_omitted_patch_fields() {
+        let connection = connection();
+        let first = add_todo(&connection, new_todo("发发布说明", Some("2026-07-26")))
+            .expect("add first todo");
+        add_todo(&connection, new_todo("今天处理", Some("2026-07-27"))).expect("add second todo");
+
+        let patch: TodoPatch = serde_json::from_str(r#"{"title":"发布说明","due":null}"#)
+            .expect("deserialize nullable patch");
+        let updated = update_todo(&connection, &first.id, patch).expect("update todo");
+        assert_eq!(updated.title, "发布说明");
+        assert_eq!(updated.due, None);
+        assert_eq!(updated.note.as_deref(), Some("保留这条备注"));
+
+        let restored_due: TodoPatch =
+            serde_json::from_str(r#"{"due":"2026-07-26"}"#).expect("restore due");
+        update_todo(&connection, &first.id, restored_due).expect("restore due date");
+
+        let committed = list_todos(
+            &connection,
+            TodoFilter {
+                done: Some(false),
+                has_commitment: Some(true),
+                ..TodoFilter::default()
+            },
+        )
+        .expect("list committed todos");
+        assert_eq!(committed.len(), 2);
+
+        let overdue = overdue_todos(&connection, "2026-07-27").expect("list overdue todos");
+        assert_eq!(overdue.len(), 1);
+        assert_eq!(overdue[0].id, first.id);
+        assert_eq!(
+            get_todo(&connection, &first.id)
+                .expect("get todo")
+                .expect("todo exists")
+                .title,
+            "发布说明"
+        );
+    }
+
+    #[test]
+    fn legacy_json_migration_is_idempotent() {
+        let mut connection = connection();
+        let legacy = r#"[{
+            "id":"legacy-1",
+            "rid":"room-1",
+            "mid":"message-1",
+            "roomName":"General",
+            "excerpt":"旧消息待办",
+            "author":"Alice",
+            "note":"来自旧 JSON",
+            "due":"2026-07-26",
+            "done":false,
+            "createdAt":1000,
+            "doneAt":null
+        }]"#;
+
+        assert_eq!(
+            migrate_from_json(&mut connection, legacy).expect("first migration"),
+            1
+        );
+        assert_eq!(
+            migrate_from_json(&mut connection, legacy).expect("second migration"),
+            0
+        );
+        let migrated = get_todo(&connection, "legacy-1")
+            .expect("get migrated todo")
+            .expect("migrated todo exists");
+        assert_eq!(migrated.source, "message");
+        assert_eq!(migrated.title, "旧消息待办");
+        assert_eq!(migrated.room_name.as_deref(), Some("General"));
+    }
 }

@@ -125,6 +125,14 @@ interface UIState {
   switcherCommandCenter: boolean;
   butlerConversationOpen: boolean;
   butlerManageOpen: boolean;
+  /** 最近一次从今日纸发起的问答；跨模块保留，但不写入长期存储。 */
+  butlerPaperConversation: {
+    date: string;
+    sessionId: string;
+    rounds: number;
+    questionId: string | null;
+    error: string | null;
+  } | null;
   /** 管家正在看的纸；null 表示今天。只保留在本次运行内。 */
   butlerPaperDate: string | null;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
@@ -145,6 +153,7 @@ interface UIState {
   closeButlerConversation: () => void;
   openButlerManage: () => void;
   closeButlerManage: () => void;
+  setButlerPaperConversation: (conversation: UIState['butlerPaperConversation']) => void;
   openButlerPaper: (date?: string) => void;
   setButlerPaperDate: (date: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
@@ -162,6 +171,7 @@ export const useUI = create<UIState>((set) => ({
   switcherCommandCenter: false,
   butlerConversationOpen: false,
   butlerManageOpen: false,
+  butlerPaperConversation: null,
   butlerPaperDate: null,
   workbenchTab: 'overview',
   workItemStateFilter: readPersistedWorkItemStateFilter(),
@@ -194,6 +204,7 @@ export const useUI = create<UIState>((set) => ({
     set({ module: 'butler-view', butlerManageOpen: true, butlerConversationOpen: false });
   },
   closeButlerManage: () => set({ butlerManageOpen: false }),
+  setButlerPaperConversation: (conversation) => set({ butlerPaperConversation: conversation }),
   openButlerPaper: (date) => {
     persistUIState({ module: 'butler-view' });
     set({
