@@ -570,8 +570,8 @@ export default function ButlerPage() {
             <section aria-label="例行照看">
               <div>
                 <span className="butler-eyebrow">持续责任</span>
-                <h2 className="mt-0.5 text-2xl font-semibold tracking-tight text-ink">例行照看</h2>
-                <p className="mt-1 text-sm text-ink-3">
+                <h2 className="butler-page-title">例行照看</h2>
+                <p className="mt-1 text-sm text-ink-2">
                   查看管家长期在守什么、是否健康，以及最近一次真实结果。
                 </p>
               </div>
@@ -592,12 +592,12 @@ export default function ButlerPage() {
             <>
               <section aria-label="管家今日概况">
                 <span className="butler-eyebrow">主动工作驾驶舱</span>
-                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                <h2 className="butler-page-title">
                   {workspace.summary.needsAttention > 0
                     ? `早上好，今天有 ${workspace.summary.needsAttention} 件事值得你先看`
                     : '早上好，现在没有需要你处理的'}
                 </h2>
-                <p className="mt-1 text-sm text-ink-3">
+                <p className="mt-1 text-sm text-ink-2">
                   我看过最近的消息、责任和运行状态；正在照看 {workspace.summary.watched} 项例行责任，
                   推进 {workspace.summary.activeTasks} 件事。
                 </p>

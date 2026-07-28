@@ -519,10 +519,10 @@ body {
 .butler-identity-hero h1 {
   margin-top: 1px;
   color: var(--color-ink);
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.025em;
-  line-height: 30px;
+  line-height: 28px;
 }
 
 .butler-identity-hero p {
@@ -559,7 +559,7 @@ body {
 
 .butler-identity-settings .butler-section-heading h2 {
   margin-top: 0;
-  font-size: 21px;
+  font-size: 20px;
   line-height: 28px;
 }
 
@@ -1020,7 +1020,7 @@ body {
 .butler-conversation-header h2 {
   overflow: hidden;
   color: var(--color-ink);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 650;
   line-height: 22px;
   text-overflow: ellipsis;
@@ -1274,18 +1274,18 @@ body {
 .butler-section-heading h2 {
   margin-top: 2px;
   color: var(--color-ink);
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.025em;
-  line-height: 32px;
+  line-height: 28px;
 }
 
 .butler-section-heading p {
   max-width: 580px;
   margin-top: 4px;
-  color: var(--color-ink-3);
-  font-size: 13px;
-  line-height: 20px;
+  color: var(--color-ink-2);
+  font-size: 15px;
+  line-height: 23px;
 }
 
 .butler-section-heading > strong {
@@ -1300,6 +1300,15 @@ body {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
+}
+
+.butler-page-title {
+  margin-top: 2px;
+  color: var(--color-ink);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 28px;
 }
 
 .butler-task-groups {
@@ -1965,7 +1974,7 @@ body {
   }
 
   .butler-section-heading h2 {
-    font-size: 21px;
+    font-size: 20px;
     line-height: 28px;
   }
 
@@ -1990,7 +1999,7 @@ body {
   }
 
   .butler-identity-hero h1 {
-    font-size: 24px;
+    font-size: 20px;
   }
 
   .butler-identity-basics {

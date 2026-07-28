@@ -108,7 +108,7 @@ export default function ButlerLearnedPanel() {
     <div className="space-y-8">
       {memories.length > 0 ? (
         <section aria-label="记住的">
-          <h2 className="text-sm font-medium text-ink-3">记住的</h2>
+          <h2 className="text-base font-semibold text-ink">记住的</h2>
           <div className="mt-2 divide-y divide-line/70">
             {memories.map((record) => (
               <div key={record.id} className="flex min-w-0 items-center gap-2 py-2.5">
@@ -140,7 +140,7 @@ export default function ButlerLearnedPanel() {
       {skills.length > 0 ? (
         <section aria-label="会的本事">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="flex items-center gap-1.5 text-sm font-medium text-ink-3">
+            <h2 className="flex items-center gap-1.5 text-base font-semibold text-ink">
               <BookOpenText size={14} aria-hidden="true" />
               会的本事
             </h2>

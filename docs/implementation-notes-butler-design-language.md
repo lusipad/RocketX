@@ -10,6 +10,7 @@ Plan: `docs/butler-design-language-unification-plan.md`
 
 - `apps/web/src/styles.css:258`：管家二级导航跟随 RocketX 主导航的 210px 宽度、15px 导航字号和 36px 行高。
 - `apps/web/src/styles.css:425`：二级导航与会话列表选中态改用 `fill-active + ink`，强调色只承担图标和关键状态。
+- `apps/web/src/styles.css:510`：页面级标题统一为 20px，分组标题统一为 16px，承担说明作用的正文使用 `ink-2` 而不是低对比 `ink-3`。
 
 ## Deviations
 
