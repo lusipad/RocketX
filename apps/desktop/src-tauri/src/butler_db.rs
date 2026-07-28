@@ -8,6 +8,7 @@ use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExten
 use serde::{Deserialize, Deserializer, Serialize};
 
 const SCHEMA_VERSION: i64 = 1;
+const MAX_COMPATIBLE_SCHEMA_VERSION: i64 = 2;
 const TODO_COLUMNS: &str = "id, source, rid, mid, ado_work_item_id, ado_project, title, note, room_name, author, done, priority, due, created_at, done_at, updated_at, committed_to, waiting_for";
 const SCHEMA_V1: &str = "
     CREATE TABLE IF NOT EXISTS todos (
@@ -63,9 +64,9 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
     let version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .map_err(|error| format!("无法读取管家数据库版本：{error}"))?;
-    if version > SCHEMA_VERSION {
+    if version > MAX_COMPATIBLE_SCHEMA_VERSION {
         return Err(format!(
-            "管家数据库版本 {version} 高于当前支持版本 {SCHEMA_VERSION}"
+            "管家数据库版本 {version} 高于当前支持版本 {MAX_COMPATIBLE_SCHEMA_VERSION}"
         ));
     }
     if version == 0 {
@@ -790,5 +791,44 @@ mod tests {
         assert_eq!(migrated.source, "message");
         assert_eq!(migrated.title, "旧消息待办");
         assert_eq!(migrated.room_name.as_deref(), Some("General"));
+    }
+
+    #[test]
+    fn additive_v2_database_remains_compatible() {
+        let mut connection = connection();
+        connection
+            .execute_batch(
+                "ALTER TABLE todos
+                    ADD COLUMN server_id TEXT NOT NULL DEFAULT 'legacy-unassigned';
+                 ALTER TABLE todos
+                    ADD COLUMN user_id TEXT NOT NULL DEFAULT 'legacy-unassigned';
+                 PRAGMA user_version = 2;",
+            )
+            .expect("upgrade test database to additive schema version 2");
+
+        migrate(&mut connection).expect("accept additive schema version 2");
+        let todo = add_todo(&connection, new_todo("兼容旧版管家", None))
+            .expect("write todo through version 1 contract");
+
+        assert_eq!(
+            get_todo(&connection, &todo.id)
+                .expect("get compatible todo")
+                .expect("compatible todo exists")
+                .title,
+            "兼容旧版管家"
+        );
+    }
+
+    #[test]
+    fn schema_newer_than_known_compatible_version_is_rejected() {
+        let mut connection = connection();
+        connection
+            .pragma_update(None, "user_version", 3)
+            .expect("mark test database as schema version 3");
+
+        assert_eq!(
+            migrate(&mut connection).unwrap_err(),
+            "管家数据库版本 3 高于当前支持版本 2"
+        );
     }
 }
