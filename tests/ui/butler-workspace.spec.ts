@@ -8,6 +8,37 @@ async function openWorkspace(page: import('@playwright/test').Page): Promise<voi
   await expect(page.getByRole('navigation', { name: '管家工作视图' })).toBeVisible();
 }
 
+test('桌面壳锁住根视口，只允许内容面板自己滚动', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkspace(page);
+
+  const shell = await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('#root');
+    if (!root) throw new Error('root not found');
+    return {
+      htmlOverflow: getComputedStyle(document.documentElement).overflow,
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      rootOverflow: getComputedStyle(root).overflow,
+      htmlOverscroll: getComputedStyle(document.documentElement).overscrollBehavior,
+      bodyOverscroll: getComputedStyle(document.body).overscrollBehavior,
+      rootOverscroll: getComputedStyle(root).overscrollBehavior,
+      rootTop: root.getBoundingClientRect().top,
+      scrollY: window.scrollY,
+    };
+  });
+
+  expect(shell).toEqual({
+    htmlOverflow: 'hidden',
+    bodyOverflow: 'hidden',
+    rootOverflow: 'hidden',
+    htmlOverscroll: 'none',
+    bodyOverscroll: 'none',
+    rootOverscroll: 'none',
+    rootTop: 0,
+    scrollY: 0,
+  });
+});
+
 async function seedWorkspace(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(async () => {
     const loadTodos = new Function('return import("/src/stores/todos.ts")') as () => Promise<{
