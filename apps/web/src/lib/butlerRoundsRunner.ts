@@ -225,6 +225,9 @@ function errorMessage(error: unknown): string {
     .replace(/API 大脑/g, 'API 模式')
     .replace(/大脑/g, '运行模式')
     .replace(/巡视|台账|对账|传感器/g, '内容')
+    .replace(/接成任务/g, '转为任务')
+    .replace(/接住/g, '处理')
+    .replace(/盯住|盯着|盯它|在盯/g, '跟进')
     .replace(/ephemeral/gi, '临时会话');
 }
 

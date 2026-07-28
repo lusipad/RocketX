@@ -66,9 +66,9 @@ export default function ButlerTasksView({
     <section aria-label="管家任务" className="butler-tasks-view">
       <div className="butler-section-heading">
         <div>
-          <span className="butler-eyebrow">已接住的工作</span>
+          <span className="butler-eyebrow">任务进展</span>
           <h2>任务</h2>
-          <p>这里是管家已经接住的责任，不是底层线程或工具运行列表。</p>
+          <p>这里汇总管家正在处理、等待和已经交付的任务。</p>
         </div>
         <strong>{tasks.length}</strong>
       </div>

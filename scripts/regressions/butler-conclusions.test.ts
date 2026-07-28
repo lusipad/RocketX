@@ -135,7 +135,7 @@ test('行内实体链接不得抢走消息归属：句尾 [原文] 仍然赢（�
     ],
   });
   assert.equal(conclusions.length, 1);
-  assert.equal(conclusions[0].ref, 'msg:m1', '取第一个锚点会归给工作项，「盯它」就此消失');
+  assert.equal(conclusions[0].ref, 'msg:m1', '取第一个锚点会归给工作项，「等待跟进」就此消失');
   assert.equal(conclusions[0].can.watch, true);
   assert.equal(conclusions[0].source?.rid, 'room-dev');
 });

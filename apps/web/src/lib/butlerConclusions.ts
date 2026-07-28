@@ -105,7 +105,7 @@ const ANCHOR_PRIORITY: Record<string, number> = { msg: 0, wi: 1, pr: 2, build: 3
  *
  * **按能力优先级挑选而不是取第一个**：承诺类结论常写成
  * 「张三承诺修完 [#202](工作项) · [原文](permalink)」，取第一个会把归属判给工作项，
- * 「盯它」（等待台账的唯一入口）就此消失。
+ * 「等待跟进」（等待记录的唯一入口）就此消失。
  */
 function anchorOf(text: string, env: ButlerConclusionEnv): Anchor | null {
   const anchors: Anchor[] = [];
@@ -199,7 +199,7 @@ export function parseButlerConclusions(
 }
 
 /**
- * 从消息来源的 label 里取发言人，供「盯它」预填。
+ * 从消息来源的 label 里取发言人，供「等待跟进」预填。
  * label 由 extractButlerSources 机器生成，形如 `房间 · 发言人：正文`，
  * 比从模型散文里猜人名可靠得多。
  */

@@ -86,9 +86,9 @@ export function analyzeWorkInsights(
     insights.push({
       id: 'insight-collaboration-question-to-task',
       kind: 'collaboration',
-      title: '你会先让管家分析，再把结论接成任务',
-      evidence: `最近有 ${questions} 次分析请求和 ${tasks} 次接成任务。`,
-      suggestion: '遇到同类问题时，可以直接要求“分析后把可执行项接成任务”。',
+      title: '你会先让管家分析，再把结论转为任务',
+      evidence: `最近有 ${questions} 次分析请求和 ${tasks} 次任务创建。`,
+      suggestion: '遇到同类问题时，可以直接要求“分析后把可执行项转为任务”。',
       confidence: questions + tasks >= 6 ? 'high' : 'medium',
       createdAt: now,
     });

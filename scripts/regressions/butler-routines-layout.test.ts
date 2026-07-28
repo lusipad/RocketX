@@ -21,7 +21,7 @@ test('自动整理可在纸底发现和配置，运行结果与提醒回到纸�
   assert.match(page, /<ButlerRoutines \/>/);
   assert.doesNotMatch(page, /收起管家管理|打开管家管理|toggleManage/);
   assert.match(page, /activeView === 'conversation' \? \([\s\S]*\) : activeView === 'routines' \? \(/);
-  assert.match(routines, /<section aria-label="在盯的事">/);
+  assert.match(routines, /<section aria-label="正在照看">/);
   assert.match(routines, /BUTLER_ABILITY_TEMPLATES/);
   assert.match(routines, /loadRoutineTemplate/);
   assert.match(routines, /selectedDigestRooms/);

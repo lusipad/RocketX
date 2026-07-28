@@ -81,7 +81,7 @@ export default function ButlerWorkspaceNav({
         })}
       </div>
       <p className="butler-workspace-nav-foot">
-        一直在，持续接住你的工作。
+        一直在，持续跟进你的工作。
       </p>
     </nav>
   );

@@ -1267,7 +1267,7 @@ test('未开启的自动整理在纸底可发现，消息能力有真实装载�
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
 
   await page.getByRole('button', { name: '自动整理未开启，打开设置', exact: true }).click();
-  const routines = page.getByRole('region', { name: '在盯的事' });
+  const routines = page.getByRole('region', { name: '正在照看' });
   await expect(routines).toContainText('晨报');
   await expect(routines).toContainText('晚间回顾');
   await expect(routines).toContainText('有人 @ 我，先帮我看');

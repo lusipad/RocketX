@@ -273,7 +273,7 @@ export function compileButlerWorkflowTask(
         missing: [],
       },
       prohibitedActions: ['不绕过 typed tool runtime 执行写操作', '不把主动任务混入用户对话 transcript'],
-      recovery: '失败或暂停后从同一 workflow session、task state 与 checkpoint 明确重试。',
+      recovery: '失败或暂停后从同一 workflow session、task state 与审批记录明确重试。',
     },
     sources,
   };

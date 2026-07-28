@@ -284,7 +284,7 @@ test('管家六视图共享真实责任投影并可端到端切换', async ({ pa
     .getByRole('button', { name: '知道了' })
     .click();
   await expect(page.getByRole('region', { name: '需要知道' })).not.toContainText('发布守护没有完成');
-  await page.getByRole('button', { name: '让管家接住', exact: true }).click();
+  await page.getByRole('button', { name: '转为待办', exact: true }).click();
   await expect(page.getByRole('region', { name: '我主动发现' })).toBeHidden();
 
   await page.getByRole('button', { name: '任务', exact: true }).click();
@@ -476,7 +476,7 @@ test('内置技能可停用并在重新打开后启用', async ({ page }) => {
 
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '例行照看', exact: true }).click();
-  const routines = page.getByRole('region', { name: '在盯的事' });
+  const routines = page.getByRole('region', { name: '正在照看' });
   await expect(routines.getByRole('checkbox', { name: '启用晨报' })).toBeDisabled();
   await expect(routines).toContainText('对应技能已停用');
   await expect(page).toHaveScreenshot('butler-routine-disabled-skill-dark-wide.png', {

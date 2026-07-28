@@ -677,7 +677,7 @@ Butler
 用户可以从任意局势继续：
 
 ```text
-用户：这个先帮我接住。
+用户：这个先交给你处理。
 Butler：好。我把它记为“我欠张三发布结论”，今天 16:30 前。
         我先继续看构建；有可靠结果后把回复准备好。发送前会让你确认。
 
@@ -690,7 +690,7 @@ Butler：刚才那件有结果了。构建 #1842 已通过，我把回复更新�
 
 - 代词“这个”“刚才那件”优先绑定当前 `situationId`；
 - 新入口仍恢复同一个 Task，而不是创建新聊天任务；
-- “帮我接住”必须生成可预览的 TaskSpec，不直接猜期限和目标；
+- “交给你处理”必须生成可预览的 TaskSpec，不直接猜期限和目标；
 - 一次澄清只问一个阻塞性问题；
 - 后续进展用原局势更新，不再次讲完整背景；
 - 用户问“为什么”时展示证据链，不回答泛化模型理由。
@@ -1110,7 +1110,7 @@ interface ButlerRoutineSpec {
 创建路径：
 
 ```text
-自然语言：“帮我盯着工作日里真的需要我回复的消息”
+自然语言：“持续检查工作日里真正需要我回复的消息”
   → Butler 识别 butler-reply-guardian
   → 根据当前连接提出 scope / trigger / effect 草稿
   → 用户看到人话预览和 3 个例子
@@ -1156,7 +1156,7 @@ description: Use when RocketX must decide whether a Rocket.Chat message or threa
 
 ## Promise
 
-只接住真正需要用户回应的对话，并把它维护到回应、明确稍后或确认无需回复。
+只保留真正需要用户回应的对话，并跟进到回应、明确稍后或确认无需回复。
 不要把“被提及”等同于“欠回复”，不要为了显得主动而汇报空结果。
 
 ## Highest-cost mistakes
@@ -1182,7 +1182,7 @@ description: Use when RocketX must decide whether a Rocket.Chat message or threa
 5. Judge：只有存在明确回应义务或高概率阻塞他人时才建立候选。
 6. Choose intervention：
    - 证据不足且不紧急：maintain 或 silent；
-   - 需要用户确认是否接住：ask；
+   - 需要用户确认是否由管家负责：ask；
    - 明确且接近期限：suggest；
    - 上下文足够：prepare reply-draft。
 7. Define verification：发送后读回消息；用户称已在别处处理时以 user-confirmation 关闭并保留来源说明。
@@ -1505,7 +1505,7 @@ description: Use when RocketX must choose at most three currently valuable items
 | Skill | `butler-decisions-and-actions` |
 | 用户承诺 | 重要讨论不会只剩聊天记录；已决定、未决定和谁要做什么保持清楚 |
 | Situation | `decision-and-action` |
-| 默认触发 | 长线程静默、会议结束、用户手动“接住这段讨论” |
+| 默认触发 | 长线程静默、会议结束、用户手动“持续跟进这段讨论” |
 | 必需读取 | 完整线程/会议记录、参与者、时间 |
 | 可选读取 | Work Item、PR、Todo、文档 |
 | 默认 Effect | Suggestion/Task candidate/决策 Artifact |
@@ -1951,7 +1951,7 @@ description: Use when RocketX must synthesize a bounded team progress view from 
 
 - 表中 `optionalWrite` 只是注册能力，不代表默认允许；
 - `release-guardian` 默认只读，即使仓库存在自动发布授权也必须先通过独立门禁；
-- `ci-recovery` 每次只接住一个 failure fingerprint，避免一个 Run 修改多个不相关故障；
+- `ci-recovery` 每次只处理一个 failure fingerprint，避免一个 Run 修改多个不相关故障；
 - `team-progress` 的 12 是 Artifact 条目上限，不是 12 条通知。
 
 ### 19.1 Skill 如何协作
@@ -2050,7 +2050,7 @@ Orchestrator
 | S15 | 发布门禁不一致 | release change | release-guardian | NeedToKnow | 歧义解除 |
 | S16 | 所有门禁通过且已授权 | release request | release-guardian | I6 | public verified |
 | S17 | 团队周期摘要 | schedule/manual | team-progress | I4 | Artifact/已发送读回 |
-| S18 | 用户直接说“帮我接住” | conversation | 路由到对应 Skill | I5/Task preview | Task confirmed |
+| S18 | 用户直接说“继续处理” | conversation | 路由到对应 Skill | I5/Task preview | Task confirmed |
 | S19 | 多来源事实冲突 | any | 对应 Skill | I5 | 冲突被澄清 |
 | S20 | 低置信度且不紧急 | any | 对应 Skill | I0/I1 | 更多证据或过期 |
 | S21 | 动作需要审批 | requested effect | 对应 Skill | PendingAction | 批准执行/拒绝结束 |
@@ -2348,10 +2348,10 @@ publish 返回 timeout
 - ADO 断开后写“本周没有阻塞”；
 - 上期阻塞原样复制却不说明是否有新进展。
 
-### 22.13 S18：用户直接委托“帮我接住”
+### 22.13 S18：用户直接委托“继续处理”
 
 ```text
-用户在消息菜单选择“让 Butler 接住”
+用户在消息菜单选择“交给 Butler”
   → SourceRef 注入对话
   → 路由到领域 Skill
   → Skill 提取责任、目标、期限、未知和验证条件
@@ -2940,7 +2940,7 @@ healthy =
 
 #### 价值
 
-- `open_loop_recovered_rate`：用户原本可能漏掉、被 Butler 成功接住的比例；
+- `open_loop_recovered_rate`：用户原本可能漏掉、被 Butler 成功找回并闭环的比例；
 - `prepared_action_acceptance`：草稿/计划直接采纳或小改后采纳；
 - `time_to_next_reliable_state`：从局势形成到下一可靠状态的时间；
 - `verified_completion_rate`：显示完成的对象中有事实验证的比例。

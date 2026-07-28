@@ -370,9 +370,9 @@ export default function ButlerRoutines() {
   };
 
   return (
-    <section aria-label="在盯的事">
+    <section aria-label="正在照看">
       <div className="flex items-baseline justify-between gap-4">
-        <h2 className="text-sm font-medium text-ink-3">在盯的事</h2>
+        <h2 className="text-sm font-medium text-ink-3">正在照看</h2>
         <span className="text-[11px] text-ink-3">
           {enabledRoutines.length - unavailableRoutineCount} 项启用
           {unavailableRoutineCount > 0 ? ` · ${unavailableRoutineCount} 项待恢复` : ''}

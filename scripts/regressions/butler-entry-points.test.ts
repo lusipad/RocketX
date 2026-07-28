@@ -119,7 +119,7 @@ test('主动发现保持克制，驾驶舱与输入区使用正确的表面层�
   const suggestionSection = /<section aria-label="我主动发现">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
 
   assert.match(suggestionSection, /visibleBriefItems\.map/);
-  assert.match(suggestionSection, /让\{identity\.displayName\}接住/);
+  assert.match(suggestionSection, /转为待办/);
   assert.match(suggestionSection, /忽略/);
   assert.doesNotMatch(suggestionSection, /<details[^>]*\sopen(?:=|\s|>)/);
   assert.match(page, /className="butler-workspace"/);

@@ -82,7 +82,7 @@ test('换个措辞仍然去重，幂等键不含结论文本（坑 3 的正解�
   assert.equal(first.idempotencyKey, second.idempotencyKey);
 });
 
-test('盯它写进等待台账，且不产出多余的承诺条', () => {
+test('等待跟进写进等待记录，且不产出多余的承诺条', () => {
   const { state, todos, calls } = fakeTodos();
   const conclusion = messageConclusion('张三答应周五给压测报告');
   assert.equal(watchConclusion(conclusion, { who: '张三', due: '2026-07-31' }, { todoState: state }), 'created');
@@ -186,7 +186,7 @@ test('改截止日期不会被幂等短路吃掉，也不会被 already-watching
     'updated',
   );
   assert.equal(todos[0].due, '2026-08-05');
-  // 完全相同才算已在盯
+  // 完全相同才算已在跟进
   assert.equal(
     watchConclusion(conclusion, { who: '张三', due: '2026-08-05' }, { todoState: state }),
     'already-watching',
@@ -211,4 +211,14 @@ test('checkpoint 是待审批的写操作，走既有审批通道', () => {
   assert.equal(checkpoint.capability, 'todos.write');
   assert.equal(checkpoint.status, 'approval-required');
   assert.match(checkpoint.preview, /记为待办/);
+});
+
+test('等待 checkpoint 使用明确动作术语', () => {
+  const checkpoint = createConclusionCheckpoint(
+    messageConclusion('张三答应周五给报告'),
+    'wait',
+    '张三',
+    1,
+  );
+  assert.equal(checkpoint.preview, '等待跟进：张三答应周五给报告（等待 张三）');
 });

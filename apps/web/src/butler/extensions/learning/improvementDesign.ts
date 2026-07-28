@@ -30,7 +30,7 @@ export function buildImprovementProposal(
     ? candidate.intentKey.slice('workflow:'.length).replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-')
     : undefined;
   const labels: Record<ImprovementTarget, string> = {
-    task: '把它接成任务',
+    task: '转为任务',
     profile: '把它变成已确认偏好',
     'memory-rule': '形成可复用规则',
     routine: '沿用现有例行照看',

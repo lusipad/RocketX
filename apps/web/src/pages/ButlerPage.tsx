@@ -475,7 +475,7 @@ export default function ButlerPage() {
     });
     recordOperation('create-task', 'task:from-butler-suggestion', 'now');
     snoozeButlerRoundsItem(item.ref);
-    toast.undo(`${identity.displayName}已接住「${title}」`, () => {
+    toast.undo(`已转为待办：「${title}」`, () => {
       removeTodo(id);
       restoreButlerRoundsItem(item.ref);
     });
@@ -646,7 +646,7 @@ export default function ButlerPage() {
                 <button
                   type="button"
                   aria-label={watchedCount > 0
-                    ? `在盯 ${watchedCount} 件事，打开管理`
+                    ? `正在照看 ${watchedCount} 项责任，打开管理`
                     : '自动整理未开启，打开设置'}
                   onClick={openManage}
                   className="butler-composer-status"
@@ -663,7 +663,7 @@ export default function ButlerPage() {
                     <span className="butler-eyebrow">第一次价值</span>
                     <h2>不用搭建，从一件真实工作开始</h2>
                     <p>
-                      管家可以先只读整理最近工作，也可以立即替你盯住未回应的 @。
+                      管家可以先只读整理最近工作，也可以开启对未回应 @ 的持续检查。
                       它不会因为启用而获得发送或修改权限。
                     </p>
                   </div>
@@ -784,7 +784,7 @@ export default function ButlerPage() {
                                 onClick={() => acceptSuggestion(item)}
                                 className="h-8 rounded bg-fill-1 px-2.5 text-xs text-ink hover:bg-fill-hover"
                               >
-                                让{identity.displayName}接住
+                                转为待办
                               </button>
                             ) : null}
                             <button

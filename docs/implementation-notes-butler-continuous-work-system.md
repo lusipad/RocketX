@@ -7,7 +7,7 @@ Plan: `docs/butler-continuous-work-system-design.md`
 - 2026-07-28：复用现有 `useButler`、Todo、Routine、Rounds、Errand Run、Memory 和房间浮层，不另建第二套执行引擎。新领域层先作为这些事实源之上的统一投影，再逐步收敛持久化边界。
 - 2026-07-28：RocketX 全局仍只有一个 Butler 入口；“现在、任务、例行照看、对话、记忆与偏好、连接与权限”是 Butler 内部视图。
 - 2026-07-28：NeedToKnow 的“知道了”只确认注意力，不改变原 Todo、Routine 或房间提醒；确认记录按账号持久化，并提供撤销。
-- 2026-07-28：Suggestion 接住后直接生成真实 Todo，原建议隐藏；撤销时同时删掉 Todo 并恢复建议，避免两套责任。
+- 2026-07-28：Suggestion 转为待办后直接生成真实 Todo，原建议隐藏；撤销时同时删掉 Todo 并恢复建议，避免两套责任。
 - 2026-07-28：长回答以 480 字、diff 或任务清单为确定性门槛沉淀为 Artifact。原聊天只保留摘要，Artifact 自己保存来源、验收状态和版本。
 - 2026-07-28：Routine Contract 复用现有 Routine schema 增量迁移，所有调整和回退都追加版本，不覆盖历史运行。
 - 2026-07-28：派活元数据按账号持久化。重启后无法安全续接的执行和审批转为明确失败、清除失效审批并保留原责任，避免重复外部动作。

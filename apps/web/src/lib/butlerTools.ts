@@ -1173,7 +1173,7 @@ export function createButlerTools(): ButlerTool[] {
       // 把用户往执行间赶——而进度就在管家页的卡片上。管家是唯一实体。
       execute: async (args) => {
         const title = optionalString(args, 'title') ?? '未命名任务';
-        return `已派出去：${title}。我盯着，有进展就在这儿告诉你。`;
+        return `已派出去：${title}。我会继续跟进，有进展就在这儿告诉你。`;
       },
     }),
   ];
