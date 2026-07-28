@@ -1433,9 +1433,10 @@ test('纸上连续第 3 轮自动升级完整对话并保留前两轮', async ({
       .getByRole('navigation', { name: '管家工作视图' })
       .getByRole('button', { name: /^现在/ }),
   ).toBeVisible();
-  await expect(page.getByText('第一轮', { exact: true })).toBeVisible();
-  await expect(page.getByText('第二轮', { exact: true })).toBeVisible();
-  await expect(page.getByText('第三轮', { exact: true })).toBeVisible();
+  const userMessages = page.getByLabel('你说');
+  await expect(userMessages.getByText('第一轮', { exact: true })).toBeVisible();
+  await expect(userMessages.getByText('第二轮', { exact: true })).toBeVisible();
+  await expect(userMessages.getByText('第三轮', { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
