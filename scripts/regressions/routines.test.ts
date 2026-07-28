@@ -133,6 +133,35 @@ test('桌面管理可切换例行事务并持久化', () => {
   }
 });
 
+test('调整例行合同会新增版本，回退也留下新的审计版本', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  resetRoutineStore([routine({ prompt: '先核对发布状态' })]);
+
+  try {
+    useRoutines.getState().updateContract(
+      'routine-1',
+      { prompt: '先核对发布状态，再检查回滚责任人' },
+      '补充回滚检查',
+    );
+    let current = useRoutines.getState().routines[0]!;
+    assert.equal(current.contractVersion, 2);
+    assert.deepEqual(current.versions?.map((version) => version.version), [1, 2]);
+    assert.equal(current.versions?.[1]?.reason, '补充回滚检查');
+
+    useRoutines.getState().rollbackContract('routine-1', 1);
+    current = useRoutines.getState().routines[0]!;
+    assert.equal(current.contractVersion, 3);
+    assert.equal(current.prompt, '先核对发布状态');
+    assert.equal(current.versions?.[2]?.reason, '回退到 v1');
+  } finally {
+    restoreNow();
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
 test('桌面关闭提醒后从事件卡与持久化中一并移除', () => {
   const storage = new MemoryStorage();
   const restoreStorage = setRoutineStorage(storage);

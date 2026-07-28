@@ -33,6 +33,9 @@ const SCOPED_KEYS = [
   'rcx-custom-queries',
   'rcx-wi-last-projects',
   'rcx-agent-environments',
+  'rcx-butler-attention',
+  'rcx-butler-artifacts',
+  'rcx-butler-errand-runs',
 ];
 
 /**

@@ -43,6 +43,8 @@ const APPROVAL_POLICY = {
     mcp_elicitations: false,
   },
 } as const;
+const ERRAND_RUNS_KEY = 'rcx-butler-errand-runs';
+const PERSISTED_RUN_LIMIT = 50;
 
 type SandboxMode = 'read-only' | 'workspace-write';
 
@@ -151,7 +153,63 @@ function visibleRuns(runs: readonly ButlerErrandRun[]): ButlerErrandRun[] {
   return visibleButlerErrands(runs);
 }
 
+export function recoverPersistedButlerErrands(value: unknown, now = Date.now()): ButlerErrandRun[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const run = candidate as Partial<ButlerErrandRun>;
+    if (
+      typeof run.id !== 'string'
+      || typeof run.title !== 'string'
+      || typeof run.threadId !== 'string'
+      || typeof run.workspaceRoot !== 'string'
+      || typeof run.workspaceName !== 'string'
+      || typeof run.readOnly !== 'boolean'
+      || typeof run.startedAt !== 'number'
+      || !['running', 'awaiting-approval', 'replied', 'failed'].includes(run.status ?? '')
+      || !Array.isArray(run.approvals)
+      || !Array.isArray(run.traces)
+    ) return [];
+    if (run.status === 'running' || run.status === 'awaiting-approval') {
+      return [{
+        ...run,
+        status: 'failed',
+        activity: undefined,
+        approvals: [],
+        error: 'RocketX 重启时这次执行中断；原责任和记录已保留，请确认后重新执行。',
+        traces: [...run.traces, {
+          id: `trace-recovery-${run.id}`,
+          at: now,
+          kind: 'warning' as const,
+          text: '重启后未恢复原执行，为避免重复外部动作，已安全停在待重试状态',
+        }].slice(-BUTLER_ERRAND_TRACE_LIMIT),
+      } as ButlerErrandRun];
+    }
+    return [{ ...run, approvals: [] } as ButlerErrandRun];
+  }).slice(-PERSISTED_RUN_LIMIT);
+}
+
+function readPersistedRuns(): ButlerErrandRun[] {
+  try {
+    const raw = localStorage.getItem(ERRAND_RUNS_KEY);
+    return raw ? recoverPersistedButlerErrands(JSON.parse(raw)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRuns(runs: readonly ButlerErrandRun[]): void {
+  try {
+    localStorage.setItem(ERRAND_RUNS_KEY, JSON.stringify(runs.slice(-PERSISTED_RUN_LIMIT)));
+  } catch {
+    // 运行状态仍保留在当前进程；存储不可用不能打断执行。
+  }
+}
+
+const initialPersistedRuns = readPersistedRuns();
+
 function setRuns(nextRuns: ButlerErrandRun[]): void {
+  persistRuns(nextRuns);
   useButlerErrandRuns.setState({
     runs: nextRuns,
     visibleRuns: visibleRuns(nextRuns),
@@ -492,8 +550,8 @@ export function setButlerErrandClientFactory(factory: ErrandClientFactory): () =
 }
 
 export const useButlerErrandRuns = create<ButlerErrandRunsState>((set, get) => ({
-  runs: [],
-  visibleRuns: [],
+  runs: initialPersistedRuns,
+  visibleRuns: visibleRuns(initialPersistedRuns),
 
   dispatchErrand: async (spec, target, options = {}) => {
     const readOnly = options.readOnly === true;
@@ -665,6 +723,7 @@ export const useButlerErrandRuns = create<ButlerErrandRunsState>((set, get) => (
     turnBuffers.clear();
     fileChangePaths.clear();
     approvalWaiters.clear();
+    persistRuns([]);
     set({ runs: [], visibleRuns: [] });
   },
 }));

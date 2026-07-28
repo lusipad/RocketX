@@ -9,6 +9,7 @@ import {
   type ButlerProfileStorage,
   type ButlerQuarantinedLegacyMemoryEntry,
 } from './butlerArchive';
+import { buildButlerIdentityInstructions, readButlerIdentity } from './butlerIdentity';
 
 export type { ButlerProfileStorage, ButlerQuarantinedLegacyMemoryEntry } from './butlerArchive';
 
@@ -17,6 +18,8 @@ export interface ButlerSkill {
   description: string;
   body: string;
 }
+
+export type ButlerSkillProvider = () => readonly ButlerSkill[];
 
 const STORAGE_PREFIX = 'rcx-butler-v1:';
 const LEGACY_MEMORY_STORAGE_KEY = 'rcx-butler-v1:memory';
@@ -126,6 +129,7 @@ export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] = [
 ];
 
 let profileStorage: ButlerProfileStorage = butlerArchiveStorage;
+const skillProviders = new Map<string, ButlerSkillProvider>();
 
 function storageKey(key: string): string {
   return `${STORAGE_PREFIX}${key}`;
@@ -157,8 +161,26 @@ function userSkills(): ButlerSkill[] {
   return Array.isArray(saved) ? saved.filter(isSkill) : [];
 }
 
-function isBuiltInSkill(name: string): boolean {
-  return BUILT_IN_BUTLER_SKILLS.some((skill) => skill.name === name);
+function providedSkills(): ButlerSkill[] {
+  return [...skillProviders.values()].flatMap((provider) =>
+    provider().map((skill) => ({ ...skill })));
+}
+
+export function registerButlerSkillProvider(
+  id: string,
+  provider: ButlerSkillProvider,
+): () => void {
+  const normalizedId = id.trim();
+  if (!normalizedId) throw new Error('Butler Skill provider id 不能为空');
+  skillProviders.set(normalizedId, provider);
+  return () => {
+    if (skillProviders.get(normalizedId) === provider) skillProviders.delete(normalizedId);
+  };
+}
+
+export function isButlerBuiltInSkill(name: string): boolean {
+  return [...BUILT_IN_BUTLER_SKILLS, ...providedSkills()]
+    .some((skill) => skill.name === name);
 }
 
 function isHostManagedSkill(name: string): boolean {
@@ -227,10 +249,12 @@ export function resetPersona(): void {
 }
 
 export function listSkills(): ButlerSkill[] {
+  const builtIn = [...BUILT_IN_BUTLER_SKILLS, ...providedSkills()];
+  const uniqueBuiltIn = [...new Map(builtIn.map((skill) => [skill.name, skill])).values()];
   return [
-    ...BUILT_IN_BUTLER_SKILLS.map((skill) => ({ ...skill })),
+    ...uniqueBuiltIn.map((skill) => ({ ...skill })),
     ...userSkills()
-      .filter((skill) => !isBuiltInSkill(skill.name) && !isHostManagedSkill(skill.name))
+      .filter((skill) => !isButlerBuiltInSkill(skill.name) && !isHostManagedSkill(skill.name))
       .map((skill) => ({ ...skill })),
   ];
 }
@@ -241,7 +265,7 @@ export function canUseNativeButlerSkill(name: string): boolean {
 }
 
 export function saveSkill(skill: ButlerSkill): void {
-  if (isBuiltInSkill(skill.name)) throw new Error('内置技能不可修改');
+  if (isButlerBuiltInSkill(skill.name)) throw new Error('内置技能不可修改');
   if (isHostManagedSkill(skill.name)) throw new Error('RocketX 托管技能不可修改');
   const normalized = {
     name: assertNativeSkillName(skill.name),
@@ -258,7 +282,7 @@ export function saveSkill(skill: ButlerSkill): void {
 }
 
 export function removeSkill(name: string): void {
-  if (isBuiltInSkill(name)) throw new Error('内置技能不可修改');
+  if (isButlerBuiltInSkill(name)) throw new Error('内置技能不可修改');
   if (isHostManagedSkill(name)) throw new Error('RocketX 托管技能不可修改');
   writeJson(SKILLS_KEY, userSkills().filter((skill) => skill.name !== name));
   syncWorkspace();
@@ -285,7 +309,7 @@ export function butlerCurrentTimeLine(now: number): string {
 }
 
 export function buildButlerApiSystemPrompt(): string {
-  const sections = [getPersona()];
+  const sections = [getPersona(), buildButlerIdentityInstructions()];
   const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   sections.push([
     '## 可用技能',
@@ -299,10 +323,12 @@ export function buildButlerApiSystemPrompt(): string {
 export function buildButlerCodexBaseInstructions(): string {
   const sections = [
     '你是 RocketX 托管的管家 Agent。',
+    buildButlerIdentityInstructions(),
     '遵守当前工作目录中的 AGENTS.md。',
     '优先使用其中发现的原生 Agent Skills。',
   ];
-  const legacySkills = userSkills().filter((skill) => !isBuiltInSkill(skill.name) && !isNativeSkill(skill));
+  const legacySkills = userSkills().filter((skill) =>
+    !isButlerBuiltInSkill(skill.name) && !isNativeSkill(skill));
   if (legacySkills.length > 0) {
     sections.push([
       '以下旧 legacy 技能尚未原生化；只有遇到它们时才调用 load_skill 读取正文：',
@@ -321,6 +347,7 @@ export function buildButlerSystemPrompt(): string {
 
 export function butlerWorkspaceRevision(): string {
   return JSON.stringify({
+    identity: readButlerIdentity(),
     persona: getPersona(),
     skills: listSkills().map(({ name, description, body }) => ({ name, description, body })),
     hostSkills: [{

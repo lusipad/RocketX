@@ -46,13 +46,16 @@ test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () =>
   assert.equal(readPersistedWorkItemStateFilter(storage), '活动');
 });
 
-test('可编程入口原子打开管家桌面对话，收起只改变表面状态', () => {
-  useUI.setState({ module: 'messages', butlerConversationOpen: false });
+test('可编程入口只通过 butlerView 原子打开管家视图', () => {
+  useUI.setState({ module: 'messages', butlerView: 'now' });
   useUI.getState().openButlerConversation();
   assert.equal(useUI.getState().module, 'butler-view');
-  assert.equal(useUI.getState().butlerConversationOpen, true);
+  assert.equal(useUI.getState().butlerView, 'conversation');
 
-  useUI.getState().closeButlerConversation();
+  useUI.getState().openButlerManage();
   assert.equal(useUI.getState().module, 'butler-view');
-  assert.equal(useUI.getState().butlerConversationOpen, false);
+  assert.equal(useUI.getState().butlerView, 'routines');
+
+  useUI.getState().setButlerView('now');
+  assert.equal(useUI.getState().butlerView, 'now');
 });

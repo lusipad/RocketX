@@ -95,8 +95,8 @@ test('日历把选中日期作为纸面索引，不新建另一套历史页', ()
   assert.match(calendar, /openButlerPaper\(selectedDate \?\? today\)/);
   assert.match(ui, /openButlerPaper: \(date\?: string\) => void/);
   assert.match(ui, /butlerPaperDate: date \?\? null/);
-  assert.match(ui, /butlerConversationOpen: false/);
-  assert.match(ui, /butlerManageOpen: false/);
+  assert.match(ui, /butlerView: 'now'/);
+  assert.doesNotMatch(ui, /butlerConversationOpen|butlerManageOpen/);
 });
 
 test('在办项是可折叠行，快操作有 aria-label，完整对话入口与底层 codex 注册分层保留', () => {
@@ -114,16 +114,18 @@ test('在办项是可折叠行，快操作有 aria-label，完整对话入口与
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
 });
 
-test('今天事项默认折叠，纸面与输入区使用正确的表面层级', () => {
+test('主动发现保持克制，驾驶舱与输入区使用正确的表面层级', () => {
   const page = source('apps/web/src/pages/ButlerPage.tsx');
-  const todaySection = /<section aria-label="今天">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
+  const suggestionSection = /<section aria-label="我主动发现">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
 
-  assert.match(todaySection, /<details/);
-  assert.doesNotMatch(todaySection, /<details[^>]*\sopen(?:=|\s|>)/);
-  assert.match(todaySection, /group-open:rotate-90/);
-  assert.match(page, /className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-surface-3"/);
-  assert.match(
-    page,
-    /className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 transition-colors focus-within:border-primary"/,
-  );
+  assert.match(suggestionSection, /visibleBriefItems\.map/);
+  assert.match(suggestionSection, /让\{identity\.displayName\}接住/);
+  assert.match(suggestionSection, /忽略/);
+  assert.doesNotMatch(suggestionSection, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.match(page, /className="butler-workspace"/);
+  assert.match(source('apps/web/src/styles.css'), /\.butler-workspace \{[\s\S]*flex: 1 1 0%;/);
+  assert.match(page, /className="butler-workspace-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-3"/);
+  assert.match(page, /<section aria-label="统一 Composer" className="butler-composer">/);
+  assert.match(page, /placeholder="问、交代或创建/);
+  assert.match(page, /交给\{identity\.displayName\}/);
 });

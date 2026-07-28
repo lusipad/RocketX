@@ -3,12 +3,26 @@ import { bootAuthenticated, type RocketChatMockState } from './support/rocket-ch
 
 const ANSWER = '发布前需要 Alice 确认检查清单。';
 
+async function openButlerConversationView(page: Page): Promise<void> {
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
+    .click();
+}
+
+async function openButlerNowView(page: Page): Promise<void> {
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: /^现在/ })
+    .click();
+}
+
 async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
   const state = await bootAuthenticated(page);
   await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await openButlerConversationView(page);
   await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
   return state;
 }
@@ -551,7 +565,7 @@ test('完整管家页可以发送图片和文字', async ({ page }) => {
     buffer: Buffer.from('image-bytes'),
   });
   await expect(page.getByAltText('release.png')).toBeVisible();
-  await page.getByPlaceholder('继续说……').fill('分析这张发布截图');
+  await page.getByRole('textbox', { name: '给管家发消息' }).fill('分析这张发布截图');
   await page.getByRole('button', { name: '发送', exact: true }).click();
 
   const captured = await page.evaluate(() => (
@@ -574,7 +588,7 @@ test('完整管家页可以粘贴图片并发送', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await captureButlerAsks(page);
 
-  const input = page.getByPlaceholder('继续说……');
+  const input = page.getByRole('textbox', { name: '给管家发消息' });
   await input.evaluate((element) => {
     const clipboard = new DataTransfer();
     clipboard.items.add(new File(['pasted-image'], 'pasted.png', { type: 'image/png' }));
@@ -689,7 +703,7 @@ test('取消动作后回到纸不会伪造在办项', async ({ page }) => {
 
   await page.getByRole('button', { name: '转待办', exact: true }).click();
   await page.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '回到纸', exact: true }).click();
+  await openButlerNowView(page);
   await expect(page.getByRole('region', { name: '在办' })).toHaveCount(0);
   await expect(
     page.getByLabel('管家空状态').or(page.getByRole('region', { name: '今日整理状态' })),
@@ -705,7 +719,11 @@ test('带待确认动作开启新对话时按原会话保留 checkpoint', async 
   await page.getByRole('button', { name: '新对话', exact: true }).click();
   await expect(page.getByLabel('待办草案')).toHaveCount(0);
 
-  await page.getByLabel('管家会话').selectOption('default');
+  await page
+    .getByRole('navigation', { name: '管家对话历史' })
+    .getByRole('button')
+    .filter({ hasText: '发布前还缺什么？' })
+    .click();
   await expect(page.getByLabel('待办草案')).toContainText('等待确认');
   expect(pageErrors).toEqual([]);
 });
@@ -786,7 +804,7 @@ test('房间管家浮层与管家页共享同一份会话', async ({ page }) => 
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await openButlerConversationView(page);
 
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -939,22 +957,23 @@ test('房间管家浮层保留本房间全部问答并隔离其他房间', async
 test('可新建、重命名并切换独立的管家会话', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await openButlerConversationView(page);
   await seedButlerAnswer(page);
 
-  const sessionSelect = page.getByLabel('管家会话');
-  await expect(sessionSelect).toHaveValue('default');
+  const history = page.getByRole('navigation', { name: '管家对话历史' });
+  await expect(history).toBeVisible();
   await page.getByRole('button', { name: '新对话', exact: true }).click();
   await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
 
   await page.getByRole('button', { name: '重命名会话', exact: true }).click();
   await page.getByRole('textbox', { name: '会话名称', exact: true }).fill('构建调查');
   await page.getByRole('button', { name: '保存会话名称', exact: true }).click();
-  await expect(sessionSelect.locator('option:checked')).toHaveText('构建调查');
+  await expect(page.getByRole('heading', { name: '构建调查', exact: true })).toBeVisible();
+  await expect(history).toContainText('构建调查');
 
-  await sessionSelect.selectOption('default');
+  await history.getByRole('button').filter({ hasText: '发布前还缺什么？' }).click();
   await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
-  await sessionSelect.selectOption({ label: '构建调查' });
+  await history.getByRole('button').filter({ hasText: '构建调查' }).click();
   await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
@@ -1007,7 +1026,7 @@ test('memory.write 需要显式审批，确认后才写入 v2 记忆', async ({ 
   expect(pageErrors).toEqual([]);
 });
 
-test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选择器', async ({ page }) => {
+test('主动 workflow 的写审批可见，但隐藏 session 不进入对话历史', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   const seeded = await seedWorkflowMemoryApproval(page);
 
@@ -1015,15 +1034,14 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入会话选�
   expect(seeded.hidden).toBe(true);
   const approvals = page.getByLabel('待批准的管家操作');
   await expect(approvals).toContainText('写入长期记忆');
-  const sessionOptions = await page.getByLabel('管家会话').locator('option').evaluateAll(
-    (options) => options.map((option) => ({
-      value: (option as HTMLOptionElement).value,
-      text: option.textContent ?? '',
-    })),
-  );
-  expect(sessionOptions.some((option) => (
-    option.value === seeded.sessionId || option.text.includes('workflow:')
-  ))).toBe(false);
+  const visibleSessionIds = await page.evaluate(async () => {
+    const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { getState: () => { sessions: Array<{ id: string }> } };
+    }>;
+    return (await loadStore()).useButler.getState().sessions.map((session) => session.id);
+  });
+  expect(visibleSessionIds).not.toContain(seeded.sessionId);
+  await expect(page.getByRole('navigation', { name: '管家对话历史' })).not.toContainText('workflow:');
   expect(await page.evaluate(() => (
     (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
       .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory') ?? null
@@ -1069,7 +1087,7 @@ test('在办活在纸、完整对话和房间浮层共享同一份可见状态',
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await openButlerConversationView(page);
   await page.getByText('1 件在办', { exact: true }).click();
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
@@ -1077,14 +1095,14 @@ test('在办活在纸、完整对话和房间浮层共享同一份可见状态',
   expect(pageErrors).toEqual([]);
 });
 
-test('纸的三区按数据渲染，空区不占位置，审批原文与动作可用', async ({ page }) => {
+test('纸按审批和在办责任渲染，审批原文与动作可用', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await seedPaperSections(page);
 
   await expect(page.getByRole('region', { name: '等你点头' })).toBeVisible();
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
-  await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '展开汇总回归结论' })).toBeVisible();
   await expect(page.getByText(/pnpm test/)).toBeVisible();
 
   await page.getByRole('button', {
@@ -1098,7 +1116,7 @@ test('纸的三区按数据渲染，空区不占位置，审批原文与动作�
   ))).toEqual([{ runId: 'approval-run', approvalId: 'approval-command', approved: true }]);
   await expect(page.getByRole('region', { name: '等你点头' })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
-  await expect(page.getByRole('region', { name: '今天' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '展开汇总回归结论' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -1120,7 +1138,8 @@ test('每日整理失败或运行时不会被画成空纸', async ({ page }) => 
 
   await expect(page.getByRole('region', { name: '今日整理状态' }))
     .toContainText('今天的整理没有完成');
-  await expect(page.getByRole('button', { name: '重试', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '今日整理状态' })
+    .getByRole('button', { name: '重试', exact: true })).toBeVisible();
   await expect(page.getByLabel('管家空状态')).toHaveCount(0);
 
   await page.evaluate(async () => {
@@ -1191,7 +1210,10 @@ test('未开启的自动整理在纸底可发现，消息能力有真实装载�
 
   await page.reload();
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('button', { name: '打开管家管理', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: /^例行照看/ })
+    .click();
   await page.getByText('管理例行事务', { exact: true }).click();
   await expect(page.getByRole('checkbox', {
     name: '启用有人 @ 我，先帮我看',
@@ -1258,7 +1280,7 @@ test('纸上临时问答失败时原位解释并可重新发送', async ({ page 
   });
 
   await page.getByRole('textbox', { name: '跟管家说件事' }).fill('帮我看看今天');
-  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('button', { name: '交给管家', exact: true }).click();
   const exchange = page.getByRole('region', { name: '临时问答' });
   await expect(exchange).toContainText('Codex 暂时不可用，请检查登录状态。');
   await expect.poll(() => page.evaluate(async () => {
@@ -1313,7 +1335,7 @@ test('纸上临时问答只属于发起当天，不会跨日期串到新纸', as
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
 
   await page.getByRole('textbox', { name: '跟管家说件事' }).fill('只留在今天');
-  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('button', { name: '交给管家', exact: true }).click();
   await expect(page.getByRole('region', { name: '临时问答' })).toContainText('只留在今天');
 
   await page.getByRole('button', { name: '前一天', exact: true }).click();
@@ -1400,13 +1422,17 @@ test('纸上连续第 3 轮自动升级完整对话并保留前两轮', async ({
   const input = page.getByRole('textbox', { name: '跟管家说件事' });
   for (const question of ['第一轮', '第二轮']) {
     await input.fill(question);
-    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await page.getByRole('button', { name: '交给管家', exact: true }).click();
     await expect(page.getByLabel('纸上问答')).toContainText(`答：${question}`);
   }
   await input.fill('第三轮');
-  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('button', { name: '交给管家', exact: true }).click();
 
-  await expect(page.getByRole('button', { name: '回到纸', exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole('navigation', { name: '管家工作视图' })
+      .getByRole('button', { name: /^现在/ }),
+  ).toBeVisible();
   await expect(page.getByText('第一轮', { exact: true })).toBeVisible();
   await expect(page.getByText('第二轮', { exact: true })).toBeVisible();
   await expect(page.getByText('第三轮', { exact: true })).toBeVisible();
@@ -1417,11 +1443,11 @@ test('规格卡派出后回到纸就在在办区出现新行', async ({ page }) 
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await seedDispatchDraft(page);
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await openButlerConversationView(page);
 
   await expect(page.getByText('任务规格', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '派出去', exact: true }).click();
-  await page.getByRole('button', { name: '回到纸', exact: true }).click();
+  await openButlerNowView(page);
 
   await expect(page.getByRole('region', { name: '在办' })).toContainText('派出后回到纸');
   expect(pageErrors).toEqual([]);

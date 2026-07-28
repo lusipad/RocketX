@@ -13,6 +13,7 @@ import {
   useButler,
 } from '../../apps/web/src/stores/butler';
 import {
+  recoverPersistedButlerErrands,
   setButlerErrandClientFactory,
   useButlerErrandRuns,
 } from '../../apps/web/src/stores/butlerErrandRuns';
@@ -42,6 +43,28 @@ Object.defineProperty(globalThis, 'localStorage', {
     setItem: (key: string, value: string) => storageEntries.set(key, String(value)),
     removeItem: (key: string) => storageEntries.delete(key),
   },
+});
+
+test('重启后保留派活责任，但中断执行安全停在待重试且不保留失效审批', () => {
+  const recovered = recoverPersistedButlerErrands([{
+    id: 'restart-run',
+    title: '发布前核对',
+    threadId: 'thread-1',
+    workspaceRoot: 'D:\\Repos\\rocketchatx',
+    workspaceName: 'RocketX',
+    readOnly: false,
+    startedAt: 100,
+    status: 'awaiting-approval',
+    activity: '等待审批',
+    approvals: [{ id: 'approval-1', method: 'item/commandExecution/requestApproval', policy: {}, params: {}, at: 200 }],
+    traces: [],
+  }], 300);
+
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0]?.status, 'failed');
+  assert.equal(recovered[0]?.approvals.length, 0);
+  assert.match(recovered[0]?.error ?? '', /原责任和记录已保留/);
+  assert.match(recovered[0]?.traces[0]?.text ?? '', /避免重复外部动作/);
 });
 test.after(() => {
   if (localStorageDescriptor) Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor);

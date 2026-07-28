@@ -19,8 +19,8 @@ test('自动整理可在纸底发现和配置，运行结果与提醒回到纸�
   assert.match(page, /automationPreview\(report\.run\.text\)/);
   assert.match(page, /aria-label=\{`\$\{report\.routine\.name\}摘要`\}/);
   assert.match(page, /<ButlerRoutines \/>/);
-  assert.match(page, /aria-label=\{manageOpen \? '收起管家管理' : '打开管家管理'\}/);
-  assert.match(page, /conversationOpen \? \([\s\S]*\) : manageOpen \? \(/);
+  assert.doesNotMatch(page, /收起管家管理|打开管家管理|toggleManage/);
+  assert.match(page, /activeView === 'conversation' \? \([\s\S]*\) : activeView === 'routines' \? \(/);
   assert.match(routines, /<section aria-label="在盯的事">/);
   assert.match(routines, /BUTLER_ABILITY_TEMPLATES/);
   assert.match(routines, /loadRoutineTemplate/);

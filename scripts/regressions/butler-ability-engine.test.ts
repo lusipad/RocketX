@@ -108,23 +108,24 @@ test('hydrate 接受合法 interval，并丢弃低于下限的持久化记录', 
   }
 });
 
-test('模板装载复制 prompt/trigger，重复装载返回同一实例', () => {
+test('模板装载引用 Skill 并复制 trigger，重复装载返回同一实例', () => {
   resetRoutineStore();
   const template = findButlerAbilityTemplate('mention-triage');
   assert.ok(template);
-  const originalPrompt = template.prompt;
+  const originalSkillName = template.skillName;
   const originalEveryMinutes = template.defaultTrigger.kind === 'interval'
     ? template.defaultTrigger.everyMinutes
     : 0;
   const loaded = useRoutines.getState().loadTemplate('mention-triage');
   assert.ok(loaded);
 
-  template.prompt = '模板升级后的提示词';
+  template.skillName = 'template-upgraded-skill';
   if (template.defaultTrigger.kind === 'interval') {
     template.defaultTrigger.everyMinutes = 30;
   }
   try {
-    assert.equal(loaded.prompt, originalPrompt);
+    assert.equal(loaded.skillName, originalSkillName);
+    assert.equal(loaded.prompt, undefined);
     assert.deepEqual(loaded.trigger, {
       kind: 'interval',
       everyMinutes: originalEveryMinutes,
@@ -136,7 +137,7 @@ test('模板装载复制 prompt/trigger，重复装载返回同一实例', () =>
       1,
     );
   } finally {
-    template.prompt = originalPrompt;
+    template.skillName = originalSkillName;
     if (template.defaultTrigger.kind === 'interval') {
       template.defaultTrigger.everyMinutes = originalEveryMinutes;
     }
@@ -228,8 +229,10 @@ test('旧格式晨报和晚间回顾迁移后保留 id 与用户改过的时间'
     assert.deepEqual(evening?.trigger, { kind: 'daily', time: '19:10' });
     assert.equal(morning?.templateId, 'morning-brief');
     assert.equal(evening?.templateId, 'evening-review');
-    assert.equal(morning?.prompt, findButlerAbilityTemplate('morning-brief')?.prompt);
-    assert.equal(evening?.prompt, findButlerAbilityTemplate('evening-review')?.prompt);
+    assert.equal(morning?.skillName, 'morning-brief');
+    assert.equal(evening?.skillName, 'evening-review');
+    assert.equal(morning?.prompt, undefined);
+    assert.equal(evening?.prompt, undefined);
   } finally {
     restoreNow();
     restoreStorage();

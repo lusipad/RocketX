@@ -19,6 +19,11 @@ import {
   setPersona,
   type ButlerProfileStorage,
 } from '../../apps/web/src/lib/butlerProfile';
+import {
+  initializeButlerLearningExtensions,
+} from '../../apps/web/src/butler/extensions/learning/runtime';
+
+initializeButlerLearningExtensions();
 
 class MemoryStorage implements ButlerProfileStorage {
   private readonly entries = new Map<string, string>();
@@ -75,12 +80,14 @@ test('默认人设改为按需 recall_memory，并严格限制可持久化内容
   assert.doesNotMatch(DEFAULT_PERSONA, /先调用 remember/);
 });
 
-test('AI 设置页提供人设编辑入口，托管纪律不受人设影响', () => {
+test('AI 设置页只保留高级行为指令，名字与性格由我的管家统一管理', () => {
   const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
-  assert.match(settings, /label="人设"/);
+  assert.match(settings, /label="高级行为指令"/);
+  assert.match(settings, /名字、头像和相处方式请在“我的管家”修改/);
   assert.match(settings, /savePersona/);
   assert.match(settings, /restoreDefaultPersona/);
   assert.match(settings, /AI 托管的编码代理和安全纪律不受影响/);
+  assert.doesNotMatch(settings, /AXIS_META|loadPersonality|管家性格/);
 
   const context = readFileSync('apps/web/src/agent/context.ts', 'utf8');
   assert.doesNotMatch(context, /getPersona|DEFAULT_PERSONA|buildButlerSystemPrompt/);
@@ -132,7 +139,7 @@ test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
     assert.match(loadButlerSkill(AZURE_DEVOPS_SERVER_SKILL_NAME), /run_azure_devops_server_cli/);
     assert.match(
       loadButlerSkill('missing'),
-      /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report、pr-comparison、commitment-extraction、azure-devops-server/,
+      /未找到技能：missing，可用技能：.*butler-profile-curator.*butler-reply-guardian.*azure-devops-server/,
     );
   });
 });

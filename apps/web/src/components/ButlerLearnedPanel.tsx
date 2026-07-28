@@ -9,7 +9,7 @@ import {
   type ButlerMemoryRecord,
 } from '../lib/butlerMemory';
 import {
-  BUILT_IN_BUTLER_SKILLS,
+  isButlerBuiltInSkill,
   listSkills,
   readButlerActiveMemoryV2RawJson,
   removeSkill,
@@ -30,10 +30,6 @@ const KIND_LABELS: Record<ButlerMemoryKind, string> = {
 function activeMemories(): ButlerMemoryRecord[] {
   const state = parseButlerMemoryState(readButlerActiveMemoryV2RawJson() ?? '');
   return state.records.filter((record) => record.status === 'active');
-}
-
-function builtInSkillNames(): Set<string> {
-  return new Set(BUILT_IN_BUTLER_SKILLS.map((skill) => skill.name));
 }
 
 /**
@@ -108,8 +104,6 @@ export default function ButlerLearnedPanel() {
 
   if (memories.length === 0 && skills.length === 0) return null;
 
-  const builtIn = builtInSkillNames();
-
   return (
     <div className="space-y-8">
       {memories.length > 0 ? (
@@ -161,29 +155,36 @@ export default function ButlerLearnedPanel() {
               装新技能
             </button>
           </div>
-          <div className="mt-2 divide-y divide-line/70">
+          <ul className="mt-3 grid gap-3 md:grid-cols-2">
             {skills.map((skill) => (
-              <div key={skill.name} className="flex min-w-0 items-center gap-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm text-ink">{skill.name}</div>
-                  <div className="mt-0.5 truncate text-[11px] text-ink-3">{skill.description}</div>
+              <li
+                key={skill.name}
+                className="flex min-h-24 min-w-0 flex-col rounded-lg border border-line/80 bg-fill-1/40 p-4"
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0 break-words text-sm font-medium leading-5 text-ink">
+                    {skill.name}
+                  </div>
+                  {isButlerBuiltInSkill(skill.name) ? (
+                    <span className="shrink-0 rounded-full bg-fill-2 px-2 py-0.5 text-[10px] font-medium text-ink-2">
+                      内置
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => dropSkill(skill)}
+                      aria-label={`卸载技能 ${skill.name}`}
+                      title="卸载技能"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-danger/10 hover:text-danger"
+                    >
+                      <Trash2 size={13} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
-                {builtIn.has(skill.name) ? (
-                  <span className="shrink-0 text-[10px] text-ink-3">内置</span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => dropSkill(skill)}
-                    aria-label={`卸载技能 ${skill.name}`}
-                    title="卸载技能"
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-danger/10 hover:text-danger"
-                  >
-                    <Trash2 size={13} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
+                <p className="mt-2 text-xs leading-5 text-ink-2">{skill.description}</p>
+              </li>
             ))}
-          </div>
+          </ul>
 
           {importing ? (
             <div className="mt-3 border-l border-primary/40 pl-4">

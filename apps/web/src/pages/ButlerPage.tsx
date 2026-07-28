@@ -1,26 +1,32 @@
 import {
   AlertCircle,
   AtSign,
+  CalendarDays,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
-  History,
   LoaderCircle,
+  Paperclip,
+  Plus,
   RefreshCw,
   Send,
-  Settings2,
+  Sparkles,
   Square,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import ButlerAuditTrail from '../components/ButlerAuditTrail';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import ButlerConnectionsPanel from '../components/ButlerConnectionsPanel';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
+import ButlerIdentityPage from '../components/ButlerIdentityPage';
 import ButlerInlineExchange from '../components/ButlerInlineExchange';
-import ButlerLearnedPanel from '../components/ButlerLearnedPanel';
 import ButlerRoutines from '../components/ButlerRoutines';
+import ButlerTasksView from '../components/ButlerTasksView';
+import ButlerWorkspaceNav from '../components/ButlerWorkspaceNav';
+import { butlerOperationJournal } from '../butler/extensions/learning/runtime';
+import type { ButlerOperationInput } from '../butler/extensions/learning/operationJournalExtension';
 import {
   buildButlerPaperViewModel,
   butlerBriefForDate,
@@ -33,10 +39,18 @@ import { renderMarkdown } from '../lib/markdown';
 import {
   runDailyButlerRoundsIfNeeded,
   runButlerRoundsNow,
+  restoreButlerRoundsItem,
+  snoozeButlerRoundsItem,
   useButlerRoundsRunner,
   visibleButlerRoundItems,
 } from '../lib/butlerRoundsRunner';
+import {
+  buildButlerWorkspaceModel,
+  type ButlerWorkspaceView,
+} from '../lib/butlerWorkspace';
 import { useAuth } from '../stores/auth';
+import { useButlerAttention } from '../stores/butlerAttention';
+import { useButlerIdentity } from '../stores/butlerIdentity';
 import { useButler } from '../stores/butler';
 import { useChat } from '../stores/chat';
 import {
@@ -46,6 +60,7 @@ import {
   type RoutineRun,
 } from '../stores/routines';
 import { dueLabel, isOverdue, useTodos, type Todo } from '../stores/todos';
+import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 
 const BRIEF_PAGE_SIZE = 5;
@@ -201,15 +216,16 @@ function ButlerAutomationPaper({
 }
 
 export default function ButlerPage() {
+  const identity = useButlerIdentity((state) => state.identity);
   const today = butlerPaperDateKey(new Date());
   const [briefOffset, setBriefOffset] = useState(0);
   const [input, setInput] = useState('');
+  const composerInputRef = useRef<HTMLInputElement>(null);
   const [inlineRange, setInlineRange] = useState<{
     start: number;
     end: number | null;
   } | null>(null);
-  const conversationOpen = useUI((state) => state.butlerConversationOpen);
-  const manageOpen = useUI((state) => state.butlerManageOpen);
+  const activeView = useUI((state) => state.butlerView);
   const paperDate = useUI((state) => state.butlerPaperDate);
   const paperConversation = useUI((state) => state.butlerPaperConversation);
   const setSelectedDate = useUI((state) => state.setButlerPaperDate);
@@ -217,8 +233,7 @@ export default function ButlerPage() {
   const setModule = useUI((state) => state.setModule);
   const openConversationStore = useUI((state) => state.openButlerConversation);
   const openManage = useUI((state) => state.openButlerManage);
-  const closeConversation = useUI((state) => state.closeButlerConversation);
-  const closeManage = useUI((state) => state.closeButlerManage);
+  const setButlerView = useUI((state) => state.setButlerView);
   const lines = useButler((state) => state.lines);
   const activeSessionId = useButler((state) => state.activeSessionId);
   const errands = useButler((state) => state.errands);
@@ -228,6 +243,9 @@ export default function ButlerPage() {
   const stopButler = useButler((state) => state.stop);
   const hydrateButler = useButler((state) => state.hydrate);
   const userId = useAuth((state) => state.user?._id);
+  const acknowledgedNeedIds = useButlerAttention((state) => state.acknowledgedNeedIds);
+  const acknowledgeNeed = useButlerAttention((state) => state.acknowledge);
+  const restoreNeed = useButlerAttention((state) => state.restore);
   const lastResult = useButlerRoundsRunner((state) => state.lastResult);
   const roundsRunning = useButlerRoundsRunner((state) => state.running);
   const roundsError = useButlerRoundsRunner((state) => state.error);
@@ -235,7 +253,20 @@ export default function ButlerPage() {
   const eventCards = useRoutines((state) => state.eventCards);
   const runRoutineNow = useRoutines((state) => state.runNow);
   const dismissCard = useRoutines((state) => state.dismissCard);
+  const hydrateRoutines = useRoutines((state) => state.hydrate);
+  const loadRoutineTemplate = useRoutines((state) => state.loadTemplate);
+  const setRoutineEnabled = useRoutines((state) => state.setEnabled);
+  const recordOperation = (
+    action: ButlerOperationInput['action'],
+    intentKey: string,
+    surface: string,
+    options: Omit<ButlerOperationInput, 'action' | 'intentKey' | 'surface'> = {},
+  ): void => {
+    butlerOperationJournal.record({ action, intentKey, surface, ...options });
+  };
   const todos = useTodos((state) => state.todos);
+  const addTodo = useTodos((state) => state.add);
+  const removeTodo = useTodos((state) => state.remove);
   const toggleTodo = useTodos((state) => state.toggle);
   const watchedCount = routines.filter((routine) => routine.enabled).length;
   const selectedDate = paperDate ?? today;
@@ -286,7 +317,6 @@ export default function ButlerPage() {
   );
   const paperEventCards = isToday ? eventCards : [];
   const visibleBriefItems = briefItems.slice(briefOffset, briefOffset + BRIEF_PAGE_SIZE);
-  const remainingBriefItems = Math.max(0, briefItems.length - briefOffset - BRIEF_PAGE_SIZE);
   const paperConversationMatches = paperConversation?.date === selectedDate
     && paperConversation.sessionId === activeSessionId;
   const retainedQuestionIndex = paperConversationMatches
@@ -321,10 +351,22 @@ export default function ButlerPage() {
     && paperEventCards.length === 0
     && !roundsRunning
     && !roundsError;
+  const workspace = useMemo(
+    () => buildButlerWorkspaceModel({
+      errands,
+      todos,
+      routines,
+      eventCards,
+      rounds: lastResult,
+      acknowledgedNeedIds,
+    }),
+    [acknowledgedNeedIds, errands, eventCards, lastResult, routines, todos],
+  );
 
   useEffect(() => {
     void runDailyButlerRoundsIfNeeded();
-  }, []);
+    hydrateRoutines();
+  }, [hydrateRoutines]);
 
   useEffect(() => {
     if (userId) void hydrateButler();
@@ -363,6 +405,9 @@ export default function ButlerPage() {
     if (shouldExpandButlerConversation(nextRound)) {
       openConversationStore();
       await askButler(text);
+      recordOperation('ask-butler', 'ask:ad-hoc', 'now', {
+        outcome: useButler.getState().error ? 'failed' : 'completed',
+      });
       const submittedQuestion = useButler.getState().lines
         .slice(start)
         .find((line) => line.role === 'user');
@@ -379,6 +424,9 @@ export default function ButlerPage() {
     try {
       await askButler(text);
     } finally {
+      recordOperation('ask-butler', 'ask:ad-hoc', 'now', {
+        outcome: useButler.getState().error ? 'failed' : 'completed',
+      });
       const latestLines = useButler.getState().lines;
       const end = latestLines.length;
       const submittedQuestion = latestLines
@@ -402,129 +450,359 @@ export default function ButlerPage() {
     void askFromPaper(input);
   };
 
-  const toggleConversation = (): void => {
-    if (conversationOpen) {
-      closeConversation();
-      return;
-    }
-    openConversationStore();
-  };
-
-  const backToPaper = (): void => {
-    closeConversation();
-    closeManage();
-  };
-
-  const toggleManage = (): void => {
-    if (manageOpen) {
-      closeManage();
-      return;
-    }
-    closeConversation();
-    openManage();
-  };
-
   const openEventCard = async (card: ButlerEventCard): Promise<void> => {
+    recordOperation('open-view', 'view:mention-context', 'now');
     setModule('messages');
     if (card.rid) await useChat.getState().openRoom(card.rid);
   };
 
+  const enableStarterRoutine = (): void => {
+    const routine = loadRoutineTemplate('mention-triage');
+    if (routine && !routine.enabled) setRoutineEnabled(routine.id, true);
+    if (routine) recordOperation('run-routine', 'routine:butler-reply-guardian', 'routines');
+  };
+
+  const acceptSuggestion = (item: {
+    ref: string;
+    why: string;
+    suggestedAction?: string;
+  }): void => {
+    const title = paperBrief?.refTitles[item.ref] ?? '管家主动发现';
+    const id = addTodo({
+      source: 'manual',
+      title,
+      note: item.suggestedAction || item.why,
+    });
+    recordOperation('create-task', 'task:from-butler-suggestion', 'now');
+    snoozeButlerRoundsItem(item.ref);
+    toast.undo(`${identity.displayName}已接住「${title}」`, () => {
+      removeTodo(id);
+      restoreButlerRoundsItem(item.ref);
+    });
+  };
+
+  const dismissSuggestion = (ref: string): void => {
+    if (!snoozeButlerRoundsItem(ref)) return;
+    recordOperation('dismiss-suggestion', 'suggestion:proactive', 'now');
+    toast.undo('已忽略这条建议', () => restoreButlerRoundsItem(ref));
+  };
+
+  const selectButlerView = (view: ButlerWorkspaceView): void => {
+    setButlerView(view);
+    recordOperation('open-view', `view:${view}`, 'butler-workspace');
+  };
+
+  const runRoutineFromPaper = async (id: string): Promise<void> => {
+    await runRoutineNow(id);
+    recordOperation('run-routine', `routine:${id}`, 'now');
+  };
+
+  const acknowledgeNeedToKnow = (id: string): void => {
+    acknowledgeNeed(id);
+    toast.undo('已标记为知道了，原责任仍然保留', () => restoreNeed(id));
+  };
+
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-surface-3">
-      <header className="shrink-0 px-6 pb-4 pt-7">
-        <div className="mx-auto flex w-full max-w-[760px] items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label="前一天"
-              title="看前一天"
-              onClick={() => setSelectedDate(shiftButlerPaperDate(selectedDate, -1))}
-              className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <h1 className="min-w-36 text-xl font-semibold tracking-tight text-ink">
-              {formatButlerPaperDate(selectedDate)}
-            </h1>
-            <button
-              type="button"
-              aria-label="后一天"
-              title={isToday ? '已经是今天' : '看后一天'}
-              disabled={isToday}
-              onClick={() => setSelectedDate(shiftButlerPaperDate(selectedDate, 1))}
-              className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink disabled:text-ink-3/35 disabled:hover:bg-transparent"
-            >
-              <ChevronRight size={16} />
-            </button>
+    <div className="butler-workspace">
+      <ButlerWorkspaceNav
+        active={activeView}
+        needsAttention={workspace.summary.needsAttention}
+        routineFailures={workspace.summary.routineFailures}
+        onSelect={selectButlerView}
+      />
+      <div className="butler-workspace-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-3">
+      {activeView === 'now' ? (
+        <header className="shrink-0 px-6 pb-0 pt-3">
+          <div className="mx-auto flex w-full max-w-[1080px] items-center justify-end">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="前一天"
+                title="看前一天"
+                onClick={() => setSelectedDate(shiftButlerPaperDate(selectedDate, -1))}
+                className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <h1 className="text-xs font-medium text-ink-3">
+                {formatButlerPaperDate(selectedDate)}
+              </h1>
+              <button
+                type="button"
+                aria-label="后一天"
+                title={isToday ? '已经是今天' : '看后一天'}
+                disabled={isToday}
+                onClick={() => setSelectedDate(shiftButlerPaperDate(selectedDate, 1))}
+                className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink disabled:text-ink-3/35 disabled:hover:bg-transparent"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label={conversationOpen ? '收起完整对话' : '查看完整对话'}
-              title={conversationOpen ? '收起完整对话' : '查看完整对话'}
-              onClick={toggleConversation}
-              className={`rounded-full p-2 transition ${
-                conversationOpen ? 'bg-fill-1 text-ink' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
-              }`}
-            >
-              <History size={16} />
-            </button>
-            <button
-              type="button"
-              aria-label={manageOpen ? '收起管家管理' : '打开管家管理'}
-              title={manageOpen ? '收起管家管理' : '打开管家管理'}
-              onClick={toggleManage}
-              className={`rounded-full p-2 transition ${
-                manageOpen ? 'bg-fill-1 text-ink' : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
-              }`}
-            >
-              <Settings2 size={16} />
-            </button>
-          </div>
-        </div>
-      </header>
+        </header>
+      ) : null}
 
       <main
-        className={`min-h-0 flex-1 px-6 ${
-          conversationOpen ? 'overflow-hidden pb-0' : 'overflow-y-auto pb-10'
+        className={`min-h-0 flex-1 ${
+          activeView === 'conversation' ? 'overflow-hidden p-0' : 'overflow-y-auto px-6 pb-10'
         }`}
       >
         <div
-          className={`mx-auto w-full max-w-[760px] ${
-            conversationOpen ? 'h-full' : 'space-y-9'
-          }`}
+          className={activeView === 'now'
+            ? 'butler-workspace-content'
+            : `mx-auto w-full ${
+              activeView === 'conversation' ? 'h-full' : 'max-w-[760px] space-y-9'
+            }`
+          }
         >
-          {conversationOpen ? (
+          <div className={
+            activeView === 'now'
+              ? 'butler-workspace-main space-y-9'
+              : activeView === 'conversation'
+                ? 'h-full min-h-0'
+                : undefined
+          }>
+          {activeView === 'conversation' ? (
             <section aria-label="完整对话" className="h-full">
-              <ButlerConversation onBackToPaper={backToPaper} embedded />
+              <ButlerConversation embedded />
             </section>
-          ) : manageOpen ? (
-            <section aria-label="管家管理">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-base font-semibold text-ink">管家管理</h2>
-                  <p className="mt-1 text-sm text-ink-3">
-                    例行事务、记忆、技能和最近动作都在这里，纸面保持安静。
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeManage}
-                  aria-label="收起管家管理"
-                  title="收起管家管理"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
-                >
-                  <ChevronUp size={15} />
-                </button>
+          ) : activeView === 'routines' ? (
+            <section aria-label="例行照看">
+              <div>
+                <span className="butler-eyebrow">持续责任</span>
+                <h2 className="mt-0.5 text-2xl font-semibold tracking-tight text-ink">例行照看</h2>
+                <p className="mt-1 text-sm text-ink-3">
+                  查看管家长期在守什么、是否健康，以及最近一次真实结果。
+                </p>
               </div>
-              <div className="mt-8 space-y-9">
+              <div className="mt-8">
                 <ButlerRoutines />
-                <ButlerLearnedPanel />
-                <ButlerAuditTrail />
               </div>
             </section>
+          ) : activeView === 'memory' ? (
+            <ButlerIdentityPage />
+          ) : activeView === 'connections' ? (
+            <ButlerConnectionsPanel />
+          ) : activeView === 'tasks' ? (
+            <div className="space-y-9">
+              <ButlerTasksView tasks={workspace.tasks} onCompleteTodo={toggleTodo} />
+              <ButlerErrandRunCard onAsk={askFromPaper} />
+            </div>
           ) : isToday ? (
             <>
+              <section aria-label="管家今日概况">
+                <span className="butler-eyebrow">主动工作驾驶舱</span>
+                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink">
+                  {workspace.summary.needsAttention > 0
+                    ? `早上好，今天有 ${workspace.summary.needsAttention} 件事值得你先看`
+                    : '早上好，现在没有需要你处理的'}
+                </h2>
+                <p className="mt-1 text-sm text-ink-3">
+                  我看过最近的消息、责任和运行状态；正在照看 {workspace.summary.watched} 项例行责任，
+                  推进 {workspace.summary.activeTasks} 件事。
+                </p>
+              </section>
+
+              <section aria-label="统一 Composer" className="butler-composer">
+                <div className="butler-composer-context">
+                  <span>#当前工作面</span>
+                  <button type="button" onClick={() => selectButlerView('tasks')}>引用任务</button>
+                  <button type="button" onClick={() => selectButlerView('routines')}>创建例行照看</button>
+                </div>
+                <form onSubmit={submitQuestion}>
+                  <input
+                    ref={composerInputRef}
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                    placeholder="问、交代或创建，例如：把这个 PR 的风险查清，下午三点前给我结论"
+                    aria-label="跟管家说件事"
+                  />
+                  <div className="butler-composer-actions">
+                    <div>
+                      <button type="button" aria-label="添加上下文" title="添加上下文">
+                        <Plus size={15} />
+                      </button>
+                      <button type="button" aria-label="引用文件或消息" title="引用文件或消息">
+                        <Paperclip size={14} />
+                      </button>
+                      <button type="button" onClick={() => selectButlerView('routines')}>
+                        创建
+                        <ChevronDown size={13} />
+                      </button>
+                    </div>
+                    {butlerRunning ? (
+                      <button type="button" aria-label="停止回答" onClick={() => void stopButler()}>
+                        <Square size={14} />
+                        停止
+                      </button>
+                    ) : (
+                      <button type="submit" disabled={!input.trim()} className="butler-composer-submit">
+                        交给{identity.displayName}
+                        <Send size={14} />
+                      </button>
+                    )}
+                  </div>
+                </form>
+                <button
+                  type="button"
+                  aria-label={watchedCount > 0
+                    ? `在盯 ${watchedCount} 件事，打开管理`
+                    : '自动整理未开启，打开设置'}
+                  onClick={openManage}
+                  className="butler-composer-status"
+                >
+                  {watchedCount > 0
+                    ? `已在照看 ${watchedCount} 项责任`
+                    : '自动整理未开启 · 设置'}
+                </button>
+              </section>
+
+              {workspace.summary.activationNeeded ? (
+                <section aria-label="管家首次启用" className="butler-activation">
+                  <div>
+                    <span className="butler-eyebrow">第一次价值</span>
+                    <h2>不用搭建，从一件真实工作开始</h2>
+                    <p>
+                      管家可以先只读整理最近工作，也可以立即替你盯住未回应的 @。
+                      它不会因为启用而获得发送或修改权限。
+                    </p>
+                  </div>
+                  <div className="butler-activation-actions">
+                    <button
+                      type="button"
+                      onClick={() => void runButlerRoundsNow(new Date(), 'first-value')}
+                      disabled={roundsRunning}
+                    >
+                      {roundsRunning ? '正在扫描…' : '扫描最近工作'}
+                    </button>
+                    <button type="button" onClick={enableStarterRoutine}>
+                      开启待回复守护
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => composerInputRef.current?.focus()}
+                    >
+                      先交代一件事
+                    </button>
+                  </div>
+                  {roundsError ? (
+                    <p className="butler-activation-error">
+                      最近一次扫描没有完成：{roundsError}
+                      <button type="button" onClick={() => void runButlerRoundsNow(new Date(), 'first-value-retry')}>
+                        重试
+                      </button>
+                    </p>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {workspace.needToKnow.length > 0 ? (
+                <section aria-label="需要知道">
+                  <div className="flex items-baseline gap-2">
+                    <h2 className="text-base font-semibold text-ink">需要知道</h2>
+                    <span className="text-xs text-danger">{workspace.needToKnow.length}</span>
+                  </div>
+                  <div className="mt-2 border-y border-line/70">
+                    {workspace.needToKnow.slice(0, 3).map((item) => (
+                      <article key={item.id} className="flex gap-3 border-b border-line/70 px-1 py-3.5 last:border-b-0">
+                        <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="text-sm font-semibold text-ink">{item.title}</h3>
+                          <p className="mt-1 text-xs leading-5 text-ink-2">{item.whyNow}</p>
+                          <p className="text-xs leading-5 text-ink-3">{item.consequence}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {item.kind === 'stale-mention' ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const card = eventCards.find((candidate) => candidate.id === item.sourceId);
+                                if (card) void openEventCard(card);
+                              }}
+                              className="h-8 rounded px-2 text-xs text-primary hover:bg-fill-hover"
+                            >
+                              去处理
+                            </button>
+                          ) : item.kind === 'routine-failure' ? (
+                            <button
+                              type="button"
+                              onClick={() => selectButlerView('routines')}
+                              className="h-8 rounded px-2 text-xs text-primary hover:bg-fill-hover"
+                            >
+                              查看并修复
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => selectButlerView('tasks')}
+                              className="h-8 rounded px-2 text-xs text-primary hover:bg-fill-hover"
+                            >
+                              查看任务
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => acknowledgeNeedToKnow(item.id)}
+                            className="h-8 rounded px-2 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink"
+                          >
+                            知道了
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {briefItems.length > 0 ? (
+                <section aria-label="我主动发现">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-baseline gap-2">
+                      <h2 className="text-base font-semibold text-ink">我主动发现</h2>
+                      <span className="text-xs text-ink-3">{briefItems.length}</span>
+                    </div>
+                    <span className="text-[11px] text-ink-3">根据真实工作变化生成</span>
+                  </div>
+                  <div className="mt-2 border-y border-line/70">
+                    {visibleBriefItems.map((item, index) => (
+                      <article key={`${item.ref}:${briefOffset + index}`} className="border-b border-line/70 py-3.5 last:border-b-0">
+                        <div className="flex items-start gap-3">
+                          <Sparkles size={15} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-sm font-semibold text-ink">
+                              {paperBrief?.refTitles[item.ref] ?? '相关事项'}
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-ink-2">{item.why}</p>
+                            {item.suggestedAction ? (
+                              <p className="text-xs leading-5 text-ink-3">{item.suggestedAction}</p>
+                            ) : null}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {item.suggestedAction ? (
+                              <button
+                                type="button"
+                                onClick={() => acceptSuggestion(item)}
+                                className="h-8 rounded bg-fill-1 px-2.5 text-xs text-ink hover:bg-fill-hover"
+                              >
+                                让{identity.displayName}接住
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              aria-label={`忽略建议${paperBrief?.refTitles[item.ref] ?? item.ref}`}
+                              onClick={() => dismissSuggestion(item.ref)}
+                              className="h-8 rounded px-2 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink"
+                            >
+                              忽略
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               <ButlerErrandRunCard onAsk={askFromPaper} />
 
               {paperTodos.length > 0 ? (
@@ -625,58 +903,10 @@ export default function ButlerPage() {
                 reports={routineReports}
                 eventCards={paperEventCards}
                 interactive
-                onRunNow={runRoutineNow}
+                onRunNow={runRoutineFromPaper}
                 onOpenEvent={openEventCard}
                 onDismissEvent={dismissCard}
               />
-
-              {briefItems.length > 0 ? (
-                <section aria-label="今天">
-                  <h2 className="text-base font-semibold text-ink">今天</h2>
-                  <div className="mt-3 space-y-2">
-                    {visibleBriefItems.map((item, index) => (
-                      <details key={`${item.ref}:${briefOffset + index}`} className="group">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 rounded py-1 text-left outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-primary-light [&::-webkit-details-marker]:hidden">
-                          <ChevronRight
-                            size={14}
-                            aria-hidden="true"
-                            className="shrink-0 text-ink-3 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none"
-                          />
-                          <h3 className="min-w-0 text-sm font-medium text-ink">
-                            {paperBrief?.refTitles[item.ref] ?? '相关事项'}
-                          </h3>
-                        </summary>
-                        <div className="ml-[22px] pb-2">
-                          <p className="text-xs leading-5 text-ink-2">{item.why}</p>
-                          {item.suggestedAction ? (
-                            <p className="mt-1 text-xs leading-5 text-ink-3">{item.suggestedAction}</p>
-                          ) : null}
-                        </div>
-                      </details>
-                    ))}
-                  </div>
-                  <div className="mt-4 flex items-center gap-4 text-xs text-ink-3">
-                    {briefOffset > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => setBriefOffset(Math.max(0, briefOffset - BRIEF_PAGE_SIZE))}
-                        className="hover:text-ink"
-                      >
-                        ‹ 前 {Math.min(BRIEF_PAGE_SIZE, briefOffset)} 条
-                      </button>
-                    ) : null}
-                    {remainingBriefItems > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => setBriefOffset(briefOffset + BRIEF_PAGE_SIZE)}
-                        className="hover:text-ink"
-                      >
-                        还有 {remainingBriefItems} 条 ›
-                      </button>
-                    ) : null}
-                  </div>
-                </section>
-              ) : null}
 
               {roundsRunning && !paperBrief ? (
                 <section
@@ -726,7 +956,7 @@ export default function ButlerPage() {
                 </section>
               ) : null}
 
-              {paperEmpty && inlineLines.length === 0 ? (
+              {paperEmpty && inlineLines.length === 0 && !workspace.summary.activationNeeded ? (
                 <section className="pt-10 text-center" aria-label="管家空状态">
                   <p className="text-base text-ink-2">今天还没有事。</p>
                   <p className="mt-2 text-sm text-ink-3">有事直接说，没事就让这张纸空着。</p>
@@ -757,7 +987,7 @@ export default function ButlerPage() {
                 reports={routineReports}
                 eventCards={[]}
                 interactive={false}
-                onRunNow={runRoutineNow}
+                onRunNow={runRoutineFromPaper}
                 onOpenEvent={openEventCard}
                 onDismissEvent={dismissCard}
               />
@@ -768,58 +998,57 @@ export default function ButlerPage() {
               ) : null}
             </>
           )}
+          </div>
+          {activeView === 'now' ? (
+            <aside className="butler-workspace-aside" aria-label="管家上下文">
+              <section>
+                <h3 className="flex items-center gap-1.5">
+                  <CalendarDays size={14} aria-hidden="true" />
+                  今天
+                </h3>
+                <ul className="mt-2 space-y-1">
+                  {workspace.tasks.filter((task) => task.nextAt).slice(0, 3).map((task) => (
+                    <li key={task.id}>{task.nextAt} · {task.title}</li>
+                  ))}
+                  {workspace.tasks.every((task) => !task.nextAt) ? <li>暂无明确截止事项</li> : null}
+                </ul>
+              </section>
+              <section>
+                <h3>例行照看</h3>
+                <p className="mt-2">
+                  {workspace.summary.watched} 项启用
+                  {workspace.summary.routineFailures > 0
+                    ? ` · ${workspace.summary.routineFailures} 项需要修复`
+                    : ' · 当前健康'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => selectButlerView('routines')}
+                  className="mt-2 text-xs text-primary hover:underline"
+                >
+                  查看全部
+                </button>
+              </section>
+              <section>
+                <h3>快捷动作</h3>
+                <div className="mt-2 flex flex-col items-start gap-1">
+                  <button type="button" onClick={() => selectButlerView('conversation')} className="text-xs text-primary hover:underline">
+                    交代一件事
+                  </button>
+                  <button type="button" onClick={() => selectButlerView('routines')} className="text-xs text-primary hover:underline">
+                    创建例行照看
+                  </button>
+                  <button type="button" onClick={() => selectButlerView('tasks')} className="text-xs text-primary hover:underline">
+                    查看全部任务
+                  </button>
+                </div>
+              </section>
+            </aside>
+          ) : null}
         </div>
       </main>
 
-      {isToday && !conversationOpen && !manageOpen ? (
-        <footer className="shrink-0 px-6 pb-5 pt-3">
-          <div className="mx-auto w-full max-w-[760px]">
-            <form
-              onSubmit={submitQuestion}
-              className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 transition-colors focus-within:border-primary"
-            >
-              <input
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                placeholder="跟管家说件事……"
-                aria-label="跟管家说件事"
-                className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
-              />
-              {butlerRunning ? (
-                <button
-                  type="button"
-                  aria-label="停止回答"
-                  onClick={() => void stopButler()}
-                  className="p-2 text-ink-2 hover:text-ink"
-                >
-                  <Square size={14} />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={!input.trim()}
-                  aria-label="发送"
-                  className="p-2 text-primary hover:text-primary-hover disabled:text-ink-3/40"
-                >
-                  <Send size={15} />
-                </button>
-              )}
-            </form>
-            <button
-              type="button"
-              aria-label={watchedCount > 0
-                ? `在盯 ${watchedCount} 件事，打开管理`
-                : '自动整理未开启，打开设置'}
-              onClick={openManage}
-              className="mx-auto mt-2 block rounded px-2 py-0.5 text-[11px] text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
-            >
-              {watchedCount > 0
-                ? `在盯 ${watchedCount} 件事 · 管理`
-                : '自动整理未开启 · 设置'}
-            </button>
-          </div>
-        </footer>
-      ) : null}
+      </div>
     </div>
   );
 }

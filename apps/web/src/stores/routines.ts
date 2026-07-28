@@ -49,6 +49,17 @@ export interface RoutineRun {
   text: string;
 }
 
+export interface RoutineVersion {
+  version: number;
+  at: number;
+  reason: string;
+  name: string;
+  trigger: RoutineTrigger;
+  skillName?: string;
+  prompt?: string;
+  params?: { rooms?: string[] };
+}
+
 // 默认类型参数保留旧 UI/调用方的静态兼容；引擎边界显式传 RoutineTrigger 做严格校验。
 export interface Routine<TTrigger extends RoutineTrigger = any> {
   id: string;
@@ -62,6 +73,9 @@ export interface Routine<TTrigger extends RoutineTrigger = any> {
   delivery: 'today';
   enabled: boolean;
   createdAt: number;
+  updatedAt?: number;
+  contractVersion?: number;
+  versions?: RoutineVersion[];
   lastFiredDate?: string;
   runs: RoutineRun[];
 }
@@ -87,6 +101,12 @@ interface RoutineState {
   ) => Routine | undefined;
   unloadRoutine: (id: string) => void;
   addRoutine: (routine: Routine) => void;
+  updateContract: (
+    id: string,
+    patch: Partial<Pick<Routine, 'name' | 'trigger' | 'skillName' | 'prompt' | 'params'>>,
+    reason?: string,
+  ) => void;
+  rollbackContract: (id: string, version: number) => void;
   removeRoutine: (id: string) => void;
   dismissCard: (id: string) => void;
   runNow: (
@@ -194,6 +214,24 @@ function cloneTrigger(trigger: RoutineTrigger): RoutineTrigger {
     : { kind: 'interval', everyMinutes: trigger.everyMinutes };
 }
 
+function routineVersion(
+  routine: Pick<Routine, 'name' | 'trigger' | 'skillName' | 'prompt' | 'params'>,
+  version: number,
+  at: number,
+  reason: string,
+): RoutineVersion {
+  return {
+    version,
+    at,
+    reason,
+    name: routine.name,
+    trigger: cloneTrigger(routine.trigger),
+    ...(routine.skillName ? { skillName: routine.skillName } : {}),
+    ...(routine.prompt ? { prompt: routine.prompt } : {}),
+    ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
+  };
+}
+
 function templateRoutineId(templateId: ButlerAbilityTemplateId): string | undefined {
   if (templateId === 'morning-brief') return 'builtin-morning-brief';
   if (templateId === 'evening-review') return 'builtin-evening-review';
@@ -208,22 +246,27 @@ function routineFromTemplate(
 ): Routine | undefined {
   const rooms = params?.rooms?.map((room) => room.trim()).filter(Boolean);
   if (template.params === 'rooms' && !rooms?.length) return undefined;
-  const prompt = template.params === 'rooms'
+  const prompt = template.params === 'rooms' && template.prompt
     ? template.prompt.replaceAll('{{rooms}}', rooms!.join('、'))
     : template.prompt;
-  return {
+  if (!template.skillName && !prompt) return undefined;
+  const routine: Routine = {
     id: options?.id ?? `routine-${template.id}-${crypto.randomUUID()}`,
     name: template.title,
     trigger: cloneTrigger(template.defaultTrigger),
-    prompt,
+    ...(template.skillName ? { skillName: template.skillName } : { prompt: prompt! }),
     templateId: template.id,
     precheck: template.precheck,
     ...(rooms ? { params: { rooms: [...rooms] } } : {}),
     delivery: 'today',
     enabled: options?.enabled ?? true,
     createdAt,
+    updatedAt: createdAt,
+    contractVersion: 1,
     runs: [],
   };
+  routine.versions = [routineVersion(routine, 1, createdAt, '创建例行照看')];
+  return routine;
 }
 
 function normalizeRoutine(value: unknown): Routine | undefined {
@@ -247,15 +290,48 @@ function normalizeRoutine(value: unknown): Routine | undefined {
       : routine.id === 'builtin-evening-review'
         ? findButlerAbilityTemplate('evening-review')
         : undefined;
-  return {
+  const normalized = {
     ...routine,
     trigger,
     runs: routine.runs.slice(0, RUN_LIMIT),
     ...(template && !routine.templateId ? { templateId: template.id } : {}),
-    ...(template && !routine.prompt ? { prompt: template.prompt } : {}),
+    ...(template && !routine.skillName && !routine.prompt
+      ? template.skillName
+        ? { skillName: template.skillName }
+        : template.prompt
+          ? { prompt: template.prompt }
+          : {}
+      : {}),
     ...(template && !routine.precheck ? { precheck: template.precheck } : {}),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
   } as Routine;
+  const versions = Array.isArray(routine.versions)
+    ? routine.versions.flatMap((version) => {
+      if (
+        !version
+        || typeof version.version !== 'number'
+        || typeof version.at !== 'number'
+        || typeof version.reason !== 'string'
+        || typeof version.name !== 'string'
+      ) return [];
+      const versionTrigger = normalizeTrigger(version.trigger);
+      if (!versionTrigger) return [];
+      return [{
+        ...version,
+        trigger: versionTrigger,
+        ...(version.params?.rooms ? { params: { rooms: [...version.params.rooms] } } : {}),
+      }];
+    }).slice(-20)
+    : [];
+  const currentVersion = Math.max(1, routine.contractVersion ?? versions.at(-1)?.version ?? 1);
+  return {
+    ...normalized,
+    updatedAt: routine.updatedAt ?? routine.createdAt,
+    contractVersion: currentVersion,
+    versions: versions.length
+      ? versions
+      : [routineVersion(normalized, currentVersion, routine.createdAt, '从旧版本迁移')],
+  };
 }
 
 function readJson(key: string): unknown {
@@ -426,15 +502,64 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   addRoutine: (routine) => {
     const trigger = normalizeTrigger(routine.trigger);
     if (!trigger) throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
-    const normalized = {
+    const base = {
       ...routine,
       trigger,
       runs: routine.runs.slice(0, RUN_LIMIT),
       ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
     };
+    const currentVersion = Math.max(1, base.contractVersion ?? 1);
+    const normalized: Routine = {
+      ...base,
+      updatedAt: base.updatedAt ?? base.createdAt,
+      contractVersion: currentVersion,
+      versions: base.versions?.length
+        ? base.versions.slice(-20)
+        : [routineVersion(base, currentVersion, base.createdAt, '创建例行照看')],
+    };
     const routines = [normalized, ...get().routines.filter((item) => item.id !== normalized.id)];
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+  },
+
+  updateContract: (id, patch, reason = '与管家调整') => {
+    const at = routineNow();
+    const routines = get().routines.map((routine) => {
+      if (routine.id !== id) return routine;
+      const trigger = patch.trigger ? normalizeTrigger(patch.trigger) : routine.trigger;
+      if (!trigger) throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
+      const next: Routine = {
+        ...routine,
+        ...patch,
+        trigger,
+        ...(patch.params?.rooms ? { params: { rooms: [...patch.params.rooms] } } : {}),
+      };
+      const version = (routine.contractVersion ?? routine.versions?.at(-1)?.version ?? 1) + 1;
+      return {
+        ...next,
+        updatedAt: at,
+        contractVersion: version,
+        versions: [
+          ...(routine.versions ?? [routineVersion(routine, 1, routine.createdAt, '从旧版本迁移')]),
+          routineVersion(next, version, at, reason),
+        ].slice(-20),
+      };
+    });
+    set({ routines });
+    persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+  },
+
+  rollbackContract: (id, version) => {
+    const routine = get().routines.find((item) => item.id === id);
+    const target = routine?.versions?.find((candidate) => candidate.version === version);
+    if (!routine || !target) return;
+    get().updateContract(id, {
+      name: target.name,
+      trigger: target.trigger,
+      skillName: target.skillName,
+      prompt: target.prompt,
+      params: target.params,
+    }, `回退到 v${version}`);
   },
 
   removeRoutine: (id) => {

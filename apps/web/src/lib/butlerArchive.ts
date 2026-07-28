@@ -23,12 +23,14 @@ const ARCHIVE_KEY = 'archive';
 const LEGACY_MEMORY_KEY = 'rcx-butler-v1:memory';
 const ACTIVE_MEMORY_V2_KEY = 'rcx-butler-v2:memory';
 const ARCHIVE_KEYS = [
+  'rcx-butler-v1:identity',
   'rcx-butler-v1:persona',
   LEGACY_MEMORY_KEY,
   ACTIVE_MEMORY_V2_KEY,
   'rcx-butler-v1:skills',
   'rcx-butler-v1:routines',
   'rcx-butler-v1:routine-seen',
+  'rcx-butler-v1:extensions',
 ] as const;
 
 export type ButlerArchiveKey = (typeof ARCHIVE_KEYS)[number];
@@ -328,7 +330,10 @@ function nativeSkillFileRelativePath(name: string): string {
   return `${nativeSkillDirectoryRelativePath(name)}/SKILL.md`;
 }
 
-function absolutePath(homeDir: string, relativePath: string): string {
+function absolutePath(homeDir: unknown, relativePath: string): string {
+  if (typeof homeDir !== 'string' || !homeDir.trim()) {
+    throw new Error('Butler home 目录不可用');
+  }
   return `${homeDir.replace(/[\\/]+$/, '')}/${relativePath}`;
 }
 
@@ -431,6 +436,61 @@ export function mirrorButlerWorkspaceFiles(
   return scheduleWorkspaceMirror(persona, skills).catch((error) => {
     console.warn('[Butler archive] 写入桌面档案镜像失败', error);
   });
+}
+
+export async function writeButlerProfileFile(
+  homeDir: string,
+  markdown: string,
+  mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>,
+  writeFile: (path: string, contents: Uint8Array) => Promise<void>,
+): Promise<void> {
+  await mkdir(homeDir, { recursive: true });
+  await writeFile(
+    absolutePath(homeDir, 'Profile.md'),
+    new TextEncoder().encode(markdown),
+  );
+}
+
+export function mirrorButlerProfileFile(markdown: string): Promise<void> {
+  if (!isTauri) return Promise.resolve();
+  return enqueueMirrorTask(async () => {
+    const [{ invoke }, { mkdir, writeFile }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+    const homeDir = await invoke<string>('butler_home_dir');
+    await writeButlerProfileFile(homeDir, markdown, mkdir, writeFile);
+  }).catch((error) => {
+    console.warn('[Butler archive] 写入 Profile.md 失败', error);
+  });
+}
+
+export async function readButlerProfileFile(): Promise<string | null> {
+  if (!isTauri) return null;
+  const [{ invoke }, { readTextFile }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
+  const homeDir = await invoke<string>('butler_home_dir');
+  return readTextFile(absolutePath(homeDir, 'Profile.md')).catch(() => null);
+}
+
+export async function watchButlerProfileFile(
+  onChange: (markdown: string) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => undefined;
+  const [{ invoke }, { readTextFile, watch }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
+  const homeDir = await invoke<unknown>('butler_home_dir');
+  if (typeof homeDir !== 'string' || !homeDir.trim()) return () => undefined;
+  const profilePath = absolutePath(homeDir, 'Profile.md');
+  return watch(profilePath, () => {
+    void readTextFile(profilePath)
+      .then(onChange)
+      .catch(() => undefined);
+  }, { delayMs: 400 });
 }
 
 export async function ensureButlerWorkspaceFiles(

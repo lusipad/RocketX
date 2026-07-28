@@ -1,7 +1,10 @@
 import {
   AtSign,
+  CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
+  CircleAlert,
   Loader2,
   Play,
   X,
@@ -45,10 +48,12 @@ function RoutineReportCard({
   routine,
   running,
   onRunNow,
+  onOpenDetails,
 }: {
   routine: Routine;
   running: boolean;
   onRunNow: (id: string) => Promise<void>;
+  onOpenDetails: (id: string) => void;
 }) {
   const latest = routine.runs[0];
   const [expanded, setExpanded] = useState(() => shouldExpandRun(latest, Date.now()));
@@ -91,6 +96,15 @@ function RoutineReportCard({
             {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
           </button>
         ) : null}
+        <button
+          type="button"
+          aria-label={`查看${routine.name}详情`}
+          title="查看健康、配置和版本"
+          onClick={() => onOpenDetails(routine.id)}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-primary"
+        >
+          <ChevronRight size={15} />
+        </button>
       </div>
       {latest && expanded ? (
         <div className="mt-2 border-l border-line pl-4">
@@ -103,6 +117,146 @@ function RoutineReportCard({
   );
 }
 
+type RoutineDetailTab = 'overview' | 'runs' | 'configuration' | 'versions';
+
+function RoutineDetail({
+  routine,
+  running,
+  onRunNow,
+  onRollback,
+  onClose,
+}: {
+  routine: Routine;
+  running: boolean;
+  onRunNow: (id: string) => Promise<void>;
+  onRollback: (id: string, version: number) => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<RoutineDetailTab>('overview');
+  const latest = routine.runs[0];
+  const lastSuccess = routine.runs.find((run) => run.status === 'ok');
+  const health = !routine.enabled
+    ? '已暂停'
+    : latest?.status === 'error'
+      ? '需要修复'
+      : latest
+        ? '正常'
+        : '等待首次运行';
+  const failing = routine.enabled && latest?.status === 'error';
+  const tabs: Array<{ id: RoutineDetailTab; label: string }> = [
+    { id: 'overview', label: '概览' },
+    { id: 'runs', label: '运行记录' },
+    { id: 'configuration', label: '配置' },
+    { id: 'versions', label: '版本' },
+  ];
+
+  return (
+    <section aria-label={`${routine.name}详情`} className="butler-routine-detail">
+      <header>
+        <div>
+          <span className="butler-eyebrow">例行照看详情</span>
+          <h3>{routine.name}</h3>
+          <p className={failing ? 'text-warning' : 'text-ink-3'}>
+            {failing
+              ? <CircleAlert size={14} aria-hidden="true" />
+              : <CheckCircle2 size={14} aria-hidden="true" />}
+            {health}
+          </p>
+        </div>
+        <button type="button" aria-label={`关闭${routine.name}详情`} onClick={onClose}>
+          <X size={15} />
+        </button>
+      </header>
+      <div role="tablist" aria-label={`${routine.name}详情视图`} className="butler-routine-tabs">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="butler-routine-detail-body">
+        {tab === 'overview' ? (
+          <dl>
+            <div><dt>当前状态</dt><dd>{health}</dd></div>
+            <div><dt>上次运行</dt><dd>{latest ? displayTime(latest.at) : '还没有运行'}</dd></div>
+            <div><dt>上次成功</dt><dd>{lastSuccess ? displayTime(lastSuccess.at) : '还没有成功记录'}</dd></div>
+            <div><dt>检查节奏</dt><dd>{routineScheduleLabel(routine.trigger)}</dd></div>
+            <div><dt>工作范围</dt><dd>{routine.params?.rooms?.join('、') || '当前账号可见范围'}</dd></div>
+          </dl>
+        ) : null}
+        {tab === 'runs' ? (
+          routine.runs.length > 0 ? (
+            <div className="butler-routine-run-list">
+              {routine.runs.map((run) => (
+                <article key={run.id}>
+                  <span className={run.status === 'ok' ? 'text-success' : 'text-warning'}>
+                    {run.status === 'ok' ? '完成' : '失败'}
+                  </span>
+                  <time>{displayTime(run.at)}</time>
+                  <p>{run.text}</p>
+                </article>
+              ))}
+            </div>
+          ) : <p className="butler-routine-empty">还没有运行记录。启用后会在这里留下真实结果。</p>
+        ) : null}
+        {tab === 'configuration' ? (
+          <dl>
+            <div><dt>触发方式</dt><dd>{routineScheduleLabel(routine.trigger)}</dd></div>
+            <div><dt>查看来源</dt><dd>{routine.params?.rooms?.join('、') || '与你有关的 RocketX 工作来源'}</dd></div>
+            <div><dt>保持沉默</dt><dd>没有变化或没有明确行动价值时</dd></div>
+            <div><dt>最多做到</dt><dd>只读检查与整理；外部动作仍需要你决定</dd></div>
+          </dl>
+        ) : null}
+        {tab === 'versions' ? (
+          <div className="butler-routine-versions">
+            {[...(routine.versions ?? [{
+              version: 1,
+              at: routine.createdAt,
+              reason: routine.templateId ? '由预置方法创建' : '由用户配置创建',
+            }])].reverse().map((version) => {
+              const current = version.version === (routine.contractVersion ?? 1);
+              return (
+                <article key={version.version} className="butler-routine-version">
+                  <strong>v{version.version}{current ? ' · 当前版本' : ''}</strong>
+                  <span>{displayTime(version.at)}</span>
+                  <p>{version.reason}</p>
+                  {!current ? (
+                    <button
+                      type="button"
+                      onClick={() => onRollback(routine.id, version.version)}
+                    >
+                      回退到此版本
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+      <footer>
+        <button
+          type="button"
+          onClick={() => void onRunNow(routine.id)}
+          disabled={running}
+        >
+          {running ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Play size={14} />}
+          {latest?.status === 'error' ? '重试并验证' : '立即检查'}
+        </button>
+        <button type="button" onClick={() => useUI.getState().openButlerConversation()}>
+          与管家调整
+        </button>
+      </footer>
+    </section>
+  );
+}
+
 export default function ButlerRoutines() {
   const routines = useRoutines((state) => state.routines);
   const eventCards = useRoutines((state) => state.eventCards);
@@ -111,12 +265,14 @@ export default function ButlerRoutines() {
   const loadRoutineTemplate = useRoutines((state) => state.loadTemplate);
   const setRoutineEnabled = useRoutines((state) => state.setEnabled);
   const runRoutineNow = useRoutines((state) => state.runNow);
+  const rollbackRoutine = useRoutines((state) => state.rollbackContract);
   const dismissCard = useRoutines((state) => state.dismissCard);
   const subscriptions = useChat((state) => state.subscriptions);
   const [manageExpanded, setManageExpanded] = useState(routines.length === 0);
   const [showDigestPicker, setShowDigestPicker] = useState(false);
   const [selectedDigestRooms, setSelectedDigestRooms] = useState<string[]>([]);
   const [digestError, setDigestError] = useState('');
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null);
 
   useEffect(() => {
     hydrateRoutines();
@@ -134,6 +290,7 @@ export default function ButlerRoutines() {
     ),
     [routines],
   );
+  const selectedRoutine = routines.find((routine) => routine.id === selectedRoutineId);
   const digestRooms = useMemo(
     () => {
       const seen = new Set<string>();
@@ -221,9 +378,20 @@ export default function ButlerRoutines() {
                 routine={routine}
                 running={runningIds.includes(routine.id)}
                 onRunNow={runRoutineNow}
+                onOpenDetails={setSelectedRoutineId}
               />
             ))}
           </div>
+        ) : null}
+
+        {selectedRoutine ? (
+          <RoutineDetail
+            routine={selectedRoutine}
+            running={runningIds.includes(selectedRoutine.id)}
+            onRunNow={runRoutineNow}
+            onRollback={rollbackRoutine}
+            onClose={() => setSelectedRoutineId(null)}
+          />
         ) : null}
 
         <details

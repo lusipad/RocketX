@@ -1,6 +1,5 @@
 import {
   ChevronDown,
-  ChevronUp,
   Loader2,
   Send,
   Share2,
@@ -24,6 +23,8 @@ import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
+import ButlerArtifactsPanel from './ButlerArtifactsPanel';
+import ButlerConversationHistory from './ButlerConversationHistory';
 import ButlerErrandCard from './ButlerErrandCard';
 import ButlerErrandRunCard from './ButlerErrandRunCard';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
@@ -35,6 +36,7 @@ import ButlerImagePicker, {
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import type { ButlerImageInput } from '../lib/butlerImages';
+import { useButlerArtifacts } from '../stores/butlerArtifacts';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
 
@@ -44,10 +46,8 @@ function routineDaysLabel(days?: number[]): string {
 }
 
 export default function ButlerConversation({
-  onBackToPaper,
   embedded = false,
 }: {
-  onBackToPaper: () => void;
   embedded?: boolean;
 }) {
   const userId = useAuth((state) => state.user?._id);
@@ -70,6 +70,9 @@ export default function ButlerConversation({
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
   const context = useButler((state) => state.context);
+  const hydrateArtifacts = useButlerArtifacts((state) => state.hydrate);
+  const captureArtifactLine = useButlerArtifacts((state) => state.captureLine);
+  const artifacts = useButlerArtifacts((state) => state.artifacts);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [transferring, setTransferring] = useState(false);
@@ -129,6 +132,14 @@ export default function ButlerConversation({
     if (userId) void hydrateButler();
   }, [hydrateButler, userId]);
 
+  useEffect(() => {
+    hydrateArtifacts();
+  }, [hydrateArtifacts]);
+
+  useEffect(() => {
+    for (const conversationLine of lines) captureArtifactLine(conversationLine);
+  }, [captureArtifactLine, lines]);
+
   // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
   // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
@@ -158,54 +169,59 @@ export default function ButlerConversation({
   };
 
   return (
-    <div className={`flex h-full min-w-0 flex-1 flex-col overflow-hidden ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
-      <header className={`flex shrink-0 items-start justify-between gap-4 border-b border-line ${embedded ? 'bg-transparent px-0 pb-4' : 'bg-surface px-6 py-4'}`}>
-        <div>
-          <h2 className="text-base font-semibold text-ink">完整对话</h2>
-          <p className="mt-1 text-xs text-ink-3">
-            {context ? `当前工作面：${context.label}` : '多轮讨论留在这里，结论会写回今天的纸。'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-1">
-          <ButlerSessionSwitcher compact />
-          <button
-            type="button"
-            onClick={() => void transferToCodex()}
-            disabled={running || transferring || !hasConversation}
-            aria-label="在 Codex App 打开"
-            title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
-            className="flex h-7 items-center gap-1 rounded px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-40"
-          >
-            {transferring ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Share2 size={13} />}
-            Codex
-          </button>
-          <button
-            type="button"
-            onClick={onBackToPaper}
-            aria-label="回到纸"
-            title="收起完整对话"
-            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
-          >
-            <ChevronUp size={14} />
-          </button>
-        </div>
-      </header>
+    <div className={`butler-conversation-layout ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
+      <ButlerConversationHistory />
+      <div className="butler-conversation-pane">
+        <header className="butler-conversation-header">
+          <div className="min-w-0">
+            <span>完整对话</span>
+            <h2>{activeSummary?.title || '新对话'}</h2>
+            <p>
+              {context ? `当前工作面：${context.label}` : '多轮讨论留在这里，结论会写回今天的纸。'}
+            </p>
+          </div>
+          <div className="butler-conversation-header-actions">
+            <div className="butler-conversation-mobile-switcher">
+              <ButlerSessionSwitcher compact />
+            </div>
+            <div className="butler-conversation-session-actions">
+              <ButlerSessionSwitcher compact actionsOnly />
+            </div>
+            <button
+              type="button"
+              onClick={() => void transferToCodex()}
+              disabled={running || transferring || !hasConversation}
+              aria-label="在 Codex App 打开"
+              title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-40"
+            >
+              {transferring ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Share2 size={13} />}
+              Codex
+            </button>
+          </div>
+        </header>
 
-      {errands.some((errand) => !errand.archivedAt) ? (
-        <details className="group shrink-0 border-b border-line/70">
-          <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 hover:text-ink">
-            <span>{errands.filter((errand) => !errand.archivedAt).length} 件在办</span>
-            <ChevronDown
-              size={13}
-              className="transition-transform motion-reduce:transition-none group-open:rotate-180"
+        {errands.some((errand) => !errand.archivedAt) ? (
+          <details className="group shrink-0 border-b border-line/70 px-6">
+            <summary className="mx-auto flex max-w-[840px] cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 hover:text-ink">
+              <span>{errands.filter((errand) => !errand.archivedAt).length} 件在办</span>
+              <ChevronDown
+                size={13}
+                className="transition-transform motion-reduce:transition-none group-open:rotate-180"
+              />
+            </summary>
+            <div className="mx-auto max-h-[36vh] max-w-[840px] overflow-y-auto pb-4">
+              <ButlerErrandRunCard />
+            </div>
+          </details>
+        ) : null}
+
+        <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="mx-auto min-h-full w-full max-w-[840px] space-y-5">
+            <ButlerArtifactsPanel
+              onContinue={(title) => setInput(`继续加工成果“${title}”：`)}
             />
-          </summary>
-          <div className="max-h-[36vh] overflow-y-auto pb-4"><ButlerErrandRunCard /></div>
-        </details>
-      ) : null}
 
-      <main ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'px-0 py-5' : 'px-6 py-5'}`}>
-        <div className={`mx-auto min-h-full w-full max-w-[760px] space-y-5 ${embedded ? 'px-2' : 'p-5'}`}>
           {recap && activeSummary ? (
             <div className="sticky top-0 z-10 border-l border-primary/45 bg-surface py-1 pl-4 text-xs leading-5 text-ink-2">
               <span className="font-medium text-ink">上回说到</span>
@@ -247,6 +263,7 @@ export default function ButlerConversation({
                 : lines.length;
             const renderLine = (line: (typeof lines)[number]) => {
               const mine = line.role === 'user';
+              const artifact = artifacts.find((candidate) => candidate.sourceLineId === line.id);
               return (
                 <article
                   key={line.id}
@@ -267,7 +284,15 @@ export default function ButlerConversation({
                         mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
                       }`}
                     >
-                      {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+                      {artifact ? (
+                        <div className="butler-artifact-message">
+                          <span>已生成{artifact.kind === 'draft' ? '草稿' : artifact.kind === 'diff' ? '变更' : artifact.kind === 'checklist' ? '清单' : '报告'}成果</span>
+                          <strong>{artifact.title}</strong>
+                          <small>完整内容、来源和版本已放在上方成果工作面。</small>
+                        </div>
+                      ) : line.role === 'assistant' && !line.text.startsWith('📌')
+                        ? renderMarkdown(line.text)
+                        : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
                       {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
@@ -312,12 +337,16 @@ export default function ButlerConversation({
           ) : null}
           <ButlerErrandCard />
           <ButlerActionCard />
-        </div>
-      </main>
+          </div>
+        </main>
 
-      <footer className={`shrink-0 bg-surface ${embedded ? 'px-0 py-3' : 'px-6 py-3'}`}>
-        <div className="mx-auto w-full max-w-[760px]">
-          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="relative flex items-end gap-2 border-b border-line py-1 focus-within:border-primary">
+        <footer className="butler-conversation-footer">
+          <div className="mx-auto w-full max-w-[840px]">
+            <form
+              aria-label="发送消息给管家"
+              onSubmit={(event) => { event.preventDefault(); void submit(); }}
+              className="butler-conversation-composer"
+            >
             <ButlerSlashMenu
               options={slashOptions}
               activeIndex={slash.activeIndex}
@@ -326,16 +355,24 @@ export default function ButlerConversation({
             />
             <div className="min-w-0 flex-1">
               <ButlerImagePreviews images={images} onChange={setImages} />
-              <div className="flex items-center">
+              <div className="flex items-end">
                 <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
-                <input
+                <textarea
+                  rows={2}
                   value={input}
                   onChange={(event) => { setInput(event.target.value); slash.reopen(); }}
-                  onKeyDown={(event) => slash.handleKeyDown(event, pickSlashOption)}
+                  onKeyDown={(event) => {
+                    if (slash.handleKeyDown(event, pickSlashOption)) return;
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      void submit();
+                    }
+                  }}
                   onBlur={() => slash.dismiss()}
                   onPaste={(event) => void pasteButlerImages(event, images, setImages)}
-                  placeholder="继续说……"
-                  className="h-9 w-full min-w-0 bg-transparent px-1 text-sm text-ink outline-none placeholder:text-ink-3"
+                  aria-label="给管家发消息"
+                  placeholder="给管家发消息……"
+                  className="min-h-12 w-full min-w-0 resize-none bg-transparent px-2 py-2 text-sm leading-5 text-ink outline-none placeholder:text-ink-3"
                 />
               </div>
             </div>
@@ -346,9 +383,11 @@ export default function ButlerConversation({
             ) : (
               <button type="submit" aria-label="发送" title="发送" disabled={!input.trim() && !images.length} className="flex h-8 w-8 items-center justify-center rounded text-primary hover:bg-primary-light disabled:text-ink-3/40"><Send size={14} /></button>
             )}
-          </form>
-        </div>
-      </footer>
+            </form>
+            <p>Enter 发送 · Shift + Enter 换行</p>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

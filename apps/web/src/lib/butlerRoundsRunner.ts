@@ -550,6 +550,16 @@ export function snoozeButlerRoundsItem(ref: string): boolean {
   return true;
 }
 
+export function restoreButlerRoundsItem(ref: string): boolean {
+  const current = useButlerRoundsRunner.getState().lastResult;
+  if (!current || !(current.snoozedRefs ?? []).includes(ref)) return false;
+  const snoozedRefs = (current.snoozedRefs ?? []).filter((item) => item !== ref);
+  const stored = { ...current, snoozedRefs };
+  persistResult(stored);
+  useButlerRoundsRunner.setState({ lastResult: stored });
+  return true;
+}
+
 function triggerStorage(): Storage | undefined {
   return browserStorage();
 }

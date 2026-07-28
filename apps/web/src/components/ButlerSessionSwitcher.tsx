@@ -12,9 +12,11 @@ function askPreview(lastAsk: string | undefined): string {
 export default function ButlerSessionSwitcher({
   compact = false,
   label,
+  actionsOnly = false,
 }: {
   compact?: boolean;
   label?: ReactNode;
+  actionsOnly?: boolean;
 }) {
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
@@ -99,37 +101,41 @@ export default function ButlerSessionSwitcher({
         </>
       ) : (
         <>
-          <div className="relative min-w-0">
-            <select
-              value={activeSession?.id ?? ''}
-              onChange={(event) => void switchSession(event.target.value)}
-              disabled={running || sessions.length === 0}
-              aria-label="管家会话"
-              className={`appearance-none rounded-md border border-line bg-surface text-ink font-normal outline-none focus:border-primary disabled:opacity-50 ${selectCls}`}
-            >
-              {sessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.title}
-                  {askPreview(session.lastAsk)}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              size={compact ? 13 : 14}
-              className={`pointer-events-none absolute text-ink-3 ${compact ? 'right-2 top-2.5' : 'right-3 top-3'}`}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => void newConversation()}
-            disabled={running}
-            aria-label="新对话"
-            title="新对话"
-            className={buttonCls}
-          >
-            <MessageSquarePlus size={compact ? 14 : 15} />
-            {compact ? null : '新对话'}
-          </button>
+          {!actionsOnly ? (
+            <>
+              <div className="relative min-w-0">
+                <select
+                  value={activeSession?.id ?? ''}
+                  onChange={(event) => void switchSession(event.target.value)}
+                  disabled={running || sessions.length === 0}
+                  aria-label="管家会话"
+                  className={`appearance-none rounded-md border border-line bg-surface text-ink font-normal outline-none focus:border-primary disabled:opacity-50 ${selectCls}`}
+                >
+                  {sessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.title}
+                      {askPreview(session.lastAsk)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={compact ? 13 : 14}
+                  className={`pointer-events-none absolute text-ink-3 ${compact ? 'right-2 top-2.5' : 'right-3 top-3'}`}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void newConversation()}
+                disabled={running}
+                aria-label="新对话"
+                title="新对话"
+                className={buttonCls}
+              >
+                <MessageSquarePlus size={compact ? 14 : 15} />
+                {compact ? null : '新对话'}
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             onClick={() => {

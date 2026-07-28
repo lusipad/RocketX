@@ -446,7 +446,7 @@ function memoryProvenance(context: ButlerToolRuntimeContext): ButlerMemoryProven
     ...(context.callId ? { callId: context.callId } : {}),
     butlerSource: sourceRefs.join(',') || 'butler:user-confirmed',
     summary: sourceRefs.length
-      ? `来自当前 Butler 任务的 ${sourceRefs.length} 个可信来源引用`
+      ? `来自当前管家任务的 ${sourceRefs.length} 个可信来源引用`
       : '用户在当前 Butler 会话中直接确认',
   };
 }

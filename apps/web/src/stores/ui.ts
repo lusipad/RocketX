@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ButlerWorkspaceView } from '../lib/butlerWorkspace';
 
 export type ModuleKey = string;
 
@@ -123,8 +124,8 @@ interface UIState {
   retainedUnreadRid: string | null;
   switcherOpen: boolean;
   switcherCommandCenter: boolean;
-  butlerConversationOpen: boolean;
-  butlerManageOpen: boolean;
+  /** Butler 内部工作视图，也是所有可见入口的唯一导航状态。 */
+  butlerView: ButlerWorkspaceView;
   /** 最近一次从今日纸发起的问答；跨模块保留，但不写入长期存储。 */
   butlerPaperConversation: {
     date: string;
@@ -150,9 +151,8 @@ interface UIState {
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
   openButlerConversation: () => void;
-  closeButlerConversation: () => void;
   openButlerManage: () => void;
-  closeButlerManage: () => void;
+  setButlerView: (view: ButlerWorkspaceView) => void;
   setButlerPaperConversation: (conversation: UIState['butlerPaperConversation']) => void;
   openButlerPaper: (date?: string) => void;
   setButlerPaperDate: (date: string | null) => void;
@@ -169,8 +169,7 @@ export const useUI = create<UIState>((set) => ({
   retainedUnreadRid: null,
   switcherOpen: false,
   switcherCommandCenter: false,
-  butlerConversationOpen: false,
-  butlerManageOpen: false,
+  butlerView: 'now',
   butlerPaperConversation: null,
   butlerPaperDate: null,
   workbenchTab: 'overview',
@@ -196,22 +195,32 @@ export const useUI = create<UIState>((set) => ({
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
   openButlerConversation: () => {
     persistUIState({ module: 'butler-view' });
-    set({ module: 'butler-view', butlerConversationOpen: true, butlerManageOpen: false });
+    set({
+      module: 'butler-view',
+      butlerView: 'conversation',
+    });
   },
-  closeButlerConversation: () => set({ butlerConversationOpen: false }),
   openButlerManage: () => {
     persistUIState({ module: 'butler-view' });
-    set({ module: 'butler-view', butlerManageOpen: true, butlerConversationOpen: false });
+    set({
+      module: 'butler-view',
+      butlerView: 'routines',
+    });
   },
-  closeButlerManage: () => set({ butlerManageOpen: false }),
+  setButlerView: (view) => {
+    persistUIState({ module: 'butler-view' });
+    set({
+      module: 'butler-view',
+      butlerView: view,
+    });
+  },
   setButlerPaperConversation: (conversation) => set({ butlerPaperConversation: conversation }),
   openButlerPaper: (date) => {
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',
+      butlerView: 'now',
       butlerPaperDate: date ?? null,
-      butlerConversationOpen: false,
-      butlerManageOpen: false,
     });
   },
   setButlerPaperDate: (date) => set({ butlerPaperDate: date }),
