@@ -491,15 +491,15 @@ body {
 
 .butler-workspace-aside h3 {
   color: var(--color-ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .butler-workspace-aside p,
 .butler-workspace-aside li {
-  color: var(--color-ink-3);
-  font-size: 11px;
-  line-height: 18px;
+  color: var(--color-ink-2);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .butler-identity-page {
@@ -638,7 +638,7 @@ body {
   min-height: 66px;
   padding: 5px 3px 4px;
   border-bottom: 2px solid transparent;
-  border-radius: 5px 5px 0 0;
+  border-radius: 6px 6px 0 0;
   color: var(--color-ink-2);
   font-size: 12px;
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
@@ -669,7 +669,9 @@ body {
 .butler-identity-choices {
   display: grid;
   margin-top: 26px;
-  border-block: 1px solid var(--color-line);
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
 }
 
 .butler-identity-choice-row {
@@ -765,10 +767,10 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 34px;
+  height: 36px;
   padding: 0 12px;
-  border-radius: 8px;
-  font-size: 12px;
+  border-radius: 6px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -1064,7 +1066,7 @@ body {
   align-items: flex-end;
   gap: 8px;
   border: 1px solid var(--color-line-strong);
-  border-radius: 11px;
+  border-radius: 8px;
   background: var(--color-surface-4);
   padding: 5px 8px;
   transition: border-color 150ms ease;
@@ -1086,7 +1088,7 @@ body {
   position: relative;
   overflow: hidden;
   border: 1px solid var(--color-line);
-  border-radius: 11px;
+  border-radius: 8px;
   background: var(--color-surface-4);
   box-shadow: var(--shadow-card);
 }
@@ -1297,9 +1299,9 @@ body {
 
 .butler-eyebrow {
   color: var(--color-primary);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
 }
 
 .butler-page-title {
@@ -1394,9 +1396,9 @@ body {
 .butler-task-copy p {
   margin-top: 2px;
   overflow: hidden;
-  color: var(--color-ink-3);
-  font-size: 11px;
-  line-height: 17px;
+  color: var(--color-ink-2);
+  font-size: 13px;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1473,7 +1475,8 @@ body {
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 10px;
   margin-top: 20px;
-  border-left: 2px solid var(--color-primary);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
   background: var(--color-fill-2);
   padding: 13px 14px;
   color: var(--color-ink-2);
@@ -1487,7 +1490,7 @@ body {
 .butler-routine-detail {
   margin-top: 18px;
   border: 1px solid var(--color-line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--color-surface-4);
 }
 
@@ -1648,7 +1651,7 @@ body {
 .butler-routine-version button {
   grid-column: 1 / -1;
   width: fit-content;
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 4px 7px;
   color: var(--color-primary);
   font-size: 11px;
@@ -1697,7 +1700,7 @@ body {
   margin-top: 12px;
   overflow: hidden;
   border: 1px solid var(--color-line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--color-surface);
 }
 
@@ -1789,7 +1792,7 @@ body {
 
 .butler-artifacts > footer button {
   min-height: 28px;
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 0 9px;
   color: var(--color-ink-2);
 }
