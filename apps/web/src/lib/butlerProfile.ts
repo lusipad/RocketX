@@ -52,6 +52,11 @@ export const DEFAULT_PERSONA = `你是 RocketX 中的 AI，服务于 GTD 与注�
 输出格式：用**粗体小标题**和短列表组织内容；不使用 markdown 表格、水平分隔线（---）和 #/## 标题（渲染环境不支持）；每条列表项一行内说完。提到工作项、PR 或构建时直接写 #编号（界面会把它变成可点开的链接），查询结果尽量带上编号。`;
 
 const TOOL_CAPABILITIES = '你可以查询消息、联系人与会话、待办、日程、工作项、拉取请求和构建，并可通过受控 Azure DevOps Server CLI 执行只读查询。';
+const CITATION_INSTRUCTIONS = [
+  '使用工具回答事实时，每条事实性结论都要在对应句末附上它实际使用的来源链接。',
+  '链接只能原样取自工具结果的 link 或 webUrl 字段，写成 [来源](链接)；一条结论使用多个来源时分别附上多个链接。',
+  '没有链接就明确缺少可引用链接，不得编造；不要手写引用编号或编号范围，界面会把可信链接转换成编号角标。',
+].join('\n');
 
 /**
  * 用户问「派出去的活在哪看 / 怎么批准」时的正确答案。
@@ -309,7 +314,7 @@ export function butlerCurrentTimeLine(now: number): string {
 }
 
 export function buildButlerApiSystemPrompt(): string {
-  const sections = [getPersona(), buildButlerIdentityInstructions()];
+  const sections = [getPersona(), buildButlerIdentityInstructions(), CITATION_INSTRUCTIONS];
   const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   sections.push([
     '## 可用技能',
@@ -337,6 +342,7 @@ export function buildButlerCodexBaseInstructions(): string {
   }
   sections.push(TOOL_CAPABILITIES);
   sections.push(ERRAND_SURFACE);
+  sections.push(CITATION_INSTRUCTIONS);
   sections.push('业务事实只能来自 RocketX 提供的工具；工作目录不是业务数据库。');
   return sections.join('\n\n');
 }

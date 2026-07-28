@@ -9,7 +9,14 @@ import {
 
 test('Butler 工具结果转成有界、可导航且去重的来源', () => {
   const messages = extractButlerSources('search_messages', JSON.stringify([
-    { _id: 'm1', rid: 'r1', roomName: '发布群', sender: '张三', text: '构建失败了' },
+    {
+      _id: 'm1',
+      rid: 'r1',
+      roomName: '发布群',
+      sender: '张三',
+      text: '构建失败了',
+      link: 'https://chat.example/channel/release?msg=m1',
+    },
     { _id: 'm1', rid: 'r1', roomName: '发布群', sender: '张三', text: '重复结果' },
   ]));
   const workItems = extractButlerSources('list_work_items', JSON.stringify([
@@ -22,6 +29,7 @@ test('Butler 工具结果转成有界、可导航且去重的来源', () => {
     label: '发布群 · 张三：构建失败了',
     rid: 'r1',
     mid: 'm1',
+    webUrl: 'https://chat.example/channel/release?msg=m1',
   }]);
   assert.deepEqual(workItems, [{
     kind: 'work-item',

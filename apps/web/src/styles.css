@@ -1831,10 +1831,6 @@ body {
   font-weight: 600;
 }
 
-.butler-answer-with-sources > p:last-of-type {
-  display: inline;
-}
-
 @media (max-width: 1279px) {
   .butler-workspace {
     grid-template-columns: 58px minmax(0, 1fr);

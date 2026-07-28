@@ -80,6 +80,17 @@ test('默认人设改为按需 recall_memory，并严格限制可持久化内容
   assert.doesNotMatch(DEFAULT_PERSONA, /先调用 remember/);
 });
 
+test('两条管家运行路径都要求把可信来源链接放到对应结论末尾', () => {
+  const api = buildButlerApiSystemPrompt();
+  const codex = buildButlerCodexBaseInstructions();
+  for (const prompt of [api, codex]) {
+    assert.match(prompt, /事实性结论/);
+    assert.match(prompt, /对应句末/);
+    assert.match(prompt, /link.*webUrl/s);
+    assert.match(prompt, /不要手写引用编号或编号范围/);
+  }
+});
+
 test('AI 设置页只保留高级行为指令，名字与性格由我的管家统一管理', () => {
   const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
   assert.match(settings, /label="高级行为指令"/);
