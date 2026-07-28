@@ -544,10 +544,27 @@ async function seedDispatchDraft(page: Page): Promise<void> {
   });
 }
 
-test('来源标签可返回原消息且不会发送消息', async ({ page }) => {
-  const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
+test('回答引用默认折叠，角标可展开来源并返回原消息', async ({ page }) => {
+  const { sentMessages, pageErrors } = await openRoomButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
+  const references = page.getByRole('group', { name: '回答引用' });
+  await expect(references.getByText('参考来源（1）', { exact: true })).toBeVisible();
+  await expect(page.getByTitle('打开来源：General · Release checklist ready')).toBeHidden();
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toHaveScreenshot(
+    'butler-room-citation-collapsed.png',
+    { animations: 'disabled', caret: 'hide' },
+  );
+
+  await references.getByRole('button', { name: '查看引用 1：General · Release checklist ready' }).click();
+  await expect(page.getByTitle('打开来源：General · Release checklist ready')).toBeVisible();
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark';
+  });
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toHaveScreenshot(
+    'butler-room-citation-expanded-dark.png',
+    { animations: 'disabled', caret: 'hide' },
+  );
   await page.getByTitle('打开来源：General · Release checklist ready').click();
 
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();

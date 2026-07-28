@@ -32,7 +32,7 @@ export default function ButlerInlineExchange({
     <div className="border-l border-primary/45 pl-4" aria-label="纸上问答">
       <div className="text-xs leading-5 text-ink-3">你：{question.text}</div>
       {answer ? (
-        <div className="mt-1.5 text-sm leading-6 text-ink">
+        <div className="butler-answer-with-sources mt-1.5 text-sm leading-6 text-ink">
           {answer.text.startsWith('📌') ? answer.text : renderMarkdown(answer.text)}
           <ButlerSources sources={answer.sources} />
         </div>

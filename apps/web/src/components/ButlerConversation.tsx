@@ -280,7 +280,7 @@ export default function ButlerConversation({
                       {mine ? '你' : '管家'}
                     </div>
                     <div
-                      className={`min-w-0 break-words rounded-lg px-3 py-2 text-sm leading-7 text-ink ${
+                      className={`min-w-0 break-words rounded-lg px-3 py-2 text-sm leading-7 text-ink ${!mine ? 'butler-answer-with-sources ' : ''}${
                         mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
                       }`}
                     >
@@ -294,7 +294,7 @@ export default function ButlerConversation({
                         ? renderMarkdown(line.text)
                         : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
-                      {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
+                      {line.role === 'assistant' && !artifact ? <ButlerSources sources={line.sources} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
                       <ButlerMessageActions line={line} disabled={running} />
                     </div>
