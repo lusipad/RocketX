@@ -593,6 +593,7 @@ test('对话中的长结果在中屏沉淀为可继续加工的成果工作面',
   const artifacts = page.getByRole('region', { name: '管家成果' });
   const conversationSelector = page.getByRole('combobox', { name: '管家会话' });
   await expect(conversationSelector).toBeVisible();
+  await expect(conversationSelector).toContainText('整理一份发布风险报告');
   const mediumComposer = page.getByRole('form', { name: '发送消息给管家' });
   await expect(mediumComposer).toBeVisible();
   const mediumComposerBox = await mediumComposer.boundingBox();
@@ -625,7 +626,9 @@ test('窄屏用单一视图切换器保持 Composer 与责任状态可用', asyn
   });
 
   await switcher.selectOption('conversation');
-  await expect(page.getByRole('combobox', { name: '管家会话' })).toBeVisible();
+  const mobileConversationSelector = page.getByRole('combobox', { name: '管家会话' });
+  await expect(mobileConversationSelector).toBeVisible();
+  await expect(mobileConversationSelector).toContainText('整理一份发布风险报告');
   await expect(page.getByRole('textbox', { name: '给管家发消息' })).toBeVisible();
   const mobileComposerBox = await page.getByRole('form', { name: '发送消息给管家' }).boundingBox();
   expect((mobileComposerBox?.y ?? 0) + (mobileComposerBox?.height ?? 0)).toBeLessThanOrEqual(844);

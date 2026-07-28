@@ -63,6 +63,47 @@ test('AI 对话落盘后重启可恢复，账号隔离', async () => {
   }
 });
 
+test('房间管家问答进入统一历史并从首个有效问题自动取标题', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('room-history-user');
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
+  const room = { rid: 'room-general', roomName: 'General' };
+  try {
+    await useButler.getState().hydrate();
+    const sessionId = useButler.getState().activeSessionId;
+
+    await useButler.getState().ask('你好', room);
+    await flushButlerPersist();
+    assert.equal(useButler.getState().sessions[0].title, '默认对话');
+
+    await useButler.getState().ask('最近在讨论啥', room);
+    await flushButlerPersist();
+    assert.deepEqual(
+      useButler.getState().sessions.map(({ id, title, lastAsk }) => ({ id, title, lastAsk })),
+      [{ id: sessionId, title: 'General · 最近在讨论啥', lastAsk: '最近在讨论啥' }],
+    );
+
+    await useButler.getState().renameSession(sessionId, '发布群跟进');
+    await useButler.getState().ask('还有哪些未闭环事项', room);
+    await flushButlerPersist();
+    assert.equal(useButler.getState().sessions[0].title, '发布群跟进');
+
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await useButler.getState().hydrate();
+    assert.equal(useButler.getState().sessions[0].title, '发布群跟进');
+    assert.equal(
+      useButler.getState().lines.some((line) => line.role === 'user' && line.text === '最近在讨论啥'),
+      true,
+    );
+  } finally {
+    restore();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
 test('回合失败后的 taskState 会覆盖已落盘的 running 状态', async () => {
   resetButlerPersistenceForTests();
   useButler.getState().reset();
@@ -219,7 +260,7 @@ test('发问等待 hydrate 时新建 session 不会截断旧 session 的已完�
     for (const read of delayedReads) read.resolve(undefined);
     await Promise.all([asking, creating]);
 
-    const oldSession = useButler.getState().sessions.find((session) => session.title === '默认对话');
+    const oldSession = useButler.getState().sessions.find((session) => session.title === '旧 session 的问题');
     assert.ok(oldSession);
     await useButler.getState().switchSession(oldSession.id);
     assert.equal(useButler.getState().lines.some((line) => line.text === '旧 session 的问题'), true);
@@ -259,7 +300,7 @@ test('Codex 回合尚不可中断时新建 session 会等待旧回复完整落�
     releaseRunner?.();
     await Promise.all([asking, creating]);
 
-    const oldSession = useButler.getState().sessions.find((session) => session.title === '默认对话');
+    const oldSession = useButler.getState().sessions.find((session) => session.title === 'Codex 旧 session 的问题');
     assert.ok(oldSession);
     await useButler.getState().switchSession(oldSession.id);
     assert.equal(useButler.getState().lines.some((line) => line.text === 'Codex 旧 session 的问题'), true);

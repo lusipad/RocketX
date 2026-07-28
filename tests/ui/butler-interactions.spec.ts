@@ -42,9 +42,15 @@ async function seedButlerAnswer(page: Page): Promise<void> {
       useButler: { setState: (state: Record<string, unknown>) => void };
     }>;
     const { useButler } = await load();
+    const roomSource = {
+      kind: 'room',
+      id: 'room-general',
+      rid: 'room-general',
+      label: 'General',
+    };
     useButler.setState({
       lines: [
-        { id: 'question', role: 'user', text: '发布前还缺什么？' },
+        { id: 'question', role: 'user', text: '发布前还缺什么？', sources: [roomSource] },
         {
           id: 'answer',
           role: 'assistant',
@@ -889,6 +895,16 @@ test('房间管家全屏后直接进入同一段完整对话', async ({ page }) 
   await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
   await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
   await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole('navigation', { name: '管家对话历史' })
+      .getByRole('button')
+      .filter({ hasText: 'General · 发布前还缺什么' }),
+  ).toBeVisible();
+  await expect(page.getByRole('region', { name: '完整对话' })).toHaveScreenshot(
+    'butler-room-conversation-auto-title.png',
+    { animations: 'disabled', caret: 'hide' },
+  );
   expect(pageErrors).toEqual([]);
 });
 

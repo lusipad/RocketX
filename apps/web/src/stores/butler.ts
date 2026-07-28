@@ -88,6 +88,8 @@ const SESSION_REGISTRY_VERSION = 1;
 const SESSION_REGISTRY_PREFIX = 'session-registry:';
 const DEFAULT_SESSION_ID = 'default';
 const DEFAULT_SESSION_TITLE = '默认对话';
+const UNTITLED_SESSION_TITLES = new Set([DEFAULT_SESSION_TITLE, '新对话', '当前对话']);
+const SESSION_TITLE_LIMIT = 32;
 const WELCOME_TEXT = '我是你的管家。消息、待办、日程、工作项都可以直接问我。';
 
 export { DEFAULT_PERSONA as BUTLER_SYSTEM_PROMPT } from '../lib/butlerProfile';
@@ -339,6 +341,50 @@ function recapText(value: string, limit: number): string {
   return normalized.length > limit ? `${normalized.slice(0, limit)}…` : normalized;
 }
 
+function sessionTitleText(value: string): string {
+  const normalized = value
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[。！？!?，,；;：:]+$/u, '');
+  if (normalized === '[图片]') return '图片分析';
+  return normalized;
+}
+
+function isGreeting(value: string): boolean {
+  return /^(?:你好|您好|嗨|哈(?:喽|啰)?|在吗|hello|hi|hey)[\s!！。,.，]*$/iu.test(value);
+}
+
+function limitedSessionTitle(value: string): string {
+  return value.length > SESSION_TITLE_LIMIT
+    ? `${value.slice(0, SESSION_TITLE_LIMIT - 1)}…`
+    : value;
+}
+
+/**
+ * 占位标题只在遇到首个有效问题时自动替换；任何非占位标题都视为用户选择，不再覆盖。
+ * 房间来源来自提问行的可信 context，而不是从问题正文猜房间名。
+ */
+function butlerAutoSessionTitle(
+  lines: readonly ButlerLine[],
+  currentTitle = DEFAULT_SESSION_TITLE,
+): string {
+  if (!UNTITLED_SESSION_TITLES.has(currentTitle)) return currentTitle;
+  for (const candidate of lines) {
+    if (candidate.role !== 'user') continue;
+    const question = sessionTitleText(candidate.text);
+    if (!question || isGreeting(question)) continue;
+    const room = candidate.sources?.find((source) => source.kind === 'room');
+    const prefix = room?.label.trim();
+    const titled = prefix && !question.toLocaleLowerCase().includes(prefix.toLocaleLowerCase())
+      ? `${prefix} · ${question}`
+      : question;
+    return limitedSessionTitle(titled);
+  }
+  return currentTitle;
+}
+
 /** 「上回说到」派生：最后一条用户提问 + 它之后的最后一条回答；没有真实提问返回 null。 */
 export function butlerSessionRecap(lines: readonly ButlerLine[]): ButlerSessionRecap | null {
   let askIndex = -1;
@@ -507,16 +553,18 @@ function normalizeRegistry(
       taskState = updateButlerTask(taskState, { status: 'paused' }, butlerNow());
       workflow.paused = true;
     }
+    const lines = Array.isArray(candidate.lines) && candidate.lines.length
+      ? candidate.lines.slice(-LINES_LIMIT)
+      : workflow ? [] : welcomeLines();
+    const storedTitle = typeof candidate.title === 'string' && candidate.title.trim()
+      ? candidate.title.trim()
+      : DEFAULT_SESSION_TITLE;
     sessions.push({
       id: candidate.id,
-      title: typeof candidate.title === 'string' && candidate.title.trim()
-        ? candidate.title.trim()
-        : DEFAULT_SESSION_TITLE,
+      title: workflow ? storedTitle : butlerAutoSessionTitle(lines, storedTitle),
       createdAt,
       updatedAt,
-      lines: Array.isArray(candidate.lines) && candidate.lines.length
-        ? candidate.lines.slice(-LINES_LIMIT)
-        : workflow ? [] : welcomeLines(),
+      lines,
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
       ...(codexThread ? { codexThread } : {}),
       ...(taskState ? { taskState } : {}),
@@ -567,12 +615,13 @@ function pruneEmptySessions(
 function defaultSession(legacy?: PersistedButler): PersistedButlerSession {
   const updatedAt = legacy?.lastAt != null && Number.isFinite(legacy.lastAt) ? legacy.lastAt : butlerNow();
   const codexThread = normalizeCodexThread(legacy?.codexThread);
+  const lines = legacy?.lines?.length ? legacy.lines.slice(-LINES_LIMIT) : welcomeLines();
   return {
     id: DEFAULT_SESSION_ID,
-    title: DEFAULT_SESSION_TITLE,
+    title: butlerAutoSessionTitle(lines),
     createdAt: updatedAt,
     updatedAt,
-    lines: legacy?.lines?.length ? legacy.lines.slice(-LINES_LIMIT) : welcomeLines(),
+    lines,
     history: trimButlerHistory(legacy?.history ?? []),
     ...(codexThread ? { codexThread } : {}),
   };
@@ -607,6 +656,7 @@ function captureActiveSession(
   const codexThread = residentCodexThreadSnapshot();
   const captured: PersistedButlerSession = {
     ...base,
+    title: butlerAutoSessionTitle(state.lines, current.title),
     updatedAt: touchActivity ? butlerNow() : current.updatedAt,
     lines: state.lines.slice(-LINES_LIMIT),
     history: trimButlerHistory(state.history),
@@ -1424,7 +1474,10 @@ export const useButler = create<ButlerState>((set, get) => ({
         const now = butlerNow();
         const startedSession: PersistedButlerSession = {
           id,
-          title: hasStoredConversation ? '当前对话' : DEFAULT_SESSION_TITLE,
+          title: butlerAutoSessionTitle(
+            startedState.lines,
+            hasStoredConversation ? '当前对话' : DEFAULT_SESSION_TITLE,
+          ),
           createdAt: now,
           updatedAt: now,
           lines: startedState.lines.slice(-LINES_LIMIT),
