@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Children, cloneElement, Fragment, isValidElement, type ReactNode } from 'react';
 import MarkdownMath from '../components/MarkdownMath';
 import WorkItemLink from '../components/WorkItemLink';
 import AdoEntityLink from '../components/AdoEntityLink';
@@ -291,12 +291,40 @@ function splitRow(line: string): string[] | null {
 const isTableSeparator = (line: string): boolean =>
   /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
 
+function appendTrailing(nodes: ReactNode[], trailing: ReactNode): ReactNode[] {
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (!isValidElement<{ children?: ReactNode; className?: string }>(node)) continue;
+
+    const children = Children.toArray(node.props.children);
+    if (node.type === 'div' && node.props.className?.split(/\s+/).includes('flex')) {
+      const lastChildIndex = children.length - 1;
+      const lastChild = children[lastChildIndex];
+      if (isValidElement<{ children?: ReactNode }>(lastChild)) {
+        children[lastChildIndex] = cloneElement(
+          lastChild,
+          undefined,
+          lastChild.props.children,
+          trailing,
+        );
+        nodes[index] = cloneElement(node, undefined, children);
+        return nodes;
+      }
+    }
+
+    nodes[index] = cloneElement(node, undefined, node.props.children, trailing);
+    return nodes;
+  }
+  return [...nodes, trailing];
+}
+
 function renderBlocks(
   text: string,
   me: string | undefined,
   keyBase: string,
   variant: Variant,
   wi: WiVariant,
+  trailing?: ReactNode,
 ): ReactNode[] {
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];
@@ -459,7 +487,7 @@ function renderBlocks(
     );
   }
 
-  return nodes;
+  return trailing ? appendTrailing(nodes, trailing) : nodes;
 }
 
 /** 每层缩进 16px；不做真正的嵌套列表，视觉对齐就够聊天用了 */
@@ -485,9 +513,28 @@ function renderWithCodeFences(
   me: string | undefined,
   variant: Variant,
   wi: WiVariant,
+  trailing?: ReactNode,
 ): ReactNode {
   const chat = variant === 'chat';
   const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
+  const segmentedParts = parts.map((part, index) => (
+    index % 2 === 0 ? splitBlockMath(part) : null
+  ));
+  const trailingTarget = trailing ? (() => {
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      if (partIndex % 2 === 1) {
+        if (parts[partIndex].trim()) return null;
+        continue;
+      }
+      const segments = segmentedParts[partIndex] ?? [];
+      for (let segmentIndex = segments.length - 1; segmentIndex >= 0; segmentIndex -= 1) {
+        const segment = segments[segmentIndex];
+        if (!segment.value.trim()) continue;
+        return segment.kind === 'text' ? `${partIndex}:${segmentIndex}` : null;
+      }
+    }
+    return null;
+  })() : null;
   return (
     <>
       {parts.map((part, i) =>
@@ -502,7 +549,7 @@ function renderWithCodeFences(
           </pre>
         ) : (
           <Fragment key={i}>
-            {splitBlockMath(part).map((segment, segmentIndex) =>
+            {(segmentedParts[i] ?? []).map((segment, segmentIndex) =>
               segment.kind === 'math' ? (
                 <MarkdownMath
                   key={`${i}-math-${segmentIndex}`}
@@ -511,23 +558,37 @@ function renderWithCodeFences(
                 />
               ) : segment.value.trim() ? (
                 <Fragment key={`${i}-text-${segmentIndex}`}>
-                  {renderBlocks(segment.value, me, `${i}-${segmentIndex}`, variant, wi)}
+                  {renderBlocks(
+                    segment.value,
+                    me,
+                    `${i}-${segmentIndex}`,
+                    variant,
+                    wi,
+                    trailingTarget === `${i}:${segmentIndex}` ? trailing : undefined,
+                  )}
                 </Fragment>
               ) : null,
             )}
           </Fragment>
         ),
       )}
+      {trailing && trailingTarget === null ? trailing : null}
     </>
   );
 }
 
 /** 聊天消息 */
-export function renderMarkdown(text: string, me?: string): ReactNode {
+export function renderMarkdown(text: string, me?: string, trailing?: ReactNode): ReactNode {
   // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
   text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
   // 整条消息只有工作项引用 → 大卡片；夹在文字里 → 紧凑 chip + 悬浮卡
-  return renderWithCodeFences(text, me, 'chat', isPureAdoEntityText(text) ? 'card' : 'chip');
+  return renderWithCodeFences(
+    text,
+    me,
+    'chat',
+    isPureAdoEntityText(text) ? 'card' : 'chip',
+    trailing,
+  );
 }
 
 /** 文档预览（.md 文件）：同一套解析，排版更松 */

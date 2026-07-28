@@ -1,34 +1,39 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { ChevronRight, ExternalLink } from 'lucide-react';
 import type { ButlerSource } from '../lib/butlerContext';
 import { openButlerSource as openSource } from '../lib/butlerSourceNavigation';
 
-export default function ButlerSources({ sources }: { sources?: ButlerSource[] }) {
+export default function ButlerSources({
+  sources,
+  children,
+}: {
+  sources?: ButlerSource[];
+  children?: (marker: ReactNode) => ReactNode;
+}) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const sourceRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  if (!sources?.length) return null;
+  if (!sources?.length) return children?.(null) ?? null;
 
-  const revealSource = (index: number) => {
+  const revealSources = () => {
     if (detailsRef.current) detailsRef.current.open = true;
-    requestAnimationFrame(() => sourceRefs.current[index]?.focus());
+    requestAnimationFrame(() => sourceRefs.current[0]?.focus());
   };
+  const markerText = sources.length === 1 ? '1' : `1–${sources.length}`;
+  const marker = (
+    <button
+      type="button"
+      aria-label={`查看 ${sources.length} 条参考来源`}
+      title={`展开 ${sources.length} 条参考来源`}
+      onClick={revealSources}
+      className="ml-1 inline-flex h-4 items-center rounded-sm px-0.5 text-[11px] font-medium leading-none text-primary underline decoration-primary/35 underline-offset-2 hover:bg-primary-light hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+    >
+      <sup>{markerText}</sup>
+    </button>
+  );
 
   return (
     <div role="group" aria-label="回答引用" className="contents">
-      <span className="ml-1 inline-flex flex-wrap items-start gap-0.5" aria-label="正文引用">
-        {sources.map((source, index) => (
-          <button
-            key={`${source.kind}:${source.id}`}
-            type="button"
-            aria-label={`查看引用 ${index + 1}：${source.label}`}
-            title={`展开引用 ${index + 1}：${source.label}`}
-            onClick={() => revealSource(index)}
-            className="rounded-sm px-0.5 text-[11px] font-medium leading-none text-primary underline decoration-primary/35 underline-offset-2 hover:bg-primary-light hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
-          >
-            <sup>{index + 1}</sup>
-          </button>
-        ))}
-      </span>
+      {children ? children(marker) : <span aria-label="正文引用">{marker}</span>}
 
       <details ref={detailsRef} className="group mt-1.5 block border-t border-line/80 pt-1.5">
         <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-[11px] text-ink-3 hover:text-ink-2">

@@ -290,11 +290,14 @@ export default function ButlerConversation({
                           <strong>{artifact.title}</strong>
                           <small>完整内容、来源和版本已放在上方成果工作面。</small>
                         </div>
-                      ) : line.role === 'assistant' && !line.text.startsWith('📌')
-                        ? renderMarkdown(line.text)
-                        : line.text}
+                      ) : line.role === 'assistant' ? (
+                        <ButlerSources sources={line.sources}>
+                          {(marker) => line.text.startsWith('📌')
+                            ? <>{line.text}{marker}</>
+                            : renderMarkdown(line.text, undefined, marker)}
+                        </ButlerSources>
+                      ) : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
-                      {line.role === 'assistant' && !artifact ? <ButlerSources sources={line.sources} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
                       <ButlerMessageActions line={line} disabled={running} />
                     </div>

@@ -69,7 +69,51 @@ async function seedButlerAnswer(page: Page): Promise<void> {
       error: null,
     });
   });
-  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
+}
+
+async function seedButlerCitationList(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    useButler.setState({
+      lines: [
+        { id: 'citation-question', role: 'user', text: '最近在讨论啥' },
+        {
+          id: 'citation-answer',
+          role: 'assistant',
+          text: [
+            '## 最近讨论',
+            '- 主要是在做 Rocket.Chat 冒烟测试。',
+            '- 张三测试了“第二用户未读消息”和“实时推送”。',
+            '- Administrator 测试了消息编辑、引用回复，以及房间设置。',
+            '- 没有看到实际业务讨论内容。',
+          ].join('\n'),
+          sources: Array.from({ length: 8 }, (_, index) => ({
+            kind: 'message',
+            id: index === 0 ? 'general-release' : `citation-${index + 1}`,
+            rid: 'room-general',
+            mid: index === 0 ? 'general-release' : `citation-${index + 1}`,
+            label: index === 0
+              ? 'General · Release checklist ready'
+              : `General · 引用消息 ${index + 1}`,
+          })),
+        },
+      ],
+      context: {
+        kind: 'room',
+        label: 'General',
+        detail: '当前 Rocket.Chat 房间',
+        sources: [{ kind: 'room', id: 'room-general', rid: 'room-general', label: 'General' }],
+      },
+      actionDraft: null,
+      running: false,
+      error: null,
+    });
+  });
+  await expect(page.getByRole('heading', { name: '最近讨论' })).toBeVisible();
 }
 
 async function captureButlerAsks(page: Page): Promise<void> {
@@ -546,18 +590,21 @@ async function seedDispatchDraft(page: Page): Promise<void> {
 
 test('回答引用默认折叠，角标可展开来源并返回原消息', async ({ page }) => {
   const { sentMessages, pageErrors } = await openRoomButlerFromGeneral(page);
-  await seedButlerAnswer(page);
+  await seedButlerCitationList(page);
 
   const references = page.getByRole('group', { name: '回答引用' });
-  await expect(references.getByText('参考来源（1）', { exact: true })).toBeVisible();
+  await expect(references.getByText('参考来源（8）', { exact: true })).toBeVisible();
   await expect(page.getByTitle('打开来源：General · Release checklist ready')).toBeHidden();
+  const citationMarker = references.getByRole('button', { name: '查看 8 条参考来源' });
+  await expect(citationMarker).toBeVisible();
   await expect(page.getByRole('dialog', { name: '房间管家' })).toHaveScreenshot(
     'butler-room-citation-collapsed.png',
     { animations: 'disabled', caret: 'hide' },
   );
 
-  await references.getByRole('button', { name: '查看引用 1：General · Release checklist ready' }).click();
+  await citationMarker.click();
   await expect(page.getByTitle('打开来源：General · Release checklist ready')).toBeVisible();
+  await expect(references.getByTitle(/^打开来源：/)).toHaveCount(8);
   await page.evaluate(() => {
     document.documentElement.dataset.theme = 'dark';
   });
@@ -818,12 +865,12 @@ test('ADO 未配置时在进入执行态和打开创建表单前完成能力预�
 test('房间管家浮层与管家页共享同一份会话', async ({ page }) => {
   const { pageErrors } = await openRoomButlerFromGeneral(page);
   await seedButlerAnswer(page);
-  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await openButlerConversationView(page);
 
-  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -834,7 +881,7 @@ test('房间管家全屏后直接进入同一段完整对话', async ({ page }) 
   await page.getByRole('button', { name: '全屏打开完整对话', exact: true }).click();
 
   await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
-  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
   await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
@@ -963,9 +1010,9 @@ test('房间管家浮层保留本房间全部问答并隔离其他房间', async
   });
   const panel = page.getByRole('dialog', { name: '房间管家' });
   await expect(panel.getByText('你：General 第一问', { exact: true })).toBeVisible();
-  await expect(panel.getByText('General 第一答', { exact: true })).toBeVisible();
+  await expect(panel.getByText('General 第一答', { exact: false }).first()).toBeVisible();
   await expect(panel.getByText('你：General 第二问', { exact: true })).toBeVisible();
-  await expect(panel.getByText('General 第二答', { exact: true })).toBeVisible();
+  await expect(panel.getByText('General 第二答', { exact: false }).first()).toBeVisible();
   await expect(panel.getByText('你：Alpha 的问题', { exact: true })).toHaveCount(0);
   await expect(panel.getByText('Alpha 的回答', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -980,7 +1027,7 @@ test('可新建、重命名并切换独立的管家会话', async ({ page }) => 
   const history = page.getByRole('navigation', { name: '管家对话历史' });
   await expect(history).toBeVisible();
   await page.getByRole('button', { name: '新对话', exact: true }).click();
-  await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(ANSWER, { exact: false })).toHaveCount(0);
 
   await page.getByRole('button', { name: '重命名会话', exact: true }).click();
   await page.getByRole('textbox', { name: '会话名称', exact: true }).fill('构建调查');
@@ -989,9 +1036,9 @@ test('可新建、重命名并切换独立的管家会话', async ({ page }) => 
   await expect(history).toContainText('构建调查');
 
   await history.getByRole('button').filter({ hasText: '发布前还缺什么？' }).click();
-  await expect(page.getByText(ANSWER, { exact: true })).toBeVisible();
+  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
   await history.getByRole('button').filter({ hasText: '构建调查' }).click();
-  await expect(page.getByText(ANSWER, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(ANSWER, { exact: false })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
