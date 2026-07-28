@@ -109,7 +109,7 @@ export default function Dialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        style={{ width }}
+        style={{ width, maxWidth: 'calc(100vw - 2rem)' }}
         className="flex max-h-[72vh] flex-col rounded-xl bg-surface-4 shadow-2xl"
       >
         <header className="flex items-start justify-between px-5 pt-4 pb-2">

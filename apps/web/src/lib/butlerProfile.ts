@@ -1,7 +1,6 @@
 import {
   assertNativeSkillName,
   butlerArchiveStorage,
-  ensureButlerWorkspaceFiles,
   mirrorButlerWorkspaceFiles,
   renderButlerSkillFile,
   onButlerArchiveHydrated,
@@ -26,6 +25,7 @@ const LEGACY_MEMORY_STORAGE_KEY = 'rcx-butler-v1:memory';
 const ACTIVE_MEMORY_V2_STORAGE_KEY = 'rcx-butler-v2:memory';
 const PERSONA_KEY = 'persona';
 const SKILLS_KEY = 'skills';
+const DISABLED_SKILLS_KEY = 'disabled-skills';
 
 export const BUTLER_PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
 export const AZURE_DEVOPS_SERVER_SKILL_NAME = 'azure-devops-server';
@@ -166,6 +166,13 @@ function userSkills(): ButlerSkill[] {
   return Array.isArray(saved) ? saved.filter(isSkill) : [];
 }
 
+function disabledSkillNames(): string[] {
+  const saved = readJson(DISABLED_SKILLS_KEY);
+  if (!Array.isArray(saved)) return [];
+  return [...new Set(saved.filter((name): name is string =>
+    typeof name === 'string' && !!name.trim()))];
+}
+
 function providedSkills(): ButlerSkill[] {
   return [...skillProviders.values()].flatMap((provider) =>
     provider().map((skill) => ({ ...skill })));
@@ -202,7 +209,10 @@ function isNativeSkill(skill: ButlerSkill): boolean {
 }
 
 function syncWorkspace(): void {
-  void mirrorButlerWorkspaceFiles(getPersona(), listSkills());
+  for (const name of disabledSkillNames()) {
+    void removeButlerArchiveSkillFile(name).catch(() => undefined);
+  }
+  void mirrorButlerWorkspaceFiles(getPersona(), listEnabledSkills());
 }
 
 export function setButlerProfileStorage(storage: ButlerProfileStorage): () => void {
@@ -264,8 +274,28 @@ export function listSkills(): ButlerSkill[] {
   ];
 }
 
+export function listEnabledSkills(): ButlerSkill[] {
+  const disabled = new Set(disabledSkillNames());
+  return listSkills().filter((skill) => !disabled.has(skill.name));
+}
+
+export function isButlerSkillEnabled(name: string): boolean {
+  return listEnabledSkills().some((skill) => skill.name === name);
+}
+
+export function setSkillEnabled(name: string, enabled: boolean): void {
+  if (!listSkills().some((skill) => skill.name === name)) {
+    throw new Error(`未找到技能：${name}`);
+  }
+  const disabled = new Set(disabledSkillNames());
+  if (enabled) disabled.delete(name);
+  else disabled.add(name);
+  writeJson(DISABLED_SKILLS_KEY, [...disabled]);
+  syncWorkspace();
+}
+
 export function canUseNativeButlerSkill(name: string): boolean {
-  const skill = listSkills().find((item) => item.name === name);
+  const skill = listEnabledSkills().find((item) => item.name === name);
   return skill ? isNativeSkill(skill) : false;
 }
 
@@ -290,12 +320,16 @@ export function removeSkill(name: string): void {
   if (isButlerBuiltInSkill(name)) throw new Error('内置技能不可修改');
   if (isHostManagedSkill(name)) throw new Error('RocketX 托管技能不可修改');
   writeJson(SKILLS_KEY, userSkills().filter((skill) => skill.name !== name));
+  writeJson(DISABLED_SKILLS_KEY, disabledSkillNames().filter((skillName) => skillName !== name));
   syncWorkspace();
   void removeButlerArchiveSkillFile(name).catch(() => undefined);
 }
 
 export function loadButlerSkill(name: string): string {
-  const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
+  if (listSkills().some((skill) => skill.name === name) && !isButlerSkillEnabled(name)) {
+    return `技能已停用：${name}。请先在“我的管家 → 记忆与技能”中重新启用。`;
+  }
+  const skills = [...listEnabledSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   const skill = skills.find((item) => item.name === name);
   if (skill) return skill.body;
   return `未找到技能：${name}，可用技能：${skills.map((item) => item.name).join('、')}`;
@@ -315,7 +349,7 @@ export function butlerCurrentTimeLine(now: number): string {
 
 export function buildButlerApiSystemPrompt(): string {
   const sections = [getPersona(), buildButlerIdentityInstructions(), CITATION_INSTRUCTIONS];
-  const skills = [...listSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
+  const skills = [...listEnabledSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   sections.push([
     '## 可用技能',
     ...skills.map((skill) => `- ${skill.name}：${skill.description}`),
@@ -332,8 +366,9 @@ export function buildButlerCodexBaseInstructions(): string {
     '遵守当前工作目录中的 AGENTS.md。',
     '优先使用其中发现的原生 Agent Skills。',
   ];
+  const enabled = new Set(listEnabledSkills().map((skill) => skill.name));
   const legacySkills = userSkills().filter((skill) =>
-    !isButlerBuiltInSkill(skill.name) && !isNativeSkill(skill));
+    enabled.has(skill.name) && !isButlerBuiltInSkill(skill.name) && !isNativeSkill(skill));
   if (legacySkills.length > 0) {
     sections.push([
       '以下旧 legacy 技能尚未原生化；只有遇到它们时才调用 load_skill 读取正文：',
@@ -355,7 +390,7 @@ export function butlerWorkspaceRevision(): string {
   return JSON.stringify({
     identity: readButlerIdentity(),
     persona: getPersona(),
-    skills: listSkills().map(({ name, description, body }) => ({ name, description, body })),
+    skills: listEnabledSkills().map(({ name, description, body }) => ({ name, description, body })),
     hostSkills: [{
       name: AZURE_DEVOPS_SERVER_SKILL_NAME,
       revision: AZURE_DEVOPS_SERVER_SKILL_REVISION,
@@ -364,7 +399,7 @@ export function butlerWorkspaceRevision(): string {
 }
 
 onButlerArchiveHydrated(() => {
-  void ensureButlerWorkspaceFiles(getPersona(), listSkills()).catch(() => undefined);
+  syncWorkspace();
 });
 
 // 档案由内存缓存写穿到 IndexedDB；旧 localStorage 键仅保留作迁移回退。

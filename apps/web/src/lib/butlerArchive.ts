@@ -28,6 +28,7 @@ const ARCHIVE_KEYS = [
   LEGACY_MEMORY_KEY,
   ACTIVE_MEMORY_V2_KEY,
   'rcx-butler-v1:skills',
+  'rcx-butler-v1:disabled-skills',
   'rcx-butler-v1:routines',
   'rcx-butler-v1:routine-seen',
   'rcx-butler-v1:extensions',

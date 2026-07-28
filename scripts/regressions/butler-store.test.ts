@@ -3,7 +3,11 @@ import test from 'node:test';
 import type { AiMessage } from '../../apps/web/src/kernel/ai/provider';
 import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
 import { parseButlerMemoryState } from '../../apps/web/src/lib/butlerMemory';
-import { setButlerProfileStorage, type ButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
+import {
+  setButlerProfileStorage,
+  setSkillEnabled,
+  type ButlerProfileStorage,
+} from '../../apps/web/src/lib/butlerProfile';
 import { createButlerTools, type ButlerRoutineDraft } from '../../apps/web/src/lib/butlerTools';
 import {
   formatButlerToolResult,
@@ -508,4 +512,29 @@ test('draft_routine 只能落草案，确认后才创建并启用例行事务', 
   assert.equal(created.skillName, 'weekly-report');
   assert.equal(useButler.getState().routineDraft, null);
   useRoutines.setState({ routines: [], eventCards: [], seenKeys: [], runningIds: [], hydrated: false });
+});
+
+test('draft_routine 明确拒绝已停用技能', async () => {
+  resetStore();
+  const storage = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(storage);
+  const draftRoutine = createButlerTools().find((tool) => tool.name === 'draft_routine');
+  assert.ok(draftRoutine);
+  const runtime = runtimeHarness();
+
+  try {
+    setSkillEnabled('weekly-report', false);
+    const result = await draftRoutine.invoke({
+      name: '每周周报',
+      time: '18:30',
+      days: [5],
+      skillName: 'weekly-report',
+    }, runtime.context);
+    assert.match(formatButlerToolResult(result), /技能已停用/);
+    assert.equal(runtime.approvals.length, 0);
+    assert.equal(useButler.getState().routineDraft, null);
+  } finally {
+    restoreProfile();
+    resetStore();
+  }
 });

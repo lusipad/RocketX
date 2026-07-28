@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { initializeButlerLearningExtensions } from '../../apps/web/src/butler/extensions/learning/runtime';
 import {
   BUTLER_ABILITY_TEMPLATES,
   findButlerAbilityTemplate,
@@ -14,6 +15,8 @@ import {
   type Routine,
 } from '../../apps/web/src/stores/routines';
 import { useChat } from '../../apps/web/src/stores/chat';
+
+initializeButlerLearningExtensions();
 
 const NOW = new Date(2026, 6, 26, 12, 0).getTime();
 

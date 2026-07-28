@@ -8,6 +8,38 @@ async function openWorkspace(page: import('@playwright/test').Page): Promise<voi
   await expect(page.getByRole('navigation', { name: '管家工作视图' })).toBeVisible();
 }
 
+async function openButlerSkills(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+  const identityPage = page.getByRole('region', { name: '我的管家' });
+  await identityPage.getByRole('tab', { name: '记忆与技能' }).click();
+  const skills = identityPage.getByRole('region', { name: '会的本事' });
+  await expect(skills.getByRole('list')).toBeVisible();
+  return skills;
+}
+
+async function firstBuiltInSkillName(page: import('@playwright/test').Page): Promise<string> {
+  return page.evaluate(async () => {
+    const loadProfile = new Function('return import("/src/lib/butlerProfile.ts")') as () => Promise<{
+      listSkills: () => Array<{ name: string }>;
+      isButlerBuiltInSkill: (name: string) => boolean;
+    }>;
+    const { listSkills, isButlerBuiltInSkill } = await loadProfile();
+    const skill = listSkills().find((item) => isButlerBuiltInSkill(item.name));
+    if (!skill) throw new Error('built-in Butler skill not found');
+    return skill.name;
+  });
+}
+
+async function openSkillDetail(
+  page: import('@playwright/test').Page,
+  skillName: string,
+) {
+  await page.getByRole('button', { name: `查看技能 ${skillName}` }).click();
+  const dialog = page.getByRole('dialog', { name: skillName });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
 test('桌面壳锁住根视口，只允许内容面板自己滚动', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkspace(page);
@@ -377,7 +409,22 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     fullPage: true,
   });
 
+  const skillDialog = await openSkillDetail(page, 'morning-brief');
+  await expect(page).toHaveScreenshot('butler-skill-detail-dark-wide.png', {
+    animations: 'disabled',
+    caret: 'hide',
+    fullPage: true,
+  });
+
   await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page).toHaveScreenshot('butler-skill-detail-dark-mobile.png', {
+    animations: 'disabled',
+    caret: 'hide',
+    fullPage: true,
+  });
+  await skillDialog.getByRole('button', { name: '关闭', exact: true }).click();
+
   await expect(page.getByRole('combobox', { name: '切换管家视图' })).toHaveValue('memory');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await expect(page).toHaveScreenshot('butler-identity-skills-dark-mobile.png', {
@@ -393,6 +440,94 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     caret: 'hide',
     fullPage: true,
   });
+});
+
+test('内置技能可查看完整详情但不可直接编辑或卸载', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openWorkspace(page);
+  await openButlerSkills(page);
+  const skillName = await firstBuiltInSkillName(page);
+
+  const dialog = await openSkillDetail(page, skillName);
+  await expect(dialog).toContainText('内置技能');
+  await expect(dialog).toContainText('方法论正文');
+  await expect(dialog).toContainText('内置原件会随 RocketX 更新，因此保持只读');
+  await expect(dialog.getByRole('button', { name: '复制并定制' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '编辑技能' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '卸载技能' })).toHaveCount(0);
+});
+
+test('内置技能可停用并在重新打开后启用', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openWorkspace(page);
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark';
+  });
+  const skills = await openButlerSkills(page);
+  const skillName = await firstBuiltInSkillName(page);
+
+  let dialog = await openSkillDetail(page, skillName);
+  const disableToggle = dialog.getByRole('switch', { name: `停用技能 ${skillName}` });
+  await expect(disableToggle).toHaveAttribute('aria-checked', 'true');
+  await disableToggle.click();
+  await expect(dialog).toContainText('已停用');
+  await expect(dialog.getByRole('switch', { name: `启用技能 ${skillName}` })).toHaveAttribute('aria-checked', 'false');
+  await expect(skills.getByRole('listitem').filter({ hasText: skillName })).toContainText('已停用');
+
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '例行照看', exact: true }).click();
+  const routines = page.getByRole('region', { name: '在盯的事' });
+  await expect(routines.getByRole('checkbox', { name: '启用晨报' })).toBeDisabled();
+  await expect(routines).toContainText('对应技能已停用');
+  await expect(page).toHaveScreenshot('butler-routine-disabled-skill-dark-wide.png', {
+    animations: 'disabled',
+    caret: 'hide',
+    fullPage: true,
+  });
+
+  const refreshedSkills = await openButlerSkills(page);
+  dialog = await openSkillDetail(page, skillName);
+  const enableToggle = dialog.getByRole('switch', { name: `启用技能 ${skillName}` });
+  await enableToggle.click();
+  await expect(dialog).toContainText('正在使用');
+  await expect(dialog.getByRole('switch', { name: `停用技能 ${skillName}` })).toHaveAttribute('aria-checked', 'true');
+  await expect(refreshedSkills.getByRole('listitem').filter({ hasText: skillName })).not.toContainText('已停用');
+});
+
+test('内置技能复制为自装副本后可编辑并卸载', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openWorkspace(page);
+  const skills = await openButlerSkills(page);
+  const builtInSkillName = await firstBuiltInSkillName(page);
+  const clonedSkillName = `${builtInSkillName}-custom`;
+
+  let dialog = await openSkillDetail(page, builtInSkillName);
+  await dialog.getByRole('button', { name: '复制并定制' }).click();
+
+  let editor = page.getByRole('dialog', { name: '复制并定制技能' });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByRole('textbox', { name: '技能名称' })).toHaveValue(clonedSkillName);
+  await editor.getByRole('button', { name: '保存副本' }).click();
+
+  dialog = page.getByRole('dialog', { name: clonedSkillName });
+  await expect(dialog).toBeVisible();
+  await expect(skills.getByRole('listitem').filter({ hasText: clonedSkillName })).toContainText('自装');
+  await expect(dialog.getByRole('button', { name: '编辑技能' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '卸载技能' })).toBeVisible();
+
+  await dialog.getByRole('button', { name: '编辑技能' }).click();
+  editor = page.getByRole('dialog', { name: '编辑技能' });
+  await editor.getByRole('textbox', { name: '一句话简介' }).fill('这是一个复制后改过的技能简介。');
+  await editor.getByRole('button', { name: '保存修改' }).click();
+
+  dialog = page.getByRole('dialog', { name: clonedSkillName });
+  await expect(dialog).toContainText('这是一个复制后改过的技能简介。');
+  await dialog.getByRole('button', { name: '卸载技能' }).click();
+
+  const confirm = page.getByRole('dialog', { name: '卸载技能' });
+  await expect(confirm).toContainText(clonedSkillName);
+  await confirm.getByRole('button', { name: '卸载', exact: true }).click();
+  await expect(skills.getByRole('listitem').filter({ hasText: clonedSkillName })).toHaveCount(0);
 });
 
 test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台完成', async ({ page }) => {

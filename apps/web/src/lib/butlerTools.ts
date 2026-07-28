@@ -7,6 +7,7 @@ import {
 } from './butlerToolRuntime';
 import {
   listButlerQuarantinedLegacyMemory,
+  isButlerSkillEnabled,
   listSkills,
   loadButlerSkill,
   readButlerActiveMemoryV2RawJson,
@@ -685,6 +686,9 @@ function routinePreflight(args: Record<string, unknown>): ButlerToolPreflight {
   if (!time || !validTime(time)) return { allowed: false, reason: '时间格式无效，请使用 HH:mm。' };
   if (!skillName || !listSkills().some((skill) => skill.name === skillName)) {
     return { allowed: false, reason: `未找到技能：${skillName ?? '（未填写）'}。` };
+  }
+  if (!isButlerSkillEnabled(skillName)) {
+    return { allowed: false, reason: `技能已停用：${skillName}。` };
   }
   const days = args.days;
   if (days !== undefined && (!Array.isArray(days) || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {

@@ -14,6 +14,7 @@ import {
   BUTLER_ABILITY_TEMPLATES,
   type ButlerAbilityTemplate,
 } from '../lib/butlerAbilityTemplates';
+import { isButlerSkillEnabled } from '../lib/butlerProfile';
 import { shouldExpandRun } from '../lib/butlerReport';
 import type { ButlerEventCard } from '../lib/butlerWatchers';
 import { renderMarkdown } from '../lib/markdown';
@@ -58,6 +59,7 @@ function RoutineReportCard({
   const latest = routine.runs[0];
   const [expanded, setExpanded] = useState(() => shouldExpandRun(latest, Date.now()));
   const freshToday = shouldExpandRun(latest, Date.now());
+  const skillUnavailable = !!routine.skillName && !isButlerSkillEnabled(routine.skillName);
 
   const handleRunNow = async () => {
     await onRunNow(routine.id);
@@ -69,7 +71,9 @@ function RoutineReportCard({
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{routine.name}</span>
         <span className="shrink-0 text-xs text-ink-3">
-          {latest
+          {skillUnavailable
+            ? '技能已停用'
+            : latest
             ? latest.status === 'error'
               ? `${displayTime(latest.at)} 生成失败`
               : `${displayTime(latest.at)} 生成${freshToday ? '' : '（非当天）'}`
@@ -77,10 +81,12 @@ function RoutineReportCard({
         </span>
         <button
           type="button"
-          title={latest?.status === 'error' ? '重试' : latest ? '重新生成' : '立即生成'}
+          title={skillUnavailable
+            ? '先到“我的管家 → 记忆与技能”重新启用'
+            : latest?.status === 'error' ? '重试' : latest ? '重新生成' : '立即生成'}
           aria-label={`立即生成${routine.name}`}
           onClick={() => void handleRunNow()}
-          disabled={running}
+          disabled={running || skillUnavailable}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-50"
         >
           {running ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Play size={14} />}
@@ -135,14 +141,17 @@ function RoutineDetail({
   const [tab, setTab] = useState<RoutineDetailTab>('overview');
   const latest = routine.runs[0];
   const lastSuccess = routine.runs.find((run) => run.status === 'ok');
+  const skillUnavailable = !!routine.skillName && !isButlerSkillEnabled(routine.skillName);
   const health = !routine.enabled
     ? '已暂停'
-    : latest?.status === 'error'
-      ? '需要修复'
-      : latest
-        ? '正常'
-        : '等待首次运行';
-  const failing = routine.enabled && latest?.status === 'error';
+    : skillUnavailable
+      ? '技能不可用'
+      : latest?.status === 'error'
+        ? '需要修复'
+        : latest
+          ? '正常'
+          : '等待首次运行';
+  const failing = routine.enabled && (skillUnavailable || latest?.status === 'error');
   const tabs: Array<{ id: RoutineDetailTab; label: string }> = [
     { id: 'overview', label: '概览' },
     { id: 'runs', label: '运行记录' },
@@ -187,6 +196,14 @@ function RoutineDetail({
             <div><dt>上次运行</dt><dd>{latest ? displayTime(latest.at) : '还没有运行'}</dd></div>
             <div><dt>上次成功</dt><dd>{lastSuccess ? displayTime(lastSuccess.at) : '还没有成功记录'}</dd></div>
             <div><dt>检查节奏</dt><dd>{routineScheduleLabel(routine.trigger)}</dd></div>
+            <div>
+              <dt>使用技能</dt>
+              <dd className={skillUnavailable ? 'text-warning' : undefined}>
+                {routine.skillName
+                  ? `${routine.skillName}${skillUnavailable ? '（已停用或卸载）' : ''}`
+                  : '自定义方法'}
+              </dd>
+            </div>
             <div><dt>工作范围</dt><dd>{routine.params?.rooms?.join('、') || '当前账号可见范围'}</dd></div>
           </dl>
         ) : null}
@@ -244,7 +261,8 @@ function RoutineDetail({
         <button
           type="button"
           onClick={() => void onRunNow(routine.id)}
-          disabled={running}
+          disabled={running || skillUnavailable}
+          title={skillUnavailable ? '先重新启用这个技能' : undefined}
         >
           {running ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Play size={14} />}
           {latest?.status === 'error' ? '重试并验证' : '立即检查'}
@@ -282,6 +300,9 @@ export default function ButlerRoutines() {
     () => routines.filter((routine) => routine.enabled),
     [routines],
   );
+  const unavailableRoutineCount = enabledRoutines.filter(
+    (routine) => routine.skillName && !isButlerSkillEnabled(routine.skillName),
+  ).length;
   const routinesByTemplate = useMemo(
     () => new Map(
       routines
@@ -353,7 +374,8 @@ export default function ButlerRoutines() {
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="text-sm font-medium text-ink-3">在盯的事</h2>
         <span className="text-[11px] text-ink-3">
-          {enabledRoutines.length} 项启用
+          {enabledRoutines.length - unavailableRoutineCount} 项启用
+          {unavailableRoutineCount > 0 ? ` · ${unavailableRoutineCount} 项待恢复` : ''}
         </span>
       </div>
       <div className="mt-3">
@@ -406,6 +428,7 @@ export default function ButlerRoutines() {
           <div className="divide-y divide-line/70 border-t border-line">
             {BUTLER_ABILITY_TEMPLATES.map((template) => {
               const routine = routinesByTemplate.get(template.id);
+              const skillUnavailable = !!template.skillName && !isButlerSkillEnabled(template.skillName);
               return (
                 <div key={template.id} className="py-2.5">
                   <div className="flex items-start gap-3">
@@ -415,12 +438,16 @@ export default function ButlerRoutines() {
                         type="checkbox"
                         aria-label={`启用${routine.name}`}
                         checked={routine.enabled}
+                        disabled={skillUnavailable}
+                        title={skillUnavailable ? '先到“我的管家 → 记忆与技能”重新启用对应技能' : undefined}
                         onChange={(event) => setRoutineEnabled(routine.id, event.target.checked)}
                       />
                     ) : (
                       <button
                         type="button"
                         aria-label={templateActionLabel(template)}
+                        disabled={skillUnavailable}
+                        title={skillUnavailable ? '先重新启用对应技能' : undefined}
                         onClick={() => {
                           if (template.id === 'room-digest') {
                             setShowDigestPicker((value) => !value);
@@ -429,7 +456,7 @@ export default function ButlerRoutines() {
                           }
                           handleEnableTemplate(template);
                         }}
-                        className="mt-0.5 shrink-0 rounded border border-line px-2 py-1 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+                        className="mt-0.5 shrink-0 rounded border border-line px-2 py-1 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {template.id === 'room-digest' ? '选房间' : '开启'}
                       </button>
@@ -442,6 +469,9 @@ export default function ButlerRoutines() {
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs leading-5 text-ink-3">{template.description}</p>
+                      {skillUnavailable ? (
+                        <p className="mt-1 text-[11px] text-warning">对应技能已停用，请先到“记忆与技能”重新启用。</p>
+                      ) : null}
                       {routine?.params?.rooms?.length ? (
                         <p className="mt-1 text-[11px] text-ink-3">
                           已汇总：{routine.params.rooms.join('、')}

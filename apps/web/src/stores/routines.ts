@@ -14,7 +14,12 @@ import {
   type ButlerAbilityTemplateId,
   type RoutinePrecheck,
 } from '../lib/butlerAbilityTemplates';
-import { canUseNativeButlerSkill, loadButlerSkill, type ButlerProfileStorage } from '../lib/butlerProfile';
+import {
+  canUseNativeButlerSkill,
+  isButlerSkillEnabled,
+  loadButlerSkill,
+  type ButlerProfileStorage,
+} from '../lib/butlerProfile';
 import { shouldRunRoutine } from '../lib/routinePrecheck';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
@@ -465,6 +470,8 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   },
 
   setEnabled: (id, enabled) => {
+    const target = get().routines.find((routine) => routine.id === id);
+    if (enabled && target?.skillName && !isButlerSkillEnabled(target.skillName)) return;
     const routines = get().routines.map((routine) => routine.id === id ? { ...routine, enabled } : routine);
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
@@ -478,6 +485,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (existing) return existing;
     const template = findButlerAbilityTemplate(templateId);
     if (!template) return undefined;
+    if (template.skillName && !isButlerSkillEnabled(template.skillName)) return undefined;
     const routine = routineFromTemplate(template, routineNow(), params);
     if (!routine) return undefined;
     const routines = [routine, ...get().routines];
@@ -576,6 +584,24 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     const routine = get().routines.find((item) => item.id === id);
     if (!routine) return;
     const at = routineNow();
+    if (routine.skillName && !isButlerSkillEnabled(routine.skillName)) {
+      if (options?.triggerReason === 'schedule') return;
+      const run: RoutineRun = {
+        id: crypto.randomUUID(),
+        at,
+        status: 'error',
+        text: `技能「${routine.skillName}」已停用或已卸载，请先到“我的管家 → 记忆与技能”重新启用。`,
+      };
+      let routines: Routine[] = [];
+      set((state) => {
+        routines = state.routines.map((item) => item.id === id
+          ? { ...item, runs: [run, ...item.runs].slice(0, RUN_LIMIT) }
+          : item);
+        return { routines };
+      });
+      persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+      return;
+    }
     const precheckPassed = shouldRunRoutine(routine, at);
     if (!precheckPassed && options?.triggerReason === 'schedule') return;
     if (get().runningIds.includes(id)) return;
@@ -703,7 +729,9 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       set({ eventCards, seenKeys });
       persist(get().routines, eventCards, seenKeys, get().unloadedTemplateIds);
     }
-    const due = dueRoutines(get().routines, now);
+    const due = dueRoutines(get().routines, now).filter(
+      (routine) => !routine.skillName || isButlerSkillEnabled(routine.skillName),
+    );
     const firedIds = new Set<string>();
     await Promise.all(due.map((routine) => get().runNow(routine.id, {
       triggerReason: 'schedule',
