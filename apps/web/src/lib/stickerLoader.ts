@@ -66,7 +66,6 @@ export function inferStickerMimeType(path: string): string | null {
   if (normalized.endsWith('.webp')) return 'image/webp';
   if (normalized.endsWith('.gif')) return 'image/gif';
   if (normalized.endsWith('.bmp')) return 'image/bmp';
-  if (normalized.endsWith('.svg')) return 'image/svg+xml';
   return null;
 }
 

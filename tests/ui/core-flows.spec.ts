@@ -420,6 +420,19 @@ const histories: Record<string, unknown[]> = {
       }],
     },
     {
+      _id: 'general-sticker-image',
+      rid: 'room-general',
+      msg: '',
+      ts: '2026-07-17T08:02:00.000Z',
+      u: ALICE,
+      file: { _id: 'file-sticker', name: '收藏示例.png', type: 'image/png', size: 128 },
+      attachments: [{
+        title: '收藏示例.png',
+        image_url: '/file-upload/sticker/demo-thumb.png',
+        title_link: '/file-upload/sticker/demo.png',
+      }],
+    },
+    {
       _id: 'general-release',
       rid: 'room-general',
       msg: 'Release checklist ready',
@@ -670,6 +683,16 @@ async function installRocketChatMock(page: Page) {
     status: 200,
     contentType: 'image/svg+xml',
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240"><rect width="100%" height="100%" fill="white"/><text x="40" y="100" font-size="52">RocketX 123</text><text x="40" y="180" font-size="44">本地 OCR</text></svg>',
+  }));
+  await page.route('**/file-upload/sticker/demo-thumb.png', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  }));
+  await page.route('**/file-upload/sticker/demo.png', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03, 0x04]),
   }));
   await page.route('**/api/info', (route) => fulfillJson(route, { version: '8.6.1' }));
   await page.route('**/api/v1/**', async (route) => {
@@ -1347,13 +1370,13 @@ test('收到的图片消息可右键收藏到个人贴纸库并在贴纸面板�
   const { pageErrors } = await bootAuthenticated(page);
 
   await conversation(page, 'General').click();
-  await page.getByRole('button', { name: /OCR 示例\.svg/ }).last().click({ button: 'right' });
+  await page.getByRole('button', { name: /收藏示例\.png/ }).last().click({ button: 'right' });
   await expect(page.getByRole('button', { name: '收藏到贴纸库' })).toBeVisible();
   await page.getByRole('button', { name: '收藏到贴纸库' }).click();
 
   await page.getByRole('button', { name: '贴纸' }).click();
   await expect(page.locator('[data-sticker-group="我的贴纸"]').first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '发送贴纸 OCR 示例' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发送贴纸 收藏示例' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

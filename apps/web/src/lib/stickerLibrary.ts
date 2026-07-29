@@ -1,6 +1,6 @@
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';
-import { exists, mkdir, readDir, readFile, readTextFile, writeFile } from '@tauri-apps/plugin-fs';
+import { exists, mkdir, readDir, readFile, readTextFile, remove, writeFile } from '@tauri-apps/plugin-fs';
 import type { StickerCatalog, StickerEntry, StickerGroup } from './stickerManifest';
 import { getServerBase, isTauri, loadStoredAuth, rest } from './client';
 import { inferStickerMimeType } from './stickerLoader';
@@ -42,7 +42,7 @@ export interface StickerImportCandidate {
 }
 
 export interface StickerDirectoryEntryLike {
-  path: string;
+  path?: string;
   name?: string | null;
   isFile?: boolean;
   isDirectory?: boolean;
@@ -59,6 +59,18 @@ export interface StickerImportReport {
 export interface StickerLibraryLimits {
   maxItems: number;
   maxTotalBytes: number;
+}
+
+export interface PreparedStickerImport extends StickerImportCandidate {
+  digest: string;
+  storedPath: string;
+  createdAt: number;
+}
+
+export interface StickerImportStorageOps {
+  writeFile: (path: string, bytes: Uint8Array) => Promise<void>;
+  removeFile: (path: string) => Promise<void>;
+  persistLibrary: (library: PersonalStickerLibraryV1) => Promise<void>;
 }
 
 export const DEFAULT_STICKER_LIBRARY_LIMITS: StickerLibraryLimits = {
@@ -125,13 +137,14 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-function isImageMimeType(mimeType: string | null | undefined): mimeType is string {
-  return typeof mimeType === 'string' && /^image\//i.test(mimeType);
+function isSupportedStickerMimeType(mimeType: string | null | undefined): mimeType is string {
+  return typeof mimeType === 'string' && /^image\//i.test(mimeType) && mimeType.toLocaleLowerCase() !== 'image/svg+xml';
 }
 
 function imageMimeTypeOf(path: string, declared?: string | null): string | null {
-  if (isImageMimeType(declared)) return declared;
-  return inferStickerMimeType(path);
+  if (isSupportedStickerMimeType(declared)) return declared;
+  const inferred = inferStickerMimeType(path);
+  return isSupportedStickerMimeType(inferred) ? inferred : null;
 }
 
 function defaultTitle(path: string): string {
@@ -282,7 +295,10 @@ export function parseQqStickerDirectory(
   const stickers = Array.isArray(value.stickers) ? value.stickers : [];
   const remaining = files
     .filter((entry) => entry.isFile !== false)
-    .map((entry) => ({ ...entry, path: entry.path, fileName: entry.name?.trim() || toPathName(entry.path) }));
+    .map((entry) => {
+      const resolvedPath = entry.path ?? entry.name?.trim() ?? '';
+      return { ...entry, path: resolvedPath, fileName: entry.name?.trim() || toPathName(resolvedPath) };
+    });
   const results: Array<Pick<StickerImportCandidate, 'title' | 'fileName' | 'tags'> & { path: string }> = [];
   for (const sticker of stickers) {
     if (!sticker || typeof sticker !== 'object') continue;
@@ -303,9 +319,20 @@ export function parseQqStickerDirectory(
   return results;
 }
 
+export async function resolveStickerDirectoryEntries(
+  directory: string,
+  entries: readonly StickerDirectoryEntryLike[],
+  joinPath: (left: string, right: string) => Promise<string> = join,
+): Promise<StickerDirectoryEntryLike[]> {
+  return Promise.all(entries.map(async (entry) => ({
+    ...entry,
+    path: await joinPath(directory, entry.name ?? toPathName(entry.path ?? directory)),
+  })));
+}
+
 export function mergeStickerImports(
   current: PersonalStickerLibraryV1,
-  prepared: Array<StickerImportCandidate & { digest: string; storedPath: string; createdAt: number }>,
+  prepared: PreparedStickerImport[],
   limits: StickerLibraryLimits = DEFAULT_STICKER_LIBRARY_LIMITS,
 ): { next: PersonalStickerLibraryV1; report: StickerImportReport } {
   const records = [...current.records];
@@ -353,6 +380,46 @@ export function mergeStickerImports(
   };
 }
 
+async function rollbackWrittenStickerFiles(
+  paths: readonly string[],
+  removeFile: StickerImportStorageOps['removeFile'],
+): Promise<void> {
+  await Promise.all(paths.map(async (path) => {
+    try {
+      await removeFile(path);
+    } catch {
+      // 回滚失败不再覆盖原始异常，尽量减少孤儿文件即可。
+    }
+  }));
+}
+
+export async function applyPreparedStickerImport(
+  current: PersonalStickerLibraryV1,
+  prepared: PreparedStickerImport[],
+  ops: StickerImportStorageOps,
+  limits: StickerLibraryLimits = DEFAULT_STICKER_LIBRARY_LIMITS,
+): Promise<{ next: PersonalStickerLibraryV1; report: StickerImportReport }> {
+  const { next, report } = mergeStickerImports(current, prepared, limits);
+  if (report.imported === 0) return { next, report };
+  const existingDigests = new Set(current.records.map((record) => record.digest));
+  const writtenPaths: string[] = [];
+  try {
+    for (const candidate of prepared) {
+      if (!candidate.digest || existingDigests.has(candidate.digest)) continue;
+      const accepted = next.records.find((record) => record.digest === candidate.digest);
+      if (!accepted) continue;
+      await ops.writeFile(candidate.storedPath, candidate.bytes);
+      writtenPaths.push(candidate.storedPath);
+      existingDigests.add(candidate.digest);
+    }
+    await ops.persistLibrary(next);
+    return { next, report };
+  } catch (error) {
+    await rollbackWrittenStickerFiles(writtenPaths, ops.removeFile);
+    throw error;
+  }
+}
+
 async function prepareImport(
   scope: { server: string; userId: string; key: string },
   candidates: StickerImportCandidate[],
@@ -360,7 +427,7 @@ async function prepareImport(
   if (candidates.length === 0) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
   const root = await libraryRoot(scope);
   await mkdir(root, { recursive: true });
-  const prepared: Array<StickerImportCandidate & { digest: string; storedPath: string; createdAt: number }> = [];
+  const prepared: PreparedStickerImport[] = [];
   for (const candidate of candidates) {
     const mimeType = imageMimeTypeOf(candidate.fileName, candidate.mimeType);
     if (!mimeType || candidate.bytes.length === 0) {
@@ -383,17 +450,11 @@ async function prepareImport(
     });
   }
   const current = await readLibrary(scope);
-  const { next, report } = mergeStickerImports(current, prepared);
-  if (report.imported === 0) return report;
-  const newDigests = new Set(current.records.map((record) => record.digest));
-  for (const candidate of prepared) {
-    if (!candidate.digest || newDigests.has(candidate.digest)) continue;
-    const accepted = next.records.find((record) => record.digest === candidate.digest);
-    if (!accepted) continue;
-    await writeFile(candidate.storedPath, candidate.bytes);
-    newDigests.add(candidate.digest);
-  }
-  await persistLibrary(scope, next);
+  const { report } = await applyPreparedStickerImport(current, prepared, {
+    writeFile: async (path, bytes) => writeFile(path, bytes),
+    removeFile: async (path) => remove(path),
+    persistLibrary: async (library) => persistLibrary(scope, library),
+  });
   return report;
 }
 
@@ -461,7 +522,7 @@ export async function importStickerFilesFromDialog(): Promise<StickerImportRepor
     title: '选择要导入的贴纸图片',
     filters: [{
       name: '图片',
-      extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'],
+      extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'],
     }],
   });
   const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : [];
@@ -488,10 +549,7 @@ export async function importStickerDirectoryFromDialog(): Promise<StickerImportR
       readTextFile(packInfoPath),
       readDir(stickersDirectory),
     ]);
-    const mappedEntries = entries.map((entry) => ({
-      ...entry,
-      path: `${stickersDirectory}\\${entry.name}`,
-    }));
+    const mappedEntries = await resolveStickerDirectoryEntries(stickersDirectory, entries);
     const matched = parseQqStickerDirectory(JSON.parse(packInfoRaw), flattenDirectoryEntries(mappedEntries));
     const candidates: StickerImportCandidate[] = [];
     for (const entry of matched) {
@@ -521,35 +579,62 @@ export async function importStickerDirectoryFromDialog(): Promise<StickerImportR
   return prepareImport(scope, await readCandidatesFromPaths(await walkImageFiles(selected), 'directory'));
 }
 
-function collectibleImageAttachment(message: RcMessage): RcMessageAttachment | null {
-  return message.attachments?.find((attachment) => !!attachment.image_url || (!!attachment.title_link && attachment.title_link_download !== true))
-    ?? null;
+export function resolveCollectibleStickerSource(
+  message: RcMessage,
+): { attachment: RcMessageAttachment; sourcePath: string; fileName: string; mimeType: string | null } | null {
+  const fileName = message.file?.name ?? '';
+  const fileMimeType = message.file?.type ?? null;
+  return message.attachments?.reduce<{
+    attachment: RcMessageAttachment; sourcePath: string; fileName: string; mimeType: string | null; rank: number;
+  } | null>((selected, attachment) => {
+    if (attachment.image_url) {
+      const inferredMimeType = imageMimeTypeOf(fileName || attachment.title || attachment.image_url, fileMimeType);
+      if (!isSupportedStickerMimeType(inferredMimeType)) return selected;
+      const candidate = {
+        attachment,
+        sourcePath: attachment.image_url,
+        fileName: fileName || attachment.title || toPathName(attachment.image_url),
+        mimeType: inferredMimeType,
+        rank: 2,
+      };
+      return !selected || candidate.rank > selected.rank ? candidate : selected;
+    }
+    if (attachment.title_link && attachment.title_link_download !== true && isSupportedStickerMimeType(fileMimeType)) {
+      const candidate = {
+        attachment,
+        sourcePath: attachment.title_link,
+        fileName: fileName || attachment.title || toPathName(attachment.title_link),
+        mimeType: imageMimeTypeOf(fileName || attachment.title || attachment.title_link, fileMimeType),
+        rank: 1,
+      };
+      return !selected || candidate.rank > selected.rank ? candidate : selected;
+    }
+    return selected;
+  }, null) ?? null;
 }
 
 export function canCollectMessageSticker(message: RcMessage): boolean {
-  return !!collectibleImageAttachment(message);
+  return !!resolveCollectibleStickerSource(message);
 }
 
 export async function collectStickerFromMessage(message: RcMessage): Promise<StickerImportReport> {
   if (!isTauri) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
   const scope = ownerScope();
   if (!scope) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
-  const attachment = collectibleImageAttachment(message);
-  if (!attachment) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
-  const sourcePath = attachment.title_link ?? attachment.image_url;
-  if (!sourcePath) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
-  const response = await rest.fetchFileResponse(sourcePath);
+  const collectible = resolveCollectibleStickerSource(message);
+  if (!collectible) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
+  const response = await rest.fetchFileResponse(collectible.sourcePath);
   if (!response.ok) throw new Error(`加载图片失败（${response.status}）`);
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const fileName = message.file?.name ?? attachment.title ?? toPathName(sourcePath);
-  const mimeType = imageMimeTypeOf(fileName, response.headers.get('content-type'));
+  const responseMimeType = response.headers.get('content-type');
+  const mimeType = imageMimeTypeOf(collectible.fileName, responseMimeType ?? collectible.mimeType);
   return prepareImport(scope, [{
-    title: defaultTitle(fileName),
-    fileName,
+    title: defaultTitle(collectible.fileName),
+    fileName: collectible.fileName,
     mimeType: mimeType ?? '',
     bytes,
     source: 'message',
-    tags: uniqueTags([defaultTitle(fileName), message.u.name || message.u.username]),
+    tags: uniqueTags([defaultTitle(collectible.fileName), message.u.name || message.u.username]),
   }]);
 }
 
