@@ -1,8 +1,8 @@
 # Release evidence and publication
 
-The current release target is `v0.34.5`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.35.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
-Starting with `v0.34.5`, the official desktop Release again covers Windows x64, macOS universal, and Linux x64. The protected workflow publishes the verified three-platform Release as GitHub Latest and checks that `gh api repos/$GITHUB_REPOSITORY/releases/latest` resolves the new tag. Windows updater metadata must continue to select the slim NSIS installer rather than the optional full package.
+`v0.34.5` restored the official Windows x64, macOS universal, and Linux x64 desktop Release. Starting with `v0.35.0`, the protected workflow continues to publish the verified three-platform Release as GitHub Latest and checks that `gh api repos/$GITHUB_REPOSITORY/releases/latest` resolves the new tag. Windows updater metadata must continue to select the slim NSIS installer rather than the optional full package.
 
 The macOS bundle uses Tauri's supported ad-hoc signing identity because this repository does not yet have Apple Developer signing and notarization credentials. This prevents an entirely unsigned universal app while keeping the limitation explicit: the DMG is not Apple-notarized and may require manual approval in macOS Privacy & Security.
 

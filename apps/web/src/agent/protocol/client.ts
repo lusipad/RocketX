@@ -8,6 +8,10 @@ import type { ThreadSetNameParams } from './generated/v2/ThreadSetNameParams';
 import type { ThreadSetNameResponse } from './generated/v2/ThreadSetNameResponse';
 import type { ThreadMemoryModeSetParams } from './generated/v2/ThreadMemoryModeSetParams';
 import type { ThreadMemoryModeSetResponse } from './generated/v2/ThreadMemoryModeSetResponse';
+import type { ThreadListParams } from './generated/v2/ThreadListParams';
+import type { ThreadListResponse } from './generated/v2/ThreadListResponse';
+import type { ThreadReadParams } from './generated/v2/ThreadReadParams';
+import type { ThreadReadResponse } from './generated/v2/ThreadReadResponse';
 import type { ThreadStartParams } from './generated/v2/ThreadStartParams';
 import type { ThreadStartResponse } from './generated/v2/ThreadStartResponse';
 import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
@@ -43,6 +47,8 @@ interface ClientMethods {
     params: ThreadMemoryModeSetParams;
     result: ThreadMemoryModeSetResponse;
   };
+  'thread/list': { params: ThreadListParams; result: ThreadListResponse };
+  'thread/read': { params: ThreadReadParams; result: ThreadReadResponse };
   'externalAgentConfig/import': {
     params: ExternalAgentConfigImportParams;
     result: ExternalAgentConfigImportResponse;
@@ -92,6 +98,18 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
   if (method === 'thread/start' || method === 'thread/resume') {
     if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
       throw new Error(`Codex app-server ${method} 响应缺少 thread.id。`);
+    }
+    return;
+  }
+  if (method === 'thread/list') {
+    if (!Array.isArray(response.data)) {
+      throw new Error('Codex app-server thread/list 响应缺少 data。');
+    }
+    return;
+  }
+  if (method === 'thread/read') {
+    if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
+      throw new Error('Codex app-server thread/read 响应缺少 thread.id。');
     }
     return;
   }

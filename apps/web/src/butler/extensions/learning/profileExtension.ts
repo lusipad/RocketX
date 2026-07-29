@@ -14,6 +14,7 @@ import {
 import type {
   OperationAction,
   ProfileFact,
+  ProfileFactProvenance,
   ProfileFactKind,
 } from './model';
 
@@ -33,6 +34,13 @@ export interface ButlerProfileExtensionApi {
   store: StoreApi<ButlerProfileExtensionState>;
   addExplicit(kind: ProfileFactKind, subject: string, value: string): ProfileFact;
   proposeObserved(kind: ProfileFactKind, subject: string, value: string): ProfileFact;
+  addGeneratedCandidates(entries: readonly {
+    kind: ProfileFactKind;
+    subject: string;
+    value: string;
+    replacesId?: string;
+    provenance: ProfileFactProvenance;
+  }[]): number;
   addBootstrapCandidates(
     entries: readonly { kind: ProfileFactKind; subject: string; value: string }[],
     origin: 'bootstrap-connected' | 'bootstrap-imported',
@@ -105,6 +113,32 @@ export function createButlerProfileExtension(
           const fact = createProfileFact({ kind, subject, value, origin: 'observed' });
           setFacts([...store.getState().facts, fact]);
           return fact;
+        },
+        addGeneratedCandidates: (entries) => {
+          const current = store.getState();
+          const existingKeys = new Set(current.facts.map((fact) => factKey(fact)));
+          const additions = entries.flatMap((entry) => {
+            try {
+              const fact = createProfileFact({
+                kind: entry.kind,
+                subject: entry.subject,
+                value: entry.value,
+                origin: 'bootstrap-generated',
+                replacesId: entry.replacesId,
+                provenance: entry.provenance,
+              });
+              if (existingKeys.has(factKey(fact))) return [];
+              existingKeys.add(factKey(fact));
+              return [fact];
+            } catch {
+              return [];
+            }
+          });
+          if (additions.length) {
+            store.setState({ facts: [...current.facts, ...additions] });
+            persist();
+          }
+          return additions.length;
         },
         addBootstrapCandidates: (entries, origin) => {
           const current = store.getState();

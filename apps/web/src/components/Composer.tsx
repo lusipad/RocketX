@@ -1,5 +1,6 @@
 import {
   useEffect,
+  type ComponentType,
   useMemo,
   useRef,
   useState,
@@ -35,12 +36,19 @@ import {
 } from '../lib/mentions';
 import { stripAgentSessionMarker } from '../agent/card';
 import UploadConfirm from './UploadConfirm';
+import type { StickerEntry } from '../lib/stickerManifest';
 
 // 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
 // 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
 // 逐字合成时会让输入框肉眼可见地抖一下（issue #15）。不支持时才回退 JS。
 const SUPPORTS_FIELD_SIZING =
   typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
+
+type StickerPickerProps = {
+  onPick: (sticker: StickerEntry) => void;
+  onClose: () => void;
+  className?: string;
+};
 
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
@@ -70,6 +78,9 @@ export default function Composer() {
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [picker, setPicker] = useState(false);
+  const [stickerPicker, setStickerPicker] = useState(false);
+  const [StickerPickerComponent, setStickerPickerComponent] = useState<ComponentType<StickerPickerProps> | null>(null);
+  const stickerPickerLoaderRef = useRef<Promise<ComponentType<StickerPickerProps>> | null>(null);
   const [members, setMembers] = useState<RcUser[]>([]);
   // 目录里搜到的群外用户（@ 群外的人用，防抖搜索）
   const [remoteResult, setRemoteResult] = useState<{
@@ -96,6 +107,7 @@ export default function Composer() {
     setText(rid ? (useChat.getState().drafts[rid] ?? '') : '');
     setMentionQuery(null);
     setPicker(false);
+    setStickerPicker(false);
     setPendingInvites([]); // 待邀请名单跟着会话走，切走就清
     setMembers(rid ? (useChat.getState().members[rid] ?? []) : []);
     textareaRef.current?.focus();
@@ -281,6 +293,27 @@ export default function Composer() {
       el?.focus();
       el?.setSelectionRange(cursor + char.length, cursor + char.length);
     });
+  };
+
+  const ensureStickerPicker = async (): Promise<ComponentType<StickerPickerProps>> => {
+    if (StickerPickerComponent) return StickerPickerComponent;
+    if (!stickerPickerLoaderRef.current) {
+      stickerPickerLoaderRef.current = import('./StickerPicker').then((mod) => mod.default);
+    }
+    const component = await stickerPickerLoaderRef.current;
+    setStickerPickerComponent(() => component);
+    return component;
+  };
+
+  const pickSticker = async (sticker: StickerEntry) => {
+    try {
+      const { fetchStickerFile } = await import('../lib/stickerLoader');
+      const file = await fetchStickerFile(sticker);
+      requestUpload([file], text);
+      setStickerPicker(false);
+    } catch (err) {
+      toast.error(err, '加载贴纸失败');
+    }
   };
 
   const clearInput = () => {
@@ -539,6 +572,13 @@ export default function Composer() {
           className="absolute bottom-full left-4 mb-1 shadow-lg"
         />
       )}
+      {stickerPicker && StickerPickerComponent && (
+        <StickerPickerComponent
+          onPick={(sticker) => void pickSticker(sticker)}
+          onClose={() => setStickerPicker(false)}
+          className="absolute bottom-full left-4 mb-1 shadow-lg"
+        />
+      )}
 
       {/* 引用回复条（飞书交互） */}
       {replyTo && (
@@ -557,8 +597,33 @@ export default function Composer() {
         </div>
       )}
       <div className="flex items-center gap-1 pb-1.5">
-        <button title="表情" className={toolBtn} onClick={() => setPicker((v) => !v)}>
+        <button
+          title="表情"
+          className={toolBtn}
+          onClick={() => {
+            setStickerPicker(false);
+            setPicker((v) => !v);
+          }}
+        >
           <Smile size={16} />
+        </button>
+        <button
+          type="button"
+          title="贴纸"
+          aria-label="贴纸"
+          className={`${toolBtn} text-xs font-medium`}
+          onClick={() => {
+            if (stickerPicker) {
+              setStickerPicker(false);
+              return;
+            }
+            setPicker(false);
+            void ensureStickerPicker()
+              .then(() => setStickerPicker(true))
+              .catch((err) => toast.error(err, '加载贴纸面板失败'));
+          }}
+        >
+          贴
         </button>
         {canMention && (
           <button

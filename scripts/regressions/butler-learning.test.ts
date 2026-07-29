@@ -50,6 +50,19 @@ import {
   createButlerEfficiencyExtension,
   type ButlerEfficiencyApi,
 } from '../../apps/web/src/butler/extensions/learning/efficiencyExtension';
+import {
+  buildReadonlyCodexThreadSnapshot,
+  collectProfileBootstrapSources,
+  setRecentCodexClientFactory,
+  setRecentCodexSourceLoader,
+  setRecentCodexWorkspaceResolver,
+} from '../../apps/web/src/butler/extensions/learning/profileBootstrapSources';
+import {
+  generateProfileBootstrapCandidates,
+  type ProfileBootstrapCandidateDraft,
+} from '../../apps/web/src/butler/extensions/learning/profileBootstrapAi';
+import type { AiChatGateway } from '../../apps/web/src/kernel/ai/features/structured-output';
+import type { Thread } from '../../apps/web/src/agent/protocol/generated/v2/Thread';
 
 const DAY = 24 * 60 * 60 * 1_000;
 
@@ -409,5 +422,335 @@ test('Profile、操作日志、分析和效率机会通过扩展事件协作', (
   const count = journal.store.getState().receipts.length;
   journal.record({ action: 'open-view', intentKey: 'view:tasks', surface: 'butler' });
   assert.equal(journal.store.getState().receipts.length, count);
+  host.dispose();
+});
+
+test('最近 Codex 线程会被归一化为只读摘要，不带命令或文件输出', () => {
+  const now = new Date('2026-07-29T12:00:00+08:00').getTime();
+  const thread = {
+    id: 'thread-release',
+    name: '发布风险报告',
+    preview: '比较本周发布风险',
+    createdAt: Math.floor((now - 3_600_000) / 1_000),
+    updatedAt: Math.floor(now / 1_000),
+    turns: [{
+      id: 'turn-release',
+      itemsView: 'full',
+      status: 'completed',
+      error: null,
+      startedAt: Math.floor((now - 3_600_000) / 1_000),
+      completedAt: Math.floor((now - 3_540_000) / 1_000),
+      durationMs: 60_000,
+      items: [
+        {
+          type: 'userMessage',
+          id: 'item-user',
+          clientId: null,
+          content: [{ type: 'text', text: '先看发布风险，再告诉我结论。', text_elements: [] }],
+        },
+        {
+          type: 'commandExecution',
+          id: 'item-command',
+          command: 'type secrets.txt',
+          cwd: 'D:/Repos/rocketchatx',
+          processId: null,
+          source: 'shell',
+          status: 'completed',
+          commandActions: [],
+          aggregatedOutput: 'OPENAI_API_KEY=secret',
+          exitCode: 0,
+          durationMs: 10,
+        },
+        {
+          type: 'agentMessage',
+          id: 'item-assistant',
+          text: '我会先归纳风险，再给结论和证据。',
+          phase: null,
+          memoryCitation: null,
+        },
+        {
+          type: 'fileChange',
+          id: 'item-file',
+          changes: [],
+          status: 'applied',
+        },
+      ],
+    }],
+  } as unknown as Thread;
+
+  const snapshot = buildReadonlyCodexThreadSnapshot(thread, now);
+  assert.ok(snapshot);
+  assert.equal(snapshot?.sourceId, 'recent-codex');
+  assert.match(snapshot?.snapshot ?? '', /用户：先看发布风险/);
+  assert.match(snapshot?.snapshot ?? '', /助手：我会先归纳风险/);
+  assert.doesNotMatch(snapshot?.snapshot ?? '', /OPENAI_API_KEY|secrets\.txt|type secrets/i);
+});
+
+test('画像初始化显式收集来源，Claude 直读不可用时返回特定错误', async () => {
+  const now = new Date('2026-07-29T12:00:00+08:00').getTime();
+  const restoreCodex = setRecentCodexSourceLoader(async () => [{
+    id: 'codex-release',
+    sourceId: 'recent-codex',
+    label: '最近 Codex · 发布风险报告',
+    snapshot: '用户：先看发布风险。助手：先给结论，再补证据。',
+    capturedAt: now,
+  }]);
+  try {
+    const result = await collectProfileBootstrapSources({
+      now,
+      selection: {
+        currentConnection: true,
+        recentCodex: true,
+        recentClaude: true,
+      },
+      currentConnection: {
+        authName: 'Lus',
+        authUsername: 'lus',
+        adoAccount: 'lus',
+        adoBase: 'http://ado.example/tfs/DefaultCollection',
+        workItems: [{
+          id: 128,
+          title: '补齐回滚说明',
+          type: 'Task',
+          state: 'Active',
+          project: 'RocketX',
+          webUrl: 'http://ado.example/RocketX/_workitems/edit/128',
+        }],
+        prs: [],
+        builds: [],
+      },
+      manualSupplement: 'Claude 最近总结：非紧急情况先异步整理，再统一回复。\ntoken=should-not-leak',
+    });
+
+    assert.equal(result.snapshots.some((item) => item.sourceId === 'current-connection'), true);
+    assert.equal(result.snapshots.some((item) => item.sourceId === 'recent-codex'), true);
+    assert.equal(result.snapshots.some((item) => item.sourceId === 'manual-import'), true);
+    assert.doesNotMatch(
+      result.snapshots.find((item) => item.sourceId === 'manual-import')?.snapshot ?? '',
+      /should-not-leak/,
+    );
+    assert.deepEqual(result.unavailable.map((item) => item.sourceId), ['recent-claude']);
+    assert.match(result.unavailable[0]?.message ?? '', /Claude.*暂不支持.*导入.*补充摘要/);
+  } finally {
+    restoreCodex();
+  }
+});
+
+test('画像初始化送给 AI 的来源总量不超过 20，并优先保留当前连接与手动摘要', async () => {
+  const now = new Date('2026-07-29T12:00:00+08:00').getTime();
+  const restoreCodex = setRecentCodexSourceLoader(async () =>
+    Array.from({ length: 20 }, (_, index) => ({
+      id: `codex-${index}`,
+      sourceId: 'recent-codex',
+      label: `最近 Codex · ${index}`,
+      snapshot: `第 ${index} 段只读摘要`,
+      capturedAt: now - index,
+    })));
+  try {
+    const result = await collectProfileBootstrapSources({
+      now,
+      selection: {
+        currentConnection: true,
+        recentCodex: true,
+        recentClaude: false,
+      },
+      currentConnection: {
+        authName: 'Lus',
+        authUsername: 'lus',
+        workItems: [],
+        prs: [],
+        builds: [],
+      },
+      manualSupplement: '用户明确补充的工作方式。',
+    });
+
+    assert.equal(result.snapshots.length, 20);
+    assert.equal(result.snapshots.some((item) => item.sourceId === 'current-connection'), true);
+    assert.equal(result.snapshots.some((item) => item.sourceId === 'manual-import'), true);
+  } finally {
+    restoreCodex();
+  }
+});
+
+test('最近 Codex 来源读取不会按 Butler 工作区 cwd 缩窄线程列表', async () => {
+  const now = new Date('2026-07-29T12:00:00+08:00').getTime();
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const restoreWorkspace = setRecentCodexWorkspaceResolver(async () => 'D:/Users/lus/AppData/RocketX/butler');
+  const restoreClient = setRecentCodexClientFactory(() => ({
+    start: async () => undefined,
+    stop: async () => undefined,
+    request: async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'thread/list') {
+        return {
+          data: [{
+            id: 'thread-release',
+            name: '发布风险报告',
+            preview: '比较本周发布风险',
+            createdAt: Math.floor((now - 3_600_000) / 1_000),
+            updatedAt: Math.floor(now / 1_000),
+            turns: [],
+          }] as unknown as Thread[],
+        };
+      }
+      return {
+        thread: {
+          id: 'thread-release',
+          name: '发布风险报告',
+          preview: '比较本周发布风险',
+          createdAt: Math.floor((now - 3_600_000) / 1_000),
+          updatedAt: Math.floor(now / 1_000),
+          turns: [{
+            id: 'turn-release',
+            itemsView: 'full',
+            status: 'completed',
+            error: null,
+            startedAt: Math.floor((now - 3_600_000) / 1_000),
+            completedAt: Math.floor((now - 3_540_000) / 1_000),
+            durationMs: 60_000,
+            items: [{
+              type: 'agentMessage',
+              id: 'item-assistant',
+              text: '先给结论，再补证据。',
+              phase: null,
+              memoryCitation: null,
+            }],
+          }],
+        } as unknown as Thread,
+      };
+    },
+  }));
+  try {
+    const result = await collectProfileBootstrapSources({
+      now,
+      selection: {
+        currentConnection: false,
+        recentCodex: true,
+        recentClaude: false,
+      },
+      currentConnection: {
+        workItems: [],
+        prs: [],
+        builds: [],
+      },
+    });
+
+    assert.equal(result.snapshots.length, 1);
+    assert.equal(calls[0]?.method, 'thread/list');
+    assert.equal('cwd' in calls[0]!.params, false);
+  } finally {
+    restoreClient();
+    restoreWorkspace();
+  }
+});
+
+test('AI 初始化候选带来源和证据摘要，并显式禁止 remember/后台扫描', async () => {
+  const now = new Date('2026-07-29T12:00:00+08:00').getTime();
+  const sourceSnapshots = [{
+    id: 'codex-release',
+    sourceId: 'recent-codex' as const,
+    label: '最近 Codex · 发布风险报告',
+    snapshot: '用户：先看发布风险。助手：先给结论，再补证据。',
+    capturedAt: now,
+  }];
+  const requests: Array<{ capability: string; system: string; user: string }> = [];
+  const gateway: AiChatGateway = {
+    async *chat(capability, request) {
+      requests.push({
+        capability,
+        system: request.messages[0]?.content ?? '',
+        user: request.messages[1]?.content ?? '',
+      });
+      yield {
+        content: JSON.stringify({
+          candidates: [{
+            kind: 'working-style',
+            subject: '回复方式',
+            value: '先给结论，再补证据',
+            sourceSnapshotId: 'codex-release',
+            evidenceSummary: '最近两次 Codex 会话都先要求结论，再补证据。',
+          }],
+        }),
+        finishReason: 'stop',
+      };
+    },
+  };
+
+  const candidates = await generateProfileBootstrapCandidates({
+    now,
+    sourceSnapshots,
+    manualSupplement: '',
+    existingFacts: [],
+  }, gateway);
+
+  assert.deepEqual(candidates, [{
+    kind: 'working-style',
+    subject: '回复方式',
+    value: '先给结论，再补证据',
+    provenance: {
+      source: sourceSnapshots[0],
+      evidenceSummary: '最近两次 Codex 会话都先要求结论，再补证据。',
+    },
+  }] satisfies ProfileBootstrapCandidateDraft[]);
+  assert.equal(requests[0]?.capability, 'butler-rounds');
+  assert.match(requests[0]?.system ?? '', /不要调用 remember/);
+  assert.match(requests[0]?.system ?? '', /不要后台扫描/);
+  assert.match(requests[0]?.system ?? '', /不要读取秘密或私有文件/);
+  assert.match(requests[0]?.user ?? '', /最近 Codex/);
+});
+
+test('AI 生成的候选进入待确认，并保留来源与证据摘要', () => {
+  const namespaces = new Map<string, unknown>();
+  const host = new ButlerExtensionHost({
+    read: <T>(id: string) => namespaces.get(id) as T | undefined,
+    write: <T>(id: string, state: T) => {
+      namespaces.set(id, state);
+    },
+  });
+  const profile = host.load<ButlerProfileExtensionApi>(
+    createButlerProfileExtension({
+      mirror: () => undefined,
+      watch: async () => () => undefined,
+    }),
+  );
+
+  const added = profile.addGeneratedCandidates([{
+    kind: 'working-style',
+    subject: '回复方式',
+    value: '先给结论，再补证据',
+    provenance: {
+      source: {
+        id: 'codex-release',
+        sourceId: 'recent-codex',
+        label: '最近 Codex · 发布风险报告',
+        snapshot: '用户：先看发布风险。助手：先给结论，再补证据。',
+        capturedAt: 1,
+      },
+      evidenceSummary: '最近两次 Codex 会话都先要求结论，再补证据。',
+    },
+  }]);
+
+  assert.equal(added, 1);
+  assert.equal(profile.store.getState().facts[0]?.status, 'candidate');
+  assert.equal(profile.store.getState().facts[0]?.origin, 'bootstrap-generated');
+  assert.equal(
+    profile.store.getState().facts[0]?.provenance?.evidenceSummary,
+    '最近两次 Codex 会话都先要求结论，再补证据。',
+  );
+  assert.equal(profile.addGeneratedCandidates([{
+    kind: 'working-style',
+    subject: '敏感来源',
+    value: '正常值',
+    provenance: {
+      source: {
+        id: 'unsafe',
+        sourceId: 'manual-import',
+        label: '导入摘要',
+        snapshot: 'token=should-not-persist',
+        capturedAt: 1,
+      },
+      evidenceSummary: '来自导入摘要',
+    },
+  }]), 0);
   host.dispose();
 });

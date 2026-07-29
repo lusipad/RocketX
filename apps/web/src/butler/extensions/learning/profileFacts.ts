@@ -4,6 +4,7 @@ import {
   type ProfileFact,
   type ProfileFactKind,
   type ProfileFactOrigin,
+  type ProfileFactProvenance,
   type ProfileFactStatus,
 } from './model';
 
@@ -67,13 +68,40 @@ export function createProfileFact(input: {
   origin: ProfileFactOrigin;
   confirmed?: boolean;
   replacesId?: string;
+  provenance?: ProfileFactProvenance;
   now?: number;
 }): ProfileFact {
   const now = input.now ?? Date.now();
   const subject = normalizeButlerLearningText(input.subject, 80);
   const value = normalizeButlerLearningText(input.value);
   if (!subject || !value) throw new Error('资料名称和内容不能为空');
-  if (RESERVED_PROFILE_PATTERN.test(`${subject} ${value}`)) {
+  const provenance = input.provenance
+    ? {
+        source: {
+          ...input.provenance.source,
+          label: normalizeButlerLearningText(input.provenance.source.label, 120),
+          snapshot: normalizeButlerLearningText(input.provenance.source.snapshot, 1_000),
+        },
+        evidenceSummary: normalizeButlerLearningText(input.provenance.evidenceSummary, 240),
+      }
+    : undefined;
+  if (
+    provenance && (
+      !provenance.source.label
+      || !provenance.source.snapshot
+      || !Number.isFinite(provenance.source.capturedAt)
+      || !provenance.evidenceSummary
+    )
+  ) {
+    throw new Error('资料名称、内容和来源证据不能为空');
+  }
+  if (RESERVED_PROFILE_PATTERN.test([
+    subject,
+    value,
+    provenance?.source.label,
+    provenance?.source.snapshot,
+    provenance?.evidenceSummary,
+  ].filter(Boolean).join(' '))) {
     throw new Error('Profile 不保存密码、令牌、密钥、权限或系统指令');
   }
   return {
@@ -86,6 +114,7 @@ export function createProfileFact(input: {
     createdAt: now,
     updatedAt: now,
     ...(input.replacesId ? { replacesId: input.replacesId } : {}),
+    ...(provenance ? { provenance } : {}),
   };
 }
 
