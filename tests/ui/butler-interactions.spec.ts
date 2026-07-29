@@ -607,7 +607,10 @@ async function seedDispatchDraft(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       useButler: {
-        getState: () => { errands: Array<Record<string, unknown>> };
+        getState: () => {
+          errands: Array<Record<string, unknown>>;
+          hydrate: () => Promise<void>;
+        };
         setState: (state: Record<string, unknown>) => void;
       };
     }>;
@@ -616,6 +619,7 @@ async function seedDispatchDraft(page: Page): Promise<void> {
     }>;
     const { useButler } = await loadButler();
     const { useAgentEnvironments } = await loadEnvironments();
+    await useButler.getState().hydrate();
     useAgentEnvironments.setState({
       environments: [{
         id: 'paper-workspace',
