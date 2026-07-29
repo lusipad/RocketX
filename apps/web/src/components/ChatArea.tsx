@@ -20,6 +20,7 @@ import { useSharedAgent } from '../stores/sharedAgent';
 import { agentRoomSessionKey } from '../stores/agentEnvironments';
 import { toast } from '../stores/toast';
 import { autoHostEnvironmentId, startRoomAgentHosting } from '../lib/agentHosting';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import { displayName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
 import MessageList from './MessageList';
@@ -62,6 +63,7 @@ export default function ChatArea({
   hasUnread: boolean;
   onNextUnread: () => void;
 }) {
+  const features = runtimeFeatures();
   const activeRid = useChat((s) => s.activeRid);
   const rightPanel = useChat((s) => s.rightPanel);
   const registeredPanels = useKernelContributions('panel.right');
@@ -104,6 +106,7 @@ export default function ChatArea({
   const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
 
   useEffect(() => {
+    if (!features.sharedAgent) return;
     if (!activeRid) return;
     const sharedAgent = useSharedAgent.getState();
     const sessionKey = agentRoomSessionKey(activeRid);
@@ -120,7 +123,7 @@ export default function ChatArea({
     void startRoomAgentHosting(activeRid, title, environmentId).catch((error) => {
       toast.error(error, '自动开启 AI 托管失败');
     });
-  }, [activeRid]);
+  }, [activeRid, features.sharedAgent]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -169,7 +172,9 @@ export default function ChatArea({
   const remoteAgentActive = remoteAgent && remoteAgent.status !== 'ended' && remoteAgent.leaseExpiresAt > Date.now()
     ? remoteAgent
     : undefined;
-  const agentPresence = localAgentActive
+  const agentPresence = !features.sharedAgent
+    ? undefined
+    : localAgentActive
     ? {
         username: me?.username ?? localAgentActive.host.userId,
         environmentName: localAgentActive.environmentName,
@@ -284,7 +289,7 @@ export default function ChatArea({
                   {memberCount}
                 </button>
               ) : null}
-              {!agentPresence ? (
+              {features.sharedAgent && !agentPresence ? (
                 <button
                   aria-label="开启 AI 托管"
                   title="让这台电脑上的 AI 接手这个会话：它会读历史消息，只有被 @ai 点名才回复，改文件要你批准"
@@ -296,7 +301,7 @@ export default function ChatArea({
                   {hosting ? '正在开启…' : 'AI 托管'}
                 </button>
               ) : null}
-              {agentPresence ? (
+              {features.sharedAgent && agentPresence ? (
                 <button
                   aria-label={localAgentActive ? '关闭 AI 托管' : `@${agentPresence.username} 的 AI ${agentStatus}`}
                   title={localAgentActive
@@ -408,7 +413,7 @@ export default function ChatArea({
         )}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <MessageList key={activeRid} rid={activeRid} />
-          {butlerPanelOpen ? (
+          {features.butler && butlerPanelOpen ? (
             <button
               type="button"
               aria-label="关闭房间管家浮层"
@@ -416,30 +421,32 @@ export default function ChatArea({
               className="absolute inset-0 z-20 cursor-default bg-black/15 transition-opacity motion-reduce:transition-none"
             />
           ) : null}
-          {butlerPanelOpen && ButlerPanel ? <ButlerPanel /> : null}
-          <button
-            ref={butlerLauncherRef}
-            id="room-butler-launcher"
-            type="button"
-            aria-controls="room-butler-panel"
-            aria-expanded={butlerPanelOpen}
-            aria-label={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
-            title={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
-            onClick={() => togglePanel({ kind: 'butler' })}
-            className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
-          >
-            {butlerPanelOpen ? (
-              <ChevronDown
-                size={22}
-                className="transition-transform duration-150 group-hover:translate-y-0.5 motion-reduce:transition-none"
-              />
-            ) : (
-              <Bot
-                size={21}
-                className="transition-transform duration-150 group-hover:-rotate-6 motion-reduce:transition-none"
-              />
-            )}
-          </button>
+          {features.butler && butlerPanelOpen && ButlerPanel ? <ButlerPanel /> : null}
+          {features.butler ? (
+            <button
+              ref={butlerLauncherRef}
+              id="room-butler-launcher"
+              type="button"
+              aria-controls="room-butler-panel"
+              aria-expanded={butlerPanelOpen}
+              aria-label={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
+              title={butlerPanelOpen ? '收起房间管家' : '打开房间管家'}
+              onClick={() => togglePanel({ kind: 'butler' })}
+              className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
+            >
+              {butlerPanelOpen ? (
+                <ChevronDown
+                  size={22}
+                  className="transition-transform duration-150 group-hover:translate-y-0.5 motion-reduce:transition-none"
+                />
+              ) : (
+                <Bot
+                  size={21}
+                  className="transition-transform duration-150 group-hover:-rotate-6 motion-reduce:transition-none"
+                />
+              )}
+            </button>
+          ) : null}
         </div>
         {/* 从讨论卡片/搜索进来但还没加入的公开房间：给出加入入口（issue #19-6）。
             不加入也能看历史，但收不到通知、不在会话列表里。 */}

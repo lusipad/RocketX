@@ -19,6 +19,7 @@ import {
 import { messagesToMarkdown } from '../lib/messageOutput';
 import { saveTextFile } from '../lib/exportText';
 import { useKernelContributions } from '../kernel/registry';
+import { runtimeFeatures } from '../lib/runtimeMode';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
@@ -90,6 +91,7 @@ export function messagesInMain(
 }
 
 export default function MessageList({ rid }: { rid: string }) {
+  const features = runtimeFeatures();
   const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
   useDayTick();
@@ -395,24 +397,28 @@ export default function MessageList({ rid }: { rid: string }) {
               <Download size={14} />
               导出
             </button>
-            <button
-              onClick={() => handOverToButler(BUTLER_EXTRACT_COMMITMENTS_PROMPT, '提取承诺')}
-              disabled={selectedMessages.length === 0 || butlerRunning}
-              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
-              title="让管家从这些消息里提取承诺"
-            >
-              <Bot size={14} />
-              提取承诺
-            </button>
-            <button
-              onClick={() => handOverToButler(BUTLER_SUMMARIZE_PROMPT, '总结这段')}
-              disabled={selectedMessages.length === 0 || butlerRunning}
-              className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
-              title="让管家总结这段对话"
-            >
-              <Bot size={14} />
-              总结这段
-            </button>
+            {features.butler ? (
+              <>
+                <button
+                  onClick={() => handOverToButler(BUTLER_EXTRACT_COMMITMENTS_PROMPT, '提取承诺')}
+                  disabled={selectedMessages.length === 0 || butlerRunning}
+                  className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+                  title="让管家从这些消息里提取承诺"
+                >
+                  <Bot size={14} />
+                  提取承诺
+                </button>
+                <button
+                  onClick={() => handOverToButler(BUTLER_SUMMARIZE_PROMPT, '总结这段')}
+                  disabled={selectedMessages.length === 0 || butlerRunning}
+                  className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
+                  title="让管家总结这段对话"
+                >
+                  <Bot size={14} />
+                  总结这段
+                </button>
+              </>
+            ) : null}
             <button
               onClick={() => {
                 for (const m of selectedMessages) toggleStar(m);

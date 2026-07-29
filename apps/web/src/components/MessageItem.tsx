@@ -52,6 +52,7 @@ import { usePrefs } from '../stores/prefs';
 import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useUiPrefs } from '../stores/uiPrefs';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -534,6 +535,7 @@ type MessageItemProps = {
 };
 
 function MessageItem({ message, mine, grouped, inThread = false }: MessageItemProps) {
+  const features = runtimeFeatures();
   const myUsername = useAuth((s) => s.user?.username);
   const myId = useAuth((s) => s.user?._id);
   const openThread = useChat((s) => s.openThread);
@@ -735,17 +737,21 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onClick: () => void toggleStar(message),
     },
     { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
-    {
-      label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
-      icon: aiExtracting ? Loader2 : Sparkles,
-      onClick: () => void extractWithAi('todo'),
-    },
-    {
-      label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
-      icon: aiExtracting ? Loader2 : Sparkles,
-      onClick: () => void extractWithAi('workitem'),
-    },
-    { label: '交给管家', icon: Bot, onClick: () => handOverToButler() },
+    ...(features.ai
+      ? [
+          {
+            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
+            icon: aiExtracting ? Loader2 : Sparkles,
+            onClick: () => void extractWithAi('todo'),
+          },
+          {
+            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
+            icon: aiExtracting ? Loader2 : Sparkles,
+            onClick: () => void extractWithAi('workitem'),
+          },
+        ]
+      : []),
+    ...(features.butler ? [{ label: '交给管家', icon: Bot, onClick: () => handOverToButler() }] : []),
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,

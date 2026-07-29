@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
 import { Bell, Blocks, Download, TerminalSquare } from 'lucide-react';
 import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
@@ -14,11 +15,8 @@ import TodosPage from '../pages/TodosPage';
 import CalendarPage from '../pages/CalendarPage';
 import WorkbenchPage from '../pages/WorkbenchPage';
 import SettingsPage from '../pages/SettingsPage';
-import ButlerPage from '../pages/ButlerPage';
-import CodexPage from '../pages/CodexPage';
 import DownloadsPage from '../pages/DownloadsPage';
 import ThreadPanel from '../components/ThreadPanel';
-import AgentPanel from '../components/AgentPanel';
 import PinPanel from '../components/PinPanel';
 import StarredPanel from '../components/StarredPanel';
 import MembersPanel from '../components/MembersPanel';
@@ -26,10 +24,6 @@ import SearchPanel from '../components/SearchPanel';
 import RoomInfoPanel from '../components/RoomInfoPanel';
 import FilesPanel from '../components/FilesPanel';
 import MentionsPanel from '../components/MentionsPanel';
-import SummaryPanel from '../components/SummaryPanel';
-import ButlerPanel from '../components/ButlerPanel';
-import { useAiAssistant } from '../stores/aiAssistant';
-import { startSharedAgentBridge, useSharedAgent } from '../stores/sharedAgent';
 import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
 import { BUNDLED_APPS } from './bundled';
 import { PermissionGate } from './permission';
@@ -40,13 +34,11 @@ import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import { hydrateButlerArchive } from '../lib/butlerArchive';
-import { initializeAiRuntime } from './ai/runtime';
 import { kernelStore } from './store';
-import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
-import { initializeButlerLearningExtensions } from '../butler/extensions/learning/runtime';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -57,6 +49,50 @@ export const installedApps = new AppManager(kernelStore);
 let initialized = false;
 let bridgeEventsStarted = false;
 const nativeServiceStarts = new Map<string, Promise<void>>();
+
+function lazyComponent(
+  loader: () => Promise<{ default: ComponentType<any> }>,
+): ComponentType<any> {
+  const Component = lazy(loader);
+  return function LazyComponent(props: Record<string, unknown>) {
+    return (
+      <Suspense fallback={null}>
+        <Component {...props} />
+      </Suspense>
+    );
+  };
+}
+
+const ButlerPage = lazyComponent(() => import('../pages/ButlerPage'));
+const CodexPage = lazyComponent(() => import('../pages/CodexPage'));
+const SummaryPanel = lazyComponent(() => import('../components/SummaryPanel'));
+const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
+const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
+
+async function summarizeRoom(rid: string): Promise<void> {
+  const { useAiAssistant } = await import('../stores/aiAssistant');
+  useChat.getState().setPanel({ kind: 'ai' });
+  await useAiAssistant.getState().summarize(rid);
+}
+
+async function endSharedAgentSession(tmid: string): Promise<void> {
+  const { useSharedAgent } = await import('../stores/sharedAgent');
+  await useSharedAgent.getState().endSession(tmid);
+}
+
+async function runSharedAgentBridge(): Promise<void> {
+  const { startSharedAgentBridge } = await import('../stores/sharedAgent');
+  startSharedAgentBridge();
+}
+
+async function initializeAiFeatures(): Promise<void> {
+  const [{ initializeAiRuntime }, { initializeButlerLearningExtensions }] = await Promise.all([
+    import('./ai/runtime'),
+    import('../butler/extensions/learning/runtime'),
+  ]);
+  initializeButlerLearningExtensions();
+  initializeAiRuntime(kernelStore);
+}
 
 function WorkbenchModule() {
   const config = useWorkbench((state) => state.config);
@@ -469,6 +505,7 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
 }
 
 function registerBuiltins(): void {
+  const features = runtimeFeatures();
   const modules = [
     ['butler-view', '管家', ButlerPage, Bell],
     ['todos', '待办', TodosPage, undefined],
@@ -478,6 +515,7 @@ function registerBuiltins(): void {
     ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
+    if ((id === 'butler-view' && !features.butler) || (id === 'codex' && !features.ai)) continue;
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
     if (id === 'calendar' && isTauri) {
       kernelRegistry.register('core', 'nav.module', {
@@ -502,52 +540,59 @@ function registerBuiltins(): void {
     ['agent', AgentPanel],
   ] as const;
   for (const [id, render] of panels) {
+    if ((id === 'ai' && !features.ai) || (id === 'butler' && !features.butler) || (id === 'agent' && !features.sharedAgent)) continue;
     kernelRegistry.register('core', 'panel.right', { id, render });
   }
-  kernelRegistry.register('core', 'composer.command', {
-    id: 'summary',
-    name: 'summary',
-    description: '用 AI 总结当前会话未读消息',
-    run: ({ rid }) => {
-      useChat.getState().setPanel({ kind: 'ai' });
-      void useAiAssistant.getState().summarize(rid);
-    },
-  });
-  kernelRegistry.register('core', 'composer.command', {
-    id: 'butler',
-    name: 'ai',
-    description: '打开 AI，可直接跟上问题',
-    params: '问题（可选）',
-    run: runButlerCommand,
-  });
-  kernelRegistry.register('core', 'composer.trigger', {
-    id: 'codex',
-    prefix: '$codex',
-    run: async (context) => {
-      // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
-      if (context.tmid) return false;
-      try {
-        await runCodexTrigger(context);
-      } catch (error) {
-        toast.error(error, 'Codex 执行失败');
-      }
-    },
-  });
-  kernelRegistry.register('core', 'composer.command', {
-    id: 'agent-exit',
-    name: 'exit',
-    description: '结束当前话题的共享 Agent 会话',
-    run: async ({ tmid }) => {
-      if (!tmid) throw new Error('/exit 只能在话题中结束共享 Agent 会话');
-      await useSharedAgent.getState().endSession(tmid);
-    },
-  });
+  if (features.ai) {
+    kernelRegistry.register('core', 'composer.command', {
+      id: 'summary',
+      name: 'summary',
+      description: '用 AI 总结当前会话未读消息',
+      run: ({ rid }) => {
+        void summarizeRoom(rid);
+      },
+    });
+    kernelRegistry.register('core', 'composer.command', {
+      id: 'butler',
+      name: 'ai',
+      description: '打开 AI，可直接跟上问题',
+      params: '问题（可选）',
+      run: runButlerCommand,
+    });
+    kernelRegistry.register('core', 'composer.trigger', {
+      id: 'codex',
+      prefix: '$codex',
+      run: async (context) => {
+        // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
+        if (context.tmid) return false;
+        try {
+          const { runCodexTrigger } = await import('../lib/codexOnce');
+          await runCodexTrigger(context);
+        } catch (error) {
+          toast.error(error, 'Codex 执行失败');
+        }
+      },
+    });
+  }
+  if (features.sharedAgent) {
+    kernelRegistry.register('core', 'composer.command', {
+      id: 'agent-exit',
+      name: 'exit',
+      description: '结束当前话题的共享 Agent 会话',
+      run: async ({ tmid }) => {
+        if (!tmid) throw new Error('/exit 只能在话题中结束共享 Agent 会话');
+        await endSharedAgentSession(tmid);
+      },
+    });
+  }
 }
 
 function registerBridgeEvents(): void {
   if (bridgeEventsStarted) return;
   bridgeEventsStarted = true;
-  startSharedAgentBridge();
+  if (runtimeFeatures().sharedAgent) {
+    void runSharedAgentBridge().catch((error) => toast.error(error, '共享 Agent 通道启动失败'));
+  }
   if (isTauri) {
     void listen<{ appId: string; event: string; payload: unknown }>(
       'rocketx://native-service-event',
@@ -575,12 +620,13 @@ function registerBridgeEvents(): void {
   }).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
 }
 
-export function initializeKernel(): void {
+export async function initializeKernel(): Promise<void> {
   if (initialized) return;
   initialized = true;
-  initializeButlerLearningExtensions();
+  if (runtimeFeatures().ai) {
+    await initializeAiFeatures();
+  }
   setActiveAppManager(installedApps);
-  initializeAiRuntime(kernelStore);
   registerCapabilities();
   registerBuiltins();
   installModuleValidator(
@@ -592,6 +638,8 @@ export function initializeKernel(): void {
   registerBridgeEvents();
   installedApps.setActivator(activateApp);
   bridgeHost.start();
-  void hydrateButlerArchive().finally(startRoutineScheduler);
+  if (runtimeFeatures().routines) {
+    void hydrateButlerArchive().finally(startRoutineScheduler);
+  }
   void installedApps.hydrate(BUNDLED_APPS).catch((error) => toast.error(error, '加载扩展应用失败'));
 }

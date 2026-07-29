@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Blocks,
@@ -67,12 +67,12 @@ import {
 import { SENSITIVE_PERMISSIONS } from '../kernel/permission';
 import { ensureHttpOrigin, httpFetch } from '../lib/http';
 import { resetFirstRun } from '../lib/firstRun';
-import AiSettings from '../components/AiSettings';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
 import { lanOutboxCapability } from '../lan/outbox';
 import { fmtSize } from '../lib/format';
+import { getRuntimeMode, persistRuntimeMode, runtimeFeatures, type RuntimeMode } from '../lib/runtimeMode';
 import { roomArchiveSummaries, type AttachmentArchiveSettingsV1 } from '../lib/attachmentArchive';
 import {
   ATTACHMENT_ARCHIVE_CHANGED,
@@ -86,6 +86,7 @@ import {
 // 由 vite.config.ts 从 apps/desktop/package.json 注入，见那里的说明
 declare const __APP_VERSION__: string;
 const APP_VERSION = __APP_VERSION__;
+const AiSettings = lazy(() => import('../components/AiSettings'));
 
 type Section =
   | 'account'
@@ -517,6 +518,7 @@ function ShortcutSection() {
 
 /** 操作系统级桌面偏好，不跟随 Rocket.Chat 账号同步。 */
 function DesktopSection() {
+  const [mode, setMode] = useState<RuntimeMode>(getRuntimeMode);
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(isTauri);
   const [error, setError] = useState<string | null>(null);
@@ -609,6 +611,24 @@ function DesktopSection() {
 
   return (
     <>
+      <Row
+        label="运行模式"
+        hint="高性能模式会关闭 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面"
+      >
+        <RadioGroup
+          value={mode}
+          onChange={(next) => {
+            if (next === mode) return;
+            setMode(next);
+            persistRuntimeMode(next);
+            window.location.reload();
+          }}
+          options={[
+            { key: 'standard', label: '标准', hint: '默认体验，保留全部能力' },
+            { key: 'performance', label: '高性能', hint: '仅保留常规 Rocket.Chat 功能' },
+          ]}
+        />
+      </Row>
       <Row
         label="开机时启动 RocketX"
         hint="由操作系统管理，设置保存在本机，不跟随账号同步"
@@ -1916,6 +1936,10 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
   const loadPrefs = usePrefs((s) => s.load);
+  const visibleSections = useMemo(
+    () => SECTIONS.filter((item) => runtimeFeatures().ai || item.key !== 'ai'),
+    [],
+  );
 
   // 自己负责把偏好拉起来，不指望 MainPage 挂载时那一次。
   // load() 内部有「已加载就直接返回」和「同一时刻只发一个请求」的保护，重复调用不会多打请求。
@@ -1923,13 +1947,18 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
     void loadPrefs();
   }, [loadPrefs]);
 
+  useEffect(() => {
+    if (visibleSections.some((item) => item.key === section)) return;
+    setSection(visibleSections[0]?.key ?? 'account');
+  }, [section, visibleSections]);
+
   const needsPrefs = ['sidebar', 'message', 'notification'].includes(section);
 
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="w-[200px] shrink-0 border-r border-line-strong bg-surface-2 p-3">
         <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">设置</div>
-        {SECTIONS.map(({ key, label, icon: Icon }) => (
+        {visibleSections.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setSection(key)}
@@ -1945,7 +1974,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
       <main className="min-w-0 flex-1 overflow-y-auto bg-surface-3">
         <div className="mx-auto max-w-3xl px-8 py-6">
           <h1 className="mb-1 text-lg font-semibold text-ink">
-            {SECTIONS.find((s) => s.key === section)?.label}
+            {visibleSections.find((s) => s.key === section)?.label}
           </h1>
           {needsPrefs && (
             <div className="mb-3 text-xs text-ink-3">
@@ -1980,7 +2009,18 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'desktop' && <DesktopSection />}
               {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
-              {section === 'ai' && <AiSettings />}
+              {section === 'ai' && runtimeFeatures().ai && (
+                <Suspense
+                  fallback={
+                    <div className="flex items-center gap-2 py-10 text-sm text-ink-3">
+                      <Loader2 size={14} className="animate-spin" />
+                      加载 AI 设置中…
+                    </div>
+                  }
+                >
+                  <AiSettings />
+                </Suspense>
+              )}
               {section === 'apps' && <AppsSection />}
               {section === 'about' && <AboutSection />}
             </>

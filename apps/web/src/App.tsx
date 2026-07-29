@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { useAuth } from './stores/auth';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
@@ -8,11 +8,13 @@ import { useFileIndex } from './stores/fileIndex';
 import { useDownloadHistory } from './stores/downloadHistory';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
-import ButlerPollerBridge from './components/ButlerPollerBridge';
 import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
 import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
+import { runtimeFeatures } from './lib/runtimeMode';
+
+const ButlerPollerBridge = lazy(() => import('./components/ButlerPollerBridge'));
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -66,7 +68,11 @@ export default function App() {
   }
   return (
     <>
-      <ButlerPollerBridge />
+      {runtimeFeatures().polling ? (
+        <Suspense fallback={null}>
+          <ButlerPollerBridge />
+        </Suspense>
+      ) : null}
       <DiagnosticBridge />
       <UpdaterBridge />
       <WorkspaceSyncBridge />

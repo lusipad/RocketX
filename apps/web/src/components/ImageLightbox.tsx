@@ -13,6 +13,7 @@ import {
   recognizeImageBlob,
   type ImageOcrResult,
 } from '../lib/imageOcr';
+import { runtimeFeatures } from '../lib/runtimeMode';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
@@ -36,7 +37,7 @@ export default function ImageLightbox({
   const [ocr, setOcr] = useState<ImageOcrResult | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState('');
-  const ocrAvailable = desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
+  const ocrAvailable = runtimeFeatures().ocr && desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

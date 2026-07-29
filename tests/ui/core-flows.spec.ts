@@ -913,6 +913,55 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('高性能模式关闭 AI 入口但保留常规聊天流程（issue #264）', async ({ page }) => {
+  const aiModuleRequests: string[] = [];
+  page.on('request', (request) => {
+    const url = request.url();
+    if (
+      [
+        '/src/components/ButlerPollerBridge.tsx',
+        '/src/pages/ButlerPage.tsx',
+        '/src/pages/CodexPage.tsx',
+        '/src/components/SummaryPanel.tsx',
+        '/src/components/AiSettings.tsx',
+      ].some((marker) => url.includes(marker))
+    ) {
+      aiModuleRequests.push(url);
+    }
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-runtime-mode-v1', 'performance');
+  });
+  const { sentMessages, pageErrors } = await bootAuthenticated(page);
+
+  await expect(page.getByRole('navigation').getByRole('button', { name: /^管家/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
+
+  await conversation(page, 'General').click();
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(0);
+  await expect(page.locator('#room-butler-launcher')).toHaveCount(0);
+
+  await page.getByPlaceholder(/输入消息/).fill('performance mode smoke');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('performance mode smoke', { exact: true })).toBeVisible();
+  expect(sentMessages.at(-1)).toMatchObject({ msg: 'performance mode smoke', rid: 'room-general' });
+
+  await page.keyboard.press('Control+Shift+F');
+  const search = page.getByRole('dialog', { name: '全局搜索' });
+  await search.getByRole('textbox').fill('performance mode smoke');
+  await expect(search.getByText('performance mode smoke', { exact: true })).toBeVisible();
+  await expect(search.getByRole('button', { name: /问管家/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
+  await page.getByRole('complementary').getByRole('button', { name: '桌面端', exact: true }).click();
+  await expect(page.getByText('高性能', { exact: true })).toBeVisible();
+
+  expect(aiModuleRequests).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('聊天消息渲染块公式、行内公式和可访问 MathML（issue #218）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
