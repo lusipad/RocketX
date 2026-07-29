@@ -462,6 +462,40 @@ body {
   line-height: 18px;
 }
 
+.butler-workspace-conversation {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.butler-workspace-conversation .butler-workspace-nav {
+  padding-inline: 8px;
+}
+
+.butler-workspace-conversation .butler-workspace-brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.butler-workspace-conversation .butler-workspace-brand > span:last-child,
+.butler-workspace-conversation .butler-workspace-nav-item > span,
+.butler-workspace-conversation .butler-workspace-nav-foot {
+  display: none;
+}
+
+.butler-workspace-conversation .butler-workspace-nav-item {
+  display: flex;
+  justify-content: center;
+  padding: 0;
+}
+
+.butler-workspace-conversation .butler-workspace-nav-item b {
+  position: absolute;
+  min-width: 15px;
+  margin: -22px 0 0 22px;
+  padding: 0 3px;
+  font-size: 8px;
+  line-height: 14px;
+}
+
 .butler-workspace-stage {
   min-width: 0;
   min-height: 0;

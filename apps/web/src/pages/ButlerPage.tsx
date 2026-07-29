@@ -501,7 +501,7 @@ export default function ButlerPage() {
   };
 
   return (
-    <div className="butler-workspace">
+    <div className={`butler-workspace${activeView === 'conversation' ? ' butler-workspace-conversation' : ''}`}>
       <ButlerWorkspaceNav
         active={activeView}
         needsAttention={workspace.summary.needsAttention}
