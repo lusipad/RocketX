@@ -63,4 +63,9 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          test "$(gh release view "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
           test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$INPUT_TAG"
+          mkdir public-release-assets
+          gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir public-release-assets
+          node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory public-release-assets
+          (cd public-release-assets && sha256sum -c SHA256SUMS.txt)

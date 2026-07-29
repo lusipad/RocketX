@@ -172,3 +172,15 @@ test('正式发布的更新清单不能遗漏任一桌面平台', async () => {
     await rm(fixture.directory, { recursive: true, force: true });
   }
 });
+
+test('正式发布拒绝混入其他版本的历史资产', async () => {
+  const fixture = await createCrossPlatformReleaseFixture();
+  try {
+    await writeFile(path.join(fixture.directory, 'RocketX_0.33.4_x64-setup.exe'), Buffer.alloc(1_024, 10));
+    const result = runVerifier(fixture.directory, fixture.version);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Unexpected release asset/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});

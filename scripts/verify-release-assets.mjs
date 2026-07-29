@@ -8,6 +8,23 @@ const directory = path.resolve(directoryIndex >= 0 ? process.argv[directoryIndex
 const tag = tagIndex >= 0 ? process.argv[tagIndex + 1] : '';
 const version = parseReleaseTag(tag);
 const names = await readdir(directory);
+const versionPattern = version.replaceAll('.', '\\.');
+const allowedAssetPatterns = [
+  new RegExp(`^RocketX_${versionPattern}_.*-setup\\.exe(?:\\.sig)?$`, 'i'),
+  new RegExp(`^RocketX_${versionPattern}_.*\\.msi(?:\\.sig)?$`, 'i'),
+  new RegExp(`^RocketX_${versionPattern}_universal\\.dmg(?:\\.sig)?$`, 'i'),
+  /^RocketX_universal\.app\.tar\.gz(?:\.sig)?$/i,
+  new RegExp(`^RocketX_${versionPattern}_amd64\\.AppImage(?:\\.sig)?$`, 'i'),
+  new RegExp(`^RocketX_${versionPattern}_amd64\\.deb(?:\\.sig)?$`, 'i'),
+  new RegExp(`^RocketX-${versionPattern}-1\\.x86_64\\.rpm(?:\\.sig)?$`, 'i'),
+  /^latest\.json$/i,
+  new RegExp(`^rocketx-plugins-${versionPattern}\\.zip$`, 'i'),
+  /^SHA256SUMS\.txt$/i,
+];
+const unexpectedAsset = names.find(
+  (name) => !allowedAssetPatterns.some((pattern) => pattern.test(name)),
+);
+if (unexpectedAsset) throw new Error(`Unexpected release asset: ${unexpectedAsset}`);
 
 function requireMatch(label, pattern) {
   const name = names.find((candidate) => pattern.test(candidate));
@@ -15,7 +32,6 @@ function requireMatch(label, pattern) {
   return name;
 }
 
-const versionPattern = version.replaceAll('.', '\\.');
 const slimInstaller = names.find((name) =>
   new RegExp(`${versionPattern}.*\\.exe$`, 'i').test(name) && !/_full-setup\.exe$/i.test(name));
 if (!slimInstaller) throw new Error('Missing Windows slim installer asset');

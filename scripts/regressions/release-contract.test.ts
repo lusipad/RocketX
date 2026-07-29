@@ -17,6 +17,10 @@ async function currentVersion(): Promise<string> {
   return manifest.version;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 test('发布标签只接受严格 SemVer', () => {
   assert.equal(parseReleaseTag('v1.0.0'), '1.0.0');
   for (const invalid of ['1.0.0', 'v1.0', 'v01.0.0', 'v1.0.0-rc.1', 'v1.0.0 ']) {
@@ -80,6 +84,7 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(releaseWorkflow, /--draft=false --latest/);
   assert.doesNotMatch(releaseWorkflow, /--latest=false|STABLE_LATEST_TAG/);
   assert.match(releaseWorkflow, /三平台/);
+  assert.match(releaseWorkflow, /public-release-assets/);
   assert.match(
     releaseWorkflow,
     /test "\$\(gh api "repos\/\$GITHUB_REPOSITORY\/releases\/latest" --jq '\.tag_name'\)" = "\$INPUT_TAG"/,
@@ -108,4 +113,22 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
   assert.match(tagWorkflow, /git config user\.name/);
   assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);
+});
+
+test('发布文档与当前三平台 Latest 目标一致', async () => {
+  const version = await currentVersion();
+  const [releaseGuide, compatibility, changelog] = await Promise.all([
+    readFile(new URL('../../docs/release/README.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/compatibility.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8'),
+  ]);
+  const escapedVersion = escapeRegex(version);
+
+  assert.match(releaseGuide, new RegExp(`current release target is \`v${escapedVersion}\``));
+  assert.match(releaseGuide, /Windows x64, macOS universal, and Linux x64/);
+  assert.match(releaseGuide, /three-platform Release as GitHub Latest/);
+  assert.match(compatibility, /Starting with `v0\.34\.1`/);
+  assert.match(compatibility, /not Apple-notarized/);
+  assert.match(changelog, new RegExp(`^## v${escapedVersion} - `, 'm'));
+  assert.match(changelog, /恢复 Windows、macOS 和 Linux 三平台交付/);
 });
