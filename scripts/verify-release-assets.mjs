@@ -7,7 +7,9 @@ const tagIndex = process.argv.indexOf('--tag');
 const directory = path.resolve(directoryIndex >= 0 ? process.argv[directoryIndex + 1] : 'release-assets');
 const tag = tagIndex >= 0 ? process.argv[tagIndex + 1] : '';
 const version = parseReleaseTag(tag);
-const names = await readdir(directory);
+const names = (await readdir(directory, { withFileTypes: true }))
+  .filter((entry) => entry.isFile())
+  .map((entry) => entry.name);
 const versionPattern = version.replaceAll('.', '\\.');
 const allowedAssetPatterns = [
   new RegExp(`^RocketX_${versionPattern}_.*-setup\\.exe(?:\\.sig)?$`, 'i'),
