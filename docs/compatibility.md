@@ -18,13 +18,13 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 | Surface | Baseline | Notes |
 | --- | --- | --- |
 | Web | Production Vite build behind the pinned Nginx image | Nginx serves the SPA and proxies Rocket.Chat API, file, avatar, emoji, and WebSocket routes on the same origin. |
-| Windows desktop | Tauri 2 / WebView2 | The current official desktop Release target. Windows-specific integrated authentication and native notifications are platform-gated. |
-| macOS desktop | Tauri 2 / system WebView | Source target only during stabilization; official installers and updater entries are deferred pending macOS acceptance evidence. |
-| Linux desktop | Tauri 2 / WebKitGTK | Source target only during stabilization; official installers and updater entries are deferred pending distribution-level acceptance evidence. |
+| Windows desktop | Tauri 2 / WebView2 | Official x64 NSIS slim, MSI, and optional full installers. Windows-specific integrated authentication and native notifications are platform-gated. |
+| macOS desktop | Tauri 2 / system WebView | Official universal DMG and updater archive. The app uses an ad-hoc macOS signature and RocketX updater signature, but is not Apple-notarized; users may need to allow it in Privacy & Security. |
+| Linux desktop | Tauri 2 / WebKitGTK | Official x64 AppImage, DEB, and RPM packages. Distribution-specific behavior beyond the CI baseline remains unverified. |
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Starting with `v0.29.1`, official desktop Releases are temporarily Windows x64 only. Windows users install the current `v0.31.1` release manually after it is public, while `v0.28.0` remains GitHub's Latest release and the last public cross-platform artifact set. macOS and Linux delivery, together with normal Latest-based auto-update promotion, resumes only after platform-specific validation is stable.
+Releases `v0.29.1` through the cancelled `v0.34.0` candidate were Windows x64 only. Starting with `v0.34.1`, official macOS and Linux packages return and the complete cross-platform updater manifest is promoted as GitHub Latest again.
 
 ## Required and optional server settings
 

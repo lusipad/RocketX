@@ -17,6 +17,10 @@ async function currentVersion(): Promise<string> {
   return manifest.version;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 test('发布标签只接受严格 SemVer', () => {
   assert.equal(parseReleaseTag('v1.0.0'), '1.0.0');
   for (const invalid of ['1.0.0', 'v1.0', 'v01.0.0', 'v1.0.0-rc.1', 'v1.0.0 ']) {
@@ -46,12 +50,14 @@ test('待发布版本可以从 CHANGELOG 提取用户向 Release notes', async (
 });
 
 test('发布工作流先验证 main 上的注解标签再执行标签代码', async () => {
-  const [npmWorkflow, releaseWorkflow, desktopWorkflow, tagWorkflow] = await Promise.all([
+  const [npmWorkflow, releaseWorkflow, desktopWorkflow, tagWorkflow, tauriConfigText] = await Promise.all([
     readFile(new URL('../../.github/workflows/npm-publish.yml', import.meta.url), 'utf8'),
     readFile(new URL('../../.github/workflows/publish-release.yml', import.meta.url), 'utf8'),
     readFile(new URL('../../.github/workflows/desktop.yml', import.meta.url), 'utf8'),
     readFile(new URL('../../.github/workflows/tag-version.yml', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/desktop/src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
   ]);
+  const tauriConfig = JSON.parse(tauriConfigText);
 
   for (const workflow of [npmWorkflow, releaseWorkflow]) {
     assert.doesNotMatch(workflow, /ref:\s*\$\{\{\s*inputs\.tag/);
@@ -75,26 +81,54 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   assert.match(releaseWorkflow, /isDraft/);
   assert.match(releaseWorkflow, /verify-release-assets\.mjs/);
   assert.match(releaseWorkflow, /sha256sum -c SHA256SUMS\.txt/);
-  assert.match(releaseWorkflow, /--draft=false --latest=false/);
-  assert.match(releaseWorkflow, /STABLE_LATEST_TAG:\s*v0\.28\.0/);
-  assert.match(releaseWorkflow, /gh release edit "\$STABLE_LATEST_TAG" --repo "\$GITHUB_REPOSITORY" --latest/);
+  assert.match(releaseWorkflow, /--draft=false --latest/);
+  assert.doesNotMatch(releaseWorkflow, /--latest=false|STABLE_LATEST_TAG/);
+  assert.match(releaseWorkflow, /三平台/);
+  assert.match(releaseWorkflow, /public-release-assets/);
   assert.match(
     releaseWorkflow,
-    /test "\$\(gh api "repos\/\$GITHUB_REPOSITORY\/releases\/latest" --jq '\.tag_name'\)" = "\$STABLE_LATEST_TAG"/,
+    /test "\$\(gh api "repos\/\$GITHUB_REPOSITORY\/releases\/latest" --jq '\.tag_name'\)" = "\$INPUT_TAG"/,
   );
-  assert.doesNotMatch(releaseWorkflow, /三平台/);
   assert.match(desktopWorkflow, /核验发布标签来源与合同/);
   assert.doesNotMatch(desktopWorkflow, /ROCKETX_BUNDLE_CODEX/);
   assert.match(desktopWorkflow, /ROCKETX_BUNDLE_OCR/);
   assert.match(desktopWorkflow, /package-full-setup\.ps1/);
   assert.match(desktopWorkflow, /gh release upload[\s\S]*\$fullInstaller/);
   const buildJob = desktopWorkflow.match(/\n  build:[\s\S]*?\n  prepare-release:/)?.[0] ?? '';
-  assert.match(buildJob, /runs-on:\s*windows-latest/);
-  assert.doesNotMatch(buildJob, /matrix:|macos-latest|ubuntu-22\.04|\.dmg|\.AppImage|\.deb|\.rpm/);
+  assert.match(buildJob, /matrix:/);
+  assert.match(buildJob, /windows-latest/);
+  assert.match(buildJob, /macos-latest/);
+  assert.match(buildJob, /ubuntu-22\.04/);
+  assert.match(buildJob, /updaterJsonPreferNsis:\s*true/);
+  assert.match(buildJob, /\.dmg/);
+  assert.match(buildJob, /\.AppImage/);
+  assert.match(buildJob, /\.deb/);
+  assert.match(buildJob, /\.rpm/);
+  assert.match(buildJob, /matrix\.platform == 'windows-latest'/);
+  assert.equal(tauriConfig.bundle.targets, 'all');
+  assert.equal(tauriConfig.bundle.macOS.signingIdentity, '-');
   assert.match(desktopWorkflow, /test "\$release_sha" = "\$\(git rev-parse origin\/main\)"/);
   const prepareRelease = desktopWorkflow.match(/prepare-release:[\s\S]*$/)?.[0] ?? '';
-  assert.match(prepareRelease, /核验 Windows 产物并准备草稿 Release/);
+  assert.match(prepareRelease, /核验三平台产物并准备草稿 Release/);
   assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
   assert.match(tagWorkflow, /git config user\.name/);
   assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);
+});
+
+test('发布文档与当前三平台 Latest 目标一致', async () => {
+  const version = await currentVersion();
+  const [releaseGuide, compatibility, changelog] = await Promise.all([
+    readFile(new URL('../../docs/release/README.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/compatibility.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8'),
+  ]);
+  const escapedVersion = escapeRegex(version);
+
+  assert.match(releaseGuide, new RegExp(`current release target is \`v${escapedVersion}\``));
+  assert.match(releaseGuide, /Windows x64, macOS universal, and Linux x64/);
+  assert.match(releaseGuide, /three-platform Release as GitHub Latest/);
+  assert.match(compatibility, /Starting with `v0\.34\.1`/);
+  assert.match(compatibility, /not Apple-notarized/);
+  assert.match(changelog, new RegExp(`^## v${escapedVersion} - `, 'm'));
+  assert.match(changelog, /恢复 Windows、macOS 和 Linux 三平台交付/);
 });

@@ -1,8 +1,10 @@
 # Release evidence and publication
 
-The current release target is `v0.34.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.34.1`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
-During the current stabilization phase, the official desktop Release is Windows x64 only. The protected workflow publishes each Windows-only Release, including the current `v0.34.0` line, with `--latest=false`; Windows users download it manually after its public Release is available. The same publish job then explicitly re-marks `v0.28.0` as GitHub's Latest release and verifies `gh api repos/$GITHUB_REPOSITORY/releases/latest` still resolves that tag, so existing macOS and Linux update checks continue to use the last complete cross-platform manifest. macOS and Linux installers, updater entries, and support claims return only after those platforms have stable acceptance evidence.
+Starting with `v0.34.1`, the official desktop Release again covers Windows x64, macOS universal, and Linux x64. The protected workflow publishes the verified three-platform Release as GitHub Latest and checks that `gh api repos/$GITHUB_REPOSITORY/releases/latest` resolves the new tag. Windows updater metadata must continue to select the slim NSIS installer rather than the optional full package.
+
+The macOS bundle uses Tauri's supported ad-hoc signing identity because this repository does not yet have Apple Developer signing and notarization credentials. This prevents an entirely unsigned universal app while keeping the limitation explicit: the DMG is not Apple-notarized and may require manual approval in macOS Privacy & Security.
 
 ## Future 1.0 external acceptance evidence
 
@@ -35,9 +37,9 @@ The active `Protect immutable v* release tags` ruleset prevents updates, force-p
 1. Verify that the protected environments and immutable `v*` tag ruleset above are still active.
 2. Commit the dated changelog section. For a major version of 1 or higher, also commit the real README PNG/GIF and two evidence JSON files.
 3. Push `release/vX.Y.Z` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, or existing tag; 1.0+ additionally refuses missing visuals or external evidence.
-4. `Desktop Build` creates a draft Release, verifies the Windows MSI and NSIS installer, updater metadata, signatures, and plugin bundle, rejects deferred-platform assets, writes release notes from `CHANGELOG.md`, and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
+4. `Desktop Build` creates a draft Release and verifies the Windows NSIS slim, MSI, and full installers; the macOS universal DMG and updater archive; the Linux AppImage, DEB, and RPM packages; updater metadata and signatures; and the plugin bundle. It writes release notes from `CHANGELOG.md` and uploads a directly usable `SHA256SUMS.txt`. It does not publish the draft.
 5. If the release changes the public SDK or CLI and npm delivery is required, run `Publish npm packages` with confirmation `publish vX.Y.Z`. The protected job publishes `@lusipad/rocketx` first and `create-rcx-app` second. Bootstrap each new package against the immutable tag with npm's interactive identity flow, then bind this exact workflow as its Trusted Publisher; later releases use GitHub OIDC without a stored npm token. This step is independent from the desktop Release.
-6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks the Windows-only evidence, artifacts, and checksums, publishes the new Release with `--latest=false`, re-pins `v0.28.0` as Latest, and asserts `gh api repos/$GITHUB_REPOSITORY/releases/latest` returns `v0.28.0`.
+6. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks the three-platform artifacts and checksums, publishes the new Release as Latest, and asserts `gh api repos/$GITHUB_REPOSITORY/releases/latest` returns the new tag.
 
 Never delete and recreate a released npm version or rewrite an existing release tag.
 

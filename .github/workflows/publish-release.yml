@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '已完成 Windows 构建的标签'
+        description: '已完成三平台构建的标签'
         required: true
         default: 'v1.0.0'
       confirmation:
@@ -57,12 +57,15 @@ jobs:
           node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory release-assets
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
 
-      - name: 公开 Release 并恢复跨平台 Latest 基线
+      - name: 公开三平台 Release 并设为 Latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.tag }}
-          STABLE_LATEST_TAG: v0.28.0
         run: |
-          gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
-          gh release edit "$STABLE_LATEST_TAG" --repo "$GITHUB_REPOSITORY" --latest
-          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$STABLE_LATEST_TAG"
+          gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          test "$(gh release view "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$INPUT_TAG"
+          mkdir public-release-assets
+          gh release download "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --dir public-release-assets
+          node scripts/verify-release-assets.mjs --tag "$INPUT_TAG" --directory public-release-assets
+          (cd public-release-assets && sha256sum -c SHA256SUMS.txt)

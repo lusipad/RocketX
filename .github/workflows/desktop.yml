@@ -53,9 +53,26 @@ jobs:
     needs: gate
     permissions:
       contents: write
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: 安装 Linux 依赖（webkit2gtk 等）
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev
 
       - uses: pnpm/action-setup@v5
 
@@ -66,6 +83,8 @@ jobs:
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust 编译缓存
         uses: swatinem/rust-cache@v2
@@ -94,9 +113,11 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: ${{ github.ref_type == 'tag' && format('RocketX {0}', github.ref_name) || '' }}
           releaseDraft: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
 
       - name: 生成并上传 full 安装包（仅发布标签）
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && matrix.platform == 'windows-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -111,9 +132,14 @@ jobs:
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v7
         with:
-          name: rocketx-windows-latest
+          name: rocketx-${{ matrix.platform }}
           path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
             apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.rpm
           if-no-files-found: warn
 
   prepare-release:
@@ -131,7 +157,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: 核验 Windows 产物并准备草稿 Release
+      - name: 核验三平台产物并准备草稿 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
