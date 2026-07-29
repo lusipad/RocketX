@@ -1051,13 +1051,67 @@ fn bundled_azure_devops_server_adapter_path(app: &tauri::AppHandle) -> Result<Pa
 }
 
 #[cfg(windows)]
-fn resolve_pwsh_program() -> PathBuf {
-    find_program("pwsh.exe").unwrap_or_else(|| PathBuf::from("pwsh"))
+fn first_existing_program(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Result<PathBuf, String> {
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            "未找到可用的 PowerShell 运行时；请安装 PowerShell 7，或确保 Windows PowerShell 可用。"
+                .to_string()
+        })
+}
+
+#[cfg(windows)]
+fn pwsh_program_candidates_from_finder(
+    mut finder: impl FnMut(&str) -> Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = finder("pwsh.exe") {
+        candidates.push(path);
+    }
+    for base in ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+    {
+        let path = base.join("PowerShell").join("7").join("pwsh.exe");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    if let Some(path) = finder("powershell.exe") {
+        candidates.push(path);
+    }
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        let path = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn resolve_pwsh_program_from_finder(
+    finder: impl FnMut(&str) -> Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    first_existing_program(pwsh_program_candidates_from_finder(finder))
+}
+
+#[cfg(windows)]
+fn resolve_pwsh_program() -> Result<PathBuf, String> {
+    resolve_pwsh_program_from_finder(find_program)
 }
 
 #[cfg(not(windows))]
-fn resolve_pwsh_program() -> PathBuf {
-    PathBuf::from("pwsh")
+fn resolve_pwsh_program() -> Result<PathBuf, String> {
+    find_program("pwsh").ok_or_else(|| "未找到可用的 pwsh 运行时。".to_string())
 }
 
 fn install_bundled_azure_devops_server_skill(
@@ -1311,13 +1365,15 @@ fn redact_json_secret(value: &mut serde_json::Value, secret: &str) {
     }
 }
 
-fn run_butler_azure_devops_server_read(
+fn run_butler_azure_devops_server_read_with_program(
+    program: PathBuf,
     adapter_path: PathBuf,
     request: ValidatedButlerAzureDevOpsServerReadRequest,
 ) -> Result<serde_json::Value, String> {
     let payload = serde_json::to_vec(&request)
         .map_err(|error| format!("无法编码 Azure DevOps 请求：{error}"))?;
-    let mut command = hidden_command(resolve_pwsh_program());
+    let display_program = program.display().to_string();
+    let mut command = hidden_command(&program);
     command
         .arg("-NoLogo")
         .arg("-NoProfile")
@@ -1327,9 +1383,9 @@ fn run_butler_azure_devops_server_read(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("无法启动 Azure DevOps Server PowerShell runner：{error}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        format!("无法启动 Azure DevOps Server PowerShell runner（{display_program}）：{error}")
+    })?;
     let mut stdin = child
         .stdin
         .take()
@@ -1403,6 +1459,13 @@ fn run_butler_azure_devops_server_read(
         redact_json_secret(&mut result, secret);
     }
     Ok(result)
+}
+
+fn run_butler_azure_devops_server_read(
+    adapter_path: PathBuf,
+    request: ValidatedButlerAzureDevOpsServerReadRequest,
+) -> Result<serde_json::Value, String> {
+    run_butler_azure_devops_server_read_with_program(resolve_pwsh_program()?, adapter_path, request)
 }
 
 fn prepare_attachments_dir(app: &tauri::AppHandle, session_id: &str) -> Result<PathBuf, String> {
@@ -2043,16 +2106,18 @@ mod tests {
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
         classify_codex_version, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, host_path,
+        exec_optional_args_for_help, find_program, first_existing_program, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
         parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
-        resolve_codex_from_candidates_with_probe, resolve_update_package,
-        run_butler_azure_devops_server_read, safe_attachment_path,
+        resolve_codex_from_candidates_with_probe, resolve_pwsh_program_from_finder,
+        resolve_update_package, run_butler_azure_devops_server_read,
+        run_butler_azure_devops_server_read_with_program, safe_attachment_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, BundledSkillInstallResult, BundledSkillOwnership,
         ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus, CodexProcessInfo,
-        CodexRuntimeProbe, CodexRuntimeSource, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
-        CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
+        CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_HOST_ADAPTER,
+        CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS,
+        UPDATER_PUBLIC_KEY,
     };
     use serde_json::json;
     #[cfg(windows)]
@@ -2420,6 +2485,36 @@ mod tests {
         assert_eq!(value["nested"]["items"][0], "***");
     }
 
+    #[test]
+    fn azure_devops_host_adapter_stays_windows_powershell_compatible() {
+        let adapter =
+            include_str!("../resources/codex-skills/azure-devops-server-host-adapter.ps1");
+        assert!(adapter.contains("$requestObject = ConvertFrom-Json -InputObject $raw"));
+        assert!(adapter.contains("$request = @{}"));
+        assert!(!adapter.contains("-AsHashtable"));
+        assert!(!adapter.contains("ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 100"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn azure_devops_runner_falls_back_to_windows_powershell_when_pwsh_is_missing() {
+        let root = unique_temp_dir("pwsh-fallback");
+        let powershell = root
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        fs::create_dir_all(powershell.parent().unwrap()).unwrap();
+        fs::write(&powershell, b"test").unwrap();
+
+        let resolved = first_existing_program([
+            root.join("PowerShell").join("7").join("pwsh.exe"),
+            powershell.clone(),
+        ])
+        .unwrap();
+        assert_eq!(resolved, powershell);
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[cfg(windows)]
     #[test]
     fn azure_devops_runner_exercises_stdin_stdout_and_secret_redaction() {
@@ -2467,6 +2562,100 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
         assert_eq!(result["authMode"], "pat");
         assert_eq!(result["pat"], "***");
         assert_eq!(result["resource"], "pullrequests/42");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn azure_devops_host_adapter_runs_under_windows_powershell() {
+        let Some(program) = resolve_pwsh_program_from_finder(|name| match name {
+            "pwsh.exe" => None,
+            "powershell.exe" => find_program("powershell.exe"),
+            _ => None,
+        })
+        .ok() else {
+            return;
+        };
+
+        let root = unique_temp_dir("azure-host-adapter");
+        let skill_root = root.join("azure-devops-server");
+        let script_root = skill_root.join("scripts");
+        fs::create_dir_all(&script_root).unwrap();
+        fs::copy(
+            PathBuf::from("resources")
+                .join("codex-skills")
+                .join(AZURE_DEVOPS_SERVER_HOST_ADAPTER),
+            root.join(AZURE_DEVOPS_SERVER_HOST_ADAPTER),
+        )
+        .unwrap();
+        fs::write(
+            script_root.join("Invoke-AzureDevOpsServerApi.ps1"),
+            r#"[CmdletBinding()]
+param(
+    [string]$Method,
+    [string]$Area,
+    [string]$Resource,
+    [hashtable]$Query,
+    [string]$CollectionUrl,
+    [string]$AuthMode,
+    [string]$Project,
+    [string]$Team,
+    [string]$Pat,
+    [string]$ApiVersion,
+    [string]$ServerVersionHint,
+    [switch]$AllowConditionalArea
+)
+[ordered]@{
+    method = $Method
+    area = $Area
+    resource = $Resource
+    collectionUrl = $CollectionUrl
+    authMode = $AuthMode
+    project = $Project
+    team = $Team
+    apiVersion = $ApiVersion
+    serverVersionHint = $ServerVersionHint
+    allowConditionalArea = $AllowConditionalArea.IsPresent
+    ids = @($Query["ids"])
+}
+"#,
+        )
+        .unwrap();
+
+        let request =
+            validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
+                method: Some("GET".to_string()),
+                collection_url: "https://ado.example.test/DefaultCollection".to_string(),
+                auth_mode: Some("default-credentials".to_string()),
+                pat: None,
+                area: Some("git".to_string()),
+                resource: "pullrequests/42".to_string(),
+                project: None,
+                team: None,
+                query: Some(serde_json::Map::from_iter([(
+                    "ids".to_string(),
+                    json!([42, 43]),
+                )])),
+                api_version: Some("6.0".to_string()),
+                server_version_hint: Some("2022".to_string()),
+                allow_conditional_area: false,
+            })
+            .unwrap();
+
+        let result = run_butler_azure_devops_server_read_with_program(
+            program,
+            root.join(AZURE_DEVOPS_SERVER_HOST_ADAPTER),
+            request,
+        )
+        .unwrap();
+        assert_eq!(result["method"], "GET");
+        assert_eq!(result["resource"], "pullrequests/42");
+        assert_eq!(
+            result["collectionUrl"],
+            "https://ado.example.test/DefaultCollection"
+        );
+        assert_eq!(result["authMode"], "default-credentials");
+        assert_eq!(result["ids"], json!([42, 43]));
         let _ = fs::remove_dir_all(root);
     }
 

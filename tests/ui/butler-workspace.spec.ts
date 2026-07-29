@@ -82,13 +82,17 @@ async function seedWorkspace(page: import('@playwright/test').Page): Promise<voi
     const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       useButler: { setState: (state: Record<string, unknown>) => void };
     }>;
+    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
+      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
+    }>;
     const loadRounds = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
       useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
     }>;
-    const [{ useTodos }, { useRoutines }, { useButler }, { useButlerRoundsRunner }] = await Promise.all([
+    const [{ useTodos }, { useRoutines }, { useButler }, { useButlerArtifacts }, { useButlerRoundsRunner }] = await Promise.all([
       loadTodos(),
       loadRoutines(),
       loadButler(),
+      loadArtifacts(),
       loadRounds(),
     ]);
     const now = new Date(2026, 6, 28, 14, 30).getTime();
@@ -207,6 +211,30 @@ async function seedWorkspace(page: import('@playwright/test').Page): Promise<voi
         traces: [],
       }],
     });
+    useButlerArtifacts.setState({
+      hydrated: true,
+      artifacts: [{
+        id: 'workspace-release-artifact',
+        sourceLineId: 'workspace-release-report',
+        title: '发布风险报告',
+        kind: 'report',
+        status: 'working',
+        createdAt: now,
+        updatedAt: now,
+        versions: [{
+          id: 'workspace-release-artifact-v1',
+          number: 1,
+          content: `# 发布风险报告\n\n## 结论\nPR #248 缺少明确的回滚责任人，需要在发布前补齐。`,
+          sources: [{
+            kind: 'message',
+            id: 'workspace-release-source',
+            rid: 'room-general',
+            label: '发布协作',
+          }],
+          createdAt: now,
+        }],
+      }],
+    });
     useButlerRoundsRunner.setState({
       running: false,
       error: null,
@@ -311,8 +339,8 @@ test('管家六视图共享真实责任投影并可端到端切换', async ({ pa
   await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
   const artifacts = page.getByRole('region', { name: '管家成果' });
   await expect(artifacts).toContainText('发布风险报告');
-  await artifacts.getByRole('button', { name: '继续加工' }).click();
-  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveValue(/继续加工成果/);
+  await artifacts.getByRole('button', { name: '继续编辑' }).click();
+  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveValue(/继续编辑成果/);
   await artifacts.getByRole('button', { name: '收下成果' }).click();
   await expect(artifacts).toContainText('已验收');
 
@@ -632,6 +660,86 @@ test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台
   expect(installed).toBe(true);
 });
 
+test('了解你支持从当前连接与显式粘贴资料初始化候选画像', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkbench = new Function('return import("/src/stores/workbench.ts")') as () => Promise<{
+      useWorkbench: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useWorkbench } = await loadWorkbench();
+    useWorkbench.setState({
+      config: {
+        adoBase: 'http://ado.example/tfs/DefaultCollection',
+        auth: 'ntlm',
+        account: 'lus',
+      },
+      workItems: [{
+        id: 128,
+        title: '补齐回滚说明',
+        type: 'Task',
+        state: 'Active',
+        project: 'RocketX',
+        webUrl: 'http://ado.example/RocketX/_workitems/edit/128',
+      }],
+      prs: [{
+        id: 42,
+        title: '统一 Butler 会话布局',
+        repo: 'RocketX',
+        project: 'RocketX',
+        creator: 'lus',
+        creatorUnique: 'lus',
+        reviewers: [],
+        sourceBranch: 'feature/butler',
+        targetBranch: 'main',
+        webUrl: 'http://ado.example/RocketX/_git/RocketX/pullrequest/42',
+      }],
+      builds: [],
+    });
+  });
+
+  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+  const profile = page.getByRole('region', { name: '用户 Profile' });
+  await page.getByRole('tab', { name: '了解你' }).click();
+  await profile.getByRole('button', { name: '初始化了解' }).click();
+  await expect(profile).toContainText('Rocket.Chat');
+  await expect(profile).toContainText('Codex、Claude 等外部资料只会通过你粘贴或导入的文本进入待确认');
+  await profile.getByRole('textbox', { name: '初始化资料' })
+    .fill('工作方式 · 回复方式：先给结论，再补证据');
+  await profile.getByRole('button', { name: '生成候选' }).click();
+
+  await expect(profile).toContainText('Rocket.Chat 身份');
+  await expect(profile).toContainText('Azure DevOps 账号：lus');
+  await expect(profile).toContainText('当前工作项目：RocketX');
+  await expect(profile).toContainText('回复方式：先给结论，再补证据');
+  await expect(profile).toContainText('来自当前连接');
+  await expect(profile).toContainText('来自导入/粘贴资料');
+});
+
+test('晨报人格与技能要求真实链接、标题和判断优先', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openWorkspace(page);
+
+  const snapshot = await page.evaluate(async () => {
+    const loadProfile = new Function('return import("/src/lib/butlerProfile.ts")') as () => Promise<{
+      DEFAULT_PERSONA: string;
+      BUILT_IN_BUTLER_SKILLS: Array<{ name: string; body: string }>;
+    }>;
+    const { DEFAULT_PERSONA, BUILT_IN_BUTLER_SKILLS } = await loadProfile();
+    return {
+      persona: DEFAULT_PERSONA,
+      morningBrief: BUILT_IN_BUTLER_SKILLS.find((skill) => skill.name === 'morning-brief')?.body ?? '',
+    };
+  });
+
+  expect(snapshot.persona).toContain('[工作项 #编号 · 标题](webUrl)');
+  expect(snapshot.persona).toContain('禁止只写孤立 #数字');
+  expect(snapshot.morningBrief).toContain('今天先处理什么');
+  expect(snapshot.morningBrief).toContain('先归纳 2-3 条判断');
+  expect(snapshot.morningBrief).toContain('工作项、PR、构建都必须带标题和工具返回的真实 `webUrl`');
+  expect(snapshot.morningBrief).toContain('禁止裸写 #编号');
+});
+
 test('超宽窗口填满工作区，非现在视图不显示日期或重复入口', async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 1200 });
   await openWorkspace(page);
@@ -722,10 +830,18 @@ test('例行照看详情把健康、运行、配置与版本放在同一工作�
   });
 });
 
-test('对话中的长结果在中屏沉淀为可继续加工的成果工作面', async ({ page }) => {
+test('对话中的长结果在中屏仍保留完整对话内容', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
   await openWorkspace(page);
   await seedWorkspace(page);
+  await page.evaluate(async () => {
+    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
+      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButlerArtifacts } = await loadArtifacts();
+    localStorage.removeItem('rcx-butler-artifacts');
+    useButlerArtifacts.setState({ hydrated: true, artifacts: [] });
+  });
   await page.getByRole('combobox', { name: '切换管家视图' }).selectOption('conversation');
   const artifacts = page.getByRole('region', { name: '管家成果' });
   const conversationSelector = page.getByRole('combobox', { name: '管家会话' });
@@ -735,13 +851,9 @@ test('对话中的长结果在中屏沉淀为可继续加工的成果工作面',
   await expect(mediumComposer).toBeVisible();
   const mediumComposerBox = await mediumComposer.boundingBox();
   expect((mediumComposerBox?.y ?? 0) + (mediumComposerBox?.height ?? 0)).toBeLessThanOrEqual(900);
-  await expect(artifacts).toContainText('1 个来源');
-  await expect(page).toHaveScreenshot('butler-artifact-medium.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-    mask: [conversationSelector],
-  });
+  await expect(artifacts).toHaveCount(0);
+  await expect(page.getByText('完整内容、来源和版本已放在上方成果工作面。')).toHaveCount(0);
+  await expect(page.getByLabel('回答引用').getByText('PR #248 缺少明确的回滚责任人，需要在发布前补齐。')).toBeVisible();
 });
 
 test('窄屏用单一视图切换器保持 Composer 与责任状态可用', async ({ page }) => {

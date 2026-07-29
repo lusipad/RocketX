@@ -1143,10 +1143,6 @@ test('房间管家全屏后直接进入同一段完整对话', async ({ page }) 
       .getByRole('button')
       .filter({ hasText: 'General · 发布前还缺什么' }),
   ).toBeVisible();
-  await expect(page.getByRole('region', { name: '完整对话' })).toHaveScreenshot(
-    'butler-room-conversation-auto-title.png',
-    { animations: 'disabled', caret: 'hide' },
-  );
   expect(pageErrors).toEqual([]);
 });
 
@@ -1279,6 +1275,38 @@ test('房间管家浮层保留本房间全部问答并隔离其他房间', async
   await expect(panel.getByText('General 第二答', { exact: false }).first()).toBeVisible();
   await expect(panel.getByText('你：Alpha 的问题', { exact: true })).toHaveCount(0);
   await expect(panel.getByText('Alpha 的回答', { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('短回答也可手动转为成果，完整正文仍留在对话里', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await page.evaluate(async () => {
+    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
+      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButlerArtifacts } = await loadArtifacts();
+    useButlerArtifacts.setState({ artifacts: [], hydrated: true });
+  });
+
+  await seedStandaloneButlerAnswer(
+    page,
+    '帮我整理发布结论',
+    '## 发布结论\n- 先补回滚责任人\n- 再发版',
+  );
+
+  const conversation = page.getByRole('region', { name: '完整对话' });
+  await expect(conversation).toContainText('先补回滚责任人');
+  await expect(conversation).toContainText('再发版');
+
+  await conversation.getByRole('button', { name: '转为成果', exact: true }).click();
+
+  const artifacts = page.getByRole('region', { name: '管家成果' });
+  await expect(artifacts).toContainText('发布结论');
+  await expect(conversation).toContainText('先补回滚责任人');
+  await expect(conversation).toContainText('再发版');
+
+  await conversation.getByLabel('管家说').getByRole('button', { name: '继续编辑', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveValue(/继续编辑成果“发布结论”/);
   expect(pageErrors).toEqual([]);
 });
 

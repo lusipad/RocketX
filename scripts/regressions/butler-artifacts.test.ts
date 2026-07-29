@@ -1,22 +1,30 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   butlerArtifactsForSession,
-  shouldCaptureButlerArtifact,
   useButlerArtifacts,
 } from '../../apps/web/src/stores/butlerArtifacts';
 
-test('长结果自动成为可验收成果，短回答仍留在对话', () => {
-  assert.equal(shouldCaptureButlerArtifact({
+test('对话默认保留正文，只有显式收进成果区才生成成果', () => {
+  const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  assert.doesNotMatch(conversation, /for \(const conversationLine of lines\) captureArtifactLine/);
+
+  useButlerArtifacts.setState({ artifacts: [], hydrated: true });
+  const shortLine = {
     id: 'short',
-    role: 'assistant',
+    role: 'assistant' as const,
     text: '已经查完，没有发现风险。',
-  }), false);
-  assert.equal(shouldCaptureButlerArtifact({
+  };
+  const longLine = {
     id: 'long',
-    role: 'assistant',
+    role: 'assistant' as const,
     text: `# 发布风险报告\n\n${'真实核对结果。'.repeat(90)}`,
-  }), true);
+  };
+  const shortArtifact = useButlerArtifacts.getState().captureLine('session-a', shortLine);
+  const longArtifact = useButlerArtifacts.getState().captureLine('session-a', longLine);
+  assert.equal(shortArtifact?.title, '已经查完，没有发现风险。');
+  assert.equal(longArtifact?.title, '发布风险报告');
 });
 
 test('同一回答只沉淀一次，继续加工产生新版本且旧版本仍可查看', () => {

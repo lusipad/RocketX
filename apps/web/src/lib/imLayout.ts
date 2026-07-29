@@ -3,7 +3,7 @@ export const MIN_CONVERSATION_WIDTH = 220;
 export const MAX_CONVERSATION_WIDTH = 480;
 export const DEFAULT_BUTLER_PANEL_WIDTH = 420;
 export const MIN_BUTLER_PANEL_WIDTH = 300;
-export const MAX_BUTLER_PANEL_WIDTH = 640;
+export const MAX_BUTLER_PANEL_WIDTH = 960;
 
 export interface ImLayoutStateV1 {
   version: 1;

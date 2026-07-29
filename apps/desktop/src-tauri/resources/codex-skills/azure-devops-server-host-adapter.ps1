@@ -4,38 +4,29 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function ConvertTo-HashtableValue {
-    param([Parameter(Mandatory)] $Value)
-
-    if ($null -eq $Value) {
-        return $null
-    }
-
-    if ($Value -is [System.Collections.IDictionary]) {
-        $table = @{}
-        foreach ($entry in $Value.GetEnumerator()) {
-            $table[[string]$entry.Key] = ConvertTo-HashtableValue -Value $entry.Value
-        }
-        return $table
-    }
-
-    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-        $items = New-Object System.Collections.Generic.List[object]
-        foreach ($item in $Value) {
-            $items.Add((ConvertTo-HashtableValue -Value $item))
-        }
-        return ,$items.ToArray()
-    }
-
-    return $Value
-}
-
 $raw = [Console]::In.ReadToEnd()
 if ([string]::IsNullOrWhiteSpace($raw)) {
     throw "RocketX Azure DevOps Server runner expected one JSON object on stdin."
 }
 
-$request = ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 100
+$requestObject = ConvertFrom-Json -InputObject $raw
+$request = @{}
+foreach ($property in $requestObject.PSObject.Properties) {
+    if ($property.Name -eq "query" -and $null -ne $property.Value) {
+        $query = @{}
+        foreach ($queryProperty in $property.Value.PSObject.Properties) {
+            $queryValue = $queryProperty.Value
+            if ($queryValue -is [System.Collections.IEnumerable] -and -not ($queryValue -is [string])) {
+                $query[[string]$queryProperty.Name] = @($queryValue)
+            } else {
+                $query[[string]$queryProperty.Name] = $queryValue
+            }
+        }
+        $request[[string]$property.Name] = $query
+        continue
+    }
+    $request[[string]$property.Name] = $property.Value
+}
 if (-not $request.ContainsKey("resource")) {
     throw "RocketX Azure DevOps Server runner requires a resource."
 }
@@ -73,7 +64,7 @@ foreach ($entry in $fieldMap.GetEnumerator()) {
 }
 
 if ($request.ContainsKey("query") -and $null -ne $request.query) {
-    $invokeParams.Query = ConvertTo-HashtableValue -Value $request.query
+    $invokeParams.Query = $request.query
 }
 
 if ($request.ContainsKey("allowConditionalArea") -and $request.allowConditionalArea) {

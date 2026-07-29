@@ -6,6 +6,7 @@ import type {
 import {
   confirmProfileFact,
   createProfileFact,
+  parseBootstrapButlerProfileText,
   parseExternalButlerProfileMarkdown,
   renderButlerProfileMarkdown,
   setProfileFactStatus,
@@ -32,6 +33,11 @@ export interface ButlerProfileExtensionApi {
   store: StoreApi<ButlerProfileExtensionState>;
   addExplicit(kind: ProfileFactKind, subject: string, value: string): ProfileFact;
   proposeObserved(kind: ProfileFactKind, subject: string, value: string): ProfileFact;
+  addBootstrapCandidates(
+    entries: readonly { kind: ProfileFactKind; subject: string; value: string }[],
+    origin: 'bootstrap-connected' | 'bootstrap-imported',
+  ): number;
+  reviewBootstrap(markdown: string, origin: 'bootstrap-imported'): number;
   confirm(id: string): void;
   revoke(id: string): void;
   restore(id: string): void;
@@ -43,6 +49,10 @@ interface ButlerOperationEvent {
   action: OperationAction;
   intentKey: string;
   surface: string;
+}
+
+function factKey(fact: Pick<ProfileFact, 'kind' | 'subject' | 'value' | 'replacesId'>): string {
+  return `${fact.kind}:${fact.subject}:${fact.value}:${fact.replacesId ?? ''}`;
 }
 
 function savedState(context: ButlerExtensionContext): ButlerProfileExtensionState {
@@ -96,6 +106,44 @@ export function createButlerProfileExtension(
           setFacts([...store.getState().facts, fact]);
           return fact;
         },
+        addBootstrapCandidates: (entries, origin) => {
+          const current = store.getState();
+          const existingKeys = new Set(current.facts.map((fact) => factKey(fact)));
+          const additions = entries.flatMap((entry) => {
+            try {
+              const fact = createProfileFact({
+                kind: entry.kind,
+                subject: entry.subject,
+                value: entry.value,
+                origin,
+              });
+              if (existingKeys.has(factKey(fact))) return [];
+              existingKeys.add(factKey(fact));
+              return [fact];
+            } catch {
+              return [];
+            }
+          });
+          if (additions.length) {
+            store.setState({ facts: [...current.facts, ...additions] });
+            persist();
+          }
+          return additions.length;
+        },
+        reviewBootstrap: (markdown, origin) => {
+          const current = store.getState();
+          const parsed = parseBootstrapButlerProfileText(markdown, current.facts, origin);
+          const existingKeys = new Set(current.facts.map((fact) => factKey(fact)));
+          const additions = parsed.candidates.filter((fact) => !existingKeys.has(factKey(fact)));
+          if (additions.length || parsed.rejectedLines.length) {
+            store.setState({
+              facts: [...current.facts, ...additions],
+              rejectedLines: parsed.rejectedLines,
+            });
+            persist();
+          }
+          return additions.length;
+        },
         confirm: (id) => {
           setFacts(confirmProfileFact(store.getState().facts, id));
           operation({ action: 'confirm-profile', intentKey: `profile:${id}`, surface: 'profile' });
@@ -108,10 +156,8 @@ export function createButlerProfileExtension(
         reviewExternal: (markdown) => {
           const current = store.getState();
           const parsed = parseExternalButlerProfileMarkdown(markdown, current.facts);
-          const existingKeys = new Set(current.facts.map((fact) =>
-            `${fact.kind}:${fact.subject}:${fact.value}:${fact.replacesId ?? ''}`));
-          const additions = parsed.candidates.filter((fact) =>
-            !existingKeys.has(`${fact.kind}:${fact.subject}:${fact.value}:${fact.replacesId ?? ''}`));
+          const existingKeys = new Set(current.facts.map((fact) => factKey(fact)));
+          const additions = parsed.candidates.filter((fact) => !existingKeys.has(factKey(fact)));
           if (additions.length || parsed.rejectedLines.length) {
             store.setState({
               facts: [...current.facts, ...additions],

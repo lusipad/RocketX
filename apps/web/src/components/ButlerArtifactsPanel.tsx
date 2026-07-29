@@ -38,8 +38,8 @@ export default function ButlerArtifactsPanel({
     <section aria-label="管家成果" className="butler-artifacts">
       <header>
         <div>
-          <span className="butler-eyebrow">可继续工作的成果</span>
-          <h3>{artifacts.length} 份成果</h3>
+          <span className="butler-eyebrow">需要继续加工时再来看</span>
+          <h3>{artifacts.length} 份成果草稿</h3>
         </div>
         <label>
           <span className="sr-only">选择成果</span>
@@ -76,7 +76,7 @@ export default function ButlerArtifactsPanel({
       <footer>
         <span>{version.sources.length > 0 ? `${version.sources.length} 个来源` : '此版本没有附带来源'}</span>
         <div>
-          <button type="button" onClick={() => onContinue(selected.title)}>继续加工</button>
+          <button type="button" onClick={() => onContinue(selected.title)}>继续编辑</button>
           <button
             type="button"
             disabled={selected.status === 'accepted'}

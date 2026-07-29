@@ -228,15 +228,10 @@ export default function ButlerConversation({
     hydrateArtifacts();
   }, [hydrateArtifacts]);
 
-  useEffect(() => {
-    if (!activeSessionId) return;
-    for (const conversationLine of lines) captureArtifactLine(activeSessionId, conversationLine);
-  }, [activeSessionId, captureArtifactLine, lines]);
-
   // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
   // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
-    lines,
+    visibleLines,
     activity,
     butlerError,
     routineDraft,
@@ -245,6 +240,8 @@ export default function ButlerConversation({
     runtimeCheckpoints,
     actionDraft,
     steps,
+    activeArtifacts,
+    selectedHostedId,
   ]);
 
   useEffect(() => {
@@ -291,7 +288,11 @@ export default function ButlerConversation({
                 }]}
                 text={line.text}
               >
-                {(renderLink) => renderMarkdown(line.text, undefined, renderLink)}
+                {(renderLink) => (
+                  <div className="butler-conversation-markdown">
+                    {renderMarkdown(line.text, undefined, renderLink)}
+                  </div>
+                )}
               </ButlerSources>
             ) : line.text}
           </div>
@@ -374,7 +375,7 @@ export default function ButlerConversation({
             {!selectedHosted ? (
               <ButlerArtifactsPanel
                 artifacts={activeArtifacts}
-                onContinue={(title) => setInput(`继续加工成果“${title}”：`)}
+                onContinue={(title) => setInput(`继续编辑成果“${title}”：`)}
               />
             ) : null}
 
@@ -419,7 +420,7 @@ export default function ButlerConversation({
                 : lines.length;
             const renderLine = (line: (typeof lines)[number]) => {
               const mine = line.role === 'user';
-              const artifact = artifacts.find((candidate) => candidate.sourceLineId === line.id);
+              const artifact = activeArtifacts.find((candidate) => candidate.sourceLineId === line.id);
               return (
                 <article
                   key={line.id}
@@ -440,22 +441,30 @@ export default function ButlerConversation({
                         mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
                       }`}
                     >
-                      {artifact ? (
-                        <div className="butler-artifact-message">
-                          <span>已生成{artifact.kind === 'draft' ? '草稿' : artifact.kind === 'diff' ? '变更' : artifact.kind === 'checklist' ? '清单' : '报告'}成果</span>
-                          <strong>{artifact.title}</strong>
-                          <small>完整内容、来源和版本已放在上方成果工作面。</small>
-                        </div>
-                      ) : line.role === 'assistant' ? (
+                      {line.role === 'assistant' ? (
                         <ButlerSources sources={line.sources} text={line.text}>
                           {(renderLink) => line.text.startsWith('📌')
                             ? line.text
-                            : renderMarkdown(line.text, undefined, renderLink)}
+                            : (
+                                <div className="butler-conversation-markdown">
+                                  {renderMarkdown(line.text, undefined, renderLink)}
+                                </div>
+                              )}
                         </ButlerSources>
                       ) : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
-                      <ButlerMessageActions line={line} disabled={running} />
+                      <ButlerMessageActions
+                        line={line}
+                        disabled={running}
+                        artifactable={line.role === 'assistant'}
+                        artifactExists={!!artifact}
+                        onPromoteArtifact={() => {
+                          if (!activeSessionId) return;
+                          captureArtifactLine(activeSessionId, line);
+                        }}
+                        onContinueArtifact={artifact ? () => setInput(`继续编辑成果“${artifact.title}”：`) : undefined}
+                      />
                     </div>
                   </div>
                 </article>

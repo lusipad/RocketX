@@ -1,4 +1,4 @@
-import { Check, RotateCcw, Save } from 'lucide-react';
+import { RotateCcw, Save } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   parseButlerMemoryState,
@@ -213,7 +213,6 @@ export default function ButlerIdentityPage() {
               >
                 <ButlerAvatar avatar={option.id} name={draft.displayName || '管家'} />
                 <span>{option.label}</span>
-                {draft.avatar === option.id ? <Check size={13} aria-hidden="true" /> : null}
               </button>
             ))}
           </div>

@@ -26,6 +26,39 @@ const RESERVED_PROFILE_PATTERN =
   /(password|passwd|token|secret|api[-_ ]?key|credential|system prompt|权限|授权|密钥|密码|令牌|凭据)/i;
 const PROFILE_LINE_PATTERN =
   /^-\s+\*\*([^·*]+?)\s*·\s*([^*]+?)\*\*[：:]\s*(.*?)\s*(?:<!--\s*profile:([a-zA-Z0-9-]+)\s*-->)?\s*$/;
+const BOOTSTRAP_FACT_ALIASES = new Map<string, { kind: ProfileFactKind; subject?: string }>([
+  ['身份', { kind: 'identity' }],
+  ['名字', { kind: 'identity', subject: '名字' }],
+  ['称呼', { kind: 'identity', subject: '称呼' }],
+  ['角色', { kind: 'identity', subject: '角色' }],
+  ['偏好', { kind: 'preference' }],
+  ['语气', { kind: 'preference', subject: '语气' }],
+  ['表达详略', { kind: 'preference', subject: '表达详略' }],
+  ['工作背景', { kind: 'work-context' }],
+  ['项目', { kind: 'work-context', subject: '当前项目' }],
+  ['团队', { kind: 'work-context', subject: '团队' }],
+  ['工作方式', { kind: 'working-style' }],
+  ['主动程度', { kind: 'working-style', subject: '主动程度' }],
+  ['边界', { kind: 'boundary' }],
+]);
+
+function defaultSubject(kind: ProfileFactKind): string {
+  return FACT_KIND_LABELS[kind];
+}
+
+function dedupedCandidates(
+  current: readonly ProfileFact[],
+  additions: readonly ProfileFact[],
+): ProfileFact[] {
+  const existingKeys = new Set(current.map((fact) =>
+    `${fact.kind}:${fact.subject}:${fact.value}:${fact.replacesId ?? ''}`));
+  return additions.filter((fact) => {
+    const key = `${fact.kind}:${fact.subject}:${fact.value}:${fact.replacesId ?? ''}`;
+    if (existingKeys.has(key)) return false;
+    existingKeys.add(key);
+    return true;
+  });
+}
 
 export function createProfileFact(input: {
   kind: ProfileFactKind;
@@ -154,4 +187,59 @@ export function parseExternalButlerProfileMarkdown(
     }
   }
   return { candidates, rejectedLines };
+}
+
+export function parseBootstrapButlerProfileText(
+  text: string,
+  existingFacts: readonly ProfileFact[],
+  origin: 'bootstrap-connected' | 'bootstrap-imported',
+  now = Date.now(),
+): ParsedProfileDocument {
+  const parsed = text.trimStart().startsWith('# Profile')
+    ? parseExternalButlerProfileMarkdown(text, existingFacts, now)
+    : (() => {
+      const candidates: ProfileFact[] = [];
+      const rejectedLines: string[] = [];
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const match = /^(?:[-*+]\s+|\d+[.)]\s+)?([^：:]+?)[：:]\s*(.+)$/.exec(line);
+        if (!match) {
+          rejectedLines.push(line);
+          continue;
+        }
+        const head = normalizeButlerLearningText(match[1], 80);
+        const value = normalizeButlerLearningText(match[2]);
+        if (!head || !value) {
+          rejectedLines.push(line);
+          continue;
+        }
+        const [rawLabel, rawSubject] = head.split(/\s*[·|/／]\s*/, 2);
+        const alias = BOOTSTRAP_FACT_ALIASES.get(rawLabel.trim());
+        if (!alias || RESERVED_PROFILE_PATTERN.test(`${head} ${value}`)) {
+          rejectedLines.push(line);
+          continue;
+        }
+        const subject = normalizeButlerLearningText(
+          rawSubject?.trim() || alias.subject || defaultSubject(alias.kind),
+          80,
+        );
+        try {
+          candidates.push(createProfileFact({
+            kind: alias.kind,
+            subject,
+            value,
+            origin,
+            now,
+          }));
+        } catch {
+          rejectedLines.push(line);
+        }
+      }
+      return { candidates, rejectedLines };
+    })();
+  return {
+    candidates: dedupedCandidates(existingFacts, parsed.candidates),
+    rejectedLines: parsed.rejectedLines,
+  };
 }

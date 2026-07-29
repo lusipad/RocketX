@@ -662,12 +662,6 @@ body {
   height: 36px;
 }
 
-.butler-identity-avatars button > svg {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-}
-
 .butler-identity-choices {
   display: grid;
   margin-top: 26px;
@@ -1813,22 +1807,19 @@ body {
   opacity: .65;
 }
 
-.butler-artifact-message {
-  display: grid;
-  gap: 2px;
-  min-width: 260px;
+.butler-conversation-markdown > p + p,
+.butler-conversation-markdown > p + div,
+.butler-conversation-markdown > div + p,
+.butler-conversation-markdown > div + div {
+  margin-top: 6px;
 }
 
-.butler-artifact-message > span,
-.butler-artifact-message > small {
-  color: var(--color-ink-3);
-  font-size: 11px;
-  line-height: 18px;
+.butler-conversation-markdown > p {
+  line-height: 1.75;
 }
 
-.butler-artifact-message > strong {
-  font-size: 13px;
-  font-weight: 600;
+.butler-conversation-markdown > div {
+  line-height: 1.75;
 }
 
 @media (max-width: 1279px) {

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   confirmProfileFact,
   createProfileFact,
+  parseBootstrapButlerProfileText,
   parseExternalButlerProfileMarkdown,
   renderButlerProfileMarkdown,
   setProfileFactStatus,
@@ -111,6 +112,41 @@ test('Profile 拒绝敏感资料和带权限含义的外部行', () => {
   );
   assert.equal(parsed.candidates.length, 0);
   assert.equal(parsed.rejectedLines.length, 1);
+});
+
+test('画像初始化只把支持的显式资料整理为待确认候选', () => {
+  const existing = createProfileFact({
+    kind: 'working-style',
+    subject: '回复方式',
+    value: '先给结论',
+    origin: 'explicit',
+    confirmed: true,
+    now: 100,
+  });
+  const parsed = parseBootstrapButlerProfileText([
+    '工作方式 · 回复方式：先给结论',
+    '偏好 · 语气：直接',
+    'API token：不得导入',
+    '这不是结构化资料',
+  ].join('\n'), [existing], 'bootstrap-imported', 200);
+
+  assert.deepEqual(
+    parsed.candidates.map(({ kind, subject, value, status, origin }) => ({
+      kind,
+      subject,
+      value,
+      status,
+      origin,
+    })),
+    [{
+      kind: 'preference',
+      subject: '语气',
+      value: '直接',
+      status: 'candidate',
+      origin: 'bootstrap-imported',
+    }],
+  );
+  assert.deepEqual(parsed.rejectedLines, ['API token：不得导入', '这不是结构化资料']);
 });
 
 test('OperationReceipt 只保留动作语义，不存在原始输入或屏幕字段', () => {

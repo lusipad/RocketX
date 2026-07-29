@@ -1,4 +1,4 @@
-import { Bot, CalendarClock, CheckSquare, Code2, MessageSquareReply, Send } from 'lucide-react';
+import { Bot, CalendarClock, CheckSquare, Code2, FileStack, MessageSquareReply, Send } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ButlerActionKind } from '../lib/butlerActions';
 import { useButler, type ButlerLine } from '../stores/butler';
@@ -25,7 +25,21 @@ const TITLES: Record<ButlerActionKind, string> = {
   codex: 'Codex 交接草案',
 };
 
-export function ButlerMessageActions({ line, disabled = false }: { line: ButlerLine; disabled?: boolean }) {
+export function ButlerMessageActions({
+  line,
+  disabled = false,
+  artifactable = false,
+  artifactExists = false,
+  onPromoteArtifact,
+  onContinueArtifact,
+}: {
+  line: ButlerLine;
+  disabled?: boolean;
+  artifactable?: boolean;
+  artifactExists?: boolean;
+  onPromoteArtifact?: () => void;
+  onContinueArtifact?: () => void;
+}) {
   const propose = useButler((state) => state.proposeAction);
   if (
     line.role !== 'assistant'
@@ -35,6 +49,23 @@ export function ButlerMessageActions({ line, disabled = false }: { line: ButlerL
   ) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-1 opacity-80 transition hover:opacity-100" aria-label="把结论变成动作">
+      {artifactable ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            if (artifactExists) {
+              onContinueArtifact?.();
+              return;
+            }
+            onPromoteArtifact?.();
+          }}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink disabled:opacity-40"
+        >
+          <FileStack size={12} />
+          {artifactExists ? '继续编辑' : '转为成果'}
+        </button>
+      ) : null}
       {ACTIONS.map(({ kind, label, icon: Icon }) => (
         <button
           key={kind}

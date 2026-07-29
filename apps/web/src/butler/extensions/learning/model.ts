@@ -7,7 +7,12 @@ export type ProfileFactKind =
   | 'boundary';
 
 export type ProfileFactStatus = 'confirmed' | 'candidate' | 'revoked';
-export type ProfileFactOrigin = 'explicit' | 'observed' | 'external-edit';
+export type ProfileFactOrigin =
+  | 'explicit'
+  | 'observed'
+  | 'external-edit'
+  | 'bootstrap-connected'
+  | 'bootstrap-imported';
 
 export interface ProfileFact {
   id: string;
@@ -152,7 +157,7 @@ function normalizeFact(value: unknown): ProfileFact | undefined {
     || typeof fact.subject !== 'string'
     || typeof fact.value !== 'string'
     || !['confirmed', 'candidate', 'revoked'].includes(fact.status ?? '')
-    || !['explicit', 'observed', 'external-edit'].includes(fact.origin ?? '')
+    || !['explicit', 'observed', 'external-edit', 'bootstrap-connected', 'bootstrap-imported'].includes(fact.origin ?? '')
     || typeof fact.createdAt !== 'number'
     || typeof fact.updatedAt !== 'number'
   ) return undefined;

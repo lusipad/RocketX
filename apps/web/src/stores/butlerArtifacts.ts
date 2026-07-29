@@ -5,8 +5,6 @@ import type { ButlerSource } from '../lib/butlerContext';
 const ARTIFACTS_KEY = 'rcx-butler-artifacts';
 const ARTIFACT_LIMIT = 50;
 const VERSION_LIMIT = 20;
-const LONG_RESULT_THRESHOLD = 480;
-
 export type ButlerArtifactKind = 'report' | 'draft' | 'diff' | 'checklist';
 export type ButlerArtifactStatus = 'working' | 'accepted' | 'superseded';
 
@@ -53,12 +51,6 @@ function artifactKind(text: string): ButlerArtifactKind {
   if (/^\s*[-*]\s+\[[ xX]\]/m.test(text)) return 'checklist';
   if (/草稿|拟定|draft/i.test(text)) return 'draft';
   return 'report';
-}
-
-export function shouldCaptureButlerArtifact(line: ButlerLine): boolean {
-  if (line.role !== 'assistant') return false;
-  return line.text.trim().length >= LONG_RESULT_THRESHOLD
-    || /```(?:diff|patch)|^\s*[-*]\s+\[[ xX]\]/m.test(line.text);
 }
 
 export function butlerArtifactsForSession(
@@ -142,7 +134,7 @@ export const useButlerArtifacts = create<ButlerArtifactState>((set, get) => ({
   },
 
   captureLine: (sessionId, line) => {
-    if (!shouldCaptureButlerArtifact(line)) return undefined;
+    if (line.role !== 'assistant' || !line.text.trim()) return undefined;
     const existing = get().artifacts.find((artifact) => (
       artifact.sourceLineId === line.id
       && (!artifact.sessionId || artifact.sessionId === sessionId)
