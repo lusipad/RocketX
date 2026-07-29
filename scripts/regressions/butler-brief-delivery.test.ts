@@ -54,7 +54,7 @@ function fakeClient(): ButlerBriefDeliveryClient & {
 function storedBrief(overrides: Partial<StoredRoundsResult> = {}): StoredRoundsResult {
   return {
     result: {
-      headline: '今天先盯住发布',
+      headline: '今天先确认发布状态',
       summary: '一项承诺今天到期。',
       items: [
         { ref: 'ledger:t1', why: '今天到期，漏掉会影响发布', suggestedAction: '上午十点前确认交付状态' },
@@ -85,7 +85,7 @@ test.after(() => {
 
 test('简报正文：标题加粗、ref 替换成人话标题、snoozed 条目不出现', () => {
   const message = renderBriefMessage(storedBrief({ snoozedRefs: ['wi:42'] }));
-  assert.match(message, /^\*今天先盯住发布\*/);
+  assert.match(message, /^\*今天先确认发布状态\*/);
   assert.match(message, /一项承诺今天到期。/);
   assert.match(message, /\*提交发布说明\*：今天到期，漏掉会影响发布 → 上午十点前确认交付状态/);
   assert.doesNotMatch(message, /#42 处理发布异常/);
@@ -109,7 +109,7 @@ test('自动投递尊重开关与当天去重；开启后发进和自己的私�
   assert.deepEqual(client.calls.map((call) => call.method), ['createDirectMessage', 'sendMessage']);
   assert.equal(client.calls[0]?.arg, 'alice');
   assert.equal(client.calls[1]?.arg, 'dm-alice');
-  assert.match(client.calls[1]?.msg ?? '', /今天先盯住发布/);
+  assert.match(client.calls[1]?.msg ?? '', /今天先确认发布状态/);
 
   // 同一天第二轮：跳过
   assert.equal(await deliverButlerBrief(storedBrief(), { storage, client, now }), false);

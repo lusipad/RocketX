@@ -150,6 +150,18 @@ const startingSessions = new Map<string, Promise<AgentSession>>();
 const clients = new Map<string, AppServerClient>();
 const clientStarts = new Map<string, Promise<AppServerClient>>();
 let restoredScope = '';
+let restoreGeneration = 0;
+
+function emptySharedAgentScope() {
+  return {
+    sessions: {},
+    remoteCards: {},
+    traces: {},
+    approvals: [],
+    memberRequests: [],
+    error: null,
+  };
+}
 
 function id(prefix: string): string {
   const value = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -497,6 +509,12 @@ async function sessionConversationMessages(session: AgentSession): Promise<RcMes
   return [...messages.values()].sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
 }
 
+/** 读取一条托管会话的 Rocket.Chat 真源消息，供只读历史视图使用。 */
+export async function loadSharedAgentConversationMessages(tmid: string): Promise<RcMessage[]> {
+  const session = useSharedAgent.getState().sessions[tmid];
+  return session ? sessionConversationMessages(session) : [];
+}
+
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
   const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
   const appServer = await ensureClient(current);
@@ -571,12 +589,31 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
 
   restore: async () => {
     const user = useAuth.getState().user;
-    if (!user) return;
+    if (!user) {
+      restoreGeneration += 1;
+      restoredScope = '';
+      set(emptySharedAgentScope());
+      return;
+    }
     const serverId = getServerBase() || 'same-origin';
     const scope = `${serverId}:${user._id}`;
     if (restoredScope === scope) return;
+    const generation = ++restoreGeneration;
     restoredScope = scope;
-    const stored = await listAgentSessions(serverId, user._id);
+    set(emptySharedAgentScope());
+    let stored: AgentSession[];
+    try {
+      stored = await listAgentSessions(serverId, user._id);
+    } catch (error) {
+      if (generation === restoreGeneration && restoredScope === scope) {
+        restoredScope = '';
+        set({ error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+    const currentUser = useAuth.getState().user;
+    const currentScope = currentUser ? `${getServerBase() || 'same-origin'}:${currentUser._id}` : '';
+    if (generation !== restoreGeneration || restoredScope !== scope || currentScope !== scope) return;
     const sessions: Record<string, AgentSession> = {};
     const recovered: AgentSession[] = [];
     const now = Date.now();

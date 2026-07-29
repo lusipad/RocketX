@@ -893,7 +893,11 @@ test('打开管家页后可返回消息', async ({ page }) => {
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('heading', { name: /\d+月\d+日 周/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看完整对话' })).toBeVisible();
+  await expect(
+    page
+      .getByRole('navigation', { name: '管家工作视图' })
+      .getByRole('button', { name: '对话', exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
@@ -1275,7 +1279,10 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
+    .click();
   await expect(page.getByText('我是你的管家。消息、待办、日程、工作项都可以直接问我。')).toBeVisible();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '在 Codex App 打开', exact: true })).toBeVisible();
@@ -1286,19 +1293,32 @@ test('管家纸上输入先即席回答，进入完整对话再回纸仍保留�
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await page.getByRole('textbox', { name: '跟管家说件事' }).fill('记住这段桌面对话');
-  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('button', { name: '交给管家', exact: true }).click();
   await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
 
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
 
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
-  await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '回到纸', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
+    .click();
+  await expect(
+    page.getByLabel('你说').getByText('记住这段桌面对话', { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: /^现在/ })
+    .click();
   await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toBeVisible();
-  await page.getByRole('button', { name: '查看完整对话', exact: true }).click();
-  await expect(page.getByText('记住这段桌面对话', { exact: true })).toBeVisible();
+  await page
+    .getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
+    .click();
+  await expect(
+    page.getByLabel('你说').getByText('记住这段桌面对话', { exact: true }),
+  ).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

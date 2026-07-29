@@ -1,12 +1,13 @@
 import {
+  ArrowUpRight,
   ChevronDown,
-  ChevronUp,
   Loader2,
   Send,
   Share2,
   Square,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import type { RcMessage } from '@rcx/rc-client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
@@ -24,6 +25,8 @@ import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
+import ButlerArtifactsPanel from './ButlerArtifactsPanel';
+import ButlerConversationHistory from './ButlerConversationHistory';
 import ButlerErrandCard from './ButlerErrandCard';
 import ButlerErrandRunCard from './ButlerErrandRunCard';
 import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
@@ -35,8 +38,32 @@ import ButlerImagePicker, {
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import type { ButlerImageInput } from '../lib/butlerImages';
+import {
+  butlerArtifactsForSession,
+  useButlerArtifacts,
+} from '../stores/butlerArtifacts';
+import {
+  projectHostedConversation,
+  type HostedConversationLine,
+} from '../agent/hostedConversation';
+import {
+  loadSharedAgentConversationMessages,
+  useSharedAgent,
+} from '../stores/sharedAgent';
+import { useChat } from '../stores/chat';
+import { openButlerSource } from '../lib/butlerSourceNavigation';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
+
+function mergeMessages(
+  loaded: readonly RcMessage[] | undefined,
+  cached: readonly RcMessage[] | undefined,
+): RcMessage[] {
+  const messages = new Map<string, RcMessage>();
+  for (const message of loaded ?? []) messages.set(message._id, message);
+  for (const message of cached ?? []) messages.set(message._id, message);
+  return [...messages.values()];
+}
 
 function routineDaysLabel(days?: number[]): string {
   if (!days?.length) return '每天';
@@ -44,10 +71,8 @@ function routineDaysLabel(days?: number[]): string {
 }
 
 export default function ButlerConversation({
-  onBackToPaper,
   embedded = false,
 }: {
-  onBackToPaper: () => void;
   embedded?: boolean;
 }) {
   const userId = useAuth((state) => state.user?._id);
@@ -70,10 +95,19 @@ export default function ButlerConversation({
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
   const context = useButler((state) => state.context);
+  const hydrateArtifacts = useButlerArtifacts((state) => state.hydrate);
+  const captureArtifactLine = useButlerArtifacts((state) => state.captureLine);
+  const artifacts = useButlerArtifacts((state) => state.artifacts);
+  const sharedAgentSessions = useSharedAgent((state) => state.sessions);
+  const restoreSharedAgent = useSharedAgent((state) => state.restore);
+  const roomMessages = useChat((state) => state.messages);
+  const rooms = useChat((state) => state.rooms);
+  const subscriptions = useChat((state) => state.subscriptions);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [transferring, setTransferring] = useState(false);
-  const hasConversation = lines.some((item) => item.role === 'user');
+  const [loadedHostedMessages, setLoadedHostedMessages] = useState<Record<string, RcMessage[]>>({});
+  const [selectedHostedId, setSelectedHostedId] = useState<string | null>(null);
   // 打 / 唤起能力菜单：选中只填输入框不发送（例句里的人名编号是占位符）
   const slashQuery = butlerSlashQuery(input);
   const slashOptions = useMemo(
@@ -88,12 +122,39 @@ export default function ButlerConversation({
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
   const activeSummary = sessions.find((session) => session.id === activeSessionId);
+  const activeArtifacts = useMemo(
+    () => butlerArtifactsForSession(artifacts, activeSessionId, lines),
+    [activeSessionId, artifacts, lines],
+  );
+  const sharedSessionKeys = Object.keys(sharedAgentSessions).sort().join('\n');
+  const hostedConversations = useMemo(
+    () =>
+      Object.values(sharedAgentSessions)
+        .map((session) => {
+          const room = subscriptions[session.rid] ?? rooms[session.rid];
+          const roomName = room?.fname || room?.name || session.workItem?.title || '房间';
+          return projectHostedConversation(
+            session,
+            roomName,
+            mergeMessages(loadedHostedMessages[session.tmid], roomMessages[session.rid]),
+          );
+        })
+        .filter((conversation) => conversation !== null)
+        .sort((left, right) => right.updatedAt - left.updatedAt),
+    [loadedHostedMessages, roomMessages, rooms, sharedAgentSessions, subscriptions],
+  );
+  const selectedHosted = hostedConversations.find(
+    (conversation) => conversation.id === selectedHostedId,
+  );
+  const visibleLines = selectedHosted?.lines ?? lines;
+  const hasConversation = visibleLines.some((item) => item.role === 'user');
   // 锚定在「进入这个会话时」：updatedAt 走 500ms 防抖落盘，而 lines 是实时的，
   // 不锚就会把用户刚发出的那句话当成「3 天前你问的」显示出来。本轮一有新提问就撤卡。
   const askCount = lines.reduce((count, item) => count + (item.role === 'user' ? 1 : 0), 0);
   const [recapAnchor, setRecapAnchor] = useState<{ sessionId: string; askCount: number } | null>(null);
   if (recapAnchor?.sessionId !== activeSessionId) setRecapAnchor({ sessionId: activeSessionId, askCount });
-  const recap = hasConversation
+  const recap = !selectedHosted
+    && hasConversation
     && activeSummary
     && recapAnchor?.sessionId === activeSessionId
     && recapAnchor.askCount === askCount
@@ -108,7 +169,12 @@ export default function ButlerConversation({
     setTransferring(true);
     try {
       const result = await transferConversationToCodexApp(
-        lines.map(({ role, text }) => ({ role, text })),
+        selectedHosted
+          ? selectedHosted.lines.map((line) => ({
+              role: line.role,
+              text: line.role === 'user' ? `${line.speaker}：${line.text}` : line.text,
+            }))
+          : lines.map(({ role, text }) => ({ role, text })),
       );
       if (result === 'unavailable') throw new Error('无法打开 Codex App，也无法复制对话记录');
       toast.success(
@@ -126,8 +192,46 @@ export default function ButlerConversation({
   };
 
   useEffect(() => {
-    if (userId) void hydrateButler();
-  }, [hydrateButler, userId]);
+    if (!userId) return;
+    void hydrateButler();
+    void restoreSharedAgent();
+  }, [hydrateButler, restoreSharedAgent, userId]);
+
+  useEffect(() => {
+    setLoadedHostedMessages({});
+    setSelectedHostedId(null);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!sharedSessionKeys) return;
+    let cancelled = false;
+    void Promise.all(
+      sharedSessionKeys
+        .split('\n')
+        .map(async (sessionKey) => [
+          sessionKey,
+          await loadSharedAgentConversationMessages(sessionKey),
+        ] as const),
+    ).then((entries) => {
+      if (cancelled) return;
+      setLoadedHostedMessages((current) => ({
+        ...current,
+        ...Object.fromEntries(entries),
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedSessionKeys, userId]);
+
+  useEffect(() => {
+    hydrateArtifacts();
+  }, [hydrateArtifacts]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    for (const conversationLine of lines) captureArtifactLine(activeSessionId, conversationLine);
+  }, [activeSessionId, captureArtifactLine, lines]);
 
   // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
   // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
@@ -157,55 +261,123 @@ export default function ButlerConversation({
     await askButler(value, undefined, submittedImages);
   };
 
+  const renderHostedLine = (line: HostedConversationLine) => {
+    const mine = line.role === 'user';
+    return (
+      <article
+        key={line.id}
+        data-speaker={line.role}
+        aria-label={`${line.speaker}说`}
+        className={`flex pb-3 ${mine ? 'justify-end' : 'justify-start'}`}
+      >
+        <div
+          className={`flex min-w-0 flex-col ${
+            mine ? 'max-w-[82%] items-end sm:max-w-[68%]' : 'max-w-[88%] items-start sm:max-w-[82%]'
+          }`}
+        >
+          <div className="mb-1 text-[11px] font-medium text-ink-3">{line.speaker}</div>
+          <div
+            className={`min-w-0 break-words rounded-lg px-3 py-2 text-sm leading-7 text-ink ${
+              mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
+            }`}
+          >
+            {line.role === 'assistant' ? (
+              <ButlerSources
+                sources={[{
+                  kind: 'room',
+                  id: selectedHosted?.rid ?? '',
+                  rid: selectedHosted?.rid,
+                  label: selectedHosted?.roomName ?? '房间',
+                }]}
+                text={line.text}
+              >
+                {(renderLink) => renderMarkdown(line.text, undefined, renderLink)}
+              </ButlerSources>
+            ) : line.text}
+          </div>
+        </div>
+      </article>
+    );
+  };
+
   return (
-    <div className={`flex h-full min-w-0 flex-1 flex-col overflow-hidden ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
-      <header className={`flex shrink-0 items-start justify-between gap-4 border-b border-line ${embedded ? 'bg-transparent px-0 pb-4' : 'bg-surface px-6 py-4'}`}>
-        <div>
-          <h2 className="text-base font-semibold text-ink">完整对话</h2>
-          <p className="mt-1 text-xs text-ink-3">
-            {context ? `当前工作面：${context.label}` : '多轮讨论留在这里，结论会写回今天的纸。'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-1">
-          <ButlerSessionSwitcher compact />
-          <button
-            type="button"
-            onClick={() => void transferToCodex()}
-            disabled={running || transferring || !hasConversation}
-            aria-label="在 Codex App 打开"
-            title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
-            className="flex h-7 items-center gap-1 rounded px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-40"
-          >
-            {transferring ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Share2 size={13} />}
-            Codex
-          </button>
-          <button
-            type="button"
-            onClick={onBackToPaper}
-            aria-label="回到纸"
-            title="收起完整对话"
-            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
-          >
-            <ChevronUp size={14} />
-          </button>
-        </div>
-      </header>
+    <div className={`butler-conversation-layout ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
+      <ButlerConversationHistory
+        hostedConversations={hostedConversations}
+        selectedHostedId={selectedHostedId}
+        onSelectHosted={setSelectedHostedId}
+        onSelectButler={() => setSelectedHostedId(null)}
+        onNewConversation={() => setSelectedHostedId(null)}
+      />
+      <div className="butler-conversation-pane">
+        <header className="butler-conversation-header">
+          <div className="min-w-0">
+            <span>{selectedHosted ? 'AI 托管记录' : '完整对话'}</span>
+            <h2>{selectedHosted?.title || activeSummary?.title || '新对话'}</h2>
+            <p>
+              {selectedHosted
+                ? `来自「${selectedHosted.roomName}」的只读记录`
+                : context
+                  ? `当前工作面：${context.label}`
+                  : '多轮讨论留在这里，结论会写回今天的纸。'}
+            </p>
+          </div>
+          <div className="butler-conversation-header-actions">
+            <div className="butler-conversation-mobile-switcher">
+              <ButlerSessionSwitcher
+                compact
+                hostedConversations={hostedConversations}
+                selectedHostedId={selectedHostedId}
+                onSelectHosted={setSelectedHostedId}
+                onSelectButler={() => setSelectedHostedId(null)}
+                onNewConversation={() => setSelectedHostedId(null)}
+              />
+            </div>
+            <div className="butler-conversation-session-actions">
+              <ButlerSessionSwitcher
+                compact
+                actionsOnly
+                selectedHostedId={selectedHostedId}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void transferToCodex()}
+              disabled={(!selectedHosted && running) || transferring || !hasConversation}
+              aria-label="在 Codex App 打开"
+              title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-40"
+            >
+              {transferring ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Share2 size={13} />}
+              Codex
+            </button>
+          </div>
+        </header>
 
-      {errands.some((errand) => !errand.archivedAt) ? (
-        <details className="group shrink-0 border-b border-line/70">
-          <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 hover:text-ink">
-            <span>{errands.filter((errand) => !errand.archivedAt).length} 件在办</span>
-            <ChevronDown
-              size={13}
-              className="transition-transform motion-reduce:transition-none group-open:rotate-180"
-            />
-          </summary>
-          <div className="max-h-[36vh] overflow-y-auto pb-4"><ButlerErrandRunCard /></div>
-        </details>
-      ) : null}
+        {!selectedHosted && errands.some((errand) => !errand.archivedAt) ? (
+          <details className="group shrink-0 border-b border-line/70 px-6">
+            <summary className="mx-auto flex max-w-[840px] cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 hover:text-ink">
+              <span>{errands.filter((errand) => !errand.archivedAt).length} 件在办</span>
+              <ChevronDown
+                size={13}
+                className="transition-transform motion-reduce:transition-none group-open:rotate-180"
+              />
+            </summary>
+            <div className="mx-auto max-h-[36vh] max-w-[840px] overflow-y-auto pb-4">
+              <ButlerErrandRunCard />
+            </div>
+          </details>
+        ) : null}
 
-      <main ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 overflow-y-auto ${embedded ? 'px-0 py-5' : 'px-6 py-5'}`}>
-        <div className={`mx-auto min-h-full w-full max-w-[760px] space-y-5 ${embedded ? 'px-2' : 'p-5'}`}>
+        <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="mx-auto min-h-full w-full max-w-[840px] space-y-5">
+            {!selectedHosted ? (
+              <ButlerArtifactsPanel
+                artifacts={activeArtifacts}
+                onContinue={(title) => setInput(`继续加工成果“${title}”：`)}
+              />
+            ) : null}
+
           {recap && activeSummary ? (
             <div className="sticky top-0 z-10 border-l border-primary/45 bg-surface py-1 pl-4 text-xs leading-5 text-ink-2">
               <span className="font-medium text-ink">上回说到</span>
@@ -213,7 +385,7 @@ export default function ButlerConversation({
               {recap.lastReply ? <>，我答到「{recap.lastReply}」</> : null}。接着说就能继续。
             </div>
           ) : null}
-          {!hasConversation && (
+          {!selectedHosted && !hasConversation && (
             <details className="group text-xs text-ink-3">
               <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 hover:text-ink">
                 可以这样问
@@ -240,13 +412,14 @@ export default function ButlerConversation({
           )}
           {/* 过程显示在它产出的那条回答上方(issue #99):
               最后一行是 assistant 时,步骤插在它前面——先看做了什么,再看结论 */}
-          {(() => {
+          {selectedHosted ? selectedHosted.lines.map(renderHostedLine) : (() => {
             const splitAt =
               lines.length > 0 && lines[lines.length - 1].role === 'assistant'
                 ? lines.length - 1
                 : lines.length;
             const renderLine = (line: (typeof lines)[number]) => {
               const mine = line.role === 'user';
+              const artifact = artifacts.find((candidate) => candidate.sourceLineId === line.id);
               return (
                 <article
                   key={line.id}
@@ -267,9 +440,20 @@ export default function ButlerConversation({
                         mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
                       }`}
                     >
-                      {line.role === 'assistant' && !line.text.startsWith('📌') ? renderMarkdown(line.text) : line.text}
+                      {artifact ? (
+                        <div className="butler-artifact-message">
+                          <span>已生成{artifact.kind === 'draft' ? '草稿' : artifact.kind === 'diff' ? '变更' : artifact.kind === 'checklist' ? '清单' : '报告'}成果</span>
+                          <strong>{artifact.title}</strong>
+                          <small>完整内容、来源和版本已放在上方成果工作面。</small>
+                        </div>
+                      ) : line.role === 'assistant' ? (
+                        <ButlerSources sources={line.sources} text={line.text}>
+                          {(renderLink) => line.text.startsWith('📌')
+                            ? line.text
+                            : renderMarkdown(line.text, undefined, renderLink)}
+                        </ButlerSources>
+                      ) : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
-                      {line.role === 'assistant' ? <ButlerSources sources={line.sources} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
                       <ButlerMessageActions line={line} disabled={running} />
                     </div>
@@ -285,18 +469,18 @@ export default function ButlerConversation({
               </>
             );
           })()}
-          {butlerError ? (
+          {!selectedHosted && butlerError ? (
             <div className="border-l border-danger pl-4 text-sm text-danger">{butlerError}</div>
           ) : null}
-          {activity ? (
+          {!selectedHosted && activity ? (
             <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />{activity}</div>
-          ) : running ? (
+          ) : !selectedHosted && running ? (
             <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />正在处理请求…</div>
           ) : null}
 
-          <ButlerToolApprovals />
+          {!selectedHosted ? <ButlerToolApprovals /> : null}
 
-          {routineDraft ? (
+          {!selectedHosted && routineDraft ? (
             <div className="border-l border-primary/45 pl-4">
               <div className="text-xs font-medium text-primary">例行事务草案</div>
               <div className="mt-2 font-medium text-ink">{routineDraft.name}</div>
@@ -310,45 +494,83 @@ export default function ButlerConversation({
               </div>
             </div>
           ) : null}
-          <ButlerErrandCard />
-          <ButlerActionCard />
-        </div>
-      </main>
+          {!selectedHosted ? <ButlerErrandCard /> : null}
+          {!selectedHosted ? <ButlerActionCard /> : null}
+          </div>
+        </main>
 
-      <footer className={`shrink-0 bg-surface ${embedded ? 'px-0 py-3' : 'px-6 py-3'}`}>
-        <div className="mx-auto w-full max-w-[760px]">
-          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="relative flex items-end gap-2 border-b border-line py-1 focus-within:border-primary">
-            <ButlerSlashMenu
-              options={slashOptions}
-              activeIndex={slash.activeIndex}
-              onPick={pickSlashOption}
-              onHover={slash.setActiveIndex}
-            />
-            <div className="min-w-0 flex-1">
-              <ButlerImagePreviews images={images} onChange={setImages} />
-              <div className="flex items-center">
-                <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
-                <input
-                  value={input}
-                  onChange={(event) => { setInput(event.target.value); slash.reopen(); }}
-                  onKeyDown={(event) => slash.handleKeyDown(event, pickSlashOption)}
-                  onBlur={() => slash.dismiss()}
-                  onPaste={(event) => void pasteButlerImages(event, images, setImages)}
-                  placeholder="继续说……"
-                  className="h-9 w-full min-w-0 bg-transparent px-1 text-sm text-ink outline-none placeholder:text-ink-3"
-                />
+        <footer className="butler-conversation-footer">
+          <div className="mx-auto w-full max-w-[840px]">
+            {selectedHosted ? (
+              <div className="butler-conversation-composer items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0">
+                  <strong className="block text-sm font-medium text-ink">这是房间里的 AI 托管记录</strong>
+                  <span className="mt-0.5 block text-xs text-ink-3">回到原房间可以继续讨论或再次托管。</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void openButlerSource({
+                    kind: 'room',
+                    id: selectedHosted.rid,
+                    rid: selectedHosted.rid,
+                    label: selectedHosted.roomName,
+                  })}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary-hover"
+                >
+                  回到「{selectedHosted.roomName}」
+                  <ArrowUpRight size={13} />
+                </button>
               </div>
-            </div>
-            {running ? (
-              <button type="button" aria-label="停止回答" title="停止回答" onClick={() => void stopButler()} className="flex h-8 w-8 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-ink">
-                <Square size={12} />
-              </button>
             ) : (
-              <button type="submit" aria-label="发送" title="发送" disabled={!input.trim() && !images.length} className="flex h-8 w-8 items-center justify-center rounded text-primary hover:bg-primary-light disabled:text-ink-3/40"><Send size={14} /></button>
+              <>
+                <form
+                  aria-label="发送消息给管家"
+                  onSubmit={(event) => { event.preventDefault(); void submit(); }}
+                  className="butler-conversation-composer"
+                >
+                  <ButlerSlashMenu
+                    options={slashOptions}
+                    activeIndex={slash.activeIndex}
+                    onPick={pickSlashOption}
+                    onHover={slash.setActiveIndex}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <ButlerImagePreviews images={images} onChange={setImages} />
+                    <div className="flex items-end">
+                      <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
+                      <textarea
+                        rows={2}
+                        value={input}
+                        onChange={(event) => { setInput(event.target.value); slash.reopen(); }}
+                        onKeyDown={(event) => {
+                          if (slash.handleKeyDown(event, pickSlashOption)) return;
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            void submit();
+                          }
+                        }}
+                        onBlur={() => slash.dismiss()}
+                        onPaste={(event) => void pasteButlerImages(event, images, setImages)}
+                        aria-label="给管家发消息"
+                        placeholder="给管家发消息……"
+                        className="min-h-12 w-full min-w-0 resize-none bg-transparent px-2 py-2 text-sm leading-5 text-ink outline-none placeholder:text-ink-3"
+                      />
+                    </div>
+                  </div>
+                  {running ? (
+                    <button type="button" aria-label="停止回答" title="停止回答" onClick={() => void stopButler()} className="flex h-8 w-8 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-ink">
+                      <Square size={12} />
+                    </button>
+                  ) : (
+                    <button type="submit" aria-label="发送" title="发送" disabled={!input.trim() && !images.length} className="flex h-8 w-8 items-center justify-center rounded text-primary hover:bg-primary-light disabled:text-ink-3/40"><Send size={14} /></button>
+                  )}
+                </form>
+                <p>Enter 发送 · Shift + Enter 换行</p>
+              </>
             )}
-          </form>
-        </div>
-      </footer>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

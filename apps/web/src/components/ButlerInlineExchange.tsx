@@ -33,8 +33,11 @@ export default function ButlerInlineExchange({
       <div className="text-xs leading-5 text-ink-3">你：{question.text}</div>
       {answer ? (
         <div className="mt-1.5 text-sm leading-6 text-ink">
-          {answer.text.startsWith('📌') ? answer.text : renderMarkdown(answer.text)}
-          <ButlerSources sources={answer.sources} />
+          <ButlerSources sources={answer.sources} text={answer.text}>
+            {(renderLink) => answer.text.startsWith('📌')
+              ? answer.text
+              : renderMarkdown(answer.text, undefined, renderLink)}
+          </ButlerSources>
         </div>
       ) : running || activity ? (
         <div className="mt-2 flex items-center gap-2 text-xs text-ink-3">

@@ -22,7 +22,6 @@ import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useButler } from '../stores/butler';
 import { useRoutines } from '../stores/routines';
-import { captureButlerSurfaceContext } from '../lib/butlerSurface';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
@@ -252,11 +251,14 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   key={key}
                   onClick={() => {
                     if (key === 'butler-view' && active !== 'butler-view') {
-                      useButler.getState().setContext(captureButlerSurfaceContext(active));
+                      void useButler.getState().openStandaloneConversation()
+                        .catch(() => undefined)
+                        .then(() => setModule(key));
+                      return;
                     }
                     setModule(key);
                   }}
-                  title={key === 'butler-view' && active !== 'butler-view' ? '打开管家，并带上你现在这一页' : label}
+                  title={label}
                   className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                     isActive
                       ? 'bg-fill-active font-medium text-ink'

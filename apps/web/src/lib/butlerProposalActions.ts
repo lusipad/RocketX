@@ -39,11 +39,11 @@ export function createButlerProposalCheckpoint(
     now?: number;
   },
 ): ButlerToolCheckpoint {
-  let actionLabel = '把建议写入待办台账';
+  let actionLabel = '把建议转为待办';
   if (input.action === 'dismiss') {
     actionLabel = '忽略本轮建议';
   } else if (proposal.kind === 'close-wait') {
-    actionLabel = '销账';
+    actionLabel = '完成等待跟进';
   }
   const idempotencyKey = [
     'rounds',

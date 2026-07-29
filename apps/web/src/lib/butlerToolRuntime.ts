@@ -219,21 +219,21 @@ export function createButlerToolCheckpoint(input: CreateCheckpointInput): Butler
 
 /** Persisted checkpoints are untrusted input; callers should catch invalid records. */
 export function normalizeButlerToolCheckpoint(value: unknown): ButlerToolCheckpoint {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('tool checkpoint 必须是对象');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('工具审批记录必须是对象');
   const candidate = value as Partial<ButlerToolCheckpoint>;
-  if (candidate.version !== 1) throw new Error('tool checkpoint 版本不受支持');
-  if (!candidate.id || typeof candidate.id !== 'string') throw new Error('tool checkpoint id 无效');
-  if (!candidate.toolName || typeof candidate.toolName !== 'string') throw new Error('tool checkpoint toolName 无效');
-  if (!isEffect(candidate.effect)) throw new Error('tool checkpoint effect 无效');
-  if (!candidate.capability || typeof candidate.capability !== 'string') throw new Error('tool checkpoint capability 无效');
-  if (!candidate.idempotencyKey || typeof candidate.idempotencyKey !== 'string') throw new Error('tool checkpoint idempotencyKey 无效');
-  if (!isStatus(candidate.status)) throw new Error('tool checkpoint status 无效');
-  if (!candidate.params || typeof candidate.params !== 'object' || Array.isArray(candidate.params)) throw new Error('tool checkpoint params 无效');
-  if (typeof candidate.preview !== 'string') throw new Error('tool checkpoint preview 无效');
-  if (!Number.isInteger(candidate.attempts) || candidate.attempts! < 0) throw new Error('tool checkpoint attempts 无效');
-  if (!Number.isFinite(candidate.createdAt) || !Number.isFinite(candidate.updatedAt)) throw new Error('tool checkpoint 时间无效');
-  if (candidate.result !== undefined && typeof candidate.result !== 'string') throw new Error('tool checkpoint result 无效');
-  if (candidate.error !== undefined && !isError(candidate.error)) throw new Error('tool checkpoint error 无效');
+  if (candidate.version !== 1) throw new Error('工具审批记录版本不受支持');
+  if (!candidate.id || typeof candidate.id !== 'string') throw new Error('工具审批记录 id 无效');
+  if (!candidate.toolName || typeof candidate.toolName !== 'string') throw new Error('工具审批记录 toolName 无效');
+  if (!isEffect(candidate.effect)) throw new Error('工具审批记录 effect 无效');
+  if (!candidate.capability || typeof candidate.capability !== 'string') throw new Error('工具审批记录 capability 无效');
+  if (!candidate.idempotencyKey || typeof candidate.idempotencyKey !== 'string') throw new Error('工具审批记录 idempotencyKey 无效');
+  if (!isStatus(candidate.status)) throw new Error('工具审批记录 status 无效');
+  if (!candidate.params || typeof candidate.params !== 'object' || Array.isArray(candidate.params)) throw new Error('工具审批记录 params 无效');
+  if (typeof candidate.preview !== 'string') throw new Error('工具审批记录 preview 无效');
+  if (!Number.isInteger(candidate.attempts) || candidate.attempts! < 0) throw new Error('工具审批记录 attempts 无效');
+  if (!Number.isFinite(candidate.createdAt) || !Number.isFinite(candidate.updatedAt)) throw new Error('工具审批记录时间无效');
+  if (candidate.result !== undefined && typeof candidate.result !== 'string') throw new Error('工具审批记录 result 无效');
+  if (candidate.error !== undefined && !isError(candidate.error)) throw new Error('工具审批记录 error 无效');
   return {
     version: 1,
     id: candidate.id,
@@ -468,7 +468,7 @@ async function executeApproved<TArgs extends Record<string, unknown>>(
   const stored = await context.loadCheckpoint?.(checkpoint.id);
   const current = stored ?? checkpoint;
   if (current.idempotencyKey !== checkpoint.idempotencyKey || current.toolName !== definition.name) {
-    return failedResult(definition as ButlerToolDefinition<Record<string, unknown>>, 'conflict', 'checkpoint 与工具调用不匹配');
+    return failedResult(definition as ButlerToolDefinition<Record<string, unknown>>, 'conflict', '审批记录与工具调用不匹配');
   }
   if (current.status === 'completed') return resultFromCheckpoint(current);
   if (current.status === 'cancelled') return resultFromCheckpoint(current);
@@ -587,7 +587,7 @@ export function defineButlerTool<TArgs extends Record<string, unknown>>(
         return failedResult(
           definition as ButlerToolDefinition<Record<string, unknown>>,
           'conflict',
-          'checkpoint id 冲突',
+          '审批记录 id 冲突',
         );
       }
       if (definition.effect === 'write' || stored.status === 'completed') return resultFromCheckpoint(stored);

@@ -100,9 +100,11 @@ export function extractButlerSources(toolName: string | undefined, content: stri
       const room = textOf(row, 'roomName') ?? rid;
       const sender = textOf(row, 'sender');
       const body = short(textOf(row, 'text'), '消息');
+      const webUrl = textOf(row, 'link');
       return [{
         kind: 'message', id: mid, mid, rid,
         label: short(`${room}${sender ? ` · ${sender}` : ''}：${body}`, room),
+        ...(webUrl ? { webUrl } : {}),
       }];
     }
     if (toolName === 'list_todos') {

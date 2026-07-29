@@ -433,6 +433,10 @@ test('新指派判断所需的 ADO 待办关联和指派人会进入快照', asy
   assert.match(BUTLER_ROUNDS_SYSTEM_PROMPT, /schedule-today.*wi:<id>/);
 });
 
+test('rounds prompt 明确禁止把内部动作黑话写回界面', () => {
+  assert.match(BUTLER_ROUNDS_SYSTEM_PROMPT, /接住、接成任务、盯住、盯它、在盯/);
+});
+
 test('有效 finishTime 不会被缺失时间的历史条目覆盖', () => {
   const builds = [
     build({ id: 2, buildNumber: '2', result: 'succeeded', finishTime: '2026-07-19T02:10:00Z' }),
@@ -545,6 +549,13 @@ test('持久化结果必须满足完整结构和界面用语约束', () => {
   }), true);
   assert.equal(isRoundsResult({
     headline: '旧巡视结果',
+    summary: '不应继续展示。',
+    items: [],
+    proposals: [],
+    suppressed: [],
+  }), false);
+  assert.equal(isRoundsResult({
+    headline: '让管家接住这件事',
     summary: '不应继续展示。',
     items: [],
     proposals: [],

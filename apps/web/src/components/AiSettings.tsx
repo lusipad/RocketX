@@ -26,13 +26,6 @@ import {
   resetPersona,
   setPersona,
 } from '../lib/butlerProfile';
-import {
-  AXIS_META,
-  DEFAULT_AXES,
-  loadPersonality,
-  savePersonality,
-  type PersonalityAxes,
-} from '../lib/butlerPersonality';
 import { isTauri } from '../lib/http';
 import { openExternal } from '../lib/client';
 import {
@@ -49,7 +42,7 @@ import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
-import { Row, Slider } from './SettingControls';
+import { Row } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -77,7 +70,6 @@ export default function AiSettings() {
   const [hostingCodex, setHostingCodexState] = useState<ButlerCodexSettings>(getAgentHostingCodexSettings);
   const [persona, setPersonaState] = useState<string>(getPersona);
   const [savedPersona, setSavedPersona] = useState<string>(getPersona);
-  const [personality, setPersonalityState] = useState<PersonalityAxes>(loadPersonality);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -348,11 +340,11 @@ export default function AiSettings() {
             </div>
           </Row>
           <Row
-            label="人设"
-            hint="只影响管家（桌面对话、房间管家面板与晨报等技能）；AI 托管的编码代理和安全纪律不受影响。保存后对下一次提问生效，管家会重开一次对话，之前聊过的内容不再带过来。"
+            label="高级行为指令"
+            hint="名字、头像和相处方式请在“我的管家”修改。这里保留底层行为规则，只影响管家；AI 托管的编码代理和安全纪律不受影响。"
           >
             <textarea
-              aria-label="AI 人设"
+              aria-label="管家高级行为指令"
               value={persona}
               onChange={(event) => setPersonaState(event.target.value)}
               rows={5}
@@ -364,14 +356,14 @@ export default function AiSettings() {
                 disabled={persona === savedPersona}
                 className="h-8 rounded-md bg-primary px-3 text-sm text-white hover:opacity-90 disabled:opacity-50"
               >
-                保存人设
+                保存指令
               </button>
               <button
                 onClick={restoreDefaultPersona}
                 disabled={persona === DEFAULT_PERSONA && savedPersona === DEFAULT_PERSONA}
                 className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
               >
-                恢复默认人设
+                恢复默认指令
               </button>
             </div>
           </Row>
@@ -416,48 +408,6 @@ export default function AiSettings() {
                 <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
               ))}
             </select>
-          </Row>
-        </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">管家性格</h2>
-        <p className="mb-2 text-xs text-ink-3">四条轴的组合覆盖从"极简效率"到"温和关怀"的跨度，影响管家的表达方式。</p>
-        <div className="rounded-lg bg-surface shadow-raise px-4">
-          {AXIS_META.map((axis) => (
-            <Row
-              key={axis.key}
-              label={axis.label}
-              hint={`${axis.low} ← → ${axis.high}`}
-            >
-              <div className="flex items-center gap-3">
-                <span className="w-16 text-right text-xs text-ink-3">{axis.low}</span>
-                <Slider
-                  value={personality[axis.key]}
-                  onChange={(v) => {
-                    const next = { ...personality, [axis.key]: v };
-                    setPersonalityState(next);
-                    savePersonality(next);
-                  }}
-                  min={1}
-                  max={5}
-                />
-                <span className="w-16 text-xs text-ink-3">{axis.high}</span>
-              </div>
-            </Row>
-          ))}
-          <Row label="" hint="">
-            <button
-              onClick={() => {
-                setPersonalityState(DEFAULT_AXES);
-                savePersonality(DEFAULT_AXES);
-                toast.success('已恢复默认性格（克制、预判、不越界）');
-              }}
-              disabled={JSON.stringify(personality) === JSON.stringify(DEFAULT_AXES)}
-              className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
-            >
-              恢复默认
-            </button>
           </Row>
         </div>
       </section>

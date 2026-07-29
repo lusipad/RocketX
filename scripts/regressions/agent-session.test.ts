@@ -77,6 +77,21 @@ test('共享 Agent 使用独立的 AI 托管 Codex 模型和推理强度设置',
   assert.match(source, /codexSettings\.effort === 'default' \? \{\} : \{ effort: codexSettings\.effort \}/);
 });
 
+test('共享 Agent 恢复按账号和服务器作用域隔离，旧请求不能覆盖新账号', () => {
+  const source = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
+  assert.match(source, /let restoreGeneration = 0/);
+  assert.match(source, /const generation = \+\+restoreGeneration/);
+  assert.match(source, /set\(emptySharedAgentScope\(\)\)/);
+  assert.match(
+    source,
+    /generation !== restoreGeneration \|\| restoredScope !== scope \|\| currentScope !== scope/,
+  );
+  assert.match(
+    source,
+    /catch \(error\) \{[\s\S]*generation === restoreGeneration && restoredScope === scope[\s\S]*restoredScope = ''/,
+  );
+});
+
 test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
   const interrupted = interruptSession(session({
     codexThreadId: 'codex-thread',

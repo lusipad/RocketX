@@ -27,7 +27,7 @@ import {
   buildButlerCodexBaseInstructions,
   butlerWorkspaceRevision,
   getPersona,
-  listSkills,
+  listEnabledSkills,
 } from '../lib/butlerProfile';
 import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
@@ -105,7 +105,7 @@ type ButlerCodexWorkspaceResolver = () => Promise<string>;
 let transportFactory: ButlerCodexTransportFactory = (sessionId, workspaceRoot) =>
   new TauriCodexTransport(sessionId, workspaceRoot);
 let workspaceResolver: ButlerCodexWorkspaceResolver = () =>
-  ensureButlerWorkspaceFiles(getPersona(), listSkills());
+  ensureButlerWorkspaceFiles(getPersona(), listEnabledSkills());
 
 let residentClient: AppServerClient | undefined;
 let residentClientStart: Promise<AppServerClient> | undefined;

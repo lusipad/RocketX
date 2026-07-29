@@ -348,7 +348,9 @@ export default function MainPage() {
   }, []);
 
   return (
-    <div className="flex h-full min-h-[640px] min-w-[940px] overflow-hidden bg-fill-2">
+    <div className={`flex h-full min-h-[640px] overflow-hidden bg-fill-2 ${
+      module === 'butler-view' ? 'main-page-butler min-w-0' : 'min-w-[940px]'
+    }`}>
       <NavRail onOpenShortcuts={() => setShortcutsOpen(true)} />
       {module === 'messages' ? (
         <>

@@ -9,7 +9,10 @@ import {
 } from '../../apps/web/src/lib/butlerBrain';
 import { setServerBase } from '../../apps/web/src/lib/client';
 import { checkWatchers } from '../../apps/web/src/lib/butlerWatchers';
-import { setButlerProfileStorage } from '../../apps/web/src/lib/butlerProfile';
+import {
+  setButlerProfileStorage,
+  setSkillEnabled,
+} from '../../apps/web/src/lib/butlerProfile';
 import {
   dueRoutines,
   setRoutineCodexRunner,
@@ -133,6 +136,69 @@ test('桌面管理可切换例行事务并持久化', () => {
   }
 });
 
+test('已停用技能不能新建对应的内置例行事务', () => {
+  const storage = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(storage);
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore();
+
+  try {
+    setSkillEnabled('morning-brief', false);
+    assert.equal(useRoutines.getState().loadTemplate('morning-brief'), undefined);
+    assert.deepEqual(useRoutines.getState().routines, []);
+  } finally {
+    restoreStorage();
+    restoreProfile();
+    resetRoutineStore();
+  }
+});
+
+test('已停用技能不能重新开启现有例行事务', () => {
+  const storage = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(storage);
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore([routine({ enabled: false, templateId: 'morning-brief' })]);
+
+  try {
+    setSkillEnabled('morning-brief', false);
+    useRoutines.getState().setEnabled('routine-1', true);
+    assert.equal(useRoutines.getState().routines[0]?.enabled, false);
+  } finally {
+    restoreStorage();
+    restoreProfile();
+    resetRoutineStore();
+  }
+});
+
+test('调整例行合同会新增版本，回退也留下新的审计版本', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  resetRoutineStore([routine({ prompt: '先核对发布状态' })]);
+
+  try {
+    useRoutines.getState().updateContract(
+      'routine-1',
+      { prompt: '先核对发布状态，再检查回滚责任人' },
+      '补充回滚检查',
+    );
+    let current = useRoutines.getState().routines[0]!;
+    assert.equal(current.contractVersion, 2);
+    assert.deepEqual(current.versions?.map((version) => version.version), [1, 2]);
+    assert.equal(current.versions?.[1]?.reason, '补充回滚检查');
+
+    useRoutines.getState().rollbackContract('routine-1', 1);
+    current = useRoutines.getState().routines[0]!;
+    assert.equal(current.contractVersion, 3);
+    assert.equal(current.prompt, '先核对发布状态');
+    assert.equal(current.versions?.[2]?.reason, '回退到 v1');
+  } finally {
+    restoreNow();
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
 test('桌面关闭提醒后从事件卡与持久化中一并移除', () => {
   const storage = new MemoryStorage();
   const restoreStorage = setRoutineStorage(storage);
@@ -244,6 +310,65 @@ test('runNow 写入成功记录并裁剪到十条', async () => {
     restoreNow();
     restoreRunner();
     restoreWorkflow();
+    resetRoutineStore();
+  }
+});
+
+test('runNow 在技能停用后写入明确错误且不调用执行器', async () => {
+  const storage = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(storage);
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  let calls = 0;
+  const restoreRunner = setRoutineCodexRunner(async () => {
+    calls += 1;
+    return { text: '不应生成的结果' };
+  });
+  resetRoutineStore([routine()]);
+
+  try {
+    setSkillEnabled('morning-brief', false);
+    await useRoutines.getState().runNow('routine-1');
+
+    const run = useRoutines.getState().routines[0]?.runs[0];
+    assert.equal(calls, 0);
+    assert.equal(run?.status, 'error');
+    assert.match(run?.text ?? '', /已停用或已卸载/);
+    assert.match(run?.text ?? '', /记忆与技能/);
+  } finally {
+    restoreRunner();
+    restoreNow();
+    restoreStorage();
+    restoreProfile();
+    resetRoutineStore();
+  }
+});
+
+test('scheduler 静默跳过已停用技能且不重复写失败记录', async () => {
+  const storage = new MemoryStorage();
+  const restoreProfile = setButlerProfileStorage(storage);
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  let calls = 0;
+  const restoreRunner = setRoutineCodexRunner(async () => {
+    calls += 1;
+    return { text: '不应生成的结果' };
+  });
+  resetRoutineStore([routine()]);
+
+  try {
+    setSkillEnabled('morning-brief', false);
+    await useRoutines.getState().tick(MONDAY_0830);
+    await useRoutines.getState().tick(MONDAY_0830);
+
+    assert.equal(calls, 0);
+    assert.deepEqual(useRoutines.getState().routines[0]?.runs, []);
+    assert.equal(useRoutines.getState().routines[0]?.lastFiredDate, undefined);
+  } finally {
+    restoreRunner();
+    restoreNow();
+    restoreStorage();
+    restoreProfile();
     resetRoutineStore();
   }
 });

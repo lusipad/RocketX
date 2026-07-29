@@ -55,6 +55,7 @@ function findInlineCodeEnd(text: string, start: number): number {
  * 夹在文字里 → 紧凑 chip + 悬浮详情卡，不打断行文（issue：文字中的 #号 要悬浮卡片）。
  */
 type WiVariant = 'card' | 'chip';
+export type MarkdownLinkRenderer = (label: string, href: string) => ReactNode | undefined;
 
 export function isPureWorkItemText(text: string): boolean {
   const t = text.trim();
@@ -78,6 +79,7 @@ function renderInline(
   me: string | undefined,
   keyBase: string,
   wi: WiVariant,
+  renderLink?: MarkdownLinkRenderer,
 ): ReactNode[] {
   const linkRe = /\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)/;
   const nodes: ReactNode[] = [];
@@ -92,7 +94,7 @@ function renderInline(
           <MarkdownMath key={`${keyBase}-math${i++}`} value={segment.value} display={false} />,
         );
       } else {
-        nodes.push(...renderInlineText(segment.value, me, `${keyBase}-s${i++}`, wi));
+        nodes.push(...renderInlineText(segment.value, me, `${keyBase}-s${i++}`, wi, renderLink));
       }
     }
   };
@@ -135,7 +137,7 @@ function renderInline(
 
     if (nextLinkStart !== -1 && linkMatch) {
       pushInlineText(text.slice(last, nextLinkStart));
-      nodes.push(...renderInlineText(linkMatch[0], me, `${keyBase}-l${i++}`, wi));
+      nodes.push(...renderInlineText(linkMatch[0], me, `${keyBase}-l${i++}`, wi, renderLink));
       last = nextLinkStart + linkMatch[0].length;
       continue;
     }
@@ -149,6 +151,7 @@ function renderInlineText(
   me: string | undefined,
   keyBase: string,
   wi: WiVariant,
+  renderLink?: MarkdownLinkRenderer,
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
@@ -162,7 +165,8 @@ function renderInlineText(
     if (m[1]) {
       const label = full.slice(1, full.indexOf(']'));
       const href = full.slice(full.indexOf('(') + 1, -1);
-      nodes.push(
+      const replacement = renderLink?.(label, href);
+      nodes.push(replacement === undefined ? (
         <a
           key={key}
           href={href}
@@ -171,8 +175,8 @@ function renderInlineText(
           className="break-all text-primary underline-offset-2 hover:underline"
         >
           {label}
-        </a>,
-      );
+        </a>
+      ) : <Fragment key={key}>{replacement}</Fragment>);
     } else if (m[2]) {
       const inner = full.startsWith('**') ? full.slice(2, -2) : full.slice(1, -1);
       nodes.push(<strong key={key}>{inner}</strong>);
@@ -297,6 +301,7 @@ function renderBlocks(
   keyBase: string,
   variant: Variant,
   wi: WiVariant,
+  renderLink?: MarkdownLinkRenderer,
 ): ReactNode[] {
   const lines = text.split('\n');
   const nodes: ReactNode[] = [];
@@ -316,7 +321,7 @@ function renderBlocks(
       const Tag = `h${level}` as 'h1';
       push(
         <Tag key={key} className={HEADING_CLS[variant][level - 1]}>
-          {renderInline(heading[2], me, key, wi)}
+          {renderInline(heading[2], me, key, wi, renderLink)}
         </Tag>,
       );
       i++;
@@ -351,7 +356,7 @@ function renderBlocks(
                     key={hi}
                     className="border border-line bg-fill-1 px-2.5 py-1.5 font-medium text-ink"
                   >
-                    {renderInline(h, me, `${key}-h${hi}`, wi)}
+                    {renderInline(h, me, `${key}-h${hi}`, wi, renderLink)}
                   </th>
                 ))}
               </tr>
@@ -362,7 +367,7 @@ function renderBlocks(
                   {/* 单元格数可能与表头不一致，按表头补齐，别让表格塌掉 */}
                   {header.map((_, ci) => (
                     <td key={ci} className="border border-line px-2.5 py-1.5 text-ink-2">
-                      {renderInline(r[ci] ?? '', me, `${key}-r${ri}c${ci}`, wi)}
+                      {renderInline(r[ci] ?? '', me, `${key}-r${ri}c${ci}`, wi, renderLink)}
                     </td>
                   ))}
                 </tr>
@@ -387,7 +392,7 @@ function renderBlocks(
           key={key}
           className={`border-l-[3px] border-line pl-2.5 text-ink-2 ${chat ? 'my-1' : 'my-1.5'}`}
         >
-          {renderBlocks(buf.join('\n'), me, `${key}-q`, variant, wi)}
+          {renderBlocks(buf.join('\n'), me, `${key}-q`, variant, wi, renderLink)}
         </blockquote>,
       );
       continue;
@@ -405,7 +410,7 @@ function renderBlocks(
         >
           <input type="checkbox" checked={done} readOnly className="mt-1 accent-primary" />
           <span className={done ? 'text-ink-3 line-through' : ''}>
-            {renderInline(task[3], me, key, wi)}
+            {renderInline(task[3], me, key, wi, renderLink)}
           </span>
         </div>,
       );
@@ -418,7 +423,7 @@ function renderBlocks(
       push(
         <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(ordered[1]) }}>
           <span className="shrink-0 text-ink-3">{ordered[2]}.</span>
-          <span className="min-w-0">{renderInline(ordered[3], me, key, wi)}</span>
+          <span className="min-w-0">{renderInline(ordered[3], me, key, wi, renderLink)}</span>
         </div>,
       );
       i++;
@@ -430,7 +435,7 @@ function renderBlocks(
       push(
         <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(bullet[1]) }}>
           <span className="shrink-0 text-ink-3">•</span>
-          <span className="min-w-0">{renderInline(bullet[2], me, key, wi)}</span>
+          <span className="min-w-0">{renderInline(bullet[2], me, key, wi, renderLink)}</span>
         </div>,
       );
       i++;
@@ -454,7 +459,7 @@ function renderBlocks(
     }
     push(
       <p key={key} className={`whitespace-pre-wrap ${chat ? '' : 'my-2'}`}>
-        {renderInline(para.join('\n'), me, `${key}-p`, wi)}
+        {renderInline(para.join('\n'), me, `${key}-p`, wi, renderLink)}
       </p>,
     );
   }
@@ -485,9 +490,13 @@ function renderWithCodeFences(
   me: string | undefined,
   variant: Variant,
   wi: WiVariant,
+  renderLink?: MarkdownLinkRenderer,
 ): ReactNode {
   const chat = variant === 'chat';
   const parts = text.split(/```(?:\w*\n)?([\s\S]*?)```/g);
+  const segmentedParts = parts.map((part, index) => (
+    index % 2 === 0 ? splitBlockMath(part) : null
+  ));
   return (
     <>
       {parts.map((part, i) =>
@@ -502,7 +511,7 @@ function renderWithCodeFences(
           </pre>
         ) : (
           <Fragment key={i}>
-            {splitBlockMath(part).map((segment, segmentIndex) =>
+            {(segmentedParts[i] ?? []).map((segment, segmentIndex) =>
               segment.kind === 'math' ? (
                 <MarkdownMath
                   key={`${i}-math-${segmentIndex}`}
@@ -511,7 +520,14 @@ function renderWithCodeFences(
                 />
               ) : segment.value.trim() ? (
                 <Fragment key={`${i}-text-${segmentIndex}`}>
-                  {renderBlocks(segment.value, me, `${i}-${segmentIndex}`, variant, wi)}
+                  {renderBlocks(
+                    segment.value,
+                    me,
+                    `${i}-${segmentIndex}`,
+                    variant,
+                    wi,
+                    renderLink,
+                  )}
                 </Fragment>
               ) : null,
             )}
@@ -523,11 +539,21 @@ function renderWithCodeFences(
 }
 
 /** 聊天消息 */
-export function renderMarkdown(text: string, me?: string): ReactNode {
+export function renderMarkdown(
+  text: string,
+  me?: string,
+  renderLink?: MarkdownLinkRenderer,
+): ReactNode {
   // 隐藏消息开头的引用链接（[ ](url) 前缀，引用内容由附件渲染）
   text = text.replace(/^(\s*\[ \]\((?:https?:\/\/|\/)[^)\s]*\)\s*)+/, '');
   // 整条消息只有工作项引用 → 大卡片；夹在文字里 → 紧凑 chip + 悬浮卡
-  return renderWithCodeFences(text, me, 'chat', isPureAdoEntityText(text) ? 'card' : 'chip');
+  return renderWithCodeFences(
+    text,
+    me,
+    'chat',
+    isPureAdoEntityText(text) ? 'card' : 'chip',
+    renderLink,
+  );
 }
 
 /** 文档预览（.md 文件）：同一套解析，排版更松 */

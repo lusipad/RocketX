@@ -11,7 +11,6 @@ import {
   MIN_BUTLER_PANEL_WIDTH,
   clampButlerPanelWidth,
 } from '../lib/imLayout';
-import type { ButlerSurfaceContext } from '../lib/butlerContext';
 import { partitionButlerPaperErrands } from '../lib/butlerPaper';
 import type { ButlerImageInput } from '../lib/butlerImages';
 import { useAuth } from '../stores/auth';
@@ -45,7 +44,11 @@ export default function ButlerPanel() {
   const running = useButler((state) => state.running);
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
-  const hydrate = useButler((state) => state.hydrate);
+  const readRoomConversation = useButler((state) => state.readRoomConversation);
+  const openRoomConversation = useButler((state) => state.openRoomConversation);
+  const roomSessionUpdatedAt = useButler((state) => (
+    rid ? state.sessions.find((session) => session.origin?.rid === rid)?.updatedAt : undefined
+  ));
   const setPanel = useChat((state) => state.setPanel);
   const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
   const setButlerPanelWidth = useImLayout((state) => state.setButlerPanelWidth);
@@ -53,6 +56,7 @@ export default function ButlerPanel() {
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
+  const [previewLines, setPreviewLines] = useState<ButlerLine[]>([]);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const resizeStart = useRef<{
     x: number;
@@ -65,36 +69,43 @@ export default function ButlerPanel() {
     () => (rid ? { rid, roomName: roomName(rid, subscription, room) } : null),
     [rid, room, subscription],
   );
-  const roomExchanges = useMemo(
-    () => (rid ? roomConversationExchanges(butlerLines, rid) : []),
-    [butlerLines, rid],
-  );
   const roomErrands = useMemo(
     () => (rid ? butlerErrands.filter((errand) => errand.roomContext?.rid === rid) : []),
     [butlerErrands, rid],
   );
   const sections = useMemo(() => partitionButlerPaperErrands(roomErrands), [roomErrands]);
+  const roomActive = !!rid && contextHasRoomSource(butlerContext, rid);
+  const roomRunning = running && roomActive;
+  const displayLines = roomActive ? butlerLines : previewLines;
+  const roomExchanges = useMemo(
+    () => (rid ? roomConversationExchanges(displayLines, rid) : []),
+    [displayLines, rid],
+  );
   const hasConversation = roomExchanges.some((exchange) => exchange.some((line) => line.role === 'user'));
-  const roomRunning = running && !!rid && contextHasRoomSource(butlerContext, rid);
   const openFullConversation = (): void => {
-    const context: ButlerSurfaceContext | null = roomContext
-      ? {
-        kind: 'room',
-        label: roomContext.roomName,
-        detail: '当前 Rocket.Chat 房间',
-        sources: [{ kind: 'room', id: roomContext.rid, rid: roomContext.rid, label: roomContext.roomName }],
-      }
-      : null;
     setPanel(null);
-    useUI.getState().openButlerConversation();
-    // 模块切换会触发完整对话的挂载与会话恢复；最后写入房间上下文，
-    // 保证全屏页不会被恢复过程覆盖成普通管家入口。
-    if (context) useButler.getState().setContext(context);
+    if (!roomContext) {
+      useUI.getState().openButlerConversation();
+      return;
+    }
+    void openRoomConversation(roomContext)
+      .catch(() => undefined)
+      .then(() => useUI.getState().openButlerConversation());
   };
 
   useEffect(() => {
-    if (userId) void hydrate();
-  }, [hydrate, userId]);
+    setPreviewLines([]);
+    if (!userId || !roomContext) return;
+    let cancelled = false;
+    void readRoomConversation(roomContext)
+      .then((lines) => {
+        if (!cancelled) setPreviewLines(lines);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [readRoomConversation, roomContext, roomSessionUpdatedAt, userId]);
 
   if (!rid) return null;
 

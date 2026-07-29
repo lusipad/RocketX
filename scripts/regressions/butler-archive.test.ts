@@ -53,6 +53,26 @@ test('档案写穿先同步更新缓存，随后持久化 rcx-butler-v2:memory',
   }
 });
 
+test('管家身份与长期档案使用同一持久化快照', async () => {
+  const backend = createMemoryBackend();
+  const restoreFallback = setButlerArchiveFallbackStorage(new MemoryStorage());
+  const restoreBackend = setButlerArchiveBackend(backend);
+
+  try {
+    butlerArchiveStorage.set('rcx-butler-v1:identity', JSON.stringify({
+      displayName: '小布',
+      avatar: 'orbit',
+    }));
+    await flushButlerArchiveWrites();
+
+    const stored = await createRcxStore({ backend }).appData.get<Record<string, string>>(APP_ID, ARCHIVE_KEY);
+    assert.match(stored?.['rcx-butler-v1:identity'] ?? '', /"displayName":"小布"/);
+  } finally {
+    restoreBackend();
+    restoreFallback();
+  }
+});
+
 test('空 IndexedDB 从旧 localStorage 一次性迁移 v1 memory 到 quarantine，但不会变成活动 recall', async () => {
   const backend = createMemoryBackend();
   const legacy = new MemoryStorage();
@@ -168,7 +188,7 @@ test('Butler home 初始化原生技能与 scratch 目录，并保持最小文�
   assert.match(source, /"memory",\s*"\.agents",\s*"\.agents\/skills",\s*"scratch"/s);
   assert.doesNotMatch(source, /for directory in \["memory", "skills"\]/);
   const capability = readFileSync('apps/desktop/src-tauri/capabilities/default.json', 'utf8');
-  for (const permission of ['fs:allow-read-file', 'fs:allow-stat', 'fs:allow-write-file', 'fs:allow-remove', 'fs:allow-mkdir']) {
+  for (const permission of ['fs:allow-read-file', 'fs:allow-stat', 'fs:allow-write-file', 'fs:allow-remove', 'fs:allow-mkdir', 'fs:allow-watch']) {
     assert.match(capability, new RegExp(permission));
   }
   assert.doesNotMatch(capability, /fs:allow-read-dir/);

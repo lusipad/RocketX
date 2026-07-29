@@ -64,7 +64,7 @@ export function turnConclusionIntoTodo(
 }
 
 /**
- * 「盯它」：把这条结论记进等待台账。
+ * 「等待跟进」：把这条结论记进等待记录。
  *
  * `waitingFor` 与 `committedTo` 互斥——同时写会在 ledger 里冒出一条多余的承诺条。
  */
@@ -133,7 +133,7 @@ export function createConclusionCheckpoint(
       ...(due?.trim() ? { due: due.trim() } : {}),
     },
     preview: action === 'wait'
-      ? `盯它：${conclusion.label}${who?.trim() ? `（等 ${who.trim()}）` : ''}`
+      ? `等待跟进：${conclusion.label}${who?.trim() ? `（等待 ${who.trim()}）` : ''}`
       : `记为待办：${conclusion.label}`,
     ...(now === undefined ? {} : { now }),
   });

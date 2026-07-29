@@ -63,6 +63,100 @@ test('AI 对话落盘后重启可恢复，账号隔离', async () => {
   }
 });
 
+test('房间管家使用独立会话，返回管家页时恢复原来的普通会话', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('room-history-user');
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
+  const room = { rid: 'room-general', roomName: 'General' };
+  try {
+    await useButler.getState().hydrate();
+    const standaloneSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('整理我的本周工作');
+    await flushButlerPersist();
+
+    await useButler.getState().newConversation();
+    const otherStandaloneSessionId = useButler.getState().activeSessionId;
+    assert.notEqual(otherStandaloneSessionId, standaloneSessionId);
+    await useButler.getState().ask('这是另一个普通会话');
+    await flushButlerPersist();
+    await useButler.getState().switchSession(standaloneSessionId);
+
+    await useButler.getState().ask('你好', room);
+    await flushButlerPersist();
+    const roomSessionId = useButler.getState().activeSessionId;
+    assert.notEqual(roomSessionId, standaloneSessionId);
+    assert.equal(useButler.getState().sessions.find((session) => session.id === roomSessionId)?.origin?.rid, room.rid);
+
+    await useButler.getState().ask('最近在讨论啥', room);
+    await flushButlerPersist();
+    assert.equal(
+      useButler.getState().sessions.find((session) => session.id === roomSessionId)?.title,
+      'General · 最近在讨论啥',
+    );
+
+    await useButler.getState().openStandaloneConversation();
+    assert.equal(useButler.getState().activeSessionId, standaloneSessionId);
+    assert.equal(useButler.getState().context, null);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '整理我的本周工作'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '这是另一个普通会话'), false);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '最近在讨论啥'), false);
+
+    await useButler.getState().openRoomConversation(room);
+    assert.equal(useButler.getState().activeSessionId, roomSessionId);
+    assert.equal(useButler.getState().context?.label, 'General');
+    assert.equal(useButler.getState().lines.some((line) => line.text === '最近在讨论啥'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '整理我的本周工作'), false);
+
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await useButler.getState().hydrate();
+    await useButler.getState().openStandaloneConversation();
+    assert.equal(useButler.getState().activeSessionId, standaloneSessionId);
+    await useButler.getState().openRoomConversation(room);
+    assert.equal(useButler.getState().activeSessionId, roomSessionId);
+  } finally {
+    restore();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
+test('读取房间管家记录不会切换或停止当前普通会话', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('room-preview-user');
+  const restore = setButlerCodexRunner(async (options) => ({ text: `回复：${options.text}` }));
+  const room = { rid: 'room-preview', roomName: 'Preview' };
+  let originalStop: ReturnType<typeof useButler.getState>['stop'] | undefined;
+  try {
+    await useButler.getState().hydrate();
+    const standaloneSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('保留这个普通会话');
+    await useButler.getState().ask('房间里讨论了什么', room);
+    await useButler.getState().openStandaloneConversation();
+
+    originalStop = useButler.getState().stop;
+    let stopCalls = 0;
+    useButler.setState({
+      running: true,
+      stop: async () => {
+        stopCalls += 1;
+      },
+    });
+    const lines = await useButler.getState().readRoomConversation(room);
+
+    assert.equal(stopCalls, 0);
+    assert.equal(useButler.getState().activeSessionId, standaloneSessionId);
+    assert.equal(lines.some((line) => line.text === '房间里讨论了什么'), true);
+    useButler.setState({ running: false, stop: originalStop });
+  } finally {
+    if (originalStop) useButler.setState({ running: false, stop: originalStop });
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
 test('回合失败后的 taskState 会覆盖已落盘的 running 状态', async () => {
   resetButlerPersistenceForTests();
   useButler.getState().reset();
@@ -219,7 +313,7 @@ test('发问等待 hydrate 时新建 session 不会截断旧 session 的已完�
     for (const read of delayedReads) read.resolve(undefined);
     await Promise.all([asking, creating]);
 
-    const oldSession = useButler.getState().sessions.find((session) => session.title === '默认对话');
+    const oldSession = useButler.getState().sessions.find((session) => session.title === '旧 session 的问题');
     assert.ok(oldSession);
     await useButler.getState().switchSession(oldSession.id);
     assert.equal(useButler.getState().lines.some((line) => line.text === '旧 session 的问题'), true);
@@ -259,7 +353,7 @@ test('Codex 回合尚不可中断时新建 session 会等待旧回复完整落�
     releaseRunner?.();
     await Promise.all([asking, creating]);
 
-    const oldSession = useButler.getState().sessions.find((session) => session.title === '默认对话');
+    const oldSession = useButler.getState().sessions.find((session) => session.title === 'Codex 旧 session 的问题');
     assert.ok(oldSession);
     await useButler.getState().switchSession(oldSession.id);
     assert.equal(useButler.getState().lines.some((line) => line.text === 'Codex 旧 session 的问题'), true);
@@ -644,11 +738,9 @@ test('Codex 常驻线程随对话一并保存，重启后走 resume 接续', () 
 
   const butlerCodex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
   assert.match(butlerCodex, /residentStatus = 'interrupted';/);
-  // 两个管家对话表面都要触发恢复
-  for (const page of [
-    'apps/web/src/components/ButlerConversation.tsx',
-    'apps/web/src/components/ButlerPanel.tsx',
-  ]) {
-    assert.match(readFileSync(page, 'utf8'), /hydrate/u);
-  }
+  // 两个管家对话表面都要触发恢复；房间浮层通过只读入口恢复，不切换活动会话。
+  assert.match(readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8'), /hydrate/u);
+  assert.match(readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8'), /readRoomConversation/u);
+  const butlerStore = readFileSync('apps/web/src/stores/butler.ts', 'utf8');
+  assert.match(butlerStore, /readRoomConversation:[\s\S]{0,220}await get\(\)\.hydrate\(\)/u);
 });

@@ -46,6 +46,7 @@ import { kernelStore } from './store';
 import { runCodexTrigger } from '../lib/codexOnce';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
+import { initializeButlerLearningExtensions } from '../butler/extensions/learning/runtime';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -577,6 +578,7 @@ function registerBridgeEvents(): void {
 export function initializeKernel(): void {
   if (initialized) return;
   initialized = true;
+  initializeButlerLearningExtensions();
   setActiveAppManager(installedApps);
   initializeAiRuntime(kernelStore);
   registerCapabilities();

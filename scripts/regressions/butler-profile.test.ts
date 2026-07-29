@@ -9,6 +9,7 @@ import {
   buildButlerCodexBaseInstructions,
   buildButlerSystemPrompt,
   butlerWorkspaceRevision,
+  canUseNativeButlerSkill,
   getPersona,
   listSkills,
   loadButlerSkill,
@@ -16,12 +17,22 @@ import {
   resetPersona,
   saveSkill,
   setButlerProfileStorage,
+  setSkillEnabled,
   setPersona,
   type ButlerProfileStorage,
 } from '../../apps/web/src/lib/butlerProfile';
+import {
+  initializeButlerLearningExtensions,
+} from '../../apps/web/src/butler/extensions/learning/runtime';
+
+initializeButlerLearningExtensions();
 
 class MemoryStorage implements ButlerProfileStorage {
-  private readonly entries = new Map<string, string>();
+  private readonly entries: Map<string, string>;
+
+  constructor(seed?: Iterable<readonly [string, string]>) {
+    this.entries = new Map(seed);
+  }
 
   get(key: string): string | null {
     return this.entries.get(key) ?? null;
@@ -29,6 +40,10 @@ class MemoryStorage implements ButlerProfileStorage {
 
   set(key: string, value: string): void {
     this.entries.set(key, value);
+  }
+
+  snapshot(): ReadonlyArray<readonly [string, string]> {
+    return [...this.entries.entries()];
   }
 }
 
@@ -75,12 +90,25 @@ test('默认人设改为按需 recall_memory，并严格限制可持久化内容
   assert.doesNotMatch(DEFAULT_PERSONA, /先调用 remember/);
 });
 
-test('AI 设置页提供人设编辑入口，托管纪律不受人设影响', () => {
+test('两条管家运行路径都要求把可信来源链接放到对应结论末尾', () => {
+  const api = buildButlerApiSystemPrompt();
+  const codex = buildButlerCodexBaseInstructions();
+  for (const prompt of [api, codex]) {
+    assert.match(prompt, /事实性结论/);
+    assert.match(prompt, /对应句末/);
+    assert.match(prompt, /link.*webUrl/s);
+    assert.match(prompt, /不要手写引用编号或编号范围/);
+  }
+});
+
+test('AI 设置页只保留高级行为指令，名字与性格由我的管家统一管理', () => {
   const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
-  assert.match(settings, /label="人设"/);
+  assert.match(settings, /label="高级行为指令"/);
+  assert.match(settings, /名字、头像和相处方式请在“我的管家”修改/);
   assert.match(settings, /savePersona/);
   assert.match(settings, /restoreDefaultPersona/);
   assert.match(settings, /AI 托管的编码代理和安全纪律不受影响/);
+  assert.doesNotMatch(settings, /AXIS_META|loadPersonality|管家性格/);
 
   const context = readFileSync('apps/web/src/agent/context.ts', 'utf8');
   assert.doesNotMatch(context, /getPersona|DEFAULT_PERSONA|buildButlerSystemPrompt/);
@@ -132,7 +160,75 @@ test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
     assert.match(loadButlerSkill(AZURE_DEVOPS_SERVER_SKILL_NAME), /run_azure_devops_server_cli/);
     assert.match(
       loadButlerSkill('missing'),
-      /未找到技能：missing，可用技能：morning-brief、evening-review、weekly-report、pr-comparison、commitment-extraction、azure-devops-server/,
+      /未找到技能：missing，可用技能：.*butler-profile-curator.*butler-reply-guardian.*azure-devops-server/,
+    );
+  });
+});
+
+test('内置技能默认启用，停用后重启仍保留停用状态', () => {
+  withMemoryStorage((storage) => {
+    assert.equal(canUseNativeButlerSkill('morning-brief'), true);
+
+    setSkillEnabled('morning-brief', false);
+    assert.equal(canUseNativeButlerSkill('morning-brief'), false);
+
+    const rebooted = new MemoryStorage(storage.snapshot());
+    const restore = setButlerProfileStorage(rebooted);
+    try {
+      assert.equal(canUseNativeButlerSkill('morning-brief'), false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('停用后的技能仍出现在管理列表，但不会进入可执行技能清单', () => {
+  withMemoryStorage(() => {
+    setSkillEnabled('morning-brief', false);
+
+    assert.equal(listSkills().some((skill) => skill.name === 'morning-brief'), true);
+    assert.equal(canUseNativeButlerSkill('morning-brief'), false);
+    assert.doesNotMatch(loadButlerSkill('morning-brief'), /^晨报/);
+    assert.doesNotMatch(buildButlerSystemPrompt(), /- morning-brief：/);
+  });
+});
+
+test('重新启用后，内置技能重新回到可执行状态', () => {
+  withMemoryStorage(() => {
+    setSkillEnabled('morning-brief', false);
+    setSkillEnabled('morning-brief', true);
+
+    assert.equal(canUseNativeButlerSkill('morning-brief'), true);
+    assert.match(loadButlerSkill('morning-brief'), /^晨报/);
+    assert.match(buildButlerSystemPrompt(), /- morning-brief：/);
+  });
+});
+
+test('自装技能删除后会清掉停用状态，重新安装默认恢复启用', () => {
+  withMemoryStorage(() => {
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '# 发布说明' });
+    setSkillEnabled('release-note', false);
+    assert.equal(canUseNativeButlerSkill('release-note'), false);
+
+    removeSkill('release-note');
+    saveSkill({ name: 'release-note', description: '整理发布说明。', body: '# 发布说明' });
+
+    assert.equal(canUseNativeButlerSkill('release-note'), true);
+    assert.match(loadButlerSkill('release-note'), /^# 发布说明/);
+  });
+});
+
+test('内置技能即使被停用，仍不可保存或删除', () => {
+  withMemoryStorage(() => {
+    setSkillEnabled('morning-brief', false);
+
+    assert.throws(
+      () => saveSkill({ name: 'morning-brief', description: '覆盖', body: '不应保存' }),
+      /内置技能不可修改/,
+    );
+    assert.throws(
+      () => removeSkill('morning-brief'),
+      /内置技能不可修改/,
     );
   });
 });

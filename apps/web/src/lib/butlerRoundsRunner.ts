@@ -225,6 +225,9 @@ function errorMessage(error: unknown): string {
     .replace(/API 大脑/g, 'API 模式')
     .replace(/大脑/g, '运行模式')
     .replace(/巡视|台账|对账|传感器/g, '内容')
+    .replace(/接成任务/g, '转为任务')
+    .replace(/接住/g, '处理')
+    .replace(/盯住|盯着|盯它|在盯/g, '跟进')
     .replace(/ephemeral/gi, '临时会话');
 }
 
@@ -544,6 +547,16 @@ export function snoozeButlerRoundsItem(ref: string): boolean {
   const current = useButlerRoundsRunner.getState().lastResult;
   if (!current || !current.result.items.some((item) => item.ref === ref)) return false;
   const snoozedRefs = [...new Set([...(current.snoozedRefs ?? []), ref])];
+  const stored = { ...current, snoozedRefs };
+  persistResult(stored);
+  useButlerRoundsRunner.setState({ lastResult: stored });
+  return true;
+}
+
+export function restoreButlerRoundsItem(ref: string): boolean {
+  const current = useButlerRoundsRunner.getState().lastResult;
+  if (!current || !(current.snoozedRefs ?? []).includes(ref)) return false;
+  const snoozedRefs = (current.snoozedRefs ?? []).filter((item) => item !== ref);
   const stored = { ...current, snoozedRefs };
   persistResult(stored);
   useButlerRoundsRunner.setState({ lastResult: stored });

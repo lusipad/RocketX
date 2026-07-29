@@ -7,6 +7,7 @@ import {
 } from './butlerToolRuntime';
 import {
   listButlerQuarantinedLegacyMemory,
+  isButlerSkillEnabled,
   listSkills,
   loadButlerSkill,
   readButlerActiveMemoryV2RawJson,
@@ -446,7 +447,7 @@ function memoryProvenance(context: ButlerToolRuntimeContext): ButlerMemoryProven
     ...(context.callId ? { callId: context.callId } : {}),
     butlerSource: sourceRefs.join(',') || 'butler:user-confirmed',
     summary: sourceRefs.length
-      ? `来自当前 Butler 任务的 ${sourceRefs.length} 个可信来源引用`
+      ? `来自当前管家任务的 ${sourceRefs.length} 个可信来源引用`
       : '用户在当前 Butler 会话中直接确认',
   };
 }
@@ -685,6 +686,9 @@ function routinePreflight(args: Record<string, unknown>): ButlerToolPreflight {
   if (!time || !validTime(time)) return { allowed: false, reason: '时间格式无效，请使用 HH:mm。' };
   if (!skillName || !listSkills().some((skill) => skill.name === skillName)) {
     return { allowed: false, reason: `未找到技能：${skillName ?? '（未填写）'}。` };
+  }
+  if (!isButlerSkillEnabled(skillName)) {
+    return { allowed: false, reason: `技能已停用：${skillName}。` };
   }
   const days = args.days;
   if (days !== undefined && (!Array.isArray(days) || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {
@@ -1169,7 +1173,7 @@ export function createButlerTools(): ButlerTool[] {
       // 把用户往执行间赶——而进度就在管家页的卡片上。管家是唯一实体。
       execute: async (args) => {
         const title = optionalString(args, 'title') ?? '未命名任务';
-        return `已派出去：${title}。我盯着，有进展就在这儿告诉你。`;
+        return `已派出去：${title}。我会继续跟进，有进展就在这儿告诉你。`;
       },
     }),
   ];

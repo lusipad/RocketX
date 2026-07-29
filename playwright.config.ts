@@ -19,6 +19,7 @@ export default defineConfig({
   use: {
     baseURL,
     serviceWorkers: 'block',
+    timezoneId: 'Asia/Shanghai',
     trace: 'retain-on-failure',
     ...devices['Desktop Chrome'],
   },

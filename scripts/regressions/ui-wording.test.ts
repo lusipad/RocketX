@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 
 const ROOT = 'apps/web/src';
 
@@ -15,50 +16,31 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * 只看用户能读到的字符串：JSX 文本、title/aria-label/placeholder、toast。
- * 注释与 console 里出现架构词是正常的——那是写给维护者的。
+ * 扫描所有可执行字符串，而不是猜哪些字段最终会显示。
+ *
+ * 用户文案经常先写进 view model，再通过三元表达式、变量或 `as string`
+ * 流入 JSX。只匹配 `key: '字面量'` 会漏掉这些路径。TypeScript AST 会排除
+ * 注释，同时覆盖 JSX、模板字符串和普通字符串。
  */
-function userFacingText(source: string, isJsx: boolean): string[] {
-  const withoutComments = source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
+function executableStrings(source: string, file: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
   const out: string[] = [];
-  // JSX 里的裸中文文本。只对 .tsx 跑——.ts 里没有 JSX，硬套会把
-  // `throw new Error('...')` 之类的代码当成界面文本报上来。
-  if (isJsx) {
-    for (const match of withoutComments.matchAll(/>([^<>{}]*[一-龥][^<>{}]*)</g)) {
-      out.push(match[1].trim());
-    }
-  }
-  // title / aria-label / placeholder / toast 里的中文串
-  for (const match of withoutComments.matchAll(
-    /(?:title|aria-label|placeholder|label)=\{?['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
-  )) {
-    out.push(match[1]);
-  }
-  for (const match of withoutComments.matchAll(
-    /toast\.(?:success|error|info|undo|loading)\(\s*['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
-  )) {
-    out.push(match[1]);
-  }
-  /**
-   * 抛出去的错误消息最终会显示在对话里、例行事务报告里、审批卡上。
-   * 它们大多写在 .ts 而不是 .tsx，此前完全不在扫描范围内——
-   * 「Codex 大脑不可用」这类文案就是从这个缺口漏到用户面前的。
-   */
-  for (const match of withoutComments.matchAll(
-    /new Error\(\s*['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
-  )) {
-    // 「字段名 + 无效/不受支持/必须是」是解析持久化数据时的内部断言，
-    // 只在数据损坏时抛给开发者看。把它翻成人话只会让排查变难。
-    if (/^[a-z][\w.]* .*(无效|不受支持|必须是)/i.test(match[1])) continue;
-    out.push(match[1]);
-  }
-  for (const match of withoutComments.matchAll(
-    /\b(?:detail|reason|message|preview|summary)\s*:\s*['"`]([^'"`]*[一-龥][^'"`]*)['"`]/g,
-  )) {
-    out.push(match[1]);
-  }
+  const collect = (text: string): void => {
+    if (/[一-龥]/.test(text)) out.push(text.trim());
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isTemplateExpression(node)) collect(node.getText(sourceFile));
+    else if (ts.isStringLiteralLike(node)) collect(node.text);
+    else if (ts.isJsxText(node)) collect(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return out.filter(Boolean);
 }
 
@@ -83,13 +65,30 @@ const FORBIDDEN = [
   'ephemeral',
   'checkpoint',
   'payload',
+  '接住',
+  '接成任务',
+  '盯住',
+  '盯着',
+  '盯它',
+  '在盯',
 ];
+
+test('AST 文案扫描覆盖三元表达式和模板字符串', () => {
+  const texts = executableStrings(
+    "const projection = { statusLabel: waiting ? `在盯 ${who}` : '已经完成' };",
+    'projection.ts',
+  );
+  assert.ok(texts.some((text) => text.includes('在盯')));
+  assert.ok(texts.includes('已经完成'));
+});
 
 test('界面文案不出现内部架构词——用户不该被要求先学一套黑话', () => {
   const offenders: string[] = [];
   for (const file of sourceFiles(ROOT)) {
     const source = readFileSync(file, 'utf8');
-    for (const text of userFacingText(source, file.endsWith('.tsx'))) {
+    for (const text of executableStrings(source, file)) {
+      // 唯一允许出现禁词的可执行字符串：系统提示明确告诉模型不要使用它们。
+      if (file.endsWith('butler-rounds.ts') && text.startsWith('界面文案只说人话，不使用')) continue;
       for (const word of FORBIDDEN) {
         if (text.includes(word)) offenders.push(`${file}: 「${text}」含「${word}」`);
       }

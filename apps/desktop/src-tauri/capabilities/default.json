@@ -31,6 +31,7 @@
     "fs:allow-write-file",
     "fs:allow-remove",
     "fs:allow-mkdir",
+    "fs:allow-watch",
     {
       "identifier": "fs:scope",
       "allow": ["$APPDATA/butler/**", "$APPDATA/attachment-archive/**"]
