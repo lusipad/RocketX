@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -92,6 +92,18 @@ test('正式发布同时要求 Windows、macOS 和 Linux 安装包', async () =>
   }
 });
 
+test('正式发布允许同名插件解包目录留在 release-assets 工作目录', async () => {
+  const fixture = await createCrossPlatformReleaseFixture();
+  try {
+    await mkdir(path.join(fixture.directory, `rocketx-plugins-${fixture.version}`));
+    const result = runVerifier(fixture.directory, fixture.version);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Verified cross-platform release assets/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test('正式发布缺少 macOS 安装包时失败', async () => {
   const fixture = await createCrossPlatformReleaseFixture();
   try {
@@ -168,6 +180,18 @@ test('正式发布的更新清单不能遗漏任一桌面平台', async () => {
     const result = runVerifier(fixture.directory, fixture.version);
     assert.notEqual(result.status, 0);
     assert.match(`${result.stdout}\n${result.stderr}`, /darwin-aarch64/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('正式发布拒绝根目录多余文件', async () => {
+  const fixture = await createCrossPlatformReleaseFixture();
+  try {
+    await writeFile(path.join(fixture.directory, 'notes.txt'), 'unexpected');
+    const result = runVerifier(fixture.directory, fixture.version);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Unexpected release asset: notes\.txt/);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }
