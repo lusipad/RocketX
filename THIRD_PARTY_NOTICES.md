@@ -66,4 +66,11 @@ Review the image publisher's license and deployment terms before redistribution 
 
 RocketX uses Lucide icons through `lucide-react`. Emoji names and rendering data are produced from the dependencies recorded in `pnpm-lock.yaml`; upstream artwork, fonts, or custom Rocket.Chat emoji remain governed by their respective owners and are not granted additional rights by the RocketX license.
 
+The built-in sticker picker redistributes selected 72×72 PNG graphics from
+[Twemoji](https://github.com/twitter/twemoji) at commit
+`bad3bceeafc901ace42a3dfe0421db6388daafb9`. Copyright 2019 Twitter, Inc. and
+other contributors. The graphics are licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the complete license
+text is packaged at `apps/web/public/stickers/twemoji/LICENSE-GRAPHICS.txt`.
+
 If a dependency is added, removed, or upgraded, update this notice when its license family or redistributed assets change.

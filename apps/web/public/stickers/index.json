@@ -1,0 +1,8 @@
+{
+  "packages": [
+    {
+      "id": "twemoji",
+      "manifest": "./twemoji/manifest.json"
+    }
+  ]
+}

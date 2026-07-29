@@ -12,7 +12,27 @@ export type ProfileFactOrigin =
   | 'observed'
   | 'external-edit'
   | 'bootstrap-connected'
-  | 'bootstrap-imported';
+  | 'bootstrap-imported'
+  | 'bootstrap-generated';
+
+export type ProfileBootstrapSourceId =
+  | 'current-connection'
+  | 'recent-codex'
+  | 'recent-claude'
+  | 'manual-import';
+
+export interface ProfileFactSourceSnapshot {
+  id: string;
+  sourceId: ProfileBootstrapSourceId;
+  label: string;
+  snapshot: string;
+  capturedAt: number;
+}
+
+export interface ProfileFactProvenance {
+  source: ProfileFactSourceSnapshot;
+  evidenceSummary: string;
+}
 
 export interface ProfileFact {
   id: string;
@@ -24,6 +44,7 @@ export interface ProfileFact {
   createdAt: number;
   updatedAt: number;
   replacesId?: string;
+  provenance?: ProfileFactProvenance;
 }
 
 export type OperationAction =
@@ -157,12 +178,13 @@ function normalizeFact(value: unknown): ProfileFact | undefined {
     || typeof fact.subject !== 'string'
     || typeof fact.value !== 'string'
     || !['confirmed', 'candidate', 'revoked'].includes(fact.status ?? '')
-    || !['explicit', 'observed', 'external-edit', 'bootstrap-connected', 'bootstrap-imported'].includes(fact.origin ?? '')
+    || !['explicit', 'observed', 'external-edit', 'bootstrap-connected', 'bootstrap-imported', 'bootstrap-generated'].includes(fact.origin ?? '')
     || typeof fact.createdAt !== 'number'
     || typeof fact.updatedAt !== 'number'
   ) return undefined;
   const subject = normalizeButlerLearningText(fact.subject, 80);
   const text = normalizeButlerLearningText(fact.value);
+  const provenance = normalizeFactProvenance(fact.provenance);
   if (!subject || !text) return undefined;
   return {
     id: fact.id,
@@ -174,7 +196,48 @@ function normalizeFact(value: unknown): ProfileFact | undefined {
     createdAt: fact.createdAt,
     updatedAt: fact.updatedAt,
     ...(typeof fact.replacesId === 'string' ? { replacesId: fact.replacesId } : {}),
+    ...(provenance ? { provenance } : {}),
   };
+}
+
+function normalizeBootstrapSourceId(value: unknown): ProfileBootstrapSourceId | undefined {
+  return ['current-connection', 'recent-codex', 'recent-claude', 'manual-import']
+    .includes(String(value))
+    ? value as ProfileBootstrapSourceId
+    : undefined;
+}
+
+function normalizeSourceSnapshot(value: unknown): ProfileFactSourceSnapshot | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const snapshot = value as Partial<ProfileFactSourceSnapshot>;
+  const sourceId = normalizeBootstrapSourceId(snapshot.sourceId);
+  if (
+    typeof snapshot.id !== 'string'
+    || !sourceId
+    || typeof snapshot.label !== 'string'
+    || typeof snapshot.snapshot !== 'string'
+    || typeof snapshot.capturedAt !== 'number'
+  ) return undefined;
+  const label = normalizeButlerLearningText(snapshot.label, 120);
+  const normalizedSnapshot = normalizeButlerLearningText(snapshot.snapshot, 1_000);
+  if (!label || !normalizedSnapshot) return undefined;
+  return {
+    id: snapshot.id,
+    sourceId,
+    label,
+    snapshot: normalizedSnapshot,
+    capturedAt: snapshot.capturedAt,
+  };
+}
+
+function normalizeFactProvenance(value: unknown): ProfileFactProvenance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const provenance = value as Partial<ProfileFactProvenance>;
+  const source = normalizeSourceSnapshot(provenance.source);
+  if (!source || typeof provenance.evidenceSummary !== 'string') return undefined;
+  const evidenceSummary = normalizeButlerLearningText(provenance.evidenceSummary, 240);
+  if (!evidenceSummary) return undefined;
+  return { source, evidenceSummary };
 }
 
 function normalizeReceipt(value: unknown): OperationReceipt | undefined {

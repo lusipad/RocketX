@@ -1,0 +1,74 @@
+{
+  "id": "twemoji",
+  "title": "Twemoji",
+  "source": "Twitter Twemoji",
+  "license": "CC-BY-4.0",
+  "groups": [
+    {
+      "id": "common-replies",
+      "title": "常用回应",
+      "items": [
+        {
+          "id": "1f44d",
+          "title": "赞",
+          "src": "./thumbs-up.png",
+          "tags": ["thumbs-up", "like", "ok", "认可"]
+        },
+        {
+          "id": "1f64f",
+          "title": "谢谢",
+          "src": "./thanks.png",
+          "tags": ["thanks", "thank-you", "感谢"]
+        },
+        {
+          "id": "2764",
+          "title": "红心",
+          "src": "./heart.png",
+          "tags": ["heart", "love", "喜欢"]
+        },
+        {
+          "id": "1f440",
+          "title": "关注",
+          "src": "./watching.png",
+          "tags": ["watching", "eyes", "看看", "关注"]
+        }
+      ]
+    },
+    {
+      "id": "progress-signals",
+      "title": "进度状态",
+      "items": [
+        {
+          "id": "1f389",
+          "title": "庆祝",
+          "src": "./celebrate.png",
+          "tags": ["celebrate", "party", "庆祝"]
+        },
+        {
+          "id": "1f680",
+          "title": "发布",
+          "src": "./ship-it.png",
+          "tags": ["ship-it", "launch", "发布"]
+        },
+        {
+          "id": "2705",
+          "title": "完成",
+          "src": "./done.png",
+          "tags": ["done", "check", "完成"]
+        }
+      ]
+    },
+    {
+      "id": "discussion-mood",
+      "title": "讨论中",
+      "items": [
+        {
+          "id": "1f914",
+          "title": "思考",
+          "src": "./thinking.png",
+          "tags": ["thinking", "ponder", "思考"]
+        }
+      ]
+    }
+  ]
+}

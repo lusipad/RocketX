@@ -663,14 +663,24 @@ test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台
   expect(installed).toBe(true);
 });
 
-test('了解你支持从当前连接与显式粘贴资料初始化候选画像', async ({ page }) => {
+test('了解你支持显式来源选择，并展示 AI 候选的来源与证据摘要', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspace(page);
   await page.evaluate(async () => {
     const loadWorkbench = new Function('return import("/src/stores/workbench.ts")') as () => Promise<{
       useWorkbench: { setState: (state: Record<string, unknown>) => void };
     }>;
-    const { useWorkbench } = await loadWorkbench();
+    const loadSources = new Function('return import("/src/butler/extensions/learning/profileBootstrapSources.ts")') as () => Promise<{
+      setRecentCodexSourceLoader: (loader: () => Promise<Array<Record<string, unknown>>>) => () => void;
+    }>;
+    const loadAi = new Function('return import("/src/butler/extensions/learning/profileBootstrapAi.ts")') as () => Promise<{
+      setProfileBootstrapCandidateGenerator: (generator: () => Promise<Array<Record<string, unknown>>>) => () => void;
+    }>;
+    const [{ useWorkbench }, { setRecentCodexSourceLoader }, { setProfileBootstrapCandidateGenerator }] = await Promise.all([
+      loadWorkbench(),
+      loadSources(),
+      loadAi(),
+    ]);
     useWorkbench.setState({
       config: {
         adoBase: 'http://ado.example/tfs/DefaultCollection',
@@ -699,24 +709,54 @@ test('了解你支持从当前连接与显式粘贴资料初始化候选画像',
       }],
       builds: [],
     });
+    const cleanups: Array<() => void> = (window as Window & {
+      __butlerProfileBootstrapCleanup?: Array<() => void>;
+    }).__butlerProfileBootstrapCleanup ?? [];
+    cleanups.forEach((cleanup) => cleanup());
+    (window as Window & {
+      __butlerProfileBootstrapCleanup?: Array<() => void>;
+    }).__butlerProfileBootstrapCleanup = [
+      setRecentCodexSourceLoader(async () => [{
+        id: 'codex-release',
+        sourceId: 'recent-codex',
+        label: '最近 Codex · 发布风险报告',
+        snapshot: '用户：先看发布风险。助手：先给结论，再补证据。',
+        capturedAt: Date.now(),
+      }]),
+      setProfileBootstrapCandidateGenerator(async () => [{
+        kind: 'working-style',
+        subject: '回复方式',
+        value: '先给结论，再补证据',
+        provenance: {
+          source: {
+            id: 'codex-release',
+            sourceId: 'recent-codex',
+            label: '最近 Codex · 发布风险报告',
+            snapshot: '用户：先看发布风险。助手：先给结论，再补证据。',
+            capturedAt: Date.now(),
+          },
+          evidenceSummary: '最近两次 Codex 会话都先要求结论，再补证据。',
+        },
+      }]),
+    ];
   });
 
   await page.getByRole('button', { name: '我的管家', exact: true }).click();
   const profile = page.getByRole('region', { name: '用户 Profile' });
   await page.getByRole('tab', { name: '了解你' }).click();
   await profile.getByRole('button', { name: '初始化了解' }).click();
-  await expect(profile).toContainText('Rocket.Chat');
-  await expect(profile).toContainText('Codex、Claude 等外部资料只会通过你粘贴或导入的文本进入待确认');
-  await profile.getByRole('textbox', { name: '初始化资料' })
-    .fill('工作方式 · 回复方式：先给结论，再补证据');
+  await expect(profile.getByLabel('当前连接')).toBeChecked();
+  await expect(profile.getByLabel('最近 Codex')).not.toBeChecked();
+  await expect(profile.getByLabel('最近 Claude')).not.toBeChecked();
+  await profile.getByLabel('最近 Codex').check();
+  await expect(profile).toContainText('只会在你点击“生成候选”时读取所选来源最近 14 天、最多 20 段只读摘要');
+  await profile.getByRole('textbox', { name: '补充摘要' })
+    .fill('Claude 最近总结：非紧急情况先异步整理，再统一回复。');
   await profile.getByRole('button', { name: '生成候选' }).click();
 
-  await expect(profile).toContainText('Rocket.Chat 身份');
-  await expect(profile).toContainText('Azure DevOps 账号：lus');
-  await expect(profile).toContainText('当前工作项目：RocketX');
   await expect(profile).toContainText('回复方式：先给结论，再补证据');
-  await expect(profile).toContainText('来自当前连接');
-  await expect(profile).toContainText('来自导入/粘贴资料');
+  await expect(profile).toContainText('最近 Codex · 发布风险报告');
+  await expect(profile).toContainText('证据：最近两次 Codex 会话都先要求结论，再补证据。');
 });
 
 test('晨报人格与技能要求真实链接、标题和判断优先', async ({ page }) => {

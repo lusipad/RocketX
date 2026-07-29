@@ -1087,6 +1087,50 @@ test('文字和图片确认后作为同一条上传消息发送（issue #155）'
   expect(pageErrors).toEqual([]);
 });
 
+test('主 Composer 贴纸首次打开后动态加载，并沿用现有上传确认链路发送（issue #250）', async ({ page }) => {
+  const { uploadedMessages, pageErrors } = await bootAuthenticated(page);
+  const stickerRequests: string[] = [];
+  const dynamicImports: string[] = [];
+  page.on('request', (request) => {
+    const url = request.url();
+    const pathname = new URL(url).pathname;
+    if (pathname.includes('/stickers/')) stickerRequests.push(pathname);
+    if (url.includes('StickerPicker.tsx') || url.includes('stickerLoader.ts')) dynamicImports.push(url);
+  });
+
+  await conversation(page, 'General').click();
+  const composer = page.getByPlaceholder(/输入消息/);
+  await composer.fill('贴纸说明');
+  expect(stickerRequests).toEqual([]);
+  expect(dynamicImports).toEqual([]);
+
+  await page.getByRole('button', { name: '贴纸' }).click();
+  const search = page.getByPlaceholder('搜索贴纸');
+  await expect(search).toBeVisible();
+  await expect.poll(() => dynamicImports.some((url) => url.includes('StickerPicker.tsx'))).toBe(true);
+  await expect.poll(() => stickerRequests.some((path) => path.endsWith('/stickers/index.json'))).toBe(true);
+  await expect(page.locator('[data-sticker-group="常用回应"]').first()).toBeVisible();
+  await expect(page.locator('[data-sticker-group="进度状态"]').first()).toBeVisible();
+
+  await search.fill('赞');
+  const sticker = page.getByRole('button', { name: '发送贴纸 赞' });
+  await expect(sticker).toBeVisible();
+  await sticker.click();
+
+  const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
+  await expect(dialog.getByText('贴纸说明', { exact: true })).toBeVisible();
+  await expect(dialog.getByAltText('thumbs-up.png')).toBeVisible();
+  await dialog.getByRole('button', { name: '发送（1）' }).click();
+
+  await expect.poll(() => uploadedMessages.length).toBe(1);
+  expect(uploadedMessages[0]?.msg).toBe('贴纸说明');
+
+  await page.getByRole('button', { name: '贴纸' }).click();
+  await expect(page.getByText('最近使用', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发送贴纸 赞' }).first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126）', async ({ page }) => {
   const { sentMessages, pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();

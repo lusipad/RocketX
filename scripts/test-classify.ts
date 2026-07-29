@@ -51,11 +51,14 @@ async function main(): Promise<void> {
   console.log(`  服务器上：${open.length} 个会话，其中 t='d' 的 ${dms.length} 个`);
 
   check(
-    '所有 1对1 单聊的成员数确实是 2',
+    '所有普通单聊有 2 名成员，给自己发消息的单聊只有当前用户',
     oneOnOne.every((s) => {
       const room = roomMap[s.rid];
       const n = room?.uids?.length ?? room?.usersCount;
-      return n === undefined || n === 2;
+      const isSelfDm =
+        room?.uids?.length === 1
+        && room.uids[0] === rest.userId;
+      return n === undefined || n === 2 || isSelfDm;
     }),
     `${oneOnOne.length} 个：${oneOnOne.map((s) => s.fname || s.name).join('、') || '无'}`,
   );

@@ -34,9 +34,7 @@ export default function ButlerInlineExchange({
       {answer ? (
         <div className="mt-1.5 text-sm leading-6 text-ink">
           <ButlerSources sources={answer.sources} text={answer.text}>
-            {(renderLink) => answer.text.startsWith('📌')
-              ? answer.text
-              : renderMarkdown(answer.text, undefined, renderLink)}
+            {(renderLink) => renderMarkdown(answer.text, undefined, renderLink)}
           </ButlerSources>
         </div>
       ) : running || activity ? (

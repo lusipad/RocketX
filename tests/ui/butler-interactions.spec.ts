@@ -183,6 +183,46 @@ async function seedButlerCitationList(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: '最近讨论' })).toBeVisible();
 }
 
+async function seedRoomButlerPinnedMarkdownAnswer(page: Page): Promise<string> {
+  const sourceUrl = await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await load();
+    const url = `${window.location.origin}/channel/General?msg=general-release`;
+    useButler.setState({
+      lines: [
+        { id: 'room-pinned-question', role: 'user', text: '发布前我该看什么？' },
+        {
+          id: 'room-pinned-answer',
+          role: 'assistant',
+          text: `📌 **发布结论** 先看[检查清单](${url})。[来源](${url})`,
+          sources: [{
+            kind: 'message',
+            id: 'general-release',
+            rid: 'room-general',
+            mid: 'general-release',
+            webUrl: url,
+            label: 'General · Release checklist ready',
+          }],
+        },
+      ],
+      context: {
+        kind: 'room',
+        label: 'General',
+        detail: '当前 Rocket.Chat 房间',
+        sources: [{ kind: 'room', id: 'room-general', rid: 'room-general', label: 'General' }],
+      },
+      actionDraft: null,
+      running: false,
+      error: null,
+    });
+    return url;
+  });
+  await expect(page.getByLabel('纸上问答')).toContainText('发布结论');
+  return sourceUrl;
+}
+
 async function captureButlerAsks(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
@@ -699,6 +739,33 @@ test('回答引用默认折叠，角标可展开来源并返回原消息', async
   await page.getByTitle('打开来源：General · Release checklist ready').click();
 
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
+  expect(sentMessages).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('房间管家里的 📌 回执保留 markdown、来源角标和可点击链接', async ({ page }) => {
+  const { sentMessages, pageErrors } = await openRoomButlerFromGeneral(page);
+  const sourceUrl = await seedRoomButlerPinnedMarkdownAnswer(page);
+
+  const exchange = page.getByLabel('纸上问答');
+  await expect(exchange.locator('strong', { hasText: '发布结论' })).toBeVisible();
+
+  const references = exchange.getByRole('group', { name: '回答引用' });
+  await expect(references.getByRole('button', { name: '查看参考来源 1' })).toBeVisible();
+
+  const link = exchange.getByRole('link', { name: '检查清单' });
+  await expect(link).toHaveAttribute('href', sourceUrl);
+  const [popup] = await Promise.all([
+    page.waitForEvent('popup'),
+    link.click(),
+  ]);
+  await popup.waitForLoadState('domcontentloaded');
+  expect(popup.url()).toContain('/channel/General?msg=general-release');
+  await popup.close();
+
+  await references.getByRole('button', { name: '查看参考来源 1' }).click();
+  await expect(references.getByTitle('打开来源：General · Release checklist ready')).toBeVisible();
+  await expect(references.getByTitle('打开来源：General · Release checklist ready')).toBeFocused();
   expect(sentMessages).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
