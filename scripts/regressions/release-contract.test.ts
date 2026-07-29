@@ -127,7 +127,7 @@ test('发布文档与当前三平台 Latest 目标一致', async () => {
   assert.match(releaseGuide, new RegExp(`current release target is \`v${escapedVersion}\``));
   assert.match(releaseGuide, /Windows x64, macOS universal, and Linux x64/);
   assert.match(releaseGuide, /three-platform Release as GitHub Latest/);
-  assert.match(compatibility, /Starting with `v0\.34\.1`/);
+  assert.match(compatibility, new RegExp('Starting with `v' + escapedVersion + '`'));
   assert.match(compatibility, /not Apple-notarized/);
   assert.match(changelog, new RegExp(`^## v${escapedVersion} - `, 'm'));
   assert.match(changelog, /恢复 Windows、macOS 和 Linux 三平台交付/);
