@@ -240,6 +240,24 @@ body {
     color 0.15s ease;
 }
 
+:root[data-runtime-mode='performance'] {
+  scroll-behavior: auto;
+}
+
+:root[data-runtime-mode='performance'] *,
+:root[data-runtime-mode='performance'] *::before,
+:root[data-runtime-mode='performance'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+
+:root[data-runtime-mode='performance'] .animate-spin {
+  animation-duration: 0.8s !important;
+  animation-iteration-count: infinite !important;
+}
+
 .rocketx-math-display {
   margin: 0.25rem 0;
   overflow-x: auto;

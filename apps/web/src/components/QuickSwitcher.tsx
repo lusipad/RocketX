@@ -40,6 +40,7 @@ import {
   type SearchTimeRange,
 } from '../lib/searchFilters';
 import { focusComposerInput } from '../lib/focus';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import { useButler } from '../stores/butler';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
@@ -713,7 +714,7 @@ export default function QuickSwitcher({
             }
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
-          {!!keyword.trim() && (
+          {!!keyword.trim() && runtimeFeatures().butler && (
             <button
               title="把这个问题交给管家，由我查找相关信息后回答"
               onClick={askButlerFromSearch}

@@ -1582,6 +1582,7 @@ test('每日整理失败或运行时不会被画成空纸', async ({ page }) => 
 test('自动整理结果和超时提醒直接回到纸面，提醒能跳回对应房间', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByRole('navigation', { name: '管家工作视图' })).toBeVisible();
   await seedAutomationPaper(page);
 
   const automation = page.getByRole('region', { name: '消息与提醒' });

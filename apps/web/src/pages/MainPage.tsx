@@ -46,6 +46,7 @@ import {
   COMPACT_CONVERSATION_WIDTH,
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import { useCodexRuntime } from '../stores/codexRuntime';
 import { useToday } from '../stores/today';
 
@@ -101,7 +102,7 @@ export default function MainPage() {
   useEffect(() => {
     void init().then(() => useToday.getState().refreshMentions());
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
-    void useCodexRuntime.getState().probe();
+    if (runtimeFeatures().runtimeProbes) void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);
 
   useEffect(() => {

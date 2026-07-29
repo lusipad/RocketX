@@ -62,8 +62,10 @@ function fileNameFromUrl(path: string, fallbackId: string): string {
 export function inferStickerMimeType(path: string): string | null {
   const normalized = path.split('?')[0].toLowerCase();
   if (normalized.endsWith('.png')) return 'image/png';
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
   if (normalized.endsWith('.webp')) return 'image/webp';
   if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.bmp')) return 'image/bmp';
   return null;
 }
 

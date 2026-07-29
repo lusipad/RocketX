@@ -24,7 +24,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages. Starting with `v0.35.0`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages. Starting with `v0.36.0`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
 
 ## Required and optional server settings
 

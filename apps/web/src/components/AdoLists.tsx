@@ -33,6 +33,7 @@ import { toast } from '../stores/toast';
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
 import { DEFAULT_WORK_ITEM_STATE_FILTER, useUI } from '../stores/ui';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 export const TYPE_COLORS: Record<string, string> = {
@@ -104,6 +105,7 @@ function ListHeader({
 
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
+  const features = runtimeFeatures();
   const [keyword, setKeyword] = useState('');
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   const [discussionItem, setDiscussionItem] = useState<WorkItem | null>(null);
@@ -242,15 +244,17 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 </span>
                 <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
               </a>
-              <button
-                type="button"
-                onClick={() => setDiscussionItem(w)}
-                title={`为工作项 #${w.id} 创建讨论`}
-                aria-label={`为工作项 #${w.id} 创建讨论`}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
-              >
-                <MessageSquarePlus size={14} />
-              </button>
+              {features.sharedAgent ? (
+                <button
+                  type="button"
+                  onClick={() => setDiscussionItem(w)}
+                  title={`为工作项 #${w.id} 创建讨论`}
+                  aria-label={`为工作项 #${w.id} 创建讨论`}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                >
+                  <MessageSquarePlus size={14} />
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setCalendarItem(w)}
@@ -267,7 +271,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
           <EmptyRow text={items.length ? '没有匹配的工作项' : '当前没有分配给你的未关闭工作项'} />
         )}
       </div>
-      {discussionItem ? (
+      {features.sharedAgent && discussionItem ? (
         <CreateWorkItemDiscussionDialog item={discussionItem} onClose={() => setDiscussionItem(null)} />
       ) : null}
       {calendarItem ? (
@@ -319,6 +323,7 @@ function PrRow({
   comparing: boolean;
 }) {
   const approved = isApproved(pr);
+  const features = runtimeFeatures();
   return (
     // 外层由 <a> 改为 div（照 WorkItemList 的写法）：整行是链接时，
     // 行内按钮的点击会冒泡去开外链，加按钮前必须先拆开。
@@ -378,15 +383,17 @@ function PrRow({
       >
         <GitCompare size={14} />
       </button>
-      <button
-        type="button"
-        onClick={() => onAsk(pr)}
-        title="让管家看看这个 PR"
-        aria-label="让管家看看这个 PR"
-        className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
-      >
-        <Bot size={14} />
-      </button>
+      {features.butler ? (
+        <button
+          type="button"
+          onClick={() => onAsk(pr)}
+          title="让管家看看这个 PR"
+          aria-label="让管家看看这个 PR"
+          className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        >
+          <Bot size={14} />
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() => onSchedule(pr)}

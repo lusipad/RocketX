@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ButlerWorkspaceView } from '../lib/butlerWorkspace';
+import { runtimeFeatures } from '../lib/runtimeMode';
 
 export type ModuleKey = string;
 
@@ -56,7 +57,8 @@ export function readPersistedModule(storage: ModuleStorage | undefined = browser
     const state = record?.state && typeof record.state === 'object'
       ? record.state as Record<string, unknown>
       : undefined;
-    return migratePersistedModule(record?.module ?? state?.module ?? parsed);
+    const module = migratePersistedModule(record?.module ?? state?.module ?? parsed);
+    return !runtimeFeatures().ai && (module === 'butler-view' || module === 'codex') ? 'messages' : module;
   } catch {
     return 'messages';
   }
@@ -194,6 +196,7 @@ export const useUI = create<UIState>((set) => ({
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
   openButlerConversation: () => {
+    if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',
@@ -201,6 +204,7 @@ export const useUI = create<UIState>((set) => ({
     });
   },
   openButlerManage: () => {
+    if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',
@@ -208,6 +212,7 @@ export const useUI = create<UIState>((set) => ({
     });
   },
   setButlerView: (view) => {
+    if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',
@@ -216,6 +221,7 @@ export const useUI = create<UIState>((set) => ({
   },
   setButlerPaperConversation: (conversation) => set({ butlerPaperConversation: conversation }),
   openButlerPaper: (date) => {
+    if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',
