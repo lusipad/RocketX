@@ -72,27 +72,153 @@ async function installFullTauriMock(page: Page) {
     let nextRid = 1;
     const requests = new Map<number, { method: string; url: string; headers: string[][]; data?: number[] }>();
     const responses = new Map<number, { bytes: number[]; read: boolean }>();
-    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const normalizeFsPath = (value: string) => value.replace(/\//g, '\\').replace(/\\+/g, '\\').replace(/\\$/, '');
+    const parentDir = (value: string) => {
+      const normalized = normalizeFsPath(value);
+      const index = normalized.lastIndexOf('\\');
+      return index >= 0 ? normalized.slice(0, index) : '';
+    };
+    const baseName = (value: string) => {
+      const normalized = normalizeFsPath(value);
+      const index = normalized.lastIndexOf('\\');
+      return index >= 0 ? normalized.slice(index + 1) : normalized;
+    };
+    const fileBytes = new Map<string, number[]>();
+    const directories = new Set<string>();
+    const ensureDir = (value: string) => {
+      const normalized = normalizeFsPath(value);
+      if (!normalized) return;
+      directories.add(normalized);
+      const parent = parentDir(normalized);
+      if (parent && parent !== normalized) ensureDir(parent);
+    };
+    const writeFsFile = (path: string, bytes: number[]) => {
+      const normalized = normalizeFsPath(path);
+      fileBytes.set(normalized, [...bytes]);
+      ensureDir(parentDir(normalized));
+    };
+    const listDir = (path: string) => {
+      const normalized = normalizeFsPath(path);
+      const seen = new Map<string, { name: string; isFile: boolean; isDirectory: boolean; path: string }>();
+      for (const [filePath] of fileBytes) {
+        if (parentDir(filePath) !== normalized) continue;
+        const name = baseName(filePath);
+        seen.set(name, { name, isFile: true, isDirectory: false, path: filePath });
+      }
+      for (const directoryPath of directories) {
+        if (!directoryPath || directoryPath === normalized || parentDir(directoryPath) !== normalized) continue;
+        const name = baseName(directoryPath);
+        if (!seen.has(name)) {
+          seen.set(name, { name, isFile: false, isDirectory: true, path: directoryPath });
+        }
+      }
+      return [...seen.values()];
+    };
+    const calls: Array<{ command: string; args?: unknown; options?: Record<string, unknown> }> = [];
     (window as unknown as { __tauriCalls: typeof calls }).__tauriCalls = calls;
+    (window as unknown as {
+      __setMockFsFile?: (path: string, bytes: number[]) => void;
+      __setMockFsDirectory?: (path: string) => void;
+      __dialogOpenResponses?: Array<string | string[] | null>;
+      __mockFsFiles?: Record<string, number[]>;
+      __mockFsDirectories?: string[];
+    }).__setMockFsFile = writeFsFile;
+    (window as unknown as {
+      __setMockFsFile?: (path: string, bytes: number[]) => void;
+      __setMockFsDirectory?: (path: string) => void;
+      __dialogOpenResponses?: Array<string | string[] | null>;
+      __mockFsFiles?: Record<string, number[]>;
+      __mockFsDirectories?: string[];
+    }).__setMockFsDirectory = ensureDir;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
-        invoke: async (command: string, args?: Record<string, any>) => {
-          calls.push({ command, args });
-          if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
+        invoke: async (command: string, args?: unknown, options?: Record<string, any>) => {
+          calls.push({ command, args, options });
+          const invokeArgs = (args && typeof args === 'object' && !ArrayBuffer.isView(args) && !Array.isArray(args))
+            ? (args as Record<string, any>)
+            : undefined;
+          if (command === 'allow_http_origin') return new URL(String(invokeArgs?.origin)).origin;
+          if (command === 'plugin:dialog|open') {
+            const queue = (window as unknown as { __dialogOpenResponses?: Array<string | string[] | null> }).__dialogOpenResponses ?? [];
+            return queue.length > 0 ? queue.shift() ?? null : null;
+          }
           if (command === 'plugin:path|resolve_directory') return 'C:\\Users\\tester\\AppData\\Roaming\\com.lusipad.rocketx';
-          if (command === 'plugin:path|join') return (args?.paths ?? []).join('\\');
+          if (command === 'plugin:path|join') return (invokeArgs?.paths ?? []).join('\\');
           if (command === 'plugin:fs|mkdir') return null;
+          if (command === 'plugin:fs|exists') {
+            const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            return fileBytes.has(path) || directories.has(path);
+          }
           if (command === 'plugin:fs|remove') {
             if ((window as unknown as { __failArchiveRemove?: boolean }).__failArchiveRemove) {
               throw new Error('mock remove failed');
             }
+            const target = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            fileBytes.delete(target);
+            directories.delete(target);
             return null;
           }
           if (command === 'plugin:fs|open') return 91;
-          if (command === 'plugin:fs|write') return args?.data?.byteLength ?? args?.data?.length ?? 0;
+          if (command === 'plugin:fs|write') return invokeArgs?.data?.byteLength ?? invokeArgs?.data?.length ?? 0;
+          if (command === 'plugin:fs|write_file') {
+            const path = decodeURIComponent(String(options?.headers?.path ?? invokeArgs?.headers?.path ?? ''));
+            const data = Array.isArray(invokeArgs?.body)
+              ? invokeArgs.body
+              : args instanceof Uint8Array
+                ? [...args]
+                : args instanceof ArrayBuffer
+                  ? [...new Uint8Array(args)]
+                : Array.isArray(args)
+                  ? args
+                  : [];
+            writeFsFile(path, data);
+            return null;
+          }
+          if (command === 'plugin:fs|copy_file') {
+            const fromPath = normalizeFsPath(String(invokeArgs?.fromPath ?? ''));
+            const toPath = normalizeFsPath(String(invokeArgs?.toPath ?? ''));
+            const existing = fileBytes.get(fromPath);
+            if (!existing) throw new Error(`mock file not found: ${fromPath}`);
+            writeFsFile(toPath, existing);
+            return null;
+          }
+          if (command === 'plugin:fs|read_file') {
+            const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            const bytes = fileBytes.get(path);
+            if (!bytes) throw new Error(`mock file not found: ${path}`);
+            return bytes;
+          }
+          if (command === 'plugin:fs|read_text_file') {
+            const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            const bytes = fileBytes.get(path);
+            if (!bytes) throw new Error(`mock file not found: ${path}`);
+            return bytes;
+          }
+          if (command === 'plugin:fs|read_dir') {
+            const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            return listDir(path);
+          }
           if (command === 'plugin:resources|close') return null;
           if (command === 'plugin:fs|stat') {
+            const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
+            const bytes = fileBytes.get(path);
+            if (bytes) {
+              return {
+                isFile: true, isDirectory: false, isSymlink: false, size: bytes.length,
+                mtime: null, atime: null, birthtime: null, readonly: false,
+                fileAttributes: null, dev: null, ino: null, mode: null, nlink: null,
+                uid: null, gid: null, rdev: null, blksize: null, blocks: null,
+              };
+            }
+            if (directories.has(path)) {
+              return {
+                isFile: false, isDirectory: true, isSymlink: false, size: 0,
+                mtime: null, atime: null, birthtime: null, readonly: false,
+                fileAttributes: null, dev: null, ino: null, mode: null, nlink: null,
+                uid: null, gid: null, rdev: null, blksize: null, blocks: null,
+              };
+            }
             return {
               isFile: true, isDirectory: false, isSymlink: false, size: 256,
               mtime: null, atime: null, birthtime: null, readonly: false,
@@ -1177,6 +1303,57 @@ test('主 Composer 贴纸首次打开后动态加载，并沿用现有上传确�
   await page.getByRole('button', { name: '贴纸' }).click();
   await expect(page.getByText('最近使用', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '发送贴纸 赞' }).first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('主 Composer 贴纸支持导入本机图片到个人贴纸库并沿用现有上传确认链路发送（issue #265）', async ({ page }) => {
+  await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x01, 0x02, 0x03, 0x04];
+    (window as unknown as {
+      __dialogOpenResponses?: Array<string | string[] | null>;
+      __setMockFsFile?: (path: string, bytes: number[]) => void;
+    }).__dialogOpenResponses = ['C:\\Import\\wave.png'];
+    (window as unknown as {
+      __dialogOpenResponses?: Array<string | string[] | null>;
+      __setMockFsFile?: (path: string, bytes: number[]) => void;
+    }).__setMockFsFile?.('C:\\Import\\wave.png', png);
+  });
+  const { uploadedMessages, pageErrors } = await bootAuthenticated(page);
+
+  await conversation(page, 'General').click();
+  await page.getByPlaceholder(/输入消息/).fill('个人贴纸说明');
+  await page.getByRole('button', { name: '贴纸' }).click();
+  await expect(page.getByRole('button', { name: '导入图片' })).toBeVisible();
+  await page.getByRole('button', { name: '导入图片' }).click();
+  await expect(page.locator('[data-sticker-group="我的贴纸"]').first()).toBeVisible();
+
+  const personalSticker = page.getByRole('button', { name: '发送贴纸 wave' });
+  await expect(personalSticker).toBeVisible();
+  await personalSticker.click();
+
+  const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
+  await expect(dialog.getByText('个人贴纸说明', { exact: true })).toBeVisible();
+  await expect(dialog.getByAltText('wave.png')).toBeVisible();
+  await dialog.getByRole('button', { name: '发送（1）' }).click();
+
+  await expect.poll(() => uploadedMessages.length).toBe(1);
+  expect(uploadedMessages[0]?.msg).toBe('个人贴纸说明');
+  expect(pageErrors).toEqual([]);
+});
+
+test('收到的图片消息可右键收藏到个人贴纸库并在贴纸面板复用（issue #265）', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /OCR 示例\.svg/ }).last().click({ button: 'right' });
+  await expect(page.getByRole('button', { name: '收藏到贴纸库' })).toBeVisible();
+  await page.getByRole('button', { name: '收藏到贴纸库' }).click();
+
+  await page.getByRole('button', { name: '贴纸' }).click();
+  await expect(page.locator('[data-sticker-group="我的贴纸"]').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '发送贴纸 OCR 示例' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

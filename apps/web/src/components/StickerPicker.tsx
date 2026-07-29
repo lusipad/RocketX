@@ -6,6 +6,15 @@ import {
   stickerEntryKey,
 } from '../lib/stickerLoader';
 import type { StickerCatalog, StickerEntry } from '../lib/stickerManifest';
+import {
+  describeStickerImport,
+  importStickerDirectoryFromDialog,
+  importStickerFilesFromDialog,
+  loadPersonalStickerCatalog,
+  mergeStickerCatalogs,
+} from '../lib/stickerLibrary';
+import { isTauri } from '../lib/client';
+import { toast } from '../stores/toast';
 
 const RECENT_KEY = 'rcx-recent-stickers';
 
@@ -52,11 +61,20 @@ export default function StickerPicker({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [recentIds, setRecentIds] = useState<string[]>(() => loadRecentStickerIds());
+  const [importing, setImporting] = useState<'files' | 'directory' | null>(null);
+
+  const refreshCatalog = async (): Promise<StickerCatalog> => {
+    const [builtin, personal] = await Promise.all([
+      loadStickerCatalog(),
+      loadPersonalStickerCatalog(),
+    ]);
+    return mergeStickerCatalogs(personal, builtin);
+  };
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    void loadStickerCatalog()
+    void refreshCatalog()
       .then((nextCatalog) => {
         if (!alive) return;
         setCatalog(nextCatalog);
@@ -104,6 +122,26 @@ export default function StickerPicker({
     onPick(sticker);
   };
 
+  const importFromDialog = async (kind: 'files' | 'directory') => {
+    setImporting(kind);
+    try {
+      const report = kind === 'files'
+        ? await importStickerFilesFromDialog()
+        : await importStickerDirectoryFromDialog();
+      if (report.imported > 0) {
+        setCatalog(await refreshCatalog());
+        setKeyword('');
+      }
+      if (report.total > 0) {
+        toast.success(describeStickerImport(report));
+      }
+    } catch (error) {
+      toast.error(error, kind === 'files' ? '导入图片失败' : '导入目录失败');
+    } finally {
+      setImporting(null);
+    }
+  };
+
   return (
     <div
       ref={ref}
@@ -119,6 +157,28 @@ export default function StickerPicker({
           className="w-full bg-transparent text-xs outline-none placeholder:text-ink-3"
         />
       </div>
+      {isTauri && (
+        <div className="mb-2 flex gap-1.5">
+          <button
+            type="button"
+            aria-label="导入图片"
+            disabled={importing !== null}
+            onClick={() => void importFromDialog('files')}
+            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-[11px] text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+          >
+            {importing === 'files' ? '导入中…' : '导入图片'}
+          </button>
+          <button
+            type="button"
+            aria-label="导入目录"
+            disabled={importing !== null}
+            onClick={() => void importFromDialog('directory')}
+            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-[11px] text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+          >
+            {importing === 'directory' ? '导入中…' : '导入目录'}
+          </button>
+        </div>
+      )}
 
       {!keyword && recent.length > 0 && (
         <>

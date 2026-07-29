@@ -75,6 +75,11 @@ import {
   type WorkItemPrefill,
 } from '../kernel/ai/features/message-extraction';
 import { parseAgentSessionCard, stripAgentSessionMarker } from '../agent/card';
+import {
+  canCollectMessageSticker,
+  collectStickerFromMessage,
+  describeStickerImport,
+} from '../lib/stickerLibrary';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -689,6 +694,17 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     toast.success('消息链接已复制');
   };
 
+  const collectSticker = async () => {
+    try {
+      const report = await collectStickerFromMessage(message);
+      if (report.total > 0) toast.success(describeStickerImport(report));
+    } catch (error) {
+      toast.error(error, '收藏贴纸失败');
+    }
+  };
+
+  const collectibleSticker = canCollectMessageSticker(message);
+
   const menuItems: MenuItem[] = [
     { label: '回复', icon: Reply, onClick: () => setReplyTo(message) },
     ...(!inThread
@@ -713,6 +729,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       : []),
     { label: copied ? '已复制' : '复制', icon: Copy, onClick: () => void copy() },
     { label: '复制消息链接', icon: Link2, onClick: copyLink },
+    ...(collectibleSticker
+      ? [{ label: '收藏到贴纸库', icon: SmilePlus, onClick: () => void collectSticker() }]
+      : []),
     {
       label: inTodo ? '已在待办中' : '标记为待办',
       icon: ListTodo,
