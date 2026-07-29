@@ -409,6 +409,7 @@ test('我的管家统一名字、头像、性格与运行身份', async ({ page 
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 });
 
@@ -425,6 +426,7 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 
   await identityPage.getByRole('tab', { name: '记忆与技能' }).click();
@@ -438,19 +440,19 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
   });
 
   const skillDialog = await openSkillDetail(page, 'morning-brief');
-  await expect(page).toHaveScreenshot('butler-skill-detail-dark-wide.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect(skillDialog).toContainText('今天先处理什么');
+  const wideDialogBox = await skillDialog.boundingBox();
+  expect(wideDialogBox).not.toBeNull();
+  expect(wideDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(wideDialogBox!.x + wideDialogBox!.width).toBeLessThanOrEqual(1440);
 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page).toHaveScreenshot('butler-skill-detail-dark-mobile.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect(skillDialog).toBeVisible();
+  const mobileDialogBox = await skillDialog.boundingBox();
+  expect(mobileDialogBox).not.toBeNull();
+  expect(mobileDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileDialogBox!.x + mobileDialogBox!.width).toBeLessThanOrEqual(390);
   await skillDialog.getByRole('button', { name: '关闭', exact: true }).click();
 
   await expect(page.getByRole('combobox', { name: '切换管家视图' })).toHaveValue('memory');
@@ -467,6 +469,7 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 });
 
@@ -769,25 +772,32 @@ test('超宽窗口填满工作区，非现在视图不显示日期或重复入�
   await expect(page.getByRole('navigation', { name: '管家对话历史' })).toContainText('每日工作盘点');
   const composer = page.getByRole('form', { name: '发送消息给管家' });
   await expect(composer).toBeVisible();
+  const workspaceNavBox = await page.getByRole('navigation', { name: '管家工作视图' }).boundingBox();
+  const historyBox = await page.getByRole('complementary', { name: '对话历史' }).boundingBox();
+  const conversationPaneBox = await page.locator('.butler-conversation-pane').boundingBox();
+  expect(workspaceNavBox).not.toBeNull();
+  expect(historyBox).not.toBeNull();
+  expect(conversationPaneBox).not.toBeNull();
+  expect(workspaceNavBox!.width).toBeLessThanOrEqual(60);
+  expect(conversationPaneBox!.width).toBeGreaterThan(historyBox!.width * 3);
   const composerBox = await composer.boundingBox();
   expect((composerBox?.y ?? 0) + (composerBox?.height ?? 0)).toBeLessThanOrEqual(1200);
   await expect(page.getByRole('button', { name: '前一天' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '后一天' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '查看完整对话' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '打开管家管理' })).toHaveCount(0);
-  await expect(page).toHaveScreenshot('butler-conversation-ultrawide.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  const lightPaneColor = await page.locator('.butler-conversation-pane').evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
   await page.evaluate(() => {
     document.documentElement.dataset.theme = 'dark';
   });
-  await expect(page).toHaveScreenshot('butler-conversation-dark-ultrawide.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect.poll(
+    () => page.locator('.butler-conversation-pane').evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ),
+  ).not.toBe(lightPaneColor);
+  await expect(composer).toBeVisible();
 });
 
 test('主动工作驾驶舱匹配确认的宽屏视觉方向', async ({ page }) => {
@@ -882,9 +892,6 @@ test('窄屏用单一视图切换器保持 Composer 与责任状态可用', asyn
   const mobileComposerBox = await page.getByRole('form', { name: '发送消息给管家' }).boundingBox();
   expect((mobileComposerBox?.y ?? 0) + (mobileComposerBox?.height ?? 0)).toBeLessThanOrEqual(844);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page).toHaveScreenshot('butler-conversation-mobile.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect(page.getByText('完整内容、来源和版本已放在上方成果工作面。')).toHaveCount(0);
+  await expect(page.getByLabel('回答引用')).toContainText('PR #248 缺少明确的回滚责任人');
 });

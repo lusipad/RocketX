@@ -2109,15 +2109,18 @@ mod tests {
         exec_optional_args_for_help, find_program, first_existing_program, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
         parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
-        resolve_codex_from_candidates_with_probe, resolve_pwsh_program_from_finder,
-        resolve_update_package, run_butler_azure_devops_server_read,
-        run_butler_azure_devops_server_read_with_program, safe_attachment_path,
+        resolve_codex_from_candidates_with_probe, resolve_update_package,
+        run_butler_azure_devops_server_read, safe_attachment_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, BundledSkillInstallResult, BundledSkillOwnership,
         ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus, CodexProcessInfo,
         CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_HOST_ADAPTER,
         CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS,
         UPDATER_PUBLIC_KEY,
+    };
+    #[cfg(windows)]
+    use super::{
+        resolve_pwsh_program_from_finder, run_butler_azure_devops_server_read_with_program,
     };
     use serde_json::json;
     #[cfg(windows)]
