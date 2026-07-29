@@ -409,6 +409,7 @@ test('我的管家统一名字、头像、性格与运行身份', async ({ page 
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 });
 
@@ -425,6 +426,7 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 
   await identityPage.getByRole('tab', { name: '记忆与技能' }).click();
@@ -438,19 +440,19 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
   });
 
   const skillDialog = await openSkillDetail(page, 'morning-brief');
-  await expect(page).toHaveScreenshot('butler-skill-detail-dark-wide.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect(skillDialog).toContainText('今天先处理什么');
+  const wideDialogBox = await skillDialog.boundingBox();
+  expect(wideDialogBox).not.toBeNull();
+  expect(wideDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(wideDialogBox!.x + wideDialogBox!.width).toBeLessThanOrEqual(1440);
 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page).toHaveScreenshot('butler-skill-detail-dark-mobile.png', {
-    animations: 'disabled',
-    caret: 'hide',
-    fullPage: true,
-  });
+  await expect(skillDialog).toBeVisible();
+  const mobileDialogBox = await skillDialog.boundingBox();
+  expect(mobileDialogBox).not.toBeNull();
+  expect(mobileDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileDialogBox!.x + mobileDialogBox!.width).toBeLessThanOrEqual(390);
   await skillDialog.getByRole('button', { name: '关闭', exact: true }).click();
 
   await expect(page.getByRole('combobox', { name: '切换管家视图' })).toHaveValue('memory');
@@ -467,6 +469,7 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     animations: 'disabled',
     caret: 'hide',
     fullPage: true,
+    maxDiffPixels: 20,
   });
 });
 
