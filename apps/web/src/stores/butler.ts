@@ -120,6 +120,11 @@ export interface ButlerRoomContext {
 
 export type ButlerAskContext = ButlerRoomContext | ButlerSurfaceContext;
 
+export interface ButlerSessionOrigin {
+  rid: string;
+  roomName: string;
+}
+
 export interface ButlerSessionSummary {
   id: string;
   title: string;
@@ -127,6 +132,7 @@ export interface ButlerSessionSummary {
   updatedAt: number;
   /** 「上回说到」预览：该会话最后一条用户消息（截断），无真实提问时缺省 */
   lastAsk?: string;
+  origin?: ButlerSessionOrigin;
 }
 
 export interface ButlerSessionRecap {
@@ -225,6 +231,8 @@ export interface ButlerState {
   stop: () => Promise<void>;
   /** 新对话：保留当前 session 并创建一个独立 session。 */
   newConversation: () => Promise<void>;
+  openRoomConversation: (room: ButlerRoomContext) => Promise<void>;
+  openStandaloneConversation: () => Promise<void>;
   switchSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   /** 删除会话：删活动会话时切到最近的其他会话，没有则新建默认会话；workflow 会话不可删。 */
@@ -257,6 +265,7 @@ interface PersistedButlerSession {
   title: string;
   createdAt: number;
   updatedAt: number;
+  origin?: ButlerSessionOrigin;
   lines: ButlerLine[];
   history: AiMessage[];
   codexThread?: ResidentCodexThreadSnapshot;
@@ -362,6 +371,17 @@ function limitedSessionTitle(value: string): string {
     : value;
 }
 
+function sessionTitlePrefix(
+  origin: ButlerSessionOrigin | undefined,
+  lines: readonly ButlerLine[],
+): string | undefined {
+  if (origin?.rid) return origin.roomName.trim();
+  return lines
+    .flatMap((item) => item.sources ?? [])
+    .find((source) => source.kind === 'room')
+    ?.label.trim();
+}
+
 /**
  * 占位标题只在遇到首个有效问题时自动替换；任何非占位标题都视为用户选择，不再覆盖。
  * 房间来源来自提问行的可信 context，而不是从问题正文猜房间名。
@@ -369,14 +389,14 @@ function limitedSessionTitle(value: string): string {
 function butlerAutoSessionTitle(
   lines: readonly ButlerLine[],
   currentTitle = DEFAULT_SESSION_TITLE,
+  origin?: ButlerSessionOrigin,
 ): string {
   if (!UNTITLED_SESSION_TITLES.has(currentTitle)) return currentTitle;
   for (const candidate of lines) {
     if (candidate.role !== 'user') continue;
     const question = sessionTitleText(candidate.text);
     if (!question || isGreeting(question)) continue;
-    const room = candidate.sources?.find((source) => source.kind === 'room');
-    const prefix = room?.label.trim();
+    const prefix = sessionTitlePrefix(origin, [candidate]);
     const titled = prefix && !question.toLocaleLowerCase().includes(prefix.toLocaleLowerCase())
       ? `${prefix} · ${question}`
       : question;
@@ -411,9 +431,16 @@ export function butlerSessionRecap(lines: readonly ButlerLine[]): ButlerSessionR
 function sessionSummaries(registry: PersistedButlerSessionRegistry): ButlerSessionSummary[] {
   return registry.sessions
     .filter((session) => session.kind !== 'workflow')
-    .map(({ id, title, createdAt, updatedAt, lines }) => {
+    .map(({ id, title, createdAt, updatedAt, lines, origin }) => {
       const lastAsk = butlerSessionRecap(lines)?.lastAsk;
-      return { id, title, createdAt, updatedAt, ...(lastAsk ? { lastAsk } : {}) };
+      return {
+        id,
+        title,
+        createdAt,
+        updatedAt,
+        ...(lastAsk ? { lastAsk } : {}),
+        ...(origin ? { origin } : {}),
+      };
     })
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
 }
@@ -524,6 +551,34 @@ function normalizeCodexThread(
   };
 }
 
+function normalizeSessionOrigin(value: unknown): ButlerSessionOrigin | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const rid = typeof candidate.rid === 'string' && candidate.rid.trim() ? candidate.rid.trim() : '';
+  const roomName = typeof candidate.roomName === 'string' && candidate.roomName.trim()
+    ? candidate.roomName.trim()
+    : rid;
+  if (!rid) return undefined;
+  return { rid, roomName };
+}
+
+function roomSessionOrigin(room: ButlerRoomContext): ButlerSessionOrigin {
+  return {
+    rid: room.rid.trim(),
+    roomName: room.roomName.trim() || room.rid.trim(),
+  };
+}
+
+function sessionContextFromOrigin(origin: ButlerSessionOrigin | undefined): ButlerSurfaceContext | null {
+  if (!origin?.rid) return null;
+  return {
+    kind: 'room',
+    label: origin.roomName,
+    detail: '当前 Rocket.Chat 房间',
+    sources: [{ kind: 'room', id: origin.rid, rid: origin.rid, label: origin.roomName }],
+  };
+}
+
 function normalizeRegistry(
   stored: PersistedButlerSessionRegistry | undefined,
 ): PersistedButlerSessionRegistry | undefined {
@@ -537,6 +592,7 @@ function normalizeRegistry(
     const createdAt = Number.isFinite(candidate.createdAt) ? candidate.createdAt : updatedAt;
     const workflow = candidate.kind === 'workflow' ? normalizeWorkflow(candidate.workflow) : undefined;
     if (candidate.kind === 'workflow' && !workflow) continue;
+    const origin = normalizeSessionOrigin(candidate.origin);
     const codexThread = normalizeCodexThread(candidate.codexThread);
     let engineState = normalizeButlerEngineState(candidate.engineState);
     const runtimeCheckpoints = normalizeRuntimeCheckpoints(candidate.runtimeCheckpoints);
@@ -561,9 +617,10 @@ function normalizeRegistry(
       : DEFAULT_SESSION_TITLE;
     sessions.push({
       id: candidate.id,
-      title: workflow ? storedTitle : butlerAutoSessionTitle(lines, storedTitle),
+      title: workflow ? storedTitle : butlerAutoSessionTitle(lines, storedTitle, origin),
       createdAt,
       updatedAt,
+      ...(origin ? { origin } : {}),
       lines,
       history: trimButlerHistory(Array.isArray(candidate.history) ? candidate.history : []),
       ...(codexThread ? { codexThread } : {}),
@@ -640,6 +697,46 @@ function activeSession(registry: PersistedButlerSessionRegistry): PersistedButle
   return registry.sessions.find((session) => session.id === registry.activeSessionId) ?? registry.sessions[0];
 }
 
+function createInteractiveSession(
+  now: number,
+  origin?: ButlerSessionOrigin,
+): PersistedButlerSession {
+  return {
+    id: crypto.randomUUID(),
+    title: '新对话',
+    createdAt: now,
+    updatedAt: now,
+    ...(origin ? { origin } : {}),
+    lines: welcomeLines(),
+    history: [],
+    engineState: initialEngineState([]),
+  };
+}
+
+function isStandaloneSession(session: PersistedButlerSession): boolean {
+  return session.kind !== 'workflow' && !session.origin;
+}
+
+function findStandaloneSession(
+  registry: PersistedButlerSessionRegistry,
+): PersistedButlerSession | undefined {
+  return registry.sessions
+    .filter((session) => isStandaloneSession(session))
+    .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];
+}
+
+function findRoomSession(
+  registry: PersistedButlerSessionRegistry,
+  rid: string,
+): PersistedButlerSession | undefined {
+  const normalizedRid = rid.trim();
+  if (!normalizedRid) return undefined;
+  return registry.sessions.find((session) => (
+    session.kind !== 'workflow'
+    && session.origin?.rid === normalizedRid
+  ));
+}
+
 function captureActiveSession(
   registry: PersistedButlerSessionRegistry,
   touchActivity: boolean,
@@ -656,8 +753,9 @@ function captureActiveSession(
   const codexThread = residentCodexThreadSnapshot();
   const captured: PersistedButlerSession = {
     ...base,
-    title: butlerAutoSessionTitle(state.lines, current.title),
+    title: butlerAutoSessionTitle(state.lines, current.title, current.origin),
     updatedAt: touchActivity ? butlerNow() : current.updatedAt,
+    ...(current.origin ? { origin: current.origin } : {}),
     lines: state.lines.slice(-LINES_LIMIT),
     history: trimButlerHistory(state.history),
     ...(codexThread ? { codexThread } : {}),
@@ -1368,6 +1466,7 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
   const session = activeSession(registry);
   const engineState = sessionEngineState(session);
   const runtimeCheckpoints = normalizeRuntimeCheckpoints(session.runtimeCheckpoints);
+  const context = sessionContextFromOrigin(session.origin);
   const taskState = session.taskState?.status === 'running'
     && engineState.status === 'paused'
     && engineState.compatibility.reason === 'interrupted-turn'
@@ -1389,6 +1488,7 @@ function applyActiveSession(registry: PersistedButlerSessionRegistry): void {
       errandDraft: errandDraftFrom(runtimeCheckpoints),
       runtimeCheckpoints,
       workflowRuntimeCheckpoints: workflowCheckpointProjection(registry),
+      context,
       actionDraft: session.actionDraft ?? null,
       taskState: taskState ?? null,
       engineState,
@@ -1518,7 +1618,11 @@ export const useButler = create<ButlerState>((set, get) => ({
       ? `${content}\n\n[用户附加图片：${images.map((image) => image.name).join('、')}]`
       : content;
     if (!content || get().running) return;
-    await get().hydrate();
+    const requestedRoom = context
+      ? ('kind' in context ? roomContextFromSurfaceContext(context) : roomSessionOrigin(context))
+      : undefined;
+    if (requestedRoom) await get().openRoomConversation(requestedRoom);
+    else await get().hydrate();
     if (get().running) return;
 
     const turnContext = context ? normalizeContext(context) : get().context;
@@ -1859,16 +1963,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const scope = persistScope;
     const currentRegistry = sessionRegistry;
     await discardResidentCodexThread();
-    const now = butlerNow();
-    const nextSession: PersistedButlerSession = {
-      id: crypto.randomUUID(),
-      title: '新对话',
-      createdAt: now,
-      updatedAt: now,
-      lines: welcomeLines(),
-      history: [],
-      engineState: initialEngineState([]),
-    };
+    const nextSession = createInteractiveSession(butlerNow());
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...currentRegistry,
       activeSessionId: nextSession.id,
@@ -1879,11 +1974,86 @@ export const useButler = create<ButlerState>((set, get) => ({
     await queueRegistryWrite(scope, nextRegistry);
   },
 
+  openRoomConversation: async (room) => {
+    const origin = roomSessionOrigin(room);
+    if (!origin.rid) return;
+    await get().hydrate();
+    if (get().running) await get().stop();
+    if (!sessionRegistry || !persistScope) return;
+
+    await flushButlerPersist();
+    if (!sessionRegistry || !persistScope) return;
+    const scope = persistScope;
+    const existing = findRoomSession(sessionRegistry, origin.rid);
+    const targetSession = existing
+      ? { ...existing, origin }
+      : createInteractiveSession(butlerNow(), origin);
+    const current = activeSession(sessionRegistry);
+    const replaceEmptyStandalone = !existing
+      && isStandaloneSession(current)
+      && !current.lines.some((line) => line.role === 'user');
+    const switching = sessionRegistry.activeSessionId !== targetSession.id;
+    const originChanged = existing?.origin?.roomName !== origin.roomName;
+    const nextRegistry: PersistedButlerSessionRegistry = {
+      ...sessionRegistry,
+      activeSessionId: targetSession.id,
+      sessions: existing
+        ? sessionRegistry.sessions.map((session) => session.id === existing.id ? targetSession : session)
+        : [
+            ...sessionRegistry.sessions.filter((session) => (
+              !replaceEmptyStandalone || session.id !== current.id
+            )),
+            targetSession,
+          ],
+    };
+    if (!switching && !originChanged && get().context?.sources[0]?.rid === origin.rid) {
+      sessionRegistry = nextRegistry;
+      applyActiveSession(nextRegistry);
+      return;
+    }
+    if (switching) await discardResidentCodexThread();
+    sessionRegistry = nextRegistry;
+    applyActiveSession(nextRegistry);
+    if (switching || originChanged || !existing) await queueRegistryWrite(scope, nextRegistry);
+  },
+
+  openStandaloneConversation: async () => {
+    await get().hydrate();
+    if (get().running) await get().stop();
+    if (!sessionRegistry || !persistScope) return;
+
+    await flushButlerPersist();
+    if (!sessionRegistry || !persistScope) return;
+    const scope = persistScope;
+    const current = activeSession(sessionRegistry);
+    const hadTarget = isStandaloneSession(current) || Boolean(findStandaloneSession(sessionRegistry));
+    const targetSession = isStandaloneSession(current)
+      ? current
+      : findStandaloneSession(sessionRegistry) ?? createInteractiveSession(butlerNow());
+    const switching = sessionRegistry.activeSessionId !== targetSession.id;
+    const nextRegistry: PersistedButlerSessionRegistry = {
+      ...sessionRegistry,
+      activeSessionId: targetSession.id,
+      sessions: sessionRegistry.sessions.some((session) => session.id === targetSession.id)
+        ? sessionRegistry.sessions
+        : [...sessionRegistry.sessions, targetSession],
+    };
+    if (!switching && get().context === null) return;
+    if (switching) await discardResidentCodexThread();
+    sessionRegistry = nextRegistry;
+    applyActiveSession(nextRegistry);
+    if (switching || !hadTarget) await queueRegistryWrite(scope, nextRegistry);
+  },
+
   switchSession: async (sessionId) => {
     const targetId = sessionId.trim();
     if (!targetId) return;
     await get().hydrate();
-    if (!sessionRegistry || !persistScope || sessionRegistry.activeSessionId === targetId) return;
+    if (!sessionRegistry || !persistScope) return;
+    if (sessionRegistry.activeSessionId === targetId) {
+      applyActiveSession(sessionRegistry);
+      return;
+    }
     if (!sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     if (get().running) await get().stop();
 
@@ -1959,16 +2129,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (nextActive) {
       nextRegistry = { ...sessionRegistry, activeSessionId: nextActive.id, sessions: remaining };
     } else {
-      const now = butlerNow();
-      const nextSession: PersistedButlerSession = {
-        id: crypto.randomUUID(),
-        title: '新对话',
-        createdAt: now,
-        updatedAt: now,
-        lines: welcomeLines(),
-        history: [],
-        engineState: initialEngineState([]),
-      };
+      const nextSession = createInteractiveSession(butlerNow());
       nextRegistry = {
         ...sessionRegistry,
         activeSessionId: nextSession.id,

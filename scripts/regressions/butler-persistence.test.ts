@@ -63,7 +63,7 @@ test('AI 对话落盘后重启可恢复，账号隔离', async () => {
   }
 });
 
-test('房间管家问答进入统一历史并从首个有效问题自动取标题', async () => {
+test('房间管家使用独立会话，返回管家页时恢复原来的普通会话', async () => {
   resetButlerPersistenceForTests();
   useButler.getState().reset();
   login('room-history-user');
@@ -71,32 +71,42 @@ test('房间管家问答进入统一历史并从首个有效问题自动取标�
   const room = { rid: 'room-general', roomName: 'General' };
   try {
     await useButler.getState().hydrate();
-    const sessionId = useButler.getState().activeSessionId;
+    const standaloneSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().ask('整理我的本周工作');
+    await flushButlerPersist();
 
     await useButler.getState().ask('你好', room);
     await flushButlerPersist();
-    assert.equal(useButler.getState().sessions[0].title, '默认对话');
+    const roomSessionId = useButler.getState().activeSessionId;
+    assert.notEqual(roomSessionId, standaloneSessionId);
+    assert.equal(useButler.getState().sessions.find((session) => session.id === roomSessionId)?.origin?.rid, room.rid);
 
     await useButler.getState().ask('最近在讨论啥', room);
     await flushButlerPersist();
-    assert.deepEqual(
-      useButler.getState().sessions.map(({ id, title, lastAsk }) => ({ id, title, lastAsk })),
-      [{ id: sessionId, title: 'General · 最近在讨论啥', lastAsk: '最近在讨论啥' }],
+    assert.equal(
+      useButler.getState().sessions.find((session) => session.id === roomSessionId)?.title,
+      'General · 最近在讨论啥',
     );
 
-    await useButler.getState().renameSession(sessionId, '发布群跟进');
-    await useButler.getState().ask('还有哪些未闭环事项', room);
-    await flushButlerPersist();
-    assert.equal(useButler.getState().sessions[0].title, '发布群跟进');
+    await useButler.getState().openStandaloneConversation();
+    assert.equal(useButler.getState().activeSessionId, standaloneSessionId);
+    assert.equal(useButler.getState().context, null);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '整理我的本周工作'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '最近在讨论啥'), false);
+
+    await useButler.getState().openRoomConversation(room);
+    assert.equal(useButler.getState().activeSessionId, roomSessionId);
+    assert.equal(useButler.getState().context?.label, 'General');
+    assert.equal(useButler.getState().lines.some((line) => line.text === '最近在讨论啥'), true);
+    assert.equal(useButler.getState().lines.some((line) => line.text === '整理我的本周工作'), false);
 
     resetButlerPersistenceForTests();
     useButler.getState().reset();
     await useButler.getState().hydrate();
-    assert.equal(useButler.getState().sessions[0].title, '发布群跟进');
-    assert.equal(
-      useButler.getState().lines.some((line) => line.role === 'user' && line.text === '最近在讨论啥'),
-      true,
-    );
+    await useButler.getState().openStandaloneConversation();
+    assert.equal(useButler.getState().activeSessionId, standaloneSessionId);
+    await useButler.getState().openRoomConversation(room);
+    assert.equal(useButler.getState().activeSessionId, roomSessionId);
   } finally {
     restore();
     resetButlerPersistenceForTests();

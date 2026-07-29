@@ -2,6 +2,7 @@ import { Check, ChevronDown, MessageSquarePlus, Pencil, Trash2, X } from 'lucide
 import { useEffect, useState, type ReactNode } from 'react';
 import { useButler } from '../stores/butler';
 import { toast } from '../stores/toast';
+import type { HostedConversationProjection } from '../agent/hostedConversation';
 
 function askPreview(lastAsk: string | undefined): string {
   if (!lastAsk) return '';
@@ -13,10 +14,20 @@ export default function ButlerSessionSwitcher({
   compact = false,
   label,
   actionsOnly = false,
+  hostedConversations = [],
+  selectedHostedId,
+  onSelectHosted,
+  onSelectButler,
+  onNewConversation,
 }: {
   compact?: boolean;
   label?: ReactNode;
   actionsOnly?: boolean;
+  hostedConversations?: HostedConversationProjection[];
+  selectedHostedId?: string | null;
+  onSelectHosted?: (id: string) => void;
+  onSelectButler?: () => void;
+  onNewConversation?: () => void;
 }) {
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
@@ -51,6 +62,8 @@ export default function ButlerSessionSwitcher({
     await renameSession(activeSession.id, nextTitle);
     setEditing(false);
   };
+
+  if (actionsOnly && selectedHostedId) return null;
 
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -105,18 +118,38 @@ export default function ButlerSessionSwitcher({
             <>
               <div className="relative min-w-0">
                 <select
-                  value={activeSession?.id ?? ''}
-                  onChange={(event) => void switchSession(event.target.value)}
-                  disabled={running || sessions.length === 0}
+                  value={selectedHostedId ? `hosted:${selectedHostedId}` : `butler:${activeSession?.id ?? ''}`}
+                  onChange={(event) => {
+                    const [kind, ...rest] = event.target.value.split(':');
+                    const id = rest.join(':');
+                    if (kind === 'hosted') {
+                      onSelectHosted?.(id);
+                      return;
+                    }
+                    onSelectButler?.();
+                    void switchSession(id);
+                  }}
+                  disabled={running || sessions.length + hostedConversations.length === 0}
                   aria-label="管家会话"
                   className={`appearance-none rounded-md border border-line bg-surface text-ink font-normal outline-none focus:border-primary disabled:opacity-50 ${selectCls}`}
                 >
-                  {sessions.map((session) => (
-                    <option key={session.id} value={session.id}>
-                      {session.title}
-                      {askPreview(session.lastAsk)}
-                    </option>
-                  ))}
+                  <optgroup label="管家对话">
+                    {sessions.map((session) => (
+                      <option key={session.id} value={`butler:${session.id}`}>
+                        {session.title}
+                        {askPreview(session.lastAsk)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {hostedConversations.length ? (
+                    <optgroup label="AI 托管">
+                      {hostedConversations.map((conversation) => (
+                        <option key={conversation.id} value={`hosted:${conversation.id}`}>
+                          {conversation.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
                 </select>
                 <ChevronDown
                   size={compact ? 13 : 14}
@@ -125,7 +158,10 @@ export default function ButlerSessionSwitcher({
               </div>
               <button
                 type="button"
-                onClick={() => void newConversation()}
+                onClick={() => {
+                  onNewConversation?.();
+                  void newConversation();
+                }}
                 disabled={running}
                 aria-label="新对话"
                 title="新对话"

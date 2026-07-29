@@ -22,8 +22,14 @@ async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
   await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { getState: () => { openStandaloneConversation: () => Promise<void> } };
+    }>;
+    await (await load()).useButler.getState().openStandaloneConversation();
+  });
   await openButlerConversationView(page);
-  await expect(page.getByText('当前工作面：General', { exact: true })).toBeVisible();
+  await expect(page.getByText('多轮讨论留在这里，结论会写回今天的纸。', { exact: true })).toBeVisible();
   return state;
 }
 
@@ -33,15 +39,35 @@ async function openRoomButlerFromGeneral(page: Page): Promise<RocketChatMockStat
   await expect(page.getByText('Release checklist ready', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '打开房间管家', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '房间管家' })).toBeVisible();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => {
+          openRoomConversation: (room: { rid: string; roomName: string }) => Promise<void>;
+        };
+      };
+    }>;
+    await (await load()).useButler.getState().openRoomConversation({
+      rid: 'room-general',
+      roomName: 'General',
+    });
+  });
   return state;
 }
 
 async function seedButlerAnswer(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
-      useButler: { setState: (state: Record<string, unknown>) => void };
+      flushButlerPersist: () => Promise<void>;
+      useButler: {
+        getState: () => {
+          openRoomConversation: (room: { rid: string; roomName: string }) => Promise<void>;
+        };
+        setState: (state: Record<string, unknown>) => void;
+      };
     }>;
-    const { useButler } = await load();
+    const { flushButlerPersist, useButler } = await load();
+    await useButler.getState().openRoomConversation({ rid: 'room-general', roomName: 'General' });
     const roomSource = {
       kind: 'room',
       id: 'room-general',
@@ -74,8 +100,41 @@ async function seedButlerAnswer(page: Page): Promise<void> {
       running: false,
       error: null,
     });
+    await flushButlerPersist();
   });
   await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
+}
+
+async function seedStandaloneButlerAnswer(
+  page: Page,
+  question: string,
+  answer: string,
+): Promise<string> {
+  return page.evaluate(async ({ question, answer }) => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      flushButlerPersist: () => Promise<void>;
+      useButler: {
+        getState: () => {
+          activeSessionId: string;
+          openStandaloneConversation: () => Promise<void>;
+        };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { flushButlerPersist, useButler } = await load();
+    await useButler.getState().openStandaloneConversation();
+    useButler.setState({
+      lines: [
+        { id: 'standalone-question', role: 'user', text: question },
+        { id: 'standalone-answer', role: 'assistant', text: answer },
+      ],
+      context: null,
+      running: false,
+      error: null,
+    });
+    await flushButlerPersist();
+    return useButler.getState().activeSessionId;
+  }, { question, answer });
 }
 
 async function seedButlerCitationList(page: Page): Promise<void> {
@@ -448,6 +507,15 @@ async function seedPaperSections(page: Page): Promise<void> {
 }
 
 async function seedAutomationPaper(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
+      useRoutines: {
+        getState: () => { hydrated: boolean };
+      };
+    }>;
+    const { useRoutines } = await load();
+    return useRoutines.getState().hydrated;
+  })).toBe(true);
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
       useRoutines: {
@@ -874,15 +942,123 @@ test('ADO 未配置时在进入执行态和打开创建表单前完成能力预�
   expect(pageErrors).toEqual([]);
 });
 
-test('房间管家浮层与管家页共享同一份会话', async ({ page }) => {
-  const { pageErrors } = await openRoomButlerFromGeneral(page);
+test('从房间进入管家恢复普通会话，房间问答留在独立历史', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.locator('button[title*="右键更多操作"]').filter({ hasText: 'General' }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerConversationView(page);
+  await seedStandaloneButlerAnswer(page, '整理我的本周工作', '这是普通管家会话。');
+  await expect(page.getByText('这是普通管家会话。', { exact: true })).toBeVisible();
+
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await page.getByRole('button', { name: '打开房间管家', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toBeVisible();
   await seedButlerAnswer(page);
   await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await openButlerConversationView(page);
 
-  await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
+  const conversationPane = page.locator('.butler-conversation-pane');
+  await expect(conversationPane.getByText('这是普通管家会话。', { exact: true })).toBeVisible();
+  await expect(conversationPane.getByText(ANSWER, { exact: false })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('navigation', { name: '管家对话历史' })
+      .getByRole('button')
+      .filter({ hasText: 'General · 发布前还缺什么' }),
+  ).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('AI 托管记录出现在管家历史，查看时不抢走普通会话', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  const activeSessionId = await seedStandaloneButlerAnswer(
+    page,
+    '我当前有哪些工作',
+    '普通管家对话仍在这里。',
+  );
+  await expect(page.getByText('普通管家对话仍在这里。', { exact: true })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const loadAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<{
+      useSharedAgent: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        setState: (
+          update: (state: { messages: Record<string, unknown[]> }) => Record<string, unknown>,
+        ) => void;
+      };
+    }>;
+    const { useSharedAgent } = await loadAgent();
+    const { useChat } = await loadChat();
+    useSharedAgent.setState({
+      sessions: {
+        'room:room-general': {
+          sessionId: 'hosted-general',
+          serverId: window.location.origin,
+          ownerUserId: 'user-me',
+          rid: 'room-general',
+          tmid: 'room:room-general',
+          host: {
+            userId: 'user-me',
+            deviceId: 'device-test',
+            heartbeatAt: Date.now(),
+            expiresAt: Date.now() + 90_000,
+          },
+          access: 'room-members',
+          approvedMemberIds: [],
+          status: 'ready',
+          workspaceRoots: ['D:/Repos/demo'],
+          sandboxMode: 'read-only',
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    useChat.setState((state) => ({
+      messages: {
+        ...state.messages,
+        'room-general': [
+          ...(state.messages['room-general'] ?? []),
+          {
+            _id: 'hosted-question',
+            rid: 'room-general',
+            msg: '@ai 检查发布失败原因',
+            ts: '2026-07-21T08:01:00.000Z',
+            u: { _id: 'user-me', username: 'tester', name: 'Test User' },
+          },
+          {
+            _id: 'hosted-answer',
+            rid: 'room-general',
+            msg: '🤖 Codex\n已经定位到签名步骤。',
+            ts: '2026-07-21T08:02:00.000Z',
+            u: { _id: 'ai', username: 'ai', name: 'RocketX AI' },
+          },
+        ],
+      },
+    }));
+  });
+
+  const hostedHistory = page
+    .getByRole('navigation', { name: '管家对话历史' })
+    .getByRole('button')
+    .filter({ hasText: 'General · 检查发布失败原因' });
+  await expect(hostedHistory).toBeVisible();
+  await hostedHistory.click();
+
+  await expect(page.getByText('AI 托管记录', { exact: true })).toBeVisible();
+  await expect(page.getByText('已经定位到签名步骤。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重命名会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '删除会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '回到「General」' })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { getState: () => { activeSessionId: string } };
+    }>;
+    return (await load()).useButler.getState().activeSessionId;
+  })).toBe(activeSessionId);
   expect(pageErrors).toEqual([]);
 });
 

@@ -11,7 +11,6 @@ import {
   MIN_BUTLER_PANEL_WIDTH,
   clampButlerPanelWidth,
 } from '../lib/imLayout';
-import type { ButlerSurfaceContext } from '../lib/butlerContext';
 import { partitionButlerPaperErrands } from '../lib/butlerPaper';
 import type { ButlerImageInput } from '../lib/butlerImages';
 import { useAuth } from '../stores/auth';
@@ -46,6 +45,7 @@ export default function ButlerPanel() {
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
   const hydrate = useButler((state) => state.hydrate);
+  const openRoomConversation = useButler((state) => state.openRoomConversation);
   const setPanel = useChat((state) => state.setPanel);
   const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
   const setButlerPanelWidth = useImLayout((state) => state.setButlerPanelWidth);
@@ -77,24 +77,26 @@ export default function ButlerPanel() {
   const hasConversation = roomExchanges.some((exchange) => exchange.some((line) => line.role === 'user'));
   const roomRunning = running && !!rid && contextHasRoomSource(butlerContext, rid);
   const openFullConversation = (): void => {
-    const context: ButlerSurfaceContext | null = roomContext
-      ? {
-        kind: 'room',
-        label: roomContext.roomName,
-        detail: '当前 Rocket.Chat 房间',
-        sources: [{ kind: 'room', id: roomContext.rid, rid: roomContext.rid, label: roomContext.roomName }],
-      }
-      : null;
     setPanel(null);
-    useUI.getState().openButlerConversation();
-    // 模块切换会触发完整对话的挂载与会话恢复；最后写入房间上下文，
-    // 保证全屏页不会被恢复过程覆盖成普通管家入口。
-    if (context) useButler.getState().setContext(context);
+    if (!roomContext) {
+      useUI.getState().openButlerConversation();
+      return;
+    }
+    void openRoomConversation(roomContext)
+      .catch(() => undefined)
+      .then(() => useUI.getState().openButlerConversation());
   };
 
   useEffect(() => {
-    if (userId) void hydrate();
-  }, [hydrate, userId]);
+    if (!userId || !roomContext) return;
+    let cancelled = false;
+    void hydrate().then(() => {
+      if (!cancelled) return openRoomConversation(roomContext);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrate, openRoomConversation, roomContext, userId]);
 
   if (!rid) return null;
 
