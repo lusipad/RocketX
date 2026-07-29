@@ -624,6 +624,40 @@ function mapPullRequest(cfg: DirectConfig, pr: any) {
   };
 }
 
+function toPullRequestId(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+function buildParameters(build: any): Record<string, unknown> | null {
+  const raw = build?.parameters;
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof raw === 'object' ? raw as Record<string, unknown> : null;
+}
+
+function extractBuildPullRequestId(build: any): number | undefined {
+  if (build?.reason !== 'pullRequest') return undefined;
+
+  const fromTriggerInfo = toPullRequestId(build?.triggerInfo?.['pr.number']);
+  if (fromTriggerInfo) return fromTriggerInfo;
+
+  const fromSourceBranch = /^refs\/pull\/(\d+)\/merge$/i.exec(build?.sourceBranch ?? '')?.[1];
+  const branchId = toPullRequestId(fromSourceBranch);
+  if (branchId) return branchId;
+
+  return toPullRequestId(buildParameters(build)?.['system.pullRequest.pullRequestId']);
+}
+
 export async function directGetPullRequest(
   cfg: DirectConfig,
   id: number,
@@ -676,6 +710,8 @@ export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {
 
 function mapBuild(cfg: DirectConfig, build: any) {
   const project = build.project?.name ?? '';
+  const repository = build.repository?.name ?? '';
+  const pullRequestId = extractBuildPullRequestId(build);
   return {
     id: build.id,
     buildNumber: build.buildNumber ?? String(build.id),
@@ -686,6 +722,14 @@ function mapBuild(cfg: DirectConfig, build: any) {
     requestedFor: build.requestedFor?.displayName ?? '',
     queueTime: build.queueTime ?? '',
     finishTime: build.finishTime ?? '',
+    reason: build.reason ?? '',
+    sourceBranch: build.sourceBranch ?? '',
+    repository,
+    pullRequestId,
+    pullRequestUrl:
+      pullRequestId && repository
+        ? `${base(cfg)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}/pullrequest/${pullRequestId}`
+        : undefined,
     webUrl:
       build._links?.web?.href ??
       `${base(cfg)}/${encodeURIComponent(project)}/_build/results?buildId=${build.id}`,

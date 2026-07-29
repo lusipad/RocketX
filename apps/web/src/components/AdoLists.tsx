@@ -572,6 +572,17 @@ const BUILD_RESULT_LABELS: Record<string, string> = {
   canceled: '已取消',
 };
 
+export function matchesBuildKeyword(build: Build, keyword: string): boolean {
+  const q = keyword.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    build.definition.toLowerCase().includes(q) ||
+    build.buildNumber.toLowerCase().includes(q) ||
+    build.project.toLowerCase().includes(q) ||
+    String(build.pullRequestId ?? '').includes(q)
+  );
+}
+
 /** 构建：完整列表（构建号、项目、触发人、结果都显示） */
 export function BuildList({ builds }: { builds: Build[] }) {
   const [keyword, setKeyword] = useState('');
@@ -579,14 +590,8 @@ export function BuildList({ builds }: { builds: Build[] }) {
   const setFailedOnly = useUI((s) => s.setBuildsFailedOnly);
 
   const filtered = useMemo(() => {
-    const q = keyword.trim().toLowerCase();
     return builds.filter(
-      (b) =>
-        (!failedOnly || b.result === 'failed') &&
-        (!q ||
-          b.definition.toLowerCase().includes(q) ||
-          b.buildNumber?.toLowerCase().includes(q) ||
-          b.project.toLowerCase().includes(q)),
+      (b) => (!failedOnly || b.result === 'failed') && matchesBuildKeyword(b, keyword),
     );
   }, [builds, keyword, failedOnly]);
 
@@ -597,7 +602,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
       <ListHeader
         keyword={keyword}
         onKeyword={setKeyword}
-        placeholder="搜索流水线、构建号或项目"
+        placeholder="搜索流水线、构建号、项目或 PR 编号"
         count={filtered.length}
         total={builds.length}
         right={
@@ -618,24 +623,53 @@ export function BuildList({ builds }: { builds: Build[] }) {
       />
 
       <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
+        {filtered.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-line px-4 py-2 text-[11px] text-ink-3">
+            <span className="min-w-0 flex-1 pl-5">构建</span>
+            <span className="w-24 shrink-0">关联 PR</span>
+            <span className="w-16 shrink-0 text-right">状态</span>
+            <span className="w-16 shrink-0 text-right">时间</span>
+            <span className="w-[14px] shrink-0" aria-hidden="true" />
+          </div>
+        )}
         {filtered.map((b) => (
-          <a
+          <div
             key={`${b.project}-${b.id}`}
-            href={b.webUrl}
-            target="_blank"
-            rel="noreferrer"
             className="group flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
           >
-            <BuildStatusIcon build={b} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-ink">{b.definition}</span>
-              <span className="mt-0.5 block truncate text-xs text-ink-3">
-                {b.buildNumber} · {b.project}
-                {b.requestedFor ? ` · ${b.requestedFor} 触发` : ''}
+            <a
+              href={b.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="flex min-w-0 flex-1 items-center gap-3"
+            >
+              <BuildStatusIcon build={b} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-ink">{b.definition}</span>
+                <span className="mt-0.5 block truncate text-xs text-ink-3">
+                  {b.buildNumber} · {b.project}
+                  {b.requestedFor ? ` · ${b.requestedFor} 触发` : ''}
+                </span>
               </span>
+            </a>
+            <span className="w-24 shrink-0 text-xs text-ink-2">
+              {b.pullRequestId && b.pullRequestUrl ? (
+                <a
+                  href={b.pullRequestUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                >
+                  PR #{b.pullRequestId}
+                </a>
+              ) : b.pullRequestId ? (
+                `PR #${b.pullRequestId}`
+              ) : (
+                '—'
+              )}
             </span>
             <span
-              className={`shrink-0 text-xs ${
+              className={`w-16 shrink-0 text-right text-xs ${
                 b.result === 'failed'
                   ? 'text-danger'
                   : b.result === 'succeeded'
@@ -650,8 +684,10 @@ export function BuildList({ builds }: { builds: Build[] }) {
             <span className="w-16 shrink-0 text-right text-xs text-ink-3">
               {relTime(b.finishTime || b.queueTime)}
             </span>
-            <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
-          </a>
+            <a href={b.webUrl} target="_blank" rel="noreferrer" className="shrink-0">
+              <ExternalLink size={14} className="text-ink-3 opacity-0 group-hover:opacity-100" />
+            </a>
+          </div>
         ))}
         {filtered.length === 0 && (
           <EmptyRow text={builds.length ? '没有匹配的构建' : '你最近没有发起过构建'} />
