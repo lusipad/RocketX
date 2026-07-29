@@ -9,6 +9,7 @@ import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
+import { canMentionInRoom } from '../lib/mentions';
 
 const SUPPORTS_FIELD_SIZING =
   typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
@@ -16,6 +17,7 @@ const SUPPORTS_FIELD_SIZING =
 /** 右侧话题（线程）面板：根消息 + 全部回复 + 回复框（表情/自动滚动/发送方式跟随偏好） */
 export default function ThreadPanel() {
   const rid = useChat((s) => s.activeRid);
+  const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const rootId = useChat((s) => (s.rightPanel?.kind === 'thread' ? s.rightPanel.mid : null));
   const all = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const send = useChat((s) => s.send);
@@ -24,6 +26,7 @@ export default function ThreadPanel() {
   const myId = useAuth((s) => s.user?._id);
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const prefsLoaded = usePrefs((s) => s.loaded);
+  const canMention = canMentionInRoom(roomType);
 
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);
@@ -159,13 +162,15 @@ export default function ThreadPanel() {
           >
             <Smile size={16} />
           </button>
-          <button
-            title="提及成员"
-            onClick={() => insertText('@')}
-            className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink"
-          >
-            <AtSign size={16} />
-          </button>
+          {canMention && (
+            <button
+              title="提及成员"
+              onClick={() => insertText('@')}
+              className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+            >
+              <AtSign size={16} />
+            </button>
+          )}
         </div>
         <div className="flex items-end gap-2">
           <textarea

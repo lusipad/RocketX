@@ -27,11 +27,14 @@ import { useKernelContributions } from '../kernel/registry';
 import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
+import {
+  MENTION_RE,
+  canMentionInRoom,
+  mentionQueryAtCursor,
+  shouldSearchMentionDirectory,
+} from '../lib/mentions';
 import { stripAgentSessionMarker } from '../agent/card';
 import UploadConfirm from './UploadConfirm';
-
-// @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
-const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
 
 // 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
 // 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
@@ -42,6 +45,7 @@ const SUPPORTS_FIELD_SIZING =
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
+  const canMention = canMentionInRoom(roomType);
   const send = useChat((s) => s.send);
   const loadMembers = useChat((s) => s.loadMembers);
   const inviteMembers = useChat((s) => s.inviteMembers);
@@ -120,8 +124,8 @@ export default function Composer() {
   useEffect(() => {
     let current = true;
     const rid = activeRid;
-    const q = mentionQuery?.trim();
-    if (!q) {
+    const q = mentionQuery?.trim() ?? '';
+    if (!shouldSearchMentionDirectory(mentionQuery, roomType)) {
       setRemoteResult({ rid, query: '', users: [] });
       return;
     }
@@ -140,7 +144,7 @@ export default function Composer() {
       current = false;
       if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     };
-  }, [activeRid, mentionQuery]);
+  }, [activeRid, mentionQuery, roomType]);
 
   const remoteUsers =
     remoteResult.rid === activeRid && remoteResult.query === mentionQuery?.trim()
@@ -148,7 +152,7 @@ export default function Composer() {
       : [];
 
   const candidates = useMemo(() => {
-    if (mentionQuery === null) return [];
+    if (!canMention || mentionQuery === null) return [];
     const q = mentionQuery.trim();
     const base: { username: string; name?: string; isRemote?: boolean }[] = [
       { username: 'all', name: '通知所有人' },
@@ -168,7 +172,7 @@ export default function Composer() {
       .map((u) => ({ username: u.username, name: u.name, isRemote: true }));
     return [...local, ...remote].slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers]);
+  }, [canMention, mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -185,11 +189,9 @@ export default function Composer() {
   }, [slashIndex, slashQuery]);
 
   const refreshMention = (value: string, cursor: number) => {
-    const before = value.slice(0, cursor);
-    const m = MENTION_RE.exec(before);
-    setMentionQuery(m ? m[1] : null);
+    setMentionQuery(mentionQueryAtCursor(value, cursor, roomType));
     setMentionIndex(0);
-    setSlashQuery(slashPrefix(before));
+    setSlashQuery(slashPrefix(value.slice(0, cursor)));
     setSlashIndex(0);
   };
 
@@ -558,24 +560,26 @@ export default function Composer() {
         <button title="表情" className={toolBtn} onClick={() => setPicker((v) => !v)}>
           <Smile size={16} />
         </button>
-        <button
-          title="提及成员"
-          className={toolBtn}
-          onClick={() => {
-            const el = textareaRef.current;
-            const cursor = el?.selectionStart ?? text.length;
-            const prefix = text.slice(0, cursor);
-            const needsSpace = prefix && !/\s$/.test(prefix);
-            const inserted = `${needsSpace ? ' ' : ''}@`;
-            const next = prefix + inserted + text.slice(cursor);
-            setText(next);
-            persistDraft(next);
-            setMentionQuery('');
-            requestAnimationFrame(() => el?.focus());
-          }}
-        >
-          <AtSign size={16} />
-        </button>
+        {canMention && (
+          <button
+            title="提及成员"
+            className={toolBtn}
+            onClick={() => {
+              const el = textareaRef.current;
+              const cursor = el?.selectionStart ?? text.length;
+              const prefix = text.slice(0, cursor);
+              const needsSpace = prefix && !/\s$/.test(prefix);
+              const inserted = `${needsSpace ? ' ' : ''}@`;
+              const next = prefix + inserted + text.slice(cursor);
+              setText(next);
+              persistDraft(next);
+              setMentionQuery('');
+              requestAnimationFrame(() => el?.focus());
+            }}
+          >
+            <AtSign size={16} />
+          </button>
+        )}
         {slashCommands.length > 0 && (
           <button
             title="斜杠命令"
