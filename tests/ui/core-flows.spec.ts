@@ -420,19 +420,6 @@ const histories: Record<string, unknown[]> = {
       }],
     },
     {
-      _id: 'general-sticker-image',
-      rid: 'room-general',
-      msg: '',
-      ts: '2026-07-17T08:02:00.000Z',
-      u: ALICE,
-      file: { _id: 'file-sticker', name: '收藏示例.png', type: 'image/png', size: 128 },
-      attachments: [{
-        title: '收藏示例.png',
-        image_url: '/file-upload/sticker/demo-thumb.png',
-        title_link: '/file-upload/sticker/demo.png',
-      }],
-    },
-    {
       _id: 'general-release',
       rid: 'room-general',
       msg: 'Release checklist ready',
@@ -465,6 +452,20 @@ const histories: Record<string, unknown[]> = {
       u: ALICE,
     },
   ],
+};
+
+const stickerMessageFixture = {
+  _id: 'general-sticker-image',
+  rid: 'room-general',
+  msg: '',
+  ts: '2026-07-17T08:02:00.000Z',
+  u: ALICE,
+  file: { _id: 'file-sticker', name: '收藏示例.png', type: 'image/png', size: 128 },
+  attachments: [{
+    title: '收藏示例.png',
+    image_url: '/file-upload/sticker/demo-thumb.png',
+    title_link: '/file-upload/sticker/demo.png',
+  }],
 };
 
 test('桌面图片灯箱优先显示 PP-OCRv5 本地离线后端并叠加可选择文字（issue #163）', async ({ page }) => {
@@ -672,7 +673,10 @@ async function installAdoDirectMock(
   });
 }
 
-async function installRocketChatMock(page: Page) {
+async function installRocketChatMock(
+  page: Page,
+  options: { includeStickerFixture?: boolean } = {},
+) {
   const sentMessages: Record<string, unknown>[] = [];
   const uploadedMessages: Record<string, unknown>[] = [];
   const pageErrors: string[] = [];
@@ -724,7 +728,12 @@ async function installRocketChatMock(page: Page) {
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
-      return fulfillJson(route, { messages: histories[rid] ?? [] });
+      const messages = histories[rid] ?? [];
+      return fulfillJson(route, {
+        messages: options.includeStickerFixture && rid === 'room-general'
+          ? [...messages, stickerMessageFixture]
+          : messages,
+      });
     }
     if (endpoint === 'chat.sendMessage') {
       const body = request.postDataJSON() as { message: Record<string, unknown> };
@@ -772,9 +781,9 @@ async function installRocketChatMock(page: Page) {
 
 async function bootAuthenticated(
   page: Page,
-  options: { expectMessages?: boolean } = {},
+  options: { expectMessages?: boolean; includeStickerFixture?: boolean } = {},
 ) {
-  const state = await installRocketChatMock(page);
+  const state = await installRocketChatMock(page, options);
   await page.addInitScript(({ server, userId }) => {
     localStorage.setItem('rcx-server', server);
     localStorage.setItem('rcx-auth', JSON.stringify({ authToken: 'test-token', userId }));
@@ -1367,7 +1376,7 @@ test('主 Composer 贴纸支持导入本机图片到个人贴纸库并沿用现�
 
 test('收到的图片消息可右键收藏到个人贴纸库并在贴纸面板复用（issue #265）', async ({ page }) => {
   await installFullTauriMock(page);
-  const { pageErrors } = await bootAuthenticated(page);
+  const { pageErrors } = await bootAuthenticated(page, { includeStickerFixture: true });
 
   await conversation(page, 'General').click();
   await page.getByRole('button', { name: /收藏示例\.png/ }).last().click({ button: 'right' });
@@ -1706,6 +1715,7 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
 test('本机托管时再次点击同一按钮会退出且不会打开错误面板', async ({ page }) => {
   const { pageErrors } = await installRocketChatMock(page);
   await page.goto('/');
+  await expect(page.getByText('RocketChat X', { exact: true })).toBeVisible();
   await page.evaluate(async ({ server, me }) => {
     const now = Date.now();
     const deviceId = 'device-ui-local';
