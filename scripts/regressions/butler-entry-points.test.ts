@@ -79,7 +79,13 @@ test('房间管家是纸的房间浮层：状态行、同一在办列表和输�
   assert.match(panel, /roomExchanges\.map[\s\S]*<ButlerInlineExchange[\s\S]*lines=\{exchange\}/);
   assert.match(panel, /placeholder="问问这个房间的讨论…"/);
   assert.match(panel, /id="room-butler-panel"[\s\S]*role="dialog"/);
-  assert.match(panel, /roomConversationExchanges\(butlerLines, rid\)/);
+  assert.match(panel, /readRoomConversation\(roomContext\)/);
+  assert.match(panel, /roomConversationExchanges\(displayLines, rid\)/);
+  assert.doesNotMatch(
+    panel,
+    /useEffect\(\(\) => \{[\s\S]{0,600}openRoomConversation\(roomContext\)/,
+    '打开或切换房间浮层不得切换活动 Butler 会话',
+  );
   assert.match(panel, /setPanel\(null\);[\s\S]{0,100}openButlerConversation\(\)/);
   assert.doesNotMatch(panel, /setPanel\(null\);[\s\S]{0,100}openButlerPaper\(\)/);
   assert.match(panel, /\{roomRunning \? \(/);
@@ -128,4 +134,6 @@ test('主动发现保持克制，驾驶舱与输入区使用正确的表面层�
   assert.match(page, /<section aria-label="统一 Composer" className="butler-composer">/);
   assert.match(page, /placeholder="问、交代或创建/);
   assert.match(page, /交给\{identity\.displayName\}/);
+  assert.doesNotMatch(page, /aria-label="添加上下文"/);
+  assert.doesNotMatch(page, /aria-label="引用文件或消息"/);
 });

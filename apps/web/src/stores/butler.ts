@@ -231,6 +231,8 @@ export interface ButlerState {
   stop: () => Promise<void>;
   /** 新对话：保留当前 session 并创建一个独立 session。 */
   newConversation: () => Promise<void>;
+  /** 只读取得房间会话，不切换活动会话，也不中断当前回答。 */
+  readRoomConversation: (room: ButlerRoomContext) => Promise<ButlerLine[]>;
   openRoomConversation: (room: ButlerRoomContext) => Promise<void>;
   openStandaloneConversation: () => Promise<void>;
   switchSession: (sessionId: string) => Promise<void>;
@@ -286,6 +288,7 @@ interface PersistedButlerSession {
 interface PersistedButlerSessionRegistry {
   schemaVersion: typeof SESSION_REGISTRY_VERSION;
   activeSessionId: string;
+  lastStandaloneSessionId?: string;
   sessions: PersistedButlerSession[];
 }
 
@@ -641,10 +644,20 @@ function normalizeRegistry(
   ))
     ? stored.activeSessionId
     : sessions.find((session) => session.kind !== 'workflow')!.id;
+  const active = sessions.find((session) => session.id === activeSessionId)!;
+  const rememberedStandalone = isStandaloneSession(active)
+    ? active
+    : findRememberedStandaloneSession({
+        schemaVersion: SESSION_REGISTRY_VERSION,
+        activeSessionId,
+        lastStandaloneSessionId: stored.lastStandaloneSessionId,
+        sessions,
+      });
   return {
     schemaVersion: SESSION_REGISTRY_VERSION,
     activeSessionId,
-    sessions: pruneEmptySessions(sessions, activeSessionId),
+    ...(rememberedStandalone ? { lastStandaloneSessionId: rememberedStandalone.id } : {}),
+    sessions: pruneEmptySessions(sessions, activeSessionId, rememberedStandalone?.id),
   };
 }
 
@@ -661,10 +674,12 @@ function normalizeRegistry(
 function pruneEmptySessions(
   sessions: readonly PersistedButlerSession[],
   activeSessionId: string,
+  lastStandaloneSessionId?: string,
 ): PersistedButlerSession[] {
   return sessions.filter((session) => (
     session.kind === 'workflow'
     || session.id === activeSessionId
+    || session.id === lastStandaloneSessionId
     || session.lines.some((line) => line.role === 'user')
   ));
 }
@@ -723,6 +738,17 @@ function findStandaloneSession(
   return registry.sessions
     .filter((session) => isStandaloneSession(session))
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];
+}
+
+function findRememberedStandaloneSession(
+  registry: PersistedButlerSessionRegistry,
+): PersistedButlerSession | undefined {
+  const remembered = registry.lastStandaloneSessionId
+    ? registry.sessions.find((session) => session.id === registry.lastStandaloneSessionId)
+    : undefined;
+  return remembered && isStandaloneSession(remembered)
+    ? remembered
+    : findStandaloneSession(registry);
 }
 
 function findRoomSession(
@@ -1564,6 +1590,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       let registry: PersistedButlerSessionRegistry = existingRegistry ?? {
         schemaVersion: SESSION_REGISTRY_VERSION,
         activeSessionId: DEFAULT_SESSION_ID,
+        lastStandaloneSessionId: DEFAULT_SESSION_ID,
         sessions: [defaultSession(legacy)],
       };
 
@@ -1592,6 +1619,7 @@ export const useButler = create<ButlerState>((set, get) => ({
         registry = {
           schemaVersion: SESSION_REGISTRY_VERSION,
           activeSessionId: id,
+          lastStandaloneSessionId: id,
           sessions: hasStoredConversation ? [...registry.sessions, startedSession] : [startedSession],
         };
       }
@@ -1967,11 +1995,20 @@ export const useButler = create<ButlerState>((set, get) => ({
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...currentRegistry,
       activeSessionId: nextSession.id,
+      lastStandaloneSessionId: nextSession.id,
       sessions: [...currentRegistry.sessions, nextSession],
     };
     sessionRegistry = nextRegistry;
     applyActiveSession(nextRegistry);
     await queueRegistryWrite(scope, nextRegistry);
+  },
+
+  readRoomConversation: async (room) => {
+    const origin = roomSessionOrigin(room);
+    if (!origin.rid) return [];
+    await get().hydrate();
+    if (!sessionRegistry) return [];
+    return findRoomSession(sessionRegistry, origin.rid)?.lines.slice(-LINES_LIMIT) ?? [];
   },
 
   openRoomConversation: async (room) => {
@@ -1992,11 +2029,21 @@ export const useButler = create<ButlerState>((set, get) => ({
     const replaceEmptyStandalone = !existing
       && isStandaloneSession(current)
       && !current.lines.some((line) => line.role === 'user');
+    const retainedSessions = replaceEmptyStandalone
+      ? sessionRegistry.sessions.filter((session) => session.id !== current.id)
+      : sessionRegistry.sessions;
+    const rememberedStandalone = isStandaloneSession(current) && !replaceEmptyStandalone
+      ? current
+      : findRememberedStandaloneSession({
+          ...sessionRegistry,
+          sessions: retainedSessions,
+        });
     const switching = sessionRegistry.activeSessionId !== targetSession.id;
     const originChanged = existing?.origin?.roomName !== origin.roomName;
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...sessionRegistry,
       activeSessionId: targetSession.id,
+      lastStandaloneSessionId: rememberedStandalone?.id,
       sessions: existing
         ? sessionRegistry.sessions.map((session) => session.id === existing.id ? targetSession : session)
         : [
@@ -2026,14 +2073,16 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!sessionRegistry || !persistScope) return;
     const scope = persistScope;
     const current = activeSession(sessionRegistry);
-    const hadTarget = isStandaloneSession(current) || Boolean(findStandaloneSession(sessionRegistry));
+    const rememberedStandalone = findRememberedStandaloneSession(sessionRegistry);
+    const hadTarget = isStandaloneSession(current) || Boolean(rememberedStandalone);
     const targetSession = isStandaloneSession(current)
       ? current
-      : findStandaloneSession(sessionRegistry) ?? createInteractiveSession(butlerNow());
+      : rememberedStandalone ?? createInteractiveSession(butlerNow());
     const switching = sessionRegistry.activeSessionId !== targetSession.id;
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...sessionRegistry,
       activeSessionId: targetSession.id,
+      lastStandaloneSessionId: targetSession.id,
       sessions: sessionRegistry.sessions.some((session) => session.id === targetSession.id)
         ? sessionRegistry.sessions
         : [...sessionRegistry.sessions, targetSession],
@@ -2060,9 +2109,11 @@ export const useButler = create<ButlerState>((set, get) => ({
     await flushButlerPersist();
     if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     const scope = persistScope;
+    const target = sessionRegistry.sessions.find((session) => session.id === targetId)!;
     const nextRegistry: PersistedButlerSessionRegistry = {
       ...sessionRegistry,
       activeSessionId: targetId,
+      ...(isStandaloneSession(target) ? { lastStandaloneSessionId: targetId } : {}),
     };
     await discardResidentCodexThread();
     sessionRegistry = nextRegistry;
@@ -2107,9 +2158,15 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!sessionRegistry || !sessionRegistry.sessions.some((session) => session.id === targetId)) return;
     const scope = persistScope;
     if (!deletingActive) {
+      const remaining = sessionRegistry.sessions.filter((session) => session.id !== targetId);
+      const rememberedStandalone = findRememberedStandaloneSession({
+        ...sessionRegistry,
+        sessions: remaining,
+      });
       const nextRegistry: PersistedButlerSessionRegistry = {
         ...sessionRegistry,
-        sessions: sessionRegistry.sessions.filter((session) => session.id !== targetId),
+        lastStandaloneSessionId: rememberedStandalone?.id,
+        sessions: remaining,
       };
       sessionRegistry = nextRegistry;
       set({ sessions: sessionSummaries(nextRegistry) });
@@ -2127,12 +2184,21 @@ export const useButler = create<ButlerState>((set, get) => ({
       .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)[0];
     let nextRegistry: PersistedButlerSessionRegistry;
     if (nextActive) {
-      nextRegistry = { ...sessionRegistry, activeSessionId: nextActive.id, sessions: remaining };
+      const rememberedStandalone = isStandaloneSession(nextActive)
+        ? nextActive
+        : findRememberedStandaloneSession({ ...sessionRegistry, sessions: remaining });
+      nextRegistry = {
+        ...sessionRegistry,
+        activeSessionId: nextActive.id,
+        lastStandaloneSessionId: rememberedStandalone?.id,
+        sessions: remaining,
+      };
     } else {
       const nextSession = createInteractiveSession(butlerNow());
       nextRegistry = {
         ...sessionRegistry,
         activeSessionId: nextSession.id,
+        lastStandaloneSessionId: nextSession.id,
         sessions: [...remaining, nextSession],
       };
     }

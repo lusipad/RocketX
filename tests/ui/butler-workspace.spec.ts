@@ -687,6 +687,8 @@ test('主动工作驾驶舱匹配确认的宽屏视觉方向', async ({ page }) 
   await openWorkspace(page);
   await seedWorkspace(page);
   await expect(page.getByRole('heading', { name: /件事值得你先看/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加上下文' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '引用文件或消息' })).toHaveCount(0);
   await expect(page).toHaveScreenshot('butler-workspace-wide.png', {
     animations: 'disabled',
     caret: 'hide',

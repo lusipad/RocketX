@@ -1,7 +1,11 @@
 import { Check, ChevronDown, FileText, GitCompare, ListChecks, PencilLine } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { renderMarkdown } from '../lib/markdown';
-import { useButlerArtifacts, type ButlerArtifactKind } from '../stores/butlerArtifacts';
+import {
+  useButlerArtifacts,
+  type ButlerArtifact,
+  type ButlerArtifactKind,
+} from '../stores/butlerArtifacts';
 
 const kindMeta: Record<ButlerArtifactKind, { label: string; icon: typeof FileText }> = {
   report: { label: '报告', icon: FileText },
@@ -11,11 +15,12 @@ const kindMeta: Record<ButlerArtifactKind, { label: string; icon: typeof FileTex
 };
 
 export default function ButlerArtifactsPanel({
+  artifacts,
   onContinue,
 }: {
+  artifacts: readonly ButlerArtifact[];
   onContinue: (title: string) => void;
 }) {
-  const artifacts = useButlerArtifacts((state) => state.artifacts);
   const accept = useButlerArtifacts((state) => state.accept);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [versionNumber, setVersionNumber] = useState<number | null>(null);

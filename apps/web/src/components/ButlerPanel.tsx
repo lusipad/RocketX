@@ -44,8 +44,11 @@ export default function ButlerPanel() {
   const running = useButler((state) => state.running);
   const ask = useButler((state) => state.ask);
   const stop = useButler((state) => state.stop);
-  const hydrate = useButler((state) => state.hydrate);
+  const readRoomConversation = useButler((state) => state.readRoomConversation);
   const openRoomConversation = useButler((state) => state.openRoomConversation);
+  const roomSessionUpdatedAt = useButler((state) => (
+    rid ? state.sessions.find((session) => session.origin?.rid === rid)?.updatedAt : undefined
+  ));
   const setPanel = useChat((state) => state.setPanel);
   const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
   const setButlerPanelWidth = useImLayout((state) => state.setButlerPanelWidth);
@@ -53,6 +56,7 @@ export default function ButlerPanel() {
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ButlerImageInput[]>([]);
+  const [previewLines, setPreviewLines] = useState<ButlerLine[]>([]);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const resizeStart = useRef<{
     x: number;
@@ -65,17 +69,19 @@ export default function ButlerPanel() {
     () => (rid ? { rid, roomName: roomName(rid, subscription, room) } : null),
     [rid, room, subscription],
   );
-  const roomExchanges = useMemo(
-    () => (rid ? roomConversationExchanges(butlerLines, rid) : []),
-    [butlerLines, rid],
-  );
   const roomErrands = useMemo(
     () => (rid ? butlerErrands.filter((errand) => errand.roomContext?.rid === rid) : []),
     [butlerErrands, rid],
   );
   const sections = useMemo(() => partitionButlerPaperErrands(roomErrands), [roomErrands]);
+  const roomActive = !!rid && contextHasRoomSource(butlerContext, rid);
+  const roomRunning = running && roomActive;
+  const displayLines = roomActive ? butlerLines : previewLines;
+  const roomExchanges = useMemo(
+    () => (rid ? roomConversationExchanges(displayLines, rid) : []),
+    [displayLines, rid],
+  );
   const hasConversation = roomExchanges.some((exchange) => exchange.some((line) => line.role === 'user'));
-  const roomRunning = running && !!rid && contextHasRoomSource(butlerContext, rid);
   const openFullConversation = (): void => {
     setPanel(null);
     if (!roomContext) {
@@ -88,15 +94,18 @@ export default function ButlerPanel() {
   };
 
   useEffect(() => {
+    setPreviewLines([]);
     if (!userId || !roomContext) return;
     let cancelled = false;
-    void hydrate().then(() => {
-      if (!cancelled) return openRoomConversation(roomContext);
-    }).catch(() => undefined);
+    void readRoomConversation(roomContext)
+      .then((lines) => {
+        if (!cancelled) setPreviewLines(lines);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [hydrate, openRoomConversation, roomContext, userId]);
+  }, [readRoomConversation, roomContext, roomSessionUpdatedAt, userId]);
 
   if (!rid) return null;
 

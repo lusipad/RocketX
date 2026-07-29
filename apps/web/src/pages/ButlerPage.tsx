@@ -8,8 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   LoaderCircle,
-  Paperclip,
-  Plus,
   RefreshCw,
   Send,
   Sparkles,
@@ -619,12 +617,6 @@ export default function ButlerPage() {
                   />
                   <div className="butler-composer-actions">
                     <div>
-                      <button type="button" aria-label="添加上下文" title="添加上下文">
-                        <Plus size={15} />
-                      </button>
-                      <button type="button" aria-label="引用文件或消息" title="引用文件或消息">
-                        <Paperclip size={14} />
-                      </button>
                       <button type="button" onClick={() => selectButlerView('routines')}>
                         创建
                         <ChevronDown size={13} />

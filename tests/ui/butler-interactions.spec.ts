@@ -971,6 +971,68 @@ test('从房间进入管家恢复普通会话，房间问答留在独立历史',
   expect(pageErrors).toEqual([]);
 });
 
+test('普通管家运行中打开房间浮层不会停止或切换当前会话', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  const activeSessionId = await seedStandaloneButlerAnswer(
+    page,
+    '继续整理发布计划',
+    '普通管家任务还在进行。',
+  );
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { stop: () => Promise<void> };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    const testWindow = window as Window & {
+      __butlerOriginalStop?: () => Promise<void>;
+      __butlerStopCalls?: number;
+    };
+    testWindow.__butlerOriginalStop = useButler.getState().stop;
+    testWindow.__butlerStopCalls = 0;
+    useButler.setState({
+      running: true,
+      stop: async () => {
+        testWindow.__butlerStopCalls = (testWindow.__butlerStopCalls ?? 0) + 1;
+      },
+    });
+  });
+
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await page.getByRole('button', { name: '打开房间管家', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '房间管家' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '管家正在处理其他内容' })).toBeDisabled();
+
+  const state = await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { activeSessionId: string; running: boolean };
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    const { useButler } = await load();
+    const testWindow = window as Window & {
+      __butlerOriginalStop?: () => Promise<void>;
+      __butlerStopCalls?: number;
+    };
+    const result = {
+      activeSessionId: useButler.getState().activeSessionId,
+      running: useButler.getState().running,
+      stopCalls: testWindow.__butlerStopCalls ?? 0,
+    };
+    useButler.setState({
+      running: false,
+      ...(testWindow.__butlerOriginalStop ? { stop: testWindow.__butlerOriginalStop } : {}),
+    });
+    return result;
+  });
+
+  expect(state).toEqual({ activeSessionId, running: true, stopCalls: 0 });
+  expect(pageErrors).toEqual([]);
+});
+
 test('AI 托管记录出现在管家历史，查看时不抢走普通会话', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   const activeSessionId = await seedStandaloneButlerAnswer(

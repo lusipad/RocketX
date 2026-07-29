@@ -38,7 +38,10 @@ import ButlerImagePicker, {
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import type { ButlerImageInput } from '../lib/butlerImages';
-import { useButlerArtifacts } from '../stores/butlerArtifacts';
+import {
+  butlerArtifactsForSession,
+  useButlerArtifacts,
+} from '../stores/butlerArtifacts';
 import {
   projectHostedConversation,
   type HostedConversationLine,
@@ -119,6 +122,10 @@ export default function ButlerConversation({
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
   const activeSummary = sessions.find((session) => session.id === activeSessionId);
+  const activeArtifacts = useMemo(
+    () => butlerArtifactsForSession(artifacts, activeSessionId, lines),
+    [activeSessionId, artifacts, lines],
+  );
   const sharedSessionKeys = Object.keys(sharedAgentSessions).sort().join('\n');
   const hostedConversations = useMemo(
     () =>
@@ -222,8 +229,9 @@ export default function ButlerConversation({
   }, [hydrateArtifacts]);
 
   useEffect(() => {
-    for (const conversationLine of lines) captureArtifactLine(conversationLine);
-  }, [captureArtifactLine, lines]);
+    if (!activeSessionId) return;
+    for (const conversationLine of lines) captureArtifactLine(activeSessionId, conversationLine);
+  }, [activeSessionId, captureArtifactLine, lines]);
 
   // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
   // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
@@ -365,6 +373,7 @@ export default function ButlerConversation({
           <div className="mx-auto min-h-full w-full max-w-[840px] space-y-5">
             {!selectedHosted ? (
               <ButlerArtifactsPanel
+                artifacts={activeArtifacts}
                 onContinue={(title) => setInput(`继续加工成果“${title}”：`)}
               />
             ) : null}

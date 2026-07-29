@@ -20,6 +20,7 @@ export interface ButlerArtifactVersion {
 
 export interface ButlerArtifact {
   id: string;
+  sessionId?: string;
   sourceLineId: string;
   title: string;
   kind: ButlerArtifactKind;
@@ -33,7 +34,7 @@ interface ButlerArtifactState {
   artifacts: ButlerArtifact[];
   hydrated: boolean;
   hydrate: () => void;
-  captureLine: (line: ButlerLine) => ButlerArtifact | undefined;
+  captureLine: (sessionId: string, line: ButlerLine) => ButlerArtifact | undefined;
   revise: (id: string, content: string, sources?: ButlerSource[]) => void;
   accept: (id: string) => void;
 }
@@ -58,6 +59,19 @@ export function shouldCaptureButlerArtifact(line: ButlerLine): boolean {
   if (line.role !== 'assistant') return false;
   return line.text.trim().length >= LONG_RESULT_THRESHOLD
     || /```(?:diff|patch)|^\s*[-*]\s+\[[ xX]\]/m.test(line.text);
+}
+
+export function butlerArtifactsForSession(
+  artifacts: readonly ButlerArtifact[],
+  sessionId: string,
+  lines: readonly ButlerLine[],
+): ButlerArtifact[] {
+  const sourceLineIds = new Set(lines.map((line) => line.id));
+  return artifacts.filter((artifact) => (
+    artifact.sessionId
+      ? artifact.sessionId === sessionId
+      : sourceLineIds.has(artifact.sourceLineId)
+  ));
 }
 
 function normalizeArtifacts(value: unknown): ButlerArtifact[] {
@@ -90,7 +104,14 @@ function normalizeArtifacts(value: unknown): ButlerArtifact[] {
         }]
         : []
     )).slice(-VERSION_LIMIT);
-    return versions.length ? [{ ...item, versions } as ButlerArtifact] : [];
+    const sessionId = typeof item.sessionId === 'string' && item.sessionId.trim()
+      ? item.sessionId.trim()
+      : undefined;
+    return versions.length ? [{
+      ...item,
+      sessionId,
+      versions,
+    } as ButlerArtifact] : [];
   }).slice(0, ARTIFACT_LIMIT);
 }
 
@@ -120,13 +141,17 @@ export const useButlerArtifacts = create<ButlerArtifactState>((set, get) => ({
     set({ artifacts: readArtifacts(), hydrated: true });
   },
 
-  captureLine: (line) => {
+  captureLine: (sessionId, line) => {
     if (!shouldCaptureButlerArtifact(line)) return undefined;
-    const existing = get().artifacts.find((artifact) => artifact.sourceLineId === line.id);
+    const existing = get().artifacts.find((artifact) => (
+      artifact.sourceLineId === line.id
+      && (!artifact.sessionId || artifact.sessionId === sessionId)
+    ));
     if (existing) return existing;
     const now = Date.now();
     const artifact: ButlerArtifact = {
-      id: `artifact-${line.id}`,
+      id: `artifact-${sessionId}-${line.id}`,
+      sessionId,
       sourceLineId: line.id,
       title: artifactTitle(line.text),
       kind: artifactKind(line.text),
