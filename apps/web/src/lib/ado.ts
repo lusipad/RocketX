@@ -144,6 +144,11 @@ export interface AdoBuildInfo {
   queueTime: string;
   finishTime: string;
   webUrl: string;
+  reason?: string;
+  sourceBranch?: string;
+  repository?: string;
+  pullRequestId?: number;
+  pullRequestUrl?: string;
 }
 
 export type AdoUrlEntity =

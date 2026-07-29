@@ -1025,6 +1025,176 @@ async function main(): Promise<void> {
     globalThis.fetch = originalGlobalFetch;
   }
 
+  console.log('\n[工作台 · 构建关联 PR]');
+  const { directGetBuilds } = await import('../apps/web/src/lib/adoDirect');
+  const { useUI } = await import('../apps/web/src/stores/ui');
+  const { BuildList, matchesBuildKeyword } = await import('../apps/web/src/components/AdoLists');
+
+  const buildCalls: string[] = [];
+  globalThis.fetch = (async (input: URL | RequestInfo) => {
+    const url = String(input);
+    buildCalls.push(url);
+    const payload = url.includes('/_apis/connectionData')
+      ? {
+          authenticatedUser: {
+            id: 'guid',
+            providerDisplayName: '张三',
+            properties: { Account: { $value: 'CORP\\zhangsan' } },
+          },
+        }
+      : url.includes('/_apis/projects')
+        ? { value: [{ name: 'Alpha' }] }
+        : {
+            value: [
+              {
+                id: 101,
+                buildNumber: 'PR_Check-101',
+                definition: { name: 'PR_Check' },
+                project: { name: 'Alpha' },
+                status: 'completed',
+                result: 'failed',
+                requestedFor: { displayName: '张三' },
+                queueTime: '2026-07-29T10:00:00Z',
+                finishTime: '2026-07-29T10:10:00Z',
+                reason: 'pullRequest',
+                repository: { name: 'RocketX' },
+                triggerInfo: { 'pr.number': '38031' },
+                sourceBranch: 'refs/pull/99999/merge',
+                parameters: JSON.stringify({
+                  'system.pullRequest.pullRequestId': '11111',
+                }),
+              },
+              {
+                id: 102,
+                buildNumber: 'PR_Check-102',
+                definition: { name: 'PR_Check' },
+                project: { name: 'Alpha' },
+                status: 'completed',
+                result: 'succeeded',
+                requestedFor: { displayName: '张三' },
+                queueTime: '2026-07-29T09:00:00Z',
+                finishTime: '2026-07-29T09:08:00Z',
+                reason: 'pullRequest',
+                repository: { name: 'RocketX' },
+                sourceBranch: 'refs/pull/38032/merge',
+                parameters: { 'system.pullRequest.pullRequestId': '22222' },
+              },
+              {
+                id: 103,
+                buildNumber: 'PR_Check-103',
+                definition: { name: 'PR_Check' },
+                project: { name: 'Alpha' },
+                status: 'completed',
+                result: 'failed',
+                requestedFor: { displayName: '张三' },
+                queueTime: '2026-07-29T08:00:00Z',
+                finishTime: '2026-07-29T08:06:00Z',
+                reason: 'pullRequest',
+                repository: { name: 'RocketX' },
+                parameters: JSON.stringify({
+                  'system.pullRequest.pullRequestId': '38033',
+                }),
+              },
+              {
+                id: 104,
+                buildNumber: 'Nightly-104',
+                definition: { name: 'Nightly' },
+                project: { name: 'Alpha' },
+                status: 'completed',
+                result: 'succeeded',
+                requestedFor: { displayName: '张三' },
+                queueTime: '2026-07-29T07:00:00Z',
+                finishTime: '2026-07-29T07:30:00Z',
+                reason: 'manual',
+                repository: { name: 'RocketX' },
+                sourceBranch: 'refs/pull/48888/merge',
+                parameters: JSON.stringify({
+                  'system.pullRequest.pullRequestId': '49999',
+                }),
+              },
+              {
+                id: 105,
+                buildNumber: 'PR_Check-105',
+                definition: { name: 'PR_Check' },
+                project: { name: 'Alpha' },
+                status: 'completed',
+                result: 'failed',
+                requestedFor: { displayName: '张三' },
+                queueTime: '2026-07-29T06:00:00Z',
+                finishTime: '2026-07-29T06:04:00Z',
+                reason: 'pullRequest',
+                repository: { name: 'RocketX' },
+                triggerInfo: { 'pr.number': '38031' },
+              },
+            ],
+          };
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const directConfig = {
+      adoBase: 'http://ado.local/DefaultCollection',
+      pat: '',
+      auth: 'none' as const,
+    };
+    const builds = await directGetBuilds(directConfig, 10);
+    check(
+      'PR 提取顺序：triggerInfo["pr.number"] 优先于 sourceBranch 和 parameters',
+      builds.find((build) => build.id === 101)?.pullRequestId === 38031,
+      JSON.stringify(builds.find((build) => build.id === 101)),
+    );
+    check(
+      'PR 提取顺序：没有 triggerInfo 时回退到 sourceBranch',
+      builds.find((build) => build.id === 102)?.pullRequestId === 38032,
+      JSON.stringify(builds.find((build) => build.id === 102)),
+    );
+    check(
+      'PR 提取顺序：前两者都没有时回退到 parameters',
+      builds.find((build) => build.id === 103)?.pullRequestId === 38033,
+      JSON.stringify(builds.find((build) => build.id === 103)),
+    );
+    check(
+      '非 PR 构建即使带 PR 形态字段也不带 pullRequestId',
+      builds.find((build) => build.id === 104)?.pullRequestId == null,
+      JSON.stringify(builds.find((build) => build.id === 104)),
+    );
+    check(
+      '同一个 PR 的多条构建保留一致的 PR 编号',
+      builds
+        .filter((build) => build.pullRequestId === 38031)
+        .map((build) => build.id)
+        .join(',') === '101,105',
+      builds
+        .filter((build) => build.pullRequestId === 38031)
+        .map((build) => `${build.id}:${build.pullRequestId}`)
+        .join(','),
+    );
+    check(
+      'PR 构建生成与现有 PR 列表一致的链接模式',
+      builds.find((build) => build.id === 101)?.pullRequestUrl ===
+        'http://ado.local/DefaultCollection/Alpha/_git/RocketX/pullrequest/38031',
+      builds.find((build) => build.id === 101)?.pullRequestUrl ?? '空',
+    );
+    check(
+      '构建检索支持 PR 编号',
+      matchesBuildKeyword(builds[0] as any, '38031') &&
+        !matchesBuildKeyword(builds.find((build) => build.id === 104) as any, '38031'),
+    );
+
+    useUI.setState({ buildsFailedOnly: false });
+    const buildListHtml = renderToStaticMarkup(React.createElement(BuildList, { builds }));
+    check('构建列表渲染独立的 PR 标签', buildListHtml.includes('PR #38031'));
+    check(
+      '构建列表里的 PR 标签指向对应 Pull Request',
+      buildListHtml.includes('href="http://ado.local/DefaultCollection/Alpha/_git/RocketX/pullrequest/38031"'),
+    );
+    check('非 PR 构建显示破折号', buildListHtml.includes('Nightly-104') && buildListHtml.includes('—'));
+  } finally {
+    globalThis.fetch = originalGlobalFetch;
+  }
+
   const sorted = sortMembers([plain, mod, owner] as any, ROLES).map((u) => u.username);
   check('成员排序：群主 → 管理员 → 普通成员', sorted.join(',') === 'owner,mod,plain', sorted.join(','));
 
