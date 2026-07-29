@@ -8,17 +8,6 @@ const directory = path.resolve(directoryIndex >= 0 ? process.argv[directoryIndex
 const tag = tagIndex >= 0 ? process.argv[tagIndex + 1] : '';
 const version = parseReleaseTag(tag);
 const names = await readdir(directory);
-const deferredAssetPatterns = [
-  /\.dmg(?:\.sig)?$/i,
-  /universal\.app\.tar\.gz(?:\.sig)?$/i,
-  /\.AppImage(?:\.sig)?$/i,
-  /\.deb(?:\.sig)?$/i,
-  /\.rpm(?:\.sig)?$/i,
-];
-const deferredAsset = names.find((name) => deferredAssetPatterns.some((pattern) => pattern.test(name)));
-if (deferredAsset) {
-  throw new Error(`Unexpected deferred-platform asset in Windows-only release: ${deferredAsset}`);
-}
 
 function requireMatch(label, pattern) {
   const name = names.find((candidate) => pattern.test(candidate));
@@ -36,7 +25,13 @@ const fullInstaller = requireMatch(
 );
 const required = [
   slimInstaller,
+  requireMatch('Windows MSI', new RegExp(`${versionPattern}.*\\.msi$`, 'i')),
   fullInstaller,
+  requireMatch('macOS universal DMG', new RegExp(`${versionPattern}.*universal.*\\.dmg$`, 'i')),
+  requireMatch('macOS updater archive', /universal\.app\.tar\.gz$/i),
+  requireMatch('Linux AppImage', new RegExp(`${versionPattern}.*\\.AppImage$`, 'i')),
+  requireMatch('Linux DEB', new RegExp(`${versionPattern}.*\\.deb$`, 'i')),
+  requireMatch('Linux RPM', new RegExp(`${versionPattern}.*\\.rpm$`, 'i')),
   requireMatch('updater metadata', /^latest\.json$/),
   requireMatch('plugins bundle', new RegExp(`rocketx-plugins-${versionPattern}\\.zip$`, 'i')),
 ];
@@ -46,7 +41,14 @@ for (const name of required) {
   if (!metadata.isFile() || metadata.size < 1_000) throw new Error(`${name} is empty or unexpectedly small`);
 }
 
-for (const pattern of [/\.exe\.sig$/i]) {
+for (const pattern of [
+  /\.exe\.sig$/i,
+  /\.msi\.sig$/i,
+  /\.AppImage\.sig$/i,
+  /\.deb\.sig$/i,
+  /\.rpm\.sig$/i,
+  /universal\.app\.tar\.gz\.sig$/i,
+]) {
   const signature = requireMatch(pattern.source, pattern);
   if ((await stat(path.join(directory, signature))).size === 0) throw new Error(`${signature} is empty`);
 }
@@ -54,12 +56,23 @@ for (const pattern of [/\.exe\.sig$/i]) {
 const updater = JSON.parse(await readFile(path.join(directory, 'latest.json'), 'utf8'));
 if (updater.version !== version) throw new Error(`latest.json version is ${updater.version}, expected ${version}`);
 const platforms = Object.keys(updater.platforms ?? {});
-if (!platforms.includes('windows-x86_64')) throw new Error('latest.json is missing windows-x86_64');
-const nonWindowsPlatform = platforms.find((platform) => !platform.startsWith('windows-'));
-if (nonWindowsPlatform) throw new Error(`latest.json contains non-Windows platform: ${nonWindowsPlatform}`);
-const updaterUrls = Object.values(updater.platforms ?? {}).map((entry) => entry?.url ?? '');
-if (updaterUrls.some((url) => /_full-setup\.exe(?:$|\?)/i.test(url))) {
+for (const platform of ['windows-x86_64', 'linux-x86_64', 'darwin-aarch64', 'darwin-x86_64']) {
+  if (!platforms.includes(platform)) throw new Error(`latest.json is missing ${platform}`);
+  if (!updater.platforms[platform]?.signature?.trim()) {
+    throw new Error(`latest.json is missing the ${platform} signature`);
+  }
+}
+const windowsUpdaterUrl = updater.platforms['windows-x86_64'].url ?? '';
+if (!/\.exe(?:$|\?)/i.test(windowsUpdaterUrl) || /_full-setup\.exe(?:$|\?)/i.test(windowsUpdaterUrl)) {
   throw new Error('latest.json must keep updating the slim installer, not the full setup');
 }
+if (!/\.AppImage(?:$|\?)/i.test(updater.platforms['linux-x86_64'].url ?? '')) {
+  throw new Error('latest.json must update Linux through the AppImage');
+}
+for (const platform of ['darwin-aarch64', 'darwin-x86_64']) {
+  if (!/universal\.app\.tar\.gz(?:$|\?)/i.test(updater.platforms[platform].url ?? '')) {
+    throw new Error(`latest.json must update ${platform} through the universal app archive`);
+  }
+}
 
-console.log(`Verified Windows release assets for v${version} (${names.length} files)`);
+console.log(`Verified cross-platform release assets for v${version} (${names.length} files)`);

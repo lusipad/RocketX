@@ -1,6 +1,6 @@
 # 更新日志
 
-## v0.34.0 - 2026-07-29
+## v0.34.1 - 2026-07-29
 
 ### 新增
 
@@ -29,8 +29,15 @@
 
 ### 发布
 
-- 本次版本继续只发布 Windows x64 的 NSIS slim 与 full 两个安装包；full 只增加 OCR 资源，不包含 `codex.exe`。
-- `v0.34.0` 不标记为 Latest；发布流程继续确认 `v0.28.0` 保持跨平台 Latest。
+- 正式恢复 Windows、macOS 和 Linux 三平台交付：Windows 提供 NSIS slim、MSI 与 full 安装包，macOS 提供 universal DMG，Linux 提供 AppImage、DEB 与 RPM。
+- 三个平台继续共用 Tauri updater 签名与完整 `latest.json`；Windows 自动更新固定选择 slim NSIS，full 只增加 OCR 资源且不包含 `codex.exe`。
+- `v0.34.1` 恢复为 GitHub Latest，取代此前保留的 `v0.28.0` 跨平台更新基线。
+
+## v0.34.0 - 2026-07-29
+
+### 发布
+
+- 此标签对应已取消的 Windows-only 发布候选，从未公开；正式三平台交付由 `v0.34.1` 取代。
 
 ## v0.33.4 - 2026-07-28
 
