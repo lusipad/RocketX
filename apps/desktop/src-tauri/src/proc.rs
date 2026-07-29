@@ -2106,7 +2106,7 @@ mod tests {
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
         classify_codex_version, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, find_program, first_existing_program, host_path,
+        exec_optional_args_for_help, find_program, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
         parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
         resolve_codex_from_candidates_with_probe, resolve_update_package,
@@ -2120,7 +2120,8 @@ mod tests {
     };
     #[cfg(windows)]
     use super::{
-        resolve_pwsh_program_from_finder, run_butler_azure_devops_server_read_with_program,
+        first_existing_program, resolve_pwsh_program_from_finder,
+        run_butler_azure_devops_server_read_with_program,
     };
     use serde_json::json;
     #[cfg(windows)]
