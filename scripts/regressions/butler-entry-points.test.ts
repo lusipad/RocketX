@@ -128,7 +128,10 @@ test('主动发现保持克制，驾驶舱与输入区使用正确的表面层�
   assert.match(suggestionSection, /转为待办/);
   assert.match(suggestionSection, /忽略/);
   assert.doesNotMatch(suggestionSection, /<details[^>]*\sopen(?:=|\s|>)/);
-  assert.match(page, /className="butler-workspace"/);
+  assert.match(
+    page,
+    /className=\{`butler-workspace\$\{activeView === 'conversation' \? ' butler-workspace-conversation' : ''\}`\}/,
+  );
   assert.match(source('apps/web/src/styles.css'), /\.butler-workspace \{[\s\S]*flex: 1 1 0%;/);
   assert.match(page, /className="butler-workspace-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-3"/);
   assert.match(page, /<section aria-label="统一 Composer" className="butler-composer">/);
