@@ -618,6 +618,23 @@ test('禅模式默认关闭并可显式开启通知聚合（issue #208）', asyn
   expect(pageErrors).toEqual([]);
 });
 
+test('头像卡片可编辑本人资料，切换离开后立即显示状态（issue #271）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  const navigation = page.getByRole('navigation');
+
+  await navigation.getByTitle('个人信息').click();
+  const card = page.getByRole('dialog', { name: 'Test User的个人信息' });
+  await card.getByRole('button', { name: '编辑资料与状态' }).click();
+
+  await expect(page.getByRole('heading', { name: '账号与状态' })).toBeVisible();
+  await page.getByRole('button', { name: '离开', exact: true }).click();
+  await expect(navigation.getByTitle('离开')).toBeVisible();
+
+  await navigation.getByTitle('个人信息').click();
+  await expect(page.getByRole('dialog', { name: 'Test User的个人信息' })).toContainText('离开');
+  expect(pageErrors).toEqual([]);
+});
+
 function fulfillJson(route: Route, json: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', json });
 }
@@ -677,6 +694,7 @@ async function installRocketChatMock(
   page: Page,
   options: { includeStickerFixture?: boolean } = {},
 ) {
+  let ownStatus = ME.status;
   const sentMessages: Record<string, unknown>[] = [];
   const uploadedMessages: Record<string, unknown>[] = [];
   const pageErrors: string[] = [];
@@ -707,7 +725,7 @@ async function installRocketChatMock(
     if (endpoint === 'login') {
       return fulfillJson(route, {
         status: 'success',
-        data: { authToken: 'test-token', userId: ME._id, me: ME },
+        data: { authToken: 'test-token', userId: ME._id, me: { ...ME, status: ownStatus } },
       });
     }
     if (endpoint === 'settings.public') {
@@ -719,10 +737,19 @@ async function installRocketChatMock(
     if (endpoint === 'subscriptions.get') return fulfillJson(route, { update: subscriptions });
     if (endpoint === 'rooms.get') return fulfillJson(route, { update: rooms });
     if (endpoint === 'commands.list') return fulfillJson(route, { commands: [] });
-    if (endpoint === 'users.info') {
-      return fulfillJson(route, { user: { ...ME, settings: { preferences: {} } } });
+    if (endpoint === 'me') {
+      return fulfillJson(route, { ...ME, status: ownStatus, settings: { preferences: {} } });
     }
-    if (endpoint === 'users.presence') return fulfillJson(route, { users: [ME, ALICE] });
+    if (endpoint === 'users.info') {
+      return fulfillJson(route, { user: { ...ME, status: ownStatus, settings: { preferences: {} } } });
+    }
+    if (endpoint === 'users.presence') {
+      return fulfillJson(route, { users: [{ ...ME, status: ownStatus }, ALICE] });
+    }
+    if (endpoint === 'users.setStatus') {
+      ownStatus = String((request.postDataJSON() as { status?: string }).status ?? ownStatus);
+      return fulfillJson(route, { success: true });
+    }
     if (endpoint === 'channels.members') {
       return fulfillJson(route, { members: [ME, ALICE], total: 2 });
     }

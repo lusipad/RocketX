@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageCircle, X } from 'lucide-react';
+import { MessageCircle, Settings, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
@@ -53,6 +53,11 @@ export default function UserCard({
     }
   };
 
+  const editSelf = () => {
+    setModule('settings');
+    onClose();
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
@@ -102,7 +107,15 @@ export default function UserCard({
           </div>
           <div className="mt-0.5 text-sm text-ink-3">@{user.username}</div>
           {error && <div className="mt-2 text-xs text-danger">{error}</div>}
-          {!isSelf && (
+          {isSelf ? (
+            <button
+              onClick={editSelf}
+              className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover"
+            >
+              <Settings size={16} />
+              编辑资料与状态
+            </button>
+          ) : (
             <button
               onClick={() => void doDM()}
               disabled={busy}

@@ -162,6 +162,7 @@ function AccountSection() {
       // 服务器保留原有状态消息；之前用 `text ?? statusText` 会把空输入框的 '' 发出去，
       // 无声清掉用户写的「开会中」（P1-14）。只有点文案保存按钮才带上 message。
       await rest.setStatus(next, text);
+      await refreshUser();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
