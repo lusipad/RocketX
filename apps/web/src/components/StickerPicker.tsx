@@ -190,10 +190,9 @@ export default function StickerPicker({
                 aria-label={`发送贴纸 ${sticker.title}`}
                 title={sticker.title}
                 onClick={() => pick(sticker)}
-                className="flex min-h-24 flex-col items-center justify-center rounded-md bg-fill-1 px-2 py-2 text-center transition hover:bg-fill-hover"
+                className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
               >
-                <img src={sticker.src} alt={sticker.title} className="mb-2 h-12 w-12 object-contain" />
-                <span className="line-clamp-2 text-[11px] text-ink">{sticker.title}</span>
+                <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
               </button>
             ))}
           </div>
@@ -214,10 +213,9 @@ export default function StickerPicker({
                   aria-label={`发送贴纸 ${sticker.title}`}
                   title={sticker.title}
                   onClick={() => pick(sticker)}
-                  className="flex min-h-24 flex-col items-center justify-center rounded-md bg-fill-1 px-2 py-2 text-center transition hover:bg-fill-hover"
+                  className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
                 >
-                  <img src={sticker.src} alt={sticker.title} className="mb-2 h-12 w-12 object-contain" />
-                  <span className="line-clamp-2 text-[11px] text-ink">{sticker.title}</span>
+                  <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
                 </button>
               ))}
             </div>
@@ -237,10 +235,9 @@ export default function StickerPicker({
                     aria-label={`发送贴纸 ${sticker.title}`}
                     title={sticker.title}
                     onClick={() => pick(sticker)}
-                    className="flex min-h-24 flex-col items-center justify-center rounded-md bg-fill-1 px-2 py-2 text-center transition hover:bg-fill-hover"
+                    className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
                   >
-                    <img src={sticker.src} alt={sticker.title} className="mb-2 h-12 w-12 object-contain" />
-                    <span className="line-clamp-2 text-[11px] text-ink">{sticker.title}</span>
+                    <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
                   </button>
                 ))}
               </div>
