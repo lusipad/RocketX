@@ -138,7 +138,15 @@ export default function MainPage() {
   // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
   useEffect(() => {
     void restoreTrayAttention();
-    const onFocus = () => void clearTaskbarFlash();
+    const onFocus = () => {
+      void clearTaskbarFlash();
+      const chat = useChat.getState();
+      const activeRid = chat.activeRid;
+      const subscription = activeRid ? chat.subscriptions[activeRid] : undefined;
+      if (activeRid && subscription && (subscription.unread > 0 || subscription.alert)) {
+        void chat.markConvRead(activeRid);
+      }
+    };
     window.addEventListener('focus', onFocus);
     return () => {
       window.removeEventListener('focus', onFocus);

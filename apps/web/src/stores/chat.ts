@@ -837,7 +837,7 @@ export function notificationAttentionPolicy(input: {
   };
 }
 
-export function conversationHasFocus(
+export function conversationIsActivelyViewed(
   activeRid: string | null,
   rid: string,
   documentHasFocus: boolean,
@@ -872,7 +872,7 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const roomType = subscription.t ?? state.rooms[rid]?.t;
   const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
   const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
-  const focused = conversationHasFocus(state.activeRid, rid, document.hasFocus());
+  const focused = conversationIsActivelyViewed(state.activeRid, rid, document.hasFocus());
   const policy = notificationAttentionPolicy({
     subscribed: true,
     muted: !!subscription.disableNotifications,
@@ -1130,8 +1130,14 @@ export const useChat = create<ChatState>((set, get) => ({
         void get().reconcilePinned(rid).catch(() => {});
       }
       if (!alreadyKnown) notifyIfNeeded(msg, rid, state);
-      if (get().activeRid === rid) {
-        if (get().subscriptions[rid]) scheduleMarkRead(rid);
+      const activeRid = get().activeRid;
+      if (activeRid === rid) {
+        if (
+          get().subscriptions[rid] &&
+          conversationIsActivelyViewed(activeRid, rid, document.hasFocus())
+        ) {
+          scheduleMarkRead(rid);
+        }
         scheduleReceiptRefresh(rid);
       }
       // 对方发出消息即视为停止输入
