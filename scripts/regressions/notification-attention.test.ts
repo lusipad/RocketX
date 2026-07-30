@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  conversationHasFocus,
+  conversationIsActivelyViewed,
   messageIsNotificationCandidate,
   messageIsFromCurrentUser,
   notificationAttentionPolicy,
@@ -18,10 +18,10 @@ const base = {
   taskbarFlash: true,
 };
 
-test('只有活动会话且文档真正聚焦时才算正在查看', () => {
-  assert.equal(conversationHasFocus('room-1', 'room-1', false), false);
-  assert.equal(conversationHasFocus('room-1', 'room-1', true), true);
-  assert.equal(conversationHasFocus('room-2', 'room-1', true), false);
+test('后台停留在当前会话时，新消息保持未读以显示任务栏数字角标', () => {
+  assert.equal(conversationIsActivelyViewed('room-1', 'room-1', false), false);
+  assert.equal(conversationIsActivelyViewed('room-1', 'room-1', true), true);
+  assert.equal(conversationIsActivelyViewed('room-2', 'room-1', true), false);
 });
 
 test('任务栏闪烁不受桌面通知关闭影响', () => {
