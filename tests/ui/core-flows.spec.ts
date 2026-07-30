@@ -1349,6 +1349,8 @@ test('主 Composer 贴纸首次打开后动态加载，并沿用现有上传确�
   await search.fill('赞');
   const sticker = page.getByRole('button', { name: '发送贴纸 赞' });
   await expect(sticker).toBeVisible();
+  await expect(sticker).toHaveAttribute('title', '赞');
+  await expect(sticker.getByText('赞', { exact: true })).toHaveCount(0);
   await sticker.click();
 
   const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
@@ -1361,7 +1363,10 @@ test('主 Composer 贴纸首次打开后动态加载，并沿用现有上传确�
 
   await page.getByRole('button', { name: '贴纸' }).click();
   await expect(page.getByText('最近使用', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '发送贴纸 赞' }).first()).toBeVisible();
+  const recentSticker = page.getByRole('button', { name: '发送贴纸 赞' }).first();
+  await expect(recentSticker).toBeVisible();
+  await expect(recentSticker).toHaveAttribute('title', '赞');
+  await expect(recentSticker.getByText('赞', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
@@ -1372,11 +1377,11 @@ test('主 Composer 贴纸支持导入本机图片到个人贴纸库并沿用现�
     (window as unknown as {
       __dialogOpenResponses?: Array<string | string[] | null>;
       __setMockFsFile?: (path: string, bytes: number[]) => void;
-    }).__dialogOpenResponses = ['C:\\Import\\wave.png'];
+    }).__dialogOpenResponses = ['C:\\Import\\xxxxxx_K20_DE39_to_xxxxxx.png'];
     (window as unknown as {
       __dialogOpenResponses?: Array<string | string[] | null>;
       __setMockFsFile?: (path: string, bytes: number[]) => void;
-    }).__setMockFsFile?.('C:\\Import\\wave.png', png);
+    }).__setMockFsFile?.('C:\\Import\\xxxxxx_K20_DE39_to_xxxxxx.png', png);
   });
   const { uploadedMessages, pageErrors } = await bootAuthenticated(page);
 
@@ -1387,13 +1392,15 @@ test('主 Composer 贴纸支持导入本机图片到个人贴纸库并沿用现�
   await page.getByRole('button', { name: '导入图片' }).click();
   await expect(page.locator('[data-sticker-group="我的贴纸"]').first()).toBeVisible();
 
-  const personalSticker = page.getByRole('button', { name: '发送贴纸 wave' });
+  const personalSticker = page.getByRole('button', { name: '发送贴纸 xxxxxx_K20_DE39_to_xxxxxx' });
   await expect(personalSticker).toBeVisible();
+  await expect(personalSticker).toHaveAttribute('title', 'xxxxxx_K20_DE39_to_xxxxxx');
+  await expect(personalSticker.getByText('xxxxxx_K20_DE39_to_xxxxxx', { exact: true })).toHaveCount(0);
   await personalSticker.click();
 
   const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
   await expect(dialog.getByText('个人贴纸说明', { exact: true })).toBeVisible();
-  await expect(dialog.getByAltText('wave.png')).toBeVisible();
+  await expect(dialog.getByAltText('xxxxxx_K20_DE39_to_xxxxxx.png')).toBeVisible();
   await dialog.getByRole('button', { name: '发送（1）' }).click();
 
   await expect.poll(() => uploadedMessages.length).toBe(1);
