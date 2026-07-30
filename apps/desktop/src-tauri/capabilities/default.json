@@ -34,7 +34,7 @@
     "fs:allow-watch",
     {
       "identifier": "fs:scope",
-      "allow": ["$APPDATA/butler/**", "$APPDATA/attachment-archive/**"]
+      "allow": ["$APPDATA/butler/**", "$APPDATA/attachment-archive/**", "$APPDATA/sticker-library/**"]
     }
   ]
 }
