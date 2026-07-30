@@ -574,6 +574,19 @@ async function main() {
 
   // ---- 个人资料 ----
   console.log('\n[个人资料]');
+  await check('切换在线状态并回读', async () => {
+    const original = (await rest.me()).status ?? 'online';
+    try {
+      await rest.setStatus('away');
+      const after = await rest.me();
+      assert(after.status === 'away', `状态没改成离开：${after.status}`);
+    } finally {
+      await rest.setStatus(original);
+    }
+    assert((await rest.me()).status === original, '在线状态未还原');
+    return `${original} → away → 已还原`;
+  });
+
   await check('改昵称并回读', async () => {
     const me = await rest.me();
     const original = me.name;

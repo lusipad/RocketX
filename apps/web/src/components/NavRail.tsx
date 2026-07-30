@@ -174,7 +174,12 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       {/* 头像 + 发起会话 */}
       <div className="flex items-center justify-between px-1 pb-3">
         <button onClick={() => setSelfCard(true)} title="个人信息">
-          <Avatar name={user?.name || user?.username || '?'} username={user?.username} size={34} />
+          <Avatar
+            name={user?.name || user?.username || '?'}
+            username={user?.username}
+            size={34}
+            status={user?.status === 'online' ? undefined : user?.status}
+          />
         </button>
         <div className="relative">
           <button
