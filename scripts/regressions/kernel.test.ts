@@ -506,7 +506,7 @@ test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', as
   );
   assert.deepEqual(fsScope, {
     identifier: 'fs:scope',
-    allow: ['$APPDATA/butler/**', '$APPDATA/attachment-archive/**'],
+    allow: ['$APPDATA/butler/**', '$APPDATA/attachment-archive/**', '$APPDATA/sticker-library/**'],
   });
   assert.ok(capability.permissions.includes('fs:allow-write-file'));
   assert.ok(capability.permissions.includes('fs:allow-remove'));
