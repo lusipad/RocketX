@@ -31,6 +31,10 @@ const AZURE_DEVOPS_SERVER_STDERR_LIMIT: usize = 32 * 1024;
 const AZURE_DEVOPS_SERVER_BODY_LIMIT: usize = 64 * 1024;
 const AZURE_DEVOPS_SERVER_TIMEOUT: Duration = Duration::from_secs(60);
 const BUSINESS_MCP_AZURE_DEVOPS_SERVER_TIMEOUT: Duration = Duration::from_secs(15);
+const AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS: [&str; 2] = [
+    "AZURE_DEVOPS_SERVER_SEARCH_BASE_URL",
+    "AZURE_DEVOPS_SERVER_TESTRESULTS_BASE_URL",
+];
 // 候选下限不是兼容承诺。只有跑过完整语义门禁的版本才进入 verified 列表；
 // 更高版本可在轻量启动探测通过后使用，但必须向用户标记为未验证。
 const CODEX_MINIMUM_CANDIDATE: &str = "0.140.0";
@@ -1070,49 +1074,30 @@ fn first_existing_program(
 }
 
 #[cfg(windows)]
-fn pwsh_program_candidates_from_finder(
-    mut finder: impl FnMut(&str) -> Option<PathBuf>,
-) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = finder("pwsh.exe") {
-        candidates.push(path);
-    }
-    for base in ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-    {
-        let path = base.join("PowerShell").join("7").join("pwsh.exe");
-        if !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    }
-    if let Some(path) = finder("powershell.exe") {
-        candidates.push(path);
-    }
-    if let Some(system_root) = std::env::var_os("SystemRoot") {
-        let path = PathBuf::from(system_root)
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        if !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    }
-    candidates
-}
+fn windows_system_directory() -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 
-#[cfg(windows)]
-fn resolve_pwsh_program_from_finder(
-    finder: impl FnMut(&str) -> Option<PathBuf>,
-) -> Result<PathBuf, String> {
-    first_existing_program(pwsh_program_candidates_from_finder(finder))
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+        if length == 0 {
+            return Err("无法定位 Windows 系统目录".to_string());
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Ok(PathBuf::from(OsString::from_wide(&buffer)));
+        }
+        buffer.resize(length + 1, 0);
+    }
 }
 
 #[cfg(windows)]
 fn resolve_pwsh_program() -> Result<PathBuf, String> {
-    resolve_pwsh_program_from_finder(find_program)
+    first_existing_program([windows_system_directory()?
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")])
 }
 
 #[cfg(not(windows))]
@@ -1397,6 +1382,12 @@ fn redact_json_secret(value: &mut serde_json::Value, secret: &str) {
     }
 }
 
+fn harden_azure_devops_runner_environment(command: &mut Command) {
+    for name in AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+        command.env_remove(name);
+    }
+}
+
 fn run_butler_azure_devops_server_read_with_program_and_timeout(
     program: PathBuf,
     adapter_path: PathBuf,
@@ -1416,6 +1407,7 @@ fn run_butler_azure_devops_server_read_with_program_and_timeout(
         .map_err(|error| format!("无法编码 Azure DevOps 请求：{error}"))?;
     let display_program = program.display().to_string();
     let mut command = hidden_command(&program);
+    harden_azure_devops_runner_environment(&mut command);
     command
         .arg("-NoLogo")
         .arg("-NoProfile")
@@ -1581,6 +1573,7 @@ where
         return run_skill(request, false);
     }
 
+    let collection_url = request.collection_url.clone();
     let preview = run_skill(request, true)?;
     let requires_allow_write = preview
         .get("RequiresAllowWrite")
@@ -1607,6 +1600,22 @@ where
         || parsed.fragment().is_some()
     {
         return Err("Azure DevOps Skill 预览返回了无效 Uri".to_string());
+    }
+    let configured = tauri::Url::parse(&collection_url)
+        .map_err(|_| "Azure DevOps collectionUrl 无效".to_string())?;
+    let configured_path = configured.path().trim_end_matches('/');
+    let preview_path = parsed.path();
+    let within_collection = configured_path.is_empty()
+        || preview_path == configured_path
+        || preview_path
+            .strip_prefix(configured_path)
+            .is_some_and(|suffix| suffix.starts_with('/'));
+    if parsed.scheme() != configured.scheme()
+        || parsed.host_str() != configured.host_str()
+        || parsed.port_or_known_default() != configured.port_or_known_default()
+        || !within_collection
+    {
+        return Err("Azure DevOps Skill 预览越过了工作台已配置的 collection 边界".to_string());
     }
     let body = match preview.get("Body") {
         None | Some(serde_json::Value::Null) => None,
@@ -2315,7 +2324,7 @@ mod tests {
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
         classify_codex_version, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, find_program, host_path,
+        exec_optional_args_for_help, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
         parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
         resolve_codex_from_candidates_with_probe, resolve_update_package,
@@ -2330,15 +2339,17 @@ mod tests {
     };
     #[cfg(windows)]
     use super::{
-        first_existing_program, resolve_pwsh_program_from_finder,
+        first_existing_program, resolve_pwsh_program,
         run_butler_azure_devops_server_read_with_program,
     };
     use serde_json::json;
+    use std::ffi::OsStr;
     #[cfg(windows)]
     use std::ffi::OsString;
     use std::{
         fs,
         path::{Path, PathBuf},
+        process::Command,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -2811,6 +2822,52 @@ mod tests {
     }
 
     #[test]
+    fn business_mcp_default_credentials_rejects_preview_outside_configured_collection() {
+        for preview_uri in [
+            "https://search.example.test/RocketX/_apis/search/workitemsearchresults?api-version=7.0",
+            "https://ado.example.test/DefaultCollection-evil/RocketX/_apis/search/workitemsearchresults?api-version=7.0",
+        ] {
+            let request = validate_butler_azure_devops_server_read_request(
+                ButlerAzureDevOpsServerReadRequest {
+                    method: Some("GET".to_string()),
+                    collection_url: "https://ado.example.test/DefaultCollection".to_string(),
+                    auth_mode: Some("default-credentials".to_string()),
+                    pat: None,
+                    area: Some("search".to_string()),
+                    resource: "workitemsearchresults".to_string(),
+                    project: Some("RocketX".to_string()),
+                    team: None,
+                    query: None,
+                    body: None,
+                    api_version: Some("7.0".to_string()),
+                    server_version_hint: None,
+                    allow_conditional_area: true,
+                },
+            )
+            .unwrap();
+
+            let error = run_business_azure_devops_server_read_with(
+                request,
+                |_, dry_run| {
+                    assert!(dry_run);
+                    Ok(json!({
+                        "Method": "GET",
+                        "Uri": preview_uri,
+                        "Body": null,
+                        "RequiresAllowWrite": false
+                    }))
+                },
+                |_, _, _, _| -> Result<crate::winauth::HttpResponse, String> {
+                    panic!("off-collection previews must never receive Windows credentials")
+                },
+            )
+            .unwrap_err();
+
+            assert!(error.contains("collection"));
+        }
+    }
+
+    #[test]
     fn business_mcp_pat_requests_stay_on_the_skill_adapter() {
         let request =
             validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
@@ -2889,6 +2946,24 @@ mod tests {
     }
 
     #[test]
+    fn azure_devops_runner_drops_ambient_alternate_host_overrides() {
+        let mut command = Command::new("powershell");
+        for name in super::AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+            command.env(name, "https://untrusted.example.test");
+        }
+
+        super::harden_azure_devops_runner_environment(&mut command);
+
+        let removed = command
+            .get_envs()
+            .filter_map(|(name, value)| value.is_none().then_some(name))
+            .collect::<Vec<_>>();
+        for name in super::AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+            assert!(removed.contains(&OsStr::new(name)));
+        }
+    }
+
+    #[test]
     fn standalone_business_mcp_resolves_the_bundled_azure_adapter() {
         let adapter = standalone_azure_devops_server_adapter_path().unwrap();
         assert!(adapter.is_file());
@@ -2916,6 +2991,16 @@ mod tests {
         .unwrap();
         assert_eq!(resolved, powershell);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn azure_devops_runner_uses_system_powershell_instead_of_path_resolution() {
+        let resolved = resolve_pwsh_program().unwrap();
+        assert!(resolved
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("\\windowspowershell\\v1.0\\powershell.exe"));
     }
 
     #[cfg(windows)]
@@ -2972,12 +3057,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
     #[cfg(windows)]
     #[test]
     fn azure_devops_host_adapter_runs_under_windows_powershell() {
-        let Some(program) = resolve_pwsh_program_from_finder(|name| match name {
-            "pwsh.exe" => None,
-            "powershell.exe" => find_program("powershell.exe"),
-            _ => None,
-        })
-        .ok() else {
+        let Ok(program) = resolve_pwsh_program() else {
             return;
         };
 
