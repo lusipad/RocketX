@@ -50,7 +50,7 @@ pnpm install
 # 3. 启动客户端（默认代理到 http://localhost:3300，
 #    连接其他服务器：在 apps/web/.env 里设置 RC_URL）
 pnpm dev
-# 打开 http://localhost:5173，用 Rocket.Chat 账号登录
+# 打开 http://127.0.0.1:1420，用 Rocket.Chat 账号登录
 ```
 
 接入 Azure DevOps Server 2022 通知见 [`services/ado-bridge/README.md`](services/ado-bridge/README.md)。

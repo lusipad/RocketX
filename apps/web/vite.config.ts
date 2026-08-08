@@ -20,8 +20,9 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [react(), tailwindcss()],
     server: {
-      host: true,
-      port: 5173,
+      host: '127.0.0.1',
+      port: 1420,
+      strictPort: true,
       // 禁掉模块的浏览器缓存。
       // 不禁的话，页面里会同时存在同一个文件的两个版本（import 里带着不同的 ?t=），
       // ESM 按 URL 区分模块 —— 于是 store 被实例化两份：init 往其中一份写数据，

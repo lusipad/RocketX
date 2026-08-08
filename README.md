@@ -62,7 +62,7 @@ docker compose -f docker/docker-compose.yml up -d
 pnpm dev
 ```
 
-Open <http://localhost:5173>. Vite proxies Rocket.Chat requests to <http://localhost:3300> by default; set `RC_URL` when starting Vite to use another development server.
+Open <http://127.0.0.1:1420>. Vite proxies Rocket.Chat requests to <http://localhost:3300> by default; set `RC_URL` when starting Vite to use another development server.
 
 Desktop development:
 

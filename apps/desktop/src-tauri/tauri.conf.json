@@ -5,7 +5,7 @@
   "identifier": "com.lusipad.rocketx",
   "build": {
     "beforeDevCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web build",
     "frontendDist": "../../web/dist"
   },
