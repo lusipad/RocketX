@@ -51,7 +51,7 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const users = useUserSearch(keyword);
+  const { users, warning: userSearchWarning } = useUserSearch(keyword);
 
   // 必须用函数式更新：直接读闭包里的 selected，同一渲染周期内的连续两次勾选
   // 会基于同一份旧 Map 计算，后一次把前一次覆盖掉，只剩一个人被选中
@@ -113,6 +113,9 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
       </div>
+      {userSearchWarning && (
+        <div className="px-5 pb-1 text-xs text-warning">{userSearchWarning}</div>
+      )}
       <div className="min-h-32 px-2">
         {users.map((u) => {
           const checked = selected.has(u._id);
