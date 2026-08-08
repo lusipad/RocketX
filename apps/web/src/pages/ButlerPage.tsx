@@ -21,6 +21,7 @@ import ButlerConversation from '../components/ButlerConversation';
 import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
 import ButlerIdentityPage from '../components/ButlerIdentityPage';
 import ButlerInlineExchange from '../components/ButlerInlineExchange';
+import ButlerRoutineCreateDialog from '../components/ButlerRoutineCreateDialog';
 import ButlerRoutines from '../components/ButlerRoutines';
 import ButlerWorkspaceNav from '../components/ButlerWorkspaceNav';
 import ButlerSkillMenu, { useButlerSkillMenu } from '../components/ButlerSkillMenu';
@@ -223,6 +224,7 @@ export default function ButlerPage() {
   const identity = useButlerIdentity((state) => state.identity);
   const today = butlerPaperDateKey(new Date());
   const [briefOffset, setBriefOffset] = useState(0);
+  const [routineCreateOpen, setRoutineCreateOpen] = useState(false);
   const [input, setInput] = useState('');
   const skillMenu = useButlerSkillMenu(input, setInput);
   const composerInputRef = useRef<HTMLInputElement>(null);
@@ -620,7 +622,7 @@ export default function ButlerPage() {
                 <button
                   type="button"
                   aria-label="新建定时任务"
-                  onClick={() => selectButlerView('conversation')}
+                  onClick={() => setRoutineCreateOpen(true)}
                   className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
                 >
                   <Plus size={15} aria-hidden="true" />
@@ -630,6 +632,9 @@ export default function ButlerPage() {
               <div className="mt-8">
                 <ButlerRoutines />
               </div>
+              {routineCreateOpen ? (
+                <ButlerRoutineCreateDialog onClose={() => setRoutineCreateOpen(false)} />
+              ) : null}
             </section>
           ) : activeView === 'memory' ? (
             <ButlerIdentityPage initialTab="memory" />

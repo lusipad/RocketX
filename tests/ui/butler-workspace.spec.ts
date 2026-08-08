@@ -363,7 +363,53 @@ test('委托和定时任务工作面提供可见且可点击的直接入口', as
   await expect(routines.getByRole('button', { name: '新建定时任务', exact: true })).toBeVisible();
   await expect(routines.getByRole('button', { name: '重试发布守护', exact: true })).toBeVisible();
   await expect(routines.getByRole('button', { name: '立即运行待回复守护', exact: true })).toBeVisible();
-  await expect(routines.getByRole('button', { name: '新建定时任务', exact: true })).toBeEnabled();
+  await routines.getByRole('button', { name: '新建定时任务', exact: true }).click();
+
+  const createRoutine = page.getByRole('dialog', { name: '新建定时任务' });
+  await expect(createRoutine).toBeVisible();
+  await expect(routines).toBeVisible();
+  await expect(navigation.getByRole('button', { name: /定时任务/ })).toHaveAttribute('aria-current', 'page');
+  const skillSelect = createRoutine.getByRole('combobox', { name: '执行 Skill' });
+  await expect(skillSelect.locator('option[value="room-digest"]')).toHaveCount(0);
+  await expect(createRoutine).toContainText('需要选择房间的 Skill 请从“管理例行事务”创建');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileDialogBox = await createRoutine.boundingBox();
+  expect(mobileDialogBox).not.toBeNull();
+  expect(mobileDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileDialogBox!.x + mobileDialogBox!.width).toBeLessThanOrEqual(390);
+  await expect(createRoutine.getByRole('button', { name: '创建并启用', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await createRoutine.getByRole('textbox', { name: '任务名称' }).fill('候选版本周报');
+  await skillSelect.selectOption('weekly-report');
+  await createRoutine.getByLabel('运行时间').fill('18:30');
+  await createRoutine.getByRole('button', { name: '周六', exact: true }).click();
+  await createRoutine.getByRole('button', { name: '周日', exact: true }).click();
+  await createRoutine.getByRole('button', { name: '创建并启用', exact: true }).click();
+
+  await expect(createRoutine).toBeHidden();
+  await expect(routines).toContainText('候选版本周报');
+  await expect(routines.getByRole('button', { name: '立即运行候选版本周报', exact: true })).toBeVisible();
+  const created = await page.evaluate(async () => {
+    const loadRoutines = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
+      useRoutines: { getState: () => { routines: Array<{
+        name: string;
+        skillName?: string;
+        prompt?: string;
+        enabled: boolean;
+        trigger: { kind: string; time?: string; days?: number[] };
+      }> } };
+    }>;
+    return (await loadRoutines()).useRoutines.getState().routines
+      .find((routine) => routine.name === '候选版本周报');
+  });
+  expect(created).toMatchObject({
+    name: '候选版本周报',
+    skillName: 'weekly-report',
+    enabled: true,
+    trigger: { kind: 'daily', time: '18:30', days: [1, 2, 3, 4, 5] },
+  });
+  expect(created?.prompt).toBeUndefined();
 });
 
 test('全新账号无需配置即可从第一件真实责任激活管家', async ({ page }) => {
