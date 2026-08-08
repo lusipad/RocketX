@@ -20,9 +20,9 @@ test('Azure Skill 只暴露一个受控只读 CLI 工具，并由宿主注入连
       account: 'alice',
     },
   });
-  let captured: ButlerAzureDevOpsServerReadRequest | undefined;
+  const captured: ButlerAzureDevOpsServerReadRequest[] = [];
   const restore = setButlerAzureDevOpsServerReadInvoker(async (request) => {
-    captured = structuredClone(request);
+    captured.push(structuredClone(request));
     return { count: 1, value: [{ id: 42, fields: { 'System.Title': '真实结果' } }] };
   });
 
@@ -48,7 +48,7 @@ test('Azure Skill 只暴露一个受控只读 CLI 工具，并由宿主注入连
       count: 1,
       value: [{ id: 42, fields: { 'System.Title': '真实结果' } }],
     });
-    assert.deepEqual(captured, {
+    assert.deepEqual(captured[0], {
       method: 'GET',
       collectionUrl: 'https://ado.example.test/tfs/DefaultCollection',
       authMode: 'pat',
@@ -59,14 +59,39 @@ test('Azure Skill 只暴露一个受控只读 CLI 工具，并由宿主注入连
       query: { ids: [42], '$expand': 'relations' },
     });
 
-    const rejected = await azureTools[0]!.invoke({
+    const wiql = await azureTools[0]!.invoke({
+      method: 'POST',
+      area: 'wit',
+      resource: 'wiql',
+      project: 'Rocket X',
+      body: { query: 'SELECT [System.Id] FROM WorkItems WHERE [System.State] <> \'Closed\'' },
+    });
+    assert.equal(wiql.status, 'completed');
+    assert.deepEqual(captured[1], {
+      method: 'POST',
+      collectionUrl: 'https://ado.example.test/tfs/DefaultCollection',
+      authMode: 'pat',
+      pat: 'top-secret',
+      area: 'wit',
+      resource: 'wiql',
+      project: 'Rocket X',
+      body: { query: 'SELECT [System.Id] FROM WorkItems WHERE [System.State] <> \'Closed\'' },
+    });
+
+    const rejectedMethod = await azureTools[0]!.invoke({
       resource: 'projects',
       method: 'DELETE',
+    });
+    assert.equal(rejectedMethod.status, 'failed');
+    assert.match(rejectedMethod.error?.message ?? '', /只允许 GET 或 POST/);
+
+    const rejectedConnection = await azureTools[0]!.invoke({
+      resource: 'projects',
       collectionUrl: 'https://attacker.invalid/',
       pat: 'attacker-controlled',
     });
-    assert.equal(rejected.status, 'failed');
-    assert.match(rejected.error?.message ?? '', /method 不是允许的字段/);
+    assert.equal(rejectedConnection.status, 'failed');
+    assert.match(rejectedConnection.error?.message ?? '', /collectionUrl 不是允许的字段/);
   } finally {
     restore();
   }

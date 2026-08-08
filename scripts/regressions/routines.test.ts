@@ -7,7 +7,7 @@ import {
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
 } from '../../apps/web/src/lib/butlerBrain';
-import { setServerBase } from '../../apps/web/src/lib/client';
+import { getServerBase, setServerBase } from '../../apps/web/src/lib/client';
 import { checkWatchers } from '../../apps/web/src/lib/butlerWatchers';
 import {
   setButlerProfileStorage,
@@ -18,6 +18,7 @@ import {
   setRoutineCodexRunner,
   setRoutineNowProvider,
   setRoutineStorage,
+  startRoutineScheduler,
   useRoutines,
   type Routine,
 } from '../../apps/web/src/stores/routines';
@@ -149,6 +150,64 @@ test('已停用技能不能新建对应的内置例行事务', () => {
   } finally {
     restoreStorage();
     restoreProfile();
+    resetRoutineStore();
+  }
+});
+
+test('房间汇总模板只保存房间参数并引用原生 Skill，不再复制方法论 prompt', () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore();
+
+  try {
+    const loaded = useRoutines.getState().loadTemplate('room-digest', {
+      rooms: ['General', '发布群'],
+    });
+    assert.equal(loaded?.skillName, 'room-digest');
+    assert.equal(loaded?.prompt, undefined);
+    assert.deepEqual(loaded?.params?.rooms, ['General', '发布群']);
+  } finally {
+    restoreStorage();
+    resetRoutineStore();
+  }
+});
+
+test('旧版未编辑的房间汇总迁移到原生 Skill，用户改过的方法仍保留 prompt', () => {
+  const storage = new MemoryStorage();
+  storage.set('rcx-butler-v1:routines', JSON.stringify({
+    routines: [
+      routine({
+        id: 'room-digest-v1',
+        templateId: 'room-digest',
+        skillName: undefined,
+        prompt: '旧版内置房间汇总方法',
+        params: { rooms: ['General'] },
+        contractVersion: 1,
+      }),
+      routine({
+        id: 'room-digest-custom',
+        templateId: 'room-digest',
+        skillName: undefined,
+        prompt: '用户改过的房间汇总方法',
+        params: { rooms: ['发布群'] },
+        contractVersion: 2,
+      }),
+    ],
+    eventCards: [],
+  }));
+  const restoreStorage = setRoutineStorage(storage);
+  resetRoutineStore();
+
+  try {
+    useRoutines.getState().hydrate();
+    const migrated = useRoutines.getState().routines.find((item) => item.id === 'room-digest-v1');
+    assert.equal(migrated?.skillName, 'room-digest');
+    assert.equal(migrated?.prompt, undefined);
+    const customized = useRoutines.getState().routines.find((item) => item.id === 'room-digest-custom');
+    assert.equal(customized?.skillName, undefined);
+    assert.equal(customized?.prompt, '用户改过的房间汇总方法');
+  } finally {
+    restoreStorage();
     resetRoutineStore();
   }
 });
@@ -297,7 +356,11 @@ test('runNow 写入成功记录并裁剪到十条', async () => {
     text: `旧结果 ${index}`,
   }));
   resetRoutineStore([routine({ runs: oldRuns })]);
-  const restoreRunner = setRoutineCodexRunner(async () => ({ text: '晨报结果' }));
+  let taskText = '';
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    taskText = options.text;
+    return { text: '晨报结果' };
+  });
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   const restoreWorkflow = await setupWorkflowRuntime('routine-success-user');
 
@@ -306,6 +369,43 @@ test('runNow 写入成功记录并裁剪到十条', async () => {
     const runs = useRoutines.getState().routines[0].runs;
     assert.equal(runs.length, 10);
     assert.deepEqual(runs[0], { id: runs[0].id, at: MONDAY_0830, status: 'ok', text: '晨报结果' });
+    assert.match(taskText, new RegExp(`上次成功运行时间：${new Date(MONDAY_0829).toISOString()}`));
+  } finally {
+    restoreNow();
+    restoreRunner();
+    restoreWorkflow();
+    resetRoutineStore();
+  }
+});
+
+test('保留自定义 prompt 的例行事务仍收到成功游标和房间范围', async () => {
+  resetRoutineStore([routine({
+    skillName: undefined,
+    prompt: '按用户改过的方法汇总。',
+    params: { rooms: ['General', '发布群'] },
+    precheck: 'none',
+    runs: [{
+      id: 'previous-success',
+      at: MONDAY_0829,
+      status: 'ok',
+      text: '上次结果',
+    }],
+  })]);
+  let taskText = '';
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    taskText = options.text;
+    return { text: '自定义汇总结果' };
+  });
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  const restoreWorkflow = await setupWorkflowRuntime('routine-custom-prompt-user');
+
+  try {
+    await useRoutines.getState().runNow('routine-1');
+
+    assert.match(taskText, /按用户改过的方法汇总/);
+    assert.match(taskText, new RegExp(`上次成功运行时间：${new Date(MONDAY_0829).toISOString()}`));
+    assert.match(taskText, /只处理这些房间：General、发布群/);
+    assert.equal(useRoutines.getState().routines[0]?.runs[0]?.status, 'ok');
   } finally {
     restoreNow();
     restoreRunner();
@@ -334,7 +434,7 @@ test('runNow 在技能停用后写入明确错误且不调用执行器', async (
     assert.equal(calls, 0);
     assert.equal(run?.status, 'error');
     assert.match(run?.text ?? '', /已停用或已卸载/);
-    assert.match(run?.text ?? '', /记忆与技能/);
+    assert.match(run?.text ?? '', /技能中心/);
   } finally {
     restoreRunner();
     restoreNow();
@@ -405,31 +505,58 @@ test('runNow 将引擎错误转成友好错误，并防止重入', async () => {
   }
 });
 
-test('选择 Codex 大脑时，runNow 使用独立的 ephemeral runner', async () => {
-  resetRoutineStore([routine()]);
+test('runNow 用独立 ephemeral runner 显式调用房间汇总 Skill，并只传任务参数', async () => {
+  resetRoutineStore([routine({
+    name: '房间汇总',
+    skillName: 'room-digest',
+    params: { rooms: ['General', '发布群'] },
+  })]);
   const storage = new MemoryStorage();
+  storage.set('rcx-butler-v2:memory', JSON.stringify({
+    schemaVersion: 2,
+    records: [{
+      id: 'routine-memory-style',
+      kind: 'preference',
+      scope: { server: getServerBase() || 'same-origin', account: 'routine-codex-user' },
+      subject: '汇总方式',
+      value: '先列风险，再列进展',
+      provenance: { butlerSource: 'test', summary: '用户确认' },
+      confidence: 'confirmed',
+      createdAt: 1,
+      confirmedAt: 1,
+      expiresAt: null,
+      status: 'active',
+      supersedes: [],
+    }],
+  }));
   const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restoreProfile = setButlerProfileStorage(storage);
   const restorePlatform = setButlerBrainTauriProvider(() => true);
   const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
   setCodexBrainUnavailableReason(undefined);
-  let input: { text: string; skillName?: string } | undefined;
+  let input: { text: string; skillName?: string; taskContext?: string } | undefined;
   const restoreRunner = setRoutineCodexRunner(async (options) => {
     input = options;
-    return { text: 'Codex 晨报' };
+    return { text: 'Codex 房间汇总' };
   });
   const restoreWorkflow = await setupWorkflowRuntime('routine-codex-user');
 
   try {
     await useRoutines.getState().runNow('routine-1');
-    assert.equal(input?.text, '执行 Today 例行事务“测试例行事务”，直接输出结果。');
-    assert.equal(input?.skillName, 'morning-brief');
-    assert.doesNotMatch(input?.text ?? '', /^晨报|请按以下方法论/);
-    assert.equal(useRoutines.getState().routines[0].runs[0].text, 'Codex 晨报');
+    assert.equal(
+      input?.text,
+      '执行 Today 例行事务“房间汇总”，直接输出结果。\n这是该例行事务首次成功运行前的检查。\n只处理这些房间：General、发布群。',
+    );
+    assert.equal(input?.skillName, 'room-digest');
+    assert.match(input?.taskContext ?? '', /汇总方式.*先列风险，再列进展/);
+    assert.doesNotMatch(input?.text ?? '', /请按以下方法论/);
+    assert.equal(useRoutines.getState().routines[0].runs[0].text, 'Codex 房间汇总');
   } finally {
     restoreRunner();
     restoreNow();
     restorePlatform();
     restoreBrainStorage();
+    restoreProfile();
     restoreWorkflow();
     resetRoutineStore();
   }
@@ -633,4 +760,90 @@ test('routines 入口源码需要接入 workflow runtime，而不是直接各走
   assert.match(source, /runButlerWorkflowTask/);
   assert.match(source, /pauseButlerWorkflowTask/);
   assert.match(source, /toolRuntimeContext/);
+});
+
+test('真实 scheduler 跨过一分钟后自行触发 schedule workflow，不依赖手动运行', async () => {
+  const storage = new MemoryStorage();
+  storage.set('rcx-butler-v1:routines', JSON.stringify({
+    routines: [routine({
+      name: '定时短验收',
+      skillName: undefined,
+      prompt: '只回复“定时短验收通过”。',
+    })],
+    eventCards: [],
+  }));
+  const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (_key: string) => undefined,
+    },
+  });
+  const intervalDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'setInterval');
+  let scheduledTick: (() => void) | undefined;
+  Object.defineProperty(globalThis, 'setInterval', {
+    configurable: true,
+    value: ((callback: () => void, delay: number) => {
+      assert.equal(delay, 60_000);
+      scheduledTick = callback;
+      return 1;
+    }) as typeof setInterval,
+  });
+  let now = MONDAY_0829;
+  const restoreNow = setRoutineNowProvider(() => now);
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreBrainStorage = setButlerBrainStorage(storage);
+  const restorePersistence = setButlerPersistence(
+    createRcxStore({ backend: createMemoryBackend() }).appData,
+  );
+  let calls = 0;
+  const restoreRunner = setRoutineCodexRunner(async () => {
+    calls += 1;
+    return { text: '定时短验收通过' };
+  });
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  useAuth.setState({ user: { _id: 'short-scheduler-user', username: 'short-scheduler' } as never });
+  useChat.setState({ subscriptions: {}, rooms: {}, messages: {}, activeRid: null } as never);
+  setServerBase('https://chat.example');
+  resetRoutineStore();
+
+  try {
+    await useButler.getState().hydrate();
+    startRoutineScheduler();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(calls, 0);
+    assert.ok(scheduledTick);
+
+    now = MONDAY_0830;
+    scheduledTick();
+    for (let attempt = 0; attempt < 20 && calls === 0; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(calls, 1);
+    const fired = useRoutines.getState().routines.find((item) => item.id === 'routine-1');
+    assert.equal(fired?.lastFiredDate, '2026-01-05');
+    assert.equal(fired?.runs[0]?.status, 'ok');
+    assert.equal(fired?.runs[0]?.text, '定时短验收通过');
+    const workflow = listButlerWorkflowSnapshots().find((snapshot) => snapshot.key === 'routine:routine-1');
+    assert.equal(workflow?.triggerReason, 'schedule');
+  } finally {
+    restoreRunner();
+    restorePersistence();
+    restoreBrainStorage();
+    restoreStorage();
+    restoreNow();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    useAuth.setState({ user: undefined } as never);
+    useChat.setState({ subscriptions: {}, rooms: {}, messages: {}, activeRid: null } as never);
+    resetRoutineStore();
+    if (intervalDescriptor) Object.defineProperty(globalThis, 'setInterval', intervalDescriptor);
+    if (localStorageDescriptor) Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
 });

@@ -10,14 +10,14 @@ const TARGET_LABELS: Record<ImprovementTarget, string> = {
   'memory-rule': '规则',
   routine: '例行照看',
   'tool-preset': '快捷入口',
-  'micro-skill': 'micro Skill',
+  'micro-skill': 'Skill',
   'no-op': '保持现状',
 };
 
 export default function EfficiencySection() {
   const efficiencyState = useStore(butlerEfficiency.store);
   const proposals = efficiencyState.proposals.filter(
-    (proposal) => proposal.status !== 'dismissed',
+    (proposal) => proposal.status !== 'dismissed' && proposal.target !== 'micro-skill',
   );
 
   return (
@@ -28,7 +28,7 @@ export default function EfficiencySection() {
           可减少的重复
         </h3>
         <p className="mt-1 text-xs leading-5 text-ink-3">
-          至少 3 次且跨 2 天才提出候选；先预演，再由你决定是否启用。
+          至少 3 次且跨 2 天才提出候选；这里只展示不需要沉淀为 Skill 的改进。
         </p>
       </div>
       <div className="mt-4 space-y-3">

@@ -74,6 +74,7 @@ test('身份设定进入运行指令但不会改变权限边界', () => {
 test('中文界面不再同时暴露 Butler 与管家两个称呼', () => {
   const navigation = readFileSync('apps/web/src/components/ButlerWorkspaceNav.tsx', 'utf8');
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
+  const identity = readFileSync('apps/web/src/components/ButlerIdentityPage.tsx', 'utf8');
   const profile = readFileSync(
     'apps/web/src/butler/extensions/learning/ui/ProfileSection.tsx',
     'utf8',
@@ -82,6 +83,9 @@ test('中文界面不再同时暴露 Butler 与管家两个称呼', () => {
   for (const source of [navigation, page, profile]) {
     assert.doesNotMatch(source, /Butler 工作视图|Butler 视图|交给 Butler|告诉 Butler|与 Butler|让 Butler/);
   }
-  assert.match(navigation, /label: '我的管家'/);
+  assert.match(navigation, /label: '技能中心'/);
+  assert.match(navigation, /<summary aria-label="更多管家视图">/);
   assert.match(navigation, /identity\.displayName/);
+  assert.match(identity, /label: '技能中心'/);
+  assert.match(page, /<ButlerIdentityPage initialTab="memory" \/>/);
 });

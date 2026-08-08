@@ -88,7 +88,7 @@ async function setupButler() {
   return { butler, auth, appData: backend, cleanup };
 }
 
-test('PR 比较场景显式加载完整 Azure DevOps Server Skill', { concurrency: false }, async () => {
+test('自然语言 PR 比较交给 Codex 原生 Skill 发现，不由前端强制指定', { concurrency: false }, async () => {
   const { butler, cleanup } = await setupButler();
   let capturedSkill: string | undefined;
   const restoreCodex = butler.setButlerCodexRunner(async (options) => {
@@ -98,7 +98,7 @@ test('PR 比较场景显式加载完整 Azure DevOps Server Skill', { concurrenc
 
   try {
     await butler.useButler.getState().ask('比较 PR #101 和 PR #102');
-    assert.equal(capturedSkill, 'azure-devops-server');
+    assert.equal(capturedSkill, undefined);
   } finally {
     restoreCodex();
     await cleanup();
@@ -150,7 +150,7 @@ test('成功回合映射为公共终态合同：证据、步骤、任务状态�
 test('失败回合映射为公共失败终态合同，不静默丢上下文', { concurrency: false }, async () => {
   const { butler, cleanup } = await setupButler();
   const restoreCodex = butler.setButlerCodexRunner(async (options) => {
-    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-1', name: 'list_builds', arguments: '{}' } });
+    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-1', name: 'rocketx_azure_devops_server_read', arguments: '{}' } });
     options.onEvent?.({ type: 'tool-result', toolCallId: 'call-1', content: '工具执行失败：超时' });
     throw new Error('provider boom');
   });
@@ -161,7 +161,7 @@ test('失败回合映射为公共失败终态合同，不静默丢上下文', { 
 
     assert.deepEqual(normalizeSnapshot(butler.useButler.getState() as never), {
       lines: [{ role: 'user', text: '失败问题', sources: [] }],
-      steps: [{ label: '查询构建', status: 'failed' }],
+      steps: [{ label: '查询 Azure DevOps', status: 'failed' }],
       taskState: { status: 'failed', sources: [] },
       engineState: {
         version: 2,

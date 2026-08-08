@@ -24,6 +24,7 @@ import ButlerImagePicker, {
   pasteButlerImages,
 } from './ButlerImagePicker';
 import ButlerInlineExchange from './ButlerInlineExchange';
+import ButlerSkillMenu, { useButlerSkillMenu } from './ButlerSkillMenu';
 
 function roomName(
   rid: string,
@@ -55,6 +56,7 @@ export default function ButlerPanel() {
   const resetButlerPanelWidth = useImLayout((state) => state.resetButlerPanelWidth);
   const userId = useAuth((state) => state.user?._id);
   const [input, setInput] = useState('');
+  const skillMenu = useButlerSkillMenu(input, setInput);
   const [images, setImages] = useState<ButlerImageInput[]>([]);
   const [previewLines, setPreviewLines] = useState<ButlerLine[]>([]);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
@@ -252,21 +254,32 @@ export default function ButlerPanel() {
 
       <form
         onSubmit={(event) => { event.preventDefault(); void submit(); }}
-        className="shrink-0 border-t border-line-soft bg-surface p-3"
+        className="relative shrink-0 border-t border-line-soft bg-surface p-3"
       >
+        <ButlerSkillMenu
+          options={skillMenu.options}
+          activeIndex={skillMenu.activeIndex}
+          onPick={skillMenu.pick}
+          onHover={skillMenu.setActiveIndex}
+        />
         <ButlerImagePreviews images={images} onChange={setImages} />
         <div className="flex items-end gap-2 rounded-xl border border-line bg-fill-2 px-2 shadow-sm transition-colors focus-within:border-primary">
           <ButlerImagePicker images={images} onChange={setImages} disabled={running} compact />
           <textarea
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => {
+              setInput(event.target.value);
+              skillMenu.reopen();
+            }}
             onPaste={(event) => void pasteButlerImages(event, images, setImages)}
             onKeyDown={(event) => {
+              if (skillMenu.handleKeyDown(event, skillMenu.pick)) return;
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 void submit();
               }
             }}
+            onBlur={() => skillMenu.dismiss()}
             rows={1}
             placeholder="问问这个房间的讨论…"
             className="max-h-28 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-ink-3"

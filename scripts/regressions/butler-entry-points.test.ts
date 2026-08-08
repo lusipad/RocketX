@@ -120,7 +120,7 @@ test('在办项是可折叠行，快操作有 aria-label，完整对话入口与
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
 });
 
-test('主动发现保持克制，驾驶舱与输入区使用正确的表面层级', () => {
+test('兼容今日纸的主动发现保持克制，输入区使用正确的表面层级', () => {
   const page = source('apps/web/src/pages/ButlerPage.tsx');
   const suggestionSection = /<section aria-label="我主动发现">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
 
@@ -128,10 +128,7 @@ test('主动发现保持克制，驾驶舱与输入区使用正确的表面层�
   assert.match(suggestionSection, /转为待办/);
   assert.match(suggestionSection, /忽略/);
   assert.doesNotMatch(suggestionSection, /<details[^>]*\sopen(?:=|\s|>)/);
-  assert.match(
-    page,
-    /className=\{`butler-workspace\$\{activeView === 'conversation' \? ' butler-workspace-conversation' : ''\}`\}/,
-  );
+  assert.match(page, /className="butler-workspace"/);
   assert.match(source('apps/web/src/styles.css'), /\.butler-workspace \{[\s\S]*flex: 1 1 0%;/);
   assert.match(page, /className="butler-workspace-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-3"/);
   assert.match(page, /<section aria-label="统一 Composer" className="butler-composer">/);
@@ -139,4 +136,14 @@ test('主动发现保持克制，驾驶舱与输入区使用正确的表面层�
   assert.match(page, /交给\{identity\.displayName\}/);
   assert.doesNotMatch(page, /aria-label="添加上下文"/);
   assert.doesNotMatch(page, /aria-label="引用文件或消息"/);
+});
+
+test('委托和定时任务工作面都有明确的直接触发入口', () => {
+  const page = source('apps/web/src/pages/ButlerPage.tsx');
+  const routines = source('apps/web/src/components/ButlerRoutines.tsx');
+
+  assert.match(page, /aria-label="新建委托"/);
+  assert.match(page, /aria-label="新建定时任务"/);
+  assert.match(routines, /aria-label=\{`\$\{runLabel\}\$\{routine\.name\}`\}/);
+  assert.match(routines, /\{running \? '运行中' : runLabel\}/);
 });

@@ -31,7 +31,7 @@ const IDENTITY_TABS: Array<{ id: IdentityTab; label: string; shortLabel: string 
   { id: 'settings', label: '相处设定', shortLabel: '设定' },
   { id: 'profile', label: '了解你', shortLabel: '了解' },
   { id: 'analysis', label: '分析与改进', shortLabel: '分析' },
-  { id: 'memory', label: '记忆与技能', shortLabel: '记忆' },
+  { id: 'memory', label: '技能中心', shortLabel: '技能' },
   { id: 'audit', label: '最近动作', shortLabel: '动作' },
 ];
 
@@ -90,18 +90,26 @@ function ChoiceRow<T extends string>({
   );
 }
 
-export default function ButlerIdentityPage() {
+export default function ButlerIdentityPage({
+  initialTab = 'settings',
+}: {
+  initialTab?: IdentityTab;
+}) {
   const identity = useButlerIdentity((state) => state.identity);
   const saveIdentity = useButlerIdentity((state) => state.save);
   const resetIdentity = useButlerIdentity((state) => state.reset);
   const [draft, setDraft] = useState<ButlerIdentity>(identity);
-  const [activeTab, setActiveTab] = useState<IdentityTab>('settings');
+  const [activeTab, setActiveTab] = useState<IdentityTab>(initialTab);
   const memoryCount = activeMemories().length;
   const skillCount = listSkills().length;
 
   useEffect(() => {
     setDraft(identity);
   }, [identity]);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const dirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(identity),

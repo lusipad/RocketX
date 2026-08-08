@@ -7,11 +7,17 @@ import {
   Square,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useStore } from 'zustand';
 import type { RcMessage } from '@rcx/rc-client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useAuth } from '../stores/auth';
-import { butlerRecapAgoLabel, butlerSessionRecap, useButler } from '../stores/butler';
+import {
+  appendButlerLine,
+  butlerRecapAgoLabel,
+  butlerSessionRecap,
+  useButler,
+} from '../stores/butler';
 import {
   BUTLER_BOUNDARY_NOTE,
   BUTLER_SCENE_PROMPTS,
@@ -25,11 +31,10 @@ import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
 import ButlerProcess from './ButlerProcess';
 import ButlerSources from './ButlerSources';
 import ButlerConclusionActions from './ButlerConclusionActions';
-import ButlerArtifactsPanel from './ButlerArtifactsPanel';
 import ButlerConversationHistory from './ButlerConversationHistory';
 import ButlerErrandCard from './ButlerErrandCard';
 import ButlerErrandRunCard from './ButlerErrandRunCard';
-import { ButlerActionCard, ButlerMessageActions } from './ButlerActions';
+import { ButlerActionCard } from './ButlerActions';
 import ButlerImagePicker, {
   ButlerImageAttachments,
   ButlerImagePreviews,
@@ -38,10 +43,6 @@ import ButlerImagePicker, {
 import ButlerSessionSwitcher from './ButlerSessionSwitcher';
 import ButlerToolApprovals from './ButlerToolApprovals';
 import type { ButlerImageInput } from '../lib/butlerImages';
-import {
-  butlerArtifactsForSession,
-  useButlerArtifacts,
-} from '../stores/butlerArtifacts';
 import {
   projectHostedConversation,
   type HostedConversationLine,
@@ -52,6 +53,14 @@ import {
 } from '../stores/sharedAgent';
 import { useChat } from '../stores/chat';
 import { openButlerSource } from '../lib/butlerSourceNavigation';
+import ButlerSkillMenu, { useButlerSkillMenu } from './ButlerSkillMenu';
+import {
+  butlerEfficiency,
+  createExplicitButlerSkillDraft,
+  recordButlerConversationTurn,
+} from '../butler/extensions/learning/runtime';
+import { isButlerSkillDraftRequest } from '../butler/extensions/learning/conversationReceipt';
+import ButlerSkillDraftCard from './ButlerSkillDraftCard';
 
 const RECAP_GAP_MS = 30 * 60 * 1000;
 
@@ -95,9 +104,6 @@ export default function ButlerConversation({
   const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
   const hydrateButler = useButler((state) => state.hydrate);
   const context = useButler((state) => state.context);
-  const hydrateArtifacts = useButlerArtifacts((state) => state.hydrate);
-  const captureArtifactLine = useButlerArtifacts((state) => state.captureLine);
-  const artifacts = useButlerArtifacts((state) => state.artifacts);
   const sharedAgentSessions = useSharedAgent((state) => state.sessions);
   const restoreSharedAgent = useSharedAgent((state) => state.restore);
   const roomMessages = useChat((state) => state.messages);
@@ -108,6 +114,7 @@ export default function ButlerConversation({
   const [transferring, setTransferring] = useState(false);
   const [loadedHostedMessages, setLoadedHostedMessages] = useState<Record<string, RcMessage[]>>({});
   const [selectedHostedId, setSelectedHostedId] = useState<string | null>(null);
+  const skillMenu = useButlerSkillMenu(input, setInput);
   // 打 / 唤起能力菜单：选中只填输入框不发送（例句里的人名编号是占位符）
   const slashQuery = butlerSlashQuery(input);
   const slashOptions = useMemo(
@@ -121,11 +128,23 @@ export default function ButlerConversation({
   };
   const sessions = useButler((state) => state.sessions);
   const activeSessionId = useButler((state) => state.activeSessionId);
+  const efficiencyState = useStore(butlerEfficiency.store);
+  const skillDraftsByLineId = useMemo(() => {
+    const statuses = new Map(
+      efficiencyState.proposals.map((proposal) => [proposal.id, proposal.status]),
+    );
+    const entries = efficiencyState.drafts.flatMap((draft) => {
+      if (draft.source.sessionId !== activeSessionId) return [];
+      if (draft.conversationHidden) return [];
+      if (draft.proposalId && !['suggested', 'dry-run'].includes(statuses.get(draft.proposalId) ?? '')) {
+        return [];
+      }
+      const anchor = draft.source.lineIds.at(-1);
+      return anchor ? [[anchor, draft] as const] : [];
+    });
+    return new Map(entries);
+  }, [activeSessionId, efficiencyState.drafts, efficiencyState.proposals]);
   const activeSummary = sessions.find((session) => session.id === activeSessionId);
-  const activeArtifacts = useMemo(
-    () => butlerArtifactsForSession(artifacts, activeSessionId, lines),
-    [activeSessionId, artifacts, lines],
-  );
   const sharedSessionKeys = Object.keys(sharedAgentSessions).sort().join('\n');
   const hostedConversations = useMemo(
     () =>
@@ -224,10 +243,6 @@ export default function ButlerConversation({
     };
   }, [sharedSessionKeys, userId]);
 
-  useEffect(() => {
-    hydrateArtifacts();
-  }, [hydrateArtifacts]);
-
   // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
   // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
@@ -240,7 +255,8 @@ export default function ButlerConversation({
     runtimeCheckpoints,
     actionDraft,
     steps,
-    activeArtifacts,
+    efficiencyState.drafts,
+    efficiencyState.proposals,
     selectedHostedId,
   ]);
 
@@ -251,11 +267,41 @@ export default function ButlerConversation({
   const submit = async (text = input) => {
     const value = text.trim();
     if ((!value && !images.length) || running) return;
+    const before = useButler.getState();
+    const start = before.lines.length;
     const submittedImages = images;
     setInput('');
     setImages([]);
     stickToBottom.current = true;
-    await askButler(value, undefined, submittedImages);
+    if (
+      submittedImages.length === 0
+      && isButlerSkillDraftRequest(value)
+      && before.taskState?.status === 'completed'
+    ) {
+      const sourceLineIds = before.lines.slice(-2).map((line) => line.id);
+      appendButlerLine('user', value);
+      appendButlerLine('assistant', '我已经把刚才的做法整理成草稿。先看一遍，确认后才会保存到技能中心。');
+      const current = useButler.getState();
+      createExplicitButlerSkillDraft({
+        task: before.taskState,
+        sessionId: before.activeSessionId,
+        lineIds: [...sourceLineIds, ...current.lines.slice(start).map((line) => line.id)],
+        steps: before.steps,
+      });
+      return;
+    }
+    try {
+      await askButler(value, undefined, submittedImages);
+    } finally {
+      const current = useButler.getState();
+      recordButlerConversationTurn({
+        task: current.taskState,
+        surface: 'conversation',
+        sessionId: current.activeSessionId,
+        lineIds: current.lines.slice(start).map((line) => line.id),
+        steps: current.steps,
+      });
+    }
   };
 
   const renderHostedLine = (line: HostedConversationLine) => {
@@ -313,14 +359,14 @@ export default function ButlerConversation({
       <div className="butler-conversation-pane">
         <header className="butler-conversation-header">
           <div className="min-w-0">
-            <span>{selectedHosted ? 'AI 托管记录' : '完整对话'}</span>
+            <span>{selectedHosted ? 'AI 托管记录' : '私人工作代理'}</span>
             <h2>{selectedHosted?.title || activeSummary?.title || '新对话'}</h2>
             <p>
               {selectedHosted
                 ? `来自「${selectedHosted.roomName}」的只读记录`
                 : context
                   ? `当前工作面：${context.label}`
-                  : '多轮讨论留在这里，结论会写回今天的纸。'}
+                  : '先回答、整理或起草；只有明确委托时，才会启动可暂停的执行任务。'}
             </p>
           </div>
           <div className="butler-conversation-header-actions">
@@ -372,13 +418,6 @@ export default function ButlerConversation({
 
         <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
           <div className="mx-auto min-h-full w-full max-w-[840px] space-y-5">
-            {!selectedHosted ? (
-              <ButlerArtifactsPanel
-                artifacts={activeArtifacts}
-                onContinue={(title) => setInput(`继续编辑成果“${title}”：`)}
-              />
-            ) : null}
-
           {recap && activeSummary ? (
             <div className="sticky top-0 z-10 border-l border-primary/45 bg-surface py-1 pl-4 text-xs leading-5 text-ink-2">
               <span className="font-medium text-ink">上回说到</span>
@@ -420,7 +459,7 @@ export default function ButlerConversation({
                 : lines.length;
             const renderLine = (line: (typeof lines)[number]) => {
               const mine = line.role === 'user';
-              const artifact = activeArtifacts.find((candidate) => candidate.sourceLineId === line.id);
+              const skillDraft = skillDraftsByLineId.get(line.id);
               return (
                 <article
                   key={line.id}
@@ -454,18 +493,10 @@ export default function ButlerConversation({
                       ) : line.text}
                       {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
                       {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
-                      <ButlerMessageActions
-                        line={line}
-                        disabled={running}
-                        artifactable={line.role === 'assistant'}
-                        artifactExists={!!artifact}
-                        onPromoteArtifact={() => {
-                          if (!activeSessionId) return;
-                          captureArtifactLine(activeSessionId, line);
-                        }}
-                        onContinueArtifact={artifact ? () => setInput(`继续编辑成果“${artifact.title}”：`) : undefined}
-                      />
                     </div>
+                    {line.role === 'assistant' && skillDraft ? (
+                      <ButlerSkillDraftCard draft={skillDraft} />
+                    ) : null}
                   </div>
                 </article>
               );
@@ -491,7 +522,7 @@ export default function ButlerConversation({
 
           {!selectedHosted && routineDraft ? (
             <div className="border-l border-primary/45 pl-4">
-              <div className="text-xs font-medium text-primary">例行事务草案</div>
+              <div className="text-xs font-medium text-primary">定时任务草案</div>
               <div className="mt-2 font-medium text-ink">{routineDraft.name}</div>
               <div className="mt-1 text-sm text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
               {routineCheckpoint?.error ? (
@@ -543,6 +574,12 @@ export default function ButlerConversation({
                     onPick={pickSlashOption}
                     onHover={slash.setActiveIndex}
                   />
+                  <ButlerSkillMenu
+                    options={skillMenu.options}
+                    activeIndex={skillMenu.activeIndex}
+                    onPick={skillMenu.pick}
+                    onHover={skillMenu.setActiveIndex}
+                  />
                   <div className="min-w-0 flex-1">
                     <ButlerImagePreviews images={images} onChange={setImages} />
                     <div className="flex items-end">
@@ -550,15 +587,23 @@ export default function ButlerConversation({
                       <textarea
                         rows={2}
                         value={input}
-                        onChange={(event) => { setInput(event.target.value); slash.reopen(); }}
+                        onChange={(event) => {
+                          setInput(event.target.value);
+                          slash.reopen();
+                          skillMenu.reopen();
+                        }}
                         onKeyDown={(event) => {
+                          if (skillMenu.handleKeyDown(event, skillMenu.pick)) return;
                           if (slash.handleKeyDown(event, pickSlashOption)) return;
                           if (event.key === 'Enter' && !event.shiftKey) {
                             event.preventDefault();
                             void submit();
                           }
                         }}
-                        onBlur={() => slash.dismiss()}
+                        onBlur={() => {
+                          slash.dismiss();
+                          skillMenu.dismiss();
+                        }}
                         onPaste={(event) => void pasteButlerImages(event, images, setImages)}
                         aria-label="给管家发消息"
                         placeholder="给管家发消息……"
@@ -574,7 +619,7 @@ export default function ButlerConversation({
                     <button type="submit" aria-label="发送" title="发送" disabled={!input.trim() && !images.length} className="flex h-8 w-8 items-center justify-center rounded text-primary hover:bg-primary-light disabled:text-ink-3/40"><Send size={14} /></button>
                   )}
                 </form>
-                <p>Enter 发送 · Shift + Enter 换行</p>
+                <p>输入 $ 使用 Skill · Enter 发送 · Shift + Enter 换行</p>
               </>
             )}
           </div>

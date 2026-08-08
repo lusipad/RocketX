@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { syncBusinessMcpAzureDevOps } from '../agent/businessMcp';
 import {
   ADO_WEB_KEY,
   loadWorkbenchConfig,
@@ -18,6 +19,8 @@ import {
 
 export interface WorkItem {
   id: number;
+  /** ADO 顶层 revision；受控写入会用它做 /rev 并发保护。 */
+  revision?: number;
   /** 当前工作项的父项 ID；父项不在当前查询结果中时仍保留此值 */
   parentId?: number;
   title: string;
@@ -151,7 +154,7 @@ let refreshRevision = 0;
 
 function connectionKey(config: WorkbenchConfig | null): string {
   if (!config) return '';
-  return `ado\0${config.adoBase?.trim().replace(/\/+$/, '') ?? ''}\0${config.auth ?? ''}`;
+  return `ado\0${config.adoBase?.trim().replace(/\/+$/, '') ?? ''}\0${config.auth ?? ''}\0${config.allowInsecureAdoHttp === true}`;
 }
 
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
@@ -169,11 +172,18 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
       pat: config.pat?.trim() || undefined,
       auth: config.auth,
+      allowInsecureAdoHttp: config.allowInsecureAdoHttp === true ? true : undefined,
       account: config.account.trim(),
     };
     const connectionChanged = connectionKey(get().config) !== connectionKey(nextConfig);
     const configRevision = get().configRevision + 1;
     saveWorkbenchConfig(nextConfig);
+    void syncBusinessMcpAzureDevOps({
+      collectionUrl: nextConfig.adoBase,
+      authMode: nextConfig.auth,
+      pat: nextConfig.pat,
+      allowInsecureAdoHttp: nextConfig.allowInsecureAdoHttp,
+    });
     refreshRevision++;
     if (connectionChanged) localStorage.removeItem(ADO_WEB_KEY);
     // 配置变了，旧数据就作废——别让用户对着上一个服务器的工作项发呆

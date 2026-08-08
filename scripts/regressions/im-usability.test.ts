@@ -72,11 +72,11 @@ const baseView = {
 test('模块快捷键保留执行间直达顺序', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
+    'workbench',
     'butler-view',
     'todos',
     'calendar',
     'downloads',
-    'workbench',
     'contacts',
     'codex',
     'settings',

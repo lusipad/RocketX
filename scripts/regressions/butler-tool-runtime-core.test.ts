@@ -550,7 +550,7 @@ test('draft_routine 在 approve 后用 checkpoint id 创建并启用 routine，�
   assert.equal(useRoutines.getState().routines.length, 1);
 });
 
-test('失败 checkpoint 只能在显式再次 approve 后重试，recover 与 cancel 保持纯状态变换', async () => {
+test('失败 checkpoint 只能在显式再次 approve 后重试，ADO/通用 recover 与 cancel 保持纯状态变换', async () => {
   const runtime = runtimeHarness();
   const draftRoutine = tool('draft_routine');
   const originalAddRoutine = useRoutines.getState().addRoutine;
@@ -594,6 +594,21 @@ test('失败 checkpoint 只能在显式再次 approve 后重试，recover 与 ca
     assert.equal(recovered.error?.kind, 'recovery');
     assert.equal(recovered.error?.retryable, true);
     assert.match(String(recovered.error?.message), /断|没做完|一半/);
+
+    const adoRunning = normalizeButlerToolCheckpoint(createButlerToolCheckpoint({
+      effect: 'write',
+      toolName: 'action.ado-state',
+      capability: 'ado.work-items.state.write',
+      status: 'running',
+      params: { workItemId: 123, targetState: 'Resolved' },
+      preview: '修改 ADO 工作项 #123：Active → Resolved',
+      now: runtime.context.now?.(),
+    }));
+    const adoRecovered = recoverButlerToolCheckpoint(adoRunning, runtime.context.now?.());
+    assert.equal(adoRecovered.status, 'failed');
+    assert.equal(adoRecovered.error?.kind, 'recovery');
+    assert.equal(adoRecovered.error?.retryable, false);
+    assert.match(String(adoRecovered.error?.message), /结果未知|重新读取新卡/);
 
     const cancelled = await cancelButlerToolCheckpoint(recovered, runtime.context);
     assert.equal(cancelled.status, 'cancelled');

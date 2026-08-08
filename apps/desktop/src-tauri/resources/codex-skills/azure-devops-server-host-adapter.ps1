@@ -32,8 +32,13 @@ if (-not $request.ContainsKey("resource")) {
 }
 
 $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath "azure-devops-server/scripts/Invoke-AzureDevOpsServerApi.ps1"
+$method = if ($request.ContainsKey("method") -and -not [string]::IsNullOrWhiteSpace([string]$request.method)) {
+    [string]$request.method
+} else {
+    "GET"
+}
 $invokeParams = @{
-    Method   = "GET"
+    Method   = $method
     Resource = [string]$request.resource
 }
 
@@ -65,6 +70,14 @@ foreach ($entry in $fieldMap.GetEnumerator()) {
 
 if ($request.ContainsKey("query") -and $null -ne $request.query) {
     $invokeParams.Query = $request.query
+}
+
+if ($request.ContainsKey("body") -and $null -ne $request.body) {
+    $invokeParams.Body = $request.body
+}
+
+if ($request.ContainsKey("dryRun") -and $request.dryRun) {
+    $invokeParams.DryRun = $true
 }
 
 if ($request.ContainsKey("allowConditionalArea") -and $request.allowConditionalArea) {

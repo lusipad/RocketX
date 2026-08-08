@@ -56,19 +56,17 @@ const prContext: ButlerSurfaceContext = {
   ],
 };
 
-// 这两句是入口按钮写死的提问。改一个字就可能不再命中场景正则，
-// 管家会先反问一轮（「要从哪个群聊提取承诺？」），用户白等。
-test('「提取承诺」按钮文案命中场景，且带房间上下文时不触发澄清', () => {
+test('「提取承诺」按钮只提供自然语言入口，缺少范围也不被前端拦截', () => {
   const task = compile(BUTLER_EXTRACT_COMMITMENTS_PROMPT, roomContext);
   assert.equal(task.manifest.scenario, 'extract-commitments');
   assert.equal(task.manifest.clarification.required, false);
   assert.equal(task.status, 'ready');
 
-  // 没有房间上下文时才应该追问——证明上面的「不追问」是上下文带来的，不是恒真
+  // 是否追问由 commitment-extraction Skill 判断，前端一律把原话交给 Codex。
   const withoutRoom = compile(BUTLER_EXTRACT_COMMITMENTS_PROMPT);
   assert.equal(withoutRoom.manifest.scenario, 'extract-commitments');
-  assert.deepEqual(withoutRoom.manifest.clarification.missing, ['群聊范围']);
-  assert.equal(withoutRoom.status, 'awaiting-clarification');
+  assert.deepEqual(withoutRoom.manifest.clarification.missing, []);
+  assert.equal(withoutRoom.status, 'ready');
 });
 
 test('PR 比较例句命中场景，且带两个 PR 来源时不触发澄清', () => {
@@ -101,21 +99,18 @@ test('总结例句与场景例句形状稳定，边界声明说清只读与先�
   assert.match(BUTLER_BOUNDARY_NOTE, /只读|先问/);
 });
 
-test('入口发出的完整正文（提问 + 转录）不会被消息内容劫持场景', () => {
-  // 对抗审查实测复现过：转录里出现「查一下那个文档」会命中 find-file，
-  // 场景变成 awaiting-clarification，管家反问「请补充发送人」，整轮空转。
+test('入口完整正文即使含其他关键词，也不会触发前端澄清拦截', () => {
   const transcript = [
     '[07-25 09:00] Alice：帮我查下昨天发的设计稿',
     '[07-25 09:05] Bob：我周四之前把接口文档补上',
   ].join('\n');
   const fullText = `${BUTLER_EXTRACT_COMMITMENTS_PROMPT}\n\n以下是「研发群」里指定的消息：\n${transcript}`;
 
-  // 不传 intent（旧行为）：确实会被劫持——这条断言证明上面的防护不是恒真
-  const hijacked = compile(fullText, roomContext);
-  assert.equal(hijacked.manifest.scenario, 'find-file');
-  assert.equal(hijacked.status, 'awaiting-clarification');
+  const fullTask = compile(fullText, roomContext);
+  assert.equal(fullTask.status, 'ready');
+  assert.equal(fullTask.manifest.clarification.required, false);
 
-  // 入口的真实调用形态：分类只吃意图句
+  // 入口仍只用意图句记录学习标签，但标签不会进入执行提示。
   const guarded = compileButlerTask(BUTLER_EXTRACT_COMMITMENTS_PROMPT, roomContext, null, 1_000);
   assert.equal(guarded.manifest.scenario, 'extract-commitments');
   assert.equal(guarded.status, 'ready');
@@ -176,7 +171,7 @@ test('PR 多选比较：生成的提问命中比较场景，两个前置条件�
   assert.equal(withoutSources.manifest.scenario, 'compare-pull-requests');
   assert.equal(withoutSources.status, 'ready');
 
-  // 前置②失效的反证：只给一个编号且无来源时应当追问，证明上面不是恒真
+  // 只给一个编号也必须送给 Codex；是否追问由 pr-comparison Skill 决定。
   const single = compile('比较这个 PR：#101。', {
     kind: 'workbench',
     label: 'ADO 拉取请求',
@@ -184,7 +179,7 @@ test('PR 多选比较：生成的提问命中比较场景，两个前置条件�
     sources: [],
   });
   assert.equal(single.manifest.scenario, 'compare-pull-requests');
-  assert.equal(single.status, 'awaiting-clarification');
+  assert.equal(single.status, 'ready');
 });
 
 test('斜杠菜单：只在以 / 开头且未接空格时弹出', () => {

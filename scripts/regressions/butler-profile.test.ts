@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   AZURE_DEVOPS_SERVER_SKILL_NAME,
   AZURE_DEVOPS_SERVER_SKILL_REVISION,
+  BUTLER_MEMORY_SKILL_UPSTREAM,
   DEFAULT_PERSONA,
   buildButlerApiSystemPrompt,
   buildButlerCodexBaseInstructions,
@@ -21,12 +22,6 @@ import {
   setPersona,
   type ButlerProfileStorage,
 } from '../../apps/web/src/lib/butlerProfile';
-import {
-  initializeButlerLearningExtensions,
-} from '../../apps/web/src/butler/extensions/learning/runtime';
-
-initializeButlerLearningExtensions();
-
 class MemoryStorage implements ButlerProfileStorage {
   private readonly entries: Map<string, string>;
 
@@ -69,6 +64,7 @@ test('系统提示只注入人设和技能索引，永不内嵌任何记忆事�
     assert.match(initial, /- weekly-report：/);
     assert.match(initial, /- pr-comparison：/);
     assert.match(initial, /- commitment-extraction：/);
+    assert.match(initial, /- butler-memory：/);
     assert.match(initial, /- azure-devops-server：/);
     assert.doesNotMatch(initial, /- compare-pull-requests：/);
 
@@ -77,17 +73,57 @@ test('系统提示只注入人设和技能索引，永不内嵌任何记忆事�
     const prompt = buildButlerSystemPrompt();
     assert.doesNotMatch(prompt, /老李是李建国|偏好简短/);
     assert.doesNotMatch(prompt, /## 你记住的事实/);
-    assert.match(prompt, /recall_memory/);
+    assert.match(prompt, /butler-memory/);
   });
 });
 
-test('默认人设改为按需 recall_memory，并严格限制可持久化内容', () => {
-  assert.match(DEFAULT_PERSONA, /recall_memory/);
+test('默认人设只保留长期记忆硬边界，并把具体方法交给 butler-memory Skill', () => {
+  assert.match(DEFAULT_PERSONA, /butler-memory/);
   assert.match(DEFAULT_PERSONA, /alias/);
   assert.match(DEFAULT_PERSONA, /偏好/);
   assert.match(DEFAULT_PERSONA, /承诺/);
   assert.match(DEFAULT_PERSONA, /PR、构建、日程、工作项、待办/);
+  assert.doesNotMatch(DEFAULT_PERSONA, /brief:/);
   assert.doesNotMatch(DEFAULT_PERSONA, /先调用 remember/);
+});
+
+test('butler-memory Skill 统一长期记忆方法，并保留确认、范围和动态状态边界', () => {
+  assert.deepEqual(BUTLER_MEMORY_SKILL_UPSTREAM, {
+    repository: 'https://github.com/mem0ai/mem0',
+    revision: '74f6dc6f0d60906c4babf762fc8d14b7169c196c',
+    license: 'Apache-2.0',
+  });
+  const skill = loadButlerSkill('butler-memory');
+  for (const tool of [
+    'recall_memory',
+    'remember',
+    'revoke_memory',
+    'restore_memory',
+    'import_legacy_memory',
+  ]) {
+    assert.match(skill, new RegExp(tool));
+  }
+  assert.match(skill, /确认卡/);
+  assert.match(skill, /account.*project.*room/s);
+  assert.match(skill, /PR、构建、日程、工作项、待办/);
+  assert.match(skill, /brief:/);
+  assert.match(skill, /写入前.*recall_memory.*同一.*kind.*subject/s);
+  assert.match(skill, /一张确认卡只包含一条/);
+  assert.match(skill, /推断.*候选.*不得自动写入/s);
+  assert.match(skill, /重复、冲突或过期.*只读/);
+  assert.match(skill, /revoke_memory.*不硬删除.*restore_memory/s);
+});
+
+test('Azure DevOps Skill 保持 MCP 只读，并把显式状态修改交给 Host 确认卡', () => {
+  const skill = readFileSync('apps/web/src/butler/skills/host/azure-devops-server/SKILL.md', 'utf8');
+  assert.match(skill, /只调用 `rocketx_azure_devops_server_read`/);
+  assert.match(skill, /method: "POST"/);
+  assert.match(skill, /resource: "wiql"/);
+  assert.match(skill, /workitems/);
+  assert.match(skill, /把 #123 改成已解决/);
+  assert.match(skill, /调用 `draft_ado_state`/);
+  assert.match(skill, /绝不通过只读 MCP 发送 PATCH/);
+  assert.doesNotMatch(skill, /summarize_open_work_items/);
 });
 
 test('两条管家运行路径都要求把可信来源链接放到对应结论末尾', () => {
@@ -98,6 +134,21 @@ test('两条管家运行路径都要求把可信来源链接放到对应结论�
     assert.match(prompt, /对应句末/);
     assert.match(prompt, /link.*webUrl/s);
     assert.match(prompt, /不要手写引用编号或编号范围/);
+  }
+});
+
+test('两条管家运行路径都用自然语言触发动作草案，并保留确认卡边界', () => {
+  for (const prompt of [buildButlerApiSystemPrompt(), buildButlerCodexBaseInstructions()]) {
+    assert.match(prompt, /把这个转成待办/);
+    assert.match(prompt, /帮我拟回复/);
+    assert.match(prompt, /记成承诺/);
+    assert.match(prompt, /建 ADO/);
+    assert.match(prompt, /交给 Codex/);
+    assert.match(prompt, /调用 draft_action/);
+    assert.match(prompt, /把 #123 改成已解决/);
+    assert.match(prompt, /调用 draft_ado_state/);
+    assert.match(prompt, /只打开一张可编辑确认卡/);
+    assert.match(prompt, /用户确认前不得声称已经/);
   }
 });
 
@@ -157,10 +208,14 @@ test('load_skill 仍可用，skills 合同不受记忆隔离影响', () => {
     assert.match(loadButlerSkill('morning-brief'), /^晨报/);
     assert.match(loadButlerSkill('pr-comparison'), /^比较 PR/);
     assert.match(loadButlerSkill('commitment-extraction'), /^提取承诺/);
-    assert.match(loadButlerSkill(AZURE_DEVOPS_SERVER_SKILL_NAME), /run_azure_devops_server_cli/);
+    assert.match(loadButlerSkill('butler-memory'), /^Butler 长期记忆/);
+    assert.match(
+      loadButlerSkill(AZURE_DEVOPS_SERVER_SKILL_NAME),
+      /rocketx_azure_devops_server_read/
+    );
     assert.match(
       loadButlerSkill('missing'),
-      /未找到技能：missing，可用技能：.*butler-profile-curator.*butler-reply-guardian.*azure-devops-server/,
+      /未找到技能：missing，可用技能：.*butler-reply-guardian.*azure-devops-server/,
     );
   });
 });
@@ -233,7 +288,7 @@ test('内置技能即使被停用，仍不可保存或删除', () => {
   });
 });
 
-test('Codex 基础指令依赖工作区原生技能，API 提示继续使用 load_skill', () => {
+test('Codex 基础指令只依赖工作区原生技能，旧 Skill 仅保留 API 兼容读取', () => {
   withMemoryStorage((storage) => {
     setPersona('这个人设只应写入 AGENTS.md。');
     const codex = buildButlerCodexBaseInstructions();
@@ -247,7 +302,7 @@ test('Codex 基础指令依赖工作区原生技能，API 提示继续使用 loa
       { name: '旧 技能', description: '迁移前技能。', body: '继续兼容。' },
     ]));
     assert.match(loadButlerSkill('旧 技能'), /继续兼容/);
-    assert.match(buildButlerCodexBaseInstructions(), /旧 技能：迁移前技能/);
+    assert.doesNotMatch(buildButlerCodexBaseInstructions(), /旧 技能|load_skill/);
     assert.throws(
       () => saveSkill({ name: '新 技能', description: '非法名称。', body: '不应保存。' }),
       /技能名称必须是/,

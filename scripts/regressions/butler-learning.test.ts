@@ -22,11 +22,9 @@ import type {
   OperationReceipt,
   RepetitionCandidate,
 } from '../../apps/web/src/butler/extensions/learning/model';
-import { BUTLER_LEARNING_SKILLS } from '../../apps/web/src/butler/extensions/learning/skills';
 import {
   isButlerBuiltInSkill,
   listSkills,
-  registerButlerSkillProvider,
 } from '../../apps/web/src/lib/butlerProfile';
 import { writeButlerProfileFile } from '../../apps/web/src/lib/butlerArchive';
 import {
@@ -247,39 +245,21 @@ test('改进机会先分流，只有 workflow 候选且没有现成能力时形�
   assert.match(proposal.preview.at(-1) ?? '', /不会直接产生副作用/);
 });
 
-test('第一批 7 个分析 micro Skill 与 reply-guardian 行动证明都已原生内置', () => {
-  const unregister = registerButlerSkillProvider(
-    'test.learning-skills',
-    () => BUTLER_LEARNING_SKILLS,
-  );
-  assert.equal(BUTLER_LEARNING_SKILLS.length, 8);
-  const names = BUTLER_LEARNING_SKILLS.map((skill) => skill.name);
-  try {
-    for (const name of [
-      'butler-profile-curator',
-      'butler-work-rhythm-analyzer',
-      'butler-attention-friction-analyzer',
-      'butler-collaboration-loop-analyzer',
-      'butler-repetition-miner',
-      'butler-micro-skill-designer',
-      'butler-skill-effectiveness-reviewer',
-      'butler-reply-guardian',
-    ]) {
-      assert.ok(names.includes(name), `${name} 应存在`);
-      assert.ok(isButlerBuiltInSkill(name));
-      assert.ok(listSkills().some((skill) => skill.name === name));
-    }
-  } finally {
-    unregister();
+test('内部学习分析不冒充 Agent Skill，只暴露可执行的回复守护', () => {
+  assert.ok(isButlerBuiltInSkill('butler-reply-guardian'));
+  assert.ok(listSkills().some((skill) => skill.name === 'butler-reply-guardian'));
+  for (const name of [
+    'butler-profile-curator',
+    'butler-work-rhythm-analyzer',
+    'butler-attention-friction-analyzer',
+    'butler-collaboration-loop-analyzer',
+    'butler-repetition-miner',
+    'butler-micro-skill-designer',
+    'butler-skill-effectiveness-reviewer',
+  ]) {
+    assert.equal(isButlerBuiltInSkill(name), false);
+    assert.equal(listSkills().some((skill) => skill.name === name), false);
   }
-  assert.match(
-    BUTLER_LEARNING_SKILLS.find((skill) => skill.name === 'butler-profile-curator')?.body ?? '',
-    /candidate.*不能代替用户确认/s,
-  );
-  assert.match(
-    BUTLER_LEARNING_SKILLS.find((skill) => skill.name === 'butler-micro-skill-designer')?.body ?? '',
-    /Task、Profile、MemoryRule、Routine、Tool preset、micro Skill/,
-  );
 });
 
 test('Profile.md 写入 Butler home 根目录', async () => {
@@ -332,7 +312,7 @@ test('薄内核不依赖任何具体 Butler 能力，能力资源由扩展注册
   );
   assert.doesNotMatch(core, /butler\/extensions|ProfileFact|WorkInsight|Routine|Skill/);
   assert.doesNotMatch(profileLibrary, /butler\/extensions\/learning/);
-  assert.match(runtime, /registerButlerSkillProvider/);
+  assert.doesNotMatch(runtime, /registerButlerSkillProvider|BUTLER_LEARNING_SKILLS/);
   assert.match(runtime, /host\.load\(createButlerProfileExtension/);
   assert.match(runtime, /host\.load\(createButlerWorkAnalysisExtension/);
 });

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_bot;
+mod business_mcp;
 mod butler_db;
 mod diagnostics;
 mod lan;
@@ -540,6 +541,13 @@ mod tray_icon_tests {
 }
 
 fn main() {
+    if std::env::args().any(|argument| argument == "--business-mcp") {
+        if let Err(error) = business_mcp::run_stdio() {
+            eprintln!("rocketx-business-mcp: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--mcp") {
         if let Err(error) = mcp::run_stdio() {
             eprintln!("rcx-mcp: {error}");
@@ -590,6 +598,11 @@ fn main() {
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
             mcp::mcp_config_disable,
+            business_mcp::business_mcp_launch_config,
+            business_mcp::business_mcp_sync_rocket_chat,
+            business_mcp::business_mcp_clear_rocket_chat,
+            business_mcp::business_mcp_sync_azure_devops,
+            business_mcp::business_mcp_clear_azure_devops,
             agent_bot::agent_bot_config_set,
             agent_bot::agent_bot_config_status,
             agent_bot::agent_bot_config_delete,
@@ -610,6 +623,7 @@ fn main() {
         .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
+        .manage(business_mcp::BusinessMcpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
         .manage(native_service::NativeServiceState::default())
         .manage(lan::LanKeychainLock::default())

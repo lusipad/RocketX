@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -8,28 +7,26 @@ import {
   setButlerBrainTauriProvider,
   setCodexBrainUnavailableReason,
 } from '../apps/web/src/lib/butlerBrain';
+import { setBusinessMcpLaunchConfigProvider } from '../apps/web/src/agent/businessMcp';
 import { writeButlerWorkspaceFiles } from '../apps/web/src/lib/butlerArchive';
 import {
   BUILT_IN_BUTLER_SKILLS,
   DEFAULT_PERSONA,
 } from '../apps/web/src/lib/butlerProfile';
 import {
-  setButlerAzureDevOpsServerReadInvoker,
-  type ButlerAzureDevOpsServerReadRequest,
-} from '../apps/web/src/lib/butlerTools';
-import {
   runButlerCodexEphemeral,
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
 } from '../apps/web/src/stores/butlerCodex';
-import { useWorkbench } from '../apps/web/src/stores/workbench';
 import {
   codexInvocation,
+  codexRuntimeSourceFromArgs,
   NodeCodexTransport,
   turnInputs,
 } from './lib/codex-app-server-spike';
 
 const SKILL_NAME = 'azure-devops-server';
+const TOOL_NAME = 'rocketx_azure_devops_server_read';
 const RESULT_MARKER = 'RCX_AZURE_SKILL_ADAPTER_6F31';
 const timeoutMs = 180_000;
 
@@ -83,40 +80,119 @@ async function startMockAdo(requests: string[]): Promise<{ server: Server; colle
   };
 }
 
-async function runHostAdapter(
-  adapterPath: string,
-  request: ButlerAzureDevOpsServerReadRequest,
-): Promise<unknown> {
-  const child = spawn(
-    'pwsh',
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', adapterPath],
-    { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
-  );
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-  child.stdin.end(JSON.stringify(request));
-  const code = await new Promise<number | null>((resolveExit, reject) => {
-    child.once('error', reject);
-    child.once('close', resolveExit);
-  });
-  if (code !== 0) throw new Error(stderr.trim() || `host adapter 退出码 ${code}`);
-  return JSON.parse(stdout.trim().replace(/^\uFEFF/, ''));
+function businessMcpProbeSource(): string {
+  return [
+    "import { spawn } from 'node:child_process';",
+    "import { createInterface } from 'node:readline';",
+    'const adapterPath = process.argv[2];',
+    'const collectionUrl = process.argv[3];',
+    "const input = createInterface({ input: process.stdin });",
+    'function send(id, result) {',
+    "  process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\\n`);",
+    '}',
+    'function runAdapter(args) {',
+    '  return new Promise((resolve, reject) => {',
+    "    const child = spawn('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', adapterPath],",
+    "      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });",
+    "    let stdout = '';",
+    "    let stderr = '';",
+    "    child.stdout.setEncoding('utf8');",
+    "    child.stderr.setEncoding('utf8');",
+    "    child.stdout.on('data', (chunk) => { stdout += chunk; });",
+    "    child.stderr.on('data', (chunk) => { stderr += chunk; });",
+    '    const timer = setTimeout(() => { child.kill(); reject(new Error("adapter timeout")); }, 15000);',
+    "    child.once('error', (error) => { clearTimeout(timer); reject(error); });",
+    "    child.once('close', (code) => {",
+    '      clearTimeout(timer);',
+    '      if (code !== 0) { reject(new Error(stderr.trim() || `adapter exited ${code}`)); return; }',
+    "      try { resolve(JSON.parse(stdout.trim().replace(/^\\uFEFF/, ''))); } catch (error) { reject(error); }",
+    '    });',
+    '    child.stdin.end(JSON.stringify({',
+    "      method: 'GET',",
+    '      collectionUrl,',
+    "      authMode: 'default-credentials',",
+    '      pat: null,',
+    '      area: args.area ?? null,',
+    '      resource: args.resource,',
+    '      project: args.project ?? null,',
+    '      team: args.team ?? null,',
+    '      query: args.query ?? null,',
+    '      apiVersion: args.apiVersion ?? null,',
+    '      serverVersionHint: args.serverVersionHint ?? null,',
+    '      allowConditionalArea: args.allowConditionalArea === true,',
+    '    }));',
+    '  });',
+    '}',
+    "input.on('line', async (line) => {",
+    '  let message;',
+    '  try { message = JSON.parse(line); } catch { return; }',
+    "  if (!Object.prototype.hasOwnProperty.call(message, 'id')) return;",
+    "  if (message.method === 'initialize') {",
+    '    send(message.id, {',
+    "      protocolVersion: '2025-06-18',",
+    "      capabilities: { tools: { listChanged: false } },",
+    "      serverInfo: { name: 'rocketx-business-probe', version: '1.0.0' },",
+    '    });',
+    '    return;',
+    '  }',
+    "  if (message.method === 'ping') { send(message.id, {}); return; }",
+    "  if (message.method === 'tools/list') {",
+    '    send(message.id, { tools: [{',
+    `      name: '${TOOL_NAME}',`,
+    "      description: '使用 RocketX 注入的连接执行 Azure DevOps Server 只读 GET。',",
+    '      inputSchema: {',
+    "        type: 'object',",
+    '        properties: {',
+    "          area: { type: 'string' },",
+    "          resource: { type: 'string' },",
+    "          project: { type: 'string' },",
+    "          team: { type: 'string' },",
+    "          query: { type: 'object' },",
+    "          apiVersion: { type: 'string' },",
+    "          serverVersionHint: { type: 'string' },",
+    "          allowConditionalArea: { type: 'boolean' },",
+    '        },',
+    "        required: ['resource'],",
+    '        additionalProperties: false,',
+    '      },',
+    '      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },',
+    '    }] });',
+    '    return;',
+    '  }',
+    `  if (message.method === 'tools/call' && message.params?.name === '${TOOL_NAME}') {`,
+    '    try {',
+    '      const value = await runAdapter(message.params?.arguments ?? {});',
+    '      send(message.id, {',
+    "        content: [{ type: 'text', text: JSON.stringify(value) }],",
+    '        structuredContent: value,',
+    '        isError: false,',
+    '      });',
+    '    } catch (error) {',
+    '      const failure = { status: "unavailable", reason: "adapter_error", retryable: true, message: String(error) };',
+    '      send(message.id, {',
+    "        content: [{ type: 'text', text: JSON.stringify(failure) }],",
+    '        structuredContent: failure,',
+    '        isError: true,',
+    '      });',
+    '    }',
+    '    return;',
+    '  }',
+    "  process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id,",
+    "    error: { code: -32601, message: 'Method not found' } })}\\n`);",
+    '});',
+    '',
+  ].join('\n');
 }
 
 async function main(): Promise<void> {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'rocketx-butler-azure-skill-'));
   const bundledRoot = resolve('apps/desktop/src-tauri/resources/codex-skills');
   const adapterPath = join(bundledRoot, 'azure-devops-server-host-adapter.ps1');
-  const invocation = codexInvocation();
+  const mcpServerPath = join(workspaceRoot, 'rocketx-business-mcp-probe.mjs');
+  const invocation = codexInvocation(codexRuntimeSourceFromArgs());
   const transports: NodeCodexTransport[] = [];
-  const toolRequests: ButlerAzureDevOpsServerReadRequest[] = [];
   const mockRequests: string[] = [];
   const events: Array<Record<string, unknown>> = [];
-  const previousConfig = useWorkbench.getState().config;
   let server: Server | undefined;
   const restoreStorage = setButlerBrainStorage(new MemoryStorage());
   const restorePlatform = setButlerBrainTauriProvider(() => true);
@@ -126,10 +202,7 @@ async function main(): Promise<void> {
     transports.push(transport);
     return transport;
   });
-  const restoreAzureInvoker = setButlerAzureDevOpsServerReadInvoker(async (request) => {
-    toolRequests.push(structuredClone(request));
-    return runHostAdapter(adapterPath, request);
-  });
+  let restoreBusinessMcp = () => undefined;
   setCodexBrainUnavailableReason(undefined);
 
   try {
@@ -149,17 +222,15 @@ async function main(): Promise<void> {
     );
     const mock = await startMockAdo(mockRequests);
     server = mock.server;
-    useWorkbench.setState({
-      config: {
-        adoBase: mock.collectionUrl,
-        auth: 'ntlm',
-        account: 'e2e',
-      },
-    });
+    await writeFile(mcpServerPath, businessMcpProbeSource());
+    restoreBusinessMcp = setBusinessMcpLaunchConfigProvider(async () => ({
+      command: process.execPath,
+      args: [mcpServerPath, adapterPath, mock.collectionUrl],
+    }));
 
     const abort = new AbortController();
     const timeout = setTimeout(
-      () => abort.abort(new Error(`Azure Skill CLI spike 超时（${timeoutMs}ms）`)),
+      () => abort.abort(new Error(`Azure Skill business MCP spike 超时（${timeoutMs}ms）`)),
       timeoutMs,
     );
     let answer: { text: string };
@@ -167,7 +238,7 @@ async function main(): Promise<void> {
       answer = await runButlerCodexEphemeral({
         text: [
           '只读取 Azure DevOps Server PR #42 的元数据，不比较、不读取 iteration 或文件。',
-          '必须按当前 Skill 把查询转换为 run_azure_devops_server_cli 调用；不得执行 PowerShell 或 shell。',
+          `必须按 RocketX 托管边界调用 ${TOOL_NAME}；不得直接执行 PowerShell 或 shell。`,
           `最终回答必须原样包含返回标题中的标记 ${RESULT_MARKER}。`,
         ].join('\n'),
         skillName: SKILL_NAME,
@@ -188,11 +259,11 @@ async function main(): Promise<void> {
       .join('\n');
     const checks = {
       nativeSkillInput: input[1]?.type === 'skill' && input[1].name === SKILL_NAME,
-      controlledToolCalled: toolNames.includes('run_azure_devops_server_cli'),
+      businessMcpToolCalled: toolNames.some((name) => name?.includes(TOOL_NAME)),
+      legacyDynamicToolUnused: !toolNames.includes('run_azure_devops_server_cli'),
       oldPrToolsAbsent: !toolNames.some((name) =>
         ['get_pull_request', 'list_pull_request_changes', 'read_pull_request_file'].includes(name ?? ''),
       ),
-      hostForcedGet: toolRequests.length > 0 && toolRequests.every((request) => request.method === 'GET'),
       mockAdoReached: mockRequests.some((request) =>
         request.startsWith('GET /DefaultCollection/_apis/git/pullrequests/42?'),
       ),
@@ -204,22 +275,24 @@ async function main(): Promise<void> {
       spike: 'butler-azure-skill-adapter-path',
       result: passed ? 'PASS' : 'FAIL',
       cliVersion: invocation.version,
+      runtimeSource: invocation.source,
+      runtimePath: invocation.displayPath,
       coverage: {
-        codexSkillToWebTool: true,
+        codexSkillToBusinessMcp: true,
+        businessMcpContractToHostAdapter: true,
         hostAdapterToMockAdo: true,
+        rustKeychainBridge: false,
         tauriInvoke: false,
       },
       checks,
       toolNames,
-      toolRequests: toolRequests.map(({ pat: _pat, ...request }) => request),
       mockRequests,
       answer: answer.text,
       stderr: transports.flatMap((transport) => transport.stderr),
     }, null, 2));
     process.exitCode = passed ? 0 : 1;
   } finally {
-    useWorkbench.setState({ config: previousConfig });
-    restoreAzureInvoker();
+    restoreBusinessMcp();
     restoreTransport();
     restoreWorkspace();
     restorePlatform();

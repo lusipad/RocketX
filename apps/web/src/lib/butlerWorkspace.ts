@@ -70,12 +70,13 @@ export interface ButlerWorkspaceModel {
   needToKnow: ButlerNeedToKnow[];
   decisions: ButlerDecisionProjection[];
   suggestions: ButlerSuggestionProjection[];
-  tasks: ButlerTaskProjection[];
+  delegations: ButlerTaskProjection[];
+  personalTasks: ButlerTaskProjection[];
   routines: ButlerRoutineProjection[];
   summary: {
     watched: number;
     needsAttention: number;
-    activeTasks: number;
+    activeDelegations: number;
     routineFailures: number;
     activationNeeded: boolean;
   };
@@ -109,6 +110,8 @@ function routineScheduleLabel(routine: Routine): string {
 function taskFromErrand(run: ButlerErrandRun): ButlerTaskProjection {
   const state: ButlerTaskProjectionState = run.status === 'awaiting-approval'
     ? 'needs-user'
+    : run.status === 'paused'
+      ? 'needs-user'
     : run.status === 'running'
       ? 'active'
       : run.status === 'replied'
@@ -116,6 +119,8 @@ function taskFromErrand(run: ButlerErrandRun): ButlerTaskProjection {
         : 'failed';
   const statusLabel = run.status === 'awaiting-approval'
     ? '等你决定'
+    : run.status === 'paused'
+      ? run.error || '已暂停，等你决定是否继续'
     : run.status === 'running'
       ? run.activity || '正在处理'
       : run.status === 'replied'
@@ -242,10 +247,7 @@ export function buildButlerWorkspaceModel({
       sourceRef: item.ref,
     }));
 
-  const tasks = [
-    ...visibleErrands.map(taskFromErrand),
-    ...openTodos.map((todo) => taskFromTodo(todo, today)),
-  ].sort((left, right) => {
+  const taskOrder = (left: ButlerTaskProjection, right: ButlerTaskProjection): number => {
     const order: Record<ButlerTaskProjectionState, number> = {
       'needs-user': 0,
       active: 1,
@@ -254,7 +256,9 @@ export function buildButlerWorkspaceModel({
       failed: 4,
     };
     return order[left.state] - order[right.state];
-  });
+  };
+  const delegations = visibleErrands.map(taskFromErrand).sort(taskOrder);
+  const personalTasks = openTodos.map((todo) => taskFromTodo(todo, today)).sort(taskOrder);
 
   const routineProjections = routines.map((routine): ButlerRoutineProjection => {
     const latest = latestRoutineRun(routine);
@@ -292,15 +296,17 @@ export function buildButlerWorkspaceModel({
     needToKnow,
     decisions,
     suggestions,
-    tasks,
+    delegations,
+    personalTasks,
     routines: routineProjections,
     summary: {
       watched,
       needsAttention: needToKnow.length + decisions.length,
-      activeTasks: tasks.filter((task) => task.state === 'active' || task.state === 'waiting-external').length,
+      activeDelegations: delegations.filter((task) => task.state === 'active').length,
       routineFailures,
       activationNeeded: watched === 0
-        && tasks.length === 0
+        && delegations.length === 0
+        && personalTasks.length === 0
         && suggestions.length === 0
         && needToKnow.length === 0
         && decisions.length === 0,

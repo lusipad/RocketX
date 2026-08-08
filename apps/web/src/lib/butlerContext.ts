@@ -52,9 +52,11 @@ function short(value: string | undefined, fallback: string): string {
 function parseRows(content: string): Record<string, unknown>[] {
   try {
     const parsed: unknown = JSON.parse(content);
-    return Array.isArray(parsed)
-      ? parsed.map(recordOf).filter((row): row is Record<string, unknown> => !!row)
-      : [];
+    const envelope = recordOf(parsed);
+    const values = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(envelope?.items) ? envelope.items : [];
+    return values.map(recordOf).filter((row): row is Record<string, unknown> => !!row);
   } catch {
     return [];
   }
@@ -93,8 +95,8 @@ export function extractButlerSources(toolName: string | undefined, content: stri
 
   const rows = parseRows(content);
   const sources = rows.flatMap((row): ButlerSource[] => {
-    if (toolName === 'search_messages' || toolName === 'list_mentions') {
-      const mid = idOf(row, toolName === 'search_messages' ? '_id' : 'id');
+    if (toolName === 'search_messages' || toolName === 'list_room_messages' || toolName === 'list_mentions') {
+      const mid = idOf(row, toolName === 'list_mentions' ? 'id' : '_id');
       const rid = idOf(row, 'rid');
       if (!mid || !rid) return [];
       const room = textOf(row, 'roomName') ?? rid;
@@ -161,7 +163,7 @@ export function butlerContextPrompt(context: ButlerSurfaceContext): string {
     context.detail,
     ...(context.kind === 'room' ? [`用户当前所在房间：${context.label}`] : []),
     context.kind === 'room'
-      ? `查询本房间消息时优先用 search_messages 的 roomName 参数限定范围为“${context.label}”。`
+      ? `按时段汇总本房间时用 list_room_messages，关键词检索时用 search_messages，并把 roomName 限定为“${context.label}”。`
       : '回答时优先结合这个工作面；需要事实时仍调用工具查证，不要把页面摘要当成完整数据。',
   ].join('\n');
 }

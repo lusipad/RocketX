@@ -58,6 +58,7 @@ import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
+import LocalAgentEnvironmentsSettings from '../components/LocalAgentEnvironmentsSettings';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -1186,6 +1187,9 @@ function WorkbenchSection() {
   // 其他设置项都是改完即存，只有这里是「填完再保存」（半截的地址存下去没意义），
   // 所以必须显式告诉用户「还没保存」，否则切走就白填了。
   const [dirty, setDirty] = useState(false);
+  const usesInsecureAdoHttp = /^http:\/\//i.test(config.adoBase?.trim() ?? '')
+    && config.auth !== 'none'
+    && config.auth !== 'bearer';
 
   const update = (patch: Partial<WorkbenchConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
@@ -1232,7 +1236,19 @@ function WorkbenchSection() {
             /* 拿不到就算了，留空也能用（工作项查询会用 @Me 宏） */
           }
         }
-        setConfig((c) => ({ ...c, adoBase, auth, account: account || c.account }));
+        setConfig((c) => {
+          const previousBase = c.adoBase?.trim().replace(/\/+$/, '').toLocaleLowerCase();
+          const nextBase = adoBase.replace(/\/+$/, '').toLocaleLowerCase();
+          return {
+            ...c,
+            adoBase,
+            auth,
+            account: account || c.account,
+            allowInsecureAdoHttp: /^http:\/\//i.test(adoBase) && previousBase === nextBase
+              ? c.allowInsecureAdoHttp
+              : undefined,
+          };
+        });
         const authLabel =
           auth === 'ntlm'
             ? 'Windows 集成认证（当前登录用户，无需 PAT）'
@@ -1252,7 +1268,7 @@ function WorkbenchSection() {
           ? '当前环境不能走 Windows 集成认证，所以必须提供 PAT。'
           : !config.pat?.trim()
             ? 'Windows 集成认证被服务器拒绝了。要么当前登录用户在这台 Azure DevOps 上没有权限，要么服务器关掉了 NTLM/Negotiate —— 后一种情况请填一个 PAT。'
-            : 'PAT 也没通过，检查它是否过期、或缺少 Work Items / Code / Build 的读取权限。';
+            : 'PAT 也没通过，检查它是否过期、或缺少 Work Items 读写、Code / Build 读取权限。';
         setResult({
           ok: false,
           msg: `探测失败。试过的认证方式：${triedLabel || '（无）'}。${hint}`,
@@ -1277,7 +1293,10 @@ function WorkbenchSection() {
       >
         <input
           value={config.adoBase ?? ''}
-          onChange={(e) => update({ adoBase: e.target.value })}
+          onChange={(e) => update({
+            adoBase: e.target.value,
+            allowInsecureAdoHttp: undefined,
+          })}
           placeholder="http://ado-server:8080/DefaultCollection/项目名"
           className={inputCls}
         />
@@ -1286,8 +1305,8 @@ function WorkbenchSection() {
         label="个人访问令牌（PAT）"
         hint={
           isTauri
-            ? '通常留空即可 —— 桌面端默认用 Windows 集成认证，直接拿你当前登录的域账号连，不需要 PAT。只有服务器禁用了集成认证时才需要填（在 ADO 的「用户设置 → 个人访问令牌」创建，勾选 Work Items / Code / Build 只读）。'
-            : '当前环境必须填 PAT：不能依赖 Windows 集成认证。仅保存在本机。'
+            ? '通常留空即可 —— 桌面端默认用 Windows 集成认证，直接拿你当前登录的域账号连，不需要 PAT。只有服务器禁用了集成认证时才需要填（在 ADO 的「用户设置 → 个人访问令牌」创建，勾选 Work Items 读写、Code / Build 读取）。'
+            : '当前环境必须填 PAT：不能依赖 Windows 集成认证。仅保存在本机；请勾选 Work Items 读写、Code / Build 读取。'
         }
       >
         <input
@@ -1307,6 +1326,20 @@ function WorkbenchSection() {
                 ? 'Bearer Token'
                 : 'Windows 集成认证（免凭据）'}
           </div>
+        </Row>
+      )}
+
+      {usesInsecureAdoHttp && (
+        <Row
+          label="允许内网 HTTP 认证"
+          hint="仅在这是受信任内网、且 ADO Server 没有 HTTPS 时开启。HTTP 无法防止中间人窃取 PAT 或中继 Windows 集成认证。"
+          inline
+        >
+          <Toggle
+            checked={config.allowInsecureAdoHttp === true}
+            onChange={(value) => update({ allowInsecureAdoHttp: value || undefined })}
+            label="允许通过 HTTP 使用 ADO 凭据"
+          />
         </Row>
       )}
 
@@ -1338,6 +1371,9 @@ function WorkbenchSection() {
               adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
               pat: config.pat?.trim() || undefined,
               auth: config.auth,
+              allowInsecureAdoHttp: usesInsecureAdoHttp && config.allowInsecureAdoHttp === true
+                ? true
+                : undefined,
               account: config.account.trim(),
             });
             setOnboardingAdo('configured');
@@ -1348,7 +1384,8 @@ function WorkbenchSection() {
           }}
           // 账号不再是必填：Windows 集成认证下由服务器识别，工作项查询用 @Me 宏。
           // 真正的必填是「连到哪儿」——这里只要 ADO 地址。
-          disabled={!config.adoBase?.trim()}
+          disabled={!config.adoBase?.trim()
+            || (usesInsecureAdoHttp && config.allowInsecureAdoHttp !== true)}
           className={`h-9 rounded-md px-4 text-sm text-white transition disabled:opacity-40 ${
             dirty ? 'bg-primary hover:bg-primary-hover' : 'bg-primary/70 hover:bg-primary'
           }`}
@@ -2002,7 +2039,12 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
           ) : (
             <>
               {section === 'account' && <AccountSection />}
-              {section === 'workspace' && <WorkspaceConfigSection />}
+              {section === 'workspace' && (
+                <div className="space-y-8">
+                  <LocalAgentEnvironmentsSettings />
+                  <WorkspaceConfigSection />
+                </div>
+              )}
               {section === 'appearance' && <AppearanceSection />}
               {section === 'sidebar' && <SidebarSection />}
               {section === 'message' && <MessageSection />}

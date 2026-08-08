@@ -11,6 +11,8 @@ export interface WorkbenchConfig {
   pat?: string;
   /** 直连的认证方式（自动探测得出）。ntlm = Windows 集成认证，桌面端默认 */
   auth?: import('./adoDirect').AdoAuth;
+  /** 仅在用户明确确认受信任内网后，允许 ADO 凭据经 HTTP 发送。 */
+  allowInsecureAdoHttp?: boolean;
   account: string;
 }
 
@@ -20,6 +22,7 @@ interface StoredWorkbenchConfig {
   adoBase?: string;
   pat?: string;
   auth?: import('./adoDirect').AdoAuth;
+  allowInsecureAdoHttp?: boolean;
   account?: string;
 }
 
@@ -65,6 +68,7 @@ function parseStoredWorkbenchConfig(): { config: WorkbenchConfig | null; issue: 
         adoBase,
         pat,
         auth: parsed.auth,
+        ...(parsed.allowInsecureAdoHttp === true ? { allowInsecureAdoHttp: true } : {}),
         account,
       },
       issue: null,
@@ -87,6 +91,7 @@ export function saveWorkbenchConfig(config: WorkbenchConfig): void {
     adoBase: config.adoBase?.trim().replace(/\/+$/, '') || undefined,
     pat: config.pat?.trim() || undefined,
     auth: config.auth,
+    allowInsecureAdoHttp: config.allowInsecureAdoHttp === true ? true : undefined,
     account: config.account.trim(),
   }));
 }

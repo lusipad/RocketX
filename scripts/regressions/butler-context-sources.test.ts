@@ -22,6 +22,18 @@ test('Butler 工具结果转成有界、可导航且去重的来源', () => {
   const workItems = extractButlerSources('list_work_items', JSON.stringify([
     { id: 105, title: '修复交接', project: 'RocketX', webUrl: 'https://ado/105' },
   ]));
+  const roomMessages = extractButlerSources('list_room_messages', JSON.stringify({
+    items: [{
+      _id: 'm2',
+      rid: 'r2',
+      roomName: '研发群',
+      sender: '李四',
+      text: '我来跟进',
+      link: 'https://chat.example/channel/dev?msg=m2',
+    }],
+    coverage: { complete: true, truncated: false },
+    warnings: [],
+  }));
 
   assert.deepEqual(messages, [{
     kind: 'message',
@@ -38,6 +50,14 @@ test('Butler 工具结果转成有界、可导航且去重的来源', () => {
     project: 'RocketX',
     webUrl: 'https://ado/105',
   }]);
+  assert.deepEqual(roomMessages, [{
+    kind: 'message',
+    id: 'm2',
+    mid: 'm2',
+    rid: 'r2',
+    label: '研发群 · 李四：我来跟进',
+    webUrl: 'https://chat.example/channel/dev?msg=m2',
+  }]);
   assert.deepEqual(mergeButlerSources(messages, messages, workItems), [...messages, ...workItems]);
   assert.equal(extractButlerSources('search_messages', '工具执行失败：超时').length, 0);
 });
@@ -52,6 +72,6 @@ test('工作面上下文只生成系统提示，并保留明确来源', () => {
 
   assert.equal(
     butlerContextPrompt(context),
-    '用户当前工作面：发布群\n当前 Rocket.Chat 房间，共 18 条已加载消息\n用户当前所在房间：发布群\n查询本房间消息时优先用 search_messages 的 roomName 参数限定范围为“发布群”。',
+    '用户当前工作面：发布群\n当前 Rocket.Chat 房间，共 18 条已加载消息\n用户当前所在房间：发布群\n按时段汇总本房间时用 list_room_messages，关键词检索时用 search_messages，并把 roomName 限定为“发布群”。',
   );
 });

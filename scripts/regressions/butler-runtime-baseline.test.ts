@@ -255,7 +255,7 @@ test('场景基线 2/7：比较两个 PR', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'complete',
     capabilityPreflight: '能按明确编号读取 PR 固定快照、文件变更和受限文本正文；pr-comparison 技能约束三段式结论模板（差异摘要/冲突与风险/建议）。',
-    sources: ['list_pull_requests', 'run_azure_devops_server_cli'],
+    sources: ['rocketx_azure_devops_server_read'],
     errorAction: '不会自动合并、评论或修改 PR。',
     clarification: '若用户没给出两个 PR 编号，先要求补齐（技能限定只问一次带证据的封闭题），不能从已加载列表中猜。',
     recovery: '固定 iteration 可重复读取；正文不可用时降级为元数据与文件清单结论（技能要求显式标注“未读取差异内容”）。',
@@ -291,20 +291,21 @@ test('场景基线 2/7：比较两个 PR', async () => {
     ],
   });
 
-  const rows = parseJson<Array<Record<string, string | number>>>(
-    (await invokeTool('list_pull_requests', { query: '支付服务' })).text,
-  );
   const names = toolNames();
 
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows.map((row) => row.id), [101, 102]);
+  // 工作台数据仍完整保留给确定性 UI，但不再注册成 AI 查询工具。
+  assert.deepEqual(useWorkbench.getState().prs.map((pr) => pr.id), [101, 102]);
+  assert.equal(names.has('list_work_items'), false);
+  assert.equal(names.has('list_pull_requests'), false);
+  assert.equal(names.has('list_builds'), false);
   assert.equal(names.has('compare_pull_requests'), false);
   assert.equal(names.has('get_pull_request'), false);
   assert.equal(names.has('list_pull_request_changes'), false);
   assert.equal(names.has('read_pull_request_file'), false);
   assert.equal(names.has('run_azure_devops_server_cli'), true);
-  // 结论层走技能而非专用工具（延续 83593ce 的收敛 Directive：方法论在技能文本，取数走唯一受控 CLI）
+  // 结论层走 Skill，取数统一走业务 MCP；旧 CLI 只保留给 legacy 兼容路径。
   assert.match(loadButlerSkill('pr-comparison'), /差异摘要.*冲突与风险.*建议/s);
+  assert.match(loadButlerSkill('pr-comparison'), /rocketx_azure_devops_server_read/);
   assert.match(loadButlerSkill('pr-comparison'), /未读取差异内容/);
   assert.equal(baseline.completion, 'complete');
 });
@@ -313,7 +314,7 @@ test('场景基线 3/7：群聊提取承诺', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'partial',
     capabilityPreflight: 'commitment-extraction 技能提供判定标准与两段式清单模板（谁·事·期限·原文链接）；仍缺 task-state 结构化提取与跨轮追踪（P2）。',
-    sources: ['search_messages'],
+    sources: ['list_room_messages'],
     errorAction: '不会把群聊里提到的承诺静默写成待办、工作项或记忆。',
     clarification: '范围不明时技能限定只问一次封闭题（哪个群/多久以内）。',
     recovery: '可重复搜索原始消息；结论按模板可复核，每条带 link 回原文。',
@@ -346,37 +347,221 @@ test('场景基线 3/7：群聊提取承诺', async () => {
     },
   } as never);
 
-  const rows = parseJson<Array<Record<string, string>>>(
-    await searchLoadedMessages({
-      query: '前',
+  const originalGetHistory = rest.getHistory;
+  rest.getHistory = async () => useChat.getState().messages['room-dev'] ?? [];
+  try {
+    const result = parseJson<{
+      items: Array<Record<string, string>>;
+      coverage: { complete: boolean; truncated: boolean };
+      warnings: string[];
+    }>((await invokeTool('list_room_messages', {
       roomName: '研发群',
       since: '2026-07-22',
       until: '2026-07-22',
-    }),
-  );
-  const names = toolNames();
+    })).text);
+    const names = toolNames();
 
-  assert.equal(rows.length, 2);
-  // 引用即产品：search_messages 每行必须带可回跳原文的 link（permalink 形态 ?msg=<id>，结果按时间倒序不保证行序）
-  const links = rows.map((row) => row.link).sort();
-  assert.deepEqual(
-    links.map((link) => link.replace(/^.*\?msg=/, '')),
-    ['msg-commit-1', 'msg-commit-2'],
-  );
-  for (const link of links) assert.match(link, /\?msg=/);
-  assert.equal(names.has('summarize_room'), false);
-  assert.equal(names.has('extract_commitments'), false);
-  // 结论层走技能而非专用工具；模板与“宁可漏报不可错报”由技能文本钉住
-  assert.match(loadButlerSkill('commitment-extraction'), /明确承诺.*疑似/s);
-  assert.match(loadButlerSkill('commitment-extraction'), /宁可漏报不可错报/);
-  assert.equal(baseline.completion, 'partial');
+    assert.equal(result.items.length, 2);
+    assert.deepEqual(result.coverage, { complete: true, truncated: false, source: 'server-history', returned: 2, limit: 100, since: '2026-07-22', until: '2026-07-22' });
+    assert.deepEqual(result.warnings, []);
+    const links = result.items.map((row) => row.link).sort();
+    assert.deepEqual(
+      links.map((link) => link.replace(/^.*\?msg=/, '')),
+      ['msg-commit-1', 'msg-commit-2'],
+    );
+    for (const link of links) assert.match(link, /\?msg=/);
+    assert.equal(names.has('summarize_room'), false);
+    assert.equal(names.has('extract_commitments'), false);
+    assert.equal(names.has('list_room_messages'), true);
+    // 结论层走技能而非专用工具；模板与“宁可漏报不可错报”由技能文本钉住
+    assert.match(loadButlerSkill('commitment-extraction'), /明确承诺.*疑似/s);
+    assert.match(loadButlerSkill('commitment-extraction'), /宁可漏报不可错报/);
+    assert.equal(baseline.completion, 'partial');
+  } finally {
+    rest.getHistory = originalGetHistory;
+  }
+});
+
+test('房间历史读取失败时显式降级为不完整本地缓存，不把空缺当成完整结果', async () => {
+  useChat.setState({
+    subscriptions: {
+      'room-release': { rid: 'room-release', fname: '发布群', name: 'release', t: 'c' },
+    },
+    rooms: {
+      'room-release': { _id: 'room-release', fname: '发布群', name: 'release', t: 'c' },
+    },
+    messages: {
+      'room-release': [{
+        _id: 'msg-local',
+        rid: 'room-release',
+        msg: '本地缓存中的发布消息',
+        ts: '2026-07-22T08:00:00.000Z',
+        u: { _id: 'u-a', username: 'alice', name: 'Alice' },
+      }],
+    },
+  } as never);
+  const originalGetHistory = rest.getHistory;
+  rest.getHistory = async () => {
+    throw new Error('offline');
+  };
+
+  try {
+    const result = parseJson<{
+      items: Array<{ _id: string }>;
+      coverage: { source: string; complete: boolean; truncated: boolean };
+      warnings: string[];
+    }>((await invokeTool('list_room_messages', {
+      roomName: '发布群',
+      since: '2026-07-22',
+      until: '2026-07-22',
+    })).text);
+
+    assert.deepEqual(result.items.map((item) => item._id), ['msg-local']);
+    assert.equal(result.coverage.source, 'local-cache');
+    assert.equal(result.coverage.complete, false);
+    assert.equal(result.coverage.truncated, false);
+    assert.match(result.warnings[0] ?? '', /offline/);
+  } finally {
+    rest.getHistory = originalGetHistory;
+  }
+});
+
+test('房间历史返回超过 limit 时保留最新消息并标记截断', async () => {
+  useChat.setState({
+    subscriptions: {
+      'room-release': { rid: 'room-release', fname: '发布群', name: 'release', t: 'c' },
+    },
+    rooms: {
+      'room-release': { _id: 'room-release', fname: '发布群', name: 'release', t: 'c' },
+    },
+    messages: {},
+  } as never);
+  const originalGetHistory = rest.getHistory;
+  rest.getHistory = async () => [
+    {
+      _id: 'msg-old',
+      rid: 'room-release',
+      msg: '较早消息',
+      ts: '2026-07-22T08:00:00.000Z',
+      u: { _id: 'u-a', username: 'alice', name: 'Alice' },
+    },
+    {
+      _id: 'msg-new',
+      rid: 'room-release',
+      msg: '最新消息',
+      ts: '2026-07-22T09:00:00.000Z',
+      u: { _id: 'u-b', username: 'bob', name: 'Bob' },
+    },
+  ];
+
+  try {
+    const result = parseJson<{
+      items: Array<{ _id: string }>;
+      coverage: { complete: boolean; truncated: boolean; returned: number; limit: number };
+    }>((await invokeTool('list_room_messages', {
+      roomName: '发布群',
+      since: '2026-07-22',
+      until: '2026-07-22',
+      limit: 1,
+    })).text);
+
+    assert.deepEqual(result.items.map((item) => item._id), ['msg-new']);
+    assert.deepEqual(result.coverage, {
+      source: 'server-history',
+      complete: false,
+      truncated: true,
+      returned: 1,
+      limit: 1,
+      since: '2026-07-22',
+      until: '2026-07-22',
+    });
+  } finally {
+    rest.getHistory = originalGetHistory;
+  }
+});
+
+test('list_mentions 按上次成功时间筛选未处理项、最新优先，并披露 20 条截断', async () => {
+  const mentions = Array.from({ length: 22 }, (_, index) => ({
+    id: `mention-${index}`,
+    rid: 'room-dev',
+    roomName: '研发群',
+    sender: 'Alice',
+    ts: `2026-07-22T10:${String(index).padStart(2, '0')}:00.000Z`,
+    text: `消息 ${index}`,
+    processed: false,
+  }));
+  mentions.push({
+    id: 'mention-processed',
+    rid: 'room-dev',
+    roomName: '研发群',
+    sender: 'Bob',
+    ts: '2026-07-22T11:00:00.000Z',
+    text: '已处理',
+    processed: true,
+  });
+  const restoreMentions = setButlerMentionProvider(() => mentions);
+
+  try {
+    const result = parseJson<{
+      items: Array<{ id: string }>;
+      coverage: { complete: boolean; truncated: boolean; returned: number; limit: number };
+    }>((await invokeTool('list_mentions', {
+      since: '2026-07-22T09:59:00.000Z',
+      unprocessedOnly: true,
+    })).text);
+
+    assert.equal(result.items.length, 20);
+    assert.equal(result.items[0].id, 'mention-21');
+    assert.equal(result.items.at(-1)?.id, 'mention-2');
+    assert.equal(result.items.some((item) => item.id === 'mention-processed'), false);
+    assert.deepEqual(result.coverage, {
+      complete: false,
+      truncated: true,
+      returned: 20,
+      limit: 20,
+      since: '2026-07-22T09:59:00.000Z',
+    });
+  } finally {
+    restoreMentions();
+  }
+});
+
+test('list_mentions 披露 Today 收件箱离线或部分刷新，不把缓存说成完整结果', async () => {
+  const restoreMentions = setButlerMentionProvider(() => ({
+    items: [{
+      id: 'mention-cached',
+      rid: 'room-dev',
+      roomName: '研发群',
+      sender: 'Alice',
+      ts: '2026-07-22T10:00:00.000Z',
+      text: '缓存中的 @',
+      processed: false,
+    }],
+    complete: false,
+    warnings: ['研发群: offline'],
+  }));
+
+  try {
+    const result = parseJson<{
+      items: Array<{ id: string }>;
+      coverage: { complete: boolean; truncated: boolean };
+      warnings: string[];
+    }>((await invokeTool('list_mentions', { unprocessedOnly: true })).text);
+
+    assert.deepEqual(result.items.map((item) => item.id), ['mention-cached']);
+    assert.equal(result.coverage.complete, false);
+    assert.equal(result.coverage.truncated, false);
+    assert.deepEqual(result.warnings, ['研发群: offline']);
+  } finally {
+    restoreMentions();
+  }
 });
 
 test('场景基线 4/7：逾期 WI 跟进草稿', async () => {
   const baseline: ScenarioBaseline = {
     completion: 'partial',
-    capabilityPreflight: '能列出逾期工作项事实，但缺少预检后的 typed 跟进草稿、审批和 checkpoint。',
-    sources: ['list_work_items'],
+    capabilityPreflight: 'azure-devops-server Skill 可实时读取逾期工作项；跟进消息仍只生成草稿，不自动发送。',
+    sources: ['rocketx_azure_devops_server_read'],
     errorAction: '不会自动给负责人发催办消息，也不会创建/修改工作项。',
     clarification: '当前不会追问“催谁、用什么口径、发到哪里”。',
     recovery: '重查可再次列逾期项；跟进草稿仍需人工整理。',
@@ -397,25 +582,27 @@ test('场景基线 4/7：逾期 WI 跟进草稿', async () => {
     ],
   });
 
-  const rows = parseJson<Array<Record<string, string | number>>>(
-    (await invokeTool('list_work_items', { query: '付款接口' })).text,
-  );
   const draftTools = [...toolNames()].filter((name) => name.startsWith('draft_'));
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].id, 501);
-  assert.equal(rows[0].assignedTo, '张三');
+  assert.equal(useWorkbench.getState().workItems[0]?.id, 501);
+  assert.equal(toolNames().has('list_work_items'), false);
+  assert.match(loadButlerSkill('azure-devops-server'), /rocketx_azure_devops_server_read/);
   // 草案类工具的白名单：新增一个就要在这里显式承认，避免悄悄多出写入口。
-  // draft_errand 只拟规格给用户过目，真正派发由用户在卡上点，大脑仍然没有手。
-  assert.deepEqual(draftTools.sort(), ['draft_errand', 'draft_routine']);
+  // 所有 draft_* 工具都只拟内容给用户过目，真正执行仍由用户在卡上确认。
+  assert.deepEqual(draftTools.sort(), [
+    'draft_action',
+    'draft_ado_state',
+    'draft_errand',
+    'draft_routine',
+  ]);
   assert.equal(baseline.completion, 'partial');
 });
 
 test('场景基线 5/7：构建失败关联提交', async () => {
   const baseline: ScenarioBaseline = {
-    completion: 'gap',
-    capabilityPreflight: '当前能列失败构建，但没有变更集/提交关联层，也没有失败原因预检合同。',
-    sources: ['list_builds'],
+    completion: 'partial',
+    capabilityPreflight: 'azure-devops-server Skill 可实时读取构建、变更和关联事实；结论受服务器版本与权限覆盖约束。',
+    sources: ['rocketx_azure_devops_server_read'],
     errorAction: '不会自动回滚、重试构建或修改代码。',
     clarification: '不会追问应该关联哪个仓库、哪个 PR、哪段变更。',
     recovery: '可重复筛失败构建；提交关联需要后续 typed tool/runtime 补足。',
@@ -438,16 +625,14 @@ test('场景基线 5/7：构建失败关联提交', async () => {
     ],
   });
 
-  const rows = parseJson<Array<Record<string, string | number>>>(
-    (await invokeTool('list_builds', { query: 'payments-ci', failedOnly: true })).text,
-  );
   const names = toolNames();
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].result, 'failed');
+  assert.equal(useWorkbench.getState().builds[0]?.result, 'failed');
+  assert.equal(names.has('list_builds'), false);
   assert.equal(names.has('list_commits'), false);
   assert.equal(names.has('list_build_changes'), false);
-  assert.equal(baseline.completion, 'gap');
+  assert.match(loadButlerSkill('azure-devops-server'), /rocketx_azure_devops_server_read/);
+  assert.equal(baseline.completion, 'partial');
 });
 
 test('场景基线 6/7：创建周报例行任务', async () => {
@@ -564,7 +749,7 @@ test('场景基线 7/7：跨重启续跑', async () => {
   }
 });
 
-test('不完整指代不调用大脑，补齐后把任务合同注入实际回合', async () => {
+test('不完整指代也交给原生 Skill 理解，宿主任务提示不再替大脑路由', async () => {
   login('clarify-user');
   let calls = 0;
   let taskContext = '';
@@ -576,17 +761,16 @@ test('不完整指代不调用大脑，补齐后把任务合同注入实际回�
 
   try {
     await useButler.getState().ask('比较这两个 PR');
-    assert.equal(calls, 0);
-    assert.equal(useButler.getState().taskState?.status, 'awaiting-clarification');
-    assert.equal(useButler.getState().lines.at(-1)?.text, '请给出要比较的两个 PR 编号。');
-
-    await useButler.getState().ask('PR #101 和 PR #102');
     assert.equal(calls, 1);
     assert.equal(useButler.getState().taskState?.status, 'completed');
-    assert.match(taskContext, /"scenario":"compare-pull-requests"/);
-    assert.match(taskContext, /"tool":"run_azure_devops_server_cli"/);
-    assert.match(taskContext, /"freshness":"query-time"/);
-    assert.match(taskContext, /不评论、合并或修改 PR/);
+    assert.match(taskContext, /Codex 原生 Agent Skills/);
+    assert.doesNotMatch(taskContext, /compare-pull-requests|sourcePlan|clarification/);
+
+    await useButler.getState().ask('PR #101 和 PR #102');
+    assert.equal(calls, 2);
+    assert.equal(useButler.getState().taskState?.status, 'completed');
+    assert.match(taskContext, /Codex 原生 Agent Skills/);
+    assert.doesNotMatch(taskContext, /scenario|sourcePlan|prohibitedActions/);
   } finally {
     restoreRunner();
   }

@@ -165,9 +165,9 @@ export default function ProfileSection() {
     <section aria-label="用户 Profile">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-medium text-ink">管家对你的理解</h3>
+          <h3 className="text-sm font-medium text-ink">关于你的记忆</h3>
           <p className="mt-1 text-xs leading-5 text-ink-3">
-            明示资料直接生效；观察和 Profile.md 外部改动只进入待确认。
+            Codex 会在对话空闲后持续维护并按相关性轻量召回；这里的已确认资料优先，且可随时纠正。
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -185,7 +185,7 @@ export default function ProfileSection() {
             className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink"
           >
             <Sparkles size={13} />
-            初始化了解
+            从历史补全
           </button>
           <button
             type="button"
@@ -202,9 +202,9 @@ export default function ProfileSection() {
         <div className="mt-4 rounded-lg border border-line bg-surface-2 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h4 className="text-sm font-medium text-ink">初始化了解你</h4>
+              <h4 className="text-sm font-medium text-ink">从历史补全画像</h4>
               <p className="mt-1 text-xs leading-5 text-ink-3">
-                只会在你点击“生成候选”时读取所选来源最近 14 天、最多 20 段只读摘要，并通过现有 Codex-first AI 生成待确认候选。
+                只有点击“生成候选”才会读取所选来源最近 14 天、最多 20 段只读摘要；生成的可见画像仍由你确认。
               </p>
             </div>
             <button
@@ -468,7 +468,7 @@ export default function ProfileSection() {
             </button>
           </div>
         )) : (
-          <p className="py-4 text-sm text-ink-3">还没有已确认的资料。你可以先初始化了解，再补一条明确偏好。</p>
+          <p className="py-4 text-sm text-ink-3">还没有已确认的资料。自动记忆会在后台维护；你也可以从历史补全，或直接告诉管家。</p>
         )}
       </div>
 

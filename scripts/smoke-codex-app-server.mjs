@@ -1,32 +1,16 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import {
+  codexInvocation,
+  codexRuntimeSourceFromArgs,
+} from './lib/codex-app-server-spike.ts';
 
 const root = resolve(import.meta.dirname, '..');
+const cli = codexInvocation(codexRuntimeSourceFromArgs());
+const cliVersion = cli.version;
 
-function invocation() {
-  if (process.platform !== 'win32') return { command: 'codex', args: [] };
-  const pinnedEntry = join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-  if (existsSync(pinnedEntry)) return { command: process.execPath, args: [pinnedEntry] };
-  const lookup = spawnSync('where.exe', ['codex.cmd'], { encoding: 'utf8' });
-  const entry = lookup.stdout
-    ?.split(/\r?\n/)
-    .filter(Boolean)
-    .map((shim) => join(dirname(shim), 'node_modules', '@openai', 'codex', 'bin', 'codex.js'))
-    .find(existsSync);
-  if (!entry || !existsSync(entry)) throw new Error('找不到 PATH 中 Codex CLI 的官方 Node 入口');
-  return { command: process.execPath, args: [entry] };
-}
-
-const cli = invocation();
-const version = spawnSync(cli.command, [...cli.args, '--version'], { encoding: 'utf8' });
-const cliVersion = version.stdout.trim().match(/^codex-cli (\d+\.\d+\.\d+)$/)?.[1];
-if (version.status !== 0 || !cliVersion) {
-  throw new Error(`无法识别 Codex CLI 版本：${version.stdout.trim() || '不可用'}`);
-}
-
-const child = spawn(cli.command, [...cli.args, 'app-server', '--stdio'], {
+const child = spawn(cli.command, [...cli.args, ...cli.appServerArgs], {
   cwd: root,
   stdio: ['pipe', 'pipe', 'pipe'],
 });
@@ -81,7 +65,9 @@ createInterface({ input: child.stdout }).on('line', (line) => {
       console.error(`未收到预期回复：${answer}`);
       process.exitCode = 1;
     } else {
-      console.log(`Codex app-server ${cliVersion} 真实 turn 通过：RCX_M8_OK`);
+      console.log(
+        `Codex app-server ${cliVersion}（${cli.source}，${cli.displayPath}）真实 turn 通过：RCX_M8_OK`,
+      );
     }
     child.kill();
   }

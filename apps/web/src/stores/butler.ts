@@ -58,13 +58,17 @@ import {
 import {
   BUTLER_AUDIT_UPDATED_EVENT,
   auditButlerAction,
+  createButlerAdoStateActionDraft,
   createButlerActionCheckpoint,
   createButlerActionDraft,
   normalizeButlerActionDraft,
   preflightButlerAction,
+  setButlerAdoStateDraftProvider,
+  setButlerActionDraftProvider,
   updateButlerActionCheckpoint,
+  type ButlerAdoStateDraftInput,
+  type ButlerAnswerActionKind,
   type ButlerActionDraft,
-  type ButlerActionKind,
 } from '../lib/butlerActions';
 import { useAuth } from './auth';
 import { useWorkbench } from './workbench';
@@ -78,6 +82,8 @@ import {
   type ResidentCodexThreadSnapshot,
 } from './butlerCodex';
 import { dispatchButlerErrand, useButlerErrandRuns } from './butlerErrandRuns';
+import { buildButlerLightweightMemoryContext } from '../lib/butlerMemoryContext';
+import type { ButlerErrandInputResponse } from '../lib/butlerHostInput';
 
 const HISTORY_LIMIT = 40;
 /** 持久化的展示行上限：超出裁旧，避免本地存储无限增长 */
@@ -221,11 +227,12 @@ export interface ButlerState {
     intent?: string,
   ) => Promise<void>;
   setContext: (context: ButlerSurfaceContext | null) => void;
-  proposeAction: (kind: ButlerActionKind, sourceLineId: string) => void;
-  updateAction: (patch: Partial<Pick<ButlerActionDraft, 'title' | 'text' | 'rid' | 'committedTo' | 'due'>>) => void;
+  proposeAction: (kind: ButlerAnswerActionKind, sourceLineId: string) => void;
+  proposeAdoStateAction: (input: ButlerAdoStateDraftInput) => void;
+  updateAction: (patch: Partial<Pick<ButlerActionDraft, 'title' | 'text' | 'rid' | 'committedTo' | 'due' | 'targetState'>>) => void;
   dismissAction: () => Promise<void>;
   beginAction: () => Promise<{ allowed: boolean; reason?: string }>;
-  failAction: (reason: string) => Promise<void>;
+  failAction: (reason: string, retryable?: boolean) => Promise<void>;
   completeAction: (message: string) => Promise<void>;
   /** 停止当前回答：保留已生成内容，不当错误处理 */
   stop: () => Promise<void>;
@@ -241,12 +248,14 @@ export interface ButlerState {
   deleteSession: (sessionId: string) => Promise<void>;
   hydrate: () => Promise<void>;
   setRoutineDraft: (draft: ButlerRoutineDraft) => void;
+  setErrandDraftReadOnly: (readOnly: boolean) => void;
   approveToolCheckpoint: (checkpointId: string) => Promise<void>;
   dismissToolCheckpoint: (checkpointId: string) => Promise<void>;
   confirmRoutineDraft: () => Promise<void>;
   dismissRoutineDraft: () => Promise<void>;
   confirmErrandDraft: (target: DispatchTarget, options?: DispatchErrandOptions) => Promise<void>;
   resolveErrandApproval: (errandId: string, approvalId: string, approved: boolean) => Promise<void>;
+  resolveErrandInput: (errandId: string, inputId: string, response: ButlerErrandInputResponse) => Promise<void>;
   stopErrand: (errandId: string) => Promise<void>;
   archiveErrand: (errandId: string) => Promise<void>;
   dismissErrandDraft: () => Promise<void>;
@@ -309,6 +318,7 @@ const activeWorkflowRuns = new Map<string, Promise<unknown>>();
 const activeWorkflowControllers = new Map<string, AbortController>();
 let currentTurnFinished: Promise<void> | null = null;
 let currentStopRequested = false;
+let currentActionSourceLineId: string | null = null;
 
 interface ButlerAppData {
   get<T>(appId: string, key: string): Promise<T | undefined>;
@@ -972,6 +982,45 @@ export function appendButlerLine(role: ButlerLine['role'], text: string): void {
   }));
 }
 
+/**
+ * 把后台结果写回发起它的真实 Butler 会话。
+ *
+ * 活动会话走现有 Zustand 落盘链；非活动会话先捕获当前屏幕上的最新状态，再只改
+ * 目标 session，避免后台回话覆盖用户此刻正在输入的另一段对话。
+ */
+export function appendButlerSessionLine(
+  sessionId: string,
+  role: ButlerLine['role'],
+  text: string,
+): boolean {
+  const targetId = sessionId.trim();
+  const content = text.trim();
+  if (!targetId || !content || !persistScope || !sessionRegistry) return false;
+  if (sessionRegistry.activeSessionId === targetId) {
+    appendButlerLine(role, content);
+    return true;
+  }
+
+  const captured = captureActiveSession(sessionRegistry, false);
+  const target = captured.sessions.find((session) => session.id === targetId);
+  if (!target || target.kind === 'workflow') return false;
+  const message = line(role, content);
+  const updated: PersistedButlerSession = {
+    ...target,
+    updatedAt: butlerNow(),
+    lines: [...target.lines, message].slice(-LINES_LIMIT),
+    engineState: recordLocalTranscript(sessionEngineState(target), 1, 'external-transcript'),
+  };
+  const nextRegistry: PersistedButlerSessionRegistry = {
+    ...captured,
+    sessions: captured.sessions.map((session) => session.id === targetId ? updated : session),
+  };
+  sessionRegistry = nextRegistry;
+  useButler.setState({ sessions: sessionSummaries(nextRegistry) });
+  void queueRegistryWrite(persistScope, nextRegistry).catch(() => undefined);
+  return true;
+}
+
 function upsertRuntimeCheckpoint(checkpoint: ButlerToolCheckpoint): void {
   if (checkpoint.effect === 'read') return;
   useButler.setState((state) => ({
@@ -1016,6 +1065,7 @@ function checkpointClosed(checkpoint: ButlerToolCheckpoint | undefined): boolean
 interface ButlerRuntimeSnapshot {
   context?: ButlerSurfaceContext | null;
   taskId?: string;
+  sessionId?: string;
   sources?: readonly ButlerSource[];
 }
 
@@ -1069,7 +1119,7 @@ function runtimeContext(callId: string, snapshot: ButlerRuntimeSnapshot = {}): B
   return {
     taskId: snapshot.taskId ?? state.taskState?.id ?? state.activeSessionId,
     callId,
-    sessionId: state.activeSessionId,
+    sessionId: snapshot.sessionId ?? state.activeSessionId,
     scope: runtimeScope(context),
     sources: runtimeSources(snapshot.sources ?? state.taskState?.sources ?? context?.sources),
     now: butlerNow,
@@ -1653,26 +1703,14 @@ export const useButler = create<ButlerState>((set, get) => ({
     else await get().hydrate();
     if (get().running) return;
 
+    const turnSessionId = get().activeSessionId;
     const turnContext = context ? normalizeContext(context) : get().context;
-    // 分类只吃意图句：证据正文（转录）不参与场景识别，否则聊天内容会劫持场景。
+    // 学习标签只吃意图句；它不参与 Skill 发现、追问或工具路由。
     const intentText = intent?.trim() || content;
     const compiledTask = compileButlerTask(intentText, turnContext, get().taskState, butlerNow());
-    if (compiledTask.status === 'awaiting-clarification') {
-      set((state) => ({
-        lines: [
-          ...state.lines,
-          line('user', content),
-          line('assistant', compiledTask.manifest.clarification.question ?? '请补充完成这项任务所需的信息。'),
-        ],
-        steps: [],
-        error: null,
-        taskState: compiledTask,
-        engineState: recordLocalTranscript(state.engineState, 2, 'local-clarification'),
-        ...(context && 'kind' in context ? { context: turnContext } : {}),
-      }));
-      return;
-    }
     const linesBeforeTurn = get().lines;
+    const actionSourceLineId = latestActionableAssistantLine(linesBeforeTurn)?.id ?? null;
+    currentActionSourceLineId = actionSourceLineId;
     const transcriptBeforeTurn = engineTranscript(linesBeforeTurn, get().engineState);
     const prepared = prepareButlerEngineTurn({
       engineState: get().engineState,
@@ -1710,6 +1748,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const toolRuntimeContextFor = (toolCall: AiToolCall) => runtimeContext(toolCall.id, {
       context: turnContext,
       taskId: runningTask.id,
+      sessionId: turnSessionId,
       sources: turnSources,
     });
     const toolCallNames = new Map<string, string>();
@@ -1790,20 +1829,18 @@ export const useButler = create<ButlerState>((set, get) => ({
     try {
       const availability = codexBrainAvailability();
       if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+      const memoryContext = buildButlerLightweightMemoryContext(content, runtimeScope(turnContext));
       const result = await codexRunner({
         text: modelContent,
         images,
         context: turnContext ?? undefined,
-        taskContext: butlerTaskPrompt(runningTask),
+        taskContext: [butlerTaskPrompt(runningTask), memoryContext].filter(Boolean).join('\n\n'),
         taskState: runningTask,
         bridgeTranscript: prepared.bridgeTranscript,
         fallbackTranscript: transcriptBeforeTurn,
         now: butlerNow(),
         onEvent,
         toolRuntimeContext: toolRuntimeContextFor,
-        ...(runningTask.manifest.scenario === 'compare-pull-requests'
-          ? { skillName: 'azure-devops-server' }
-          : {}),
       });
       const resultText = result.text;
       turnOpen = false;
@@ -1867,6 +1904,7 @@ export const useButler = create<ButlerState>((set, get) => ({
         currentTurnFinished = null;
         currentStopRequested = false;
       }
+      if (currentActionSourceLineId === actionSourceLineId) currentActionSourceLineId = null;
       finishTurn?.();
     }
   },
@@ -1889,6 +1927,22 @@ export const useButler = create<ButlerState>((set, get) => ({
     set({ actionDraft });
     void recordButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
     void auditButlerAction(kind, 'proposed', actionDraft).catch(() => undefined);
+  },
+
+  proposeAdoStateAction: (input) => {
+    const previous = get().actionDraft;
+    if (previous) {
+      const previousCheckpoint = runtimeCheckpoint(previous.checkpointId);
+      if (previousCheckpoint) {
+        void cancelButlerToolCheckpoint(previousCheckpoint, runtimeContextForCheckpoint(previousCheckpoint));
+      }
+      void auditButlerAction(previous.kind, 'cancelled', previous).catch(() => undefined);
+    }
+    const actionDraft = createButlerAdoStateActionDraft(input);
+    const checkpoint = createButlerActionCheckpoint(actionDraft, butlerNow());
+    set({ actionDraft });
+    void recordButlerToolCheckpoint(checkpoint, runtimeContextForCheckpoint(checkpoint));
+    void auditButlerAction(actionDraft.kind, 'proposed', actionDraft).catch(() => undefined);
   },
 
   updateAction: (patch) => set((state) => {
@@ -1922,11 +1976,21 @@ export const useButler = create<ButlerState>((set, get) => ({
     if (!draft) return { allowed: false, reason: '没有待执行的动作草案' };
     const existing = runtimeCheckpoint(draft.checkpointId);
     if (!existing) return { allowed: false, reason: '这个动作已经不在了，重新问一次管家吧' };
+    if (existing.status === 'failed' && existing.error?.retryable === false) {
+      return { allowed: false, reason: existing.error.message };
+    }
     const checkpoint = updateButlerActionCheckpoint(existing, draft, butlerNow());
     upsertRuntimeCheckpoint(checkpoint);
     const workbenchConfig = useWorkbench.getState().config;
     const reason = preflightButlerAction(draft, {
       adoDirectConfigured: Boolean(workbenchConfig?.adoBase),
+      ...(workbenchConfig?.adoBase ? {
+        adoConnection: {
+          adoBase: workbenchConfig.adoBase,
+          auth: workbenchConfig.auth,
+          account: workbenchConfig.account,
+        },
+      } : {}),
     });
     if (reason) {
       await failButlerToolCheckpoint(checkpoint, {
@@ -1941,7 +2005,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     return { allowed: true };
   },
 
-  failAction: async (reason) => {
+  failAction: async (reason, retryable = true) => {
     const draft = get().actionDraft;
     if (!draft) return;
     const checkpoint = runtimeCheckpoint(draft.checkpointId);
@@ -1949,7 +2013,7 @@ export const useButler = create<ButlerState>((set, get) => ({
       await failButlerToolCheckpoint(checkpoint, {
         kind: 'execution',
         message: reason,
-        retryable: true,
+        retryable,
       }, runtimeContextForCheckpoint(checkpoint));
     }
     await auditButlerAction(draft.kind, 'failed', draft, reason).catch(() => undefined);
@@ -2209,6 +2273,10 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   setRoutineDraft: (routineDraft) => set({ routineDraft }),
 
+  setErrandDraftReadOnly: (readOnly) => set((state) => ({
+    errandDraft: state.errandDraft ? { ...state.errandDraft, readOnly } : null,
+  })),
+
   approveToolCheckpoint: async (checkpointId) => {
     const workflowEntry = workflowCheckpointById(checkpointId);
     const checkpoint = runtimeCheckpoint(checkpointId) ?? workflowEntry?.checkpoint;
@@ -2305,6 +2373,7 @@ export const useButler = create<ButlerState>((set, get) => ({
     const roomContext = draft.roomContext ?? roomContextFromSurfaceContext(get().context);
     await dispatchButlerErrand(draft.spec, target, {
       ...options,
+      originSessionId: get().activeSessionId,
       ...(roomContext ? { roomContext } : {}),
     });
     await get().approveToolCheckpoint(draft.checkpointId);
@@ -2312,6 +2381,10 @@ export const useButler = create<ButlerState>((set, get) => ({
 
   resolveErrandApproval: async (errandId, approvalId, approved) => {
     await useButlerErrandRuns.getState().resolveApproval(errandId, approvalId, approved);
+  },
+
+  resolveErrandInput: async (errandId, inputId, response) => {
+    await useButlerErrandRuns.getState().resolveInput(errandId, inputId, response);
   },
 
   stopErrand: async (errandId) => {
@@ -2355,6 +2428,43 @@ export const useButler = create<ButlerState>((set, get) => ({
   },
 }));
 
+function isActionableAssistantLine(candidate: ButlerLine): boolean {
+  return candidate.role === 'assistant'
+    && !candidate.text.startsWith('我是你的管家')
+    && !candidate.text.startsWith('📌')
+    && !candidate.text.startsWith('✅');
+}
+
+function latestActionableAssistantLine(lines: readonly ButlerLine[]): ButlerLine | undefined {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const candidate = lines[index];
+    if (candidate && isActionableAssistantLine(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function draftButlerAction(kind: ButlerAnswerActionKind): boolean {
+  const state = useButler.getState();
+  const source = currentActionSourceLineId
+    ? state.lines.find((candidate) =>
+      candidate.id === currentActionSourceLineId && isActionableAssistantLine(candidate))
+    : latestActionableAssistantLine(state.lines);
+  if (!source) return false;
+  state.proposeAction(kind, source.id);
+  return useButler.getState().actionDraft?.kind === kind;
+}
+
+setButlerActionDraftProvider(draftButlerAction);
+
+setButlerAdoStateDraftProvider((input) => {
+  const state = useButler.getState();
+  state.proposeAdoStateAction(input);
+  const draft = useButler.getState().actionDraft;
+  return draft?.kind === 'ado-state'
+    && draft.workItemId === input.workItemId
+    && draft.targetState === input.targetState.trim();
+});
+
 function syncErrandsIntoButler(): void {
   const errands = useButlerErrandRuns.getState().visibleRuns;
   const current = useButler.getState();
@@ -2362,9 +2472,63 @@ function syncErrandsIntoButler(): void {
   useButler.setState({ errands });
 }
 
+function errandConversationExcerpt(value: string | undefined): string {
+  const normalized = value?.trim().replace(/\s+/g, ' ') ?? '';
+  if (!normalized) return '';
+  return normalized.length > 400 ? `${normalized.slice(0, 400)}…` : normalized;
+}
+
+function deliverErrandConversationEvents(
+  runs: readonly ButlerErrandRun[],
+  previousRuns: readonly ButlerErrandRun[],
+): void {
+  for (const run of runs) {
+    if (!run.originSessionId) continue;
+    const previous = previousRuns.find((candidate) => candidate.id === run.id);
+    if (!previous) continue;
+
+    const firstApproval = run.status === 'awaiting-approval'
+      && previous.approvals.length === 0
+      && run.approvals.length > 0;
+    if (firstApproval) {
+      appendButlerSessionLine(
+        run.originSessionId,
+        'assistant',
+        `「${run.title}」需要你确认一项操作，已经放在任务卡里。`,
+      );
+      continue;
+    }
+
+    if (run.status === previous.status) continue;
+    if (run.status === 'paused') {
+      const reason = errandConversationExcerpt(run.error);
+      appendButlerSessionLine(
+        run.originSessionId,
+        'assistant',
+        `「${run.title}」已安全暂停${reason ? `：${reason}` : '。'}`,
+      );
+    } else if (run.status === 'replied') {
+      const result = errandConversationExcerpt(run.reply);
+      appendButlerSessionLine(
+        run.originSessionId,
+        'assistant',
+        `「${run.title}」回话了${result ? `：${result}` : '。'}`,
+      );
+    } else if (run.status === 'failed') {
+      const reason = errandConversationExcerpt(run.error ?? run.reply);
+      appendButlerSessionLine(
+        run.originSessionId,
+        'assistant',
+        `「${run.title}」停下来了${reason ? `：${reason}` : '。'}`,
+      );
+    }
+  }
+}
+
 syncErrandsIntoButler();
 
 useButlerErrandRuns.subscribe((state, previous) => {
+  deliverErrandConversationEvents(state.runs, previous.runs);
   if (state.visibleRuns === previous.visibleRuns) return;
   syncErrandsIntoButler();
 });

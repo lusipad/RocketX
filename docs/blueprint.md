@@ -570,14 +570,14 @@ M7 快速通道复用官方 CLI、零自研 agent 逻辑：优先实测 app-serv
 | Agent 循环 | `agent` 能力路由 | — | 前置基建：`AiChunk` 补 `toolCalls` 流式解析 |
 | 人设 | 单个文本文件 | 恒定注入 | 判断默认值；双支柱写进出厂值；只有一个管家 |
 | 记忆 | MEMORY.md + 主题文件 | 索引常驻、正文按需 | 只存数据推不出的事实；写入透明可删 |
-| 技能 | SKILL.md 目录 | 索引常驻、`load_skill` 按需 | 方法论；管家可自写（对话即配置） |
+| 技能 | SKILL.md 目录 | 元数据常驻、正文由 Codex 渐进加载 | 方法论；管家可自写（对话即配置） |
 | 例行事务 | 触发器×技能×投递 | 列表可视可停 | cron + 事件 watcher；运行记录可审计 |
 
 **工具层（手）**。原语清单一步到位、参数表达力优先——管家聪明程度的上限 = 工具参数的
-表达力：`search_messages(query?, from?, room?, since?, until?, hasFile?)`、
-`search_people_rooms`、`list_todos / list_calendar / list_work_items / list_prs /
-list_builds`、`summarize_room`、`get_today_brief`、`draft_work_item`（仍走确认弹窗）、
-`open_*` 导航、`handoff_codex`（移交本地执行，复用决策 9 的 app-server 链路）。三条铁律：
+表达力：Rocket.Chat 服务端事实和 Azure DevOps 实时事实由业务 MCP 提供；
+`list_mentions / list_todos / list_calendar` 保留为 WebView 本地状态工具；
+`draft_action / draft_ado_state / draft_routine / draft_errand` 只生成确认卡。工作台数据只供
+确定性 UI 使用，不作为 AI 快照数据源。三条铁律：
 ① 复合任务不做成工具——"生成晨报"是技能编排原语，防止再长出 queryResults 式分支蔓延；
 ② 副作用审批、审计、脱敏全部强制在这层，人设/记忆/技能文本一概影响不了；
 ③ 强类型签名 + 回归测试（沿用 `assistant-command.test.ts` 模式）。

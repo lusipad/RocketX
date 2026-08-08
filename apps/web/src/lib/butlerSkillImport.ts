@@ -1,4 +1,4 @@
-import type { ButlerSkill } from './butlerProfile';
+import type { ButlerSkill } from './butlerSkill';
 
 /**
  * 「npm 式装技能」的解析层：把一份 SKILL.md 文本解析成管家技能。

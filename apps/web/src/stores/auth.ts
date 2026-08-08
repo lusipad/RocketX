@@ -1,5 +1,12 @@
 import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
+import {
+  clearBusinessMcpAzureDevOps,
+  clearBusinessMcpRocketChat,
+  syncBusinessMcpAzureDevOps,
+  syncBusinessMcpRocketChat,
+} from '../agent/businessMcp';
+import { loadWorkbenchConfig } from '../lib/ado';
 import { getServerBase, loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
 import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope } from '../lib/accountScope';
@@ -67,6 +74,30 @@ function readAvatarVersion(): number {
   }
 }
 
+async function syncBusinessMcpSession(auth: { authToken: string; userId: string }): Promise<void> {
+  const workbench = loadWorkbenchConfig();
+  await Promise.all([
+    syncBusinessMcpRocketChat({
+      serverUrl: getServerBase(),
+      userId: auth.userId,
+      authToken: auth.authToken,
+    }),
+    syncBusinessMcpAzureDevOps({
+      collectionUrl: workbench?.adoBase,
+      authMode: workbench?.auth,
+      pat: workbench?.pat,
+      allowInsecureAdoHttp: workbench?.allowInsecureAdoHttp,
+    }),
+  ]);
+}
+
+async function clearBusinessMcpSession(): Promise<void> {
+  await Promise.all([
+    clearBusinessMcpRocketChat(),
+    clearBusinessMcpAzureDevOps(),
+  ]);
+}
+
 export const useAuth = create<AuthState>((set, get) => ({
   status: 'boot',
   user: null,
@@ -78,6 +109,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     wireSessionHandlers(() => get().handleAuthLost());
     const stored = loadStoredAuth();
     if (!stored) {
+      await clearBusinessMcpSession();
       set({ status: 'guest' });
       return;
     }
@@ -86,6 +118,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       const data = await rest.loginWithToken(stored.authToken);
       // 重新写一遍认证信息，确保 rc_uid/rc_token cookie 就位（头像、文件下载要用）
       saveAuth({ authToken: data.authToken, userId: data.userId });
+      await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 本地数据换主人了（换账号/首次升级）→ 搬移后重载，让各 store 重新加载
       if (ensureAccountScope(data.userId) === 'switched') {
         location.reload();
@@ -94,6 +127,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       set({ status: 'authed', user: data.me, error: null });
     } catch {
       saveAuth(null);
+      await clearBusinessMcpSession();
       set({ status: 'guest' });
     }
   },
@@ -104,6 +138,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       await ensureHttpOrigin(getServerBase());
       const data = await rest.login(username, password);
       saveAuth({ authToken: data.authToken, userId: data.userId });
+      await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 同一台机器换账号登录：先把上一个人的本地数据搬走、还原自己的,再重载
       if (ensureAccountScope(data.userId) === 'switched') {
         location.reload();
@@ -111,6 +146,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       }
       set({ status: 'authed', user: data.me, error: null });
     } catch (err) {
+      await clearBusinessMcpSession();
       set({ status: 'guest', error: loginFailureMessage(err) });
     }
   },
@@ -119,6 +155,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     realtime.close();
     await import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime()).catch(() => {});
     saveAuth(null);
+    await clearBusinessMcpSession();
     try {
       await rest.logout();
     } catch {
@@ -155,6 +192,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     realtime.close();
     void import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime());
     saveAuth(null);
+    void clearBusinessMcpSession();
     set({ status: 'guest', user: null, error: '登录已失效，请重新登录' });
   },
 }));

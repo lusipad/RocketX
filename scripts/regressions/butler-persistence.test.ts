@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
+import type { ButlerErrandRun } from '../../apps/web/src/lib/butlerErrands';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import {
+  appendButlerSessionLine,
   butlerSessionRecap,
   flushButlerPersist,
   resetButlerPersistenceForTests,
@@ -14,6 +16,7 @@ import {
   useButler,
   type ButlerLine,
 } from '../../apps/web/src/stores/butler';
+import { useButlerErrandRuns } from '../../apps/web/src/stores/butlerErrandRuns';
 
 const appData = createRcxStore({ backend: createMemoryBackend() }).appData;
 const restorePersistence = setButlerPersistence(appData);
@@ -117,6 +120,116 @@ test('房间管家使用独立会话，返回管家页时恢复原来的普通�
     assert.equal(useButler.getState().activeSessionId, roomSessionId);
   } finally {
     restore();
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
+test('后台任务结果只写回来源会话，不覆盖当前正在看的另一段对话', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  login('errand-return-user');
+  try {
+    await useButler.getState().hydrate();
+    const sourceSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().newConversation();
+    const currentSessionId = useButler.getState().activeSessionId;
+    assert.notEqual(currentSessionId, sourceSessionId);
+
+    assert.equal(
+      appendButlerSessionLine(sourceSessionId, 'assistant', '「登录修复」回话了：验证通过。'),
+      true,
+    );
+    assert.equal(
+      useButler.getState().lines.some((item) => item.text.includes('登录修复')),
+      false,
+    );
+
+    await useButler.getState().switchSession(sourceSessionId);
+    assert.equal(
+      useButler.getState().lines.some((item) => item.text === '「登录修复」回话了：验证通过。'),
+      true,
+    );
+    await flushButlerPersist();
+
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+    await useButler.getState().hydrate();
+    await useButler.getState().switchSession(sourceSessionId);
+    assert.equal(
+      useButler.getState().lines.some((item) => item.text === '「登录修复」回话了：验证通过。'),
+      true,
+    );
+  } finally {
+    resetButlerPersistenceForTests();
+    useButler.getState().reset();
+  }
+});
+
+test('后台任务的审批提醒和最终结果自动回到来源会话且同一审批不重复提醒', async () => {
+  resetButlerPersistenceForTests();
+  useButler.getState().reset();
+  useButlerErrandRuns.setState({ runs: [], visibleRuns: [] });
+  login('errand-event-user');
+  try {
+    await useButler.getState().hydrate();
+    const sourceSessionId = useButler.getState().activeSessionId;
+    await useButler.getState().newConversation();
+    const currentSessionId = useButler.getState().activeSessionId;
+    const running: ButlerErrandRun = {
+      id: 'errand-event-run',
+      title: '登录修复',
+      threadId: 'thread-1',
+      workspaceRoot: 'D:/Repos/rocketchatx',
+      workspaceName: 'RocketX',
+      readOnly: false,
+      startedAt: 1,
+      status: 'running',
+      approvals: [],
+      traces: [],
+      originSessionId: sourceSessionId,
+    };
+    useButlerErrandRuns.setState({ runs: [running], visibleRuns: [running] });
+
+    const waiting: ButlerErrandRun = {
+      ...running,
+      status: 'awaiting-approval',
+      approvals: [{
+        id: 'approval-1',
+        method: 'item/commandExecution/requestApproval',
+        policy: {},
+        params: {},
+        at: 2,
+      }],
+    };
+    useButlerErrandRuns.setState({ runs: [waiting], visibleRuns: [waiting] });
+    useButlerErrandRuns.setState({
+      runs: [{ ...waiting, activity: '仍在等待确认' }],
+      visibleRuns: [{ ...waiting, activity: '仍在等待确认' }],
+    });
+
+    const replied: ButlerErrandRun = {
+      ...waiting,
+      status: 'replied',
+      approvals: [],
+      reply: '验证通过。',
+    };
+    useButlerErrandRuns.setState({ runs: [replied], visibleRuns: [replied] });
+
+    assert.equal(useButler.getState().activeSessionId, currentSessionId);
+    assert.equal(useButler.getState().lines.some((item) => item.text.includes('登录修复')), false);
+    await useButler.getState().switchSession(sourceSessionId);
+    assert.deepEqual(
+      useButler.getState().lines
+        .filter((item) => item.text.includes('登录修复'))
+        .map((item) => item.text),
+      [
+        '「登录修复」需要你确认一项操作，已经放在任务卡里。',
+        '「登录修复」回话了：验证通过。',
+      ],
+    );
+  } finally {
+    useButlerErrandRuns.setState({ runs: [], visibleRuns: [] });
     resetButlerPersistenceForTests();
     useButler.getState().reset();
   }

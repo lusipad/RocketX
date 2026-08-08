@@ -212,7 +212,7 @@ interface ChatState {
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
-  send: (text: string, opts?: { rid?: string; tmid?: string; quote?: RcMessage }) => Promise<void>;
+  send: (text: string, opts?: { rid?: string; tmid?: string; quote?: RcMessage; clientId?: string }) => Promise<ChatSendResult | undefined>;
   /** 执行斜杠命令。tmid 有值时在话题里执行 */
   runSlash: (command: string, params: string, tmid?: string) => Promise<void>;
 
@@ -294,6 +294,12 @@ interface ChatState {
   cancelUpload: () => void;
   uploadFiles: (files: File[], tmid?: string, message?: string) => Promise<boolean>;
   uploadNativeFiles: (paths: string[], tmid?: string, message?: string) => Promise<boolean>;
+}
+
+export interface ChatSendResult {
+  id: string;
+  delivery: 'server' | 'lan' | 'unknown' | 'failed';
+  reason?: string;
 }
 
 /**
@@ -640,10 +646,30 @@ function roomTypeOf(
  * upsertMessage 按 _id 天然合并，杜绝「同一条消息显示两遍」和「重试发出第二条」。
  */
 const ID_CHARS = '23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz';
+const MESSAGE_ID_RE = /^[23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz]{17}$/;
 function randomMessageId(): string {
   let s = '';
   for (let i = 0; i < 17; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
   return s;
+}
+
+function safeMessageId(value: string | undefined): string | undefined {
+  return value && MESSAGE_ID_RE.test(value) ? value : undefined;
+}
+
+function isUncertainSendError(error: unknown): boolean {
+  return !(error instanceof RcApiError) || error.status >= 500;
+}
+
+function findMessageById(
+  messages: Record<string, RcMessage[]>,
+  messageId: string,
+): RcMessage | undefined {
+  for (const list of Object.values(messages)) {
+    const found = list.find((message) => message._id === messageId);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /**
@@ -1394,7 +1420,16 @@ export const useChat = create<ChatState>((set, get) => ({
     const rid = opts?.rid ?? get().activeRid;
     const trimmed = text.trim();
     const me = useAuth.getState().user;
-    if (!rid || !trimmed || !me) return;
+    if (!rid || !trimmed || !me) return undefined;
+    const explicitClientId = opts?.clientId;
+    const clientId = safeMessageId(explicitClientId);
+    if (explicitClientId !== undefined && !clientId) {
+      return {
+        id: explicitClientId,
+        delivery: 'failed',
+        reason: '消息 ID 无效，已拒绝发送',
+      };
+    }
 
     // 引用回复：文本前缀消息链接，服务端展开为引用附件。
     // 必须 await 到服务端真正的 Site_Url——缓存没热时 siteUrlSync 会回退到
@@ -1407,10 +1442,10 @@ export const useChat = create<ChatState>((set, get) => ({
     // 乐观上屏：秒回显，pending 状态等服务器确认。
     // _id 由客户端生成并随请求提交 —— WS 回声先到时同 id 被 upsert 合并，
     // 不会「同一条显示两遍」；504 但服务端已落库时重试同 id 也不会发出第二条。
-    const clientId = randomMessageId();
-    rememberLocalMessage(clientId);
+    const resolvedClientId = clientId ?? randomMessageId();
+    rememberLocalMessage(resolvedClientId);
     const temp: RcMessage = {
-      _id: clientId,
+      _id: resolvedClientId,
       rid,
       msg: fullText,
       ts: new Date().toISOString(),
@@ -1420,7 +1455,7 @@ export const useChat = create<ChatState>((set, get) => ({
       pending: true,
     };
     set({
-      messages: { ...get().messages, [rid]: [...(get().messages[rid] ?? []), temp] },
+      messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], temp) },
       ...(opts?.tmid ? {} : { scrollNonce: get().scrollNonce + 1 }),
     });
     // 发送即视为停止输入
@@ -1428,7 +1463,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
     try {
       const msg = await rest.sendMessageRaw({
-        _id: clientId,
+        _id: resolvedClientId,
         rid,
         msg: fullText,
         ...(opts?.tmid ? { tmid: opts.tmid } : {}),
@@ -1436,33 +1471,48 @@ export const useChat = create<ChatState>((set, get) => ({
       set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
       useOnboarding.getState().markChecklist('sentMessage');
       scheduleReceiptRefresh(rid);
+      return { id: resolvedClientId, delivery: 'server' as const };
     } catch (err) {
-      // 8.6.1 对重复 _id 会只保留一条但返回 500；先按 id 回查，避免把已成功的消息
-      // 又转成 LAN 离线消息或失败态。
-      try {
-        const existing = await rest.getMessage(clientId);
-        if (existing.rid === rid) {
-          set({
-            messages: {
-              ...get().messages,
-              [rid]: upsertMessage(get().messages[rid] ?? [], existing),
-            },
-          });
-          useOnboarding.getState().markChecklist('sentMessage');
-          return;
+      const uncertain = isUncertainSendError(err);
+      let delivery: ChatSendResult['delivery'] = uncertain ? 'unknown' : 'failed';
+      let reason = uncertain
+        ? '发送结果暂时无法确认，请检查原会话后重试'
+        : humanError(err, '消息发送失败');
+      if (uncertain) {
+        // 8.6.1 对重复 _id 会只保留一条但返回 500；先按 id 回查，避免把已成功的消息
+        // 又转成 LAN 离线消息或未知态。
+        try {
+          const existing = await rest.getMessage(resolvedClientId);
+          if (existing.rid === rid && existing.msg === fullText) {
+            set({
+              messages: {
+                ...get().messages,
+                [rid]: upsertMessage(get().messages[rid] ?? [], existing),
+              },
+            });
+            useOnboarding.getState().markChecklist('sentMessage');
+            return { id: resolvedClientId, delivery: 'server' as const };
+          }
+          if (existing.rid === rid && existing.msg !== fullText) {
+            delivery = 'failed';
+            reason = '原会话里同一消息 ID 已存在不同内容，请检查原会话后重试';
+          } else if (existing.rid !== rid) {
+            delivery = 'failed';
+            reason = '同一消息 ID 已被其他会话占用，请检查原会话后重试';
+          }
+        } catch {
+          /* 服务端不可达或确实未落库，继续判断 LAN 降级 */
         }
-      } catch {
-        /* 服务端不可达或确实未落库，继续判断 LAN 降级 */
       }
 
-      const canUseLan = shouldUseLanFallback(err, opts?.tmid);
+      const canUseLan = delivery === 'unknown' && shouldUseLanFallback(err, opts?.tmid);
       if (canUseLan) {
         const recipients = await lanRecipientIds(rid).catch(() => []);
         const originalTs = tsMs(temp.ts);
         const deliveries = await Promise.allSettled(
           recipients.map((userId) =>
             sendLanChat(userId, {
-              messageId: clientId,
+              messageId: resolvedClientId,
               roomId: rid,
               originalTs,
               text: fullText,
@@ -1484,7 +1534,7 @@ export const useChat = create<ChatState>((set, get) => ({
             messages: {
               ...get().messages,
               [rid]: current.map((message) =>
-                message._id === clientId ? offlineMessage : message,
+                message._id === resolvedClientId ? offlineMessage : message,
               ),
             },
             ...(room
@@ -1499,31 +1549,47 @@ export const useChat = create<ChatState>((set, get) => ({
           toast.info('服务器不可达，消息已通过可信局域网投递');
           useOnboarding.getState().markChecklist('sentMessage');
           if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
-          return;
+          return { id: resolvedClientId, delivery: 'lan' as const };
         }
       }
       // 只对**仍是 pending** 的那条标失败：WS 回声可能已抢先把 temp 替换成真实消息
       //（同 _id、无 pending 字段），此时其实发送成功了，不能给它扣一顶失败的帽子。
       const cur = get().messages[rid] ?? [];
-      const stillPending = cur.some((m) => m._id === clientId && m.pending);
+      const stillPending = cur.some((m) => m._id === resolvedClientId && m.pending);
       if (!stillPending) {
-        useOnboarding.getState().markChecklist('sentMessage');
-        return;
+        const currentMessage = findMessageById(get().messages, resolvedClientId);
+        if (currentMessage?.rid === rid && currentMessage.msg === fullText) {
+          useOnboarding.getState().markChecklist('sentMessage');
+          return { id: resolvedClientId, delivery: 'server' as const };
+        }
+        delivery = currentMessage ? 'failed' : 'unknown';
+        reason = !currentMessage
+          ? '发送结果暂时无法确认，请检查原会话后重试'
+          : currentMessage.rid !== rid
+            ? '同一消息 ID 已被其他会话占用，请检查原会话后重试'
+            : '原会话里同一消息 ID 已存在不同内容，请检查原会话后重试';
       }
       set({
         messages: {
           ...get().messages,
           [rid]: cur.map((m) =>
-            m._id === clientId && m.pending ? { ...m, pending: false, failed: true } : m,
+            m._id === resolvedClientId && m.pending ? { ...m, pending: false, failed: true } : m,
           ),
         },
       });
       if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
       toast.show({
         kind: 'error',
-        message: humanError(err, '消息发送失败'),
-        action: { label: '重试', onClick: () => void get().resendMessage(clientId) },
+        message: reason,
+        ...(explicitClientId === undefined
+          ? { action: { label: '重试', onClick: () => void get().resendMessage(resolvedClientId) } }
+          : {}),
       });
+      return {
+        id: resolvedClientId,
+        delivery,
+        reason,
+      };
     }
   },
 

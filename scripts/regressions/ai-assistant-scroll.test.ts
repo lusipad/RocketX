@@ -15,7 +15,7 @@ test('对话类页面打开时停在最新内容，滚上去阅读时不被拽�
   // 又让每次新增卡片都误伤一条无关的滚动测试。
   const conversationDeps = /useStickToBottom\(\[([\s\S]*?)\]\)/.exec(conversation)?.[1] ?? '';
   assert.ok(conversationDeps, '找不到管家对话的 stickToBottom 依赖数组');
-  for (const dep of ['visibleLines', 'activity', 'butlerError', 'routineDraft', 'errandDraft', 'errands', 'runtimeCheckpoints', 'actionDraft', 'steps', 'activeArtifacts', 'selectedHostedId']) {
+  for (const dep of ['visibleLines', 'activity', 'butlerError', 'routineDraft', 'errandDraft', 'errands', 'runtimeCheckpoints', 'actionDraft', 'steps', 'selectedHostedId']) {
     assert.ok(conversationDeps.includes(dep), `管家对话的贴底依赖漏了 ${dep}`);
   }
   assert.match(conversation, /<main ref=\{scrollRef\} onScroll=\{onScroll\}/);

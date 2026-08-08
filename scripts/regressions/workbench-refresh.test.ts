@@ -78,7 +78,7 @@ test('旧版 direct 配置会平滑归一，bridge 配置会被视为未配置',
   assert.match(loadWorkbenchConfigIssue() ?? '', /ado-bridge.*移除|直连 Azure DevOps/);
 });
 
-test('工作台保存仅按 adoBase+auth 视为连接键，并只持久化直连字段', async () => {
+test('工作台保存按连接与 HTTP 授权视为连接键，并只持久化直连字段', async () => {
   const { ADO_WEB_KEY, WORKBENCH_CONFIG_KEY, useWorkbench } = await loadModules();
   let refreshCalls = 0;
   useWorkbench.setState({
@@ -100,6 +100,7 @@ test('工作台保存仅按 adoBase+auth 视为连接键，并只持久化直连
     adoBase: 'http://new/',
     auth: 'pat',
     pat: 'new-secret',
+    allowInsecureAdoHttp: true,
     account: 'alice',
   });
 
@@ -115,6 +116,7 @@ test('工作台保存仅按 adoBase+auth 视为连接键，并只持久化直连
   assert.equal(localStorage.getItem(ADO_WEB_KEY), null);
   const saved = localStorage.getItem(WORKBENCH_CONFIG_KEY) ?? '';
   assert.match(saved, /http:\/\/new/);
+  assert.match(saved, /"allowInsecureAdoHttp":true/);
   assert.doesNotMatch(saved, /"mode"|"bridge"/);
 });
 

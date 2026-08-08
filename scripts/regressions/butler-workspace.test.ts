@@ -47,7 +47,7 @@ function routine(overrides: Partial<Routine> = {}): Routine {
   };
 }
 
-test('工作区把必须知道、决定、建议、任务和例行健康投影成一份模型', () => {
+test('工作区把必须知道、决定、建议、委托、个人待办和定时健康分开投影', () => {
   const approvalRun = errand({
     status: 'awaiting-approval',
     approvals: [{
@@ -98,12 +98,15 @@ test('工作区把必须知道、决定、建议、任务和例行健康投影�
   );
   assert.equal(model.decisions[0]?.run.id, approvalRun.id);
   assert.equal(model.suggestions[0]?.sourceRef, 'pr:248');
-  assert.equal(model.tasks.length, 2);
+  assert.equal(model.delegations.length, 1);
+  assert.equal(model.delegations[0]?.kind, 'errand');
+  assert.equal(model.personalTasks.length, 1);
+  assert.equal(model.personalTasks[0]?.kind, 'todo');
   assert.equal(model.routines[0]?.health, 'failing');
   assert.deepEqual(model.summary, {
     watched: 1,
     needsAttention: 4,
-    activeTasks: 1,
+    activeDelegations: 0,
     routineFailures: 1,
     activationNeeded: false,
   });
@@ -139,11 +142,31 @@ test('建议遵守隐藏和三条上限，暂停的例行不制造虚假故障',
   });
 
   assert.deepEqual(model.suggestions.map((item) => item.sourceRef), ['ref:1', 'ref:3', 'ref:4']);
-  assert.equal(model.tasks.length, 0);
+  assert.equal(model.delegations.length, 0);
+  assert.equal(model.personalTasks.length, 0);
   assert.equal(model.needToKnow.length, 0);
   assert.equal(model.routines[0]?.health, 'paused');
   assert.equal(model.summary.needsAttention, 0);
   assert.equal(model.summary.activationNeeded, false);
+});
+
+test('paused errand 进入需要我分组，而不是被投影成 failed', () => {
+  const pausedRun = errand({
+    id: 'run-paused',
+    status: 'paused',
+    error: '等你确认下一步',
+  });
+  const model = buildButlerWorkspaceModel({
+    errands: [pausedRun],
+    todos: [],
+    routines: [],
+    eventCards: [],
+    rounds: null,
+    now,
+  });
+
+  assert.equal(model.delegations[0]?.state, 'needs-user');
+  assert.equal(model.delegations[0]?.statusLabel, '等你确认下一步');
 });
 
 test('全新账号没有责任、建议和例行照看时进入首次价值引导', () => {

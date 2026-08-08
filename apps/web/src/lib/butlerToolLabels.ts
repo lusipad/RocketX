@@ -1,12 +1,20 @@
 const TOOL_LABELS: Record<string, string> = {
   search_messages: '搜索消息',
+  list_room_messages: '读取房间消息',
   list_mentions: '查询 @我',
   search_people_rooms: '查询联系人和会话',
   list_todos: '查询待办',
+  list_errands: '查询派活',
   list_calendar: '查询日程',
   list_work_items: '查询工作项',
   list_pull_requests: '查询拉取请求',
   run_azure_devops_server_cli: '运行 Azure DevOps 只读 CLI',
+  rocketx_list_conversations: '查询会话',
+  rocketx_get_thread_context: '读取讨论串',
+  rocketx_get_room_history: '读取房间消息',
+  rocketx_search_messages: '搜索消息',
+  rocketx_search_people_rooms: '查询联系人和会话',
+  rocketx_azure_devops_server_read: '查询 Azure DevOps',
   list_builds: '查询构建',
   recall_memory: '召回记忆',
   load_skill: '加载技能',
@@ -14,7 +22,10 @@ const TOOL_LABELS: Record<string, string> = {
   revoke_memory: '撤销记忆',
   restore_memory: '恢复记忆',
   import_legacy_memory: '导入旧记忆',
+  draft_action: '准备确认卡',
+  draft_ado_state: '准备 ADO 状态修改',
   draft_routine: '生成例行事务草案',
+  steer_errand: '调整派活',
 };
 
 /**
@@ -26,10 +37,15 @@ const TOOL_LABELS: Record<string, string> = {
  */
 const DETAIL_FIELDS: Record<string, readonly string[]> = {
   search_messages: ['query'],
+  list_room_messages: ['roomName'],
   list_work_items: ['state', 'project'],
   list_pull_requests: ['project', 'repo'],
   list_builds: ['definition'],
   run_azure_devops_server_cli: ['resource'],
+  rocketx_get_room_history: ['roomId'],
+  rocketx_search_messages: ['query'],
+  rocketx_search_people_rooms: ['query'],
+  rocketx_azure_devops_server_read: ['resource'],
 };
 
 const DETAIL_LIMIT = 20;

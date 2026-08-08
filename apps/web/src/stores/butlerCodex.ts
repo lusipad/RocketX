@@ -6,13 +6,26 @@ import {
   type ServerRequestPolicy,
 } from '../agent/protocol';
 import type { JsonValue } from '../agent/protocol/generated/serde_json/JsonValue';
-import type { UserInput } from '../agent/protocol/generated/v2';
+import type {
+  MarketplaceAddResponse,
+  MarketplaceRemoveResponse,
+  MarketplaceUpgradeResponse,
+  PluginInstallResponse,
+  PluginInstalledResponse,
+  PluginListResponse,
+  SkillMetadata,
+  UserInput,
+} from '../agent/protocol/generated/v2';
 import {
   openCodexNewThread,
   transferTranscript,
   type CodexHandoffResult,
   type TransferLine,
 } from '../agent/codexTransfer';
+import {
+  businessMcpCredentialRevision,
+  businessMcpThreadConfig,
+} from '../agent/businessMcp';
 import { rocketxThreadName } from '../agent/threadName';
 import type { AgentLoopEvent, ButlerTool } from '../kernel/ai/agent-loop';
 import type { AiToolCall } from '../kernel/ai/provider';
@@ -26,13 +39,18 @@ import {
   butlerCurrentTimeLine,
   buildButlerCodexBaseInstructions,
   butlerWorkspaceRevision,
+  clearButlerNativeSkillStates,
   getPersona,
+  legacyButlerSkillConfigMigration,
   listEnabledSkills,
+  markButlerSkillConfigMigrated,
+  setButlerNativeSkillStates,
 } from '../lib/butlerProfile';
 import { butlerContextPrompt, type ButlerSurfaceContext } from '../lib/butlerContext';
 import type { ButlerEngineTranscriptLine } from '../lib/butlerEngineContract';
 import type { ButlerTaskState } from '../lib/butlerTaskContext';
 import type { ButlerImageInput } from '../lib/butlerImages';
+import { parseButlerSkillInvocation } from '../lib/butlerSkillInvocation';
 import {
   beginButlerTurnTiming,
   currentButlerTurnTiming,
@@ -52,6 +70,7 @@ export interface ButlerCodexRoomContext {
 export interface ButlerCodexAskOptions {
   text: string;
   skillName?: string;
+  skillPath?: string;
   images?: readonly ButlerImageInput[];
   context?: ButlerSurfaceContext | ButlerCodexRoomContext;
   taskContext?: string;
@@ -120,6 +139,18 @@ let residentTurn: TurnController | undefined;
 let residentEvent: ((event: AgentLoopEvent) => void) | undefined;
 let residentToolRuntimeContext: ((toolCall: AiToolCall) => ButlerToolRuntimeContext) | undefined;
 let residentStopRequested = false;
+const skillChangeListeners = new Set<() => void>();
+
+function emitSkillChange(): void {
+  for (const listener of skillChangeListeners) listener();
+}
+
+export function onButlerCodexSkillsChanged(listener: () => void): () => void {
+  skillChangeListeners.add(listener);
+  return () => {
+    skillChangeListeners.delete(listener);
+  };
+}
 
 type ButlerCodexImageMaterializer = (
   sessionId: string,
@@ -232,7 +263,7 @@ function roomPrefixedInput(
   const taskPrefix = taskContext ? `${taskContext}\n\n` : '';
   if (!context) return `${taskPrefix}${text}`;
   if (!('kind' in context)) {
-    return `${taskPrefix}（用户当前所在房间：${context.roomName}，查本房间消息优先用 search_messages 的 roomName 参数）\n\n${text}`;
+    return `${taskPrefix}（用户当前所在房间：${context.roomName}；按时段汇总用 list_room_messages，关键词检索用 search_messages，并限定 roomName）\n\n${text}`;
   }
   return `${taskPrefix}（${butlerContextPrompt(context)}）\n\n${text}`;
 }
@@ -275,6 +306,7 @@ async function buildTurnInputs(
   text: string,
   images: readonly ButlerImageInput[] | undefined,
   skillName?: string,
+  skillPath?: string,
 ): Promise<UserInput[]> {
   const nativeSkillName = skillName ? assertNativeSkillName(skillName) : undefined;
   const content = nativeSkillName ? `$${nativeSkillName}\n\n${text}` : text;
@@ -287,7 +319,7 @@ async function buildTurnInputs(
     input.push({
       type: 'skill',
       name: nativeSkillName,
-      path: nativeSkillPath(workspaceRoot, nativeSkillName),
+      path: skillPath ?? nativeSkillPath(workspaceRoot, nativeSkillName),
     });
   }
   if (!images?.length) return input;
@@ -323,6 +355,37 @@ function createTurnController(
       }
       if (method === 'turn/started') {
         if (active) onEvent?.({ type: 'phase', phase: 'thinking', detail: '正在想…' });
+        return;
+      }
+      if (method === 'item/started') {
+        const item = record(params.item);
+        if (
+          item.type === 'mcpToolCall'
+          && typeof item.id === 'string'
+          && typeof item.tool === 'string'
+        ) {
+          onEvent?.({
+            type: 'tool-call',
+            toolCall: {
+              id: item.id,
+              name: item.tool,
+              arguments: JSON.stringify(item.arguments ?? {}),
+            },
+          });
+        }
+        return;
+      }
+      if (method === 'item/completed') {
+        const item = record(params.item);
+        if (item.type === 'mcpToolCall' && typeof item.id === 'string') {
+          const error = record(item.error);
+          const result = record(item.result);
+          const content = typeof error.message === 'string'
+            ? `工具调用失败：${error.message}`
+            : JSON.stringify(result.structuredContent ?? result.content ?? {});
+          onEvent?.({ type: 'tool-result', toolCallId: item.id, content });
+          onEvent?.({ type: 'phase', phase: 'summarizing', detail: '正在整理结果…' });
+        }
         return;
       }
       if (method === 'error' && active) {
@@ -391,7 +454,7 @@ function createTurnController(
           threadId,
           input,
           approvalPolicy: 'on-request',
-          approvalsReviewer: 'user',
+          approvalsReviewer: 'auto_review',
           sandboxPolicy: { type: 'readOnly', networkAccess: false },
           ...(effort === 'default' ? {} : { effort }),
         });
@@ -484,6 +547,7 @@ async function ensureResidentClient(): Promise<AppServerClient> {
       transportFactory(residentSessionId, residentWorkspaceRoot),
       {
         onNotification: (method, params) => {
+          if (method === 'skills/changed') emitSkillChange();
           residentTurn?.onNotification(method, params);
         },
         onServerRequest: (request) => respondDynamicToolCall(
@@ -509,6 +573,208 @@ async function ensureResidentClient(): Promise<AppServerClient> {
   }
 }
 
+function createCodexHostTools(): ButlerTool[] {
+  return createButlerTools().filter((tool) =>
+    tool.name !== 'run_azure_devops_server_cli'
+    && tool.name !== 'load_skill');
+}
+
+function codexHostToolRevision(): string {
+  return createCodexHostTools().map((tool) => tool.name).join('\0');
+}
+
+function normalizedWorkspacePath(value: string): string {
+  return value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function skillsForWorkspace(
+  entries: readonly { cwd: string; skills: SkillMetadata[] }[],
+  workspaceRoot: string,
+): SkillMetadata[] {
+  const normalizedRoot = normalizedWorkspacePath(workspaceRoot);
+  const entry = entries.find((item) =>
+    normalizedWorkspacePath(item.cwd) === normalizedRoot);
+  return entry?.skills ?? [];
+}
+
+function repoSkillsForWorkspace(
+  skills: readonly SkillMetadata[],
+  workspaceRoot: string,
+): SkillMetadata[] {
+  const normalizedRoot = normalizedWorkspacePath(workspaceRoot);
+  const skillRoot = `${normalizedRoot}/.agents/skills/`;
+  return skills.filter((skill) =>
+    skill.scope === 'repo'
+    && normalizedWorkspacePath(skill.path).startsWith(skillRoot));
+}
+
+export async function listButlerCodexSkills(): Promise<SkillMetadata[]> {
+  const client = await ensureResidentClient();
+  const workspaceRoot = residentWorkspaceRoot!;
+  const read = async (): Promise<SkillMetadata[]> => {
+    const response = await client.request('skills/list', {
+      cwds: [workspaceRoot],
+      forceReload: true,
+    });
+    return skillsForWorkspace(response.data, workspaceRoot);
+  };
+
+  let skills = await read();
+  let repoSkills = repoSkillsForWorkspace(skills, workspaceRoot);
+  const migration = legacyButlerSkillConfigMigration();
+  if (migration && repoSkills.length > 0) {
+    const disabled = new Set(migration.disabledNames);
+    let changed = false;
+    for (const skill of repoSkills) {
+      if (!disabled.has(skill.name) || !skill.enabled) continue;
+      await client.request('skills/config/write', {
+        path: skill.path,
+        enabled: false,
+      });
+      changed = true;
+    }
+    markButlerSkillConfigMigrated();
+    if (changed) {
+      skills = await read();
+      repoSkills = repoSkillsForWorkspace(skills, workspaceRoot);
+    }
+  }
+  setButlerNativeSkillStates(repoSkills);
+  return skills;
+}
+
+export async function setButlerCodexSkillEnabled(
+  name: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const normalizedName = assertNativeSkillName(name);
+  const skills = await listButlerCodexSkills();
+  const skill = skills.find((item) => item.name === normalizedName);
+  if (!skill) throw new Error(`Codex 工作区未找到技能：${normalizedName}`);
+  const client = await ensureResidentClient();
+  const response = await client.request('skills/config/write', {
+    path: skill.path,
+    enabled,
+  });
+  const workspaceRoot = residentWorkspaceRoot;
+  if (workspaceRoot) {
+    setButlerNativeSkillStates(
+      repoSkillsForWorkspace(skills, workspaceRoot).map((item) =>
+        item.name === normalizedName
+          ? { ...item, enabled: response.effectiveEnabled }
+          : item),
+    );
+  }
+  return response.effectiveEnabled;
+}
+
+export async function setButlerCodexSkillPathEnabled(
+  path: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const client = await ensureResidentClient();
+  const response = await client.request('skills/config/write', { path, enabled });
+  return response.effectiveEnabled;
+}
+
+export async function listButlerCodexPlugins(): Promise<PluginListResponse> {
+  const client = await ensureResidentClient();
+  return client.request('plugin/list', {
+    cwds: [residentWorkspaceRoot!],
+  });
+}
+
+export async function listButlerInstalledCodexPlugins(): Promise<PluginInstalledResponse> {
+  const client = await ensureResidentClient();
+  return client.request('plugin/installed', {
+    cwds: [residentWorkspaceRoot!],
+  });
+}
+
+export async function addButlerCodexMarketplace(
+  source: string,
+): Promise<MarketplaceAddResponse> {
+  const normalized = source.trim();
+  if (!normalized) throw new Error('市场地址不能为空');
+  const client = await ensureResidentClient();
+  return client.request('marketplace/add', { source: normalized });
+}
+
+export async function removeButlerCodexMarketplace(
+  marketplaceName: string,
+): Promise<MarketplaceRemoveResponse> {
+  const normalized = marketplaceName.trim();
+  if (!normalized) throw new Error('市场名称不能为空');
+  const client = await ensureResidentClient();
+  const result = await client.request('marketplace/remove', {
+    marketplaceName: normalized,
+  });
+  emitSkillChange();
+  return result;
+}
+
+export async function upgradeButlerCodexMarketplaces(): Promise<MarketplaceUpgradeResponse> {
+  const client = await ensureResidentClient();
+  return client.request('marketplace/upgrade', {});
+}
+
+export async function installButlerCodexPlugin({
+  marketplaceName,
+  marketplacePath,
+  pluginName,
+}: {
+  marketplaceName: string;
+  marketplacePath: string | null;
+  pluginName: string;
+}): Promise<PluginInstallResponse> {
+  const client = await ensureResidentClient();
+  const result = await client.request('plugin/install', {
+    ...(marketplacePath
+      ? { marketplacePath }
+      : { remoteMarketplaceName: marketplaceName }),
+    pluginName,
+  });
+  emitSkillChange();
+  return result;
+}
+
+export async function uninstallButlerCodexPlugin(pluginId: string): Promise<void> {
+  const client = await ensureResidentClient();
+  await client.request('plugin/uninstall', { pluginId });
+  emitSkillChange();
+}
+
+async function resolveSkillInput(
+  client: AppServerClient,
+  workspaceRoot: string,
+  text: string,
+  skillName?: string,
+  skillPath?: string,
+): Promise<{ text: string; skillName?: string; skillPath?: string }> {
+  if (skillName) {
+    return {
+      text,
+      skillName: assertNativeSkillName(skillName),
+      ...(skillPath ? { skillPath } : {}),
+    };
+  }
+  const invocation = parseButlerSkillInvocation(text);
+  if (!invocation) return { text };
+  const response = await client.request('skills/list', {
+    cwds: [workspaceRoot],
+    forceReload: false,
+  });
+  const skill = skillsForWorkspace(response.data, workspaceRoot)
+    .find((candidate) => candidate.name === invocation.name);
+  if (!skill) throw new Error(`未安装 Skill：${invocation.name}`);
+  if (!skill.enabled) throw new Error(`Skill 已停用：${invocation.name}`);
+  return {
+    text: invocation.prompt,
+    skillName: skill.name,
+    skillPath: skill.path,
+  };
+}
+
 async function stopResident(clearThread = true): Promise<void> {
   const pending = residentClientStart;
   let client = residentClient;
@@ -529,14 +795,9 @@ async function stopResident(clearThread = true): Promise<void> {
 }
 
 /**
- * 关掉 Codex 的原生记忆。
- *
- * 原生 memories 是**会话空闲后后台自动提炼、无逐条确认、全局作用域**的，
- * 而管家对「记忆」的承诺是「确认卡是唯一写入口 + scope 由可信上下文强制捕获」。
- * 两者同时开着，等于我们的承诺只靠对方默认关闭在守——所以必须显式声明。
- * 本机 ~/.codex/config.toml 里 [features] memories 就是开着的。
- *
- * 失败静默：老版本 app-server 可能没有这个方法，不该因此让管家起不来。
+ * 管家只使用 RocketX 自己可确认、可撤销且按账号隔离的 Memory。
+ * Codex 原生 Memory 会在后台跨线程提炼，无法满足这条审批与作用域边界。
+ * 老版本 app-server 可能没有该方法，因此失败时静默兼容。
  */
 function disableCodexNativeMemories(client: AppServerClient, threadId: string): void {
   void client
@@ -551,16 +812,18 @@ async function startResidentThread(
 ): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
-  const tools = createButlerTools();
+  const tools = createCodexHostTools();
+  const config = await businessMcpThreadConfig();
   residentTools = new Map(tools.map((tool) => [tool.name, tool]));
   const response = await client.request('thread/start', {
     ...(model ? { model } : {}),
     cwd: residentWorkspaceRoot!,
     approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
+    approvalsReviewer: 'auto_review',
     sandbox: 'read-only',
     baseInstructions: prompt,
     dynamicTools: dynamicTools(tools),
+    ...(config ? { config } : {}),
   });
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
@@ -585,17 +848,19 @@ async function startResidentThread(
 async function resumeResidentThread(prompt: string, promptHash: string): Promise<void> {
   const client = await ensureResidentClient();
   const { model } = getButlerCodexSettings();
-  const tools = createButlerTools();
+  const tools = createCodexHostTools();
+  const config = await businessMcpThreadConfig();
   residentTools = new Map(tools.map((tool) => [tool.name, tool]));
   const response = await client.request('thread/resume', {
     ...(model ? { model } : {}),
     threadId: residentThreadId!,
     cwd: residentWorkspaceRoot!,
     approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
+    approvalsReviewer: 'auto_review',
     sandbox: 'read-only',
     baseInstructions: prompt,
     excludeTurns: true,
+    ...(config ? { config } : {}),
   });
   residentThreadId = response.thread.id;
   residentPromptHash = promptHash;
@@ -637,7 +902,9 @@ export function residentCodexThreadSnapshot(): ResidentCodexThreadSnapshot | und
 async function ensureResidentThread(): Promise<ButlerCodexResumeMode> {
   const prompt = buildButlerCodexBaseInstructions();
   const settings = getButlerCodexSettings();
-  const promptHash = hash(`${prompt}\n\0${butlerWorkspaceRevision()}\n\0${settings.model}\n\0${settings.effort}`);
+  const promptHash = hash(
+    `${prompt}\n\0${butlerWorkspaceRevision()}\n\0${codexHostToolRevision()}\n\0${businessMcpCredentialRevision()}\n\0${settings.model}\n\0${settings.effort}`,
+  );
   if (residentThreadId && residentPromptHash !== promptHash) await stopResident();
   if (!residentThreadId) {
     await startResidentThread(prompt, promptHash);
@@ -676,6 +943,14 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
     });
     const threadId = residentThreadId;
     if (!threadId) throw new Error('AI Codex 会话尚未创建');
+    const client = await ensureResidentClient();
+    const skillInput = await resolveSkillInput(
+      client,
+      residentWorkspaceRoot!,
+      text,
+      options.skillName,
+      options.skillPath,
+    );
     timing = beginButlerTurnTiming({ threadSetupMs: Date.now() - setupStartedAt, resumeMode });
     const controller = createTurnController(threadId, options.onEvent, timing);
     residentTurn = controller;
@@ -686,17 +961,22 @@ export async function askButlerCodex(options: ButlerCodexAskOptions): Promise<Bu
       ? options.fallbackTranscript
       : options.bridgeTranscript;
     const prefixedText = timePrefixedInput(
-      roomPrefixedInput(transcriptPrefixedInput(text, transcript), options.context, options.taskContext),
+      roomPrefixedInput(
+        transcriptPrefixedInput(skillInput.text, transcript),
+        options.context,
+        options.taskContext,
+      ),
       now,
     );
     const result = await controller.start(
-      await ensureResidentClient(),
+      client,
       await buildTurnInputs(
         residentSessionId!,
         residentWorkspaceRoot!,
         prefixedText,
         options.images,
-        options.skillName,
+        skillInput.skillName,
+        skillInput.skillPath,
       ),
     );
     residentStatus = 'ready';
@@ -761,7 +1041,7 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
   if (options.signal?.aborted) throw abortError();
   const availability = codexBrainAvailability();
   if (!availability.available) throw new Error(availability.reason ?? '管家暂时用不了');
-  const tools = createButlerTools();
+  const tools = createCodexHostTools();
   const registeredTools = new Map(tools.map((tool) => [tool.name, tool]));
   const sessionId = `butler-routine-${crypto.randomUUID()}`;
   const workspaceRoot = await workspaceResolver();
@@ -790,16 +1070,25 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
     await client.start();
     if (options.signal?.aborted) throw abortError();
     const now = options.now ?? Date.now();
+    const skillInput = await resolveSkillInput(
+      client,
+      workspaceRoot,
+      options.text.trim(),
+      options.skillName,
+      options.skillPath,
+    );
     const { model } = getButlerCodexSettings();
+    const config = await businessMcpThreadConfig();
     const response = await client.request('thread/start', {
       ...(model ? { model } : {}),
       cwd: workspaceRoot,
       approvalPolicy: 'on-request',
-      approvalsReviewer: 'user',
+      approvalsReviewer: 'auto_review',
       sandbox: 'read-only',
       ephemeral: true,
       baseInstructions: instructions(),
       dynamicTools: dynamicTools(tools),
+      ...(config ? { config } : {}),
     });
     threadId = response.thread.id;
     controller = createTurnController(threadId, options.onEvent);
@@ -808,9 +1097,14 @@ export async function runButlerCodexEphemeral(options: ButlerCodexAskOptions): P
       text: await controller.start(client, await buildTurnInputs(
         sessionId,
         workspaceRoot,
-        timePrefixedInput(options.text.trim(), now),
+        timePrefixedInput(roomPrefixedInput(
+          skillInput.text,
+          options.context,
+          options.taskContext,
+        ), now),
         options.images,
-        options.skillName,
+        skillInput.skillName,
+        skillInput.skillPath,
       )),
     };
   } catch (error) {
@@ -843,4 +1137,5 @@ export async function resetButlerCodexRuntime(): Promise<void> {
   await stopResident();
   residentSessionId = undefined;
   residentWorkspaceRoot = undefined;
+  clearButlerNativeSkillStates();
 }

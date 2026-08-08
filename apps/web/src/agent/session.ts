@@ -55,6 +55,8 @@ export interface AgentSession {
   proposedBranch?: string;
   baseBranch?: string;
   sandboxMode: 'read-only' | 'workspace-write';
+  /** 最近一次仅属于本会话的失败；成功恢复或开始新一轮后清除。 */
+  lastError?: string;
   updatedAt: number;
 }
 

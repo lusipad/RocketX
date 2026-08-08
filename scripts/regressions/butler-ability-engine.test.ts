@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeButlerLearningExtensions } from '../../apps/web/src/butler/extensions/learning/runtime';
 import {
   BUTLER_ABILITY_TEMPLATES,
   findButlerAbilityTemplate,
 } from '../../apps/web/src/lib/butlerAbilityTemplates';
+import { shouldRunRoutine } from '../../apps/web/src/lib/routinePrecheck';
 import {
   MIN_INTERVAL_MINUTES,
   dueRoutines,
@@ -16,7 +16,6 @@ import {
 } from '../../apps/web/src/stores/routines';
 import { useChat } from '../../apps/web/src/stores/chat';
 
-initializeButlerLearningExtensions();
 
 const NOW = new Date(2026, 6, 26, 12, 0).getTime();
 
@@ -148,7 +147,7 @@ test('模板装载引用 Skill 并复制 trigger，重复装载返回同一实�
   }
 });
 
-test('room-digest 装载时替换房间占位，并保留预检所需参数', () => {
+test('room-digest 装载时只引用原生 Skill，并保留预检所需房间参数', () => {
   resetRoutineStore();
   assert.equal(useRoutines.getState().loadTemplate('room-digest'), undefined);
   assert.equal(
@@ -159,8 +158,8 @@ test('room-digest 装载时替换房间占位，并保留预检所需参数', ()
     rooms: ['发布群', '研发群'],
   });
   assert.ok(loaded);
-  assert.doesNotMatch(loaded.prompt ?? '', /\{\{rooms\}\}/);
-  assert.match(loaded.prompt ?? '', /发布群、研发群/);
+  assert.equal(loaded.skillName, 'room-digest');
+  assert.equal(loaded.prompt, undefined);
   assert.deepEqual(loaded.params, { rooms: ['发布群', '研发群'] });
   resetRoutineStore();
 });
@@ -298,9 +297,41 @@ test('new-mentions 预检无新事时定时静默跳过，手动检查留下明�
   }
 });
 
-test('模板库只包含四条已定案能力', () => {
+test('new-mentions 预检只以前一次成功运行划界，失败运行不吞掉尚未处理的新 @', () => {
+  useChat.setState({
+    subscriptions: {
+      'room-1': { rid: 'room-1', name: '测试群', userMentions: 1 },
+    },
+    rooms: {
+      'room-1': { _id: 'room-1', lm: new Date(NOW - 10 * 60_000).toISOString() },
+    },
+    messages: {},
+  } as never);
+  const target = routine({
+    trigger: { kind: 'interval', everyMinutes: 15 },
+    templateId: 'mention-triage',
+    precheck: 'new-mentions',
+    runs: [
+      { id: 'failed', at: NOW - 5 * 60_000, status: 'error', text: '上次失败' },
+      { id: 'success', at: NOW - 60 * 60_000, status: 'ok', text: '上次成功' },
+    ],
+  });
+
+  try {
+    assert.equal(shouldRunRoutine(target, NOW), true);
+  } finally {
+    useChat.setState({ subscriptions: {}, rooms: {}, messages: {} } as never);
+  }
+});
+
+test('模板库只包含四条已定案能力，且全部只引用原生 Skill', () => {
   assert.deepEqual(
-    BUTLER_ABILITY_TEMPLATES.map((template) => template.id),
-    ['mention-triage', 'room-digest', 'morning-brief', 'evening-review'],
+    BUTLER_ABILITY_TEMPLATES.map(({ id, skillName }) => ({ id, skillName })),
+    [
+      { id: 'mention-triage', skillName: 'butler-reply-guardian' },
+      { id: 'room-digest', skillName: 'room-digest' },
+      { id: 'morning-brief', skillName: 'morning-brief' },
+      { id: 'evening-review', skillName: 'evening-review' },
+    ],
   );
 });

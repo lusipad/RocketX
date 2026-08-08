@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
 import { useAuth } from '../../apps/web/src/stores/auth';
 import { createButlerProposalCheckpoint } from '../../apps/web/src/lib/butlerProposalActions';
+import { createButlerTools } from '../../apps/web/src/lib/butlerTools';
 import {
   executeApprovedButlerOperation,
   flushButlerPersist,
@@ -68,6 +69,196 @@ test('写动作在明确审批前不会直接完成执行', async () => {
   assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.status, 'completed');
 });
 
+test('draft_action 把上一条有效回答转成确认卡，不直接执行', async () => {
+  useButler.setState({
+    lines: [
+      { id: 'welcome', role: 'assistant', text: '我是你的管家。消息、待办、日程、工作项都可以直接问我。' },
+      { id: 'answer', role: 'assistant', text: '发布前需要 Alice 确认检查清单。' },
+      { id: 'request', role: 'user', text: '把这个转成待办。' },
+    ],
+    actionDraft: null,
+    runtimeCheckpoints: [],
+  });
+  const tool = createButlerTools().find((candidate) => candidate.name === 'draft_action');
+  assert.ok(tool);
+  assert.equal(tool.effect, 'draft');
+  assert.equal(tool.approve, undefined);
+
+  const result = await tool.invoke({ kind: 'todo' }, { sessionId: 'session-action' });
+
+  assert.equal(result.status, 'completed');
+  assert.match(result.content ?? '', /已准备待办草案/);
+  assert.equal(useButler.getState().actionDraft?.kind, 'todo');
+  assert.equal(useButler.getState().actionDraft?.sourceLineId, 'answer');
+  assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.status, 'approval-required');
+});
+
+test('draft_ado_state 先读取工作项并生成参数化确认卡，确认前零 PATCH', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ method: string; url: string }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ method: init?.method ?? 'GET', url });
+    if (url.includes('/_apis/connectionData?api-version=7.0-preview')) {
+      return new Response(JSON.stringify({
+        authenticatedUser: {
+          id: '00000000-0000-0000-0000-000000000123',
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      value: [{
+        id: 123,
+        rev: 7,
+        fields: {
+          'System.Title': '修复发布失败',
+          'System.WorkItemType': 'Bug',
+          'System.State': 'Active',
+          'System.TeamProject': 'Shop',
+        },
+      }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  useWorkbench.setState({
+    config: {
+      adoBase: 'http://ado/DefaultCollection',
+      pat: '',
+      auth: 'none',
+      account: 'lus',
+    },
+  });
+
+  try {
+    const tool = createButlerTools().find((candidate) => candidate.name === 'draft_ado_state');
+    assert.ok(tool);
+    assert.equal(tool.effect, 'draft');
+
+    const result = await tool.invoke(
+      { workItemId: 123, targetState: 'Resolved' },
+      { sessionId: 'session-ado-state' },
+    );
+
+    assert.equal(result.status, 'completed');
+    assert.match(result.content ?? '', /#123.*Active.*Resolved/);
+    assert.deepEqual(requests.map((request) => request.method), ['GET', 'GET']);
+    assert.deepEqual(
+      {
+        kind: useButler.getState().actionDraft?.kind,
+        workItemId: useButler.getState().actionDraft?.workItemId,
+        currentState: useButler.getState().actionDraft?.currentState,
+        targetState: useButler.getState().actionDraft?.targetState,
+        expectedRevision: useButler.getState().actionDraft?.expectedRevision,
+        adoIdentityId: useButler.getState().actionDraft?.adoIdentityId,
+      },
+      {
+        kind: 'ado-state',
+        workItemId: 123,
+        currentState: 'Active',
+        targetState: 'Resolved',
+        expectedRevision: 7,
+        adoIdentityId: '00000000-0000-0000-0000-000000000123',
+      },
+    );
+    assert.deepEqual(requests, [
+      {
+        method: 'GET',
+        url: 'http://ado/DefaultCollection/_apis/connectionData?api-version=7.0-preview',
+      },
+      {
+        method: 'GET',
+        url: 'http://ado/DefaultCollection/_apis/wit/workitems?ids=123&fields=System.Title,System.WorkItemType,System.Parent,System.State,System.TeamProject,System.AssignedTo,System.ChangedDate,Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Scheduling.DueDate,Microsoft.VSTS.Scheduling.TargetDate,Microsoft.VSTS.Scheduling.FinishDate&api-version=7.0',
+      },
+    ]);
+    assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.status, 'approval-required');
+    assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.attempts, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('draft_ado_state 取不到稳定 identity id 时失败且不会生成确认卡', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/_apis/connectionData?api-version=7.0-preview')) {
+      return new Response(JSON.stringify({
+        authenticatedUser: {
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`不应继续读取工作项：${url}`);
+  }) as typeof fetch;
+  useWorkbench.setState({
+    config: {
+      adoBase: 'http://ado/DefaultCollection',
+      pat: '',
+      auth: 'none',
+      account: 'lus',
+    },
+  });
+
+  try {
+    const tool = createButlerTools().find((candidate) => candidate.name === 'draft_ado_state');
+    assert.ok(tool);
+
+    const result = await tool.invoke(
+      { workItemId: 123, targetState: 'Resolved' },
+      { sessionId: 'session-ado-state-missing-identity' },
+    );
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.error?.message ?? '', /稳定 id/);
+    assert.equal(useButler.getState().actionDraft, null);
+    assert.equal(useButler.getState().runtimeCheckpoints.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ADO 连接或账号在草案后改变时 preflight fail closed', async () => {
+  useWorkbench.setState({
+    config: {
+      adoBase: 'http://ado/DefaultCollection',
+      pat: '',
+      auth: 'none',
+      account: 'lus',
+    },
+  });
+  useButler.getState().proposeAdoStateAction({
+    workItemId: 123,
+    workItemTitle: '修复发布失败',
+    currentState: 'Active',
+    targetState: 'Resolved',
+    expectedRevision: 7,
+    adoIdentityId: '00000000-0000-0000-0000-000000000123',
+    project: 'Shop',
+    webUrl: 'http://ado/DefaultCollection/Shop/_workitems/edit/123',
+    adoBase: 'http://ado/DefaultCollection',
+    adoAuth: 'none',
+    adoAccount: 'lus',
+  });
+  useWorkbench.setState({
+    config: {
+      adoBase: 'http://ado/OtherCollection',
+      pat: '',
+      auth: 'none',
+      account: 'other',
+    },
+  });
+
+  const authorization = await useButler.getState().beginAction();
+  assert.deepEqual(authorization, {
+    allowed: false,
+    reason: 'ADO 连接或账号已变化，请重新发起状态修改',
+  });
+  assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.status, 'failed');
+  assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.attempts, 0);
+});
+
 test('ADO 能力未配置时 preflight 不会把 checkpoint 推进执行态', async () => {
   useWorkbench.setState({ config: null });
   useButler.setState({
@@ -85,6 +276,45 @@ test('ADO 能力未配置时 preflight 不会把 checkpoint 推进执行态', as
   assert.equal(checkpoint?.status, 'failed');
   assert.equal(checkpoint?.attempts, 0, '能力预检失败不能算作一次执行尝试');
   assert.equal(checkpoint?.error?.kind, 'preflight');
+});
+
+test('ado-state 非可重试失败后，同一卡片二次 begin 不会再次进入写', async () => {
+  useWorkbench.setState({
+    config: {
+      adoBase: 'http://ado/DefaultCollection',
+      pat: '',
+      auth: 'none',
+      account: 'lus',
+    },
+  });
+  useButler.getState().proposeAdoStateAction({
+    workItemId: 123,
+    workItemTitle: '修复发布失败',
+    currentState: 'Active',
+    targetState: 'Resolved',
+    expectedRevision: 7,
+    adoIdentityId: '00000000-0000-0000-0000-000000000123',
+    project: 'Shop',
+    webUrl: 'http://ado/DefaultCollection/Shop/_workitems/edit/123',
+    adoBase: 'http://ado/DefaultCollection',
+    adoAuth: 'none',
+    adoAccount: 'lus',
+  });
+
+  assert.deepEqual(await useButler.getState().beginAction(), { allowed: true });
+  await useButler.getState().failAction('结果未知，请重新读取新卡', false);
+  const failed = useButler.getState().runtimeCheckpoints.at(-1);
+  assert.equal(failed?.status, 'failed');
+  assert.equal(failed?.attempts, 1);
+  assert.equal(failed?.error?.retryable, false);
+
+  const retried = await useButler.getState().beginAction();
+  assert.deepEqual(retried, {
+    allowed: false,
+    reason: '结果未知，请重新读取新卡',
+  });
+  assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.status, 'failed');
+  assert.equal(useButler.getState().runtimeCheckpoints.at(-1)?.attempts, 1);
 });
 
 test('completeAction 会记录 completed 审计证据而不只是本地成功提示', async () => {

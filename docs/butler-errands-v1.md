@@ -1,5 +1,22 @@
 # 切片规格：派活 v1（薄路径）
 
+> 这份文档保留了派活从“转交到执行间”演进为“管家内并行代办”的历史。
+> 当前实现以本节为准：每件活使用独立的持久 Codex Thread 和原生 Goal，最多同时
+> 保留 5 件未收下的活；下文的“单会话 / 只看执行间”描述仅是首版背景。
+
+## 当前实现（2026-07-31）
+
+- 每件活创建独立的非 ephemeral Codex Thread，并在首轮前写入 active Goal。
+- `turn/completed` 只表示一轮结束；Goal 仍 active 时由 Codex 原生机制自动续跑，
+  RocketX 保持连接并继续展示进度。只有 Goal complete 才显示“回话了”。
+- 适合独立并行的工作由 Codex 原生子代理完成。RocketX 只消费
+  `subAgentActivity` 显示“正在分头处理”，不维护第二套子代理调度或状态库。
+- Goal 终态后通过 `thread/read` 核对持久历史，补齐可能漏掉的流式文本；父子线程
+  关系也继续保留在 Codex 历史中。
+- 用户叫停时先把 Goal 置为 paused，再中断当前 turn，避免之后 resume 时误续跑。
+- RocketX 重启时仍采用保守恢复：保留 thread id 与过程记录，但不会自动重放可能
+  已产生外部副作用的指令。
+
 管家能把工程任务派给 Codex 干——像 GPT Live 那样「说一句，活就有人干了」。
 v1 走薄路径：**不新建派工 store，规格卡直接送进执行间（`localCodex`）开跑。**
 

@@ -14,6 +14,7 @@ import {
 } from '../apps/web/src/stores/butlerCodex';
 import {
   codexInvocation,
+  codexRuntimeSourceFromArgs,
   NodeCodexTransport,
   turnInputs,
 } from './lib/codex-app-server-spike';
@@ -36,7 +37,7 @@ class MemoryStorage {
 
 async function main(): Promise<void> {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'rocketx-butler-native-skill-'));
-  const invocation = codexInvocation();
+  const invocation = codexInvocation(codexRuntimeSourceFromArgs());
   const transports: NodeCodexTransport[] = [];
   const restoreStorage = setButlerBrainStorage(new MemoryStorage());
   const restorePlatform = setButlerBrainTauriProvider(() => true);
@@ -94,6 +95,8 @@ async function main(): Promise<void> {
       spike: 'butler-native-skills',
       result: passed ? 'PASS' : 'FAIL',
       cliVersion: invocation.version,
+      runtimeSource: invocation.source,
+      runtimePath: invocation.displayPath,
       checks,
       controlAnswer: control.text,
       skillAnswer: skill.text,

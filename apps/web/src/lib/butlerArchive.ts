@@ -1,5 +1,6 @@
 import { createMemoryBackend, createRcxStore, type RcxStoreBackend } from '@rcx/rcx-store';
 import { isTauri } from './http';
+import { parseSkillMarkdown } from './butlerSkillImport';
 
 export interface ButlerProfileStorage {
   get(key: string): string | null;
@@ -16,6 +17,7 @@ export interface ButlerArchiveSkill {
   name: string;
   description: string;
   body: string;
+  source?: string;
 }
 
 const ARCHIVE_APP_ID = 'rocketx.butler';
@@ -242,6 +244,20 @@ export function renderButlerSkillFile(skill: ButlerArchiveSkill): string {
   const name = assertNativeSkillName(skill.name);
   const description = assertSkillDescription(skill.description);
   const body = assertSkillBody(skill.body);
+  if (skill.source !== undefined) {
+    const source = `${skill.source.replace(/\r\n/g, '\n').trimEnd()}\n`;
+    if (!source.startsWith('---\n')) throw new Error('托管技能必须使用标准 SKILL.md frontmatter');
+    const parsed = parseSkillMarkdown(source);
+    if (!parsed.ok) throw new Error(parsed.error);
+    if (
+      parsed.skill.name !== name
+      || parsed.skill.description !== description
+      || parsed.skill.body !== body
+    ) {
+      throw new Error('托管技能字段与 SKILL.md 源文件不一致');
+    }
+    return source;
+  }
   return `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`;
 }
 
@@ -260,7 +276,7 @@ export function renderButlerAgentsFile(persona: string): string {
     '- 写入类工具返回 approval-required 时停止动作，等待 RocketX 用户确认。',
     '- 不在工作目录中寻找、复制、生成或保存账号凭据。',
     '- 不得使用命令执行或文件修改绕过 RocketX 工具和审批系统。',
-    '- 使用 azure-devops-server Skill 时，把其中的 PowerShell 查询示例转换为 run_azure_devops_server_cli 参数；不得直接执行脚本，也不得请求写操作。',
+    '- 使用 azure-devops-server Skill 时，忽略其中的凭据采集、bootstrap 和 PowerShell 执行步骤；只把所需 method、area、resource、project、team、query、body 和版本参数交给 rocketx_azure_devops_server_read。连接与凭据由 RocketX 注入，只允许 GET 和 Skill 白名单内的只读 POST，不得请求写操作或 AllowWrite。',
     BUTLER_AGENTS_END,
     '',
   ].join('\n');
