@@ -83,5 +83,6 @@ pnpm spike:butler-native-skills:system
 - 市场可用性仍取决于用户配置和 Codex 运行时；加载错误会在市场区原样呈现。
 - `navigator.onLine` 只用于离线快速路径，不能证明互联网真的可达；因此在线读取
   仍有截止时间和本地回退。
-- 旧版本遗留的不规范自装 Skill 仍走最小 `load_skill` 兼容路径，尚未强制删除用户数据。
+- 旧版本遗留的不规范自装 Skill 仍保留在兼容数据层，尚未强制删除；Codex 线程不会再获得
+  `load_skill` Host Tool，只有旧 API 读取路径可以查看这些内容。
 - 回滚时可撤销 UI 和协议适配；第一方 `SKILL.md` 与现有用户数据没有转换成不可逆格式。

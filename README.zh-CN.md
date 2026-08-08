@@ -55,19 +55,21 @@ pnpm dev
 
 接入 Azure DevOps Server 2022 通知见 [`services/ado-bridge/README.md`](services/ado-bridge/README.md)。
 
-桌面端全新安装会先显示「加入团队」：可从本地文件或无需登录的 HTTP(S) / Git Raw URL
-导入不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、AI、模板和更新源等默认值后，
-再在本机填写密码、PAT 与 API key。URL 团队配置每 24 小时检查一次，有变化时先展示差异，
-不会静默覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
+桌面端全新安装会先用 GTD 流程说明 RocketX 如何可靠捕获、理清下一步并保护注意力，再进入
+团队或个人设置。选择「加入团队」时，可从本地文件或无需登录的 HTTP(S) / Git Raw URL 导入
+不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、AI、模板和更新源等默认值后，再在本机
+填写密码、PAT 与 API key。URL 团队配置每 24 小时检查一次，有变化时先展示差异，不会静默
+覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
-登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询 ADO 工作项/PR/构建、
-生成工作项草案或运行例行复盘；完整页和房间侧栏都能直接附加图片，并把真实多模态输入交给
-所选 API Provider 或 Codex 大脑。所有创建操作仍需在现有创建窗口中确认。桌面端可让管家使用
-本机 Codex CLI，也可把管家或群托管对话转进 Codex App / CLI 的原生线程列表继续处理。
-管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；DeepSeek 等 Provider
-与密钥也在这里配置，密钥只进入操作系统凭据库。托管会话中被 `@ai` 请求引用到的图片会
-下载到会话隔离缓存，并作为图片输入交给 Codex。
+登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询或调整 ADO 计划、安排任务，
+以及运行例行复盘。确定性的事实、计划和状态继续由工作台界面承载；AI 侧统一通过 Codex 原生
+Skills 执行，Plugin 市场也直接复用 Codex 的安装与更新协议。管家的 Memory 只轻量装载当前
+账号和工作范围内已确认的画像、偏好与习惯，支持查看、撤销和恢复；Codex 自带 Memory 不参与。
+完整页和房间侧栏都能附加图片并传给 Codex。副作用仍由确定性界面或任务卡确认，运行过程中
+需要补充输入或审批时会回到所属任务卡继续处理。也可把管家或群托管对话转进 Codex App / CLI
+的原生线程列表继续。管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；密钥只
+进入操作系统凭据库。
 
 随 Windows 发布包提供的「飞鸽 / IPMSG」官方插件默认关闭，可随时禁用。协议、GBK 编码、UDP/TCP `2425`、消息和普通文件传输都在插件自己的 Rust Sidecar 中，RocketX 核心只提供通用进程桥。标准 IPMSG/飞鸽支持消息与文件；原版内网通仅支持 `1@shiyeline` 的 2425 发现和文本，不实现私有 `9011`。该旧协议能力不等同于 RocketX 的认证 LAN 通道。
 
@@ -81,11 +83,11 @@ pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件上传下载/中文搜索/置顶免打扰/通讯录/实时推送/
                     # 斜杠命令/群管理（踢人·角色·禁言·归档·只读）/
                     # 文件与提及面板/改昵称与头像
-pnpm test:pure      # 221 项纯函数：拼音、日期、分组规则、待办、emoji、
+pnpm test:pure      # 230 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 593 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 970 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 46 项浏览器流程：登录、消息、管家图片、禅模式、表情面板、首次引导、AI 设置与插件 Bridge
+pnpm test:ui        # 108 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
@@ -109,14 +111,14 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前稳定化阶段，GitHub Actions 只构建 Windows x64（msi/nsis）正式安装包；macOS 与 Linux
-源码目标继续保留，待平台验收稳定后再恢复官方安装包与自动更新：
+当前候选版本是 `v0.36.5`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
-  并构建 Windows 安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
+  并构建三平台安装包与草稿 Release；标签只接受最新 `main` 与一致版本，进入 1.0 及以上时
   还会强制核验两位外部开发者证据和真实 README 截图/GIF；
-- **公开发布**：复核草稿后手动运行受保护的 `Publish GitHub Release`；公开工作流以非 Latest
-  方式发布 `v0.31.1`，Windows 用户在公开后从 Release 页面手动下载，`v0.28.0` 暂时保留为跨平台 Latest；
+- **公开发布**：复核草稿后运行受保护的 `Publish GitHub Release`；工作流重新核验三平台产物、
+  更新签名和 SHA256 后公开，并确认 GitHub Latest 指向新标签；
 - **npm 包（按需）**：公开 SDK/CLI 变更需要 npm 交付时，独立运行受保护的
   `Publish npm packages`，按 SDK → CLI 顺序发布；npm 不阻塞桌面安装包与 GitHub Release；
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；

@@ -88,8 +88,9 @@ have been removed; production MCP adapters remain a later phase.
 - Codex `dynamicTools` remains the minimal host-function boundary for data
   that only exists inside the running RocketX host. This is an app-server
   capability adapter, not a second tool-selection or Agent runtime.
-- Native Skills remove the normal need for `load_skill`; only malformed
-  pre-migration Skills keep that compatibility tool.
+- Native Skills remove the need for `load_skill` in Codex threads. Malformed
+  pre-migration Skills remain readable only through the legacy API compatibility
+  path; Codex host tools never expose them.
 - Managed Skill content lives only under
   `apps/web/src/butler/skills/<category>/<name>/SKILL.md`. The shared loader
   uses Vite's eager raw glob in the app and synchronous reads of those same
