@@ -518,6 +518,16 @@ export class RcRestClient {
     return messages;
   }
 
+  /** 关注讨论串，后续新回复由 Rocket.Chat 按关注关系提醒。 */
+  followMessage(mid: string): Promise<unknown> {
+    return this.request('POST', 'chat.followMessage', { mid });
+  }
+
+  /** 取消关注讨论串，停止接收普通新回复提醒。 */
+  unfollowMessage(mid: string): Promise<unknown> {
+    return this.request('POST', 'chat.unfollowMessage', { mid });
+  }
+
   async getMembers(rid: string, type: RoomType, count = 200): Promise<RcUser[]> {
     const endpoint =
       type === 'c' ? 'channels.members' : type === 'p' ? 'groups.members' : 'im.members';

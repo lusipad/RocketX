@@ -530,6 +530,7 @@ test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', as
   assert.ok(capability.permissions.includes('process:allow-restart'));
   assert.equal(typeof tauriConfig.app.security.csp, 'string');
   assert.match(tauriConfig.app.security.csp ?? '', /connect-src[^;]*\basset:/);
+  assert.match(tauriConfig.app.security.csp ?? '', /connect-src[^;]*\bblob:/);
   assert.match(tauriConfig.app.security.csp ?? '', /object-src 'none'/);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
   assert.match(tauriConfig.plugins?.updater?.pubkey ?? '', /^[A-Za-z0-9+/=]+$/);

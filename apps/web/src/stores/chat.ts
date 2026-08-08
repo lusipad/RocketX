@@ -209,6 +209,7 @@ interface ChatState {
   scrollToLatest: () => void;
   openRoom: (rid: string) => Promise<void>;
   openThread: (mid: string) => Promise<void>;
+  toggleThreadFollow: (mid: string, follow: boolean) => Promise<boolean>;
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
@@ -380,7 +381,7 @@ async function acceptLanMessage(event: LanMessageEvent): Promise<void> {
         }
       : {}),
   });
-  notifyIfNeeded(message, event.roomId, current);
+  void notifyIfNeeded(message, event.roomId, current);
 }
 
 function localLanFileMessage(
@@ -451,7 +452,7 @@ async function acceptLanFile(event: LanFileEvent): Promise<void> {
   if (!author) return;
   const message = localLanFileMessage(event, author);
   insertLanFileMessage(message);
-  notifyIfNeeded(message, event.roomId, state);
+  void notifyIfNeeded(message, event.roomId, state);
 }
 
 function messagePreview(msg: RcMessage | undefined): string {
@@ -838,6 +839,29 @@ export function messageIsNotificationCandidate(
   return !message.attachments?.some((attachment) => attachment.type === 'removed-file');
 }
 
+function messageMentionsCurrentUser(
+  message: Pick<RcMessage, 'msg' | 'mentions'>,
+  currentUser: Pick<RcUser, '_id' | 'username'> | null | undefined,
+): boolean {
+  if (!currentUser) return false;
+  const username = currentUser.username.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+  return !!message.mentions?.some(
+    (mention) => mention._id === currentUser._id || mention.username === currentUser.username,
+  ) || new RegExp(`@(${username}|all|here)\\b`, 'i').test(message.msg ?? '');
+}
+
+export function threadReplyShouldNotify(
+  message: Pick<RcMessage, 'tmid' | 'msg' | 'mentions'>,
+  root: Pick<RcMessage, 'u' | 'replies' | 'tcount'> | undefined,
+  currentUser: Pick<RcUser, '_id' | 'username'> | null | undefined,
+): boolean {
+  if (!message.tmid) return true;
+  if (messageMentionsCurrentUser(message, currentUser)) return true;
+  if (!root || !currentUser) return false;
+  if (root.replies?.includes(currentUser._id)) return true;
+  return !root.tcount && root.u._id === currentUser._id;
+}
+
 export function notificationAttentionPolicy(input: {
   subscribed: boolean;
   muted: boolean;
@@ -871,7 +895,7 @@ export function conversationIsActivelyViewed(
   return activeRid === rid && documentHasFocus;
 }
 
-function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
+async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   const auth = loadStoredAuth();
   if (!auth || !messageIsNotificationCandidate(msg)) return;
   const currentUser = useAuth.getState().user;
@@ -889,10 +913,20 @@ function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   }
   if (expectedAgentReply) return;
 
-  const me = currentUser?.username;
-  const mentioned =
-    !!me &&
-    new RegExp(`@(${me.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}|all|here)\\b`).test(msg.msg ?? '');
+  let threadRoot = msg.tmid
+    ? state.messages[rid]?.find((message) => message._id === msg.tmid)
+    : undefined;
+  if (msg.tmid && !threadReplyShouldNotify(msg, threadRoot, currentUser)) {
+    if (threadRoot) return;
+    try {
+      threadRoot = await rest.getMessage(msg.tmid);
+    } catch {
+      return;
+    }
+    if (!threadReplyShouldNotify(msg, threadRoot, currentUser)) return;
+  }
+
+  const mentioned = messageMentionsCurrentUser(msg, currentUser);
 
   const prefs = usePrefs.getState().prefs;
   const roomType = subscription.t ?? state.rooms[rid]?.t;
@@ -1155,7 +1189,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if ((msg.t === 'message_pinned' || msg.t === 'message_unpinned') && state.historyLoaded[rid]) {
         void get().reconcilePinned(rid).catch(() => {});
       }
-      if (!alreadyKnown) notifyIfNeeded(msg, rid, state);
+      if (!alreadyKnown) void notifyIfNeeded(msg, rid, state);
       const activeRid = get().activeRid;
       if (activeRid === rid) {
         if (
@@ -1358,6 +1392,36 @@ export const useChat = create<ChatState>((set, get) => ({
       set({ messages: { ...get().messages, [rid]: list } });
     } catch {
       /* 线程功能被服务器禁用时静默降级 */
+    }
+  },
+
+  toggleThreadFollow: async (mid, follow) => {
+    try {
+      if (follow) await rest.followMessage(mid);
+      else await rest.unfollowMessage(mid);
+
+      const userId = useAuth.getState().user?._id ?? loadStoredAuth()?.userId;
+      const rid = get().activeRid;
+      const list = rid ? get().messages[rid] : undefined;
+      if (rid && list && userId) {
+        set({
+          messages: {
+            ...get().messages,
+            [rid]: list.map((message) => {
+              if (message._id !== mid) return message;
+              const replies = new Set(message.replies ?? []);
+              if (follow) replies.add(userId);
+              else replies.delete(userId);
+              return { ...message, replies: [...replies] };
+            }),
+          },
+        });
+      }
+      toast.success(follow ? '已关注讨论串' : '已关闭讨论串提醒');
+      return true;
+    } catch (error) {
+      toast.error(error, follow ? '关注讨论串失败' : '关闭讨论串提醒失败');
+      return false;
     }
   },
 
