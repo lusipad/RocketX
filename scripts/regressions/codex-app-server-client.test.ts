@@ -115,6 +115,186 @@ test('客户端请求按 id 关联响应', async () => {
   assert.deepEqual(await response, {});
 });
 
+test('turn/steer 按协议要求返回 turnId', async () => {
+  const transport = new FakeTransport();
+  const client = await startClient(transport);
+
+  const response = client.request('turn/steer', {
+    threadId: 'thread',
+    expectedTurnId: 'turn-1',
+    input: [],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = transport.writes.at(-1)!;
+  transport.line({ id: request.id, result: { turnId: 'turn-2' } });
+  assert.deepEqual(await response, { turnId: 'turn-2' });
+});
+
+test('原生 Skill、Goal 与 MCP 方法按协议返回结构校验', async () => {
+  const transport = new FakeTransport();
+  const client = await startClient(transport);
+
+  const skills = client.request('skills/list', { cwds: ['C:/workspace'] });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { data: [] } });
+  assert.deepEqual(await skills, { data: [] });
+
+  const skillConfig = client.request('skills/config/write', {
+    path: 'C:/workspace/.agents/skills/example/SKILL.md',
+    enabled: false,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { effectiveEnabled: false },
+  });
+  assert.deepEqual(await skillConfig, { effectiveEnabled: false });
+
+  const goal = client.request('thread/goal/set', {
+    threadId: 'thread',
+    objective: '完成迁移',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: {
+      goal: {
+        threadId: 'thread',
+        objective: '完成迁移',
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+  });
+  assert.equal((await goal).goal.threadId, 'thread');
+
+  const cleared = client.request('thread/goal/clear', { threadId: 'thread' });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { cleared: true } });
+  assert.deepEqual(await cleared, { cleared: true });
+
+  const mcpServers = client.request('mcpServerStatus/list', {
+    threadId: 'thread',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { data: [], nextCursor: null },
+  });
+  assert.deepEqual(await mcpServers, { data: [], nextCursor: null });
+
+  const mcpCall = client.request('mcpServer/tool/call', {
+    threadId: 'thread',
+    server: 'rocketx',
+    tool: 'ping',
+    arguments: {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { content: [{ type: 'text', text: 'pong' }], isError: false },
+  });
+  assert.deepEqual(await mcpCall, {
+    content: [{ type: 'text', text: 'pong' }],
+    isError: false,
+  });
+});
+
+test('原生 Marketplace 与 Plugin 方法按协议返回结构校验', async () => {
+  const transport = new FakeTransport();
+  const client = await startClient(transport);
+
+  const marketplace = client.request('marketplace/add', {
+    source: 'https://github.com/example/skills',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: {
+      marketplaceName: 'example',
+      installedRoot: 'C:/Users/test/.codex/marketplaces/example',
+      alreadyAdded: false,
+    },
+  });
+  assert.equal((await marketplace).marketplaceName, 'example');
+
+  const marketplaceRemoval = client.request('marketplace/remove', {
+    marketplaceName: 'example',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: {
+      marketplaceName: 'example',
+      installedRoot: 'C:/Users/test/.codex/marketplaces/example',
+    },
+  });
+  assert.equal((await marketplaceRemoval).marketplaceName, 'example');
+
+  const plugins = client.request('plugin/list', { cwds: ['C:/workspace'] });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+  });
+  assert.deepEqual(await plugins, {
+    marketplaces: [],
+    marketplaceLoadErrors: [],
+    featuredPluginIds: [],
+  });
+
+  const installed = client.request('plugin/installed', { cwds: ['C:/workspace'] });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { marketplaces: [], marketplaceLoadErrors: [] },
+  });
+  assert.deepEqual(await installed, { marketplaces: [], marketplaceLoadErrors: [] });
+
+  const detail = client.request('plugin/read', {
+    remoteMarketplaceName: 'official',
+    pluginName: 'example',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { plugin: { summary: { name: 'example' } } },
+  });
+  assert.equal((await detail).plugin.summary.name, 'example');
+
+  const skill = client.request('plugin/skill/read', {
+    remoteMarketplaceName: 'official',
+    remotePluginId: 'example',
+    skillName: 'example-skill',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { contents: '---\nname: example-skill\n---\n' },
+  });
+  assert.match((await skill).contents ?? '', /example-skill/);
+
+  const install = client.request('plugin/install', {
+    remoteMarketplaceName: 'official',
+    pluginName: 'example',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { authPolicy: 'ON_USE', appsNeedingAuth: [] },
+  });
+  assert.deepEqual(await install, { authPolicy: 'ON_USE', appsNeedingAuth: [] });
+
+  const uninstall = client.request('plugin/uninstall', { pluginId: 'official@example' });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: {} });
+  assert.deepEqual(await uninstall, {});
+});
+
 test('只对实际调用的方法做响应结构与 method not found 能力校验', async () => {
   const transport = new FakeTransport('0.144.5');
   const client = await startClient(transport, new AppServerClient(transport), '0.144.5');
@@ -123,6 +303,15 @@ test('只对实际调用的方法做响应结构与 method not found 能力校�
   await new Promise((resolve) => setImmediate(resolve));
   transport.line({ id: transport.writes.at(-1)!.id, result: { thread: {} } });
   await assert.rejects(() => invalid, /thread\/start.*thread\.id/);
+
+  const invalidSteer = client.request('turn/steer', {
+    threadId: 'thread',
+    expectedTurnId: 'turn-1',
+    input: [],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: {} });
+  await assert.rejects(() => invalidSteer, /turn\/steer.*turnId/);
 
   const missing = client.request('thread/resume', { threadId: 'thread' });
   await new Promise((resolve) => setImmediate(resolve));

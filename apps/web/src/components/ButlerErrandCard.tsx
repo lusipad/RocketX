@@ -14,12 +14,13 @@ export default function ButlerErrandCard() {
   const errandDraft = useButler((state) => state.errandDraft);
   const confirmErrandDraft = useButler((state) => state.confirmErrandDraft);
   const dismissErrandDraft = useButler((state) => state.dismissErrandDraft);
+  const setErrandDraftReadOnly = useButler((state) => state.setErrandDraftReadOnly);
   const environments = useAgentEnvironments((state) => state.environments);
   const lastDispatchEnvironmentId = useAgentEnvironments((state) => state.lastDispatchEnvironmentId);
   const localCodexRoot = useLocalCodex((state) => state.workspaceRoot);
   const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined);
-  const [readOnly, setReadOnly] = useState(false);
   const [dispatching, setDispatching] = useState(false);
+  const readOnly = errandDraft?.readOnly === true;
 
   const resolution = useMemo(
     () => resolveDispatchTargets(
@@ -109,7 +110,7 @@ export default function ButlerErrandCard() {
         <input
           type="checkbox"
           checked={readOnly}
-          onChange={(event) => setReadOnly(event.target.checked)}
+          onChange={(event) => setErrandDraftReadOnly(event.target.checked)}
           className="h-3.5 w-3.5 accent-primary"
         />
         只调查，不改文件

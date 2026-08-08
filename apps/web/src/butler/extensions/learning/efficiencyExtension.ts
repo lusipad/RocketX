@@ -12,6 +12,10 @@ import type {
   ImprovementProposal,
   RepetitionCandidate,
 } from './model';
+import {
+  renderButlerSkillDraftMarkdown,
+  type ButlerSkillDraft,
+} from './skillDraft';
 
 export const BUTLER_EFFICIENCY_EXTENSION_ID = 'rocketx.butler.efficiency';
 
@@ -23,6 +27,7 @@ export interface ButlerSkillCatalog {
 export interface ButlerEfficiencyState {
   candidates: RepetitionCandidate[];
   proposals: ImprovementProposal[];
+  drafts: ButlerSkillDraft[];
 }
 
 export interface ButlerEfficiencyApi {
@@ -31,6 +36,9 @@ export interface ButlerEfficiencyApi {
   dryRun(id: string): void;
   enable(id: string): void;
   dismiss(id: string): void;
+  upsertDraft(draft: ButlerSkillDraft): ButlerSkillDraft;
+  saveDraft(draft: ButlerSkillDraft): void;
+  discardDraft(id: string): void;
 }
 
 function updateProposal(
@@ -58,12 +66,14 @@ export function createButlerEfficiencyExtension(
       const store = createStore<ButlerEfficiencyState>(() => ({
         candidates: Array.isArray(saved?.candidates) ? saved.candidates : [],
         proposals: Array.isArray(saved?.proposals) ? saved.proposals : [],
+        drafts: Array.isArray(saved?.drafts) ? saved.drafts : [],
       }));
       context.on('host.storage-ready', () => {
         const hydrated = context.readState<Partial<ButlerEfficiencyState>>();
         store.setState({
           candidates: Array.isArray(hydrated?.candidates) ? hydrated.candidates : [],
           proposals: Array.isArray(hydrated?.proposals) ? hydrated.proposals : [],
+          drafts: Array.isArray(hydrated?.drafts) ? hydrated.drafts : [],
         }, true);
       });
       const persist = () => context.writeState(store.getState());
@@ -117,6 +127,56 @@ export function createButlerEfficiencyExtension(
         },
         dismiss: (id) => {
           store.setState({ proposals: updateProposal(store.getState().proposals, id, 'dismissed') });
+          persist();
+        },
+        upsertDraft: (draft) => {
+          store.setState({
+            drafts: [
+              ...store.getState().drafts.filter((item) => item.id !== draft.id),
+              draft,
+            ],
+          });
+          persist();
+          return draft;
+        },
+        saveDraft: (draft) => {
+          const stored = store.getState().drafts.find((item) => item.id === draft.id);
+          if (!stored) throw new Error('Skill 草稿不存在或已经处理。');
+          const normalized = {
+            ...draft,
+            name: draft.name.trim(),
+            title: draft.title.trim(),
+            description: draft.description.trim(),
+          };
+          if (skills.names().includes(normalized.name)) {
+            throw new Error(`同名 Skill 已存在：${normalized.name}`);
+          }
+          skills.install({
+            name: normalized.name,
+            description: normalized.description,
+            body: renderButlerSkillDraftMarkdown(normalized),
+          });
+          store.setState({
+            drafts: store.getState().drafts.filter((item) => item.id !== draft.id),
+            proposals: normalized.proposalId
+              ? updateProposal(store.getState().proposals, normalized.proposalId, 'enabled')
+              : store.getState().proposals,
+          });
+          journal.record({
+            action: 'enable-improvement',
+            intentKey: `workflow:${normalized.name}`,
+            surface: 'skill-center',
+          });
+          persist();
+        },
+        discardDraft: (id) => {
+          const draft = store.getState().drafts.find((item) => item.id === id);
+          store.setState({
+            drafts: store.getState().drafts.filter((item) => item.id !== id),
+            proposals: draft?.proposalId
+              ? updateProposal(store.getState().proposals, draft.proposalId, 'dismissed')
+              : store.getState().proposals,
+          });
           persist();
         },
       };

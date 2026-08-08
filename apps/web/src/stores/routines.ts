@@ -25,6 +25,9 @@ import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from 
 import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
 import { pauseButlerWorkflowTask, runButlerWorkflowTask } from './butler';
 import { useChat } from './chat';
+import { useAuth } from './auth';
+import { getServerBase } from '../lib/client';
+import { buildButlerLightweightMemoryContext } from '../lib/butlerMemoryContext';
 
 const ROUTINES_KEY = 'rcx-butler-v1:routines';
 const WATCHER_KEYS_KEY = 'rcx-butler-v1:routine-seen';
@@ -251,15 +254,11 @@ function routineFromTemplate(
 ): Routine | undefined {
   const rooms = params?.rooms?.map((room) => room.trim()).filter(Boolean);
   if (template.params === 'rooms' && !rooms?.length) return undefined;
-  const prompt = template.params === 'rooms' && template.prompt
-    ? template.prompt.replaceAll('{{rooms}}', rooms!.join('、'))
-    : template.prompt;
-  if (!template.skillName && !prompt) return undefined;
   const routine: Routine = {
     id: options?.id ?? `routine-${template.id}-${crypto.randomUUID()}`,
     name: template.title,
     trigger: cloneTrigger(template.defaultTrigger),
-    ...(template.skillName ? { skillName: template.skillName } : { prompt: prompt! }),
+    skillName: template.skillName,
     templateId: template.id,
     precheck: template.precheck,
     ...(rooms ? { params: { rooms: [...rooms] } } : {}),
@@ -300,12 +299,8 @@ function normalizeRoutine(value: unknown): Routine | undefined {
     trigger,
     runs: routine.runs.slice(0, RUN_LIMIT),
     ...(template && !routine.templateId ? { templateId: template.id } : {}),
-    ...(template && !routine.skillName && !routine.prompt
-      ? template.skillName
-        ? { skillName: template.skillName }
-        : template.prompt
-          ? { prompt: template.prompt }
-          : {}
+    ...(template?.skillName && !routine.skillName && !routine.prompt
+      ? { skillName: template.skillName }
       : {}),
     ...(template && !routine.precheck ? { precheck: template.precheck } : {}),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
@@ -329,13 +324,21 @@ function normalizeRoutine(value: unknown): Routine | undefined {
     }).slice(-20)
     : [];
   const currentVersion = Math.max(1, routine.contractVersion ?? versions.at(-1)?.version ?? 1);
+  const templateSkillName = template?.skillName;
+  const migrated = templateSkillName
+    && template?.id === 'room-digest'
+    && !routine.skillName
+    && typeof routine.prompt === 'string'
+    && currentVersion === 1
+    ? { ...normalized, skillName: templateSkillName, prompt: undefined }
+    : normalized;
   return {
-    ...normalized,
+    ...migrated,
     updatedAt: routine.updatedAt ?? routine.createdAt,
     contractVersion: currentVersion,
     versions: versions.length
       ? versions
-      : [routineVersion(normalized, currentVersion, routine.createdAt, '从旧版本迁移')],
+      : [routineVersion(migrated, currentVersion, routine.createdAt, '从旧版本迁移')],
   };
 }
 
@@ -485,7 +488,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (existing) return existing;
     const template = findButlerAbilityTemplate(templateId);
     if (!template) return undefined;
-    if (template.skillName && !isButlerSkillEnabled(template.skillName)) return undefined;
+    if (!isButlerSkillEnabled(template.skillName)) return undefined;
     const routine = routineFromTemplate(template, routineNow(), params);
     if (!routine) return undefined;
     const routines = [routine, ...get().routines];
@@ -590,7 +593,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: `技能「${routine.skillName}」已停用或已卸载，请先到“我的管家 → 记忆与技能”重新启用。`,
+        text: `技能「${routine.skillName}」已停用或已卸载，请先到“技能中心”重新启用。`,
       };
       let routines: Routine[] = [];
       set((state) => {
@@ -655,9 +658,29 @@ export const useRoutines = create<RoutineState>((set, get) => ({
           const runtimeContext = (toolCall: { id: string }) => toolRuntimeContext(toolCall.id, sources);
           const availability = codexBrainAvailability();
           if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
+          const previousSuccessfulRunAt = routine.runs
+            .filter((item) => item.status === 'ok')
+            .reduce((latest, item) => Math.max(latest, item.at), 0);
+          const taskText = [
+            `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
+            ...(previousSuccessfulRunAt > 0
+              ? [`该例行事务上次成功运行时间：${new Date(previousSuccessfulRunAt).toISOString()}。`]
+              : ['这是该例行事务首次成功运行前的检查。']),
+            ...(routine.params?.rooms?.length
+              ? [`只处理这些房间：${routine.params.rooms.join('、')}。`]
+              : []),
+          ].join('\n');
+          const user = useAuth.getState().user;
+          const memoryContext = buildButlerLightweightMemoryContext(
+            taskText,
+            user?._id
+              ? { server: getServerBase() || 'same-origin', account: user._id }
+              : undefined,
+          );
           const value = routine.prompt
             ? await routineCodexRunner({
-              text: routine.prompt,
+              text: `${taskText}\n\n请按以下自定义方法执行：\n\n${routine.prompt}`,
+              taskContext: memoryContext || undefined,
               now: at,
               signal,
               onEvent,
@@ -665,15 +688,17 @@ export const useRoutines = create<RoutineState>((set, get) => ({
             })
             : routine.skillName && canUseNativeButlerSkill(routine.skillName)
             ? await routineCodexRunner({
-              text: `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
+              text: taskText,
               skillName: routine.skillName,
+              taskContext: memoryContext || undefined,
               now: at,
               signal,
               onEvent,
               toolRuntimeContext: runtimeContext,
             })
             : await routineCodexRunner({
-              text: `请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName ?? '')}`,
+              text: `${taskText}\n\n请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName ?? '')}`,
+              taskContext: memoryContext || undefined,
               now: at,
               signal,
               onEvent,

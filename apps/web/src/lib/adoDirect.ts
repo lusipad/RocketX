@@ -23,6 +23,90 @@ export interface DirectConfig {
 
 /** ntlm 只能在桌面端用：浏览器跨域带凭据要求服务端回显具体 Origin，而 ADO 回的是 `*` */
 export const canUseNtlm = isTauri;
+const ADO_REQUEST_TIMEOUT_MS = 15_000;
+const CONTROLLED_WRITE_READBACK_RESERVE_MS = 1_000;
+
+type AdoRequestMethod = 'GET' | 'POST' | 'PATCH';
+
+interface AdoRequestOptions {
+  deadlineAt?: number;
+  signal?: AbortSignal;
+}
+
+class AdoRequestTimeoutError extends Error {
+  readonly reason = 'ado-request-timeout';
+
+  constructor(
+    readonly method: AdoRequestMethod,
+    readonly url: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`ADO ${method} 请求超过 ${Math.ceil(timeoutMs / 1_000)} 秒时限：${url}`);
+    this.name = 'AdoRequestTimeoutError';
+  }
+}
+
+export type ControlledWorkItemStateReason =
+  | 'deadline-before-write'
+  | 'write-attempted-unknown'
+  | 'readback-timeout';
+
+export class ControlledWorkItemStateError extends Error {
+  constructor(
+    readonly reason: ControlledWorkItemStateReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ControlledWorkItemStateError';
+  }
+}
+
+export function isControlledWorkItemStateOutcomeUnknown(err: unknown): boolean {
+  return err instanceof ControlledWorkItemStateError && err.reason !== 'deadline-before-write';
+}
+
+function createAdoDeadline(timeoutMs = ADO_REQUEST_TIMEOUT_MS): number {
+  return Date.now() + timeoutMs;
+}
+
+function remainingMsUntil(deadlineAt: number): number {
+  return Math.max(0, deadlineAt - Date.now());
+}
+
+function isAdoRequestTimeoutError(err: unknown): err is AdoRequestTimeoutError {
+  return err instanceof AdoRequestTimeoutError;
+}
+
+function deadlineTimeoutError(method: AdoRequestMethod, url: string, timeoutMs: number): never {
+  throw new AdoRequestTimeoutError(method, url, timeoutMs);
+}
+
+function withDeadlineSignal(deadlineAt: number, upstream?: AbortSignal) {
+  const timeoutMs = remainingMsUntil(deadlineAt);
+  if (timeoutMs <= 0) return { timeoutMs, signal: upstream, timedOut: () => true, cleanup: () => {} };
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const forwardAbort = () => controller.abort(upstream?.reason);
+  if (upstream?.aborted) {
+    controller.abort(upstream.reason);
+  } else {
+    upstream?.addEventListener('abort', forwardAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error('ado request timeout'));
+  }, timeoutMs);
+  return {
+    timeoutMs,
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timer);
+      upstream?.removeEventListener('abort', forwardAbort);
+    },
+  };
+}
 
 function base(cfg: DirectConfig): string {
   return cfg.adoBase.replace(/\/+$/, '');
@@ -55,6 +139,7 @@ async function ntlmRequest(
   method: string,
   body: string | undefined,
   contentType: string,
+  remainingMs: number,
 ): Promise<{ status: number; text: string }> {
   const { invoke } = await import('@tauri-apps/api/core');
   const res = await invoke<{ status: number; body: string }>('win_auth_request', {
@@ -62,18 +147,23 @@ async function ntlmRequest(
     method,
     body,
     contentType,
+    remainingMs,
   });
   return { status: res.status, text: res.body };
 }
 
 async function adoRequest<T>(
   cfg: DirectConfig,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: AdoRequestMethod,
   path: string,
   body?: unknown,
   contentType = 'application/json',
+  options?: AdoRequestOptions,
 ): Promise<T> {
   const url = `${base(cfg)}${path}`;
+  const deadlineAt = options?.deadlineAt ?? createAdoDeadline();
+  const timeoutMs = remainingMsUntil(deadlineAt);
+  if (timeoutMs <= 0) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
   const payload = body === undefined ? undefined : JSON.stringify(body);
   let status: number;
   let text: string;
@@ -85,22 +175,33 @@ async function adoRequest<T>(
           'Windows 集成认证只能在桌面客户端使用（浏览器的跨域规则不允许携带系统凭据）。网页端请填写 PAT。',
         );
       }
-      ({ status, text } = await ntlmRequest(url, method, payload, contentType));
+      ({ status, text } = await ntlmRequest(url, method, payload, contentType, timeoutMs));
     } else {
       await ensureHttpOrigin(url);
-      const res = await httpFetch(url, {
-        method,
-        headers: {
-          'Content-Type': contentType,
-          Accept: 'application/json',
-          ...authHeaders(cfg),
-        },
-        body: payload,
-      });
-      status = res.status;
-      text = await res.text();
+      const requestSignal = withDeadlineSignal(deadlineAt, options?.signal);
+      if (requestSignal.timeoutMs <= 0) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
+      try {
+        const res = await httpFetch(url, {
+          method,
+          headers: {
+            'Content-Type': contentType,
+            Accept: 'application/json',
+            ...authHeaders(cfg),
+          },
+          body: payload,
+          signal: requestSignal.signal,
+        });
+        status = res.status;
+        text = await res.text();
+      } catch (err) {
+        if (requestSignal.timedOut()) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
+        throw err;
+      } finally {
+        requestSignal.cleanup();
+      }
     }
   } catch (err) {
+    if (isAdoRequestTimeoutError(err)) throw err;
     const raw = err instanceof Error ? err.message : String(err);
     if (/只能在桌面客户端/.test(raw)) throw err;
     throw new Error(
@@ -117,7 +218,7 @@ async function adoRequest<T>(
         ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
         : cfg.auth === 'none' || !cfg.pat?.trim()
           ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
-          : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items / Code / Build 读取）',
+          : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）',
     );
   }
   if (status === 404) {
@@ -283,9 +384,15 @@ const WI_FIELDS = [
   'Microsoft.VSTS.Scheduling.FinishDate',
 ].join(',');
 
-function mapWorkItem(cfg: DirectConfig, w: { id: number; fields: Record<string, any> }) {
+const OPEN_WORK_ITEM_STATE_FILTER =
+  `[System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复')`;
+
+type RawWorkItem = { id: number; rev: number; fields: Record<string, any> };
+
+function mapWorkItem(cfg: DirectConfig, w: RawWorkItem) {
   return {
     id: w.id,
+    revision: w.rev,
     parentId: w.fields['System.Parent'],
     title: w.fields['System.Title'] ?? '',
     type: w.fields['System.WorkItemType'] ?? '',
@@ -344,18 +451,15 @@ export async function directGetMe(cfg: DirectConfig) {
  * 账号字符串匹配格式经常对不上，会把「我的十几个」漏成几个）。
  */
 export async function directGetWorkItems(cfg: DirectConfig, _assignedTo = '', top = 100) {
-  const notDone =
-    `[System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved', '已关闭', '已完成', '已删除', '已移除', '已解决', '已修复')`;
-
   const result = await adoRequest<{ workItems?: { id: number }[] }>(
     cfg,
     'POST',
     `/_apis/wit/wiql?api-version=7.0&$top=${top}`,
-    { query: `SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me AND ${notDone} ORDER BY [System.ChangedDate] DESC` },
+    { query: `SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me AND ${OPEN_WORK_ITEM_STATE_FILTER} ORDER BY [System.ChangedDate] DESC` },
   );
   const ids = (result.workItems ?? []).slice(0, top).map((w) => w.id);
   if (ids.length === 0) return [];
-  const detail = await adoRequest<{ value: { id: number; fields: Record<string, any> }[] }>(
+  const detail = await adoRequest<{ value: RawWorkItem[] }>(
     cfg,
     'GET',
     `/_apis/wit/workitems?ids=${ids.join(',')}&fields=${WI_FIELDS}&api-version=7.0`,
@@ -364,10 +468,12 @@ export async function directGetWorkItems(cfg: DirectConfig, _assignedTo = '', to
 }
 
 export async function directGetWorkItem(cfg: DirectConfig, id: number) {
-  const detail = await adoRequest<{ value: { id: number; fields: Record<string, any> }[] }>(
+  const detail = await adoRequest<{ value: RawWorkItem[] }>(
     cfg,
     'GET',
     `/_apis/wit/workitems?ids=${id}&fields=${WI_FIELDS}&api-version=7.0`,
+    undefined,
+    'application/json',
   );
   const w = detail.value?.[0];
   return w ? mapWorkItem(cfg, w) : null;
@@ -524,7 +630,7 @@ export async function directCreateWorkItem(
   opts?: CreateWorkItemOpts,
 ) {
   const request = createWorkItemRequest(cfg, project, type, title, opts);
-  const result = await adoRequest<{ id: number; fields: Record<string, any> }>(
+  const result = await adoRequest<RawWorkItem>(
     cfg,
     'POST',
     request.path,
@@ -536,20 +642,213 @@ export async function directCreateWorkItem(
 
 export interface UpdateWorkItemStateRequest {
   path: string;
-  body: { op: string; path: string; value: string }[];
+  body: { op: 'test' | 'add'; path: string; value: number | string }[];
   contentType: 'application/json-patch+json';
 }
 
 /** ADO 改状态的可测试请求契约（看板拖拽用，issue #82） */
-export function updateWorkItemStateRequest(id: number, state: string): UpdateWorkItemStateRequest {
+export function updateWorkItemStateRequest(
+  id: number,
+  state: string,
+  expectedRevision?: number,
+): UpdateWorkItemStateRequest {
   const value = state.trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error('工作项编号无效');
   if (!value) throw new Error('目标状态不能为空');
+  if (expectedRevision != null && (!Number.isInteger(expectedRevision) || expectedRevision <= 0)) {
+    throw new Error('期望 revision 无效');
+  }
+  const body: UpdateWorkItemStateRequest['body'] = [];
+  if (expectedRevision != null) body.push({ op: 'test', path: '/rev', value: expectedRevision });
+  body.push({ op: 'add', path: '/fields/System.State', value });
   return {
     path: `/_apis/wit/workitems/${id}?api-version=7.0`,
-    body: [{ op: 'add', path: '/fields/System.State', value }],
+    body,
     contentType: 'application/json-patch+json',
   };
+}
+
+type DirectWorkItem = ReturnType<typeof mapWorkItem>;
+
+export interface ControlledWorkItemStateOptions {
+  expectedRevision: number;
+  expectedState: string;
+}
+
+export interface ControlledWorkItemStateResult {
+  item: DirectWorkItem;
+  changed: boolean;
+}
+
+function normalizeWorkItemState(state: string, field: string): string {
+  const value = state.trim();
+  if (!value) throw new Error(`${field}不能为空`);
+  return value;
+}
+
+function describeWorkItemStateConflict(
+  id: number,
+  item: DirectWorkItem,
+  opts?: ControlledWorkItemStateOptions,
+): string | null {
+  const expectedState = opts?.expectedState.trim();
+  if (expectedState && item.state !== expectedState) {
+    return `工作项 #${id} 状态已从「${expectedState}」变为「${item.state}」，未执行写入`;
+  }
+  if (opts && item.revision !== opts.expectedRevision) {
+    return `工作项 #${id} 已被其他人更新：期望 rev ${opts.expectedRevision}，当前 rev ${item.revision ?? '未知'}`;
+  }
+  return null;
+}
+
+async function directGetWorkItemWithOptions(
+  cfg: DirectConfig,
+  id: number,
+  options?: AdoRequestOptions,
+) {
+  const detail = await adoRequest<{ value: RawWorkItem[] }>(
+    cfg,
+    'GET',
+    `/_apis/wit/workitems?ids=${id}&fields=${WI_FIELDS}&api-version=7.0`,
+    undefined,
+    'application/json',
+    options,
+  );
+  const w = detail.value?.[0];
+  return w ? mapWorkItem(cfg, w) : null;
+}
+
+async function mustGetWorkItemWithOptions(
+  cfg: DirectConfig,
+  id: number,
+  options?: AdoRequestOptions,
+): Promise<DirectWorkItem> {
+  const item = await directGetWorkItemWithOptions(cfg, id, options);
+  if (!item) throw new Error(`工作项 #${id} 不存在或当前账号无权访问`);
+  return item;
+}
+
+function updateWorkItemStateFailure(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  return raw || '未知错误';
+}
+
+export async function directSetWorkItemStateControlled(
+  cfg: DirectConfig,
+  id: number,
+  targetState: string,
+  opts: ControlledWorkItemStateOptions,
+): Promise<ControlledWorkItemStateResult> {
+  const deadlineAt = createAdoDeadline();
+  const writeDeadlineAt = deadlineAt - CONTROLLED_WRITE_READBACK_RESERVE_MS;
+  const nextState = normalizeWorkItemState(targetState, '目标状态');
+  const expectedState = normalizeWorkItemState(opts.expectedState, '期望状态');
+  if (!Number.isInteger(opts.expectedRevision) || opts.expectedRevision <= 0) {
+    throw new Error('期望 revision 无效');
+  }
+  const current = await mustGetWorkItemWithOptions(cfg, id, { deadlineAt });
+  if (current.state === nextState) return { item: current, changed: false };
+
+  const expected = { expectedRevision: opts.expectedRevision, expectedState };
+  const conflict = describeWorkItemStateConflict(id, current, expected);
+  if (conflict) throw new Error(conflict);
+  if (remainingMsUntil(writeDeadlineAt) <= 0) {
+    throw new ControlledWorkItemStateError(
+      'deadline-before-write',
+      `工作项 #${id} 预读已耗尽 15 秒写入时限，未执行写入`,
+    );
+  }
+
+  const request = updateWorkItemStateRequest(id, nextState, expected.expectedRevision);
+  try {
+    await adoRequest<RawWorkItem>(
+      cfg,
+      'PATCH',
+      request.path,
+      request.body,
+      request.contentType,
+      { deadlineAt: writeDeadlineAt },
+    );
+  } catch (err) {
+    const patchTimedOut = isAdoRequestTimeoutError(err);
+    if (remainingMsUntil(deadlineAt) <= 0) {
+      throw new ControlledWorkItemStateError(
+        'write-attempted-unknown',
+        `工作项 #${id} 写入已尝试但 15 秒预算已耗尽，结果暂时无法确认：${updateWorkItemStateFailure(err)}`,
+      );
+    }
+    let reread: DirectWorkItem;
+    try {
+      reread = await mustGetWorkItemWithOptions(cfg, id, { deadlineAt });
+    } catch (readError) {
+      if (isAdoRequestTimeoutError(readError)) {
+        throw new ControlledWorkItemStateError(
+          'readback-timeout',
+          `工作项 #${id} 写入后回读超时，结果暂时无法确认`,
+        );
+      }
+      throw new ControlledWorkItemStateError(
+        'write-attempted-unknown',
+        `工作项 #${id} 写入请求失败且回读也失败，结果暂时无法确认：${updateWorkItemStateFailure(readError)}`,
+      );
+    }
+    if (reread.state === nextState && reread.revision > expected.expectedRevision) {
+      return { item: reread, changed: true };
+    }
+    const failure = updateWorkItemStateFailure(err);
+    const rereadConflict = reread.state !== nextState
+      ? describeWorkItemStateConflict(id, reread, expected)
+      : null;
+    if (/ADO 返回 4\d\d/.test(failure)) {
+      if (rereadConflict) throw new Error(rereadConflict);
+      throw new Error(failure);
+    }
+    if (patchTimedOut) {
+      throw new ControlledWorkItemStateError(
+        'write-attempted-unknown',
+        `工作项 #${id} PATCH 超时；当前远端结果仍需人工确认`,
+      );
+    }
+    throw new ControlledWorkItemStateError(
+      'write-attempted-unknown',
+      `工作项 #${id} 状态更新结果暂时无法确认：${rereadConflict ?? failure}`,
+    );
+  }
+
+  let reread: DirectWorkItem;
+  if (remainingMsUntil(deadlineAt) <= 0) {
+    throw new ControlledWorkItemStateError(
+      'readback-timeout',
+      `工作项 #${id} PATCH 已提交，但 15 秒预算内来不及回读确认`,
+    );
+  }
+  try {
+    reread = await mustGetWorkItemWithOptions(cfg, id, { deadlineAt });
+  } catch (readError) {
+    if (isAdoRequestTimeoutError(readError)) {
+      throw new ControlledWorkItemStateError(
+        'readback-timeout',
+        `工作项 #${id} PATCH 已提交但回读超时，结果暂时无法确认`,
+      );
+    }
+    throw new ControlledWorkItemStateError(
+      'write-attempted-unknown',
+      `工作项 #${id} PATCH 已提交但回读失败，结果暂时无法确认：${updateWorkItemStateFailure(readError)}`,
+    );
+  }
+  if (reread.state !== nextState) {
+    throw new ControlledWorkItemStateError(
+      'write-attempted-unknown',
+      `工作项 #${id} PATCH 后回读仍为「${reread.state}」，期望「${nextState}」`,
+    );
+  }
+  if (reread.revision <= expected.expectedRevision) {
+    throw new ControlledWorkItemStateError(
+      'write-attempted-unknown',
+      `工作项 #${id} PATCH 后 revision 未前进，结果暂时无法确认：当前 rev ${reread.revision ?? '未知'}`,
+    );
+  }
+  return { item: reread, changed: true };
 }
 
 /**
@@ -558,7 +857,7 @@ export function updateWorkItemStateRequest(id: number, state: string): UpdateWor
  */
 export async function directUpdateWorkItemState(cfg: DirectConfig, id: number, state: string) {
   const request = updateWorkItemStateRequest(id, state);
-  const result = await adoRequest<{ id: number; fields: Record<string, any> }>(
+  const result = await adoRequest<RawWorkItem>(
     cfg,
     'PATCH',
     request.path,
@@ -798,7 +1097,7 @@ export async function directRunSavedQuery(
   for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
   const all = await Promise.all(
     chunks.map((chunk) =>
-      adoRequest<{ value: { id: number; fields: Record<string, any> }[] }>(
+      adoRequest<{ value: RawWorkItem[] }>(
         cfg,
         'GET',
         `/_apis/wit/workitems?ids=${chunk.join(',')}&fields=${WI_FIELDS}&api-version=7.0`,

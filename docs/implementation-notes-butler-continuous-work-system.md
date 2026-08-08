@@ -29,10 +29,10 @@ Plan: `docs/butler-continuous-work-system-design.md`
 | Suggestion 转持续责任并可撤销 | Rounds snooze/restore + Todo add/remove | 完成 |
 | Task / Decision / Run 统一投影 | `butlerWorkspace` + `ButlerTasksView` + `ButlerErrandRunCard` | 完成 |
 | Routine 健康、运行、配置、版本 | `ButlerRoutines` 四页签、真实 contract versions 和 rollback | 完成 |
-| 对话与 Artifact 协作 | `butlerArtifacts` + `ButlerArtifactsPanel`，长输出自动沉淀 | 完成 |
+| 对话保持聊天主线 | 回答完整留在 `ButlerConversation`；业务动作由自然语言触发确认卡，不增加成果工作面 | 完成 |
 | 可见记忆与连接边界 | 复用 `ButlerLearnedPanel` / `ButlerAuditTrail`，新增 `ButlerConnectionsPanel` | 完成 |
 | 全新账号首次价值 | 无状态时显示三条真实入口，启用首个守护后进入正常工作区 | 完成 |
-| 重启与账号隔离 | Attention、Artifact、Errand Run 加入 account scope；中断执行安全恢复 | 完成 |
+| 重启与账号隔离 | Attention、Errand Run 加入 account scope；中断执行安全恢复 | 完成 |
 | 390 / 768 / 1440 视觉与交互 | Butler 专属解除旧 940px 最小宽度；Playwright 三档快照，Routine 独立快照 | 完成 |
 
 ## Surprises
@@ -40,6 +40,7 @@ Plan: `docs/butler-continuous-work-system-design.md`
 - 2026-07-28：当前 `ButlerPage` 仍是 760px “今日纸面”，管理和完整对话通过两个布尔状态互斥切换；与已确认的六视图主动驾驶舱存在结构性差距。见 `apps/web/src/pages/ButlerPage.tsx`。
 - 2026-07-28：已有主动能力分散在 `butlerPoller.ts`、`butlerRoundsRunner.ts`、`routines.ts` 和 `butlerLedger.ts`，且部分状态仍在账户作用域的 `localStorage`，不能直接把任一模块当作统一责任核心。
 - 2026-07-28：现有 ButlerErrandRun 原本只在进程内保存；若直接把 approval 持久化，重启后会出现“按钮还在但 waiter 已不存在”的假 Decision。实现选择显式失败恢复，而不是恢复一个不可执行的批准按钮。
+- 2026-07-31：按“聊天为主”的产品定位移除语义不清的成果工作面及“转为成果”入口；旧存储键仅保留在账号清理白名单中，不主动删除用户历史数据。
 
 ## Questions for review
 

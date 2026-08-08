@@ -8,17 +8,12 @@ import {
   type ButlerProfileStorage,
   type ButlerQuarantinedLegacyMemoryEntry,
 } from './butlerArchive';
+import { bundledButlerSkills } from './butlerBundledSkills';
 import { buildButlerIdentityInstructions, readButlerIdentity } from './butlerIdentity';
+import type { ButlerSkill } from './butlerSkill';
 
 export type { ButlerProfileStorage, ButlerQuarantinedLegacyMemoryEntry } from './butlerArchive';
-
-export interface ButlerSkill {
-  name: string;
-  description: string;
-  body: string;
-}
-
-export type ButlerSkillProvider = () => readonly ButlerSkill[];
+export type { ButlerSkill } from './butlerSkill';
 
 const STORAGE_PREFIX = 'rcx-butler-v1:';
 const LEGACY_MEMORY_STORAGE_KEY = 'rcx-butler-v1:memory';
@@ -26,32 +21,28 @@ const ACTIVE_MEMORY_V2_STORAGE_KEY = 'rcx-butler-v2:memory';
 const PERSONA_KEY = 'persona';
 const SKILLS_KEY = 'skills';
 const DISABLED_SKILLS_KEY = 'disabled-skills';
+const NATIVE_SKILL_CONFIG_MIGRATED_KEY = 'native-skill-config-migrated-v1';
 
 export const BUTLER_PROVIDER_ERROR = '尚未配置 AI Provider，可在设置页添加；快速搜索与查询不受影响。';
 export const AZURE_DEVOPS_SERVER_SKILL_NAME = 'azure-devops-server';
 export const AZURE_DEVOPS_SERVER_SKILL_REVISION =
-  '293b09774cf9d1ef880a889baf212a9b661e0a75:0cc00597153f26ab6ec7e50197dbae82ffb35206';
-const AZURE_DEVOPS_SERVER_API_SKILL: ButlerSkill = {
-  name: AZURE_DEVOPS_SERVER_SKILL_NAME,
-  description: 'Azure DevOps Server 只读查询：通过 RocketX 托管 CLI 读取项目、代码、工作项、构建、Wiki 和测试数据。',
-  body: `Azure DevOps Server 只读查询
-
-1. 只调用 \`run_azure_devops_server_cli\`，不要直接执行 PowerShell、命令行或网络请求。
-2. 把查询拆成单个 GET 请求，按工具参数传入 \`area\`、\`resource\`、可选的 \`project\`、\`team\`、\`query\` 和 \`apiVersion\`。
-3. 集合级项目列表使用 \`resource: "projects"\`；代码仓库和拉取请求使用 \`area: "git"\`；工作项使用 \`area: "wit"\`；构建使用 \`area: "build"\`。
-4. 需要多步读取时，先用列表或详情请求取得 ID，再发下一次只读请求；所有结论只基于工具返回值。
-5. 不请求写操作，不索取或输出凭据；工具报告能力、版本或认证不足时，明确说明缺失条件。`,
-};
+  '293b09774cf9d1ef880a889baf212a9b661e0a75:0cc00597153f26ab6ec7e50197dbae82ffb35206:read-post-v1';
+export const BUTLER_MEMORY_SKILL_UPSTREAM = {
+  repository: 'https://github.com/mem0ai/mem0',
+  revision: '74f6dc6f0d60906c4babf762fc8d14b7169c196c',
+  license: 'Apache-2.0',
+} as const;
+const [AZURE_DEVOPS_SERVER_API_SKILL] = bundledButlerSkills('host');
 
 export const DEFAULT_PERSONA = `你是 RocketX 中的 AI，服务于 GTD 与注意力保护。
 
-默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时，先基于当前上下文和业务工具查证；需要跨会话偏好、alias、纠错或承诺时，再调用 recall_memory。出现多个候选时列出证据，请用户二选一。绝不编造数据。
+默认回答简洁，先查证据再回答。找不到时明确说没找到，并给出下一步建议。涉及人名、时间等模糊指代时，先基于当前上下文和业务工具查证；需要跨会话偏好、alias、纠错或承诺时，遵循 butler-memory Skill。出现多个候选时列出证据，请用户二选一。绝不编造数据。
 
-只有 alias、偏好、用户已明确确认且需要跨会话延续的承诺，才允许写入长期记忆。不要把 PR、构建、日程、工作项、待办或其他可查询的动态状态写入长期记忆；没有确认的意图、猜测中的计划也不要长期保存。用户表达主动简报应多盯或少报什么时，确认后用 remember 写入 preference 记忆，subject 以 brief: 开头（例如 brief:构建），主动简报会读取这类偏好。
+长期记忆的硬边界不变：只有 alias、偏好、用户已明确确认且需要跨会话延续的承诺可以持久化；PR、构建、日程、工作项、待办和其他可查询的动态状态不得写入。
 
 输出格式：用**粗体小标题**和短列表组织内容；不使用 markdown 表格、水平分隔线（---）和 #/## 标题（渲染环境不支持）；每条列表项一行内说完。提到工作项、PR 或构建时，优先直接使用工具结果里的 webUrl 写成 [工作项 #编号 · 标题](webUrl)、[PR #编号 · 标题](webUrl) 或 [构建 #编号 · 定义名](webUrl)；没有 webUrl 时明确说明缺少链接，禁止只写孤立 #数字。`;
 
-const TOOL_CAPABILITIES = '你可以查询消息、联系人与会话、待办、日程、工作项、拉取请求和构建，并可通过受控 Azure DevOps Server CLI 执行只读查询。';
+const TOOL_CAPABILITIES = '业务工具只作为 Skill 的底层数据与审批适配器。消息、联系人、待办、日程和当前对话派活按适用 Skill 查询；Azure DevOps Server 事实只由 azure-devops-server Skill 通过 RocketX 业务 MCP 实时读取，不读取工作台已加载快照。';
 const CITATION_INSTRUCTIONS = [
   '使用工具回答事实时，每条事实性结论都要在对应句末附上它实际使用的来源链接。',
   '链接只能原样取自工具结果的 link 或 webUrl 字段，写成 [来源](链接)；一条结论使用多个来源时分别附上多个链接。',
@@ -66,77 +57,24 @@ const CITATION_INSTRUCTIONS = [
  */
 const ERRAND_SURFACE = [
   '关于派活：你用 draft_errand 拟规格卡，用户在卡上选工作区并确认后才真正开跑。',
+  '用户询问派出去的活现在怎样时，调用 list_errands；用户补充要求、纠正方向或说“继续刚才那件事”时，调用 steer_errand 继续原任务，绝不另拟一张新任务卡。',
   '开跑后一切都留在管家界面：进度、需要用户点头的请求、以及最终结果都显示在「派出去的活」卡片上，用户直接在卡上点「让它跑 / 这次不行」即可。',
   '用户离开管家页时，导航栏「管家」会出现小圆点提醒。',
   '**不要让用户去执行间**——执行间只是想看命令级细节时的可选去处，不是查看进度或批准的地方。',
 ].join('\n');
 
-export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] = [
-  {
-    name: 'morning-brief',
-    description: '晨报：综合消息、待办、日程、工作项、PR 和构建安排今天。',
-    body: `晨报
+const ACTION_SURFACE = [
+  '关于把回答变成动作：用户明确说“把这个转成待办”“帮我拟回复”“帮我回复”“发出去”“记成承诺”“建 ADO”或“交给 Codex”时，调用 draft_action，不要只描述操作步骤。',
+  '“建 ADO”仍是创建一个新工作项；如果用户说“把 #123 改成已解决”这类修改既有工作项状态的话，调用 draft_ado_state，而不是 draft_action。',
+  '“帮我拟回复”对应 kind=reply，只放原会话编辑框；“帮我回复”或“发出去”对应 kind=send，必须经过确认卡后才真正发送。',
+  'draft_action 和 draft_ado_state 都只打开一张可编辑确认卡；用户确认前不得声称已经创建、发送、记录、改好状态或交接。',
+].join('\n');
 
-目标是回答“今天先处理什么”，只基于工具返回的数据给出判断，不做流水账。
-
-1. 调用 \`list_mentions\`、\`list_todos\`；调用 \`list_calendar\` 时把当前日期同时作为 \`from\` 和 \`to\`，找出需回应的消息、到期事项和时间冲突。
-2. 调用 \`list_work_items\`、\`list_pull_requests\` 和 \`list_builds\`，检查分配给我的工作、待我评审/我提的 PR、失败或进行中的构建。
-3. 如需历史偏好、alias 或确认过的承诺，调用 \`recall_memory\`；所有工作状态必须以工具当次返回为准。
-4. 先归纳 2-3 条判断：今天必须先回应什么、先推进什么、哪里最可能拖慢交付；判断要说“为什么”，不要只抄列表。
-5. 输出四段：**今日判断**、**优先顺序**、**代码与交付风险**、**可顺手处理**。每段用一行粗体小标题开头，下面跟短列表；禁止表格与分隔线。
-6. 工作项、PR、构建都必须带标题和工具返回的真实 \`webUrl\`，例如 [工作项 #123 · 补齐回滚说明](webUrl)；没有 \`webUrl\` 时明确标注缺少链接，禁止裸写 #编号。只保留最值得处理的 3-5 条，同类项合并表达。`,
-  },
-  {
-    name: 'evening-review',
-    description: '晚间回顾：综合消息、任务和交付状态盘点未完成承诺。',
-    body: `晚间回顾
-
-目标是回答“今天欠什么”，不猜测未查询到的事项。
-
-1. 调用 \`list_mentions\`、\`list_todos\`；调用 \`list_calendar\` 时把当前日期同时作为 \`from\` 和 \`to\`，找出今天没回应、没完成或已过时的事。
-2. 调用 \`list_work_items\`、\`list_pull_requests\` 和 \`list_builds\`，找出仍在进行、待评审、失败或阻塞交付的项。
-3. 如需历史偏好、alias 或确认过的承诺，调用 \`recall_memory\`；不要把动态工作数据写入记忆。
-4. 输出 **未回应**、**未完成**、**交付风险** 三段；每条给出顺延、完成、放弃或明日首先处理之一的明确建议。`,
-  },
-  {
-    name: 'weekly-report',
-    description: '周报：按项目汇总本周的 PR、工作项和构建。',
-    body: `周报
-
-目标是形成可直接发送的周报骨架，所有结论都应可追溯到工具结果。
-
-1. 调用 \`list_pull_requests\`、\`list_work_items\` 和 \`list_builds\` 获取本周相关数据。
-2. 按项目分组；PR 只有仓库信息时，归入能确定的项目，否则标为“未归类”。
-3. 每个项目依次输出 **本周进展**、**风险**、**下周计划骨架**；每段用一行粗体小标题开头，下面跟短列表；禁止表格与分隔线；每条列表项一行内说完。风险优先列出失败构建和阻塞中的工作项。`,
-  },
-  {
-    name: 'pr-comparison',
-    description: '比较 PR：对比两个或多个 PR 的改动、风险与评审顺序建议。',
-    body: `比较 PR
-
-目标是给出可直接行动的比较结论，不是罗列 PR 元数据；所有结论必须可追溯到工具返回或差异内容。引用 PR 一律写成 [#编号](webUrl)，webUrl 只能取自 \`list_pull_requests\` 返回的同名字段——禁止自行拼接 URL，也不要写裸 #编号（裸写会被界面当成工作项编号渲染）。
-
-1. 用户没给出明确 PR 编号时，调用 \`list_pull_requests\` 列出候选；候选多于 3 个时，先问一个带证据的封闭题（列出编号+标题让用户选），只问一次。
-2. 已确定比较对象后，加载 azure-devops-server 技能，按其流程用 \`run_azure_devops_server_cli\` 读取各 PR 的 iterations 与累计文件变更；只读与结论相关的内容，不猜没读到的部分。
-3. 输出三段：**差异摘要**（每个 PR 一行：[#编号](webUrl)、改了什么层面、规模、涉及模块）、**冲突与风险**（改动重叠的文件、相互依赖或合并顺序约束；没有就明说没有）、**建议**（先看/先合哪个，一句话理由）。若某个 PR 没有 webUrl，就只写 PR 编号并说明缺少链接。
-4. 差异取不到（权限/超限）时，降级为基于元数据的比较并明确标注“未读取差异内容”；禁止编造文件级结论。每段用一行粗体小标题开头，下面跟短列表；禁止表格与分隔线。`,
-  },
-  {
-    name: 'commitment-extraction',
-    description: '提取承诺：从群聊/频道消息中找出谁答应了什么、何时兑现。',
-    body: `提取承诺
-
-目标是把口头承诺变成可核对的清单，宁可漏报不可错报；每条必须附原文链接——只使用 \`search_messages\` 返回的 link 字段，格式 [原文](link)；返回里没有 link 就不给链接，禁止拼造。
-
-1. 调用 \`search_messages\` 检索目标范围（房间/人/时段）；用户没说清范围时，先问一个封闭题确认（哪个群/多久以内），只问一次。
-2. 承诺判定标准：发言人以第一人称明确认领可交付事项（“我来/我会/明天给你/这周内搞定”）。转述他人、假设句、引用旧消息、疑问句不算承诺。
-3. 输出两段：**明确承诺**（每条一行：谁 · 答应什么 · 期限（原话没说就写“未给期限”） · [原文](link)）、**疑似**（语义模糊但值得确认的，同样带链接；没有就省略此段）。
-4. 只依据检索到的消息，禁止推断检索范围外的承诺；搜索结果为空就直说没找到，并说明检索了什么范围。每段用一行粗体小标题开头，下面跟短列表；禁止表格与分隔线。`,
-  },
-];
+export const BUILT_IN_BUTLER_SKILLS: readonly ButlerSkill[] =
+  bundledButlerSkills('core');
 
 let profileStorage: ButlerProfileStorage = butlerArchiveStorage;
-const skillProviders = new Map<string, ButlerSkillProvider>();
+let nativeSkillEnabled = new Map<string, boolean>();
 
 function storageKey(key: string): string {
   return `${STORAGE_PREFIX}${key}`;
@@ -175,26 +113,8 @@ function disabledSkillNames(): string[] {
     typeof name === 'string' && !!name.trim()))];
 }
 
-function providedSkills(): ButlerSkill[] {
-  return [...skillProviders.values()].flatMap((provider) =>
-    provider().map((skill) => ({ ...skill })));
-}
-
-export function registerButlerSkillProvider(
-  id: string,
-  provider: ButlerSkillProvider,
-): () => void {
-  const normalizedId = id.trim();
-  if (!normalizedId) throw new Error('Butler Skill provider id 不能为空');
-  skillProviders.set(normalizedId, provider);
-  return () => {
-    if (skillProviders.get(normalizedId) === provider) skillProviders.delete(normalizedId);
-  };
-}
-
 export function isButlerBuiltInSkill(name: string): boolean {
-  return [...BUILT_IN_BUTLER_SKILLS, ...providedSkills()]
-    .some((skill) => skill.name === name);
+  return BUILT_IN_BUTLER_SKILLS.some((skill) => skill.name === name);
 }
 
 function isHostManagedSkill(name: string): boolean {
@@ -211,17 +131,17 @@ function isNativeSkill(skill: ButlerSkill): boolean {
 }
 
 function syncWorkspace(): void {
-  for (const name of disabledSkillNames()) {
-    void removeButlerArchiveSkillFile(name).catch(() => undefined);
-  }
-  void mirrorButlerWorkspaceFiles(getPersona(), listEnabledSkills());
+  void mirrorButlerWorkspaceFiles(getPersona(), listSkills());
 }
 
 export function setButlerProfileStorage(storage: ButlerProfileStorage): () => void {
   const previous = profileStorage;
+  const previousNativeSkillEnabled = nativeSkillEnabled;
   profileStorage = storage;
+  nativeSkillEnabled = new Map();
   return () => {
     profileStorage = previous;
+    nativeSkillEnabled = previousNativeSkillEnabled;
   };
 }
 
@@ -266,10 +186,8 @@ export function resetPersona(): void {
 }
 
 export function listSkills(): ButlerSkill[] {
-  const builtIn = [...BUILT_IN_BUTLER_SKILLS, ...providedSkills()];
-  const uniqueBuiltIn = [...new Map(builtIn.map((skill) => [skill.name, skill])).values()];
   return [
-    ...uniqueBuiltIn.map((skill) => ({ ...skill })),
+    ...BUILT_IN_BUTLER_SKILLS.map((skill) => ({ ...skill })),
     ...userSkills()
       .filter((skill) => !isButlerBuiltInSkill(skill.name) && !isHostManagedSkill(skill.name))
       .map((skill) => ({ ...skill })),
@@ -278,7 +196,8 @@ export function listSkills(): ButlerSkill[] {
 
 export function listEnabledSkills(): ButlerSkill[] {
   const disabled = new Set(disabledSkillNames());
-  return listSkills().filter((skill) => !disabled.has(skill.name));
+  return listSkills().filter((skill) =>
+    nativeSkillEnabled.get(skill.name) ?? !disabled.has(skill.name));
 }
 
 export function isButlerSkillEnabled(name: string): boolean {
@@ -293,7 +212,31 @@ export function setSkillEnabled(name: string, enabled: boolean): void {
   if (enabled) disabled.delete(name);
   else disabled.add(name);
   writeJson(DISABLED_SKILLS_KEY, [...disabled]);
+  nativeSkillEnabled.set(name, enabled);
   syncWorkspace();
+}
+
+export function setButlerNativeSkillStates(
+  skills: readonly { name: string; enabled: boolean }[],
+): void {
+  nativeSkillEnabled = new Map(skills.map((skill) => [skill.name, skill.enabled]));
+}
+
+export function clearButlerNativeSkillStates(): void {
+  nativeSkillEnabled = new Map();
+}
+
+export function legacyButlerSkillConfigMigration(): {
+  disabledNames: string[];
+} | undefined {
+  if (profileStorage.get(storageKey(NATIVE_SKILL_CONFIG_MIGRATED_KEY)) === '1') {
+    return undefined;
+  }
+  return { disabledNames: disabledSkillNames() };
+}
+
+export function markButlerSkillConfigMigrated(): void {
+  profileStorage.set(storageKey(NATIVE_SKILL_CONFIG_MIGRATED_KEY), '1');
 }
 
 export function canUseNativeButlerSkill(name: string): boolean {
@@ -323,13 +266,14 @@ export function removeSkill(name: string): void {
   if (isHostManagedSkill(name)) throw new Error('RocketX 托管技能不可修改');
   writeJson(SKILLS_KEY, userSkills().filter((skill) => skill.name !== name));
   writeJson(DISABLED_SKILLS_KEY, disabledSkillNames().filter((skillName) => skillName !== name));
+  nativeSkillEnabled.delete(name);
   syncWorkspace();
   void removeButlerArchiveSkillFile(name).catch(() => undefined);
 }
 
 export function loadButlerSkill(name: string): string {
   if (listSkills().some((skill) => skill.name === name) && !isButlerSkillEnabled(name)) {
-    return `技能已停用：${name}。请先在“我的管家 → 记忆与技能”中重新启用。`;
+    return `技能已停用：${name}。请先在“技能中心”中重新启用。`;
   }
   const skills = [...listEnabledSkills(), AZURE_DEVOPS_SERVER_API_SKILL];
   const skill = skills.find((item) => item.name === name);
@@ -340,6 +284,7 @@ export function loadButlerSkill(name: string): string {
 export function friendlyButlerError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/unconfigured|尚未配置路由|Provider 不存在/iu.test(message)) return BUTLER_PROVIDER_ERROR;
+  if (/^(?:未安装 Skill|Skill 已停用)：/u.test(message)) return message;
   return 'AI 暂时无法回答，请稍后重试。';
 }
 
@@ -358,6 +303,7 @@ export function buildButlerApiSystemPrompt(): string {
     '需要使用某技能的方法论时，先调用 load_skill 工具取其正文再照做。',
   ].join('\n'));
   sections.push(TOOL_CAPABILITIES);
+  sections.push(ACTION_SURFACE);
   return sections.join('\n\n');
 }
 
@@ -366,18 +312,10 @@ export function buildButlerCodexBaseInstructions(): string {
     '你是 RocketX 托管的管家 Agent。',
     buildButlerIdentityInstructions(),
     '遵守当前工作目录中的 AGENTS.md。',
-    '优先使用其中发现的原生 Agent Skills。',
+    '所有可重复的业务行为都先由其中发现的原生 Agent Skills 决定方法、追问和工具顺序。自然语言默认使用 Codex 隐式 Skill 发现；只有用户显式输入 $skill 时才固定使用对应 Skill。不要根据宿主任务标签自行选择或替代 Skill。',
   ];
-  const enabled = new Set(listEnabledSkills().map((skill) => skill.name));
-  const legacySkills = userSkills().filter((skill) =>
-    enabled.has(skill.name) && !isButlerBuiltInSkill(skill.name) && !isNativeSkill(skill));
-  if (legacySkills.length > 0) {
-    sections.push([
-      '以下旧 legacy 技能尚未原生化；只有遇到它们时才调用 load_skill 读取正文：',
-      ...legacySkills.map((skill) => `- ${skill.name}：${skill.description}`),
-    ].join('\n'));
-  }
   sections.push(TOOL_CAPABILITIES);
+  sections.push(ACTION_SURFACE);
   sections.push(ERRAND_SURFACE);
   sections.push(CITATION_INSTRUCTIONS);
   sections.push('业务事实只能来自 RocketX 提供的工具；工作目录不是业务数据库。');
@@ -392,7 +330,12 @@ export function butlerWorkspaceRevision(): string {
   return JSON.stringify({
     identity: readButlerIdentity(),
     persona: getPersona(),
-    skills: listEnabledSkills().map(({ name, description, body }) => ({ name, description, body })),
+    skills: listEnabledSkills().map((skill) =>
+      skill.source ?? {
+        name: skill.name,
+        description: skill.description,
+        body: skill.body,
+      }),
     hostSkills: [{
       name: AZURE_DEVOPS_SERVER_SKILL_NAME,
       revision: AZURE_DEVOPS_SERVER_SKILL_REVISION,

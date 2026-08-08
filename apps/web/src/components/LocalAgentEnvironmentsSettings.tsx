@@ -20,7 +20,7 @@ export default function LocalAgentEnvironmentsSettings() {
     if (!isTauri) return;
     setAdding(true);
     try {
-      const path = await open({ directory: true, multiple: false, title: '选择 Agent 本地环境' });
+      const path = await open({ directory: true, multiple: false, title: '选择本地工作区' });
       if (typeof path !== 'string') return;
       addEnvironment({
         name: path.split(/[\\/]/).filter(Boolean).at(-1) || '本地环境',
@@ -29,9 +29,9 @@ export default function LocalAgentEnvironmentsSettings() {
         defaultBaseBranch: 'main',
         branchPrefix: 'ai/',
       });
-      toast.success('本地环境已添加');
+      toast.success('本地工作区已添加');
     } catch (error) {
-      toast.error(error, '添加本地环境失败');
+      toast.error(error, '添加本地工作区失败');
     } finally {
       setAdding(false);
     }
@@ -41,15 +41,17 @@ export default function LocalAgentEnvironmentsSettings() {
     <section>
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-ink">AI 工作目录</h2>
-          <p className="mt-0.5 text-xs text-ink-3">添加代码目录后，即可从工作项创建 AI 讨论。</p>
+          <h2 className="text-sm font-semibold text-ink">本地工作区</h2>
+          <p className="mt-0.5 max-w-xl text-xs leading-5 text-ink-3">
+            添加允许管家派活和 AI 托管访问的代码目录。目录只保存在本机，模型不能自行添加。
+          </p>
         </div>
         <button
           onClick={() => void chooseAndAdd()}
           disabled={!isTauri || adding}
           className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
         >
-          <Plus size={14} /> 添加目录
+          <Plus size={14} /> 添加本地工作区
         </button>
       </div>
 
@@ -149,7 +151,7 @@ export default function LocalAgentEnvironmentsSettings() {
         })}
         {environments.length === 0 ? (
           <div className="rounded-lg border border-dashed border-line bg-surface px-4 py-8 text-center text-sm text-ink-3">
-            添加一个代码目录即可开始，其他设置会自动使用默认值。
+            还没有本地工作区。添加一个代码目录后，管家就能把独立工作派到这里。
           </div>
         ) : null}
       </div>

@@ -4,7 +4,8 @@ import { BUTLER_AUDIT_UPDATED_EVENT } from '../lib/butlerActions';
 import { kernelStore } from '../kernel/store';
 
 const KIND_LABELS: Record<string, string> = {
-  reply: '回复草稿', todo: '待办', commitment: '承诺', ado: 'ADO 工作项', codex: 'Codex 交接',
+  reply: '回复草稿', send: '发送回复', todo: '待办', commitment: '承诺', ado: 'ADO 工作项',
+  'ado-state': 'ADO 状态修改', codex: 'Codex 交接',
 };
 const STATUS_LABELS: Record<string, string> = {
   proposed: '已提议', cancelled: '已取消', executed: '已执行', failed: '执行失败',

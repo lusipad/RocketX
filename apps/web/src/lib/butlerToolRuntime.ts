@@ -257,14 +257,17 @@ export function recoverButlerToolCheckpoint(
   now = Date.now(),
 ): ButlerToolCheckpoint {
   if (checkpoint.status !== 'running') return checkpoint;
+  const adoStateWrite = checkpoint.capability === 'ado.work-items.state.write';
   return {
     ...checkpoint,
     status: 'failed',
     updatedAt: now,
     error: {
       kind: 'recovery',
-      message: '上次做到一半断了。先确认这件事是不是已经做过一半，再决定要不要重来。',
-      retryable: true,
+      message: adoStateWrite
+        ? '上次 ADO 状态写入在结果确认前中断了，结果未知；请重新读取新卡并先核对远端工作项。'
+        : '上次做到一半断了。先确认这件事是不是已经做过一半，再决定要不要重来。',
+      retryable: !adoStateWrite,
     },
   };
 }
@@ -328,6 +331,9 @@ export async function beginButlerToolCheckpoint(
   if (current.status === 'running') throw new Error('工具正在执行，不能重复提交');
   if (current.status === 'completed') return current;
   if (current.status === 'cancelled') throw new Error('工具调用已取消');
+  if (current.status === 'failed' && current.error?.retryable === false) {
+    throw new Error(current.error.message || '工具上次执行结果未知，不能直接重试');
+  }
   const running: ButlerToolCheckpoint = {
     ...current,
     status: 'running',

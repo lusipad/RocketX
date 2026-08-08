@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { tsMs } from '@rcx/rc-client';
-import { AtSign, SendHorizontal, Smile } from 'lucide-react';
+import { AtSign, Bell, BellOff, SendHorizontal, Smile } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
@@ -21,6 +21,7 @@ export default function ThreadPanel() {
   const rootId = useChat((s) => (s.rightPanel?.kind === 'thread' ? s.rightPanel.mid : null));
   const all = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const send = useChat((s) => s.send);
+  const toggleThreadFollow = useChat((s) => s.toggleThreadFollow);
   const runSlash = useChat((s) => s.runSlash);
   const emitTyping = useChat((s) => s.emitTyping);
   const myId = useAuth((s) => s.user?._id);
@@ -30,6 +31,7 @@ export default function ThreadPanel() {
 
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +39,9 @@ export default function ThreadPanel() {
   const replies = useMemo(
     () => (all ?? []).filter((m) => m.tmid === rootId).sort((a, b) => tsMs(a.ts) - tsMs(b.ts)),
     [all, rootId],
+  );
+  const following = !!myId && !!root && (
+    root.replies?.includes(myId) || (!root.tcount && root.u._id === myId)
   );
 
   // 切换话题时清空草稿并聚焦
@@ -113,6 +118,30 @@ export default function ThreadPanel() {
       }
     >
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+        {root && (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-line bg-surface-2 px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-ink">
+                {following ? '已关注讨论串' : '未关注讨论串'}
+              </div>
+              <div className="text-xs text-ink-3">只有关注后，普通新回复才会提醒你</div>
+            </div>
+            <button
+              type="button"
+              disabled={!myId || followLoading}
+              aria-label={following ? '取消关注讨论串' : '关注讨论串'}
+              title={following ? '关闭此讨论串提醒' : '接收此讨论串的新回复提醒'}
+              onClick={() => {
+                setFollowLoading(true);
+                void toggleThreadFollow(rootId, !following).finally(() => setFollowLoading(false));
+              }}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {following ? <BellOff size={14} /> : <Bell size={14} />}
+              {following ? '关闭提醒' : '关注'}
+            </button>
+          </div>
+        )}
         {root ? (
           <>
             <MessageItem message={root} mine={root.u._id === myId} grouped={false} inThread />

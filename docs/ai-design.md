@@ -1,6 +1,13 @@
-# RocketChatX · AI 管家设计（现行）
+# RocketChatX · AI 管家设计（历史方案：v3「对账员」）
 
-> 状态：现行 · 2026-07-19 · **v3「对账员」修订**
+> 状态：历史记录 · 2026-07-19。本文保留规则管家被证伪后转向“判断力”的产品依据，
+> 但不再是 `v0.36.5` 的实现合同。当前实现以
+> [个人 Agent 重构计划](butler-personal-agent-restructure-plan.md)、
+> [Codex 原生 Skill 与 Marketplace](codex-native-skill-marketplace-review.md)、
+> [业务 MCP 迁移说明](implementation-notes-codex-business-mcp-migration.md)、
+> [自然 Skill 学习说明](implementation-notes-butler-natural-skill-learning.md)和
+> [首次引导改造说明](implementation-notes-onboarding-redesign.md)为准。
+>
 > 取代：本文件前身 v2（规则引擎设计）——v2 已完整实现并经 dogfooding **证伪**：确定性规则
 > 产出机械噪音（CI 失败被后续成功覆盖仍在提醒、工作项只改分组标签也提醒），用户被训练到
 > 不再看管家页。v1（L0–L5 阶梯、简报流）此前已废弃于 `ai-proactivity-design.md`。

@@ -4,7 +4,12 @@ import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { useAuth } from './auth';
 import { useChat } from './chat';
-import { AppServerClient, TauriCodexTransport, type ServerRequestPolicy } from '../agent/protocol';
+import {
+  AppServerClient,
+  TauriCodexTransport,
+  type AppServerClientOptions,
+  type ServerRequestPolicy,
+} from '../agent/protocol';
 import { agentDeviceId } from '../agent/device';
 import {
   agentSessionCardMatchesMessage,
@@ -151,6 +156,19 @@ const clients = new Map<string, AppServerClient>();
 const clientStarts = new Map<string, Promise<AppServerClient>>();
 let restoredScope = '';
 let restoreGeneration = 0;
+
+type SharedAgentClientFactory = (
+  sessionId: string,
+  workspaceRoot: string,
+  options: AppServerClientOptions,
+) => Promise<AppServerClient>;
+
+let sharedAgentClientFactory: SharedAgentClientFactory = async (sessionId, workspaceRoot, options) => {
+  if (!isTauri) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
+  const client = new AppServerClient(new TauriCodexTransport(sessionId, workspaceRoot), options);
+  await client.start();
+  return client;
+};
 
 function emptySharedAgentScope() {
   return {
@@ -387,10 +405,11 @@ function onInterrupted(tmid: string, error: Error): void {
   clientStarts.delete(tmid);
   const session = useSharedAgent.getState().sessions[tmid];
   if (session && session.status !== 'ended') {
-    const interrupted = interruptSession(session);
+    const detail = redactAgentOutput(error.message).text;
+    const interrupted = { ...interruptSession(session), lastError: detail };
     updateSession(interrupted);
     void updateLeaseCard(interrupted).catch(() => undefined);
-    trace(tmid, 'error', error.message);
+    trace(tmid, 'error', detail);
   }
   for (const [itemId, tracked] of fileChangePaths) {
     if (tracked.threadId === session?.codexThreadId) fileChangePaths.delete(itemId);
@@ -411,21 +430,16 @@ function onInterrupted(tmid: string, error: Error): void {
 }
 
 async function ensureClient(session: AgentSession): Promise<AppServerClient> {
-  if (!isTauri) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
   const current = clients.get(session.tmid);
   if (current) return current;
   const pending = clientStarts.get(session.tmid);
   if (pending) return pending;
   const start = (async () => {
-    const next = new AppServerClient(
-      new TauriCodexTransport(session.sessionId, session.workspaceRoots[0]),
-      {
-        onNotification,
-        onServerRequest,
-        onInterrupted: (error) => onInterrupted(session.tmid, error),
-      },
-    );
-    await next.start();
+    const next = await sharedAgentClientFactory(session.sessionId, session.workspaceRoots[0], {
+      onNotification,
+      onServerRequest,
+      onInterrupted: (error) => onInterrupted(session.tmid, error),
+    });
     clients.set(session.tmid, next);
     return next;
   })();
@@ -537,7 +551,7 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
       useWorkbench.getState().workItems,
     ),
   });
-  updateSession({ ...current, status: 'running', updatedAt: Date.now() });
+  updateSession({ ...current, status: 'running', lastError: undefined, updatedAt: Date.now() });
   const response = await appServer.request('turn/start', {
     ...(codexSettings.model ? { model: codexSettings.model } : {}),
     ...(codexSettings.effort === 'default' ? {} : { effort: codexSettings.effort }),
@@ -566,7 +580,13 @@ async function queueCommand(session: AgentSession, message: RcMessage): Promise<
       const detail = error instanceof Error ? error.message : String(error);
       trace(session.tmid, 'error', detail);
       const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
-      updateSession({ ...current, status: 'ready', activeTurnId: undefined, updatedAt: Date.now() });
+      updateSession({
+        ...current,
+        status: 'ready',
+        activeTurnId: undefined,
+        lastError: detail,
+        updatedAt: Date.now(),
+      });
       await sendAgentReply(session, `🤖 Codex 执行失败：${redactAgentOutput(detail).text}`);
     }
   });
@@ -699,6 +719,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         createdWithCodexVersion: appServer.processInfo!.version,
         createdWithRuntimeSource: appServer.processInfo!.runtimeSource,
         status: 'ready',
+        lastError: undefined,
         updatedAt: Date.now(),
       };
       updateSession(session);
@@ -713,14 +734,15 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     try {
       return await start;
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : String(error) });
+      const detail = error instanceof Error ? error.message : String(error);
+      set({ error: detail });
       await stopClient(tmid).catch(() => undefined);
       const failed = get().sessions[tmid];
       if (failed && failed.status !== 'ended') {
         updateSession(
           failed.codexThreadId
-            ? interruptSession(failed)
-            : { ...failed, status: 'ended', updatedAt: Date.now() },
+            ? { ...interruptSession(failed), lastError: detail }
+            : { ...failed, status: 'ended', lastError: detail, updatedAt: Date.now() },
         );
       }
       throw error;
@@ -786,7 +808,9 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     } catch (error) {
       processedMessages.delete(message._id);
       const detail = error instanceof Error ? error.message : String(error);
-      set({ error: detail });
+      const failed = get().sessions[sessionKey];
+      if (failed) updateSession({ ...failed, lastError: detail, updatedAt: Date.now() });
+      else set({ error: detail });
       trace(sessionKey, 'error', detail);
     }
   },
@@ -885,33 +909,46 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const host = actor();
     const now = Date.now();
     const leased = takeHostLease(existing, host, now, LEASE_MS);
-    const resuming = enterResumeState(leased, host, now);
+    const resuming = { ...enterResumeState(leased, host, now), lastError: undefined };
     updateSession(resuming);
-    const appServer = await ensureClient(resuming);
-    const { model } = getAgentHostingCodexSettings();
-    const response = await appServer.request('thread/resume', {
-      ...(model ? { model } : {}),
-      threadId: resuming.codexThreadId!,
-      cwd: resuming.workspaceRoots[0],
-      runtimeWorkspaceRoots: resuming.workspaceRoots,
-      approvalPolicy: APPROVAL_POLICY,
-      approvalsReviewer: 'user',
-      sandbox: resuming.sandboxMode,
-      excludeTurns: true,
-    });
-    const resumed: AgentSession = {
-      ...resuming,
-      codexThreadId: response.thread.id,
-      lastResumedWithCodexVersion: appServer.processInfo!.version,
-      lastResumedWithRuntimeSource: appServer.processInfo!.runtimeSource,
-      lastResumeMode: 'native',
-      status: 'ready',
-      updatedAt: Date.now(),
-    };
-    updateSession(resumed);
-    nameCodexThread(appServer, resumed); // 旧线程也补上名字
-    trace(tmid, 'status', '已恢复 Codex 会话');
-    await updateLeaseCard(get().sessions[tmid]);
+    try {
+      const appServer = await ensureClient(resuming);
+      const { model } = getAgentHostingCodexSettings();
+      const response = await appServer.request('thread/resume', {
+        ...(model ? { model } : {}),
+        threadId: resuming.codexThreadId!,
+        cwd: resuming.workspaceRoots[0],
+        runtimeWorkspaceRoots: resuming.workspaceRoots,
+        approvalPolicy: APPROVAL_POLICY,
+        approvalsReviewer: 'user',
+        sandbox: resuming.sandboxMode,
+        excludeTurns: true,
+      });
+      const resumed: AgentSession = {
+        ...resuming,
+        codexThreadId: response.thread.id,
+        lastResumedWithCodexVersion: appServer.processInfo!.version,
+        lastResumedWithRuntimeSource: appServer.processInfo!.runtimeSource,
+        lastResumeMode: 'native',
+        status: 'ready',
+        lastError: undefined,
+        updatedAt: Date.now(),
+      };
+      updateSession(resumed);
+      nameCodexThread(appServer, resumed); // 旧线程也补上名字
+      trace(tmid, 'status', '已恢复 Codex 会话');
+      try {
+        await updateLeaseCard(get().sessions[tmid]);
+      } catch (error) {
+        const detail = redactAgentOutput(error instanceof Error ? error.message : String(error)).text;
+        trace(tmid, 'warning', `已恢复 Codex 会话，但同步租约卡片失败：${detail}`);
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      await stopClient(tmid).catch(() => undefined);
+      onInterrupted(tmid, failure);
+      throw failure;
+    }
   },
 
   transferToCodexApp: async (tmid) => {
@@ -968,6 +1005,14 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     await useChat.getState().send('🤖 Codex 共享会话已结束。', { rid: session.rid, tmid: replyTmid(session) });
   },
 }));
+
+export function setSharedAgentClientFactory(factory: SharedAgentClientFactory): () => void {
+  const previous = sharedAgentClientFactory;
+  sharedAgentClientFactory = factory;
+  return () => {
+    sharedAgentClientFactory = previous;
+  };
+}
 
 export function startSharedAgentBridge(): () => void {
   void useSharedAgent.getState().restore();

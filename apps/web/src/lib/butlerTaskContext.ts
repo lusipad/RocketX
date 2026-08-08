@@ -63,106 +63,77 @@ interface ScenarioDefinition {
   sourcePlan: ButlerManifestSource[];
   prohibitedActions: string[];
   recovery: string;
-  clarification?: (
-    input: string,
-    context?: ButlerSurfaceContext | null,
-    previous?: ButlerTaskState | null,
-  ) => {
-    missing: string[];
-    question?: string;
-  };
 }
 
-function sourceCount(context: ButlerSurfaceContext | null | undefined, kind: ButlerSource['kind']): number {
-  return context?.sources.filter((source) => source.kind === kind).length ?? 0;
-}
-
-function prIds(input: string): string[] {
-  return [...input.matchAll(/(?:\bPR\s*#?|#)(\d+)\b/gi)].map((match) => match[1]);
-}
-
+/**
+ * 这些标签只服务于任务归档和用户确认后的 Skill 学习，不参与回答、追问、
+ * Skill 选择或工具路由。真正的语义判断由 Codex 原生 Agent Skills 完成。
+ */
 const definitions: readonly ScenarioDefinition[] = [
+  {
+    id: 'general',
+    matches: [
+      /^(?=[\s\S]*(?:Azure\s*DevOps|ADO))(?=[\s\S]*(?:工作项|WI\b|work\s*items?))(?=[\s\S]*(?:未关闭|未完成|开放|打开|进行中|活跃|open))[\s\S]*$/i,
+    ],
+    available: ['由 azure-devops-server Skill 通过业务 MCP 实时查询工作项'],
+    missing: [],
+    sourcePlan: [{ tool: 'rocketx_azure_devops_server_read', kind: 'work-item', freshness: 'query-time' }],
+    prohibitedActions: ['不创建、修改或关闭工作项'],
+    recovery: '由 Skill 根据实际工具结果说明覆盖范围并重试。',
+  },
   {
     id: 'find-file',
     matches: [/(?:找|查|搜索).*(?:文件|附件|文档|设计稿)/i, /(?:文件|附件).*(?:昨天|昨日|发送|上传)/i],
     available: ['可按发送人、日期、房间和附件条件查询消息'],
-    missing: ['别名解析与文件内容检索尚不在本阶段范围'],
+    missing: [],
     sourcePlan: [{ tool: 'search_messages', kind: 'message', freshness: 'query-time' }],
     prohibitedActions: ['不发送消息', '不修改或下载文件'],
-    recovery: '保留筛选条件与来源，可在同一 session 补充发送人或日期后重查。',
-    clarification: (input) => {
-      const hasDate = /(?:昨天|昨日|\d{4}-\d{2}-\d{2})/.test(input);
-      const hasPerson = /(?:昨天|昨日)\s*[^，。,.\s]{2,12}?(?:发的|上传的)/.test(input)
-        || /(?:发送人|来自)[:：]?\s*[^，。,.\s]{2,20}/.test(input);
-      const missing = [!hasPerson && '发送人', !hasDate && '日期'].filter(Boolean) as string[];
-      return { missing, question: missing.length ? `请补充${missing.join('和')}。` : undefined };
-    },
+    recovery: '保留实际命中的消息来源。',
   },
   {
     id: 'compare-pull-requests',
     matches: [/(?:比较|对比).*(?:PR|拉取请求)/i, /(?:PR|拉取请求).*(?:差异|区别)/i],
-    available: ['可通过完整 Azure DevOps Server Skill 与受控只读 CLI 读取 PR 固定快照、变更和必要文件'],
+    available: ['由 pr-comparison 与 azure-devops-server Skills 通过业务 MCP 读取 PR'],
     missing: [],
-    sourcePlan: [
-      { tool: 'run_azure_devops_server_cli', kind: 'pull-request', freshness: 'query-time' },
-    ],
+    sourcePlan: [{ tool: 'rocketx_azure_devops_server_read', kind: 'pull-request', freshness: 'query-time' }],
     prohibitedActions: ['不评论、合并或修改 PR'],
-    recovery: '按 Skill 固定 iteration 后可重复读取；正文受限或不可用时降级为元数据和文件清单比较。',
-    clarification: (input, context) => {
-      const count = new Set([...prIds(input), ...(context?.sources.filter((source) => source.kind === 'pull-request').map((source) => source.id) ?? [])]).size;
-      return count >= 2 ? { missing: [] } : { missing: ['两个 PR 编号'], question: '请给出要比较的两个 PR 编号。' };
-    },
+    recovery: '由 Skill 固定读取快照；正文不可用时明确降级。',
   },
   {
     id: 'extract-commitments',
     matches: [/(?:提取|整理|查找).*(?:承诺|答应|跟进项)/i, /(?:群聊|消息).*(?:承诺|负责人|截止)/i],
-    available: ['可查询群聊原始消息并把证据挂到任务来源'],
-    missing: ['自动写入待办或长期记忆不在本阶段范围'],
-    sourcePlan: [{ tool: 'search_messages', kind: 'message', freshness: 'query-time' }],
+    available: ['可查询群聊原始消息并保留来源'],
+    missing: [],
+    sourcePlan: [{ tool: 'list_room_messages', kind: 'message', freshness: 'query-time' }],
     prohibitedActions: ['不静默创建待办、工作项或记忆'],
-    recovery: '保留原始消息证据；补充群聊或时间范围后重新提取。',
-    clarification: (input, context) => {
-      const hasRoom = context?.kind === 'room' || /(?:在|从).{1,20}(?:群|房间)/.test(input);
-      return hasRoom ? { missing: [] } : { missing: ['群聊范围'], question: '要从哪个群聊提取承诺？' };
-    },
+    recovery: '保留原始消息证据。',
   },
   {
     id: 'draft-overdue-work-item-followup',
     matches: [/(?:逾期|过期).*(?:WI|工作项).*(?:跟进|催办|草稿)/i, /(?:跟进|催办).*(?:逾期|过期).*(?:WI|工作项)/i],
-    available: ['可查询逾期工作项并生成只读跟进上下文'],
-    missing: ['发送草稿与修改工作项需要后续审批运行时'],
-    sourcePlan: [{ tool: 'list_work_items', kind: 'work-item', freshness: 'loaded-snapshot' }],
+    available: ['由 azure-devops-server Skill 实时查询逾期工作项'],
+    missing: [],
+    sourcePlan: [{ tool: 'rocketx_azure_devops_server_read', kind: 'work-item', freshness: 'query-time' }],
     prohibitedActions: ['不发送催办消息', '不创建或修改工作项'],
-    recovery: '保留工作项来源与草稿目标；用户可补充对象和口径后重新生成。',
+    recovery: '保留工作项来源与草稿目标。',
   },
   {
     id: 'associate-build-failure',
     matches: [/(?:构建|CI).*(?:失败|红灯).*(?:提交|变更|PR|关联)/i, /(?:关联|查找).*(?:构建|CI).*(?:提交|变更)/i],
-    available: ['可查询失败构建元数据并保留构建来源'],
-    missing: ['构建变更集与提交详情读取能力不可用'],
-    sourcePlan: [{ tool: 'list_builds', kind: 'build', freshness: 'loaded-snapshot' }],
+    available: ['由 azure-devops-server Skill 实时查询构建和关联变更'],
+    missing: [],
+    sourcePlan: [{ tool: 'rocketx_azure_devops_server_read', kind: 'build', freshness: 'query-time' }],
     prohibitedActions: ['不重试或回滚构建', '不修改代码'],
-    recovery: '保留失败构建；补齐构建编号后重查，缺少变更能力时明确说明边界。',
-    clarification: (input, context) => {
-      const hasBuild = /(?:构建|build)\s*#?[\w.-]*\d[\w.-]*/i.test(input) || sourceCount(context, 'build') > 0;
-      return hasBuild ? { missing: [] } : { missing: ['构建编号'], question: '请给出要关联的失败构建编号。' };
-    },
+    recovery: '保留实际查询到的失败构建与变更来源。',
   },
   {
     id: 'create-weekly-routine',
     matches: [/(?:创建|安排|新增).*(?:周报|例行|定时).*(?:任务|事务)?/i, /(?:每周|周报).*(?:定时|提醒|例行)/i],
-    available: ['可加载 weekly-report 技能并生成待确认的 routine 草案'],
+    available: ['由原生 weekly-report Skill 生成待确认的 routine 草案'],
     missing: [],
-    sourcePlan: [
-      { tool: 'load_skill', kind: 'session', freshness: 'persisted' },
-      { tool: 'draft_routine', kind: 'session', freshness: 'persisted' },
-    ],
+    sourcePlan: [{ tool: 'draft_routine', kind: 'session', freshness: 'persisted' }],
     prohibitedActions: ['不绕过确认直接启用例行任务'],
-    recovery: '草案可取消并重新生成；确认后的 routine 走既有持久化。',
-    clarification: (input) => {
-      const missing = [!/(?:[01]?\d|2[0-3]):[0-5]\d/.test(input) && '执行时间', !/周[一二三四五六日天]/.test(input) && '星期'].filter(Boolean) as string[];
-      return { missing, question: missing.length ? `请补充周报的${missing.join('和')}。` : undefined };
-    },
+    recovery: '草案可取消并重新生成。',
   },
   {
     id: 'resume-task',
@@ -171,51 +142,36 @@ const definitions: readonly ScenarioDefinition[] = [
     missing: [],
     sourcePlan: [{ tool: 'session-registry', kind: 'session', freshness: 'persisted' }],
     prohibitedActions: ['不跨账号、服务器或 session 猜测任务'],
-    recovery: '任务态随 session 持久化；失败或暂停后可从记录的恢复状态继续。',
-    clarification: (_input, _context, previous) => previous
-      ? { missing: [] }
-      : { missing: ['要恢复的任务'], question: '当前会话没有可恢复的任务，请说明要继续哪项调查。' },
+    recovery: '由原生会话上下文判断应继续的任务。',
   },
 ];
 
 const generalDefinition: ScenarioDefinition = {
   id: 'general',
   matches: [],
-  available: ['可使用当前工作面和只读工具查证'],
+  available: ['由 Codex 原生 Agent Skills 选择适用方法'],
   missing: [],
   sourcePlan: [],
   prohibitedActions: ['不执行未经确认的写动作'],
-  recovery: '保留当前 session transcript；可补充目标后重新编译任务上下文。',
+  recovery: '保留当前 session transcript。',
 };
 
-function identify(input: string): ScenarioDefinition {
+function identifyLearningScenario(input: string): ScenarioDefinition {
   return definitions.find((definition) => definition.matches.some((pattern) => pattern.test(input))) ?? generalDefinition;
-}
-
-function startsNewTask(input: string): boolean {
-  return /^(?:新任务|另一个任务|开始新任务)(?:\s*[:：]\s*|\s+|$)/u.test(input.trim());
 }
 
 export function compileButlerTask(
   input: string,
   context: ButlerSurfaceContext | null | undefined,
-  previous: ButlerTaskState | null | undefined,
+  _previous: ButlerTaskState | null | undefined,
   now = Date.now(),
 ): ButlerTaskState {
-  const identified = identify(input);
-  const continuing = !startsNewTask(input) && previous?.status === 'awaiting-clarification' &&
-    (identified.id === 'general' || identified.id === previous.manifest.scenario);
-  const definition = continuing
-    ? definitions.find((candidate) => candidate.id === previous.manifest.scenario) ?? identified
-    : identified;
-  const goal = continuing ? `${previous.goal}\n补充：${input}` : input;
-  const clarification = definition.clarification?.(goal, context, previous) ?? { missing: [] };
-  const sources = context?.sources ?? [];
+  const definition = identifyLearningScenario(input);
   return {
-    id: continuing ? previous.id : crypto.randomUUID(),
-    goal,
-    status: clarification.missing.length ? 'awaiting-clarification' : 'ready',
-    createdAt: continuing ? previous.createdAt : now,
+    id: crypto.randomUUID(),
+    goal: input,
+    status: 'ready',
+    createdAt: now,
     updatedAt: now,
     manifest: {
       schemaVersion: 1,
@@ -226,14 +182,13 @@ export function compileButlerTask(
       },
       sourcePlan: definition.sourcePlan,
       clarification: {
-        required: clarification.missing.length > 0,
-        missing: clarification.missing,
-        ...(clarification.question ? { question: clarification.question } : {}),
+        required: false,
+        missing: [],
       },
       prohibitedActions: definition.prohibitedActions,
       recovery: definition.recovery,
     },
-    sources,
+    sources: context?.sources ?? [],
   };
 }
 
@@ -290,14 +245,12 @@ export function updateButlerTask(
 
 export function butlerTaskPrompt(task: ButlerTaskState): string {
   return [
-    '当前任务合同（由代码侧编译，不得绕过）：',
+    '以下仅是 RocketX 当前回合的宿主状态，不负责解释意图、选择 Skill 或规划工具：',
     JSON.stringify({
       id: task.id,
-      goal: task.goal,
       status: task.status,
-      manifest: task.manifest,
       sources: task.sources,
     }),
-    '先遵守能力预检与禁止动作；只引用实际工具结果，缺信息时按 clarification 提最少问题。',
+    '请直接理解用户原话，由 Codex 原生 Agent Skills 隐式匹配适用方法；只有用户显式输入 $skill 时才固定使用对应 Skill。缺少信息时由所选 Skill 在对话中自然追问。',
   ].join('\n');
 }

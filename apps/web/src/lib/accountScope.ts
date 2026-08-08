@@ -34,6 +34,7 @@ const SCOPED_KEYS = [
   'rcx-wi-last-projects',
   'rcx-agent-environments',
   'rcx-butler-attention',
+  // 旧版“成果”功能已下线，但遗留数据仍必须随账号隔离。
   'rcx-butler-artifacts',
   'rcx-butler-errand-runs',
 ];

@@ -1,9 +1,12 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import {
+  codexInvocation,
+  codexRuntimeSourceFromArgs,
+} from './lib/codex-app-server-spike.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const timeoutMs = 120_000;
@@ -13,23 +16,6 @@ const demoTodos = [
   { id: 'demo-2', title: '整理周报', status: '未完成' },
 ];
 const demoTodoKeywords = demoTodos.map((todo) => todo.title);
-
-function invocation() {
-  if (process.platform !== 'win32') return { command: 'codex', args: [] };
-  const lookup = spawnSync('where.exe', ['codex.cmd'], { encoding: 'utf8' });
-  const fallback = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', '(Get-Command -Name codex.cmd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)'],
-    { encoding: 'utf8' },
-  );
-  const entry = `${lookup.stdout ?? ''}\n${fallback.stdout ?? ''}`
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((shim) => join(dirname(shim), 'node_modules', '@openai', 'codex', 'bin', 'codex.js'))
-    .find(existsSync);
-  if (!entry || !existsSync(entry)) throw new Error('找不到 PATH 中 Codex CLI 的官方 Node 入口');
-  return { command: process.execPath, args: [entry] };
-}
 
 function asRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : null;
@@ -56,6 +42,8 @@ async function main() {
   let answer = '';
   let failure = null;
   let cliVersion = null;
+  let runtimeSource = null;
+  let runtimePath = null;
   let stopping = false;
   let dynamicToolCall = {
     received: false,
@@ -69,14 +57,12 @@ async function main() {
 
   try {
     tempDir = await mkdtemp(join(tmpdir(), 'rocketx-butler-dynamic-tools-'));
-    const cli = invocation();
-    const version = spawnSync(cli.command, [...cli.args, '--version'], { encoding: 'utf8' });
-    cliVersion = version.stdout.trim().match(/^codex-cli (\d+\.\d+\.\d+)$/)?.[1] ?? null;
-    if (version.status !== 0 || !cliVersion) {
-      throw new Error(`无法识别 Codex CLI 版本：${version.stdout.trim() || '不可用'}`);
-    }
+    const cli = codexInvocation(codexRuntimeSourceFromArgs(process.argv.slice(2), 'system'));
+    cliVersion = cli.version;
+    runtimeSource = cli.source;
+    runtimePath = cli.displayPath;
 
-    child = spawn(cli.command, [...cli.args, 'app-server', '--stdio'], {
+    child = spawn(cli.command, [...cli.args, ...cli.appServerArgs], {
       cwd: root,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -259,6 +245,8 @@ async function main() {
         spike: 'butler-dynamic-tools',
         result: passed ? 'PASS' : 'FAIL',
         cliVersion,
+        runtimeSource,
+        runtimePath,
         threadId,
         turnId,
         checks,

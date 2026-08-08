@@ -20,6 +20,7 @@ interface TodayState {
   warnings: string[];
   loading: boolean;
   loaded: boolean;
+  refreshed: boolean;
   hydrate: () => Promise<void>;
   refreshMentions: () => Promise<void>;
   setProcessed: (key: string, value: boolean) => Promise<void>;
@@ -46,11 +47,19 @@ export const useToday = create<TodayState>((set, get) => ({
   warnings: [],
   loading: false,
   loaded: false,
+  refreshed: false,
 
   hydrate: async () => {
     const scope = currentScope();
     if (get().loaded && get().scope === scope) return;
-    set({ scope, mentions: [], processed: new Set(), warnings: [], loaded: false });
+    set({
+      scope,
+      mentions: [],
+      processed: new Set(),
+      warnings: [],
+      loaded: false,
+      refreshed: false,
+    });
     const saved = await kernelStore.appData.get<PersistedTodayState>(APP_ID, scope);
     if (currentScope() !== scope) return;
     set({
@@ -82,7 +91,7 @@ export const useToday = create<TodayState>((set, get) => ({
       const merged = new Map<string, MentionItem>();
       for (const item of [...get().mentions, ...result.items]) merged.set(item.message._id, item);
       const mentions = [...merged.values()];
-      set({ mentions, warnings: result.warnings });
+      set({ mentions, warnings: result.warnings, refreshed: true });
       await persist(scope, mentions, get().processed);
     } finally {
       if (currentScope() === scope) set({ loading: false });
@@ -105,13 +114,22 @@ export function mentionMessage(item: MentionItem): RcMessage {
 
 setButlerMentionProvider(() => {
   const state = useToday.getState();
-  return state.mentions.map(({ message, roomName }) => ({
-    id: message._id,
-    rid: message.rid,
-    roomName,
-    sender: message.u.name || message.u.username,
-    ts: new Date(tsMs(message.ts)).toISOString(),
-    text: stripAgentSessionMarker(message.msg).slice(0, 200),
-    processed: state.processed.has(`rc:${currentScope()}:${message.rid}:${message._id}`),
-  }));
+  const warnings = [
+    ...(!state.refreshed ? ['@我收件箱尚未完成本次服务器刷新'] : []),
+    ...(state.loading ? ['@我收件箱仍在刷新，仅返回当前快照'] : []),
+    ...state.warnings,
+  ];
+  return {
+    items: state.mentions.map(({ message, roomName }) => ({
+      id: message._id,
+      rid: message.rid,
+      roomName,
+      sender: message.u.name || message.u.username,
+      ts: new Date(tsMs(message.ts)).toISOString(),
+      text: stripAgentSessionMarker(message.msg).slice(0, 200),
+      processed: state.processed.has(`rc:${currentScope()}:${message.rid}:${message._id}`),
+    })),
+    complete: state.refreshed && !state.loading && state.warnings.length === 0,
+    warnings,
+  };
 });

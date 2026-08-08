@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RcUser } from '@rcx/rc-client';
 import { Check, Lock, Search, X } from 'lucide-react';
-import { rest } from '../lib/client';
+import { getServerBase, rest } from '../lib/client';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
+import { loadUserSearchRoster } from '../lib/userSearch';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { settleScopedResult } from '../lib/scopedResult';
@@ -14,11 +15,12 @@ import Dialog from './Dialog';
  * 走 searchUsers 三级回退：spotlight 在部分服务器上对空关键词返回空，
  * 而发起会话时需要「不输入也能看到人」。
  *
- * 服务端不认拼音，所以先取一页花名册在本地做拼音匹配，再与服务端结果合并——
- * 这样 zs / zhangsan 能找到「张三」，同时首屏之外的人也不会漏。
+ * 服务端不认拼音，所以在安全上限内分页缓存花名册并做本地匹配，再与服务端结果合并——
+ * 这样 zs / zhangsan 能找到「张三」；目录不完整时会明确提示，不会静默漏人。
  */
-export function useUserSearch(keyword: string): RcUser[] {
+export function useUserSearch(keyword: string): { users: RcUser[]; warning: string | null } {
   const [roster, setRoster] = useState<RcUser[]>([]);
+  const [rosterWarning, setRosterWarning] = useState<string | null>(null);
   const [remoteResult, setRemoteResult] = useState<{ query: string; users: RcUser[] }>({
     query: '',
     users: [],
@@ -29,10 +31,26 @@ export function useUserSearch(keyword: string): RcUser[] {
   useEffect(() => {
     let current = true;
     void settleScopedResult(
-      () => rest.searchUsers('', 100),
+      () =>
+        loadUserSearchRoster(
+          (offset) => rest.searchUsers('', 100, offset),
+          {
+            cacheKey: `${getServerBase()}\0${me ?? ''}`,
+            isCurrent: () => current,
+            onFirstPage: (users) => {
+              setRoster(users.filter((u) => u.username !== me));
+            },
+          },
+        ),
       {
-        success: (result) => setRoster(result.users.filter((u) => u.username !== me)),
-        error: () => setRoster([]),
+        success: (result) => {
+          setRoster(result.users.filter((u) => u.username !== me));
+          setRosterWarning(result.warning ?? null);
+        },
+        error: () => {
+          setRoster([]);
+          setRosterWarning(null);
+        },
       },
       () => current,
     );
@@ -71,7 +89,7 @@ export function useUserSearch(keyword: string): RcUser[] {
 
   const pinyinReady = usePinyinReady();
   const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
-  return useMemo(() => {
+  const users = useMemo(() => {
     if (!keyword.trim()) return roster;
     const merged = new Map<string, RcUser>();
     for (const u of roster) {
@@ -84,6 +102,7 @@ export function useUserSearch(keyword: string): RcUser[] {
         pinyinScore(keyword, b.name || b.username),
     );
   }, [roster, remote, keyword, pinyinReady]);
+  return { users, warning: rosterWarning };
 }
 
 /** 统一弹窗外壳（含 Esc 关闭） */
@@ -102,7 +121,7 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const users = useUserSearch(keyword);
+  const { users, warning: userSearchWarning } = useUserSearch(keyword);
 
   // 函数式更新：读闭包里的 selected 的话，同一渲染周期内连点两个人只会剩一个
   const toggle = (u: RcUser) => {
@@ -189,6 +208,9 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
       </div>
 
       {error && <div className="px-5 pb-1 text-xs text-danger">{error}</div>}
+      {userSearchWarning && (
+        <div className="px-5 pb-1 text-xs text-warning">{userSearchWarning}</div>
+      )}
 
       <div className="min-h-40 flex-1 overflow-y-auto px-2 pb-3">
         {users.map((u) => {
@@ -253,7 +275,7 @@ export function CreateGroupDialog({
   const [priv, setPriv] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const users = useUserSearch(keyword);
+  const { users, warning: userSearchWarning } = useUserSearch(keyword);
   const isTeam = kind === 'team';
 
   const toggle = (u: RcUser) => {
@@ -343,6 +365,9 @@ export function CreateGroupDialog({
           );
         })}
       </div>
+      {userSearchWarning && (
+        <div className="px-5 pt-1 text-xs text-warning">{userSearchWarning}</div>
+      )}
       {error && <div className="px-5 pt-1 text-xs text-danger">{error}</div>}
       <div className="flex items-center justify-between px-5 py-3.5">
         <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-2">

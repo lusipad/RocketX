@@ -19,7 +19,9 @@ import {
 } from '../lib/butlerPaper';
 import type { ButlerErrandRun } from '../lib/butlerErrands';
 import { useButler } from '../stores/butler';
+import { useButlerErrandRuns } from '../stores/butlerErrandRuns';
 import { toast } from '../stores/toast';
+import ButlerErrandInputCard from './ButlerErrandInputCard';
 
 function elapsedMinutes(startedAt: number, now: number): number {
   return Math.max(0, Math.floor((now - startedAt) / 60_000));
@@ -37,6 +39,7 @@ function approvalQuestion(errand: ButlerErrandRun, request: string): string {
 
 function activeProgress(errand: ButlerErrandRun): string {
   if (errand.status === 'running') return errand.activity ?? '正在处理';
+  if (errand.status === 'paused') return errand.error ?? '已暂停，等你决定是否继续';
   if (errand.status === 'replied') return '回话了';
   return '停下来了';
 }
@@ -51,6 +54,7 @@ function ActiveIcon({ errand }: { errand: ButlerErrandRun }) {
       />
     );
   }
+  if (errand.status === 'paused') return <Play size={15} className="text-ink-3" />;
   if (errand.status === 'replied') return <MessageSquareText size={15} className="text-primary" />;
   return <XCircle size={15} className="text-ink-3" />;
 }
@@ -80,14 +84,17 @@ export default function ButlerErrandRunCard({
 }) {
   const storeErrands = useButler((state) => state.errands);
   const resolveErrandApproval = useButler((state) => state.resolveErrandApproval);
+  const resolveErrandInput = useButler((state) => state.resolveErrandInput);
   const stopErrand = useButler((state) => state.stopErrand);
   const archiveErrand = useButler((state) => state.archiveErrand);
   const askButler = useButler((state) => state.ask);
+  const resumeErrand = useButlerErrandRuns((state) => state.resumeErrand);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [now, setNow] = useState(Date.now());
   const errands = runs ?? storeErrands;
   const sections = useMemo(() => partitionButlerPaperErrands(errands), [errands]);
-  const hasRunning = sections.active.some((errand) => errand.status === 'running');
+  const hasPendingInput = sections.approvals.some((errand) => (errand.inputs?.length ?? 0) > 0);
+  const hasRunning = sections.active.some((errand) => errand.status === 'running' || errand.status === 'paused');
 
   useEffect(() => {
     if (!hasRunning) return undefined;
@@ -140,13 +147,24 @@ export default function ButlerErrandRunCard({
   return (
     <div className={compact ? 'space-y-5' : 'space-y-8'}>
       {sections.approvals.length > 0 ? (
-        <section aria-label="等你点头">
-          <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-danger`}>等你点头</h2>
-          <div className="mt-3 space-y-5 border-l-2 border-danger pl-4">
-            {sections.approvals.map((errand) => (
-              <article key={errand.id}>
-                <h3 className="text-sm font-medium text-ink">{errand.title}</h3>
-                <div className="mt-2 space-y-3">
+        <section aria-label={hasPendingInput ? '等你回应' : '等你点头'}>
+          <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold ${hasPendingInput ? 'text-primary' : 'text-danger'}`}>
+            {hasPendingInput ? '等你回应' : '等你点头'}
+          </h2>
+          <div className={`mt-3 space-y-5 border-l-2 pl-4 ${hasPendingInput ? 'border-primary' : 'border-danger'}`}>
+            {sections.approvals.map((errand) => {
+              const inputs = errand.inputs ?? [];
+              return (
+                <article key={errand.id}>
+                  <h3 className="text-sm font-medium text-ink">{errand.title}</h3>
+                  <div className="mt-2 space-y-3">
+                    {inputs.map((input) => (
+                      <ButlerErrandInputCard
+                        key={input.id}
+                        input={input}
+                        onResolve={(response) => resolveErrandInput(errand.id, input.id, response)}
+                      />
+                    ))}
                   {errand.approvals.map((approval, approvalIndex) => {
                     const request = codexApprovalSummary(approval.method, approval.params);
                     return (
@@ -201,9 +219,22 @@ export default function ButlerErrandRunCard({
                       </div>
                     );
                   })}
-                </div>
-              </article>
-            ))}
+                  </div>
+                  {inputs.length > 0 && errand.approvals.length === 0 ? (
+                    <button
+                      type="button"
+                      aria-label={`叫停${errand.title}`}
+                      title="叫停"
+                      className="mt-2 inline-flex h-7 items-center gap-1 rounded px-2 text-danger transition-colors hover:bg-danger/10"
+                      onClick={() => void stopErrand(errand.id)}
+                    >
+                      <Square size={11} aria-hidden="true" />
+                      叫停
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -214,7 +245,10 @@ export default function ButlerErrandRunCard({
           <div className="mt-2 divide-y divide-line/60">
             {sections.active.map((errand) => {
               const isExpanded = expanded.has(errand.id);
-              const replied = errand.status === 'replied' || errand.status === 'failed';
+              const replied = errand.status === 'replied';
+              const failed = errand.status === 'failed';
+              const terminal = replied || failed;
+              const paused = errand.status === 'paused';
               const conclusion = errand.reply ?? errand.error ?? '这个活没留下结论。';
 
               return (
@@ -234,6 +268,8 @@ export default function ButlerErrandRunCard({
                         {elapsedMinutes(errand.startedAt, now)} 分钟
                       </span>
                       {replied ? <span className="shrink-0 text-xs text-primary">回话了</span> : null}
+                      {failed ? <span className="shrink-0 text-xs text-danger">没办成</span> : null}
+                      {paused ? <span className="shrink-0 text-xs text-ink-3">已暂停</span> : null}
                       <ChevronDown
                         size={14}
                         aria-hidden="true"
@@ -242,22 +278,35 @@ export default function ButlerErrandRunCard({
                         }`}
                       />
                     </button>
-                    {!replied ? (
-                      <button
-                        type="button"
-                        aria-label={`叫停${errand.title}`}
-                        title="叫停"
-                        onClick={() => void stopErrand(errand.id)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 opacity-0 transition group-hover:opacity-100 hover:bg-danger/10 hover:text-danger focus:opacity-100"
-                      >
-                        <Square size={11} aria-hidden="true" />
-                      </button>
+                    {!terminal ? (
+                      <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                        {paused ? (
+                          <button
+                            type="button"
+                            aria-label={`继续${errand.title}`}
+                            title="继续"
+                            onClick={() => void resumeErrand(errand.id)}
+                            className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-primary-light hover:text-primary"
+                          >
+                            <Play size={11} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          aria-label={`叫停${errand.title}`}
+                          title="叫停"
+                          onClick={() => void stopErrand(errand.id)}
+                          className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Square size={11} aria-hidden="true" />
+                        </button>
+                      </div>
                     ) : null}
                   </div>
 
                   {isExpanded ? (
                     <div className="ml-6 mt-3 border-l border-line pl-4 text-xs leading-5 text-ink-2">
-                      {replied ? (
+                      {terminal ? (
                         <>
                           <div className="whitespace-pre-wrap">{conclusion}</div>
                           <button
@@ -274,6 +323,30 @@ export default function ButlerErrandRunCard({
                       ) : (
                         <>
                           <div>{errand.activity ?? '正在处理'}</div>
+                          {paused ? (
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                aria-label={`继续${errand.title}`}
+                                title="继续"
+                                className="inline-flex h-7 items-center gap-1 rounded px-2 text-primary transition-colors hover:bg-primary-light"
+                                onClick={() => void resumeErrand(errand.id)}
+                              >
+                                <Play size={12} aria-hidden="true" />
+                                继续
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`叫停${errand.title}`}
+                                title="叫停"
+                                className="inline-flex h-7 items-center gap-1 rounded px-2 text-danger transition-colors hover:bg-danger/10"
+                                onClick={() => void stopErrand(errand.id)}
+                              >
+                                <Square size={11} aria-hidden="true" />
+                                叫停
+                              </button>
+                            </div>
+                          ) : null}
                           {errand.plan?.length ? (
                             <ol className="mt-3 space-y-1" aria-label={`${errand.title} 的 TODO`}>
                               {errand.plan.map((item, index) => (

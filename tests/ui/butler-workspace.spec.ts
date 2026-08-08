@@ -8,11 +8,27 @@ async function openWorkspace(page: import('@playwright/test').Page): Promise<voi
   await expect(page.getByRole('navigation', { name: '管家工作视图' })).toBeVisible();
 }
 
-async function openButlerSkills(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+async function openLegacyTodayPaper(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
+      useUI: { getState: () => { setButlerView: (view: 'now') => void } };
+    }>;
+    (await loadUI()).useUI.getState().setButlerView('now');
+  });
+}
+
+async function openButlerIdentity(page: import('@playwright/test').Page) {
+  await page.getByLabel('更多管家视图', { exact: true }).click();
+  await page.getByRole('menuitem', { name: '技能中心', exact: true }).click();
   const identityPage = page.getByRole('region', { name: '我的管家' });
-  await identityPage.getByRole('tab', { name: '记忆与技能' }).click();
-  const skills = identityPage.getByRole('region', { name: '会的本事' });
+  await expect(identityPage).toBeVisible();
+  return identityPage;
+}
+
+async function openButlerSkills(page: import('@playwright/test').Page) {
+  const identityPage = await openButlerIdentity(page);
+  await expect(identityPage.getByRole('tab', { name: '技能中心' })).toHaveAttribute('aria-selected', 'true');
+  const skills = identityPage.getByRole('region', { name: '项目 Skills' });
   await expect(skills.getByRole('list')).toBeVisible();
   return skills;
 }
@@ -82,17 +98,13 @@ async function seedWorkspace(page: import('@playwright/test').Page): Promise<voi
     const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       useButler: { setState: (state: Record<string, unknown>) => void };
     }>;
-    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
-      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
-    }>;
     const loadRounds = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
       useButlerRoundsRunner: { setState: (state: Record<string, unknown>) => void };
     }>;
-    const [{ useTodos }, { useRoutines }, { useButler }, { useButlerArtifacts }, { useButlerRoundsRunner }] = await Promise.all([
+    const [{ useTodos }, { useRoutines }, { useButler }, { useButlerRoundsRunner }] = await Promise.all([
       loadTodos(),
       loadRoutines(),
       loadButler(),
-      loadArtifacts(),
       loadRounds(),
     ]);
     const now = new Date(2026, 6, 28, 14, 30).getTime();
@@ -211,30 +223,6 @@ async function seedWorkspace(page: import('@playwright/test').Page): Promise<voi
         traces: [],
       }],
     });
-    useButlerArtifacts.setState({
-      hydrated: true,
-      artifacts: [{
-        id: 'workspace-release-artifact',
-        sourceLineId: 'workspace-release-report',
-        title: '发布风险报告',
-        kind: 'report',
-        status: 'working',
-        createdAt: now,
-        updatedAt: now,
-        versions: [{
-          id: 'workspace-release-artifact-v1',
-          number: 1,
-          content: `# 发布风险报告\n\n## 结论\nPR #248 缺少明确的回滚责任人，需要在发布前补齐。`,
-          sources: [{
-            kind: 'message',
-            id: 'workspace-release-source',
-            rid: 'room-general',
-            label: '发布协作',
-          }],
-          createdAt: now,
-        }],
-      }],
-    });
     useButlerRoundsRunner.setState({
       running: false,
       error: null,
@@ -298,11 +286,20 @@ async function seedConversationHistory(page: import('@playwright/test').Page): P
   });
 }
 
-test('管家六视图共享真实责任投影并可端到端切换', async ({ page }) => {
+test('管家以对话为首页，并把委托、定时任务与管理能力分层', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspace(page);
   await seedWorkspace(page);
 
+  const navigation = page.getByRole('navigation', { name: '管家工作视图' });
+  await expect(navigation.getByText('私人工作代理', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: '对话', exact: true })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: '委托', exact: true })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: /定时任务/ })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: '现在', exact: true })).toHaveCount(0);
+
+  await openLegacyTodayPaper(page);
   await expect(page.getByRole('heading', { name: /件事值得你先看/ })).toBeVisible();
   await expect(page.getByRole('region', { name: '需要知道' })).toContainText('发布守护没有完成');
   await expect(page.getByRole('region', { name: '我主动发现' })).toContainText('PR #248');
@@ -315,16 +312,17 @@ test('管家六视图共享真实责任投影并可端到端切换', async ({ pa
   await page.getByRole('button', { name: '转为待办', exact: true }).click();
   await expect(page.getByRole('region', { name: '我主动发现' })).toBeHidden();
 
-  await page.getByRole('button', { name: '任务', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '任务', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: '管家任务' })).toContainText('比较 PR #247');
-  await expect(page.getByRole('region', { name: '管家任务' })).toContainText('PR #248 可能缺少回滚说明');
+  await page.getByRole('button', { name: '委托', exact: true }).click();
+  const delegations = page.getByRole('region', { name: '管家委托' });
+  await expect(delegations.getByRole('heading', { name: '委托', exact: true })).toBeVisible();
+  await expect(delegations).toContainText('比较 PR #247');
+  await expect(delegations).not.toContainText('PR #248 可能缺少回滚说明');
 
   await page.getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: /例行照看/ })
+    .getByRole('button', { name: /定时任务/ })
     .click();
   await seedWorkspace(page);
-  await expect(page.getByRole('region', { name: '例行照看' })).toContainText('发布守护');
+  await expect(page.getByRole('region', { name: '定时任务' })).toContainText('发布守护');
   await page.getByRole('button', { name: '查看发布守护详情' }).click();
   const routineDetail = page.getByRole('region', { name: '发布守护详情' });
   await expect(routineDetail).toContainText('需要修复');
@@ -337,47 +335,110 @@ test('管家六视图共享真实责任投影并可端到端切换', async ({ pa
 
   await page.getByRole('button', { name: '对话', exact: true }).click();
   await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
-  const artifacts = page.getByRole('region', { name: '管家成果' });
-  await expect(artifacts).toContainText('发布风险报告');
-  await artifacts.getByRole('button', { name: '继续编辑' }).click();
-  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveValue(/继续编辑成果/);
-  await artifacts.getByRole('button', { name: '收下成果' }).click();
-  await expect(artifacts).toContainText('已验收');
+  await expect(page.getByRole('region', { name: '管家成果' })).toHaveCount(0);
+  await expect(page.getByText('PR #248 缺少明确的回滚责任人，需要在发布前补齐。')).toBeVisible();
 
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
-  await expect(page.getByRole('region', { name: '我的管家' })).toBeVisible();
+  await openButlerIdentity(page);
 
-  await page.getByRole('button', { name: '连接与权限', exact: true }).click();
+  await page.getByLabel('更多管家视图', { exact: true }).click();
+  await page.getByRole('menuitem', { name: '连接与权限', exact: true }).click();
   await expect(page.getByRole('region', { name: '连接与权限' })).toContainText('Rocket.Chat');
+});
+
+test('委托和定时任务工作面提供可见且可点击的直接入口', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkspace(page);
+  await seedWorkspace(page);
+
+  const navigation = page.getByRole('navigation', { name: '管家工作视图' });
+  await navigation.getByRole('button', { name: '委托', exact: true }).click();
+  const delegations = page.getByRole('region', { name: '管家委托' });
+  await expect(delegations.getByRole('button', { name: '新建委托', exact: true })).toBeVisible();
+  await delegations.getByRole('button', { name: '新建委托', exact: true }).click();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+
+  await navigation.getByRole('button', { name: /定时任务/ }).click();
+  await seedWorkspace(page);
+  const routines = page.getByRole('region', { name: '定时任务' });
+  await expect(routines.getByRole('button', { name: '新建定时任务', exact: true })).toBeVisible();
+  await expect(routines.getByRole('button', { name: '重试发布守护', exact: true })).toBeVisible();
+  await expect(routines.getByRole('button', { name: '立即运行待回复守护', exact: true })).toBeVisible();
+  await routines.getByRole('button', { name: '新建定时任务', exact: true }).click();
+
+  const createRoutine = page.getByRole('dialog', { name: '新建定时任务' });
+  await expect(createRoutine).toBeVisible();
+  await expect(routines).toBeVisible();
+  await expect(navigation.getByRole('button', { name: /定时任务/ })).toHaveAttribute('aria-current', 'page');
+  const skillSelect = createRoutine.getByRole('combobox', { name: '执行 Skill' });
+  await expect(skillSelect.locator('option[value="room-digest"]')).toHaveCount(0);
+  await expect(createRoutine).toContainText('需要选择房间的 Skill 请从“管理例行事务”创建');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileDialogBox = await createRoutine.boundingBox();
+  expect(mobileDialogBox).not.toBeNull();
+  expect(mobileDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileDialogBox!.x + mobileDialogBox!.width).toBeLessThanOrEqual(390);
+  await expect(createRoutine.getByRole('button', { name: '创建并启用', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await createRoutine.getByRole('textbox', { name: '任务名称' }).fill('候选版本周报');
+  await skillSelect.selectOption('weekly-report');
+  await createRoutine.getByLabel('运行时间').fill('18:30');
+  await createRoutine.getByRole('button', { name: '周六', exact: true }).click();
+  await createRoutine.getByRole('button', { name: '周日', exact: true }).click();
+  await createRoutine.getByRole('button', { name: '创建并启用', exact: true }).click();
+
+  await expect(createRoutine).toBeHidden();
+  await expect(routines).toContainText('候选版本周报');
+  await expect(routines.getByRole('button', { name: '立即运行候选版本周报', exact: true })).toBeVisible();
+  const created = await page.evaluate(async () => {
+    const loadRoutines = new Function('return import("/src/stores/routines.ts")') as () => Promise<{
+      useRoutines: { getState: () => { routines: Array<{
+        name: string;
+        skillName?: string;
+        prompt?: string;
+        enabled: boolean;
+        trigger: { kind: string; time?: string; days?: number[] };
+      }> } };
+    }>;
+    return (await loadRoutines()).useRoutines.getState().routines
+      .find((routine) => routine.name === '候选版本周报');
+  });
+  expect(created).toMatchObject({
+    name: '候选版本周报',
+    skillName: 'weekly-report',
+    enabled: true,
+    trigger: { kind: 'daily', time: '18:30', days: [1, 2, 3, 4, 5] },
+  });
+  expect(created?.prompt).toBeUndefined();
 });
 
 test('全新账号无需配置即可从第一件真实责任激活管家', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkspace(page);
+  await openLegacyTodayPaper(page);
   const activation = page.getByRole('region', { name: '管家首次启用' });
   await expect(activation).toContainText('不用搭建');
   await activation.getByRole('button', { name: '开启待回复守护' }).click();
   await expect(activation).toBeHidden();
   await page.getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: /例行照看/ })
+    .getByRole('button', { name: /定时任务/ })
     .click();
-  await expect(page.getByRole('region', { name: '例行照看' })).toContainText('有人 @ 我，先帮我看');
+  await expect(page.getByRole('region', { name: '定时任务' })).toContainText('有人 @ 我，先帮我看');
 });
 
 test('我的管家统一名字、头像、性格与运行身份', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1100 });
   await openWorkspace(page);
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
-
-  const identityPage = page.getByRole('region', { name: '我的管家' });
+  const identityPage = await openButlerIdentity(page);
   await expect(identityPage.getByRole('heading', { name: '管家', exact: true })).toBeVisible();
   await expect(identityPage).toContainText('你的长期工作伙伴');
   await expect(page.getByText('Butler', { exact: true })).toHaveCount(0);
-  await expect(identityPage.getByRole('tab', { name: '相处设定' })).toHaveAttribute('aria-selected', 'true');
+  await expect(identityPage.getByRole('tab', { name: '技能中心' })).toHaveAttribute('aria-selected', 'true');
   await expect(identityPage.getByRole('tab', { name: '了解你' })).toBeVisible();
   await expect(identityPage.getByRole('tab', { name: '分析与改进' })).toBeVisible();
-  await expect(identityPage.getByRole('tab', { name: '记忆与技能' })).toBeVisible();
   await expect(identityPage.getByRole('tab', { name: '最近动作' })).toBeVisible();
+
+  await identityPage.getByRole('tab', { name: '相处设定' }).click();
 
   await identityPage.getByRole('textbox', { name: '管家名字' }).fill('小布');
   await identityPage.getByRole('textbox', { name: '管家角色' }).fill('可靠的长期工作搭档');
@@ -392,7 +453,7 @@ test('我的管家统一名字、头像、性格与运行身份', async ({ page 
   await expect(identityPage.getByRole('heading', { name: '小布', exact: true })).toBeVisible();
   await expect(page.getByRole('navigation', { name: '管家工作视图' })).toContainText('小布');
 
-  await page.getByRole('button', { name: '现在', exact: true }).click();
+  await openLegacyTodayPaper(page);
   await expect(page.getByRole('button', { name: '交给小布', exact: true })).toBeVisible();
 
   const prompt = await page.evaluate(async () => {
@@ -404,7 +465,7 @@ test('我的管家统一名字、头像、性格与运行身份', async ({ page 
   expect(prompt).toContain('你的名字是“小布”');
   expect(prompt).toContain('遇到风险先说事实');
 
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+  await openButlerIdentity(page);
   await expect(page).toHaveScreenshot('butler-identity-wide.png', {
     animations: 'disabled',
     caret: 'hide',
@@ -419,8 +480,7 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
   await page.evaluate(() => {
     document.documentElement.dataset.theme = 'dark';
   });
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
-  const identityPage = page.getByRole('region', { name: '我的管家' });
+  const identityPage = await openButlerIdentity(page);
   await expect(identityPage.getByRole('heading', { name: '管家', exact: true })).toBeVisible();
   await expect(page).toHaveScreenshot('butler-identity-dark-wide.png', {
     animations: 'disabled',
@@ -429,8 +489,8 @@ test('我的管家在暗色主题与窄屏下保持身份层级和可用性', as
     maxDiffPixels: 20,
   });
 
-  await identityPage.getByRole('tab', { name: '记忆与技能' }).click();
-  const skills = identityPage.getByRole('region', { name: '会的本事' });
+  await identityPage.getByRole('tab', { name: '技能中心' }).click();
+  const skills = identityPage.getByRole('region', { name: '项目 Skills' });
   await expect(skills.getByRole('list')).toBeVisible();
   await expect(skills.getByRole('listitem').first()).toContainText('内置');
   await expect(page).toHaveScreenshot('butler-identity-skills-dark-wide.png', {
@@ -488,6 +548,136 @@ test('内置技能可查看完整详情但不可直接编辑或卸载', async ({
   await expect(dialog.getByRole('button', { name: '卸载技能' })).toHaveCount(0);
 });
 
+test('Skill 市场离线时直接读取本地 Plugin，联网后自动恢复在线目录', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadBrain = new Function('return import("/src/lib/butlerBrain.ts")') as () => Promise<{
+      setButlerBrainTauriProvider: (provider: () => boolean) => () => void;
+    }>;
+    const loadCodex = new Function('return import("/src/stores/butlerCodex.ts")') as () => Promise<{
+      resetButlerCodexRuntime: () => Promise<void>;
+      setButlerCodexTransportFactory: (factory: () => Record<string, unknown>) => () => void;
+      setButlerCodexWorkspaceResolver: (resolver: () => Promise<string>) => () => void;
+    }>;
+    const loadProtocol = new Function('return import("/src/agent/protocol/index.ts")') as () => Promise<{
+      CODEX_APP_SERVER_VERSION: string;
+    }>;
+    const [{ setButlerBrainTauriProvider }, codex, { CODEX_APP_SERVER_VERSION }] =
+      await Promise.all([loadBrain(), loadCodex(), loadProtocol()]);
+    await codex.resetButlerCodexRuntime();
+
+    const testWindow = window as typeof window & {
+      __marketplaceOnline?: boolean;
+      __marketplaceMethods?: string[];
+    };
+    testWindow.__marketplaceOnline = false;
+    testWindow.__marketplaceMethods = [];
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      get: () => testWindow.__marketplaceOnline,
+    });
+
+    const workspaceRoot = 'C:/RocketX/AppData/butler';
+    const plugin = (name: string, displayName: string) => ({
+      id: `test:${name}`,
+      name,
+      installed: true,
+      availability: 'AVAILABLE',
+      installPolicy: 'AVAILABLE',
+      interface: {
+        displayName,
+        shortDescription: '可在离线环境使用。',
+      },
+    });
+    let handlers: {
+      onLine: (line: string) => void;
+      onExit: (code: number | null) => void;
+    } | undefined;
+    const transport = {
+      async start(nextHandlers: typeof handlers) {
+        handlers = nextHandlers;
+        return {
+          processId: 'marketplace-ui-test',
+          version: CODEX_APP_SERVER_VERSION,
+          runtimeSource: 'bundled',
+        };
+      },
+      async write(message: Record<string, unknown>) {
+        if (typeof message.method === 'string') {
+          testWindow.__marketplaceMethods!.push(message.method);
+        }
+        if (!('id' in message)) return;
+        const respond = (result: unknown) => queueMicrotask(() => {
+          handlers?.onLine(JSON.stringify({ id: message.id, result }));
+        });
+        if (message.method === 'initialize') {
+          respond({
+            userAgent: `Codex Desktop/${CODEX_APP_SERVER_VERSION} (Windows)`,
+            codexHome: 'C:/Users/test/.codex',
+            platformFamily: 'windows',
+            platformOs: 'windows',
+          });
+        } else if (message.method === 'skills/list') {
+          respond({
+            data: [{ cwd: workspaceRoot, skills: [], errors: [] }],
+          });
+        } else if (message.method === 'plugin/installed') {
+          respond({
+            marketplaces: [{
+              name: 'local-market',
+              path: 'C:/skills/local-market',
+              interface: { displayName: '本地市场' },
+              plugins: [plugin('offline-helper', '离线助手')],
+            }],
+            marketplaceLoadErrors: [],
+          });
+        } else if (message.method === 'plugin/list') {
+          respond({
+            marketplaces: [{
+              name: 'online-market',
+              path: 'C:/skills/online-market',
+              interface: { displayName: '在线市场' },
+              plugins: [plugin('online-helper', '在线助手')],
+            }],
+            marketplaceLoadErrors: [],
+            featuredPluginIds: [],
+          });
+        }
+      },
+      async stop() {
+        handlers = undefined;
+      },
+    };
+
+    setButlerBrainTauriProvider(() => true);
+    codex.setButlerCodexWorkspaceResolver(async () => workspaceRoot);
+    codex.setButlerCodexTransportFactory(() => transport);
+  });
+
+  await openButlerSkills(page);
+  const marketplace = page.getByRole('region', { name: 'Skill 市场' });
+  await expect(marketplace).toContainText('当前离线，仅显示已安装 Plugin 和本地市场');
+  await expect(marketplace).toContainText('离线助手');
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __marketplaceMethods?: string[] })
+      .__marketplaceMethods ?? [])).toContain('plugin/installed');
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __marketplaceMethods?: string[] })
+      .__marketplaceMethods ?? [])).not.toContain('plugin/list');
+
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & { __marketplaceOnline?: boolean };
+    testWindow.__marketplaceOnline = true;
+    window.dispatchEvent(new Event('online'));
+  });
+  await expect(marketplace).toContainText('在线助手');
+  await expect(marketplace).not.toContainText('当前离线');
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __marketplaceMethods?: string[] })
+      .__marketplaceMethods ?? [])).toContain('plugin/list');
+});
+
 test('内置技能可停用并在重新打开后启用', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspace(page);
@@ -506,7 +696,7 @@ test('内置技能可停用并在重新打开后启用', async ({ page }) => {
   await expect(skills.getByRole('listitem').filter({ hasText: skillName })).toContainText('已停用');
 
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-  await page.getByRole('button', { name: '例行照看', exact: true }).click();
+  await page.getByRole('button', { name: '定时任务', exact: true }).click();
   const routines = page.getByRole('region', { name: '正在照看' });
   await expect(routines.getByRole('checkbox', { name: '启用晨报' })).toBeDisabled();
   await expect(routines).toContainText('对应技能已停用');
@@ -561,22 +751,29 @@ test('内置技能复制为自装副本后可编辑并卸载', async ({ page }) 
   await expect(skills.getByRole('listitem').filter({ hasText: clonedSkillName })).toHaveCount(0);
 });
 
-test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台完成', async ({ page }) => {
+test('重复工作在对话中形成私人 Skill 草稿并保存到技能中心', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 960 });
   await openWorkspace(page);
   await page.evaluate(async () => {
     const loadLearning = new Function('return import("/src/butler/extensions/learning/runtime.ts")') as () => Promise<{
       butlerProfile: { store: { setState: (state: Record<string, unknown>) => void } };
       butlerOperationJournal: { store: { setState: (state: Record<string, unknown>) => void } };
-      butlerWorkAnalysis: { store: { setState: (state: Record<string, unknown>) => void } };
       butlerEfficiency: { store: { setState: (state: Record<string, unknown>) => void } };
+      recordButlerConversationTurn: (input: Record<string, unknown>) => unknown;
+    }>;
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => { activeSessionId: string };
+        setState: (state: Record<string, unknown>) => void;
+      };
     }>;
     const {
       butlerProfile,
       butlerOperationJournal,
-      butlerWorkAnalysis,
       butlerEfficiency,
+      recordButlerConversationTurn,
     } = await loadLearning();
+    const { useButler } = await loadButler();
     const now = Date.now();
     const day = 86_400_000;
     butlerProfile.store.setState({
@@ -607,34 +804,67 @@ test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台
         {
           id: 'learning-operation-1',
           action: 'ask-butler',
-          intentKey: 'workflow:release-risk-check',
-          surface: 'now',
+          intentKey: 'workflow:associate-build-failure',
+          surface: 'conversation',
           outcome: 'completed',
           at: now - day,
         },
         {
           id: 'learning-operation-2',
           action: 'ask-butler',
-          intentKey: 'workflow:release-risk-check',
-          surface: 'now',
+          intentKey: 'workflow:associate-build-failure',
+          surface: 'conversation',
           outcome: 'completed',
           at: now - day + 1_000,
         },
-        {
-          id: 'learning-operation-3',
-          action: 'ask-butler',
-          intentKey: 'workflow:release-risk-check',
-          surface: 'now',
-          outcome: 'completed',
-          at: now,
-        },
       ],
     });
-    butlerWorkAnalysis.store.setState({ insights: [] });
-    butlerEfficiency.store.setState({ candidates: [], proposals: [] });
+    butlerEfficiency.store.setState({ candidates: [], proposals: [], drafts: [] });
+    const task = {
+      id: 'task-associate-build-failure',
+      goal: '不要把这段原始问题写入 Skill',
+      status: 'completed',
+      createdAt: now - 2_000,
+      updatedAt: now,
+      manifest: {
+        schemaVersion: 1,
+        scenario: 'associate-build-failure',
+        capabilityPreflight: {
+          available: ['可读取构建元数据'],
+          missing: ['完整变更集不可用'],
+        },
+        sourcePlan: [{ tool: 'list_builds', kind: 'build', freshness: 'loaded-snapshot' }],
+        clarification: { required: false, missing: [] },
+        prohibitedActions: ['不重试构建', '不修改代码'],
+        recovery: '补充构建编号后重查。',
+      },
+      sources: [],
+    };
+    const steps = [{
+      id: 'step-build',
+      label: '查询构建',
+      status: 'done',
+      at: now - 1_000,
+      endedAt: now - 500,
+    }];
+    useButler.setState({
+      lines: [
+        { id: 'learning-user', role: 'user', text: '关联构建 #9001 与变更' },
+        { id: 'learning-assistant', role: 'assistant', text: '已整理构建失败的关联线索。' },
+      ],
+      taskState: task,
+      steps,
+    });
+    recordButlerConversationTurn({
+      task,
+      surface: 'conversation',
+      sessionId: useButler.getState().activeSessionId,
+      lineIds: ['learning-user', 'learning-assistant'],
+      steps,
+    });
   });
 
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+  await openButlerIdentity(page);
   await page.getByRole('tab', { name: '了解你' }).click();
   const profile = page.getByRole('region', { name: '用户 Profile' });
   await expect(profile).toContainText('回复方式 = 先给结论，再补证据');
@@ -642,25 +872,106 @@ test('Profile、工作分析与重复模式形成 Skill 的闭环可在工作台
   await profile.getByRole('button', { name: '确认风险排序' }).click();
   await expect(profile).toContainText('风险排序 = 发布风险优先于进度汇总');
 
-  await page.getByRole('tab', { name: '分析与改进' }).click();
-  await page.getByRole('region', { name: '工作分析' })
-    .getByRole('button', { name: '重新分析' })
+  await page.getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
     .click();
-  const opportunities = page.getByRole('region', { name: '效率机会' });
-  await expect(opportunities).toContainText('形成一个小 Skill');
-  await opportunities.getByRole('button', { name: '先看预演' }).click();
-  await expect(opportunities).toContainText('识别意图：workflow:release-risk-check');
-  await opportunities.getByRole('button', { name: '确认形成 Skill' }).click();
-  await expect(opportunities).toContainText('已启用');
+  const suggestion = page.getByLabel('Skill 草稿 关联构建失败');
+  await expect(suggestion).toContainText('这套做法已经稳定出现了几次');
+  await suggestion.getByRole('button', { name: '先不用' }).click();
+  await expect(suggestion).toBeHidden();
+  await page.getByRole('textbox', { name: '给管家发消息' })
+    .fill('把刚才的方法保存成 Skill');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(suggestion).toContainText('确认前不会写入或启用任何 Skill');
+  await suggestion.getByRole('button', { name: '查看草稿' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Skill 草稿 · 关联构建失败' });
+  await expect(dialog).toContainText('默认仅当前用户可用');
+  await expect(dialog).toContainText('完整变更集不可用');
+  await expect(dialog).not.toContainText('workflow:associate-build-failure');
+  await dialog.getByRole('button', { name: '保存到技能中心' }).click();
+  await expect(dialog).toBeHidden();
+
+  const skills = await openButlerSkills(page);
+  await expect(skills.getByRole('listitem').filter({ hasText: 'associate-build-failure' })).toBeVisible();
 
   const installed = await page.evaluate(async () => {
     const loadProfile = new Function('return import("/src/lib/butlerProfile.ts")') as () => Promise<{
       listSkills: () => Array<{ name: string }>;
     }>;
     const { listSkills } = await loadProfile();
-    return listSkills().some((skill) => skill.name === 'release-risk-check');
+    return listSkills().some((skill) => skill.name === 'associate-build-failure');
   });
   expect(installed).toBe(true);
+});
+
+test('用户可以用自然语言把刚完成的做法整理成 Skill 草稿', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    const { useButler } = await loadButler();
+    const now = Date.now();
+    useButler.setState({
+      lines: [
+        { id: 'explicit-user', role: 'user', text: '帮我按固定顺序检查候选版本' },
+        { id: 'explicit-assistant', role: 'assistant', text: '已经按范围、风险和证据完成检查。' },
+      ],
+      taskState: {
+        id: 'task-explicit-general',
+        goal: '不应复制到 Skill 的原始问题',
+        status: 'completed',
+        createdAt: now - 1_000,
+        updatedAt: now,
+        manifest: {
+          schemaVersion: 1,
+          scenario: 'general',
+          capabilityPreflight: { available: [], missing: [] },
+          sourcePlan: [],
+          clarification: { required: false, missing: [] },
+          prohibitedActions: ['不执行未经确认的写动作'],
+          recovery: '补充目标后重试。',
+        },
+        sources: [],
+      },
+      steps: [{
+        id: 'explicit-step',
+        label: '核对候选版本风险',
+        status: 'done',
+        at: now - 500,
+        endedAt: now - 100,
+      }],
+    });
+  });
+
+  await page.getByRole('textbox', { name: '给管家发消息' })
+    .fill('把这套做法保存为 Skill');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  const draft = page.getByLabel('Skill 草稿 通用工作做法');
+  await expect(draft).toContainText('确认前不会写入或启用任何 Skill');
+  await draft.getByRole('button', { name: '查看草稿' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Skill 草稿 · 通用工作做法' });
+  await expect(dialog).toContainText('只有用户明确要求“把这套做法保存为 Skill”时才使用');
+  await expect(dialog).not.toContainText('不应复制到 Skill 的原始问题');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileDialogBox = await dialog.boundingBox();
+  expect(mobileDialogBox).not.toBeNull();
+  expect(mobileDialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileDialogBox!.x + mobileDialogBox!.width).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await dialog.getByRole('button', { name: '继续修改以后再说' }).click();
+  await draft.getByRole('button', { name: '先不用' }).click();
+  await expect(draft).toBeHidden();
+
+  await openButlerIdentity(page);
+  await expect(page.getByRole('region', { name: '待确认 Skill' }))
+    .toContainText('通用工作做法');
+  await page.getByRole('navigation', { name: '管家工作视图' })
+    .getByRole('button', { name: '对话', exact: true })
+    .click();
+  await expect(draft).toBeHidden();
 });
 
 test('了解你支持显式来源选择，并展示 AI 候选的来源与证据摘要', async ({ page }) => {
@@ -741,15 +1052,16 @@ test('了解你支持显式来源选择，并展示 AI 候选的来源与证据�
     ];
   });
 
-  await page.getByRole('button', { name: '我的管家', exact: true }).click();
+  await openButlerIdentity(page);
   const profile = page.getByRole('region', { name: '用户 Profile' });
   await page.getByRole('tab', { name: '了解你' }).click();
-  await profile.getByRole('button', { name: '初始化了解' }).click();
+  await expect(profile).toContainText('Codex 会在对话空闲后持续维护并按相关性轻量召回');
+  await profile.getByRole('button', { name: '从历史补全' }).click();
   await expect(profile.getByLabel('当前连接')).toBeChecked();
   await expect(profile.getByLabel('最近 Codex')).not.toBeChecked();
   await expect(profile.getByLabel('最近 Claude')).not.toBeChecked();
   await profile.getByLabel('最近 Codex').check();
-  await expect(profile).toContainText('只会在你点击“生成候选”时读取所选来源最近 14 天、最多 20 段只读摘要');
+  await expect(profile).toContainText('只有点击“生成候选”才会读取所选来源最近 14 天、最多 20 段只读摘要');
   await profile.getByRole('textbox', { name: '补充摘要' })
     .fill('Claude 最近总结：非紧急情况先异步整理，再统一回复。');
   await profile.getByRole('button', { name: '生成候选' }).click();
@@ -779,11 +1091,11 @@ test('晨报人格与技能要求真实链接、标题和判断优先', async ({
   expect(snapshot.persona).toContain('禁止只写孤立 #数字');
   expect(snapshot.morningBrief).toContain('今天先处理什么');
   expect(snapshot.morningBrief).toContain('先归纳 2-3 条判断');
-  expect(snapshot.morningBrief).toContain('工作项、PR、构建都必须带标题和工具返回的真实 `webUrl`');
-  expect(snapshot.morningBrief).toContain('禁止裸写 #编号');
+  expect(snapshot.morningBrief).toContain('工作项、PR、构建都必须带标题和 MCP 返回的真实链接');
+  expect(snapshot.morningBrief).toContain('禁止自行拼接或只写孤立 #编号');
 });
 
-test('超宽窗口填满工作区，非现在视图不显示日期或重复入口', async ({ page }) => {
+test('超宽窗口使用横向代理导航，历史今日纸仍可回到同一对话', async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 1200 });
   await openWorkspace(page);
   await seedWorkspace(page);
@@ -797,6 +1109,7 @@ test('超宽窗口填满工作区，非现在视图不显示日期或重复入�
       - (workspaceBox?.x ?? 0) - (workspaceBox?.width ?? 0),
   )).toBeLessThanOrEqual(1);
 
+  await openLegacyTodayPaper(page);
   await expect(page.getByRole('button', { name: '前一天' })).toBeVisible();
   await page
     .getByRole('navigation', { name: '管家工作视图' })
@@ -804,7 +1117,8 @@ test('超宽窗口填满工作区，非现在视图不显示日期或重复入�
     .click();
   await seedConversationHistory(page);
 
-  await expect(page.getByText('完整对话', { exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '管家工作视图' })
+    .getByText('私人工作代理', { exact: true })).toBeVisible();
   await expect(
     page.locator('.butler-conversation-header').getByRole('heading', { name: '发布风险报告', exact: true }),
   ).toBeVisible();
@@ -818,7 +1132,8 @@ test('超宽窗口填满工作区，非现在视图不显示日期或重复入�
   expect(workspaceNavBox).not.toBeNull();
   expect(historyBox).not.toBeNull();
   expect(conversationPaneBox).not.toBeNull();
-  expect(workspaceNavBox!.width).toBeLessThanOrEqual(60);
+  expect(workspaceNavBox!.width).toBeGreaterThan(1000);
+  expect(workspaceNavBox!.height).toBeLessThanOrEqual(70);
   expect(conversationPaneBox!.width).toBeGreaterThan(historyBox!.width * 3);
   const composerBox = await composer.boundingBox();
   expect((composerBox?.y ?? 0) + (composerBox?.height ?? 0)).toBeLessThanOrEqual(1200);
@@ -840,11 +1155,30 @@ test('超宽窗口填满工作区，非现在视图不显示日期或重复入�
   await expect(composer).toBeVisible();
 });
 
-test('主动工作驾驶舱匹配确认的宽屏视觉方向', async ({ page }) => {
+test('离开历史今日纸后仍可从更多菜单返回', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openWorkspace(page);
+  await seedWorkspace(page);
+
+  await openLegacyTodayPaper(page);
+  await expect(page.getByRole('button', { name: '前一天' })).toBeVisible();
+  const navigation = page.getByRole('navigation', { name: '管家工作视图' });
+  await navigation.getByRole('button', { name: '对话', exact: true }).click();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+
+  await navigation.getByLabel('更多管家视图', { exact: true }).click();
+  await navigation.getByRole('menuitem', { name: '今日纸' }).click();
+  await expect(page.getByRole('button', { name: '前一天' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '后一天' })).toBeVisible();
+});
+
+test('私人工作代理首页匹配确认的宽屏视觉方向', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspace(page);
   await seedWorkspace(page);
-  await expect(page.getByRole('heading', { name: /件事值得你先看/ })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '管家工作视图' })
+    .getByText('私人工作代理', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
   await expect(page.getByRole('button', { name: '添加上下文' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '引用文件或消息' })).toHaveCount(0);
   await expect(page).toHaveScreenshot('butler-workspace-wide.png', {
@@ -859,11 +1193,11 @@ test('主动工作驾驶舱匹配确认的宽屏视觉方向', async ({ page }) 
   });
 });
 
-test('例行照看详情把健康、运行、配置与版本放在同一工作面', async ({ page }) => {
+test('定时任务详情把健康、运行、配置与版本放在同一工作面', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspace(page);
   await page.getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: /例行照看/ })
+    .getByRole('button', { name: /定时任务/ })
     .click();
   await seedWorkspace(page);
   await page.getByRole('button', { name: '查看发布守护详情' }).click();
@@ -884,14 +1218,6 @@ test('对话中的长结果在中屏仍保留完整对话内容', async ({ page 
   await page.setViewportSize({ width: 768, height: 900 });
   await openWorkspace(page);
   await seedWorkspace(page);
-  await page.evaluate(async () => {
-    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
-      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
-    }>;
-    const { useButlerArtifacts } = await loadArtifacts();
-    localStorage.removeItem('rcx-butler-artifacts');
-    useButlerArtifacts.setState({ hydrated: true, artifacts: [] });
-  });
   await page.getByRole('combobox', { name: '切换管家视图' }).selectOption('conversation');
   const artifacts = page.getByRole('region', { name: '管家成果' });
   const conversationSelector = page.getByRole('combobox', { name: '管家会话' });
@@ -915,9 +1241,9 @@ test('窄屏用单一视图切换器保持 Composer 与责任状态可用', asyn
   await expect(switcher).toBeVisible();
   expect((await switcher.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page.getByRole('region', { name: '统一 Composer' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
   await switcher.selectOption('tasks');
-  await expect(page.getByRole('region', { name: '管家任务' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '管家委托' })).toBeVisible();
   await expect(page).toHaveScreenshot('butler-workspace-mobile.png', {
     animations: 'disabled',
     caret: 'hide',

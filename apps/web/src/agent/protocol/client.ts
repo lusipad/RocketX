@@ -2,6 +2,40 @@ import type { ExternalAgentConfigImportParams } from './generated/v2/ExternalAge
 import type { ExternalAgentConfigImportResponse } from './generated/v2/ExternalAgentConfigImportResponse';
 import type { InitializeParams } from './generated/InitializeParams';
 import type { InitializeResponse } from './generated/InitializeResponse';
+import type { ListMcpServerStatusParams } from './generated/v2/ListMcpServerStatusParams';
+import type { ListMcpServerStatusResponse } from './generated/v2/ListMcpServerStatusResponse';
+import type { McpServerToolCallParams } from './generated/v2/McpServerToolCallParams';
+import type { McpServerToolCallResponse } from './generated/v2/McpServerToolCallResponse';
+import type { MarketplaceAddParams } from './generated/v2/MarketplaceAddParams';
+import type { MarketplaceAddResponse } from './generated/v2/MarketplaceAddResponse';
+import type { MarketplaceRemoveParams } from './generated/v2/MarketplaceRemoveParams';
+import type { MarketplaceRemoveResponse } from './generated/v2/MarketplaceRemoveResponse';
+import type { MarketplaceUpgradeParams } from './generated/v2/MarketplaceUpgradeParams';
+import type { MarketplaceUpgradeResponse } from './generated/v2/MarketplaceUpgradeResponse';
+import type { PluginInstallParams } from './generated/v2/PluginInstallParams';
+import type { PluginInstallResponse } from './generated/v2/PluginInstallResponse';
+import type { PluginInstalledParams } from './generated/v2/PluginInstalledParams';
+import type { PluginInstalledResponse } from './generated/v2/PluginInstalledResponse';
+import type { PluginListParams } from './generated/v2/PluginListParams';
+import type { PluginListResponse } from './generated/v2/PluginListResponse';
+import type { PluginReadParams } from './generated/v2/PluginReadParams';
+import type { PluginReadResponse } from './generated/v2/PluginReadResponse';
+import type { PluginSkillReadParams } from './generated/v2/PluginSkillReadParams';
+import type { PluginSkillReadResponse } from './generated/v2/PluginSkillReadResponse';
+import type { PluginUninstallParams } from './generated/v2/PluginUninstallParams';
+import type { PluginUninstallResponse } from './generated/v2/PluginUninstallResponse';
+import type { SkillsConfigWriteParams } from './generated/v2/SkillsConfigWriteParams';
+import type { SkillsConfigWriteResponse } from './generated/v2/SkillsConfigWriteResponse';
+import type { SkillsListParams } from './generated/v2/SkillsListParams';
+import type { SkillsListResponse } from './generated/v2/SkillsListResponse';
+import type { ThreadArchiveParams } from './generated/v2/ThreadArchiveParams';
+import type { ThreadArchiveResponse } from './generated/v2/ThreadArchiveResponse';
+import type { ThreadGoalClearParams } from './generated/v2/ThreadGoalClearParams';
+import type { ThreadGoalClearResponse } from './generated/v2/ThreadGoalClearResponse';
+import type { ThreadGoalGetParams } from './generated/v2/ThreadGoalGetParams';
+import type { ThreadGoalGetResponse } from './generated/v2/ThreadGoalGetResponse';
+import type { ThreadGoalSetParams } from './generated/v2/ThreadGoalSetParams';
+import type { ThreadGoalSetResponse } from './generated/v2/ThreadGoalSetResponse';
 import type { ThreadResumeParams } from './generated/v2/ThreadResumeParams';
 import type { ThreadResumeResponse } from './generated/v2/ThreadResumeResponse';
 import type { ThreadSetNameParams } from './generated/v2/ThreadSetNameParams';
@@ -18,6 +52,8 @@ import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
 import type { TurnInterruptResponse } from './generated/v2/TurnInterruptResponse';
 import type { TurnStartParams } from './generated/v2/TurnStartParams';
 import type { TurnStartResponse } from './generated/v2/TurnStartResponse';
+import type { TurnSteerParams } from './generated/v2/TurnSteerParams';
+import type { TurnSteerResponse } from './generated/v2/TurnSteerResponse';
 import { assertCodexHandshake } from './compatibility';
 import { serverRequestPolicy } from './serverRequests';
 
@@ -40,8 +76,58 @@ export interface CodexTransport {
 
 interface ClientMethods {
   initialize: { params: InitializeParams; result: InitializeResponse };
+  'skills/list': { params: SkillsListParams; result: SkillsListResponse };
+  'skills/config/write': {
+    params: SkillsConfigWriteParams;
+    result: SkillsConfigWriteResponse;
+  };
+  'marketplace/add': {
+    params: MarketplaceAddParams;
+    result: MarketplaceAddResponse;
+  };
+  'marketplace/remove': {
+    params: MarketplaceRemoveParams;
+    result: MarketplaceRemoveResponse;
+  };
+  'marketplace/upgrade': {
+    params: MarketplaceUpgradeParams;
+    result: MarketplaceUpgradeResponse;
+  };
+  'plugin/list': { params: PluginListParams; result: PluginListResponse };
+  'plugin/installed': {
+    params: PluginInstalledParams;
+    result: PluginInstalledResponse;
+  };
+  'plugin/read': { params: PluginReadParams; result: PluginReadResponse };
+  'plugin/skill/read': {
+    params: PluginSkillReadParams;
+    result: PluginSkillReadResponse;
+  };
+  'plugin/install': {
+    params: PluginInstallParams;
+    result: PluginInstallResponse;
+  };
+  'plugin/uninstall': {
+    params: PluginUninstallParams;
+    result: PluginUninstallResponse;
+  };
+  'mcpServerStatus/list': {
+    params: ListMcpServerStatusParams;
+    result: ListMcpServerStatusResponse;
+  };
+  'mcpServer/tool/call': {
+    params: McpServerToolCallParams;
+    result: McpServerToolCallResponse;
+  };
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
+  'thread/archive': { params: ThreadArchiveParams; result: ThreadArchiveResponse };
+  'thread/goal/set': { params: ThreadGoalSetParams; result: ThreadGoalSetResponse };
+  'thread/goal/get': { params: ThreadGoalGetParams; result: ThreadGoalGetResponse };
+  'thread/goal/clear': {
+    params: ThreadGoalClearParams;
+    result: ThreadGoalClearResponse;
+  };
   'thread/name/set': { params: ThreadSetNameParams; result: ThreadSetNameResponse };
   'thread/memoryMode/set': {
     params: ThreadMemoryModeSetParams;
@@ -54,6 +140,7 @@ interface ClientMethods {
     result: ExternalAgentConfigImportResponse;
   };
   'turn/start': { params: TurnStartParams; result: TurnStartResponse };
+  'turn/steer': { params: TurnSteerParams; result: TurnSteerResponse };
   'turn/interrupt': { params: TurnInterruptParams; result: TurnInterruptResponse };
 }
 
@@ -101,6 +188,107 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
     }
     return;
   }
+  if (method === 'skills/list') {
+    if (!Array.isArray(response.data)) {
+      throw new Error('Codex app-server skills/list 响应缺少 data。');
+    }
+    return;
+  }
+  if (method === 'skills/config/write') {
+    if (typeof response.effectiveEnabled !== 'boolean') {
+      throw new Error('Codex app-server skills/config/write 响应缺少 effectiveEnabled。');
+    }
+    return;
+  }
+  if (method === 'marketplace/add') {
+    if (
+      typeof response.marketplaceName !== 'string'
+      || typeof response.installedRoot !== 'string'
+      || typeof response.alreadyAdded !== 'boolean'
+    ) {
+      throw new Error('Codex app-server marketplace/add 返回了无效市场。');
+    }
+    return;
+  }
+  if (method === 'marketplace/remove') {
+    if (
+      typeof response.marketplaceName !== 'string'
+      || (response.installedRoot !== null && typeof response.installedRoot !== 'string')
+    ) {
+      throw new Error('Codex app-server marketplace/remove 返回了无效市场。');
+    }
+    return;
+  }
+  if (method === 'marketplace/upgrade') {
+    if (
+      !Array.isArray(response.selectedMarketplaces)
+      || !Array.isArray(response.upgradedRoots)
+      || !Array.isArray(response.errors)
+    ) {
+      throw new Error('Codex app-server marketplace/upgrade 返回了无效结果。');
+    }
+    return;
+  }
+  if (method === 'plugin/list' || method === 'plugin/installed') {
+    if (!Array.isArray(response.marketplaces) || !Array.isArray(response.marketplaceLoadErrors)) {
+      throw new Error(`Codex app-server ${method} 返回了无效插件市场。`);
+    }
+    if (method === 'plugin/list' && !Array.isArray(response.featuredPluginIds)) {
+      throw new Error('Codex app-server plugin/list 响应缺少 featuredPluginIds。');
+    }
+    return;
+  }
+  if (method === 'plugin/read') {
+    if (!isRecord(response.plugin)) {
+      throw new Error('Codex app-server plugin/read 响应缺少 plugin。');
+    }
+    return;
+  }
+  if (method === 'plugin/skill/read') {
+    if (response.contents !== null && typeof response.contents !== 'string') {
+      throw new Error('Codex app-server plugin/skill/read 返回了无效 Skill 正文。');
+    }
+    return;
+  }
+  if (method === 'plugin/install') {
+    if (
+      (response.authPolicy !== 'ON_INSTALL' && response.authPolicy !== 'ON_USE')
+      || !Array.isArray(response.appsNeedingAuth)
+    ) {
+      throw new Error('Codex app-server plugin/install 返回了无效安装结果。');
+    }
+    return;
+  }
+  if (method === 'mcpServerStatus/list') {
+    if (!Array.isArray(response.data)) {
+      throw new Error('Codex app-server mcpServerStatus/list 响应缺少 data。');
+    }
+    return;
+  }
+  if (method === 'mcpServer/tool/call') {
+    if (!Array.isArray(response.content)) {
+      throw new Error('Codex app-server mcpServer/tool/call 响应缺少 content。');
+    }
+    return;
+  }
+  if (method === 'thread/goal/set') {
+    if (!isRecord(response.goal) || typeof response.goal.threadId !== 'string') {
+      throw new Error('Codex app-server thread/goal/set 响应缺少 goal。');
+    }
+    return;
+  }
+  if (method === 'thread/goal/get') {
+    if (response.goal !== null && (!isRecord(response.goal) || typeof response.goal.threadId !== 'string')) {
+      throw new Error('Codex app-server thread/goal/get 返回了无效 goal。');
+    }
+    return;
+  }
+  if (method === 'thread/goal/clear') {
+    if (typeof response.cleared !== 'boolean') {
+      throw new Error('Codex app-server thread/goal/clear 响应缺少 cleared。');
+    }
+    return;
+  }
   if (method === 'thread/list') {
     if (!Array.isArray(response.data)) {
       throw new Error('Codex app-server thread/list 响应缺少 data。');
@@ -115,6 +303,10 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
   }
   if (method === 'turn/start' && (!isRecord(response.turn) || typeof response.turn.id !== 'string')) {
     throw new Error('Codex app-server turn/start 响应缺少 turn.id。');
+    return;
+  }
+  if (method === 'turn/steer' && typeof response.turnId !== 'string') {
+    throw new Error('Codex app-server turn/steer 响应缺少 turnId。');
   }
 }
 

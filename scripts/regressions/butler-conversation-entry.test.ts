@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('纸上先即席问答，第 3 轮与左侧导航打开同一个完整对话层', () => {
+test('纸上先即席问答，第 3 轮与管家主导航打开同一个私人代理对话层', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   const ui = readFileSync('apps/web/src/stores/ui.ts', 'utf8');
@@ -34,8 +34,9 @@ test('纸上先即席问答，第 3 轮与左侧导航打开同一个完整对�
 
   assert.match(
     conversation,
-    /<span>\{selectedHosted \? 'AI 托管记录' : '完整对话'\}<\/span>[\s\S]*<h2>\{selectedHosted\?\.title \|\| activeSummary\?\.title \|\| '新对话'\}<\/h2>/,
+    /<span>\{selectedHosted \? 'AI 托管记录' : '私人工作代理'\}<\/span>[\s\S]*<h2>\{selectedHosted\?\.title \|\| activeSummary\?\.title \|\| '新对话'\}<\/h2>/,
   );
+  assert.match(conversation, /只有明确委托时，才会启动可暂停的执行任务/);
   assert.match(conversation, /\{selectedHosted \? \([\s\S]*回到「\{selectedHosted\.roomName\}」/);
   assert.match(conversation, /const mine = line\.role === 'user'/);
   assert.match(conversation, /data-speaker=\{line\.role\}/);

@@ -4,6 +4,7 @@ import {
   CODEX_APP_SERVER_VERSION,
   type CodexTransport,
 } from '../../apps/web/src/agent/protocol';
+import { setBusinessMcpLaunchConfigProvider } from '../../apps/web/src/agent/businessMcp';
 import {
   setButlerBrainStorage,
   setButlerCodexSettings,
@@ -18,17 +19,27 @@ import {
 } from '../../apps/web/src/lib/butlerProfile';
 import { parseButlerMemoryState } from '../../apps/web/src/lib/butlerMemory';
 import type { ButlerToolCheckpoint } from '../../apps/web/src/lib/butlerToolRuntime';
+import type { AgentLoopEvent } from '../../apps/web/src/kernel/ai/agent-loop';
 import {
   askButlerCodex,
+  addButlerCodexMarketplace,
   hydrateResidentCodexThread,
+  listButlerCodexSkills,
+  listButlerCodexPlugins,
+  listButlerInstalledCodexPlugins,
   residentCodexThreadSnapshot,
+  removeButlerCodexMarketplace,
   resetButlerCodexRuntime,
   runButlerCodexEphemeral,
+  installButlerCodexPlugin,
+  setButlerCodexSkillEnabled,
   setButlerCodexImageMaterializer,
   setButlerCodexTransportFactory,
   setButlerCodexWorkspaceResolver,
   stopButlerCodexTurn,
   transferConversationToCodexApp,
+  uninstallButlerCodexPlugin,
+  upgradeButlerCodexMarketplaces,
 } from '../../apps/web/src/stores/butlerCodex';
 
 class FakeTransport implements CodexTransport {
@@ -130,6 +141,10 @@ async function completeTurn(transport: FakeTransport, threadId = 'butler-thread'
 }
 
 function testRuntime(transports: FakeTransport[]) {
+  const restoreBusinessMcp = setBusinessMcpLaunchConfigProvider(async () => ({
+    command: 'C:/Program Files/RocketX/rocketx.exe',
+    args: ['--business-mcp'],
+  }));
   const restoreTransport = setButlerCodexTransportFactory(() => {
     const transport = new FakeTransport();
     transports.push(transport);
@@ -146,6 +161,7 @@ function testRuntime(transports: FakeTransport[]) {
     restoreBrainStorage();
     restoreWorkspace();
     restoreTransport();
+    restoreBusinessMcp();
   };
 }
 
@@ -166,6 +182,16 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     const threadParams = threadStart.params as Record<string, unknown>;
     assert.equal(threadParams.cwd, 'C:/RocketX/AppData/butler');
     assert.equal(threadParams.sandbox, 'read-only');
+    assert.equal(threadParams.approvalPolicy, 'on-request');
+    assert.equal(threadParams.approvalsReviewer, 'auto_review');
+    assert.deepEqual(threadParams.config, {
+      mcp_servers: {
+        rocketx_business: {
+          command: 'C:/Program Files/RocketX/rocketx.exe',
+          args: ['--business-mcp'],
+        },
+      },
+    });
     assert.equal('runtimeWorkspaceRoots' in threadParams, false);
     assert.doesNotMatch(
       String(threadParams.baseInstructions),
@@ -179,28 +205,27 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
       (threadParams.dynamicTools as Array<Record<string, unknown>>).map((tool) => tool.name),
       [
         'search_messages',
+        'list_room_messages',
         'list_mentions',
         'search_people_rooms',
         'list_todos',
+        'list_errands',
+        'steer_errand',
         'list_calendar',
-        'list_work_items',
-        'list_pull_requests',
-        'run_azure_devops_server_cli',
-        'list_builds',
         'recall_memory',
-        'load_skill',
         'remember',
         'revoke_memory',
         'restore_memory',
         'import_legacy_memory',
+        'draft_action',
+        'draft_ado_state',
         'draft_routine',
         'draft_errand',
       ],
     );
 
-    // Codex 原生记忆必须显式关掉：它是会话空闲后后台自动提炼、无逐条确认、
-    // 全局作用域的，与「确认卡是记忆唯一写入口 + scope 由可信上下文强制捕获」
-    // 直接冲突。不显式声明，这条承诺就只靠对方默认值在守。
+    // 管家只使用 RocketX Profile/v2 Memory：写入先确认、按账号隔离且可撤销。
+    // Codex 原生 Memory 会后台跨线程提炼，因此常驻线程必须显式关闭。
     const memoryMode = transport.writes.find((message) => message.method === 'thread/memoryMode/set');
     assert.ok(memoryMode, '常驻线程必须显式关闭 Codex 原生记忆');
     assert.deepEqual(memoryMode.params, { threadId: 'butler-thread', mode: 'disabled' });
@@ -208,6 +233,8 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     const turnStart = await startTurn(transport);
     const turnParams = turnStart.params as Record<string, unknown>;
     assert.equal(turnParams.effort, 'medium');
+    assert.equal(turnParams.approvalPolicy, 'on-request');
+    assert.equal(turnParams.approvalsReviewer, 'auto_review');
     assert.equal('runtimeWorkspaceRoots' in turnParams, false);
     const turnInput = String((turnParams.input as Array<Record<string, unknown>>)[0].text);
     assert.match(turnInput, /当前时间：2026-01-05 08:30 周一/);
@@ -218,6 +245,36 @@ test('常驻管家线程使用只读沙箱、无仓库 roots、dynamicTools 和 
     // 等待期可见化：线程建立与上下文准备各播报一次，之后才是正文流
     assert.deepEqual(events, ['phase', 'phase', 'content']);
   } finally {
+    await restore();
+  }
+});
+
+test('旧版自装 Skill 不会让 Codex 回退到 load_skill', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const profile = new MemoryStorage();
+  profile.set('rcx-butler-v1:skills', JSON.stringify([
+    {
+      name: '旧 技能',
+      description: '迁移前的不规范技能。',
+      body: '先查询旧系统，再输出结果。',
+    },
+  ]));
+  const restoreProfile = setButlerProfileStorage(profile);
+  try {
+    const asking = askButlerCodex({ text: '使用旧技能' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const threadStart = await startThread(transport);
+    const registered = (threadStart.params as Record<string, unknown>).dynamicTools as Array<Record<string, unknown>>;
+    const names = registered.map((tool) => tool.name);
+    assert.equal(names.includes('load_skill'), false);
+    assert.doesNotMatch(String(threadStart.params.baseInstructions), /旧 技能|load_skill/);
+    await startTurn(transport);
+    await completeTurn(transport);
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    restoreProfile();
     await restore();
   }
 });
@@ -273,7 +330,22 @@ test('Codex 例行事务使用原生 Agent Skill 输入', async () => {
     });
     const transport = await transportAt(transports, 0);
     await initialize(transport);
-    await startThread(transport, 'workflow-thread');
+    const threadStart = await startThread(transport, 'workflow-thread');
+    const threadParams = threadStart.params as Record<string, unknown>;
+    assert.equal(threadParams.approvalsReviewer, 'auto_review');
+    assert.deepEqual(threadParams.config, {
+      mcp_servers: {
+        rocketx_business: {
+          command: 'C:/Program Files/RocketX/rocketx.exe',
+          args: ['--business-mcp'],
+        },
+      },
+    });
+    assert.equal(
+      transport.writes.some((message) => message.method === 'thread/memoryMode/set'),
+      false,
+      'Codex 不允许 ephemeral 线程修改 memory mode；例行事务通过 taskContext 轻量召回',
+    );
     const turnStart = await startTurn(transport, 'workflow-turn');
     const input = (turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>;
     assert.match(String(input[0].text), /^\$morning-brief/);
@@ -285,6 +357,402 @@ test('Codex 例行事务使用原生 Agent Skill 输入', async () => {
     await completeTurn(transport, 'workflow-thread', 'workflow-turn');
     assert.deepEqual(await asking, { text: '完成。' });
   } finally {
+    await restore();
+  }
+});
+
+test('Codex MCP 工具进度会映射成管家步骤和结果事件', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const events: AgentLoopEvent[] = [];
+  try {
+    const asking = runButlerCodexEphemeral({
+      text: '读取项目列表',
+      onEvent: (event) => events.push(event),
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await startThread(transport, 'mcp-thread');
+    await startTurn(transport, 'mcp-turn');
+    transport.line({
+      method: 'item/started',
+      params: {
+        threadId: 'mcp-thread',
+        turnId: 'mcp-turn',
+        item: {
+          type: 'mcpToolCall',
+          id: 'mcp-tool-1',
+          server: 'rocketx_business',
+          tool: 'rocketx_azure_devops_server_read',
+          status: 'inProgress',
+          arguments: { resource: 'projects' },
+          result: null,
+          error: null,
+        },
+      },
+    });
+    transport.line({
+      method: 'item/completed',
+      params: {
+        threadId: 'mcp-thread',
+        turnId: 'mcp-turn',
+        item: {
+          type: 'mcpToolCall',
+          id: 'mcp-tool-1',
+          server: 'rocketx_business',
+          tool: 'rocketx_azure_devops_server_read',
+          status: 'completed',
+          arguments: { resource: 'projects' },
+          result: {
+            content: [],
+            structuredContent: { marker: 'MCP_RESULT' },
+          },
+          error: null,
+        },
+      },
+    });
+    await completeTurn(transport, 'mcp-thread', 'mcp-turn');
+    await asking;
+
+    const call = events.find((event) => event.type === 'tool-call');
+    assert.equal(call?.type === 'tool-call' ? call.toolCall.name : undefined,
+      'rocketx_azure_devops_server_read');
+    const result = events.find((event) => event.type === 'tool-result');
+    assert.match(result?.type === 'tool-result' ? result.content : '', /MCP_RESULT/);
+    assert.ok(events.some((event) =>
+      event.type === 'phase' && event.phase === 'summarizing'));
+  } finally {
+    await restore();
+  }
+});
+
+test('手写 $skill 使用 Codex 返回的真实 Skill 路径', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const asking = runButlerCodexEphemeral({
+      text: '$market-skill 分析发布风险',
+      now: new Date(2026, 0, 5, 8, 30).getTime(),
+    });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const list = transport.writes.find((message) => message.method === 'skills/list');
+    assert.ok(list);
+    transport.line({
+      id: list.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [{
+            name: 'market-skill',
+            description: '市场安装的 Skill',
+            path: 'C:/Users/test/.codex/plugins/market-skill/SKILL.md',
+            scope: 'user',
+            enabled: true,
+          }],
+          errors: [],
+        }],
+      },
+    });
+    await tick();
+    await startThread(transport, 'market-thread');
+    const turnStart = await startTurn(transport, 'market-turn');
+    const input = (turnStart.params as Record<string, unknown>).input as Array<Record<string, unknown>>;
+    assert.match(String(input[0].text), /^\$market-skill/);
+    assert.match(String(input[0].text), /分析发布风险/);
+    assert.deepEqual(input[1], {
+      type: 'skill',
+      name: 'market-skill',
+      path: 'C:/Users/test/.codex/plugins/market-skill/SKILL.md',
+    });
+    await completeTurn(transport, 'market-thread', 'market-turn');
+    assert.deepEqual(await asking, { text: '完成。' });
+  } finally {
+    await restore();
+  }
+});
+
+test('手写未知或停用的 $skill 不会静默退化为普通文本', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const asking = runButlerCodexEphemeral({ text: '$missing-skill 做事' });
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    const list = transport.writes.find((message) => message.method === 'skills/list');
+    assert.ok(list);
+    transport.line({
+      id: list.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [],
+          errors: [],
+        }],
+      },
+    });
+    await assert.rejects(() => asking, /未安装 Skill：missing-skill/);
+    assert.equal(
+      transport.writes.some((message) => message.method === 'thread/start'),
+      false,
+    );
+  } finally {
+    await restore();
+  }
+});
+
+test('Butler Skill 开关读取并写入 Codex 原生配置', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const profile = new MemoryStorage();
+  profile.set('rcx-butler-v1:native-skill-config-migrated-v1', '1');
+  const restoreProfile = setButlerProfileStorage(profile);
+  const skill = {
+    name: 'morning-brief',
+    description: '晨报',
+    path: 'C:/RocketX/AppData/butler/.agents/skills/morning-brief/SKILL.md',
+    scope: 'repo',
+    enabled: true,
+  };
+  try {
+    const listing = listButlerCodexSkills();
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await tick();
+    const firstList = transport.writes.find((message) => message.method === 'skills/list');
+    assert.ok(firstList);
+    transport.line({
+      id: firstList.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [skill],
+          errors: [],
+        }],
+      },
+    });
+    assert.deepEqual(await listing, [skill]);
+
+    const toggling = setButlerCodexSkillEnabled('morning-brief', false);
+    await tick();
+    const listRequests = transport.writes.filter((message) => message.method === 'skills/list');
+    const secondList = listRequests[1];
+    assert.ok(secondList);
+    transport.line({
+      id: secondList.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [skill],
+          errors: [],
+        }],
+      },
+    });
+    await tick();
+    const config = transport.writes.find((message) =>
+      message.method === 'skills/config/write');
+    assert.ok(config);
+    assert.deepEqual(config.params, {
+      path: skill.path,
+      enabled: false,
+    });
+    transport.line({ id: config.id, result: { effectiveEnabled: false } });
+    assert.equal(await toggling, false);
+  } finally {
+    restoreProfile();
+    await restore();
+  }
+});
+
+test('Butler 市场只转发 Codex 原生 marketplace/plugin 协议', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  try {
+    const listing = listButlerCodexPlugins();
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await tick();
+    const list = transport.writes.find((message) => message.method === 'plugin/list');
+    assert.ok(list);
+    assert.deepEqual(list.params, { cwds: ['C:/RocketX/AppData/butler'] });
+    transport.line({
+      id: list.id,
+      result: {
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      },
+    });
+    assert.deepEqual((await listing).marketplaces, []);
+
+    const installedListing = listButlerInstalledCodexPlugins();
+    await tick();
+    const installedList = transport.writes.find((message) =>
+      message.method === 'plugin/installed');
+    assert.ok(installedList);
+    assert.deepEqual(installedList.params, { cwds: ['C:/RocketX/AppData/butler'] });
+    transport.line({
+      id: installedList.id,
+      result: {
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+      },
+    });
+    assert.deepEqual((await installedListing).marketplaces, []);
+
+    const adding = addButlerCodexMarketplace('https://github.com/example/skills');
+    await tick();
+    const add = transport.writes.find((message) => message.method === 'marketplace/add');
+    assert.ok(add);
+    assert.deepEqual(add.params, { source: 'https://github.com/example/skills' });
+    transport.line({
+      id: add.id,
+      result: {
+        marketplaceName: 'example-skills',
+        installedRoot: 'C:/Users/test/.codex/marketplaces/example-skills',
+        alreadyAdded: false,
+      },
+    });
+    assert.equal((await adding).marketplaceName, 'example-skills');
+
+    const removing = removeButlerCodexMarketplace('example-skills');
+    await tick();
+    const remove = transport.writes.find((message) => message.method === 'marketplace/remove');
+    assert.ok(remove);
+    assert.deepEqual(remove.params, { marketplaceName: 'example-skills' });
+    transport.line({
+      id: remove.id,
+      result: {
+        marketplaceName: 'example-skills',
+        installedRoot: 'C:/Users/test/.codex/marketplaces/example-skills',
+      },
+    });
+    assert.equal((await removing).marketplaceName, 'example-skills');
+
+    const installing = installButlerCodexPlugin({
+      marketplaceName: 'official',
+      marketplacePath: null,
+      pluginName: 'memory-tools',
+    });
+    await tick();
+    const install = transport.writes.find((message) => message.method === 'plugin/install');
+    assert.ok(install);
+    assert.deepEqual(install.params, {
+      remoteMarketplaceName: 'official',
+      pluginName: 'memory-tools',
+    });
+    transport.line({
+      id: install.id,
+      result: { authPolicy: 'ON_USE', appsNeedingAuth: [] },
+    });
+    assert.deepEqual(await installing, { authPolicy: 'ON_USE', appsNeedingAuth: [] });
+
+    const uninstalling = uninstallButlerCodexPlugin('official:memory-tools');
+    await tick();
+    const uninstall = transport.writes.find((message) => message.method === 'plugin/uninstall');
+    assert.ok(uninstall);
+    assert.deepEqual(uninstall.params, { pluginId: 'official:memory-tools' });
+    transport.line({ id: uninstall.id, result: {} });
+    await uninstalling;
+
+    const upgrading = upgradeButlerCodexMarketplaces();
+    await tick();
+    const upgrade = transport.writes.find((message) => message.method === 'marketplace/upgrade');
+    assert.ok(upgrade);
+    assert.deepEqual(upgrade.params, {});
+    transport.line({
+      id: upgrade.id,
+      result: {
+        selectedMarketplaces: ['official'],
+        upgradedRoots: ['C:/Users/test/.codex/marketplaces/official'],
+        errors: [],
+      },
+    });
+    assert.deepEqual((await upgrading).selectedMarketplaces, ['official']);
+  } finally {
+    await restore();
+  }
+});
+
+test('首次读取原生 Skill 时迁移旧的停用状态', async () => {
+  const transports: FakeTransport[] = [];
+  const restore = testRuntime(transports);
+  const profile = new MemoryStorage();
+  profile.set('rcx-butler-v1:disabled-skills', JSON.stringify(['morning-brief']));
+  const restoreProfile = setButlerProfileStorage(profile);
+  const enabledSkill = {
+    name: 'morning-brief',
+    description: '晨报',
+    path: 'C:/RocketX/AppData/butler/.agents/skills/morning-brief/SKILL.md',
+    scope: 'repo',
+    enabled: true,
+  };
+  const nativelyDisabledSkill = {
+    name: 'native-disabled',
+    description: '由 Codex 原生配置停用',
+    path: 'C:/RocketX/AppData/butler/.agents/skills/native-disabled/SKILL.md',
+    scope: 'repo',
+    enabled: false,
+  };
+  try {
+    const listing = listButlerCodexSkills();
+    const transport = await transportAt(transports, 0);
+    await initialize(transport);
+    await tick();
+    const firstList = transport.writes.find((message) => message.method === 'skills/list');
+    assert.ok(firstList);
+    transport.line({
+      id: firstList.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [enabledSkill, nativelyDisabledSkill],
+          errors: [],
+        }],
+      },
+    });
+    await tick();
+    const config = transport.writes.find((message) =>
+      message.method === 'skills/config/write');
+    assert.ok(config);
+    assert.deepEqual(config.params, {
+      path: enabledSkill.path,
+      enabled: false,
+    });
+    assert.equal(
+      transport.writes.filter((message) =>
+        message.method === 'skills/config/write').length,
+      1,
+    );
+    transport.line({ id: config.id, result: { effectiveEnabled: false } });
+    await tick();
+    const listRequests = transport.writes.filter((message) => message.method === 'skills/list');
+    const migratedList = listRequests[1];
+    assert.ok(migratedList);
+    transport.line({
+      id: migratedList.id,
+      result: {
+        data: [{
+          cwd: 'C:/RocketX/AppData/butler',
+          skills: [{ ...enabledSkill, enabled: false }, nativelyDisabledSkill],
+          errors: [],
+        }],
+      },
+    });
+
+    assert.deepEqual(
+      (await listing).map((skill) => [skill.name, skill.enabled]),
+      [
+        ['morning-brief', false],
+        ['native-disabled', false],
+      ],
+    );
+    assert.equal(
+      profile.get('rcx-butler-v1:native-skill-config-migrated-v1'),
+      '1',
+    );
+  } finally {
+    restoreProfile();
     await restore();
   }
 });
@@ -611,6 +1079,16 @@ test('resume 失败重建线程时，重建后首轮 turn input 带 fallbackTran
 
     const resumeRequest = secondTransport.writes.find((message) => message.method === 'thread/resume');
     assert.ok(resumeRequest);
+    const resumeParams = resumeRequest.params as Record<string, unknown>;
+    assert.equal(resumeParams.approvalsReviewer, 'auto_review');
+    assert.deepEqual(resumeParams.config, {
+      mcp_servers: {
+        rocketx_business: {
+          command: 'C:/Program Files/RocketX/rocketx.exe',
+          args: ['--business-mcp'],
+        },
+      },
+    });
     secondTransport.line({
       id: resumeRequest.id,
       error: { code: -32000, message: 'resume failed' },

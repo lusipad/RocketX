@@ -135,6 +135,8 @@ test('桌面工作区使用标准 Agent Skill 与 AGENTS.md 格式', () => {
   assert.match(agents, /approval-required 时停止动作/);
   assert.match(agents, /不在工作目录中寻找、复制、生成或保存账号凭据/);
   assert.match(agents, /不得使用命令执行或文件修改绕过 RocketX 工具和审批系统/);
+  assert.match(agents, /GET 和 Skill 白名单内的只读 POST/);
+  assert.match(agents, /method.*body/);
 
   const source = readFileSync('apps/web/src/lib/butlerArchive.ts', 'utf8');
   assert.doesNotMatch(source, /renderButlerMemoryFile/);

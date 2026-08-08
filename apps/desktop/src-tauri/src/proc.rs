@@ -28,7 +28,13 @@ const AZURE_DEVOPS_SERVER_MARKER_FILE: &str = ".rocketx-managed.json";
 const AZURE_DEVOPS_SERVER_UPSTREAM_COMMIT: &str = "293b09774cf9d1ef880a889baf212a9b661e0a75";
 const AZURE_DEVOPS_SERVER_STDOUT_LIMIT: usize = 1024 * 1024;
 const AZURE_DEVOPS_SERVER_STDERR_LIMIT: usize = 32 * 1024;
+const AZURE_DEVOPS_SERVER_BODY_LIMIT: usize = 64 * 1024;
 const AZURE_DEVOPS_SERVER_TIMEOUT: Duration = Duration::from_secs(60);
+const BUSINESS_MCP_AZURE_DEVOPS_SERVER_TIMEOUT: Duration = Duration::from_secs(15);
+const AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS: [&str; 2] = [
+    "AZURE_DEVOPS_SERVER_SEARCH_BASE_URL",
+    "AZURE_DEVOPS_SERVER_TESTRESULTS_BASE_URL",
+];
 // 候选下限不是兼容承诺。只有跑过完整语义门禁的版本才进入 verified 列表；
 // 更高版本可在轻量启动探测通过后使用，但必须向用户标记为未验证。
 const CODEX_MINIMUM_CANDIDATE: &str = "0.140.0";
@@ -822,27 +828,29 @@ enum BundledSkillInstallResult {
 #[serde(rename_all = "camelCase")]
 pub struct ButlerAzureDevOpsServerReadRequest {
     #[serde(default)]
-    method: Option<String>,
-    collection_url: String,
+    pub(crate) method: Option<String>,
+    pub(crate) collection_url: String,
     #[serde(default)]
-    auth_mode: Option<String>,
+    pub(crate) auth_mode: Option<String>,
     #[serde(default)]
-    pat: Option<String>,
+    pub(crate) pat: Option<String>,
     #[serde(default)]
-    area: Option<String>,
-    resource: String,
+    pub(crate) area: Option<String>,
+    pub(crate) resource: String,
     #[serde(default)]
-    project: Option<String>,
+    pub(crate) project: Option<String>,
     #[serde(default)]
-    team: Option<String>,
+    pub(crate) team: Option<String>,
     #[serde(default)]
-    query: Option<serde_json::Map<String, serde_json::Value>>,
+    pub(crate) query: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
-    api_version: Option<String>,
+    pub(crate) body: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
-    server_version_hint: Option<String>,
+    pub(crate) api_version: Option<String>,
     #[serde(default)]
-    allow_conditional_area: bool,
+    pub(crate) server_version_hint: Option<String>,
+    #[serde(default)]
+    pub(crate) allow_conditional_area: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -862,6 +870,8 @@ struct ValidatedButlerAzureDevOpsServerReadRequest {
     team: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     query: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     api_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1064,49 +1074,30 @@ fn first_existing_program(
 }
 
 #[cfg(windows)]
-fn pwsh_program_candidates_from_finder(
-    mut finder: impl FnMut(&str) -> Option<PathBuf>,
-) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = finder("pwsh.exe") {
-        candidates.push(path);
-    }
-    for base in ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-    {
-        let path = base.join("PowerShell").join("7").join("pwsh.exe");
-        if !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    }
-    if let Some(path) = finder("powershell.exe") {
-        candidates.push(path);
-    }
-    if let Some(system_root) = std::env::var_os("SystemRoot") {
-        let path = PathBuf::from(system_root)
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        if !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    }
-    candidates
-}
+fn windows_system_directory() -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 
-#[cfg(windows)]
-fn resolve_pwsh_program_from_finder(
-    finder: impl FnMut(&str) -> Option<PathBuf>,
-) -> Result<PathBuf, String> {
-    first_existing_program(pwsh_program_candidates_from_finder(finder))
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+        if length == 0 {
+            return Err("无法定位 Windows 系统目录".to_string());
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Ok(PathBuf::from(OsString::from_wide(&buffer)));
+        }
+        buffer.resize(length + 1, 0);
+    }
 }
 
 #[cfg(windows)]
 fn resolve_pwsh_program() -> Result<PathBuf, String> {
-    resolve_pwsh_program_from_finder(find_program)
+    first_existing_program([windows_system_directory()?
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")])
 }
 
 #[cfg(not(windows))]
@@ -1240,6 +1231,20 @@ fn validate_azure_devops_query(
     Ok(Some(query))
 }
 
+fn validate_azure_devops_body(
+    body: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    let Some(body) = body else {
+        return Ok(None);
+    };
+    let encoded = serde_json::to_vec(&body)
+        .map_err(|error| format!("Azure DevOps body 无法编码：{error}"))?;
+    if encoded.len() > AZURE_DEVOPS_SERVER_BODY_LIMIT {
+        return Err("Azure DevOps body 过大".to_string());
+    }
+    Ok(Some(body))
+}
+
 fn validate_server_version_hint(value: Option<String>) -> Result<Option<String>, String> {
     let Some(value) = value else {
         return Ok(None);
@@ -1263,8 +1268,19 @@ fn validate_butler_azure_devops_server_read_request(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("GET");
-    if !method.eq_ignore_ascii_case("GET") {
-        return Err("RocketX 只允许 Azure DevOps Server GET 读取".to_string());
+    let method = if method.eq_ignore_ascii_case("GET") {
+        "GET"
+    } else if method.eq_ignore_ascii_case("POST") {
+        "POST"
+    } else {
+        return Err("RocketX 只允许 Azure DevOps Server GET 或只读 POST".to_string());
+    };
+    let body = validate_azure_devops_body(request.body)?;
+    if method == "GET" && body.is_some() {
+        return Err("Azure DevOps GET 请求不接受 body".to_string());
+    }
+    if method == "POST" && body.is_none() {
+        return Err("Azure DevOps POST 请求必须提供 body".to_string());
     }
 
     let collection_url = validate_url("Azure DevOps collectionUrl", request.collection_url)?;
@@ -1288,7 +1304,7 @@ fn validate_butler_azure_devops_server_read_request(
     }
 
     Ok(ValidatedButlerAzureDevOpsServerReadRequest {
-        method: "GET",
+        method,
         collection_url,
         auth_mode,
         pat,
@@ -1297,6 +1313,7 @@ fn validate_butler_azure_devops_server_read_request(
         project: validate_optional_plain_string("Azure DevOps project", request.project, 256)?,
         team: validate_optional_plain_string("Azure DevOps team", request.team, 256)?,
         query: validate_azure_devops_query(request.query)?,
+        body,
         api_version: validate_optional_plain_string(
             "Azure DevOps apiVersion",
             request.api_version,
@@ -1365,19 +1382,39 @@ fn redact_json_secret(value: &mut serde_json::Value, secret: &str) {
     }
 }
 
-fn run_butler_azure_devops_server_read_with_program(
+fn harden_azure_devops_runner_environment(command: &mut Command) {
+    for name in AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+        command.env_remove(name);
+    }
+}
+
+fn run_butler_azure_devops_server_read_with_program_and_timeout(
     program: PathBuf,
     adapter_path: PathBuf,
     request: ValidatedButlerAzureDevOpsServerReadRequest,
+    timeout: Duration,
+    dry_run: bool,
 ) -> Result<serde_json::Value, String> {
-    let payload = serde_json::to_vec(&request)
+    let mut payload = serde_json::to_value(&request)
+        .map_err(|error| format!("无法编码 Azure DevOps 请求：{error}"))?;
+    if dry_run {
+        payload
+            .as_object_mut()
+            .ok_or_else(|| "Azure DevOps 请求不是对象".to_string())?
+            .insert("dryRun".to_string(), serde_json::Value::Bool(true));
+    }
+    let payload = serde_json::to_vec(&payload)
         .map_err(|error| format!("无法编码 Azure DevOps 请求：{error}"))?;
     let display_program = program.display().to_string();
     let mut command = hidden_command(&program);
+    harden_azure_devops_runner_environment(&mut command);
     command
         .arg("-NoLogo")
         .arg("-NoProfile")
-        .arg("-NonInteractive")
+        .arg("-NonInteractive");
+    #[cfg(windows)]
+    command.arg("-ExecutionPolicy").arg("Bypass");
+    command
         .arg("-File")
         .arg(&adapter_path)
         .stdin(Stdio::piped())
@@ -1415,12 +1452,15 @@ fn run_butler_azure_devops_server_read_with_program(
         {
             break status;
         }
-        if start.elapsed() >= AZURE_DEVOPS_SERVER_TIMEOUT {
+        if start.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
-            return Err("Azure DevOps Server 读取超时（60 秒）".to_string());
+            return Err(format!(
+                "Azure DevOps Server 读取超时（{} 秒）",
+                timeout.as_secs()
+            ));
         }
         thread::sleep(Duration::from_millis(50));
     };
@@ -1461,11 +1501,189 @@ fn run_butler_azure_devops_server_read_with_program(
     Ok(result)
 }
 
+fn run_butler_azure_devops_server_read_with_program(
+    program: PathBuf,
+    adapter_path: PathBuf,
+    request: ValidatedButlerAzureDevOpsServerReadRequest,
+) -> Result<serde_json::Value, String> {
+    run_butler_azure_devops_server_read_with_program_and_timeout(
+        program,
+        adapter_path,
+        request,
+        AZURE_DEVOPS_SERVER_TIMEOUT,
+        false,
+    )
+}
+
 fn run_butler_azure_devops_server_read(
     adapter_path: PathBuf,
     request: ValidatedButlerAzureDevOpsServerReadRequest,
 ) -> Result<serde_json::Value, String> {
     run_butler_azure_devops_server_read_with_program(resolve_pwsh_program()?, adapter_path, request)
+}
+
+fn standalone_azure_devops_server_adapter_path() -> Result<PathBuf, String> {
+    let executable_dir = std::env::current_exe()
+        .map_err(|error| format!("无法定位 RocketX 可执行文件：{error}"))?
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "RocketX 可执行文件没有父目录".to_string())?;
+    let mut roots = vec![
+        executable_dir.join(BUTLER_BUNDLED_SKILLS_DIR),
+        executable_dir
+            .join("..")
+            .join("Resources")
+            .join(BUTLER_BUNDLED_SKILLS_DIR),
+        executable_dir
+            .join("..")
+            .join("lib")
+            .join("rocketx")
+            .join(BUTLER_BUNDLED_SKILLS_DIR),
+    ];
+    if cfg!(debug_assertions) {
+        roots.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join(BUTLER_BUNDLED_SKILLS_DIR),
+        );
+    }
+    for root in roots {
+        let adapter = root.join(AZURE_DEVOPS_SERVER_HOST_ADAPTER);
+        if adapter.is_file() {
+            return contained_existing_path(&root, &adapter);
+        }
+    }
+    Err("无法定位 RocketX 内置 Azure DevOps Server adapter".to_string())
+}
+
+fn run_business_azure_devops_server_read_with<RunSkill, RunWindowsAuth>(
+    request: ValidatedButlerAzureDevOpsServerReadRequest,
+    run_skill: RunSkill,
+    run_windows_auth: RunWindowsAuth,
+) -> Result<serde_json::Value, String>
+where
+    RunSkill: FnOnce(
+        ValidatedButlerAzureDevOpsServerReadRequest,
+        bool,
+    ) -> Result<serde_json::Value, String>,
+    RunWindowsAuth:
+        FnOnce(&str, &str, Option<&str>, &str) -> Result<crate::winauth::HttpResponse, String>,
+{
+    if request.auth_mode != "default-credentials" {
+        return run_skill(request, false);
+    }
+
+    let collection_url = request.collection_url.clone();
+    let preview = run_skill(request, true)?;
+    let requires_allow_write = preview
+        .get("RequiresAllowWrite")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "Azure DevOps Skill 预览缺少写入安全标记".to_string())?;
+    if requires_allow_write {
+        return Err("RocketX 业务 MCP 只允许执行 Azure DevOps 只读请求".to_string());
+    }
+    let method = preview
+        .get("Method")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| matches!(*value, "GET" | "POST"))
+        .ok_or_else(|| "Azure DevOps Skill 预览缺少有效 Method".to_string())?;
+    let uri = preview
+        .get("Uri")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Azure DevOps Skill 预览缺少 Uri".to_string())?;
+    let parsed =
+        tauri::Url::parse(uri).map_err(|_| "Azure DevOps Skill 预览返回了无效 Uri".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("Azure DevOps Skill 预览返回了无效 Uri".to_string());
+    }
+    let configured = tauri::Url::parse(&collection_url)
+        .map_err(|_| "Azure DevOps collectionUrl 无效".to_string())?;
+    let configured_path = configured.path().trim_end_matches('/');
+    let preview_path = parsed.path();
+    let within_collection = configured_path.is_empty()
+        || preview_path == configured_path
+        || preview_path
+            .strip_prefix(configured_path)
+            .is_some_and(|suffix| suffix.starts_with('/'));
+    if parsed.scheme() != configured.scheme()
+        || parsed.host_str() != configured.host_str()
+        || parsed.port_or_known_default() != configured.port_or_known_default()
+        || !within_collection
+    {
+        return Err("Azure DevOps Skill 预览越过了工作台已配置的 collection 边界".to_string());
+    }
+    let body = match preview.get("Body") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value)) => Some(value.as_str()),
+        Some(_) => return Err("Azure DevOps Skill 预览返回了无效 Body".to_string()),
+    };
+
+    let response = run_windows_auth(uri, method, body, "application/json")
+        .map_err(|error| format!("Azure DevOps Server 读取失败：{error}"))?;
+    if response.body.len() > AZURE_DEVOPS_SERVER_STDOUT_LIMIT {
+        return Err("Azure DevOps Server 返回过大（超过 1 MiB）".to_string());
+    }
+    if !(200..=299).contains(&response.status) {
+        let detail = response.body.trim().chars().take(512).collect::<String>();
+        let hint = match response.status {
+            401 => "Windows 集成认证失败，请确认当前登录用户可访问该集合",
+            403 => "当前 Windows 登录用户没有该路由的读取权限",
+            404 => "该路由在当前 Azure DevOps Server 或 API 版本中不存在",
+            _ => "请检查请求路由、服务状态与 API 版本",
+        };
+        return Err(if detail.is_empty() {
+            format!("Azure DevOps Server 返回 HTTP {}：{hint}", response.status)
+        } else {
+            format!(
+                "Azure DevOps Server 返回 HTTP {}：{hint}；响应：{detail}",
+                response.status
+            )
+        });
+    }
+
+    let mut result = if response.body.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(&response.body)
+            .map_err(|error| format!("Azure DevOps Server 返回了无效 JSON：{error}"))?
+    };
+    let source = serde_json::json!({ "url": uri });
+    match &mut result {
+        serde_json::Value::Object(value) => {
+            value.insert("_rocketxSource".to_string(), source);
+            Ok(result)
+        }
+        _ => Ok(serde_json::json!({
+            "data": result,
+            "_rocketxSource": source,
+        })),
+    }
+}
+
+pub(crate) fn business_azure_devops_server_read(
+    request: ButlerAzureDevOpsServerReadRequest,
+) -> Result<serde_json::Value, String> {
+    let request = validate_butler_azure_devops_server_read_request(request)?;
+    let program = resolve_pwsh_program()?;
+    let adapter = standalone_azure_devops_server_adapter_path()?;
+    run_business_azure_devops_server_read_with(
+        request,
+        move |request, dry_run| {
+            run_butler_azure_devops_server_read_with_program_and_timeout(
+                program,
+                adapter,
+                request,
+                BUSINESS_MCP_AZURE_DEVOPS_SERVER_TIMEOUT,
+                dry_run,
+            )
+        },
+        crate::winauth::blocking_request,
+    )
 }
 
 fn prepare_attachments_dir(app: &tauri::AppHandle, session_id: &str) -> Result<PathBuf, String> {
@@ -2106,29 +2324,32 @@ mod tests {
         app_server_args_for_help, azure_devops_server_marker_path,
         azure_devops_server_marker_payload, classify_bundled_skill_ownership,
         classify_codex_version, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, find_program, host_path,
+        exec_optional_args_for_help, host_path,
         install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
         parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
         resolve_codex_from_candidates_with_probe, resolve_update_package,
-        run_butler_azure_devops_server_read, safe_attachment_path,
+        run_business_azure_devops_server_read_with, run_butler_azure_devops_server_read,
+        safe_attachment_path, standalone_azure_devops_server_adapter_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, BundledSkillInstallResult, BundledSkillOwnership,
         ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus, CodexProcessInfo,
-        CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_HOST_ADAPTER,
-        CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS,
-        UPDATER_PUBLIC_KEY,
+        CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
+        AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
+        CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
     };
     #[cfg(windows)]
     use super::{
-        first_existing_program, resolve_pwsh_program_from_finder,
+        first_existing_program, resolve_pwsh_program,
         run_butler_azure_devops_server_read_with_program,
     };
     use serde_json::json;
+    use std::ffi::OsStr;
     #[cfg(windows)]
     use std::ffi::OsString;
     use std::{
         fs,
         path::{Path, PathBuf},
+        process::Command,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -2402,7 +2623,7 @@ mod tests {
     }
 
     #[test]
-    fn azure_devops_read_contract_is_get_only_and_scalar_query_only() {
+    fn azure_devops_read_contract_accepts_skill_read_posts_and_rejects_write_methods() {
         let valid = ButlerAzureDevOpsServerReadRequest {
             method: Some("GET".to_string()),
             collection_url: "https://ado.example.test/DefaultCollection".to_string(),
@@ -2416,27 +2637,71 @@ mod tests {
                 ("includeHidden".to_string(), json!(true)),
                 ("ids".to_string(), json!(["1", "2"])),
             ])),
+            body: None,
             api_version: Some("7.1-preview.1".to_string()),
             server_version_hint: Some("2022".to_string()),
             allow_conditional_area: false,
         };
         assert!(validate_butler_azure_devops_server_read_request(valid).is_ok());
 
-        let invalid_method = ButlerAzureDevOpsServerReadRequest {
-            method: Some("POST".to_string()),
-            collection_url: "https://ado.example.test/DefaultCollection".to_string(),
-            auth_mode: Some("default-credentials".to_string()),
-            pat: None,
-            area: Some("git".to_string()),
-            resource: "repositories".to_string(),
-            project: None,
-            team: None,
-            query: None,
-            api_version: None,
-            server_version_hint: None,
-            allow_conditional_area: false,
-        };
+        let wiql: ButlerAzureDevOpsServerReadRequest = serde_json::from_value(json!({
+            "method": "POST",
+            "collectionUrl": "https://ado.example.test/DefaultCollection",
+            "authMode": "default-credentials",
+            "area": "wit",
+            "resource": "wiql",
+            "project": "RocketX",
+            "body": {"query": "SELECT [System.Id] FROM WorkItems"}
+        }))
+        .unwrap();
+        let validated = validate_butler_azure_devops_server_read_request(wiql).unwrap();
+        assert_eq!(validated.method, "POST");
+        assert_eq!(
+            serde_json::to_value(validated).unwrap()["body"]["query"],
+            "SELECT [System.Id] FROM WorkItems"
+        );
+
+        let invalid_method: ButlerAzureDevOpsServerReadRequest = serde_json::from_value(json!({
+            "method": "PATCH",
+            "collectionUrl": "https://ado.example.test/DefaultCollection",
+            "authMode": "default-credentials",
+            "area": "wit",
+            "resource": "workitems/42",
+            "body": {"state": "Closed"}
+        }))
+        .unwrap();
         assert!(validate_butler_azure_devops_server_read_request(invalid_method).is_err());
+
+        let get_with_body: ButlerAzureDevOpsServerReadRequest = serde_json::from_value(json!({
+            "method": "GET",
+            "collectionUrl": "https://ado.example.test/DefaultCollection",
+            "authMode": "default-credentials",
+            "resource": "projects",
+            "body": {"query": "unexpected"}
+        }))
+        .unwrap();
+        assert!(validate_butler_azure_devops_server_read_request(get_with_body).is_err());
+
+        let post_without_body: ButlerAzureDevOpsServerReadRequest = serde_json::from_value(json!({
+            "method": "POST",
+            "collectionUrl": "https://ado.example.test/DefaultCollection",
+            "authMode": "default-credentials",
+            "area": "wit",
+            "resource": "wiql"
+        }))
+        .unwrap();
+        assert!(validate_butler_azure_devops_server_read_request(post_without_body).is_err());
+
+        let oversized_body: ButlerAzureDevOpsServerReadRequest = serde_json::from_value(json!({
+            "method": "POST",
+            "collectionUrl": "https://ado.example.test/DefaultCollection",
+            "authMode": "default-credentials",
+            "area": "wit",
+            "resource": "wiql",
+            "body": {"query": "x".repeat(AZURE_DEVOPS_SERVER_BODY_LIMIT)}
+        }))
+        .unwrap();
+        assert!(validate_butler_azure_devops_server_read_request(oversized_body).is_err());
 
         let invalid_query = ButlerAzureDevOpsServerReadRequest {
             method: Some("GET".to_string()),
@@ -2451,6 +2716,7 @@ mod tests {
                 "bad".to_string(),
                 json!({ "nested": true }),
             )])),
+            body: None,
             api_version: None,
             server_version_hint: None,
             allow_conditional_area: false,
@@ -2467,6 +2733,7 @@ mod tests {
             project: None,
             team: None,
             query: None,
+            body: None,
             api_version: None,
             server_version_hint: None,
             allow_conditional_area: false,
@@ -2495,8 +2762,215 @@ mod tests {
             include_str!("../resources/codex-skills/azure-devops-server-host-adapter.ps1");
         assert!(adapter.contains("$requestObject = ConvertFrom-Json -InputObject $raw"));
         assert!(adapter.contains("$request = @{}"));
+        assert!(adapter.contains("$invokeParams.Body = $request.body"));
+        assert!(adapter.contains("$invokeParams.DryRun = $true"));
+        assert!(!adapter.contains("$invokeParams.AllowWrite"));
         assert!(!adapter.contains("-AsHashtable"));
         assert!(!adapter.contains("ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 100"));
+    }
+
+    #[test]
+    fn business_mcp_default_credentials_uses_skill_preview_then_native_windows_auth() {
+        let request =
+            validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
+                method: Some("GET".to_string()),
+                collection_url: "http://ado.example.test/DefaultCollection".to_string(),
+                auth_mode: Some("default-credentials".to_string()),
+                pat: None,
+                area: None,
+                resource: "projects".to_string(),
+                project: None,
+                team: None,
+                query: Some(serde_json::Map::from_iter([("$top".to_string(), json!(1))])),
+                body: None,
+                api_version: Some("7.0".to_string()),
+                server_version_hint: None,
+                allow_conditional_area: false,
+            })
+            .unwrap();
+
+        let result = run_business_azure_devops_server_read_with(
+            request,
+            |_, dry_run| {
+                assert!(dry_run, "Skill adapter must build the authoritative request");
+                Ok(json!({
+                    "Method": "GET",
+                    "Uri": "http://ado.example.test/DefaultCollection/_apis/projects?%24top=1&api-version=7.0",
+                    "Body": null,
+                    "RequiresAllowWrite": false
+                }))
+            },
+            |url, method, body, content_type| {
+                assert_eq!(url, "http://ado.example.test/DefaultCollection/_apis/projects?%24top=1&api-version=7.0");
+                assert_eq!(method, "GET");
+                assert_eq!(body, None);
+                assert_eq!(content_type, "application/json");
+                Ok(crate::winauth::HttpResponse {
+                    status: 200,
+                    body: r#"{"count":1,"value":[{"name":"test"}]}"#.to_string(),
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["value"][0]["name"], "test");
+        assert_eq!(
+            result["_rocketxSource"]["url"],
+            "http://ado.example.test/DefaultCollection/_apis/projects?%24top=1&api-version=7.0"
+        );
+    }
+
+    #[test]
+    fn business_mcp_default_credentials_rejects_preview_outside_configured_collection() {
+        for preview_uri in [
+            "https://search.example.test/RocketX/_apis/search/workitemsearchresults?api-version=7.0",
+            "https://ado.example.test/DefaultCollection-evil/RocketX/_apis/search/workitemsearchresults?api-version=7.0",
+        ] {
+            let request = validate_butler_azure_devops_server_read_request(
+                ButlerAzureDevOpsServerReadRequest {
+                    method: Some("GET".to_string()),
+                    collection_url: "https://ado.example.test/DefaultCollection".to_string(),
+                    auth_mode: Some("default-credentials".to_string()),
+                    pat: None,
+                    area: Some("search".to_string()),
+                    resource: "workitemsearchresults".to_string(),
+                    project: Some("RocketX".to_string()),
+                    team: None,
+                    query: None,
+                    body: None,
+                    api_version: Some("7.0".to_string()),
+                    server_version_hint: None,
+                    allow_conditional_area: true,
+                },
+            )
+            .unwrap();
+
+            let error = run_business_azure_devops_server_read_with(
+                request,
+                |_, dry_run| {
+                    assert!(dry_run);
+                    Ok(json!({
+                        "Method": "GET",
+                        "Uri": preview_uri,
+                        "Body": null,
+                        "RequiresAllowWrite": false
+                    }))
+                },
+                |_, _, _, _| -> Result<crate::winauth::HttpResponse, String> {
+                    panic!("off-collection previews must never receive Windows credentials")
+                },
+            )
+            .unwrap_err();
+
+            assert!(error.contains("collection"));
+        }
+    }
+
+    #[test]
+    fn business_mcp_pat_requests_stay_on_the_skill_adapter() {
+        let request =
+            validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
+                method: Some("GET".to_string()),
+                collection_url: "https://ado.example.test/DefaultCollection".to_string(),
+                auth_mode: Some("pat".to_string()),
+                pat: Some("secret".to_string()),
+                area: None,
+                resource: "projects".to_string(),
+                project: None,
+                team: None,
+                query: None,
+                body: None,
+                api_version: Some("7.0".to_string()),
+                server_version_hint: None,
+                allow_conditional_area: false,
+            })
+            .unwrap();
+
+        let result = run_business_azure_devops_server_read_with(
+            request,
+            |_, dry_run| {
+                assert!(!dry_run);
+                Ok(json!({"count": 1}))
+            },
+            |_, _, _, _| -> Result<crate::winauth::HttpResponse, String> {
+                panic!("PAT requests must not enter Windows integrated auth")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result["count"], 1);
+    }
+
+    #[test]
+    fn business_mcp_native_auth_never_executes_skill_write_previews() {
+        let request =
+            validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
+                method: Some("POST".to_string()),
+                collection_url: "http://ado.example.test/DefaultCollection".to_string(),
+                auth_mode: Some("default-credentials".to_string()),
+                pat: None,
+                area: Some("git".to_string()),
+                resource: "repositories".to_string(),
+                project: Some("RocketX".to_string()),
+                team: None,
+                query: None,
+                body: Some(serde_json::Map::from_iter([(
+                    "name".to_string(),
+                    json!("must-not-write"),
+                )])),
+                api_version: Some("7.0".to_string()),
+                server_version_hint: None,
+                allow_conditional_area: false,
+            })
+            .unwrap();
+
+        let error = run_business_azure_devops_server_read_with(
+            request,
+            |_, dry_run| {
+                assert!(dry_run);
+                Ok(json!({
+                    "Method": "POST",
+                    "Uri": "http://ado.example.test/DefaultCollection/RocketX/_apis/git/repositories?api-version=7.0",
+                    "Body": "{\"name\":\"must-not-write\"}",
+                    "RequiresAllowWrite": true
+                }))
+            },
+            |_, _, _, _| -> Result<crate::winauth::HttpResponse, String> {
+                panic!("write previews must never reach native HTTP")
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("只读"));
+    }
+
+    #[test]
+    fn azure_devops_runner_drops_ambient_alternate_host_overrides() {
+        let mut command = Command::new("powershell");
+        for name in super::AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+            command.env(name, "https://untrusted.example.test");
+        }
+
+        super::harden_azure_devops_runner_environment(&mut command);
+
+        let removed = command
+            .get_envs()
+            .filter_map(|(name, value)| value.is_none().then_some(name))
+            .collect::<Vec<_>>();
+        for name in super::AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS {
+            assert!(removed.contains(&OsStr::new(name)));
+        }
+    }
+
+    #[test]
+    fn standalone_business_mcp_resolves_the_bundled_azure_adapter() {
+        let adapter = standalone_azure_devops_server_adapter_path().unwrap();
+        assert!(adapter.is_file());
+        assert_eq!(
+            adapter.file_name().and_then(|value| value.to_str()),
+            Some(AZURE_DEVOPS_SERVER_HOST_ADAPTER)
+        );
     }
 
     #[cfg(windows)]
@@ -2517,6 +2991,16 @@ mod tests {
         .unwrap();
         assert_eq!(resolved, powershell);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn azure_devops_runner_uses_system_powershell_instead_of_path_resolution() {
+        let resolved = resolve_pwsh_program().unwrap();
+        assert!(resolved
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("\\windowspowershell\\v1.0\\powershell.exe"));
     }
 
     #[cfg(windows)]
@@ -2551,6 +3035,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
                 project: None,
                 team: None,
                 query: None,
+                body: None,
                 api_version: Some("6.0".to_string()),
                 server_version_hint: Some("2022".to_string()),
                 allow_conditional_area: false,
@@ -2572,12 +3057,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
     #[cfg(windows)]
     #[test]
     fn azure_devops_host_adapter_runs_under_windows_powershell() {
-        let Some(program) = resolve_pwsh_program_from_finder(|name| match name {
-            "pwsh.exe" => None,
-            "powershell.exe" => find_program("powershell.exe"),
-            _ => None,
-        })
-        .ok() else {
+        let Ok(program) = resolve_pwsh_program() else {
             return;
         };
 
@@ -2600,6 +3080,7 @@ param(
     [string]$Area,
     [string]$Resource,
     [hashtable]$Query,
+    [object]$Body,
     [string]$CollectionUrl,
     [string]$AuthMode,
     [string]$Project,
@@ -2621,6 +3102,7 @@ param(
     serverVersionHint = $ServerVersionHint
     allowConditionalArea = $AllowConditionalArea.IsPresent
     ids = @($Query["ids"])
+    body = $Body
 }
 "#,
         )
@@ -2628,17 +3110,21 @@ param(
 
         let request =
             validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
-                method: Some("GET".to_string()),
+                method: Some("POST".to_string()),
                 collection_url: "https://ado.example.test/DefaultCollection".to_string(),
                 auth_mode: Some("default-credentials".to_string()),
                 pat: None,
-                area: Some("git".to_string()),
-                resource: "pullrequests/42".to_string(),
-                project: None,
+                area: Some("wit".to_string()),
+                resource: "wiql".to_string(),
+                project: Some("RocketX".to_string()),
                 team: None,
                 query: Some(serde_json::Map::from_iter([(
                     "ids".to_string(),
                     json!([42, 43]),
+                )])),
+                body: Some(serde_json::Map::from_iter([(
+                    "query".to_string(),
+                    json!("SELECT [System.Id] FROM WorkItems"),
                 )])),
                 api_version: Some("6.0".to_string()),
                 server_version_hint: Some("2022".to_string()),
@@ -2652,15 +3138,46 @@ param(
             request,
         )
         .unwrap();
-        assert_eq!(result["method"], "GET");
-        assert_eq!(result["resource"], "pullrequests/42");
+        assert_eq!(result["method"], "POST");
+        assert_eq!(result["resource"], "wiql");
         assert_eq!(
             result["collectionUrl"],
             "https://ado.example.test/DefaultCollection"
         );
         assert_eq!(result["authMode"], "default-credentials");
         assert_eq!(result["ids"], json!([42, 43]));
+        assert_eq!(result["body"]["query"], "SELECT [System.Id] FROM WorkItems");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_azure_devops_skill_blocks_non_read_post_routes() {
+        let request =
+            validate_butler_azure_devops_server_read_request(ButlerAzureDevOpsServerReadRequest {
+                method: Some("POST".to_string()),
+                collection_url: "https://ado.example.test/DefaultCollection".to_string(),
+                auth_mode: Some("default-credentials".to_string()),
+                pat: None,
+                area: Some("git".to_string()),
+                resource: "repositories".to_string(),
+                project: Some("RocketX".to_string()),
+                team: None,
+                query: None,
+                body: Some(serde_json::Map::from_iter([(
+                    "name".to_string(),
+                    json!("must-not-write"),
+                )])),
+                api_version: Some("6.0".to_string()),
+                server_version_hint: Some("2022".to_string()),
+                allow_conditional_area: false,
+            })
+            .unwrap();
+        let adapter = PathBuf::from("resources")
+            .join("codex-skills")
+            .join(AZURE_DEVOPS_SERVER_HOST_ADAPTER);
+        let error = run_butler_azure_devops_server_read(adapter, request).unwrap_err();
+        assert!(error.contains("Live writes are blocked by default"));
     }
 
     #[test]

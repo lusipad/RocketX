@@ -1,4 +1,11 @@
-import { tsMs } from '@rcx/rc-client';
+import { tsMs, type RcMessage, type RoomType } from '@rcx/rc-client';
+import {
+  requestButlerActionDraft,
+  requestButlerAdoStateDraft,
+  type ButlerAnswerActionKind,
+  type ButlerActionKind,
+} from './butlerActions';
+import type { AdoAuth, DirectConfig } from './adoDirect';
 import {
   defineButlerTool,
   type ButlerTool,
@@ -39,15 +46,20 @@ import { useAuth } from '../stores/auth';
 import { useCalendar } from '../stores/calendar';
 import { permalinkOf, useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
-import { myPrsOf, reviewPrsOf, useWorkbench } from '../stores/workbench';
+import { useWorkbench } from '../stores/workbench';
 import { useRoutines } from '../stores/routines';
+import { useButlerErrandRuns } from '../stores/butlerErrandRuns';
 import { stripAgentSessionMarker } from '../agent/card';
+import type { ButlerErrandRun } from './butlerErrands';
 
 const LIMIT = 20;
-const WORK_LIMIT = 100;
+const ROOM_HISTORY_PAGE = 50;
+const ROOM_MESSAGE_DEFAULT_LIMIT = 100;
+const ROOM_MESSAGE_MAX_LIMIT = 200;
+const ROOM_HISTORY_MAX_PAGES = 20;
 
 export interface ButlerAzureDevOpsServerReadRequest {
-  method: 'GET';
+  method: 'GET' | 'POST';
   collectionUrl: string;
   authMode: 'pat' | 'default-credentials';
   pat?: string;
@@ -56,6 +68,7 @@ export interface ButlerAzureDevOpsServerReadRequest {
   project?: string;
   team?: string;
   query?: Record<string, unknown>;
+  body?: Record<string, unknown>;
   apiVersion?: string;
   serverVersionHint?: string;
   allowConditionalArea?: boolean;
@@ -100,14 +113,45 @@ export interface ButlerMentionSnapshot {
   processed: boolean;
 }
 
-let mentionProvider: () => ButlerMentionSnapshot[] = () => [];
+export interface ButlerMentionProviderResult {
+  items: ButlerMentionSnapshot[];
+  complete: boolean;
+  warnings?: string[];
+}
 
-export function setButlerMentionProvider(provider: () => ButlerMentionSnapshot[]): () => void {
+type ButlerMentionProviderValue = ButlerMentionSnapshot[] | ButlerMentionProviderResult;
+
+let mentionProvider: () => ButlerMentionProviderValue = () => ({
+  items: [],
+  complete: false,
+  warnings: ['@我收件箱尚未加载'],
+});
+
+export function setButlerMentionProvider(provider: () => ButlerMentionProviderValue): () => void {
   const previous = mentionProvider;
   mentionProvider = provider;
   return () => {
     mentionProvider = previous;
   };
+}
+
+const ACTION_DRAFT_LABELS: Record<ButlerActionKind, string> = {
+  reply: '回复草稿',
+  send: '发送回复草案',
+  todo: '待办草案',
+  commitment: '承诺草案',
+  ado: 'ADO 工作项草案',
+  'ado-state': 'ADO 状态修改',
+  codex: 'Codex 交接草案',
+};
+
+function isButlerActionKind(value: string | undefined): value is ButlerAnswerActionKind {
+  return value === 'reply'
+    || value === 'send'
+    || value === 'todo'
+    || value === 'commitment'
+    || value === 'ado'
+    || value === 'codex';
 }
 
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
@@ -117,6 +161,75 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 
 function optionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
   return typeof args[key] === 'boolean' ? args[key] : undefined;
+}
+
+function optionalInteger(args: Record<string, unknown>, key: string): number | undefined {
+  const value = args[key];
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+function currentAdoStateDraftConnection(): {
+  directConfig: DirectConfig;
+  adoBase: string;
+  adoAuth?: AdoAuth;
+  adoAccount: string;
+} {
+  const config = useWorkbench.getState().config;
+  if (!config) throw new Error('当前未连接 Azure DevOps，请先在设置中完成连接后再重试');
+  const adoBase = config.adoBase?.trim().replace(/\/+$/, '');
+  if (!adoBase) throw new Error('请先在工作台配置 Azure DevOps Server 集合地址');
+  return {
+    directConfig: {
+      adoBase,
+      pat: config.pat ?? '',
+      auth: config.auth,
+    },
+    adoBase,
+    adoAuth: config.auth,
+    adoAccount: config.account.trim(),
+  };
+}
+
+async function draftAdoState(args: Record<string, unknown>): Promise<string> {
+  const workItemId = optionalInteger(args, 'workItemId');
+  if (!workItemId || workItemId <= 0) throw new Error('workItemId 必须是正整数');
+  const targetState = optionalString(args, 'targetState');
+  if (!targetState) throw new Error('targetState 不能为空');
+
+  const { directConfig, adoBase, adoAuth, adoAccount } = currentAdoStateDraftConnection();
+  const { directGetIdentity, directGetWorkItem } = await import('./adoDirect');
+  const identity = await directGetIdentity(directConfig);
+  const adoIdentityId = identity.id.trim();
+  if (!adoIdentityId) throw new Error('当前 ADO 身份缺少稳定 id，不能生成状态修改确认卡');
+  const workItem = await directGetWorkItem(directConfig, workItemId);
+  if (!workItem) throw new Error(`未找到 ADO 工作项 #${workItemId}`);
+  const expectedRevision = workItem.revision;
+  if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision)) {
+    throw new Error('当前工作项缺少 revision，暂不能生成状态修改确认卡');
+  }
+
+  const currentState = workItem.state.trim();
+  if (currentState === targetState) {
+    return `ADO 工作项 #${workItem.id}「${workItem.title}」当前已是 ${targetState}，无需修改。`;
+  }
+
+  if (!requestButlerAdoStateDraft({
+    workItemId: workItem.id,
+    workItemTitle: workItem.title,
+    currentState,
+    targetState,
+    expectedRevision,
+    adoIdentityId,
+    project: workItem.project,
+    webUrl: workItem.webUrl,
+    adoBase,
+    adoAuth,
+    adoAccount,
+  })) {
+    throw new Error('当前无法创建 ADO 状态修改确认卡。');
+  }
+
+  return `已准备 ADO 状态修改：#${workItem.id}「${workItem.title}」${currentState} → ${targetState}，请在确认卡中检查后执行。`;
 }
 
 function matches(value: string, query: string | undefined): boolean {
@@ -131,6 +244,21 @@ function localDate(timestamp: number): string {
 function roomNameFor(rid: string): string {
   const chat = useChat.getState();
   return chat.subscriptions[rid]?.fname || chat.subscriptions[rid]?.name || chat.rooms[rid]?.fname || chat.rooms[rid]?.name || rid;
+}
+
+function messageSummary(message: RcMessage): Record<string, unknown> {
+  const link = permalinkOf(message.rid, message._id);
+  return {
+    _id: message._id,
+    rid: message.rid,
+    roomName: roomNameFor(message.rid),
+    sender: message.u.name || message.u.username,
+    ts: new Date(tsMs(message.ts)).toISOString(),
+    text: stripAgentSessionMarker(message.msg).slice(0, 200),
+    // 拼不出可用永久链接时整个字段省略：技能已写明「没有 link 就不给链接」，
+    // 给死链比不给链接更糟。
+    ...(link ? { link } : {}),
+  };
 }
 
 async function searchMessages(args: Record<string, unknown>): Promise<string> {
@@ -179,22 +307,175 @@ async function searchMessages(args: Record<string, unknown>): Promise<string> {
       );
     })
     .slice(0, LIMIT)
-    .map((message) => ({
-      _id: message._id,
-      rid: message.rid,
-      roomName: roomNameFor(message.rid),
-      sender: message.u.name || message.u.username,
-      ts: new Date(tsMs(message.ts)).toISOString(),
-      text: stripAgentSessionMarker(message.msg).slice(0, 200),
-      // 拼不出可用永久链接时整个字段省略：技能已写明「没有 link 就不给链接」，
-      // 给死链比不给链接更糟。
-      ...(permalinkOf(message.rid, message._id) ? { link: permalinkOf(message.rid, message._id) } : {}),
-    }));
+    .map(messageSummary);
   return JSON.stringify(rows);
 }
 
-function listMentions(): string {
-  return JSON.stringify(mentionProvider().slice(0, LIMIT));
+function roomHistoryTarget(roomRef: string): {
+  rid: string;
+  roomName: string;
+  type: RoomType;
+} {
+  const chat = useChat.getState();
+  const normalized = roomRef.trim().replace(/^#/, '').toLocaleLowerCase();
+  const matchesRoom = Object.keys({ ...chat.rooms, ...chat.subscriptions })
+    .filter((rid) => {
+      const subscription = chat.subscriptions[rid];
+      const room = chat.rooms[rid];
+      return [rid, subscription?.name, subscription?.fname, room?.name, room?.fname]
+        .some((candidate) => candidate?.replace(/^#/, '').toLocaleLowerCase() === normalized);
+    });
+  if (matchesRoom.length === 0) throw new Error(`未找到房间：${roomRef}`);
+  if (matchesRoom.length > 1) throw new Error(`房间名称不唯一：${roomRef}，请改用房间 ID`);
+  const rid = matchesRoom[0];
+  const type = chat.subscriptions[rid]?.t ?? chat.rooms[rid]?.t ?? 'c';
+  return { rid, roomName: roomNameFor(rid), type };
+}
+
+function validatedLocalDate(value: string | undefined, label: string): string | undefined {
+  if (!value) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) throw new Error(`${label} 必须是 YYYY-MM-DD`);
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (localDate(date.getTime()) !== value) throw new Error(`${label} 不是有效日期`);
+  return value;
+}
+
+function nextLocalDayIso(value: string): string {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day + 1).toISOString();
+}
+
+function messageMatchesRange(
+  message: RcMessage,
+  from: string | undefined,
+  since: string | undefined,
+  until: string | undefined,
+): boolean {
+  const date = localDate(tsMs(message.ts));
+  const sender = `${message.u.username} ${message.u.name ?? ''}`;
+  return matches(sender, from)
+    && (!since || date >= since)
+    && (!until || date <= until);
+}
+
+async function listRoomMessages(args: Record<string, unknown>): Promise<string> {
+  const roomRef = optionalString(args, 'roomName');
+  if (!roomRef) throw new Error('roomName 不能为空');
+  const from = optionalString(args, 'from');
+  const since = validatedLocalDate(optionalString(args, 'since'), 'since');
+  const until = validatedLocalDate(optionalString(args, 'until'), 'until');
+  if (since && until && since > until) throw new Error('since 不能晚于 until');
+  const requestedLimit = optionalInteger(args, 'limit') ?? ROOM_MESSAGE_DEFAULT_LIMIT;
+  if (requestedLimit < 1 || requestedLimit > ROOM_MESSAGE_MAX_LIMIT) {
+    throw new Error(`limit 必须在 1-${ROOM_MESSAGE_MAX_LIMIT} 之间`);
+  }
+
+  const target = roomHistoryTarget(roomRef);
+  const chat = useChat.getState();
+  const messages = new Map<string, RcMessage>();
+  for (const message of chat.messages[target.rid] ?? []) messages.set(message._id, message);
+
+  let complete = false;
+  let truncated = false;
+  let source: 'server-history' | 'server-history-partial' | 'local-cache' = 'server-history';
+  const warnings: string[] = [];
+  let latest = until ? nextLocalDayIso(until) : undefined;
+  let previousCursor = '';
+  let receivedServerMessages = false;
+
+  try {
+    for (let pageIndex = 0; pageIndex < ROOM_HISTORY_MAX_PAGES; pageIndex += 1) {
+      const page = await rest.getHistory(target.rid, target.type, ROOM_HISTORY_PAGE, latest);
+      if (page.length === 0) {
+        complete = true;
+        break;
+      }
+      receivedServerMessages = true;
+      for (const message of page) messages.set(message._id, message);
+      const oldest = page.reduce((candidate, message) =>
+        tsMs(message.ts) < tsMs(candidate.ts) ? message : candidate);
+      if (since && localDate(tsMs(oldest.ts)) < since) {
+        complete = true;
+        break;
+      }
+      if (page.length < ROOM_HISTORY_PAGE) {
+        complete = true;
+        break;
+      }
+      const cursor = new Date(tsMs(oldest.ts)).toISOString();
+      if (cursor === previousCursor) {
+        warnings.push('服务器历史分页游标未前进，已停止继续读取');
+        break;
+      }
+      previousCursor = cursor;
+      latest = cursor;
+      const matchingCount = [...messages.values()]
+        .filter((message) => messageMatchesRange(message, from, since, until))
+        .length;
+      if (matchingCount > requestedLimit) {
+        truncated = true;
+        break;
+      }
+    }
+  } catch (error) {
+    source = receivedServerMessages ? 'server-history-partial' : 'local-cache';
+    warnings.push(`服务器历史读取失败，仅返回已取得或本地缓存消息：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const matching = [...messages.values()]
+    .filter((message) => messageMatchesRange(message, from, since, until))
+    .sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
+  if (matching.length > requestedLimit) truncated = true;
+  if (!complete && !truncated && warnings.length === 0) {
+    warnings.push(`读取达到 ${ROOM_HISTORY_MAX_PAGES * ROOM_HISTORY_PAGE} 条扫描上限，覆盖范围可能不完整`);
+  }
+  if (truncated) complete = false;
+  const items = matching.slice(-requestedLimit).map(messageSummary);
+
+  return JSON.stringify({
+    room: { rid: target.rid, roomName: target.roomName },
+    items,
+    coverage: {
+      source,
+      complete,
+      truncated,
+      returned: items.length,
+      limit: requestedLimit,
+      ...(since ? { since } : {}),
+      ...(until ? { until } : {}),
+    },
+    warnings,
+  });
+}
+
+function listMentions(args: Record<string, unknown>): string {
+  const since = optionalString(args, 'since');
+  const sinceTimestamp = since ? Date.parse(since) : undefined;
+  if (sinceTimestamp !== undefined && !Number.isFinite(sinceTimestamp)) {
+    throw new Error('since 必须是有效的 ISO 日期时间');
+  }
+  const unprocessedOnly = optionalBoolean(args, 'unprocessedOnly') ?? false;
+  const provided = mentionProvider();
+  const snapshot = Array.isArray(provided)
+    ? { items: provided, complete: true, warnings: [] }
+    : { ...provided, warnings: provided.warnings ?? [] };
+  const matches = snapshot.items
+    .filter((mention) => !unprocessedOnly || !mention.processed)
+    .filter((mention) => sinceTimestamp === undefined || Date.parse(mention.ts) > sinceTimestamp)
+    .sort((left, right) => Date.parse(right.ts) - Date.parse(left.ts));
+  const items = matches.slice(0, LIMIT);
+  return JSON.stringify({
+    items,
+    coverage: {
+      complete: snapshot.complete && matches.length <= LIMIT,
+      truncated: matches.length > LIMIT,
+      returned: items.length,
+      limit: LIMIT,
+      ...(since ? { since } : {}),
+    },
+    warnings: snapshot.warnings,
+  });
 }
 
 async function searchPeopleAndRooms(args: Record<string, unknown>): Promise<string> {
@@ -259,61 +540,12 @@ function listCalendar(args: Record<string, unknown>): string {
   );
 }
 
-function listWorkItems(args: Record<string, unknown>): string {
-  const query = optionalString(args, 'query');
-  return JSON.stringify(
-    useWorkbench.getState().workItems
-      .filter((item) => matches(`#${item.id} ${item.title} ${item.type} ${item.state} ${item.project}`, query))
-      .slice(0, WORK_LIMIT)
-      .map((item) => ({
-        id: item.id,
-        title: item.title,
-        type: item.type,
-        state: item.state,
-        project: item.project,
-        assignedTo: item.assignedTo,
-        priority: item.priority,
-        dueDate: item.dueDate,
-        changedDate: item.changedDate,
-        webUrl: item.webUrl,
-      })),
-  );
-}
-
-function listPullRequests(args: Record<string, unknown>): string {
-  const query = optionalString(args, 'query');
-  const workbench = useWorkbench.getState();
-  const account = workbench.config?.account ?? '';
-  const reviewIds = new Set(reviewPrsOf(workbench.prs, account).map((pr) => pr.id));
-  const mineIds = new Set(myPrsOf(workbench.prs, account).map((pr) => pr.id));
-  return JSON.stringify(
-    workbench.prs
-      .filter((pr) => reviewIds.has(pr.id) || mineIds.has(pr.id))
-      .filter((pr) => matches(`#${pr.id} ${pr.title} ${pr.repo} ${pr.creator}`, query))
-      .slice(0, WORK_LIMIT)
-      .map((pr) => ({
-        id: pr.id,
-        title: pr.title,
-        repo: pr.repo,
-        creator: pr.creator,
-        sourceBranch: pr.sourceBranch,
-        targetBranch: pr.targetBranch,
-        createdDate: pr.createdDate,
-        relation: reviewIds.has(pr.id) && mineIds.has(pr.id)
-          ? 'both'
-          : reviewIds.has(pr.id) ? 'review' : 'mine',
-        project: pr.project,
-        webUrl: pr.webUrl,
-      })),
-  );
-}
-
 function butlerAzureDevOpsServerConnection(): Pick<
   ButlerAzureDevOpsServerReadRequest,
   'collectionUrl' | 'authMode' | 'pat'
 > {
   const config = useWorkbench.getState().config;
-  if (!config) throw new Error('请先在工作台完成 Azure DevOps 连接配置');
+  if (!config) throw new Error('当前未连接 Azure DevOps，请先在设置中完成连接后再重试');
   if (!config.adoBase) throw new Error('请先在工作台配置 Azure DevOps Server 集合地址');
   const auth = config.auth ?? (config.pat ? 'pat' : 'ntlm');
   if (auth === 'ntlm') {
@@ -331,8 +563,8 @@ function butlerAzureDevOpsServerConnection(): Pick<
   };
 }
 
-function optionalQuery(args: Record<string, unknown>): Record<string, unknown> | undefined {
-  const value = args.query;
+function optionalObject(args: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = args[key];
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
@@ -344,44 +576,28 @@ async function runAzureDevOpsServerCli(args: Record<string, unknown>): Promise<s
   const area = optionalString(args, 'area');
   const project = optionalString(args, 'project');
   const team = optionalString(args, 'team');
-  const query = optionalQuery(args);
+  const method = (optionalString(args, 'method') ?? 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'POST') {
+    throw new Error('Azure DevOps method 只允许 GET 或 POST');
+  }
+  const query = optionalObject(args, 'query');
+  const body = optionalObject(args, 'body');
   const apiVersion = optionalString(args, 'apiVersion');
   const serverVersionHint = optionalString(args, 'serverVersionHint');
   const result = await azureDevOpsServerReadInvoker({
-    method: 'GET',
+    method,
     ...butlerAzureDevOpsServerConnection(),
     ...(area ? { area } : {}),
     resource,
     ...(project ? { project } : {}),
     ...(team ? { team } : {}),
     ...(query ? { query } : {}),
+    ...(body ? { body } : {}),
     ...(apiVersion ? { apiVersion } : {}),
     ...(serverVersionHint ? { serverVersionHint } : {}),
     ...(args.allowConditionalArea === true ? { allowConditionalArea: true } : {}),
   });
   return JSON.stringify(result ?? null);
-}
-
-function listBuilds(args: Record<string, unknown>): string {
-  const query = optionalString(args, 'query');
-  const failedOnly = optionalBoolean(args, 'failedOnly') ?? false;
-  return JSON.stringify(
-    useWorkbench.getState().builds
-      .filter((build) => !failedOnly || build.result.toLocaleLowerCase() === 'failed')
-      .filter((build) => matches(`${build.buildNumber} ${build.definition} ${build.project} ${build.result}`, query))
-      .slice(0, WORK_LIMIT)
-      .map((build) => ({
-        id: build.id,
-        buildNumber: build.buildNumber,
-        definition: build.definition,
-        project: build.project,
-        status: build.status,
-        result: build.result,
-        requestedFor: build.requestedFor,
-        finishTime: build.finishTime,
-        webUrl: build.webUrl,
-      })),
-  );
 }
 
 function loadSkill(args: Record<string, unknown>): string {
@@ -716,14 +932,6 @@ const searchMessagesParameters: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-function queryParameters(description: string): Record<string, unknown> {
-  return {
-    type: 'object',
-    properties: { query: { type: 'string', description } },
-    additionalProperties: false,
-  };
-}
-
 const memoryScopeParameter = {
   type: 'string',
   enum: ['account', 'project', 'room'],
@@ -745,6 +953,68 @@ const memoryWriteProperties = {
   expiresAt: { type: 'string', description: '可选 ISO 日期时间；到期后默认不再召回。' },
 };
 
+function sessionErrands(sessionId: string | undefined): ButlerErrandRun[] {
+  const normalized = sessionId?.trim();
+  if (!normalized) return [];
+  return useButlerErrandRuns.getState().visibleRuns
+    .filter((run) => run.originSessionId === normalized);
+}
+
+function errandStatusLabel(status: ButlerErrandRun['status']): string {
+  if (status === 'running') return '正在处理';
+  if (status === 'paused') return '已暂停';
+  if (status === 'awaiting-approval') return '等待你确认';
+  if (status === 'replied') return '已经回话';
+  return '已经停下';
+}
+
+function errandExcerpt(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, ' ');
+  if (!normalized) return undefined;
+  return normalized.length > 320 ? `${normalized.slice(0, 320)}…` : normalized;
+}
+
+function listSessionErrands(context: ButlerToolRuntimeContext): string {
+  const runs = sessionErrands(context.sessionId);
+  if (!runs.length) return '当前对话没有派出去的活。';
+  return JSON.stringify(runs.map((run) => ({
+    id: run.id,
+    title: run.title,
+    status: run.status,
+    statusLabel: errandStatusLabel(run.status),
+    workspace: run.workspaceName,
+    ...(run.activity ? { activity: run.activity } : {}),
+    ...(run.plan?.length ? { plan: run.plan } : {}),
+    ...(errandExcerpt(run.reply) ? { result: errandExcerpt(run.reply) } : {}),
+    ...(run.error ? { error: run.error } : {}),
+  })));
+}
+
+function captureSteerErrand(
+  args: Record<string, unknown>,
+  context: ButlerToolRuntimeContext,
+): Record<string, unknown> {
+  const instruction = optionalString(args, 'instruction');
+  if (!instruction) throw new Error('补充要求不能为空。');
+  const runs = sessionErrands(context.sessionId);
+  const requestedId = optionalString(args, 'runId');
+  const target = requestedId
+    ? runs.find((run) => run.id === requestedId)
+    : runs.filter((run) => run.status === 'running' || run.status === 'paused').length === 1
+      ? runs.find((run) => run.status === 'running' || run.status === 'paused')
+      : undefined;
+  if (!target) {
+    if (requestedId) throw new Error('当前对话中没有这个派活任务。');
+    const actionable = runs.filter((run) => run.status === 'running' || run.status === 'paused');
+    if (actionable.length > 1) throw new Error('当前对话有多件可继续的活，请先用 list_errands 确认并传入 runId。');
+    if (runs.some((run) => run.status === 'awaiting-approval')) {
+      throw new Error('当前任务正等待审批，请先处理任务卡上的请求。');
+    }
+    throw new Error('当前对话没有可以继续下指令的任务。');
+  }
+  return { runId: target.id, instruction };
+}
+
 export function createButlerTools(): ButlerTool[] {
   return [
     defineButlerTool({
@@ -756,12 +1026,43 @@ export function createButlerTools(): ButlerTool[] {
       execute: searchMessages,
     }),
     defineButlerTool({
-      name: 'list_mentions',
-      description: '列出当前 @我 收件箱中的消息及是否已处理；返回最多 20 条。',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      name: 'list_room_messages',
+      description: '按一个明确房间和日期范围分页读取消息；返回 items、coverage 和 warnings，最多返回 200 条。coverage.complete=false 时不得把结果当作完整房间历史。',
+      parameters: {
+        type: 'object',
+        properties: {
+          roomName: { type: 'string', description: '精确房间名或房间 ID。' },
+          from: { type: 'string', description: '可选发送人用户名或显示名子串。' },
+          since: { type: 'string', description: '起始日期，YYYY-MM-DD，包含当天。' },
+          until: { type: 'string', description: '结束日期，YYYY-MM-DD，包含当天。' },
+          limit: {
+            type: 'integer',
+            minimum: 1,
+            maximum: ROOM_MESSAGE_MAX_LIMIT,
+            description: `最多返回多少条，默认 ${ROOM_MESSAGE_DEFAULT_LIMIT}。`,
+          },
+        },
+        required: ['roomName'],
+        additionalProperties: false,
+      },
       effect: 'read',
       capability: 'rocket-chat.messages.read',
-      execute: async () => listMentions(),
+      execute: listRoomMessages,
+    }),
+    defineButlerTool({
+      name: 'list_mentions',
+      description: '按时间和处理状态列出当前 @我 收件箱，最新优先；返回 items 和 coverage，最多 20 条。',
+      parameters: {
+        type: 'object',
+        properties: {
+          since: { type: 'string', description: '可选 ISO 日期时间；只返回严格晚于该时间的 @。' },
+          unprocessedOnly: { type: 'boolean', description: 'true 时只返回尚未处理的 @。' },
+        },
+        additionalProperties: false,
+      },
+      effect: 'read',
+      capability: 'rocket-chat.messages.read',
+      execute: async (args) => listMentions(args),
     }),
     defineButlerTool({
       name: 'search_people_rooms',
@@ -792,6 +1093,48 @@ export function createButlerTools(): ButlerTool[] {
       execute: async (args) => listTodos(args),
     }),
     defineButlerTool({
+      name: 'list_errands',
+      description: '查询当前 Butler 对话派出去的任务、进度、审批状态和结果摘要；用户问“刚才那件事怎么样了”时先调用。不会读取其他对话的任务。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      effect: 'read',
+      capability: 'errands.read',
+      execute: async (_args, { context }) => listSessionErrands(context),
+    }),
+    defineButlerTool({
+      name: 'steer_errand',
+      description: '把用户的补充要求或方向纠正送进当前对话已有的 Codex 任务，继续同一个持久 Thread；不要为同一件事重新调用 draft_errand。多件任务时先调用 list_errands 并传准确 runId。',
+      parameters: {
+        type: 'object',
+        properties: {
+          runId: { type: 'string', description: 'list_errands 返回的任务 id；当前对话只有一件可继续任务时可省略。' },
+          instruction: { type: 'string', description: '用户刚刚给出的补充要求或方向纠正，保持原意。' },
+        },
+        required: ['instruction'],
+        additionalProperties: false,
+      },
+      effect: 'draft',
+      capability: 'errands.steer',
+      capture: captureSteerErrand,
+      preflight: (args) => {
+        const runId = optionalString(args, 'runId');
+        const run = useButlerErrandRuns.getState().runs.find((candidate) => candidate.id === runId);
+        if (!run || (run.status !== 'running' && run.status !== 'paused')) {
+          return { allowed: false, reason: '这件活当前不能继续下指令。' };
+        }
+        return { allowed: true, preview: `调整「${run.title}」` };
+      },
+      execute: async (args) => {
+        const runId = optionalString(args, 'runId')!;
+        const instruction = optionalString(args, 'instruction')!;
+        const store = useButlerErrandRuns.getState();
+        const run = store.runs.find((candidate) => candidate.id === runId);
+        if (!run) throw new Error('派活任务不存在。');
+        if (run.status === 'paused') await store.resumeErrand(runId, instruction);
+        else await store.steerErrand(runId, instruction);
+        return `已把补充要求送给「${run.title}」，仍在原任务中继续。`;
+      },
+    }),
+    defineButlerTool({
       name: 'list_calendar',
       description: '列出本地日程，可按关键词和 YYYY-MM-DD 日期范围筛选。',
       parameters: {
@@ -808,27 +1151,16 @@ export function createButlerTools(): ButlerTool[] {
       execute: async (args) => listCalendar(args),
     }),
     defineButlerTool({
-      name: 'list_work_items',
-      description: '列出已加载的 Azure DevOps 工作项，可按编号、标题、类型、状态或项目筛选；返回最多 100 条。',
-      parameters: queryParameters('工作项编号、标题、类型、状态或项目关键词。'),
-      effect: 'read',
-      capability: 'ado.work-items.read',
-      execute: async (args) => listWorkItems(args),
-    }),
-    defineButlerTool({
-      name: 'list_pull_requests',
-      description: '列出已加载的待我评审或我提的 Azure DevOps 拉取请求，可按编号、标题、仓库或创建者筛选；返回最多 100 条。',
-      parameters: queryParameters('拉取请求编号、标题、仓库或创建者关键词。'),
-      effect: 'read',
-      capability: 'ado.pull-requests.read',
-      execute: async (args) => listPullRequests(args),
-    }),
-    defineButlerTool({
       name: 'run_azure_devops_server_cli',
-      description: '执行 azure-devops-server Skill 规划出的一个 Azure DevOps Server 只读 CLI 请求。集合地址和凭据由 RocketX 注入；这里只传 Area、Resource、Project、Team、Query 和版本参数。只能 GET，不能写入。',
+      description: '执行 azure-devops-server Skill 规划出的一个 Azure DevOps Server 只读请求。集合地址和凭据由 RocketX 注入；支持 GET 与 Skill 白名单内的只读 POST，不能写入。',
       parameters: {
         type: 'object',
         properties: {
+          method: {
+            type: 'string',
+            enum: ['GET', 'POST'],
+            description: '默认 GET；WIQL 等 Skill 白名单内的只读路由使用 POST。',
+          },
           area: {
             type: 'string',
             enum: ['build', 'git', 'release', 'search', 'test', 'testplan', 'testresults', 'wiki', 'wit', 'work'],
@@ -865,6 +1197,10 @@ export function createButlerTools(): ButlerTool[] {
               ],
             },
           },
+          body: {
+            type: 'object',
+            description: '只读 POST 请求体，例如 WIQL 的 query 对象。',
+          },
           apiVersion: { type: 'string', description: '可选 API 版本覆盖；优先遵守 Skill 的版本矩阵。' },
           serverVersionHint: {
             type: 'string',
@@ -882,21 +1218,6 @@ export function createButlerTools(): ButlerTool[] {
       effect: 'read',
       capability: 'ado.server.read',
       execute: runAzureDevOpsServerCli,
-    }),
-    defineButlerTool({
-      name: 'list_builds',
-      description: '列出已加载的 Azure DevOps 构建，可按关键词筛选，也可只看失败构建；返回最多 100 条。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '构建号、定义、项目或结果关键词。' },
-          failedOnly: { type: 'boolean', description: '是否只返回失败构建，默认 false。' },
-        },
-        additionalProperties: false,
-      },
-      effect: 'read',
-      capability: 'ado.builds.read',
-      execute: async (args) => listBuilds(args),
     }),
     defineButlerTool({
       name: 'recall_memory',
@@ -1099,6 +1420,54 @@ export function createButlerTools(): ButlerTool[] {
           ? `已导入 legacy-unverified 记忆（${scopeLabel(result.record.scope)}）：${result.record.subject} = ${result.record.value}`
           : `相同 legacy-unverified 记忆已存在（${scopeLabel(result.record.scope)}）：${result.record.subject} = ${result.record.value}`;
       },
+    }),
+    defineButlerTool({
+      name: 'draft_action',
+      description: '用户明确要求把上一条管家回答拟成回复、待办、承诺、ADO 工作项或 Codex 交接时调用；只打开可编辑确认卡，绝不直接执行。',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['reply', 'send', 'todo', 'commitment', 'ado', 'codex'],
+            description: '动作类型：reply 只放编辑框、send 确认后发送、todo 待办、commitment 承诺、ado 工作项、codex 交接。',
+          },
+        },
+        required: ['kind'],
+        additionalProperties: false,
+      },
+      effect: 'draft',
+      capability: 'actions.draft',
+      execute: async (args) => {
+        const kind = optionalString(args, 'kind');
+        if (!isButlerActionKind(kind)) throw new Error('不支持的动作草案类型。');
+        if (!requestButlerActionDraft(kind)) {
+          throw new Error('当前对话还没有可以转成动作的管家回答。');
+        }
+        return `已准备${ACTION_DRAFT_LABELS[kind]}，请在确认卡中检查后执行。`;
+      },
+    }),
+    defineButlerTool({
+      name: 'draft_ado_state',
+      description: '用户明确要求把某个 ADO 工作项改到目标状态时调用；先读取当前工作项并生成确认卡，绝不直接 PATCH。',
+      parameters: {
+        type: 'object',
+        properties: {
+          workItemId: {
+            type: 'integer',
+            description: '要修改状态的 ADO 工作项编号。',
+          },
+          targetState: {
+            type: 'string',
+            description: '要修改到的目标状态名，保持用户或项目流程里的原始写法。',
+          },
+        },
+        required: ['workItemId', 'targetState'],
+        additionalProperties: false,
+      },
+      effect: 'draft',
+      capability: 'actions.draft',
+      execute: async (args) => draftAdoState(args),
     }),
     defineButlerTool({
       name: 'draft_routine',

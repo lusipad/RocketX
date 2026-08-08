@@ -50,7 +50,7 @@ export default function ButlerSlashMenu({
 }
 
 /** 菜单的键盘与选中态：上下移动、回车选中、Esc 关闭 */
-export function useSlashMenu(options: readonly ButlerSlashOption[]) {
+export function useSlashMenu<T>(options: readonly T[]) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
 
@@ -69,7 +69,7 @@ export function useSlashMenu(options: readonly ButlerSlashOption[]) {
     reopen: () => setDismissed(false),
     dismiss: () => setDismissed(true),
     /** 返回 true 表示按键已被菜单消费，调用方不要再处理 */
-    handleKeyDown: (event: { key: string; preventDefault: () => void }, onPick: (option: ButlerSlashOption) => void): boolean => {
+    handleKeyDown: (event: { key: string; preventDefault: () => void }, onPick: (option: T) => void): boolean => {
       if (!open) return false;
       if (event.key === 'ArrowDown') {
         event.preventDefault();

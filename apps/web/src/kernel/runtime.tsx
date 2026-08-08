@@ -6,9 +6,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
+import { useWorkbench } from '../stores/workbench';
 import { toast } from '../stores/toast';
 import { installModuleValidator, useUI } from '../stores/ui';
-import { useWorkbench } from '../stores/workbench';
 import { startRoutineScheduler } from '../stores/routines';
 import ContactsPage from '../pages/ContactsPage';
 import TodosPage from '../pages/TodosPage';
@@ -86,18 +86,8 @@ async function runSharedAgentBridge(): Promise<void> {
 }
 
 async function initializeAiFeatures(): Promise<void> {
-  const [{ initializeAiRuntime }, { initializeButlerLearningExtensions }] = await Promise.all([
-    import('./ai/runtime'),
-    import('../butler/extensions/learning/runtime'),
-  ]);
-  initializeButlerLearningExtensions();
+  const { initializeAiRuntime } = await import('./ai/runtime');
   initializeAiRuntime(kernelStore);
-}
-
-function WorkbenchModule() {
-  const config = useWorkbench((state) => state.config);
-  const connected = !!config?.adoBase;
-  return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
 }
 
 function scopedAppId(appId: string): string {
@@ -504,13 +494,19 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
   };
 }
 
+function WorkbenchModule() {
+  const config = useWorkbench((state) => state.config);
+  const connected = !!config?.adoBase;
+  return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
+}
+
 function registerBuiltins(): void {
   const features = runtimeFeatures();
   const modules = [
+    ['workbench', '工作台', WorkbenchModule, undefined],
     ['butler-view', '管家', ButlerPage, Bell],
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
-    ['workbench', '工作台', WorkbenchModule, undefined],
     ['contacts', '通讯录', ContactsPage, undefined],
     ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;

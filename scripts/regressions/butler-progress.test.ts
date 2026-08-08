@@ -6,7 +6,15 @@ test('工具标签：白名单内的参数进摘要，白名单外一律不显�
   // 无参数时必须原样返回纯标签——既有回归逐字断言「搜索消息」这类值
   assert.equal(butlerStepLabel('search_messages'), '搜索消息');
   assert.equal(butlerStepLabel('search_messages', '{}'), '搜索消息');
+  assert.equal(
+    butlerStepLabel('list_room_messages', '{"roomName":"发布群","since":"2026-07-22"}'),
+    '读取房间消息（发布群）',
+  );
   assert.equal(butlerStepLabel('list_todos', '{"query":"发布"}'), '查询待办');
+  assert.equal(butlerStepLabel('list_errands', '{}'), '查询派活');
+  assert.equal(butlerStepLabel('steer_errand', '{"instruction":"改方向"}'), '调整派活');
+  assert.equal(butlerStepLabel('draft_action', '{"kind":"todo"}'), '准备确认卡');
+  assert.equal(butlerStepLabel('draft_ado_state', '{"workItemId":123,"targetState":"已解决"}'), '准备 ADO 状态修改');
 
   assert.equal(butlerStepLabel('search_messages', '{"query":"发布失败"}'), '搜索消息（发布失败）');
   assert.equal(
@@ -26,6 +34,20 @@ test('ADO CLI 只暴露 resource，绝不显示查询参数或内网地址', () 
     }),
   );
   assert.equal(label, '运行 Azure DevOps 只读 CLI（pullrequests/101）');
+  assert.doesNotMatch(label, /ado-internal|secret-token|DefaultCollection/);
+});
+
+test('ADO 业务 MCP 只暴露 resource，绝不显示查询参数或内网地址', () => {
+  const label = butlerStepLabel(
+    'rocketx_azure_devops_server_read',
+    JSON.stringify({
+      area: 'git',
+      resource: 'pullrequests/101',
+      project: '商城',
+      query: { collectionUrl: 'https://ado-internal/tfs/DefaultCollection', pat: 'secret-token' },
+    }),
+  );
+  assert.equal(label, '查询 Azure DevOps（pullrequests/101）');
   assert.doesNotMatch(label, /ado-internal|secret-token|DefaultCollection/);
 });
 

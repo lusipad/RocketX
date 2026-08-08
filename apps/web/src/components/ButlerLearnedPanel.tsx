@@ -1,5 +1,7 @@
 import { BookOpenText, ChevronRight, Copy, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useStore } from 'zustand';
+import type { SkillMetadata } from '../agent/protocol/generated/v2';
 import {
   parseButlerMemoryState,
   restoreButlerMemory,
@@ -8,6 +10,7 @@ import {
   type ButlerMemoryKind,
   type ButlerMemoryRecord,
 } from '../lib/butlerMemory';
+import { codexBrainAvailability } from '../lib/butlerBrain';
 import {
   isButlerBuiltInSkill,
   isButlerSkillEnabled,
@@ -20,10 +23,19 @@ import {
   type ButlerSkill,
 } from '../lib/butlerProfile';
 import { parseSkillMarkdown } from '../lib/butlerSkillImport';
+import {
+  listButlerCodexSkills,
+  onButlerCodexSkillsChanged,
+  setButlerCodexSkillPathEnabled,
+  setButlerCodexSkillEnabled,
+} from '../stores/butlerCodex';
 import { useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import Dialog, { ConfirmDialog } from './Dialog';
+import ButlerPluginMarketplace from './ButlerPluginMarketplace';
 import { Toggle } from './SettingControls';
+import { butlerEfficiency } from '../butler/extensions/learning/runtime';
+import ButlerSkillDraftCard from './ButlerSkillDraftCard';
 
 const KIND_LABELS: Record<ButlerMemoryKind, string> = {
   alias: '称呼',
@@ -257,10 +269,12 @@ function SkillEditorDialog({
 export default function ButlerLearnedPanel() {
   const [memories, setMemories] = useState<ButlerMemoryRecord[]>([]);
   const [skills, setSkills] = useState<ButlerSkill[]>([]);
+  const [nativeSkills, setNativeSkills] = useState<SkillMetadata[]>([]);
   const [importing, setImporting] = useState(false);
   const [importText, setImportText] = useState('');
   const [skillDialog, setSkillDialog] = useState<SkillDialogState | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<ButlerSkill | null>(null);
+  const efficiencyState = useStore(butlerEfficiency.store);
   const rooms = useChat((state) => state.rooms);
   const parsed = useMemo(
     () => (importText.trim() ? parseSkillMarkdown(importText) : null),
@@ -270,11 +284,19 @@ export default function ButlerLearnedPanel() {
   const refresh = useCallback((): void => {
     setMemories(activeMemories());
     setSkills(listSkills());
+    void listButlerCodexSkills()
+      .then((listed) => {
+        setNativeSkills(listed);
+        setSkills(listSkills());
+      })
+      .catch(() => setNativeSkills([]));
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => onButlerCodexSkillsChanged(refresh), [refresh]);
 
   const scopeLabel = (record: ButlerMemoryRecord): string | null => {
     if (record.scope.room) {
@@ -299,8 +321,15 @@ export default function ButlerLearnedPanel() {
     });
   };
 
-  const dropSkill = (skill: ButlerSkill): void => {
+  const dropSkill = async (skill: ButlerSkill): Promise<void> => {
     try {
+      const availability = codexBrainAvailability();
+      if (availability.available) {
+        const enabled = await setButlerCodexSkillEnabled(skill.name, true);
+        if (!enabled) throw new Error('Codex 未能清除该技能的停用配置');
+      } else if (!availability.reason?.includes('浏览器')) {
+        throw new Error(availability.reason ?? 'Codex 暂不可用');
+      }
       removeSkill(skill.name);
       refresh();
       setSkillDialog(null);
@@ -311,13 +340,43 @@ export default function ButlerLearnedPanel() {
     }
   };
 
-  const toggleSkill = (skill: ButlerSkill, enabled: boolean): void => {
+  const toggleSkill = async (
+    skill: ButlerSkill,
+    enabled: boolean,
+  ): Promise<void> => {
     try {
+      const availability = codexBrainAvailability();
+      if (!availability.available && availability.reason?.includes('浏览器')) {
+        setSkillEnabled(skill.name, enabled);
+        refresh();
+        toast.success(`已${enabled ? '启用' : '停用'}技能「${skill.name}」`);
+        return;
+      }
+      const effectiveEnabled = await setButlerCodexSkillEnabled(skill.name, enabled);
+      if (effectiveEnabled !== enabled) {
+        throw new Error(`Codex 未能${enabled ? '启用' : '停用'}该技能`);
+      }
       setSkillEnabled(skill.name, enabled);
       refresh();
       toast.success(`已${enabled ? '启用' : '停用'}技能「${skill.name}」`);
     } catch (error) {
       toast.error(error, `${enabled ? '启用' : '停用'}技能失败`);
+    }
+  };
+
+  const toggleNativeSkill = async (
+    skill: SkillMetadata,
+    enabled: boolean,
+  ): Promise<void> => {
+    try {
+      const effectiveEnabled = await setButlerCodexSkillPathEnabled(skill.path, enabled);
+      if (effectiveEnabled !== enabled) {
+        throw new Error(`Codex 未能${enabled ? '启用' : '停用'}该 Skill`);
+      }
+      refresh();
+      toast.success(`已${enabled ? '启用' : '停用'} Skill「${skill.name}」`);
+    } catch (error) {
+      toast.error(error, `${enabled ? '启用' : '停用'} Skill 失败`);
     }
   };
 
@@ -343,11 +402,92 @@ export default function ButlerLearnedPanel() {
   const selectedSkill = skillDialog
     ? skills.find((skill) => skill.name === skillDialog.name)
     : undefined;
-
-  if (memories.length === 0 && skills.length === 0) return null;
+  const localSkillNames = new Set(skills.map((skill) => skill.name));
+  const codexOnlySkills = nativeSkills.filter((skill) => !localSkillNames.has(skill.name));
 
   return (
     <div className="space-y-8">
+      {efficiencyState.drafts.length > 0 ? (
+        <section aria-label="待确认 Skill">
+          <h2 className="flex items-center gap-1.5 text-base font-semibold text-ink">
+            <BookOpenText size={14} aria-hidden="true" />
+            待确认
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-ink-3">
+            这些只是私人草稿。检查并确认后，管家才会把它们保存成可用 Skill。
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {efficiencyState.drafts.map((draft) => (
+              <ButlerSkillDraftCard
+                key={draft.id}
+                draft={draft}
+                location="skill-center"
+                onSaved={(name) => {
+                  refresh();
+                  setSkillDialog({ name, mode: 'view' });
+                }}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <ButlerPluginMarketplace onSkillsChanged={refresh} />
+
+      {codexOnlySkills.length > 0 ? (
+        <section aria-label="Codex Skills">
+          <h2 className="flex items-center gap-1.5 text-base font-semibold text-ink">
+            <BookOpenText size={14} aria-hidden="true" />
+            Codex Skills
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-ink-3">
+            来自用户、系统或已安装 Plugin；在输入框键入 $ 即可手动调用。
+          </p>
+          <ul className="mt-3 grid gap-3 md:grid-cols-2">
+            {codexOnlySkills.map((skill) => (
+              <li
+                key={skill.path}
+                className={`rounded-lg border p-4 ${
+                  skill.enabled
+                    ? 'border-line/80 bg-fill-1/40'
+                    : 'border-line/70 bg-fill-2/45'
+                }`}
+              >
+                <div className="flex items-start gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong className="text-sm font-medium text-ink">${skill.name}</strong>
+                      <span className="rounded-full bg-fill-2 px-2 py-0.5 text-[10px] text-ink-3">
+                        {skill.scope === 'user'
+                          ? '我的'
+                          : skill.scope === 'repo'
+                            ? '项目'
+                            : skill.scope === 'admin'
+                              ? '管理员'
+                              : '系统'}
+                      </span>
+                      {!skill.enabled ? (
+                        <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] text-warning">
+                          已停用
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-ink-2">
+                      {skill.shortDescription || skill.description}
+                    </p>
+                  </div>
+                  <Toggle
+                    checked={skill.enabled}
+                    onChange={(enabled) => void toggleNativeSkill(skill, enabled)}
+                    label={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {memories.length > 0 ? (
         <section aria-label="记住的">
           <h2 className="text-base font-semibold text-ink">记住的</h2>
@@ -380,21 +520,21 @@ export default function ButlerLearnedPanel() {
       ) : null}
 
       {skills.length > 0 ? (
-        <section aria-label="会的本事">
+        <section aria-label="项目 Skills">
           <div className="flex items-center justify-between gap-3">
             <h2 className="flex items-center gap-1.5 text-base font-semibold text-ink">
               <BookOpenText size={14} aria-hidden="true" />
-              会的本事
+              项目 Skills
             </h2>
             <button
               type="button"
               onClick={() => setImporting((open) => !open)}
               aria-expanded={importing}
-              aria-label={importing ? '收起技能安装' : '安装新技能'}
+              aria-label={importing ? '收起本地 Skill 导入' : '导入本地 SKILL.md'}
               className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-primary"
             >
               <Plus size={12} aria-hidden="true" />
-              装新技能
+              导入本地 SKILL.md
             </button>
           </div>
           <ul className="mt-3 grid gap-3 md:grid-cols-2">
@@ -440,7 +580,7 @@ export default function ButlerLearnedPanel() {
                     </button>
                     <Toggle
                       checked={enabled}
-                      onChange={(next) => toggleSkill(skill, next)}
+                      onChange={(next) => void toggleSkill(skill, next)}
                       label={`${enabled ? '停用' : '启用'}技能 ${skill.name}`}
                     />
                   </div>
@@ -504,7 +644,7 @@ export default function ButlerLearnedPanel() {
           skill={selectedSkill}
           builtIn={isButlerBuiltInSkill(selectedSkill.name)}
           enabled={isButlerSkillEnabled(selectedSkill.name)}
-          onToggle={(enabled) => toggleSkill(selectedSkill, enabled)}
+          onToggle={(enabled) => void toggleSkill(selectedSkill, enabled)}
           onEdit={() => setSkillDialog({ name: selectedSkill.name, mode: 'edit' })}
           onClone={() => setSkillDialog({ name: selectedSkill.name, mode: 'clone' })}
           onDelete={() => setDeletingSkill(selectedSkill)}
@@ -528,7 +668,7 @@ export default function ButlerLearnedPanel() {
           title="卸载技能"
           message={`确定卸载“${deletingSkill.name}”吗？引用它的例行照看会保留，但在重新安装前无法运行。`}
           confirmLabel="卸载"
-          onConfirm={() => dropSkill(deletingSkill)}
+          onConfirm={() => void dropSkill(deletingSkill)}
           onClose={() => setDeletingSkill(null)}
         />
       ) : null}

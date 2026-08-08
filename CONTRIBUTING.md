@@ -22,7 +22,7 @@ docker compose -f docker/docker-compose.yml up -d
 pnpm dev
 ```
 
-RocketX development runs at <http://localhost:5173>; the pinned Rocket.Chat server runs at <http://localhost:3300>. The local development account is `admin` / `rcxdev123`.
+RocketX development runs at <http://127.0.0.1:1420>; the pinned Rocket.Chat server runs at <http://localhost:3300>. The local development account is `admin` / `rcxdev123`.
 
 ## Change guidelines
 

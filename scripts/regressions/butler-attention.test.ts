@@ -47,7 +47,6 @@ test('知道了只隐藏当前 Need to Know，不会关闭原任务', () => {
     now,
   });
   assert.equal(acknowledged.needToKnow.length, 0);
-  assert.equal(acknowledged.tasks.length, 1);
-  assert.equal(acknowledged.tasks[0]?.todo?.done, false);
+  assert.equal(acknowledged.personalTasks.length, 1);
+  assert.equal(acknowledged.personalTasks[0]?.todo?.done, false);
 });
-

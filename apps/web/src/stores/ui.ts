@@ -7,11 +7,11 @@ export type ModuleKey = string;
 /** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
   'messages',
+  'workbench',
   'butler-view',
   'todos',
   'calendar',
   'downloads',
-  'workbench',
   'contacts',
   'codex',
   'settings',
@@ -45,7 +45,8 @@ function readPersistedUIValue(storage: ModuleStorage | undefined = browserStorag
 }
 
 export function migratePersistedModule(value: unknown): ModuleKey {
-  if (value === 'today' || value === 'ai-assistant') return 'butler-view';
+  if (value === 'today') return 'workbench';
+  if (value === 'ai-assistant') return 'butler-view';
   return typeof value === 'string' && MODULE_ORDER.includes(value) ? value : 'messages';
 }
 
@@ -171,7 +172,7 @@ export const useUI = create<UIState>((set) => ({
   retainedUnreadRid: null,
   switcherOpen: false,
   switcherCommandCenter: false,
-  butlerView: 'now',
+  butlerView: 'conversation',
   butlerPaperConversation: null,
   butlerPaperDate: null,
   workbenchTab: 'overview',
@@ -181,7 +182,9 @@ export const useUI = create<UIState>((set) => ({
   setModule: (m) => {
     if (moduleValidator(m)) {
       persistUIState({ module: m });
-      set({ module: m });
+      set(m === 'butler-view'
+        ? { module: m, butlerView: 'conversation' }
+        : { module: m });
     }
   },
   setConvFilter: (f) =>

@@ -11,6 +11,7 @@
 //! 这正是 Azure DevOps Server 在企业内网里的默认认证方式。
 
 use serde::Serialize;
+use std::time::{Duration, Instant};
 
 #[derive(Serialize)]
 pub struct HttpResponse {
@@ -18,9 +19,129 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 15_000;
+const RESOLVE_TIMEOUT_MS: u32 = 2_000;
+const CONNECT_TIMEOUT_MS: u32 = 3_000;
+const SEND_TIMEOUT_MS: u32 = 3_000;
+const RECEIVE_TIMEOUT_MS: u32 = 7_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeadlinePhase {
+    Connect,
+    Send,
+    Receive,
+    QueryAuth,
+    Read,
+}
+
+impl DeadlinePhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Send => "send",
+            Self::Receive => "receive",
+            Self::QueryAuth => "query-auth",
+            Self::Read => "read",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeadlineExceeded {
+    phase: DeadlinePhase,
+}
+
+impl DeadlineExceeded {
+    fn new(phase: DeadlinePhase) -> Self {
+        Self { phase }
+    }
+}
+
+impl std::fmt::Display for DeadlineExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WinHTTP {} 阶段超过剩余 deadline", self.phase.label())
+    }
+}
+
+struct RequestDeadline {
+    deadline: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WinHttpTimeouts {
+    resolve_ms: i32,
+    connect_ms: i32,
+    send_ms: i32,
+    receive_ms: i32,
+}
+
+impl RequestDeadline {
+    fn from_timeout_ms(timeout_ms: Option<u64>) -> Result<Self, String> {
+        let timeout_ms = timeout_ms.unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
+        if timeout_ms == 0 {
+            return Err(DeadlineExceeded::new(DeadlinePhase::Connect).to_string());
+        }
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(timeout_ms))
+            .ok_or_else(|| "请求 deadline 溢出".to_string())?;
+        Ok(Self { deadline })
+    }
+
+    fn remaining_ms(&self, phase: DeadlinePhase) -> Result<u32, DeadlineExceeded> {
+        self.remaining_ms_at(Instant::now(), phase)
+    }
+
+    fn remaining_ms_at(&self, now: Instant, phase: DeadlinePhase) -> Result<u32, DeadlineExceeded> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(now)
+            .ok_or_else(|| DeadlineExceeded::new(phase))?;
+        if remaining.is_zero() {
+            return Err(DeadlineExceeded::new(phase));
+        }
+        let millis = remaining.as_millis().min(u32::MAX as u128) as u32;
+        Ok(millis.max(1))
+    }
+
+    fn clamped_timeout_ms_at(
+        &self,
+        now: Instant,
+        phase: DeadlinePhase,
+        stage_cap_ms: u32,
+    ) -> Result<i32, DeadlineExceeded> {
+        let remaining = self.remaining_ms_at(now, phase)?;
+        Ok(remaining.min(stage_cap_ms) as i32)
+    }
+
+    fn winhttp_timeouts(&self, phase: DeadlinePhase) -> Result<WinHttpTimeouts, DeadlineExceeded> {
+        self.winhttp_timeouts_at(Instant::now(), phase)
+    }
+
+    fn winhttp_timeouts_at(
+        &self,
+        now: Instant,
+        phase: DeadlinePhase,
+    ) -> Result<WinHttpTimeouts, DeadlineExceeded> {
+        Ok(WinHttpTimeouts {
+            resolve_ms: self.clamped_timeout_ms_at(now, phase, RESOLVE_TIMEOUT_MS)?,
+            connect_ms: self.clamped_timeout_ms_at(now, phase, CONNECT_TIMEOUT_MS)?,
+            send_ms: self.clamped_timeout_ms_at(now, phase, SEND_TIMEOUT_MS)?,
+            receive_ms: self.clamped_timeout_ms_at(now, phase, RECEIVE_TIMEOUT_MS)?,
+        })
+    }
+
+    #[cfg(test)]
+    fn from_deadline(deadline: Instant) -> Self {
+        Self { deadline }
+    }
+}
+
 #[cfg(windows)]
 mod imp {
-    use super::HttpResponse;
+    use super::{
+        DeadlinePhase, HttpResponse, RequestDeadline, CONNECT_TIMEOUT_MS, RECEIVE_TIMEOUT_MS,
+        RESOLVE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+    };
     use std::ptr;
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Networking::WinHttp::*;
@@ -87,9 +208,91 @@ mod imp {
         Ok(code as u16)
     }
 
-    fn read_body(request: *mut core::ffi::c_void) -> Result<String, String> {
+    fn set_timeouts(
+        handle: *mut core::ffi::c_void,
+        resolve_timeout_ms: i32,
+        connect_timeout_ms: i32,
+        send_timeout_ms: i32,
+        receive_timeout_ms: i32,
+    ) -> Result<(), String> {
+        unsafe {
+            WinHttpSetTimeouts(
+                handle,
+                resolve_timeout_ms,
+                connect_timeout_ms,
+                send_timeout_ms,
+                receive_timeout_ms,
+            )
+            .map_err(|e| format!("设置网络超时失败：{e}"))?;
+        }
+        Ok(())
+    }
+
+    fn set_connect_timeouts(
+        session: *mut core::ffi::c_void,
+        deadline: Option<&RequestDeadline>,
+    ) -> Result<(), String> {
+        let Some(timeouts) = deadline
+            .map(|value| value.winhttp_timeouts(DeadlinePhase::Connect))
+            .transpose()
+            .map_err(|e| e.to_string())?
+        else {
+            return set_timeouts(
+                session,
+                RESOLVE_TIMEOUT_MS as i32,
+                CONNECT_TIMEOUT_MS as i32,
+                SEND_TIMEOUT_MS as i32,
+                RECEIVE_TIMEOUT_MS as i32,
+            );
+        };
+        set_timeouts(
+            session,
+            timeouts.resolve_ms,
+            timeouts.connect_ms,
+            timeouts.send_ms,
+            timeouts.receive_ms,
+        )
+    }
+
+    fn set_io_timeouts(
+        request: *mut core::ffi::c_void,
+        deadline: Option<&RequestDeadline>,
+        phase: DeadlinePhase,
+    ) -> Result<(), String> {
+        let Some(timeouts) = deadline
+            .map(|value| value.winhttp_timeouts(phase))
+            .transpose()
+            .map_err(|e| e.to_string())?
+        else {
+            return set_timeouts(
+                request,
+                RESOLVE_TIMEOUT_MS as i32,
+                CONNECT_TIMEOUT_MS as i32,
+                SEND_TIMEOUT_MS as i32,
+                RECEIVE_TIMEOUT_MS as i32,
+            );
+        };
+        set_timeouts(
+            request,
+            timeouts.resolve_ms,
+            timeouts.connect_ms,
+            timeouts.send_ms,
+            timeouts.receive_ms,
+        )
+    }
+
+    fn read_body(
+        request: *mut core::ffi::c_void,
+        deadline: Option<&RequestDeadline>,
+    ) -> Result<String, String> {
         let mut buf: Vec<u8> = Vec::new();
         loop {
+            if let Some(deadline) = deadline {
+                deadline
+                    .remaining_ms(DeadlinePhase::Read)
+                    .map_err(|e| e.to_string())?;
+            }
+            set_io_timeouts(request, deadline, DeadlinePhase::Read)?;
             let mut available: u32 = 0;
             unsafe {
                 WinHttpQueryDataAvailable(request, &mut available)
@@ -100,6 +303,12 @@ mod imp {
             }
             let start = buf.len();
             buf.resize(start + available as usize, 0);
+            if let Some(deadline) = deadline {
+                deadline
+                    .remaining_ms(DeadlinePhase::Read)
+                    .map_err(|e| e.to_string())?;
+            }
+            set_io_timeouts(request, deadline, DeadlinePhase::Read)?;
             let mut read: u32 = 0;
             unsafe {
                 WinHttpReadData(
@@ -123,6 +332,7 @@ mod imp {
         request: *mut core::ffi::c_void,
         headers: &str,
         body: Option<&str>,
+        deadline: Option<&RequestDeadline>,
     ) -> Result<(), String> {
         // WinHttpSendRequest 取的是 UTF-16 切片长度，不能带结尾的 NUL
         let headers_w: Vec<u16> = headers.encode_utf16().collect();
@@ -135,9 +345,23 @@ mod imp {
                 body_bytes.len() as u32,
             )
         };
+        if let Some(deadline) = deadline {
+            deadline
+                .remaining_ms(DeadlinePhase::Send)
+                .map_err(|e| e.to_string())?;
+        }
+        set_io_timeouts(request, deadline, DeadlinePhase::Send)?;
         unsafe {
             WinHttpSendRequest(request, Some(&headers_w), ptr_opt, len, len, 0)
                 .map_err(|e| format!("请求发送失败：{e}"))?;
+        }
+        if let Some(deadline) = deadline {
+            deadline
+                .remaining_ms(DeadlinePhase::Receive)
+                .map_err(|e| e.to_string())?;
+        }
+        set_io_timeouts(request, deadline, DeadlinePhase::Receive)?;
+        unsafe {
             WinHttpReceiveResponse(request, ptr::null_mut())
                 .map_err(|e| format!("没有收到响应：{e}"))?;
         }
@@ -151,7 +375,11 @@ mod imp {
         content_type: &str,
         extra_headers: &str,
         integrated_auth: bool,
+        timeout_ms: Option<u64>,
     ) -> Result<HttpResponse, String> {
+        let deadline = timeout_ms
+            .map(|ms| RequestDeadline::from_timeout_ms(Some(ms)))
+            .transpose()?;
         let (host, port, path, secure) = split_url(url)?;
 
         let agent = wide("RocketX");
@@ -168,8 +396,14 @@ mod imp {
             return Err("WinHttpOpen 失败".into());
         }
         let session = Handle(session);
+        set_connect_timeouts(session.0, deadline.as_ref())?;
 
         let host_w = wide(&host);
+        if let Some(deadline) = deadline.as_ref() {
+            deadline
+                .remaining_ms(DeadlinePhase::Connect)
+                .map_err(|e| e.to_string())?;
+        }
         let connect = unsafe { WinHttpConnect(session.0, PCWSTR(host_w.as_ptr()), port, 0) };
         if connect.is_null() {
             return Err(format!("无法连接 {host}:{port}"));
@@ -214,12 +448,22 @@ mod imp {
 
         let headers =
             format!("Content-Type: {content_type}\r\nAccept: application/json\r\n{extra_headers}");
-        send(request.0, &headers, body)?;
+        send(request.0, &headers, body, deadline.as_ref())?;
+        if let Some(deadline) = deadline.as_ref() {
+            deadline
+                .remaining_ms(DeadlinePhase::Receive)
+                .map_err(|e| e.to_string())?;
+        }
         let mut status = query_status(request.0)?;
 
         // 401：问服务器支持哪些认证方式，选一个，用「当前用户凭据」(NULL/NULL) 重发。
         // 这就是 NTLM/Negotiate 的挑战-应答握手，WinHTTP 内部替我们走完。
         if integrated_auth && status == 401 {
+            if let Some(deadline) = deadline.as_ref() {
+                deadline
+                    .remaining_ms(DeadlinePhase::QueryAuth)
+                    .map_err(|e| e.to_string())?;
+            }
             let mut supported: u32 = 0;
             let mut first: u32 = 0;
             let mut target: u32 = 0;
@@ -246,11 +490,16 @@ mod imp {
                 )
                 .map_err(|e| format!("设置凭据失败：{e}"))?;
             }
-            send(request.0, &headers, body)?;
+            send(request.0, &headers, body, deadline.as_ref())?;
+            if let Some(deadline) = deadline.as_ref() {
+                deadline
+                    .remaining_ms(DeadlinePhase::Receive)
+                    .map_err(|e| e.to_string())?;
+            }
             status = query_status(request.0)?;
         }
 
-        let body = read_body(request.0)?;
+        let body = read_body(request.0, deadline.as_ref())?;
         Ok(HttpResponse { status, body })
     }
 
@@ -259,8 +508,17 @@ mod imp {
         method: &str,
         body: Option<&str>,
         content_type: &str,
+        timeout_ms: Option<u64>,
     ) -> Result<HttpResponse, String> {
-        request_inner(url, method, body, content_type, "", true)
+        request_inner(
+            url,
+            method,
+            body,
+            content_type,
+            "",
+            true,
+            Some(timeout_ms.unwrap_or(super::DEFAULT_REQUEST_TIMEOUT_MS)),
+        )
     }
 
     pub fn token_request(
@@ -280,7 +538,7 @@ mod imp {
             return Err("Rocket.Chat credentials are invalid".to_string());
         }
         let headers = format!("X-User-Id: {user_id}\r\nX-Auth-Token: {token}\r\n");
-        request_inner(url, method, body, "application/json", &headers, false)
+        request_inner(url, method, body, "application/json", &headers, false, None)
     }
 
     // PWSTR 只在个别 API 里需要，这里显式引用一下避免未使用告警
@@ -297,6 +555,7 @@ mod imp {
         _method: &str,
         _body: Option<&str>,
         _content_type: &str,
+        _timeout_ms: Option<u64>,
     ) -> Result<HttpResponse, String> {
         Err("Windows 集成认证只在 Windows 上可用，请改用 PAT".into())
     }
@@ -319,7 +578,7 @@ pub fn blocking_request(
     body: Option<&str>,
     content_type: &str,
 ) -> Result<HttpResponse, String> {
-    imp::request(url, method, body, content_type)
+    imp::request(url, method, body, content_type, None)
 }
 
 pub fn blocking_token_request(
@@ -341,6 +600,7 @@ pub async fn win_auth_request(
     method: String,
     body: Option<String>,
     content_type: Option<String>,
+    remaining_ms: Option<u64>,
 ) -> Result<HttpResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         imp::request(
@@ -348,8 +608,76 @@ pub async fn win_auth_request(
             &method,
             body.as_deref(),
             content_type.as_deref().unwrap_or("application/json"),
+            remaining_ms,
         )
     })
     .await
     .map_err(|e| format!("请求线程崩溃：{e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DeadlineExceeded, DeadlinePhase, RequestDeadline, RECEIVE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn winauth_deadline_remaining_shrinks_without_reset() {
+        let start = Instant::now();
+        let deadline = RequestDeadline::from_deadline(start + Duration::from_millis(15));
+        let first = deadline
+            .remaining_ms_at(start + Duration::from_millis(2), DeadlinePhase::Send)
+            .unwrap();
+        let second = deadline
+            .remaining_ms_at(start + Duration::from_millis(9), DeadlinePhase::Receive)
+            .unwrap();
+        assert!(second < first, "same absolute deadline must keep shrinking");
+    }
+
+    #[test]
+    fn winauth_deadline_clamp_uses_remaining_budget() {
+        let start = Instant::now();
+        let deadline = RequestDeadline::from_deadline(start + Duration::from_millis(20));
+        assert_eq!(
+            deadline
+                .clamped_timeout_ms_at(start, DeadlinePhase::Send, SEND_TIMEOUT_MS)
+                .unwrap(),
+            20
+        );
+        assert_eq!(
+            deadline
+                .clamped_timeout_ms_at(
+                    start + Duration::from_millis(18),
+                    DeadlinePhase::Read,
+                    RECEIVE_TIMEOUT_MS
+                )
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn winauth_request_timeouts_clamp_all_four_fields_to_same_remaining_budget() {
+        let start = Instant::now();
+        let deadline = RequestDeadline::from_deadline(start + Duration::from_millis(500));
+        let timeouts = deadline
+            .winhttp_timeouts_at(start, DeadlinePhase::Receive)
+            .unwrap();
+        assert!(timeouts.resolve_ms >= 1 && timeouts.resolve_ms <= 500);
+        assert!(timeouts.connect_ms >= 1 && timeouts.connect_ms <= 500);
+        assert!(timeouts.send_ms >= 1 && timeouts.send_ms <= 500);
+        assert!(timeouts.receive_ms >= 1 && timeouts.receive_ms <= 500);
+    }
+
+    #[test]
+    fn winauth_deadline_exhaustion_reports_stable_phase() {
+        let start = Instant::now();
+        let deadline = RequestDeadline::from_deadline(start + Duration::from_millis(5));
+        let err = deadline
+            .remaining_ms_at(start + Duration::from_millis(6), DeadlinePhase::Read)
+            .unwrap_err();
+        assert_eq!(err, DeadlineExceeded::new(DeadlinePhase::Read));
+        assert_eq!(err.to_string(), "WinHTTP read 阶段超过剩余 deadline");
+    }
 }

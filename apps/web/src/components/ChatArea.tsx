@@ -71,6 +71,14 @@ export default function ChatArea({
   const requestUpload = useChat((s) => s.requestUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
+  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
+  // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像和在线状态顶上。
+  const dmSize = room?.uids?.length ?? room?.usersCount;
+  const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
+  const avatarUsername = sub?.t === 'd' && !isMultiDM ? sub.name : undefined;
+  const peerStatus = useChat((s) =>
+    avatarUsername ? s.userStatus[avatarUsername] : undefined,
+  );
   const agentSessionKey = activeRid ? agentRoomSessionKey(activeRid) : '';
   const localAgent = useSharedAgent((s) => (agentSessionKey ? s.sessions[agentSessionKey] : undefined));
   const remoteAgent = useSharedAgent((s) => (agentSessionKey ? s.remoteCards[agentSessionKey] : undefined));
@@ -102,8 +110,6 @@ export default function ChatArea({
     : undefined;
   const butlerLauncherRef = useRef<HTMLButtonElement>(null);
   const wasButlerPanelOpen = useRef(butlerPanelOpen);
-
-  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
 
   useEffect(() => {
     if (!features.sharedAgent) return;
@@ -160,10 +166,6 @@ export default function ChatArea({
     );
   }
 
-  // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像顶上
-  const dmSize = room?.uids?.length ?? room?.usersCount;
-  const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
-  const avatarUsername = sub?.t === 'd' && !isMultiDM ? sub.name : undefined;
   const name = displayName(aliases, { rid: activeRid, name: rawName, avatarUsername }, nameFormat);
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
@@ -266,6 +268,7 @@ export default function ChatArea({
               username={avatarUsername}
               roomId={avatarUsername ? undefined : activeRid}
               size={36}
+              status={peerStatus}
             />
           </button>
           <div className="min-w-0 flex-1">

@@ -15,11 +15,12 @@ function colorFor(name: string): string {
  * 头像：优先加载 Rocket.Chat 头像（用户 /avatar/:username，房间 /avatar/room/:rid），
  * 失败时回退为飞书风格的彩色首字圆角块。
  */
-/** 在线状态点的颜色（online 绿 / away 黄 / busy 红 / offline 不显示） */
+/** 在线状态点的颜色（online 绿 / away 黄 / busy 红 / offline 灰） */
 const STATUS_COLOR: Record<string, string> = {
   online: '#00b96b',
   away: '#ff8800',
   busy: '#f54a45',
+  offline: '#8a9099',
 };
 
 export default function Avatar({
@@ -33,7 +34,7 @@ export default function Avatar({
   username?: string;
   roomId?: string;
   size?: number;
-  /** 在线状态：传了且非 offline 时右下角显示彩色圆点 */
+  /** 在线状态：传入时在右下角显示对应颜色的状态点 */
   status?: string;
 }) {
   /**
@@ -91,7 +92,7 @@ export default function Avatar({
     <span
       className="absolute right-0 bottom-0 rounded-full border-2 border-surface-4"
       style={{ width: dotSize, height: dotSize, background: dotColor }}
-      title={status === 'away' ? '离开' : status === 'busy' ? '忙碌' : '在线'}
+      title={status === 'away' ? '离开' : status === 'busy' ? '忙碌' : status === 'offline' ? '离线' : '在线'}
     />
   ) : null;
 

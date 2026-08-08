@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Send,
   Sparkles,
@@ -20,10 +21,16 @@ import ButlerConversation from '../components/ButlerConversation';
 import ButlerErrandRunCard from '../components/ButlerErrandRunCard';
 import ButlerIdentityPage from '../components/ButlerIdentityPage';
 import ButlerInlineExchange from '../components/ButlerInlineExchange';
+import ButlerRoutineCreateDialog from '../components/ButlerRoutineCreateDialog';
 import ButlerRoutines from '../components/ButlerRoutines';
-import ButlerTasksView from '../components/ButlerTasksView';
 import ButlerWorkspaceNav from '../components/ButlerWorkspaceNav';
-import { butlerOperationJournal } from '../butler/extensions/learning/runtime';
+import ButlerSkillMenu, { useButlerSkillMenu } from '../components/ButlerSkillMenu';
+import {
+  butlerOperationJournal,
+  createExplicitButlerSkillDraft,
+  recordButlerConversationTurn,
+} from '../butler/extensions/learning/runtime';
+import { isButlerSkillDraftRequest } from '../butler/extensions/learning/conversationReceipt';
 import type { ButlerOperationInput } from '../butler/extensions/learning/operationJournalExtension';
 import {
   buildButlerPaperViewModel,
@@ -49,7 +56,7 @@ import {
 import { useAuth } from '../stores/auth';
 import { useButlerAttention } from '../stores/butlerAttention';
 import { useButlerIdentity } from '../stores/butlerIdentity';
-import { useButler } from '../stores/butler';
+import { appendButlerLine, useButler } from '../stores/butler';
 import { useChat } from '../stores/chat';
 import {
   useRoutines,
@@ -217,7 +224,9 @@ export default function ButlerPage() {
   const identity = useButlerIdentity((state) => state.identity);
   const today = butlerPaperDateKey(new Date());
   const [briefOffset, setBriefOffset] = useState(0);
+  const [routineCreateOpen, setRoutineCreateOpen] = useState(false);
   const [input, setInput] = useState('');
+  const skillMenu = useButlerSkillMenu(input, setInput);
   const composerInputRef = useRef<HTMLInputElement>(null);
   const [inlineRange, setInlineRange] = useState<{
     start: number;
@@ -360,6 +369,10 @@ export default function ButlerPage() {
     }),
     [acknowledgedNeedIds, errands, eventCards, lastResult, routines, todos],
   );
+  const visibleErrands = useMemo(
+    () => errands.filter((run) => !run.archivedAt),
+    [errands],
+  );
 
   useEffect(() => {
     void runDailyButlerRoundsIfNeeded();
@@ -380,6 +393,23 @@ export default function ButlerPage() {
     await hydrateButler();
     if (useButler.getState().running) return;
     const sessionId = useButler.getState().activeSessionId;
+    const before = useButler.getState();
+    if (isButlerSkillDraftRequest(text) && before.taskState?.status === 'completed') {
+      const start = before.lines.length;
+      const sourceLineIds = before.lines.slice(-2).map((line) => line.id);
+      setInput('');
+      openConversationStore();
+      appendButlerLine('user', text);
+      appendButlerLine('assistant', '我已经把刚才的做法整理成草稿。先看一遍，确认后才会保存到技能中心。');
+      const current = useButler.getState();
+      createExplicitButlerSkillDraft({
+        task: before.taskState,
+        sessionId,
+        lineIds: [...sourceLineIds, ...current.lines.slice(start).map((line) => line.id)],
+        steps: before.steps,
+      });
+      return;
+    }
     const previousPaperConversation = useUI.getState().butlerPaperConversation;
     const previousRound = (
       previousPaperConversation?.date === selectedDate
@@ -402,10 +432,18 @@ export default function ButlerPage() {
     const start = useButler.getState().lines.length;
     if (shouldExpandButlerConversation(nextRound)) {
       openConversationStore();
-      await askButler(text);
-      recordOperation('ask-butler', 'ask:ad-hoc', 'now', {
-        outcome: useButler.getState().error ? 'failed' : 'completed',
-      });
+      try {
+        await askButler(text);
+      } finally {
+        const current = useButler.getState();
+        recordButlerConversationTurn({
+          task: current.taskState,
+          surface: 'now',
+          sessionId: current.activeSessionId,
+          lineIds: current.lines.slice(start).map((line) => line.id),
+          steps: current.steps,
+        });
+      }
       const submittedQuestion = useButler.getState().lines
         .slice(start)
         .find((line) => line.role === 'user');
@@ -422,10 +460,15 @@ export default function ButlerPage() {
     try {
       await askButler(text);
     } finally {
-      recordOperation('ask-butler', 'ask:ad-hoc', 'now', {
-        outcome: useButler.getState().error ? 'failed' : 'completed',
-      });
       const latestLines = useButler.getState().lines;
+      const current = useButler.getState();
+      recordButlerConversationTurn({
+        task: current.taskState,
+        surface: 'now',
+        sessionId: current.activeSessionId,
+        lineIds: latestLines.slice(start).map((line) => line.id),
+        steps: current.steps,
+      });
       const end = latestLines.length;
       const submittedQuestion = latestLines
         .slice(start)
@@ -501,10 +544,12 @@ export default function ButlerPage() {
   };
 
   return (
-    <div className={`butler-workspace${activeView === 'conversation' ? ' butler-workspace-conversation' : ''}`}>
+    <div className="butler-workspace">
       <ButlerWorkspaceNav
         active={activeView}
-        needsAttention={workspace.summary.needsAttention}
+        delegationAttention={workspace.delegations.filter((task) => (
+          task.state === 'needs-user' || task.state === 'delivered' || task.state === 'failed'
+        )).length}
         routineFailures={workspace.summary.routineFailures}
         onSelect={selectButlerView}
       />
@@ -565,27 +610,76 @@ export default function ButlerPage() {
               <ButlerConversation embedded />
             </section>
           ) : activeView === 'routines' ? (
-            <section aria-label="例行照看">
-              <div>
-                <span className="butler-eyebrow">持续责任</span>
-                <h2 className="butler-page-title">例行照看</h2>
-                <p className="mt-1 text-sm text-ink-2">
-                  查看管家长期在守什么、是否健康，以及最近一次真实结果。
-                </p>
+            <section aria-label="定时任务">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <span className="butler-eyebrow">自动执行</span>
+                  <h2 className="butler-page-title">定时任务</h2>
+                  <p className="mt-1 text-sm text-ink-2">
+                    只在你设定的时间运行；在这里检查状态、最近结果和失败原因。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="新建定时任务"
+                  onClick={() => setRoutineCreateOpen(true)}
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+                >
+                  <Plus size={15} aria-hidden="true" />
+                  新建定时任务
+                </button>
               </div>
               <div className="mt-8">
                 <ButlerRoutines />
               </div>
+              {routineCreateOpen ? (
+                <ButlerRoutineCreateDialog onClose={() => setRoutineCreateOpen(false)} />
+              ) : null}
             </section>
           ) : activeView === 'memory' ? (
-            <ButlerIdentityPage />
+            <ButlerIdentityPage initialTab="memory" />
           ) : activeView === 'connections' ? (
             <ButlerConnectionsPanel />
           ) : activeView === 'tasks' ? (
-            <div className="space-y-9">
-              <ButlerTasksView tasks={workspace.tasks} onCompleteTodo={toggleTodo} />
-              <ButlerErrandRunCard onAsk={askFromPaper} />
-            </div>
+            <section aria-label="管家委托">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <span className="butler-eyebrow">异步执行</span>
+                  <h2 className="butler-page-title">委托</h2>
+                  <p className="mt-1 text-sm text-ink-2">
+                    这里只放明确交给管家执行的工作；你的普通待办仍留在“待办”。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="新建委托"
+                  onClick={() => selectButlerView('conversation')}
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+                >
+                  <Plus size={15} aria-hidden="true" />
+                  新建委托
+                </button>
+              </div>
+              {visibleErrands.length > 0 ? (
+                <div className="mt-8">
+                  <ButlerErrandRunCard runs={visibleErrands} onAsk={askFromPaper} />
+                </div>
+              ) : (
+                <div className="mt-10 border-l-2 border-line pl-4">
+                  <h3 className="text-sm font-medium text-ink">还没有委托</h3>
+                  <p className="mt-1 text-sm text-ink-2">
+                    在对话里明确说“帮我完成”或从消息、PR 上选择“交给管家”，才会在这里启动运行。
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => selectButlerView('conversation')}
+                    className="mt-3 text-sm text-primary hover:underline"
+                  >
+                    去和管家对话
+                  </button>
+                </div>
+              )}
+            </section>
           ) : isToday ? (
             <>
               <section aria-label="管家今日概况">
@@ -597,7 +691,7 @@ export default function ButlerPage() {
                 </h2>
                 <p className="mt-1 text-sm text-ink-2">
                   我看过最近的消息、责任和运行状态；正在照看 {workspace.summary.watched} 项例行责任，
-                  推进 {workspace.summary.activeTasks} 件事。
+                  推进 {workspace.summary.activeDelegations} 项委托。
                 </p>
               </section>
 
@@ -607,11 +701,24 @@ export default function ButlerPage() {
                   <button type="button" onClick={() => selectButlerView('tasks')}>引用任务</button>
                   <button type="button" onClick={() => selectButlerView('routines')}>创建例行照看</button>
                 </div>
-                <form onSubmit={submitQuestion}>
+                <form onSubmit={submitQuestion} className="relative">
+                  <ButlerSkillMenu
+                    options={skillMenu.options}
+                    activeIndex={skillMenu.activeIndex}
+                    onPick={skillMenu.pick}
+                    onHover={skillMenu.setActiveIndex}
+                  />
                   <input
                     ref={composerInputRef}
                     value={input}
-                    onChange={(event) => setInput(event.target.value)}
+                    onChange={(event) => {
+                      setInput(event.target.value);
+                      skillMenu.reopen();
+                    }}
+                    onKeyDown={(event) => {
+                      if (skillMenu.handleKeyDown(event, skillMenu.pick)) return;
+                    }}
+                    onBlur={() => skillMenu.dismiss()}
                     placeholder="问、交代或创建，例如：把这个 PR 的风险查清，下午三点前给我结论"
                     aria-label="跟管家说件事"
                   />
@@ -999,10 +1106,10 @@ export default function ButlerPage() {
                   今天
                 </h3>
                 <ul className="mt-2 space-y-1">
-                  {workspace.tasks.filter((task) => task.nextAt).slice(0, 3).map((task) => (
+                  {workspace.personalTasks.filter((task) => task.nextAt).slice(0, 3).map((task) => (
                     <li key={task.id}>{task.nextAt} · {task.title}</li>
                   ))}
-                  {workspace.tasks.every((task) => !task.nextAt) ? <li>暂无明确截止事项</li> : null}
+                  {workspace.personalTasks.every((task) => !task.nextAt) ? <li>暂无明确截止事项</li> : null}
                 </ul>
               </section>
               <section>
@@ -1031,7 +1138,7 @@ export default function ButlerPage() {
                     创建例行照看
                   </button>
                   <button type="button" onClick={() => selectButlerView('tasks')} className="text-xs text-primary hover:underline">
-                    查看全部任务
+                    查看全部委托
                   </button>
                 </div>
               </section>

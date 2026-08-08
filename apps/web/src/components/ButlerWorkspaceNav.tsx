@@ -1,47 +1,62 @@
 import {
-  CircleGauge,
+  BrainCircuit,
+  CalendarDays,
   ListTodo,
   MessageSquareText,
+  MoreHorizontal,
   PlugZap,
   Repeat2,
-  UserRound,
 } from 'lucide-react';
+import { useRef } from 'react';
 import type { ButlerWorkspaceView } from '../lib/butlerWorkspace';
 import { useButlerIdentity } from '../stores/butlerIdentity';
 import ButlerAvatar from './ButlerAvatar';
 
-const ITEMS: Array<{
+const PRIMARY_ITEMS: Array<{
   id: ButlerWorkspaceView;
   label: string;
-  Icon: typeof CircleGauge;
+  Icon: typeof MessageSquareText;
 }> = [
-  { id: 'now', label: '现在', Icon: CircleGauge },
-  { id: 'tasks', label: '任务', Icon: ListTodo },
-  { id: 'routines', label: '例行照看', Icon: Repeat2 },
   { id: 'conversation', label: '对话', Icon: MessageSquareText },
-  { id: 'memory', label: '我的管家', Icon: UserRound },
+  { id: 'tasks', label: '委托', Icon: ListTodo },
+  { id: 'routines', label: '定时任务', Icon: Repeat2 },
+];
+
+const SECONDARY_ITEMS: Array<{
+  id: ButlerWorkspaceView;
+  label: string;
+  Icon: typeof BrainCircuit;
+}> = [
+  { id: 'now', label: '今日纸', Icon: CalendarDays },
+  { id: 'memory', label: '技能中心', Icon: BrainCircuit },
   { id: 'connections', label: '连接与权限', Icon: PlugZap },
 ];
 
 export default function ButlerWorkspaceNav({
   active,
-  needsAttention,
+  delegationAttention,
   routineFailures,
   onSelect,
 }: {
   active: ButlerWorkspaceView;
-  needsAttention: number;
+  delegationAttention: number;
   routineFailures: number;
   onSelect: (view: ButlerWorkspaceView) => void;
 }) {
   const identity = useButlerIdentity((state) => state.identity);
+  const moreRef = useRef<HTMLDetailsElement>(null);
+  const selectSecondary = (view: ButlerWorkspaceView): void => {
+    moreRef.current?.removeAttribute('open');
+    onSelect(view);
+  };
+
   return (
     <nav aria-label="管家工作视图" className="butler-workspace-nav">
       <div className="butler-workspace-brand">
         <ButlerAvatar avatar={identity.avatar} name={identity.displayName} size="small" />
         <span>
           <strong>{identity.displayName}</strong>
-          <small>持续工作中</small>
+          <small>私人工作代理</small>
         </span>
       </div>
       <label className="butler-workspace-mobile-select">
@@ -51,15 +66,22 @@ export default function ButlerWorkspaceNav({
           value={active}
           onChange={(event) => onSelect(event.target.value as ButlerWorkspaceView)}
         >
-          {ITEMS.map(({ id, label }) => (
-            <option key={id} value={id}>{label}</option>
-          ))}
+          <optgroup label="工作">
+            {PRIMARY_ITEMS.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </optgroup>
+          <optgroup label="更多">
+            {SECONDARY_ITEMS.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </optgroup>
         </select>
       </label>
       <div className="butler-workspace-nav-items">
-        {ITEMS.map(({ id, label, Icon }) => {
-          const count = id === 'now'
-            ? needsAttention
+        {PRIMARY_ITEMS.map(({ id, label, Icon }) => {
+          const count = id === 'tasks'
+            ? delegationAttention
             : id === 'routines'
               ? routineFailures
               : 0;
@@ -80,9 +102,26 @@ export default function ButlerWorkspaceNav({
           );
         })}
       </div>
-      <p className="butler-workspace-nav-foot">
-        一直在，持续跟进你的工作。
-      </p>
+      <details ref={moreRef} className="butler-workspace-more">
+        <summary aria-label="更多管家视图">
+          <MoreHorizontal size={17} aria-hidden="true" />
+          <span>更多</span>
+        </summary>
+        <div role="menu" aria-label="更多管家视图菜单">
+          {SECONDARY_ITEMS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              role="menuitem"
+              aria-current={active === id ? 'page' : undefined}
+              onClick={() => selectSecondary(id)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
+      </details>
     </nav>
   );
 }

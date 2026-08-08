@@ -4,7 +4,9 @@ import { useChat } from '../stores/chat';
 import type { Routine } from '../stores/routines';
 
 function lastRunAt(routine: Routine): number {
-  return routine.runs.reduce((latest, run) => Math.max(latest, run.at), 0);
+  return routine.runs
+    .filter((run) => run.status === 'ok')
+    .reduce((latest, run) => Math.max(latest, run.at), 0);
 }
 
 function directlyMentionsMe(message: RcMessage): boolean {

@@ -21,8 +21,8 @@ class MemoryStorage {
   }
 }
 
-test('退役的模块持久化值启动时迁到管家桌面', () => {
-  assert.equal(migratePersistedModule('today'), 'butler-view');
+test('退役的今天值迁到全局今天，旧 AI 助手值迁到管家', () => {
+  assert.equal(migratePersistedModule('today'), 'workbench');
   assert.equal(migratePersistedModule('ai-assistant'), 'butler-view');
   assert.equal(migratePersistedModule('butler-view'), 'butler-view');
   assert.equal(migratePersistedModule('downloads'), 'downloads');
@@ -30,7 +30,7 @@ test('退役的模块持久化值启动时迁到管家桌面', () => {
 
   const storage = new MemoryStorage();
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ module: 'today' }));
-  assert.equal(readPersistedModule(storage), 'butler-view');
+  assert.equal(readPersistedModule(storage), 'workbench');
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'ai-assistant' } }));
   assert.equal(readPersistedModule(storage), 'butler-view');
 });
@@ -58,4 +58,7 @@ test('可编程入口只通过 butlerView 原子打开管家视图', () => {
 
   useUI.getState().setButlerView('now');
   assert.equal(useUI.getState().butlerView, 'now');
+
+  useUI.getState().setModule('butler-view');
+  assert.equal(useUI.getState().butlerView, 'conversation');
 });

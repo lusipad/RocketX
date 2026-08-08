@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import { bootAuthenticated, type RocketChatMockState } from './support/rocket-chat-mock';
 
 const ANSWER = '发布前需要 Alice 确认检查清单。';
@@ -11,10 +11,13 @@ async function openButlerConversationView(page: Page): Promise<void> {
 }
 
 async function openButlerNowView(page: Page): Promise<void> {
-  await page
-    .getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: /^现在/ })
-    .click();
+  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
+  await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
+      useUI: { getState: () => { setButlerView: (view: 'now') => void } };
+    }>;
+    (await loadUI()).useUI.getState().setButlerView('now');
+  });
 }
 
 async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
@@ -29,7 +32,7 @@ async function openButlerFromGeneral(page: Page): Promise<RocketChatMockState> {
     await (await load()).useButler.getState().openStandaloneConversation();
   });
   await openButlerConversationView(page);
-  await expect(page.getByText('多轮讨论留在这里，结论会写回今天的纸。', { exact: true })).toBeVisible();
+  await expect(page.getByText('先回答、整理或起草；只有明确委托时，才会启动可暂停的执行任务。', { exact: true })).toBeVisible();
   return state;
 }
 
@@ -103,6 +106,56 @@ async function seedButlerAnswer(page: Page): Promise<void> {
     await flushButlerPersist();
   });
   await expect(page.getByText(ANSWER, { exact: false }).first()).toBeVisible();
+}
+
+async function draftLatestButlerAction(
+  page: Page,
+  kind: 'reply' | 'send' | 'todo' | 'commitment' | 'ado' | 'codex',
+): Promise<void> {
+  const result = await page.evaluate(async (actionKind) => {
+    const load = new Function('return import("/src/lib/butlerTools.ts")') as () => Promise<{
+      createButlerTools: () => Array<{
+        name: string;
+        invoke: (args: Record<string, unknown>) => Promise<{ status: string; content?: string }>;
+      }>;
+    }>;
+    const tool = (await load()).createButlerTools().find((candidate) => candidate.name === 'draft_action');
+    if (!tool) throw new Error('缺少 draft_action 工具');
+    const invoked = await tool.invoke({ kind: actionKind });
+    return { status: invoked.status, content: invoked.content };
+  }, kind);
+  expect(result.status).toBe('completed');
+}
+
+async function draftAdoStateAction(
+  page: Page,
+  workItemId: number,
+  targetState: string,
+): Promise<void> {
+  const result = await page.evaluate(async ({ workItemId, targetState }) => {
+    const loadTools = new Function('return import("/src/lib/butlerTools.ts")') as () => Promise<{
+      createButlerTools: () => Array<{
+        name: string;
+        invoke: (args: Record<string, unknown>) => Promise<{ status: string; content?: string }>;
+      }>;
+    }>;
+    const loadWorkbench = new Function('return import("/src/stores/workbench.ts")') as () => Promise<{
+      useWorkbench: { setState: (state: Record<string, unknown>) => void };
+    }>;
+    (await loadWorkbench()).useWorkbench.setState({
+      config: {
+        adoBase: `${location.origin}/ado-mock`,
+        pat: '',
+        auth: 'none',
+        account: 'lus',
+      },
+    });
+    const tool = (await loadTools()).createButlerTools()
+      .find((candidate) => candidate.name === 'draft_ado_state');
+    if (!tool) throw new Error('缺少 draft_ado_state 工具');
+    return tool.invoke({ workItemId, targetState });
+  }, { workItemId, targetState });
+  expect(result.status).toBe('completed');
 }
 
 async function seedStandaloneButlerAnswer(
@@ -416,6 +469,42 @@ async function seedErrandSurface(page: Page): Promise<void> {
 
     useButler.setState({
       ...(Array.isArray(current.errands) ? { errands: [sharedErrand] } : {}),
+    });
+  });
+}
+
+async function seedPausedErrandSurface(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const loadButler = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: unknown;
+    }>;
+    const loadRuns = new Function('return import("/src/stores/butlerErrandRuns.ts")') as () => Promise<{
+      useButlerErrandRuns: {
+        setState: (state: Record<string, unknown>) => void;
+      };
+    }>;
+    await loadButler();
+    const { useButlerErrandRuns } = await loadRuns();
+    const paused = {
+      id: 'paused-run',
+      title: '恢复登录修复',
+      threadId: 'thread-paused',
+      workspaceRoot: 'D:/Repos/rocketchatx',
+      workspaceName: '主仓',
+      readOnly: false,
+      startedAt: Date.now() - 60_000,
+      status: 'paused',
+      error: '本轮已结束，但结果暂时无法确认。原线程已保留，请恢复连接后手动继续。',
+      approvals: [],
+      traces: [],
+    };
+    (window as Window & { __paperResumeActions?: string[] }).__paperResumeActions = [];
+    useButlerErrandRuns.setState({
+      runs: [paused],
+      visibleRuns: [paused],
+      resumeErrand: async (runId: string) => {
+        (window as Window & { __paperResumeActions?: string[] }).__paperResumeActions?.push(runId);
+      },
     });
   });
 }
@@ -897,11 +986,24 @@ test('房间管家浮层可以粘贴图片并保留房间上下文', async ({ pa
   expect(pageErrors).toEqual([]);
 });
 
+test('回答下不再常驻业务按钮，自然语言动作工具仍会打开确认卡', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  for (const name of ['拟回复', '转待办', '记承诺', '建 ADO', '交给 Codex', '转为成果', '继续编辑']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+
+  await draftLatestButlerAction(page, 'todo');
+  await expect(page.getByLabel('待办草案')).toContainText('等待确认');
+  expect(pageErrors).toEqual([]);
+});
+
 test('取消待办草案不会产生本地副作用', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await draftLatestButlerAction(page, 'todo');
   await expect(page.getByLabel('待办草案')).toContainText('等待确认');
   await page.getByLabel('动作标题').fill('确认发布清单');
   expect(await page.evaluate(() => localStorage.getItem('rcx-todos'))).toBeNull();
@@ -916,7 +1018,7 @@ test('取消动作后回到纸不会伪造在办项', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await draftLatestButlerAction(page, 'todo');
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await openButlerNowView(page);
   await expect(page.getByRole('region', { name: '在办' })).toHaveCount(0);
@@ -930,7 +1032,7 @@ test('带待确认动作开启新对话时按原会话保留 checkpoint', async 
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await draftLatestButlerAction(page, 'todo');
   await page.getByRole('button', { name: '新对话', exact: true }).click();
   await expect(page.getByLabel('待办草案')).toHaveCount(0);
 
@@ -947,7 +1049,7 @@ test('确认待办会保存编辑内容与截止日期', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '转待办', exact: true }).click();
+  await draftLatestButlerAction(page, 'todo');
   await page.getByLabel('动作标题').fill('确认发布清单');
   await page.getByLabel('动作内容').fill('请 Alice 在发布前确认完整清单');
   await page.getByLabel('截止日期').fill('2026-07-25');
@@ -969,7 +1071,7 @@ test('承诺缺少对象时阻止执行，补齐后才保存', async ({ page }) 
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '记承诺', exact: true }).click();
+  await draftLatestButlerAction(page, 'commitment');
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
   await expect(page.getByText('请填写“我答应给谁”', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('rcx-todos'))).toBeNull();
@@ -988,7 +1090,7 @@ test('确认回复只回填原会话草稿，不调用发送接口', async ({ pa
   const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '拟回复', exact: true }).click();
+  await draftLatestButlerAction(page, 'reply');
   await page.getByLabel('动作内容').fill('Alice，发布清单我已确认。');
   await page.getByRole('button', { name: '确认执行', exact: true }).click();
 
@@ -997,11 +1099,31 @@ test('确认回复只回填原会话草稿，不调用发送接口', async ({ pa
   expect(pageErrors).toEqual([]);
 });
 
+test('确认发送回复前零写入，确认后只发送一条稳定 ID 消息', async ({ page }) => {
+  const { sentMessages, pageErrors } = await openButlerFromGeneral(page);
+  await seedButlerAnswer(page);
+
+  await draftLatestButlerAction(page, 'send');
+  await page.getByLabel('动作内容').fill('Alice，发布清单我已确认。');
+  expect(sentMessages).toEqual([]);
+
+  await page.getByRole('button', { name: '确认发送', exact: true }).click();
+
+  await expect(page.getByText('✅ 已发送回复', { exact: true })).toBeVisible();
+  expect(sentMessages).toHaveLength(1);
+  expect(sentMessages[0]).toMatchObject({
+    rid: 'room-general',
+    msg: 'Alice，发布清单我已确认。',
+    _id: expect.stringMatching(/^[23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz]{17}$/),
+  });
+  expect(pageErrors).toEqual([]);
+});
+
 test('ADO 未配置时在进入执行态和打开创建表单前完成能力预检', async ({ page }) => {
   const { pageErrors } = await openButlerFromGeneral(page);
   await seedButlerAnswer(page);
 
-  await page.getByRole('button', { name: '建 ADO', exact: true }).click();
+  await draftLatestButlerAction(page, 'ado');
   await expect(page.getByRole('dialog', { name: '创建工作项' })).toHaveCount(0);
   await expect(page.getByLabel('ADO 工作项草案')).toContainText('等待确认');
   await page.getByRole('button', { name: '继续填写', exact: true }).click();
@@ -1345,38 +1467,6 @@ test('房间管家浮层保留本房间全部问答并隔离其他房间', async
   expect(pageErrors).toEqual([]);
 });
 
-test('短回答也可手动转为成果，完整正文仍留在对话里', async ({ page }) => {
-  const { pageErrors } = await openButlerFromGeneral(page);
-  await page.evaluate(async () => {
-    const loadArtifacts = new Function('return import("/src/stores/butlerArtifacts.ts")') as () => Promise<{
-      useButlerArtifacts: { setState: (state: Record<string, unknown>) => void };
-    }>;
-    const { useButlerArtifacts } = await loadArtifacts();
-    useButlerArtifacts.setState({ artifacts: [], hydrated: true });
-  });
-
-  await seedStandaloneButlerAnswer(
-    page,
-    '帮我整理发布结论',
-    '## 发布结论\n- 先补回滚责任人\n- 再发版',
-  );
-
-  const conversation = page.getByRole('region', { name: '完整对话' });
-  await expect(conversation).toContainText('先补回滚责任人');
-  await expect(conversation).toContainText('再发版');
-
-  await conversation.getByRole('button', { name: '转为成果', exact: true }).click();
-
-  const artifacts = page.getByRole('region', { name: '管家成果' });
-  await expect(artifacts).toContainText('发布结论');
-  await expect(conversation).toContainText('先补回滚责任人');
-  await expect(conversation).toContainText('再发版');
-
-  await conversation.getByLabel('管家说').getByRole('button', { name: '继续编辑', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toHaveValue(/继续编辑成果“发布结论”/);
-  expect(pageErrors).toEqual([]);
-});
-
 test('可新建、重命名并切换独立的管家会话', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
@@ -1473,7 +1563,7 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入对话历�
   await approvals.getByRole('button', { name: '确认执行', exact: true }).click();
 
   await expect(approvals).toHaveCount(0);
-  const completed = await page.evaluate(async () => {
+  await expect.poll(() => page.evaluate(async () => {
     const loadStore = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       listButlerWorkflowSnapshots: () => Array<{
         key: string;
@@ -1487,15 +1577,287 @@ test('主动 workflow 的写审批可见，但隐藏 session 不进入对话历�
     return {
       taskStatus: snapshot?.taskState?.status,
       engineStatus: snapshot?.engineState.status,
-      memory: (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
-        .__butlerWorkflowMemoryEntries?.get('rcx-butler-v2:memory') ?? null,
+      memoryWritten: (window as Window & { __butlerWorkflowMemoryEntries?: Map<string, string> })
+        .__butlerWorkflowMemoryEntries?.has('rcx-butler-v2:memory') ?? false,
     };
-  });
-  expect(completed).toMatchObject({
+  })).toEqual({
     taskStatus: 'completed',
     engineStatus: 'ready',
+    memoryWritten: true,
   });
-  expect(completed.memory).not.toBeNull();
+  expect(pageErrors).toEqual([]);
+});
+
+test('ADO 状态修改确认前零写，确认后带 revision 写入并回读', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  let state = 'Active';
+  let revision = 7;
+  const patches: unknown[] = [];
+  const responseItem = () => ({
+    id: 123,
+    rev: revision,
+    fields: {
+      'System.Title': '修复发布失败',
+      'System.WorkItemType': 'Bug',
+      'System.State': state,
+      'System.TeamProject': 'Shop',
+    },
+  });
+  await page.route('**/ado-mock/_apis/connectionData?api-version=7.0-preview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authenticatedUser: {
+          id: '00000000-0000-0000-0000-000000000123',
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }),
+    });
+  });
+  await page.route('**/ado-mock/_apis/wit/workitems?ids=123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ value: [responseItem()] }) });
+  });
+  await page.route('**/ado-mock/_apis/wit/workitems/123?api-version=7.0', async (route) => {
+    expect(route.request().method()).toBe('PATCH');
+    const body = route.request().postDataJSON();
+    patches.push(body);
+    state = 'Resolved';
+    revision += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(responseItem()) });
+  });
+
+  await draftAdoStateAction(page, 123, 'Resolved');
+  const card = page.getByLabel('修改 ADO 工作项状态');
+  await expect(card).toContainText('#123 修复发布失败');
+  await expect(card).toContainText('Active');
+  await expect(page.getByLabel('目标状态')).toHaveValue('Resolved');
+  expect(patches).toEqual([]);
+
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+
+  await expect(page.getByText('✅ 已把 ADO 工作项 #123 改为「Resolved」', { exact: true })).toBeVisible();
+  expect(patches).toEqual([[
+    { op: 'test', path: '/rev', value: 7 },
+    { op: 'add', path: '/fields/System.State', value: 'Resolved' },
+  ]]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('ADO 身份漂移时确认前不会 PATCH，写前失败保持可安全重试', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  let identityReads = 0;
+  let patchAttempts = 0;
+  const identityUrl = '**/ado-mock/_apis/connectionData?api-version=7.0-preview';
+  const initialIdentityRoute = async (route: Route) => {
+    identityReads += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authenticatedUser: {
+          id: '00000000-0000-0000-0000-000000000123',
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }),
+    });
+  };
+  await page.route(identityUrl, initialIdentityRoute);
+  await page.route('**/ado-mock/_apis/wit/workitems?ids=123**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        value: [{
+          id: 123,
+          rev: 7,
+          fields: {
+            'System.Title': '修复发布失败',
+            'System.WorkItemType': 'Bug',
+            'System.State': 'Active',
+            'System.TeamProject': 'Shop',
+          },
+        }],
+      }),
+    });
+  });
+  await page.route('**/ado-mock/_apis/wit/workitems/123?api-version=7.0', async () => {
+    patchAttempts += 1;
+    throw new Error('身份漂移时不应进入 PATCH');
+  });
+
+  await draftAdoStateAction(page, 123, 'Resolved');
+  await page.unroute(identityUrl, initialIdentityRoute);
+  await page.route(identityUrl, async (route) => {
+    identityReads += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authenticatedUser: {
+          id: '00000000-0000-0000-0000-000000000999',
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }),
+    });
+  });
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => {
+          actionDraft: { kind?: string } | null;
+          runtimeCheckpoints: Array<{
+            capability: string;
+            status: string;
+            attempts: number;
+            error?: { retryable: boolean };
+          }>;
+        };
+      };
+    }>;
+    const { useButler } = await load();
+    const checkpoint = [...useButler.getState().runtimeCheckpoints]
+      .reverse()
+      .find((item) => item.capability === 'ado.work-items.state.write');
+    return {
+      draftKind: useButler.getState().actionDraft?.kind ?? null,
+      status: checkpoint?.status ?? null,
+      attempts: checkpoint?.attempts ?? null,
+      retryable: checkpoint?.error?.retryable ?? null,
+    };
+  })).toEqual({
+    draftKind: 'ado-state',
+    status: 'failed',
+    attempts: 1,
+    retryable: true,
+  });
+  expect(patchAttempts).toBe(0);
+  const readsAfterFirstFailure = identityReads;
+
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+  await expect.poll(() => identityReads).toBe(readsAfterFirstFailure + 1);
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => {
+          runtimeCheckpoints: Array<{
+            capability: string;
+            status: string;
+            attempts: number;
+            error?: { retryable: boolean; message: string };
+          }>;
+        };
+      };
+    }>;
+    const { useButler } = await load();
+    const checkpoint = [...useButler.getState().runtimeCheckpoints]
+      .reverse()
+      .find((item) => item.capability === 'ado.work-items.state.write');
+    return {
+      status: checkpoint?.status ?? null,
+      attempts: checkpoint?.attempts ?? null,
+      retryable: checkpoint?.error?.retryable ?? null,
+    };
+  })).toEqual({ status: 'failed', attempts: 2, retryable: true });
+  expect(patchAttempts).toBe(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('ADO 写入结果未知后旧卡会锁定，重启后也要求重新读取', async ({ page }) => {
+  const { pageErrors } = await openButlerFromGeneral(page);
+  let workItemReads = 0;
+  let patchAttempts = 0;
+  await page.route('**/ado-mock/_apis/connectionData?api-version=7.0-preview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authenticatedUser: {
+          id: '00000000-0000-0000-0000-000000000123',
+          customDisplayName: 'lus',
+          properties: { Account: { $value: 'lus' } },
+        },
+      }),
+    });
+  });
+  await page.route('**/ado-mock/_apis/wit/workitems?ids=123**', async (route) => {
+    workItemReads += 1;
+    if (workItemReads > 2) {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        value: [{
+          id: 123,
+          rev: 7,
+          fields: {
+            'System.Title': '修复发布失败',
+            'System.WorkItemType': 'Bug',
+            'System.State': 'Active',
+            'System.TeamProject': 'Shop',
+          },
+        }],
+      }),
+    });
+  });
+  await page.route('**/ado-mock/_apis/wit/workitems/123?api-version=7.0', async (route) => {
+    patchAttempts += 1;
+    await route.fulfill({ status: 500, contentType: 'text/plain', body: 'server busy' });
+  });
+
+  await draftAdoStateAction(page, 123, 'Resolved');
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+
+  await expect.poll(() => page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      useButler: {
+        getState: () => {
+          runtimeCheckpoints: Array<{
+            capability: string;
+            status: string;
+            attempts: number;
+            error?: { retryable: boolean; message: string };
+          }>;
+        };
+      };
+    }>;
+    const { useButler } = await load();
+    const checkpoint = [...useButler.getState().runtimeCheckpoints]
+      .reverse()
+      .find((item) => item.capability === 'ado.work-items.state.write');
+    return {
+      status: checkpoint?.status ?? null,
+      attempts: checkpoint?.attempts ?? null,
+      retryable: checkpoint?.error?.retryable ?? null,
+      unknownMessage: /结果暂时无法确认/.test(checkpoint?.error?.message ?? ''),
+    };
+  })).toEqual({ status: 'failed', attempts: 1, retryable: false, unknownMessage: true });
+  await expect(page.getByRole('button', { name: '需重新读取', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('修改 ADO 工作项状态').getByRole('status'))
+    .toContainText('同一张卡不会再次写入');
+  expect(workItemReads).toBe(3);
+  expect(patchAttempts).toBe(1);
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
+      flushButlerPersist: () => Promise<void>;
+    }>;
+    await (await load()).flushButlerPersist();
+  });
+
+  await page.reload();
+  await openButlerConversationView(page);
+  await expect(page.getByRole('button', { name: '需重新读取', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('修改 ADO 工作项状态').getByRole('status'))
+    .toContainText('请先重新读取远端工作项');
+  expect(patchAttempts).toBe(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -1507,6 +1869,7 @@ test('在办活在纸、完整对话和房间浮层共享同一份可见状态',
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await expect(page.getByRole('region', { name: '在办' })).toBeVisible();
   await expect(page.getByText('发布前核对清单', { exact: true })).toBeVisible();
 
@@ -1518,9 +1881,29 @@ test('在办活在纸、完整对话和房间浮层共享同一份可见状态',
   expect(pageErrors).toEqual([]);
 });
 
+test('结果不确定的活在纸上明确暂停，并只由用户显式继续一次', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
+  await seedPausedErrandSurface(page);
+
+  await expect(page.getByText('已暂停', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (
+    (window as Window & { __paperResumeActions?: string[] }).__paperResumeActions
+  ))).toEqual([]);
+  await page.getByRole('button', { name: '展开恢复登录修复', exact: true }).click();
+  await expect(page.getByText('本轮已结束，但结果暂时无法确认。原线程已保留，请恢复连接后手动继续。', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '继续恢复登录修复', exact: true }).first().click();
+  expect(await page.evaluate(() => (
+    (window as Window & { __paperResumeActions?: string[] }).__paperResumeActions
+  ))).toEqual(['paused-run']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('纸按审批和在办责任渲染，审批原文与动作可用', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await seedPaperSections(page);
 
   await expect(page.getByRole('region', { name: '等你点头' })).toBeVisible();
@@ -1546,6 +1929,7 @@ test('纸按审批和在办责任渲染，审批原文与动作可用', async ({
 test('每日整理失败或运行时不会被画成空纸', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
 
   await page.evaluate(async () => {
     const load = new Function('return import("/src/lib/butlerRoundsRunner.ts")') as () => Promise<{
@@ -1583,6 +1967,7 @@ test('自动整理结果和超时提醒直接回到纸面，提醒能跳回对�
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('navigation', { name: '管家工作视图' })).toBeVisible();
+  await openButlerNowView(page);
   await seedAutomationPaper(page);
 
   const automation = page.getByRole('region', { name: '消息与提醒' });
@@ -1603,6 +1988,7 @@ test('自动整理结果和超时提醒直接回到纸面，提醒能跳回对�
 test('未开启的自动整理在纸底可发现，消息能力有真实装载与选房入口', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
 
   await page.getByRole('button', { name: '自动整理未开启，打开设置', exact: true }).click();
   const routines = page.getByRole('region', { name: '正在照看' });
@@ -1636,7 +2022,7 @@ test('未开启的自动整理在纸底可发现，消息能力有真实装载�
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await page
     .getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: /^例行照看/ })
+    .getByRole('button', { name: /^定时任务/ })
     .click();
   await page.getByText('管理例行事务', { exact: true }).click();
   await expect(page.getByRole('checkbox', {
@@ -1666,6 +2052,7 @@ test('未开启的自动整理在纸底可发现，消息能力有真实装载�
 test('纸上临时问答失败时原位解释并可重新发送', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
       useButler: {
@@ -1757,6 +2144,7 @@ test('纸上临时问答失败时原位解释并可重新发送', async ({ page 
 test('纸上临时问答只属于发起当天，不会跨日期串到新纸', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
 
   await page.getByRole('textbox', { name: '跟管家说件事' }).fill('只留在今天');
   await page.getByRole('button', { name: '交给管家', exact: true }).click();
@@ -1772,6 +2160,7 @@ test('纸上临时问答只属于发起当天，不会跨日期串到新纸', as
 test('在办行内展开当前进度，回话结论展开后可以收下', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await seedPaperSections(page);
 
   const runningRow = page.getByRole('button', { name: '展开实现纸面进度', exact: true });
@@ -1804,6 +2193,7 @@ test('在办行内展开当前进度，回话结论展开后可以收下', async
 test('翻到昨天只读显示当天简报与收下的活，再往前为空时诚实说明', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await seedYesterdayPaper(page);
 
   await page.getByRole('button', { name: '前一天', exact: true }).click();
@@ -1819,6 +2209,7 @@ test('翻到昨天只读显示当天简报与收下的活，再往前为空时�
 test('纸上连续第 3 轮自动升级完整对话并保留前两轮', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await openButlerNowView(page);
   await seedPaperSections(page);
   await page.evaluate(async () => {
     const load = new Function('return import("/src/stores/butler.ts")') as () => Promise<{
@@ -1855,8 +2246,8 @@ test('纸上连续第 3 轮自动升级完整对话并保留前两轮', async ({
   await expect(
     page
       .getByRole('navigation', { name: '管家工作视图' })
-      .getByRole('button', { name: /^现在/ }),
-  ).toBeVisible();
+      .getByRole('button', { name: '对话', exact: true }),
+  ).toHaveAttribute('aria-current', 'page');
   const userMessages = page.getByLabel('你说');
   await expect(userMessages.getByText('第一轮', { exact: true })).toBeVisible();
   await expect(userMessages.getByText('第二轮', { exact: true })).toBeVisible();

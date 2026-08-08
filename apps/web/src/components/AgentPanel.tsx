@@ -52,7 +52,7 @@ export default function AgentPanel() {
     () => allMemberRequests.filter((item) => item.tmid === tmid),
     [allMemberRequests, tmid],
   );
-  const error = useSharedAgent((state) => state.error);
+  const globalError = useSharedAgent((state) => state.error);
   const start = useSharedAgent((state) => state.startSession);
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
   const resolveApproval = useSharedAgent((state) => state.resolveApproval);
@@ -62,6 +62,7 @@ export default function AgentPanel() {
   const end = useSharedAgent((state) => state.endSession);
   const transferToCodexApp = useSharedAgent((state) => state.transferToCodexApp);
   const [transferring, setTransferring] = useState(false);
+  const [resumingTmid, setResumingTmid] = useState<string | null>(null);
   // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
   // 依赖用 store 里的原始引用，traces 的 `?? []` 每次渲染都是新数组
   const { scrollRef, onScroll } = useStickToBottom([sessionTraces]);
@@ -72,6 +73,18 @@ export default function AgentPanel() {
 
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
+  const resuming = resumingTmid === tmid;
+  const error = session?.lastError ?? (!session ? globalError : null);
+  const statusLabel = session
+    ? {
+        starting: '正在启动',
+        ready: '待命',
+        running: '正在工作',
+        'waiting-approval': '等待审批',
+        interrupted: '已中断',
+        ended: '已结束',
+      }[session.status]
+    : '';
 
   return (
     <PanelShell
@@ -141,7 +154,7 @@ export default function AgentPanel() {
           <div className="space-y-3 border-b border-line p-4 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-ink-3">状态</span>
-              <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{session.status}</span>
+              <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{statusLabel}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-ink-3">安全模式</span>
@@ -247,15 +260,23 @@ export default function AgentPanel() {
             <div className="flex gap-2">
               {session.status === 'interrupted' ? (
                 <button
-                  onClick={() => void resume(tmid)}
-                  className="flex flex-1 items-center justify-center gap-1 rounded border border-primary px-2 py-1.5 text-xs text-primary"
+                  disabled={resuming}
+                  onClick={() => {
+                    setResumingTmid(tmid);
+                    void resume(tmid)
+                      .catch((resumeError) => toast.error(resumeError, '恢复 AI 托管失败'))
+                      .finally(() => setResumingTmid((current) => (current === tmid ? null : current)));
+                  }}
+                  className="flex flex-1 items-center justify-center gap-1 rounded border border-primary px-2 py-1.5 text-xs text-primary disabled:opacity-50"
                 >
-                  <Play size={14} /> 恢复
+                  {resuming ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  {resuming ? '恢复中…' : '恢复'}
                 </button>
               ) : null}
               <button
+                disabled={resuming}
                 onClick={() => void end(tmid)}
-                className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
+                className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1.5 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
               >
                 <Square size={12} /> 结束
               </button>

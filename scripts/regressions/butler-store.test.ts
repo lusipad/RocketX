@@ -204,6 +204,46 @@ test('管家将流式内容和工具活动实时写入展示状态', async () =>
   }
 });
 
+test('自然语言动作在流式回答已出现时仍转换上一轮结论', async () => {
+  resetStore();
+  useButler.setState({
+    lines: [
+      { id: 'welcome', role: 'assistant', text: '我是你的管家。' },
+      { id: 'previous-answer', role: 'assistant', text: '发布前需要 Alice 确认检查清单。' },
+    ],
+  });
+  const draftAction = createButlerTools().find((tool) => tool.name === 'draft_action');
+  assert.ok(draftAction);
+  const restoreAudit = setButlerToolAuditWriter(() => undefined);
+  const restore = setButlerCodexRunner(async (options) => {
+    options.onEvent?.({ type: 'content', content: '正在准备确认卡…' });
+    const runtime = options.toolRuntimeContext?.({
+      id: 'draft-action-1',
+      name: 'draft_action',
+      arguments: '{"kind":"todo"}',
+    });
+    assert.ok(runtime);
+    const result = await draftAction.invoke({ kind: 'todo' }, runtime);
+    assert.equal(result.status, 'completed');
+    return { text: '已准备待办草案。' };
+  });
+
+  try {
+    await useButler.getState().ask('把这个转成待办');
+
+    const draft = useButler.getState().actionDraft;
+    assert.equal(draft?.sourceLineId, 'previous-answer');
+    assert.equal(
+      useButler.getState().runtimeCheckpoints.find((checkpoint) => checkpoint.id === draft?.checkpointId)?.status,
+      'approval-required',
+    );
+  } finally {
+    restore();
+    restoreAudit();
+    resetStore();
+  }
+});
+
 test('remember 在 ask 流里只留下待审批 checkpoint，不伪造已写入成功消息', async () => {
   resetStore();
   const restore = setButlerCodexRunner(async (options) => {
@@ -535,6 +575,51 @@ test('draft_routine 明确拒绝已停用技能', async () => {
     assert.equal(useButler.getState().routineDraft, null);
   } finally {
     restoreProfile();
+    resetStore();
+  }
+});
+
+test('管家每轮自动轻量装载当前账号的已确认 Memory', async () => {
+  resetStore();
+  const previousAuth = useAuth.getState();
+  const previousServerBase = getServerBase();
+  const restorePersistence = setButlerPersistence({
+    get: async () => undefined,
+    set: async () => undefined,
+  });
+  const storage = new MemoryStorage();
+  storage.set('rcx-butler-v2:memory', JSON.stringify({
+    schemaVersion: 2,
+    records: [{
+      id: 'memory-style',
+      kind: 'preference',
+      scope: { server: previousServerBase || 'same-origin', account: 'alice' },
+      subject: '回复方式',
+      value: '先给结论，再补证据',
+      provenance: { butlerSource: 'test', summary: '用户确认' },
+      confidence: 'confirmed',
+      createdAt: 1,
+      confirmedAt: 1,
+      expiresAt: null,
+      status: 'active',
+      supersedes: [],
+    }],
+  }));
+  const restoreProfile = setButlerProfileStorage(storage);
+  useAuth.setState({ status: 'authed', user: { _id: 'alice' } as never });
+  const restoreRunner = setButlerCodexRunner(async (options) => {
+    assert.match(options.taskContext ?? '', /个人记忆/);
+    assert.match(options.taskContext ?? '', /回复方式.*先给结论，再补证据/);
+    return { text: '收到。' };
+  });
+
+  try {
+    await useButler.getState().ask('按我的习惯汇报');
+  } finally {
+    restoreRunner();
+    restoreProfile();
+    useAuth.setState(previousAuth);
+    restorePersistence();
     resetStore();
   }
 });

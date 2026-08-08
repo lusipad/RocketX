@@ -41,7 +41,6 @@ import {
 import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
-import LocalAgentEnvironmentsSettings from './LocalAgentEnvironmentsSettings';
 import { Row } from './SettingControls';
 
 const inputCls =
@@ -411,8 +410,6 @@ export default function AiSettings() {
           </Row>
         </div>
       </section>
-
-      <LocalAgentEnvironmentsSettings />
 
       <details className="group rounded-lg bg-surface shadow-raise">
         <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">

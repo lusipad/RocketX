@@ -23,7 +23,7 @@ import {
   type MessageSearchSource,
   type QuickSearchTab,
 } from '../lib/quickSearch';
-import { mergeUserSearchResults } from '../lib/userSearch';
+import { loadUserSearchRoster, mergeUserSearchResults } from '../lib/userSearch';
 import { commandCenterConversations } from '../lib/conversationView';
 import { searchWork, type WorkSearchResult } from '../lib/workSearch';
 import { useTodos } from '../stores/todos';
@@ -113,6 +113,7 @@ export default function QuickSwitcher({
     rooms: [],
   });
   const [contactRoster, setContactRoster] = useState<RcUser[]>([]);
+  const [contactRosterWarning, setContactRosterWarning] = useState<string | null>(null);
   const [messageSearching, setMessageSearching] = useState(false);
   const [messageLoadingMore, setMessageLoadingMore] = useState(false);
   const [messageHasMore, setMessageHasMore] = useState(false);
@@ -132,6 +133,7 @@ export default function QuickSwitcher({
   const messageSearchRequestRef = useRef('');
   const tabRef = useRef(tab);
   const dialogRef = useDialogBehavior(onClose);
+  const shouldLoadContactRoster = tab === 'contacts' || !!keyword.trim();
 
   const conversations = useMemo(
     () => buildConversations(subscriptions, rooms),
@@ -243,19 +245,34 @@ export default function QuickSwitcher({
   useEffect(() => { tabRef.current = tab; }, [tab]);
   useEffect(() => setIndex(0), [keyword, tab]);
   useEffect(() => {
+    if (!shouldLoadContactRoster) return;
     let cancelled = false;
-    void rest
-      .searchUsers('', 100)
-      .then(({ users }) => {
-        if (!cancelled) setContactRoster(users.filter((user) => user.username !== me));
+    void loadUserSearchRoster(
+      (offset) => rest.searchUsers('', 100, offset),
+      {
+        cacheKey: `${getServerBase()}\0${me ?? ''}`,
+        isCurrent: () => !cancelled,
+        onFirstPage: (users) => {
+          setContactRoster(users.filter((user) => user.username !== me));
+        },
+      },
+    )
+      .then((result) => {
+        if (!cancelled) {
+          setContactRoster(result.users.filter((user) => user.username !== me));
+          setContactRosterWarning(result.warning ?? null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setContactRoster([]);
+        if (!cancelled) {
+          setContactRoster([]);
+          setContactRosterWarning(null);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [me]);
+  }, [me, shouldLoadContactRoster]);
 
   useEffect(() => {
     if (
@@ -842,6 +859,9 @@ export default function QuickSwitcher({
               {keyword.trim() && contactSearching && (
                 <div className="px-4 py-1.5 text-xs text-ink-3">正在补全联系人和频道…</div>
               )}
+              {keyword.trim() && contactRosterWarning && (
+                <div className="px-4 py-1.5 text-xs text-warning">{contactRosterWarning}</div>
+              )}
               {keyword.trim() && messageSearching && (
                 <div className="px-4 py-1.5 text-xs text-ink-3">
                   {messages.length > 0
@@ -1101,6 +1121,9 @@ export default function QuickSwitcher({
 
           {tab === 'contacts' && (
             <>
+              {contactRosterWarning && (
+                <div className="px-4 py-1.5 text-xs text-warning">{contactRosterWarning}</div>
+              )}
               {contactSearching && <div className="py-8 text-center text-sm text-ink-3">搜索中…</div>}
               {!contactSearching &&
                 contactError &&

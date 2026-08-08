@@ -8,7 +8,7 @@ use crate::winauth;
 
 const MCP_KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.mcp";
 const MCP_KEYCHAIN_ACCOUNT: &str = "active";
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
 pub struct McpConfigLock(pub Mutex<()>);
 
@@ -34,7 +34,7 @@ fn entry() -> Result<keyring::Entry, String> {
         .map_err(|error| format!("MCP keychain is unavailable: {error}"))
 }
 
-fn normalize_server_url(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_server_url(value: &str) -> Result<String, String> {
     let value = value.trim().trim_end_matches('/');
     if value.len() > 2048
         || value.chars().any(char::is_control)
@@ -45,7 +45,7 @@ fn normalize_server_url(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-fn validate_credentials(user_id: &str, auth_token: &str) -> Result<(), String> {
+pub(crate) fn validate_credentials(user_id: &str, auth_token: &str) -> Result<(), String> {
     if user_id.is_empty()
         || auth_token.is_empty()
         || user_id.len() > 512
@@ -121,7 +121,7 @@ pub fn mcp_config_disable(lock: tauri::State<'_, McpConfigLock>) -> Result<(), S
     }
 }
 
-fn percent_encode(value: &str) -> String {
+pub(crate) fn percent_encode(value: &str) -> String {
     value
         .bytes()
         .flat_map(|byte| {
@@ -255,11 +255,11 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
     }))
 }
 
-fn response(id: Value, result: Value) -> Value {
+pub(crate) fn response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
+pub(crate) fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
 }
 
@@ -303,7 +303,9 @@ fn handle(message: Value) -> Option<Value> {
     }
 }
 
-pub fn run_stdio() -> Result<(), String> {
+pub(crate) fn run_stdio_with_handler(
+    mut handler: impl FnMut(Value) -> Option<Value>,
+) -> Result<(), String> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -317,12 +319,16 @@ pub fn run_stdio() -> Result<(), String> {
                 continue;
             }
         };
-        if let Some(value) = handle(message) {
+        if let Some(value) = handler(message) {
             writeln!(stdout, "{value}").map_err(|error| error.to_string())?;
             stdout.flush().map_err(|error| error.to_string())?;
         }
     }
     Ok(())
+}
+
+pub fn run_stdio() -> Result<(), String> {
+    run_stdio_with_handler(handle)
 }
 
 #[cfg(test)]
