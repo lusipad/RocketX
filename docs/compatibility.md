@@ -1,5 +1,7 @@
 # Compatibility matrix and upgrade policy
 
+> Status: current compatibility reference. User-visible platform behavior is defined by the [capability matrix](specs/capability-matrix.md).
+
 RocketX is a separate client built on Rocket.Chat's public REST (`/api/v1/*`) and realtime (`/websocket`) interfaces. It does not patch the Rocket.Chat server, create private Rocket.Chat tables, or require a RocketX server plugin.
 
 ## Verified Rocket.Chat versions
@@ -24,7 +26,21 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages. Starting with `v0.36.5`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages. Starting with `v0.40.0`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+
+## Codex runtime compatibility
+
+RocketX installers do not bundle Codex. Desktop AI features require a compatible, signed-in local Codex discovered from the manual path, `PATH`, or a supported standard installation location.
+
+| Codex condition | RocketX behavior |
+| --- | --- |
+| Version `0.144.4` | Current verified protocol baseline |
+| Newer than `0.144.4` | Allowed only after binary, `app-server --help`, and login probes pass; shown as untested newer |
+| Older than `0.144.4` | Blocked; the lower `0.140.0` candidate constant is diagnostic metadata, not a compatibility promise |
+| Missing or signed out | Messaging and deterministic work surfaces remain usable; local AI features are unavailable |
+| Web client | No local Codex transport; messaging and deterministic work surfaces remain usable |
+
+See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, and release evidence.
 
 ## Required and optional server settings
 

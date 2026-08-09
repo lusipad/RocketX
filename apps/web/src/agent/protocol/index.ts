@@ -17,5 +17,6 @@ export {
   type AppServerClientOptions,
   type CodexProcessInfo,
   type CodexTransport,
+  type ServerRequestContext,
 } from './client';
 export { TauriCodexTransport } from './tauriTransport';

@@ -201,6 +201,7 @@ export class NodeCodexTransport implements CodexTransport {
       processId: String(child.pid ?? 'unknown'),
       version: this.invocation.version,
       runtimeSource: this.invocation.source === 'system' ? 'system' : 'bundled',
+      managedSkillRoots: [],
     };
   }
 

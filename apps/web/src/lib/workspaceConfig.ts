@@ -4,17 +4,8 @@ import type { WiTemplatesConfig } from '../stores/wiTemplates';
  * 工作区配置描述文件（issue #67）。
  *
  * 一份 rcx.workspace.json 提供各模块配置的默认值；用户自己改过的字段
- * 保持本地值不被覆盖，其余字段跟随配置。凭据（PAT / AI key）永远不进
- * 配置文件，也不参与这里的任何字段。
+ * 保持本地值不被覆盖，其余字段跟随配置。凭据永远不进配置文件。
  */
-
-export interface WorkspaceAiProvider {
-  id: string;
-  kind: 'openai-compatible' | 'anthropic' | 'azure-openai';
-  baseUrl: string;
-  model: string;
-  name?: string;
-}
 
 export interface WorkspaceConfig {
   version: 1;
@@ -27,7 +18,6 @@ export interface WorkspaceConfig {
     webUrl?: string;
   };
   workItemTemplates?: { url: string } | WiTemplatesConfig;
-  ai?: { providers: WorkspaceAiProvider[] };
   /** 更新源（issue #106）：github 走原生通道；http/dir 需要 location */
   update?: {
     source: 'github' | 'http' | 'dir';
@@ -167,44 +157,7 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
       : parseInlineWorkItemTemplates(raw.workItemTemplates);
   }
   if (raw.ai !== undefined) {
-    const providers = raw.ai?.providers;
-    if (!Array.isArray(providers) || providers.length === 0) {
-      throw new Error('ai.providers 必须是非空数组');
-    }
-    const seen = new Set<string>();
-    config.ai = {
-      providers: providers.map((provider: any, index: number) => {
-        const label = `ai.providers[${index}]`;
-        if (typeof provider?.id !== 'string' || !provider.id.trim()) {
-          throw new Error(`${label}.id 必须是非空字符串`);
-        }
-        const id = provider.id.trim();
-        if (seen.has(id)) throw new Error(`ai.providers 里 id 重复：${id}`);
-        seen.add(id);
-        const kind = oneOf(
-          provider.kind,
-          ['openai-compatible', 'anthropic', 'azure-openai'] as const,
-          `${label}.kind`,
-        );
-        if (typeof provider.model !== 'string' || !provider.model.trim()) {
-          throw new Error(`${label}.model 必须是非空字符串`);
-        }
-        const entry: WorkspaceAiProvider = {
-          id,
-          kind,
-          baseUrl: normalizeUrl(provider.baseUrl, `${label}.baseUrl`),
-          model: provider.model.trim(),
-        };
-        if (provider.name !== undefined) {
-          if (typeof provider.name !== 'string') throw new Error(`${label}.name 必须是字符串`);
-          entry.name = provider.name.trim();
-        }
-        if (provider.key !== undefined || provider.pat !== undefined || provider.token !== undefined) {
-          throw new Error(`${label} 不允许携带 key/pat/token —— 凭据不进配置文件`);
-        }
-        return entry;
-      }),
-    };
+    throw new Error('ai 配置已移除；RocketX 统一使用 Codex 的模型与权限设置');
   }
   if (raw.update !== undefined) {
     if (!raw.update || typeof raw.update !== 'object') throw new Error('update 必须是对象');
@@ -263,8 +216,6 @@ export interface WorkspaceCurrentValues {
   adoWebUrl?: string;
   templatesUrl?: string;
   templatesInline?: string;
-  /** 现有 AI Provider 的比对串，键为 provider id */
-  aiProviders?: Record<string, string>;
   /** 更新源比对串（updateSourceFingerprint 口径） */
   updateSource?: string;
   /** 层级工作项当前形态 */
@@ -273,15 +224,6 @@ export interface WorkspaceCurrentValues {
 
 export function inlineWorkItemTemplatesFingerprint(config: WiTemplatesConfig): string {
   return JSON.stringify(config);
-}
-
-/** AI Provider 的比对口径：kind、地址、模型任一变化都算变化；name 和密钥不参与 */
-export function aiProviderFingerprint(provider: {
-  kind: string;
-  baseUrl: string;
-  model: string;
-}): string {
-  return `${provider.kind}|${provider.baseUrl.replace(/\/+$/, '')}|${provider.model}`;
 }
 
 function field(
@@ -336,17 +278,6 @@ export function planWorkspaceFields(
         ),
       );
     }
-  }
-  for (const provider of config.ai?.providers ?? []) {
-    fields.push(
-      field(
-        `ai.provider.${provider.id}`,
-        `AI Provider · ${provider.name || provider.id}`,
-        aiProviderFingerprint(provider),
-        current.aiProviders?.[provider.id] ?? '',
-        lastApplied,
-      ),
-    );
   }
   if (config.update) {
     fields.push(
@@ -455,17 +386,6 @@ export function mergeAppliedFields(
         }
       : {}),
   };
-}
-
-/** 凭据与端点绑定：kind 或 baseUrl 变化时不能沿用原 AI 密钥/本地信任分类。 */
-export function aiProviderEndpointChanged(
-  current: { kind: string; baseUrl: string } | undefined,
-  incoming: { kind: string; baseUrl: string },
-): boolean {
-  return !!current && (
-    current.kind !== incoming.kind
-    || current.baseUrl.replace(/\/+$/, '') !== incoming.baseUrl.replace(/\/+$/, '')
-  );
 }
 
 /** ADO PAT 与连接绑定；地址或认证方式任一变化都必须解绑。 */

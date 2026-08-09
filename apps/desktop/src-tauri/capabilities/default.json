@@ -12,7 +12,13 @@
     "opener:allow-open-path",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "codex://threads/*" }]
+      "allow": [
+        { "url": "codex://threads/*" },
+        { "url": "codex://automations" },
+        { "url": "codex://plugins/*" },
+        { "url": "codex://skills" },
+        { "url": "codex://settings" }
+      ]
     },
     "dialog:allow-save",
     "dialog:allow-open",

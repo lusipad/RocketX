@@ -1,5 +1,7 @@
 # Implementation notes — 管家自然 Skill 学习
 
+> 文档状态：**已废弃方案的历史实施记录**。RocketX 不再维护私有 Skill 学习与保存链路；当前见[Skills、Plugins 与 Apps](specs/skills-and-plugins.md)。
+
 Plan: docs/butler-natural-skill-learning-plan.md
 
 ## Decisions

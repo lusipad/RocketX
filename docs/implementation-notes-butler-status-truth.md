@@ -1,5 +1,7 @@
 # Implementation notes — Butler 状态真相闭环
 
+> 文档状态：**已废弃方案的历史实施记录**。旧 `ButlerErrandStatus` 不再承担当前状态合同；现状见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。
+
 Plan: `docs/butler-status-truth-plan.md`
 
 ## Decisions

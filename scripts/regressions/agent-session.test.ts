@@ -69,12 +69,15 @@ test('工作项 Discussion 默认允许房间成员提问，但宿主仍掌握�
   assert.equal(commandAccess(session({ tmid: 'room:discussion-128', access: 'host-only' }), 'member'), 'denied');
 });
 
-test('共享 Agent 使用独立的 AI 托管 Codex 模型和推理强度设置', () => {
+test('共享 Agent 使用独立的 AI 托管 Codex 模型、推理强度和权限设置', () => {
   const source = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
   assert.match(source, /getAgentHostingCodexSettings\(\)/);
   assert.doesNotMatch(source, /getButlerCodexSettings/);
-  assert.match(source, /codexSettings\.model \? \{ model: codexSettings\.model \}/);
-  assert.match(source, /codexSettings\.effort === 'default' \? \{\} : \{ effort: codexSettings\.effort \}/);
+  assert.match(source, /function runtimeSelection\(catalog: CodexCatalog\): CodexRuntimeSelection/);
+  assert.match(source, /permissionPreset: saved\.permissionPreset/);
+  assert.match(source, /\.startThread\(runtimeSelection\(catalog\)\)/);
+  assert.match(source, /controller\.startTurn\(/);
+  assert.doesNotMatch(source, /AppServerClient|TauriCodexTransport|sandboxPolicy/);
 });
 
 test('共享 Agent 恢复按账号和服务器作用域隔离，旧请求不能覆盖新账号', () => {
@@ -100,7 +103,6 @@ test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
     createdWithRuntimeSource: 'system',
     lastResumedWithCodexVersion: '0.145.0',
     lastResumedWithRuntimeSource: 'manual',
-    lastResumeMode: 'native',
   }), 1_100);
   assert.equal(interrupted.status, 'interrupted');
   assert.equal(interrupted.activeTurnId, undefined);
@@ -111,7 +113,6 @@ test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
   assert.equal(resumed.createdWithRuntimeSource, 'system');
   assert.equal(resumed.lastResumedWithCodexVersion, '0.145.0');
   assert.equal(resumed.lastResumedWithRuntimeSource, 'manual');
-  assert.equal(resumed.lastResumeMode, 'native');
 });
 
 test('恢复时标记中断，超过孤儿超时则自动结束', () => {

@@ -1,14 +1,16 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Shield, Square, Users, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
 import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
+import { isTauriRuntime } from '../lib/client';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
 import { environmentIsBusy, proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
 import PanelShell from './PanelShell';
+import ButlerErrandInputCard from './ButlerErrandInputCard';
 
 function approvalSummary(method: string, params: unknown): string {
   const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
@@ -42,11 +44,16 @@ export default function AgentPanel() {
   const selectedEnvironment = boundEnvironment ?? defaultEnvironment;
   const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
   const allApprovals = useSharedAgent((state) => state.approvals);
+  const allInputs = useSharedAgent((state) => state.inputs);
   const allMemberRequests = useSharedAgent((state) => state.memberRequests);
   const traces = sessionTraces ?? [];
   const approvals = useMemo(
     () => allApprovals.filter((item) => item.tmid === tmid),
     [allApprovals, tmid],
+  );
+  const inputs = useMemo(
+    () => allInputs.filter((item) => item.tmid === tmid),
+    [allInputs, tmid],
   );
   const members = useMemo(
     () => allMemberRequests.filter((item) => item.tmid === tmid),
@@ -56,13 +63,14 @@ export default function AgentPanel() {
   const start = useSharedAgent((state) => state.startSession);
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
   const resolveApproval = useSharedAgent((state) => state.resolveApproval);
-  const setSandboxMode = useSharedAgent((state) => state.setSandboxMode);
+  const resolveInput = useSharedAgent((state) => state.resolveInput);
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
   const transferToCodexApp = useSharedAgent((state) => state.transferToCodexApp);
   const [transferring, setTransferring] = useState(false);
   const [resumingTmid, setResumingTmid] = useState<string | null>(null);
+  const desktopRuntime = isTauriRuntime();
   // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
   // 依赖用 store 里的原始引用，traces 的 `?? []` 每次渲染都是新数组
   const { scrollRef, onScroll } = useStickToBottom([sessionTraces]);
@@ -113,41 +121,49 @@ export default function AgentPanel() {
               {binding
                 ? `为工作项 #${binding.workItemId} 开启 AI 托管`
                 : roomSession
-                  ? '在当前会话开启 AI 托管'
+                  ? '在当前任务开启 AI 托管'
                   : '在当前话题开启 AI 托管'}
             </div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              AI 会从已有讨论继续理解上下文。默认只读，只有明确的 @ai 指令才会回复，写入仍需本机审批。
+              AI 会从已有讨论继续理解上下文。只有明确的 @ai 指令才会回复；权限、审批和执行边界与 Codex 任务一致。
             </div>
           </div>
-          <button
-            onClick={() =>
-              void open({ directory: true, multiple: false, title: '选择 Agent 工作区' }).then((path) => {
-                if (typeof path === 'string') setWorkspaceRoot(path);
-              })
-            }
-            className="flex max-w-full items-center gap-2 rounded-md border border-line px-3 py-2 text-xs text-ink-2 hover:bg-fill-hover"
-            title={workspaceRoot ?? selectedEnvironment?.path}
-          >
-            <FolderOpen size={14} />
-            <span className="truncate">{workspaceRoot ?? selectedEnvironment?.name ?? '选择项目目录（可选）'}</span>
-          </button>
-          <button
-            onClick={() => void start(rid, tmid, {
-              workspaceRoot: workspaceRoot ?? selectedEnvironment?.path,
-              replyTmid: tmid.startsWith('room:') ? undefined : tmid,
-              environmentId: workspaceRoot ? undefined : selectedEnvironment?.id,
-              environmentName: workspaceRoot ? undefined : selectedEnvironment?.name,
-              workItem: binding ? { id: binding.workItemId, project: binding.adoProject, title: binding.workItemTitle } : undefined,
-              proposedBranch: binding && selectedEnvironment
-                ? proposedAgentBranch(selectedEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
-                : undefined,
-              baseBranch: selectedEnvironment?.defaultBaseBranch,
-            }).catch(() => undefined)}
-            className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
-          >
-            <Play size={14} /> 开启 AI 托管
-          </button>
+          {!desktopRuntime ? (
+            <div className="rounded-md border border-line bg-fill-1 px-3 py-2 text-xs text-ink-3">
+              共享 Agent 仅支持 RocketX 桌面端。
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={() =>
+                  void open({ directory: true, multiple: false, title: '选择 Agent 工作区' }).then((path) => {
+                    if (typeof path === 'string') setWorkspaceRoot(path);
+                  })
+                }
+                className="flex max-w-full items-center gap-2 rounded-md border border-line px-3 py-2 text-xs text-ink-2 hover:bg-fill-hover"
+                title={workspaceRoot ?? selectedEnvironment?.path}
+              >
+                <FolderOpen size={14} />
+                <span className="truncate">{workspaceRoot ?? selectedEnvironment?.name ?? '选择项目目录（可选）'}</span>
+              </button>
+              <button
+                onClick={() => void start(rid, tmid, {
+                  workspaceRoot: workspaceRoot ?? selectedEnvironment?.path,
+                  replyTmid: tmid.startsWith('room:') ? undefined : tmid,
+                  environmentId: workspaceRoot ? undefined : selectedEnvironment?.id,
+                  environmentName: workspaceRoot ? undefined : selectedEnvironment?.name,
+                  workItem: binding ? { id: binding.workItemId, project: binding.adoProject, title: binding.workItemTitle } : undefined,
+                  proposedBranch: binding && selectedEnvironment
+                    ? proposedAgentBranch(selectedEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
+                    : undefined,
+                  baseBranch: selectedEnvironment?.defaultBaseBranch,
+                }).catch(() => undefined)}
+                className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
+              >
+                <Play size={14} /> 开启 AI 托管
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -155,25 +171,6 @@ export default function AgentPanel() {
             <div className="flex items-center justify-between">
               <span className="text-ink-3">状态</span>
               <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{statusLabel}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-3">安全模式</span>
-              <button
-                onClick={() =>
-                  void setSandboxMode(
-                    tmid,
-                    session.sandboxMode === 'read-only' ? 'workspace-write' : 'read-only',
-                  )
-                }
-                className={`flex items-center gap-1 rounded px-2 py-1 text-xs ${
-                  session.sandboxMode === 'read-only'
-                    ? 'bg-success-light text-success'
-                    : 'bg-warning-light text-warning'
-                }`}
-              >
-                <Shield size={14} />
-                {session.sandboxMode === 'read-only' ? '只读' : '工作区可写'}
-              </button>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-ink-3">指挥范围</span>
@@ -192,7 +189,7 @@ export default function AgentPanel() {
             </div>
             {session.codexThreadId ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-ink-3">Codex 会话</span>
+                <span className="text-ink-3">Codex 任务</span>
                 <div className="flex min-w-0 items-center gap-1.5">
                   <button
                     title={`复制 codex resume ${session.codexThreadId}，在 Codex 命令行里接着这次对话`}
@@ -207,7 +204,7 @@ export default function AgentPanel() {
                     <span className="truncate">codex resume</span>
                   </button>
                   <button
-                    title="在 Codex App 打开新对话并填好托管记录，由你按回车发出"
+                    title="在 Codex App 打开新任务并填好托管记录，由你按回车发出"
                     disabled={transferring || session.status === 'running'}
                     onClick={() => {
                       setTransferring(true);
@@ -217,7 +214,9 @@ export default function AgentPanel() {
                             throw new Error('无法打开 Codex App，也无法复制对话记录');
                           }
                           toast.success(
-                            result === 'opened'
+                            result === 'opened-existing'
+                              ? '已在 Codex App 接续当前任务'
+                              : result === 'opened'
                               ? '已打开 Codex App，完整记录已填入，请确认后发送'
                               : result === 'opened-with-copy'
                                 ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
@@ -283,7 +282,7 @@ export default function AgentPanel() {
             </div>
           </div>
 
-          {(members.length > 0 || approvals.length > 0) && (
+          {(members.length > 0 || approvals.length > 0 || inputs.length > 0) && (
             <div className="space-y-3 border-b border-line bg-warning-light/30 p-4">
               {members.map((request) => (
                 <div key={request.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
@@ -294,7 +293,7 @@ export default function AgentPanel() {
                       onClick={() => void approveMember(request.id, true)}
                       className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-white"
                     >
-                      <Check size={12} /> 放行本会话
+                      <Check size={12} /> 放行本次任务
                     </button>
                     <button
                       onClick={() => void approveMember(request.id, false)}
@@ -311,21 +310,36 @@ export default function AgentPanel() {
                   <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-ink-3">
                     {approvalSummary(approval.method, approval.params)}
                   </pre>
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      onClick={() => void resolveApproval(approval.id, true)}
-                      className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-white"
-                    >
-                      <Check size={12} /> 允许
-                    </button>
-                    <button
-                      onClick={() => void resolveApproval(approval.id, false)}
+                      onClick={() => void resolveApproval(approval.id, 'decline')}
                       className="flex items-center gap-1 rounded border border-line px-2 py-1 text-ink-2"
                     >
                       <X size={12} /> 拒绝
                     </button>
+                    {approval.method.startsWith('item/') ? (
+                      <button
+                        onClick={() => void resolveApproval(approval.id, 'accept-session')}
+                        className="flex items-center gap-1 rounded border border-line px-2 py-1 text-ink-2"
+                      >
+                        <Check size={12} /> 本次任务允许
+                      </button>
+                    ) : null}
+                    <button
+                      onClick={() => void resolveApproval(approval.id, 'accept')}
+                      className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-white"
+                    >
+                      <Check size={12} /> 允许一次
+                    </button>
                   </div>
                 </div>
+              ))}
+              {inputs.map((input) => (
+                <ButlerErrandInputCard
+                  key={input.id}
+                  input={input}
+                  onResolve={(response) => resolveInput(input.id, response)}
+                />
               ))}
             </div>
           )}

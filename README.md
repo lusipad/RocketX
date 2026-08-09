@@ -29,7 +29,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 - `examples`: RocketX application examples.
 - `docker`: reproducible RocketX Web, Rocket.Chat, and MongoDB stack.
 
-The detailed product and technical scope lives in the [blueprint](docs/blueprint.md). See the [architecture notes](docs/architecture.md), [compatibility matrix](docs/compatibility.md), and [changelog](CHANGELOG.md) for evidence and constraints.
+The current user-visible behavior is defined by the [functional specifications](docs/specs/README.md). Start from the [documentation index](docs/README.md) to distinguish current references from historical plans. Product choices follow the [product principles](docs/specs/product-principles.md); the [vision](docs/vision.md) and [blueprint](docs/blueprint.md) are directional and historical context, not current delivery commitments. See the [architecture notes](docs/architecture.md), [compatibility matrix](docs/compatibility.md), and [changelog](CHANGELOG.md) for supporting context and release history.
 
 ## Optional self-host with Docker
 
@@ -52,7 +52,7 @@ docker compose -f docker/docker-compose.yml down
 
 ## Develop locally
 
-Prerequisites: Node.js 22 and pnpm 11.12.0. Docker is only needed when using the bundled Rocket.Chat self-host stack. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work, and Codex features require the compatible Codex CLI on `PATH`.
+Prerequisites: Node.js 22 and pnpm 11.12.0. Docker is only needed when using the bundled Rocket.Chat self-host stack. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work. Codex features require a compatible, signed-in local Codex runtime discoverable on `PATH`, in a standard installation location, or through RocketX's manual runtime path setting.
 
 ```bash
 corepack enable
@@ -70,9 +70,9 @@ Desktop development:
 pnpm --filter @rcx/desktop dev
 ```
 
-On a new desktop installation, RocketX first explains how its GTD flow captures work, clarifies the next action, and protects attention before opening team or personal setup. **Join a team** can then import a non-secret `rcx.workspace.json` from a local file or an anonymously reachable HTTP(S)/Git raw URL. Rocket.Chat, Azure DevOps, AI-provider, template, and update-source defaults are reviewed before they are applied; passwords, PATs, and API keys are always entered locally. URL-based team configuration checks for changes every 24 hours and asks before applying them. Start from the [workspace configuration example](docs/examples/rcx.workspace.sample.json), and see the [configuration guide](docs/proposal-config-provisioning.md) for the field and security rules.
+On a new desktop installation, RocketX first explains how its GTD flow captures work, clarifies the next action, and protects attention before opening team or personal setup. **Join a team** can then import a non-secret `rcx.workspace.json` from a local file or an anonymously reachable HTTP(S)/Git raw URL. Rocket.Chat, Azure DevOps, work-item template, hierarchy-layout, and update-source defaults are reviewed before they are applied; passwords and PATs are always entered locally. URL-based team configuration checks for changes every 24 hours and asks before applying them. Start from the [workspace configuration example](docs/examples/rcx.workspace.sample.json), and see the [configuration guide](docs/proposal-config-provisioning.md) for the field and security rules.
 
-After signing in, open **Butler** to search messages and work data, query or adjust Azure DevOps plans, arrange tasks, and run recurring reviews. Deterministic facts, plans, and state stay in the Workbench UI; AI work runs through native Codex Skills, while plugin discovery and installation reuse the Codex Plugin/Marketplace protocol. Butler's scoped Memory lightly recalls only confirmed profile, preference, and habit records for the current account and work context, with review, revoke, and restore controls; Codex's built-in Memory is disabled for Butler. The full page and room sidebar both accept real multimodal image input. Writes remain behind deterministic dialogs or task-card approval, and runtime input or approval requests return to their owning task card. Butler or shared-agent conversations can also open a new Codex App chat with the workspace and full context prefilled for the user to confirm and send. Butler and AI Hosting have independent Codex model and reasoning-effort settings under **Settings → AI**. API keys stay in the operating-system credential store.
+After signing in, deterministic facts, plans, and state stay in Messages, Workbench, Todos, and Calendar. **Butler** is a native Codex task surface: it reuses Codex threads, models, permissions, Skills, Plugins, Apps, and local Memory through `app-server`; runtime input and approval requests return to their owning task. These AI surfaces currently require the desktop app plus a compatible, signed-in local Codex runtime—RocketX installers do not bundle Codex, and the web client keeps messaging and deterministic work surfaces available without pretending local AI can run. Scheduled tasks are device-local and execute only while RocketX is running. See the [capability matrix](docs/specs/capability-matrix.md) for exact platform and degradation behavior.
 
 ## Verify changes
 

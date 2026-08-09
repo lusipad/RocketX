@@ -24,17 +24,6 @@
       }
     ]
   },
-  "ai": {
-    "providers": [
-      {
-        "id": "team-default",
-        "kind": "openai-compatible",
-        "baseUrl": "https://api.deepseek.com",
-        "model": "deepseek-chat",
-        "name": "团队默认模型"
-      }
-    ]
-  },
   "update": {
     "source": "dir",
     "location": "\\\\fileserver\\share\\rocketx"

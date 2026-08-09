@@ -1,5 +1,7 @@
 # Implementation notes — 管家本地工作区配置
 
+> 文档状态：**历史实施记录**。当前工作区选择、共享 Agent 环境与权限边界分别见[管家任务](specs/butler-tasks.md)、[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)和[权限与审批](specs/approvals-and-permissions.md)。
+
 Plan: 当前 Codex 任务计划
 
 ## Summary

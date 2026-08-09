@@ -48,7 +48,6 @@ import {
 } from '../lib/conversationPanelLayout';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { useCodexRuntime } from '../stores/codexRuntime';
-import { useToday } from '../stores/today';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -100,7 +99,7 @@ export default function MainPage() {
   const wasLayoutPanelOpen = useRef(layoutPanelOpen);
 
   useEffect(() => {
-    void init().then(() => useToday.getState().refreshMentions());
+    void init();
     void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
     if (runtimeFeatures().runtimeProbes) void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);

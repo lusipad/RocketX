@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('管家对话不做本地正则拆解，所有输入交给管家大脑（issue #89）', () => {
-  // 正则命令解析模块已整体删除，不能再被加回来
+test('任务输入不再做本地命令拆解，统一交给 codexWorkspace 驱动的原生任务流', () => {
   assert.equal(existsSync('apps/web/src/lib/assistantCommand.ts'), false);
 
-  const page = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
-  assert.doesNotMatch(page, /isAssistantWorkCommand|fallbackAssistantCommand|AssistantCommand/);
-  assert.match(page, /await askButler\(value,\s*undefined,\s*submittedImages\)/);
-  // 快捷提示只填入输入框，确认发送后仍走同一条管家路径
-  assert.match(page, /BUTLER_SCENE_PROMPTS\.map\(\(item\) => \([\s\S]*onClick=\{\(\) => setInput\(item\.prompt\)\}/);
+  const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  assert.doesNotMatch(conversation, /AssistantCommand|assistantCommand|fallbackAssistantCommand|isAssistantWorkCommand/);
+  assert.match(conversation, /const submit = async \(text = input, modeOverride\?: CodexFollowUpMode\): Promise<void> => \{/);
+  assert.match(conversation, /await send\(value, outgoingImages, modeOverride\)/);
+  assert.match(conversation, /if \(event\.key !== 'Enter' \|\| event\.nativeEvent\.isComposing\) return;/);
+  assert.match(conversation, /const opposite = followUpMode === 'steer' \? 'queue' : 'steer';/);
+  assert.match(conversation, /void submit\(\);/);
+  assert.match(conversation, /suggestions\.map\(\(suggestion\) => \(/);
+  assert.match(conversation, /onClick=\{\(\) => void submit\(suggestion\)\}/);
 });

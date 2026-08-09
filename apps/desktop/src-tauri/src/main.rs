@@ -12,15 +12,7 @@ mod ocr;
 mod proc;
 mod winauth;
 
-use std::{
-    collections::HashSet,
-    io::{Read, Write},
-    path::PathBuf,
-    process::Stdio,
-    sync::Mutex,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, sync::Mutex};
 #[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
@@ -37,10 +29,6 @@ const MAIN_TRAY_ID: &str = "main";
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
 
-struct AiKeychainLock(Mutex<()>);
-
-const AI_KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.ai";
-
 fn validate_external_url(url: &str) -> Result<&str, String> {
     let url = url.trim();
     if url.len() > 8192 || url.chars().any(char::is_control) {
@@ -50,12 +38,19 @@ fn validate_external_url(url: &str) -> Result<&str, String> {
     if matches!(parsed.scheme(), "http" | "https") {
         return Ok(url);
     }
+    if matches!(
+        url,
+        "codex://automations" | "codex://plugins/" | "codex://skills" | "codex://settings"
+    ) {
+        return Ok(url);
+    }
     if parsed.scheme() == "codex"
         && parsed.host_str() == Some("threads")
         && parsed.fragment().is_none()
     {
         let thread_id = parsed.path().strip_prefix('/').unwrap_or_default();
-        if parsed.query().is_none()
+        if thread_id != "new"
+            && parsed.query().is_none()
             && !thread_id.is_empty()
             && thread_id.len() <= 256
             && thread_id.chars().all(|character| {
@@ -94,203 +89,6 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(validate_external_url(&url)?, None::<&str>)
         .map_err(|error| format!("failed to open external URL: {error}"))
-}
-
-fn validate_ai_provider_id(provider_id: &str) -> Result<&str, String> {
-    let provider_id = provider_id.trim();
-    if provider_id.is_empty()
-        || provider_id.len() > 128
-        || provider_id.chars().any(char::is_control)
-    {
-        return Err("invalid AI provider id".to_string());
-    }
-    Ok(provider_id)
-}
-
-fn ai_keychain_entry(provider_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(AI_KEYCHAIN_SERVICE, validate_ai_provider_id(provider_id)?)
-        .map_err(|error| format!("AI keychain is unavailable: {error}"))
-}
-
-#[tauri::command]
-fn ai_secret_set(
-    keychain: tauri::State<'_, AiKeychainLock>,
-    provider_id: String,
-    secret: String,
-) -> Result<(), String> {
-    if secret.is_empty() || secret.len() > 64 * 1024 {
-        return Err("invalid AI provider secret".to_string());
-    }
-    let _guard = keychain
-        .0
-        .lock()
-        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
-    ai_keychain_entry(&provider_id)?
-        .set_password(&secret)
-        .map_err(|error| format!("failed to save AI provider secret: {error}"))
-}
-
-#[tauri::command]
-fn ai_secret_get(
-    keychain: tauri::State<'_, AiKeychainLock>,
-    provider_id: String,
-) -> Result<Option<String>, String> {
-    let _guard = keychain
-        .0
-        .lock()
-        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
-    match ai_keychain_entry(&provider_id)?.get_password() {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("failed to read AI provider secret: {error}")),
-    }
-}
-
-#[tauri::command]
-fn ai_secret_delete(
-    keychain: tauri::State<'_, AiKeychainLock>,
-    provider_id: String,
-) -> Result<(), String> {
-    let _guard = keychain
-        .0
-        .lock()
-        .map_err(|_| "AI keychain lock is unavailable".to_string())?;
-    match ai_keychain_entry(&provider_id)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!("failed to delete AI provider secret: {error}")),
-    }
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexExecResult {
-    text: String,
-    thread_id: Option<String>,
-}
-
-fn run_codex_once(
-    app: tauri::AppHandle,
-    cache_dir: PathBuf,
-    prompt: String,
-) -> Result<CodexExecResult, String> {
-    if prompt.trim().is_empty() || prompt.len() > 100_000 {
-        return Err("Codex prompt is empty or too long".to_string());
-    }
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|error| format!("failed to prepare Codex workspace: {error}"))?;
-    let mut command = proc::codex_command(&app)?;
-    // --json/--sandbox 是协议与安全必需；其余参数按当前 CLI 的 --help 探测，
-    // 避免新版移除参数后 clap 直接以退出码 2 拒绝（与 app-server --stdio 同款问题）
-    command.args(["exec", "--json", "--sandbox", "read-only"]);
-    command.args(proc::codex_exec_optional_args(&app)?);
-    command.arg("-C").arg(&cache_dir).arg("-");
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Codex CLI is unavailable: {error}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| "Codex stdin is unavailable".to_string())?
-        .write_all(prompt.as_bytes())
-        .map_err(|error| format!("failed to send prompt to Codex: {error}"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Codex stdout is unavailable".to_string())?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Codex stderr is unavailable".to_string())?;
-    let stdout_reader = thread::spawn(move || {
-        let mut value = String::new();
-        let _ = stdout.read_to_string(&mut value);
-        value
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut value = String::new();
-        let _ = stderr.read_to_string(&mut value);
-        value
-    });
-    let deadline = Instant::now() + Duration::from_secs(300);
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("failed to monitor Codex: {error}"))?
-        {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Codex timed out after 5 minutes".to_string());
-        }
-        thread::sleep(Duration::from_millis(100));
-    };
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "failed to read Codex output".to_string())?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "failed to read Codex error output".to_string())?;
-    if !status.success() {
-        let detail = stderr.trim().chars().take(2_000).collect::<String>();
-        return Err(format!(
-            "Codex exited with {}{}",
-            status,
-            if detail.is_empty() {
-                String::new()
-            } else {
-                format!(": {detail}")
-            }
-        ));
-    }
-    let mut text = String::new();
-    let mut thread_id = None;
-    for line in stdout.lines() {
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if event.get("type").and_then(|value| value.as_str()) == Some("thread.started") {
-            thread_id = event
-                .get("thread_id")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned);
-        }
-        let item = event.get("item");
-        if event.get("type").and_then(|value| value.as_str()) == Some("item.completed")
-            && item
-                .and_then(|value| value.get("type"))
-                .and_then(|value| value.as_str())
-                == Some("agent_message")
-        {
-            if let Some(value) = item
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str())
-            {
-                text = value.to_string();
-            }
-        }
-    }
-    if text.trim().is_empty() {
-        return Err("Codex completed without an agent response".to_string());
-    }
-    Ok(CodexExecResult { text, thread_id })
-}
-
-#[tauri::command]
-async fn codex_exec_once(app: tauri::AppHandle, prompt: String) -> Result<CodexExecResult, String> {
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| format!("failed to resolve app cache directory: {error}"))?
-        .join("codex-once");
-    tauri::async_runtime::spawn_blocking(move || run_codex_once(app, cache_dir, prompt))
-        .await
-        .map_err(|error| format!("Codex task failed: {error}"))?
 }
 
 fn normalize_http_origin(value: &str) -> Result<String, String> {
@@ -481,9 +279,7 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 
 #[cfg(test)]
 mod tray_icon_tests {
-    use super::{
-        dim_tray_icon, normalize_http_origin, validate_ai_provider_id, validate_external_url,
-    };
+    use super::{dim_tray_icon, normalize_http_origin, validate_external_url};
     use tauri::image::Image;
 
     #[test]
@@ -504,14 +300,7 @@ mod tray_icon_tests {
     }
 
     #[test]
-    fn ai_keychain_rejects_unsafe_provider_ids() {
-        assert_eq!(validate_ai_provider_id("deepseek").unwrap(), "deepseek");
-        assert!(validate_ai_provider_id("").is_err());
-        assert!(validate_ai_provider_id("bad\nname").is_err());
-    }
-
-    #[test]
-    fn external_url_allows_http_and_codex_threads_only() {
+    fn external_url_allows_http_and_known_codex_surfaces_only() {
         assert_eq!(
             validate_external_url(" https://example.com/path ").unwrap(),
             "https://example.com/path"
@@ -531,10 +320,16 @@ mod tray_icon_tests {
             .append_pair("path", std::env::temp_dir().to_string_lossy().as_ref());
         assert!(validate_external_url(new_thread_url.as_str()).is_ok());
         assert!(validate_external_url("codex://threads/").is_err());
+        assert!(validate_external_url("codex://threads/new").is_err());
         assert!(validate_external_url("codex://threads/new?prompt=").is_err());
         assert!(validate_external_url("codex://threads/new?path=relative").is_err());
         assert!(validate_external_url("codex://threads/new?prompt=ok&unsafe=1").is_err());
-        assert!(validate_external_url("codex://settings").is_err());
+        assert!(validate_external_url("codex://automations").is_ok());
+        assert!(validate_external_url("codex://plugins/").is_ok());
+        assert!(validate_external_url("codex://skills").is_ok());
+        assert!(validate_external_url("codex://settings").is_ok());
+        assert!(validate_external_url("codex://settings?section=memory").is_err());
+        assert!(validate_external_url("codex://unknown").is_err());
         assert!(validate_external_url("javascript:alert(1)").is_err());
         assert!(validate_external_url("https://example.com/\nheader").is_err());
     }
@@ -573,10 +368,6 @@ fn main() {
             show_message_notification,
             ocr::image_ocr_recognize,
             ocr::image_ocr_runtime_probe,
-            ai_secret_set,
-            ai_secret_get,
-            ai_secret_delete,
-            codex_exec_once,
             butler_db::butler_todo_add,
             butler_db::butler_todo_update,
             butler_db::butler_todo_delete,
@@ -589,7 +380,6 @@ fn main() {
             proc::codex_app_server_write,
             proc::codex_app_server_stop,
             proc::codex_agent_workspace,
-            proc::butler_home_dir,
             proc::butler_azure_devops_server_read,
             proc::check_signed_http_update,
             proc::read_update_manifest_dir,
@@ -619,7 +409,6 @@ fn main() {
             lan::lan_send_file
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
-        .manage(AiKeychainLock(Mutex::new(())))
         .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))

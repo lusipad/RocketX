@@ -14,7 +14,6 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   SquareKanban,
   Trash2,
   Wrench,
@@ -29,7 +28,6 @@ import { useChat } from '../stores/chat';
 import { useTodos, todayKey, type Todo } from '../stores/todos';
 import { buildQueue, queueSummary, type QueueItem } from '../lib/queue';
 import { useCalendar, eventsForDate } from '../stores/calendar';
-import { useButler } from '../stores/butler';
 import { useFavorites, SIZE_SPAN, SIZE_LABELS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
 import {
   beginCustomQueryLoad,
@@ -348,7 +346,6 @@ function FavoriteDialog({
 
 export default function WorkbenchPage() {
   const setModule = useUI((s) => s.setModule);
-  const setButlerView = useUI((s) => s.setButlerView);
   const tab = useUI((s) => s.workbenchTab);
   const setTab = useUI((s) => s.setWorkbenchTab);
   const user = useAuth((s) => s.user);
@@ -356,7 +353,6 @@ export default function WorkbenchPage() {
   const openRoom = useChat((s) => s.openRoom);
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const todos = useTodos((s) => s.todos);
-  const errands = useButler((s) => s.errands);
   const calendarEvents = useCalendar((s) => s.events);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const setCursor = useCalendar((s) => s.setCursor);
@@ -556,16 +552,6 @@ export default function WorkbenchPage() {
   const connected = !!config?.adoBase;
   // 标题上显示身份：没识别到账号就别硬凑一个空字符串出来
   const adoTitle = account ? `Azure DevOps · ${account}` : 'Azure DevOps';
-  const visibleDelegations = useMemo(
-    () => errands.filter((errand) => !errand.archivedAt),
-    [errands],
-  );
-  const delegationAttention = useMemo(
-    () => visibleDelegations.filter((errand) => errand.status !== 'running'),
-    [visibleDelegations],
-  );
-  const runningDelegations = visibleDelegations.length - delegationAttention.length;
-
   useEffect(() => {
     if (!connected && tab !== 'overview') setTab('overview');
   }, [connected, setTab, tab]);
@@ -871,30 +857,6 @@ export default function WorkbenchPage() {
                 </button>
               </div>
             )}
-
-            {visibleDelegations.length > 0 ? (
-              <button
-                type="button"
-                aria-label="打开管家委托"
-                onClick={() => setButlerView('tasks')}
-                className="mb-4 flex w-full items-center gap-3 rounded-xl border border-primary/20 bg-primary-light/45 px-4 py-3 text-left transition hover:border-primary/40 hover:bg-primary-light"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-4 text-primary">
-                  <Sparkles size={15} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <strong className="block text-sm font-semibold text-ink">
-                    {delegationAttention.length > 0
-                      ? `${delegationAttention.length} 项管家委托等你查看`
-                      : `管家正在推进 ${runningDelegations} 项委托`}
-                  </strong>
-                  <span className="mt-0.5 block truncate text-xs text-ink-2">
-                    {visibleDelegations.slice(0, 2).map((errand) => errand.title).join(' · ')}
-                  </span>
-                </span>
-                <ChevronRight size={15} className="shrink-0 text-primary" />
-              </button>
-            ) : null}
 
             {connected && loading && !lastRefresh ? (
               <SkeletonRows rows={6} />

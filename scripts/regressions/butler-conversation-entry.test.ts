@@ -2,50 +2,40 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('纸上先即席问答，第 3 轮与管家主导航打开同一个私人代理对话层', () => {
+test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原生线程历史和当前线程组成', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
+  const history = readFileSync('apps/web/src/components/ButlerConversationHistory.tsx', 'utf8');
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
-  const ui = readFileSync('apps/web/src/stores/ui.ts', 'utf8');
-  const nav = readFileSync('apps/web/src/components/ButlerWorkspaceNav.tsx', 'utf8');
-  const todaySection = /<section aria-label="今天">[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
 
-  assert.match(page, /const paperConversation = useUI/);
-  assert.match(page, /await hydrateButler\(\);[\s\S]*const sessionId = useButler\.getState\(\)\.activeSessionId/);
-  assert.match(page, /const previousRound = \([\s\S]*previousPaperConversation\.rounds[\s\S]*\);/);
-  assert.match(page, /const nextRound = advanceRound \? previousRound \+ 1 : Math\.max\(previousRound, 1\)/);
-  assert.match(page, /setPaperConversation\(\{[\s\S]*questionId:/);
-  assert.match(page, /shouldExpandButlerConversation\(nextRound\)[\s\S]*openConversationStore\(\)/);
-  assert.match(nav, /\{ id: 'conversation', label: '对话'/);
-  assert.doesNotMatch(page, /toggleConversation|toggleManage|查看完整对话|打开管家管理/);
-  assert.match(page, /<section aria-label="临时问答">[\s\S]*<ButlerInlineExchange/);
-  assert.doesNotMatch(todaySection, /<ButlerInlineExchange/);
-  assert.doesNotMatch(page, /reset\(|newConversation\(/);
-  assert.match(page, /activeView === 'conversation' \? \([\s\S]*\) : activeView === 'routines' \? \(/);
-  assert.match(page, /\{activeView === 'now' \? \([\s\S]*aria-label="前一天"[\s\S]*\) : null\}/);
+  assert.match(page, /activeView === 'routines' \? \(/);
+  assert.match(page, /activeView === 'plugins' \? \(/);
+  assert.match(page, /<ButlerRoutines \/>/);
+  assert.match(page, /<ButlerPluginsPage \/>/);
+  assert.match(page, /<section aria-label="任务" className="h-full min-h-0">/);
+  assert.match(page, /<ButlerConversation embedded \/>/);
+  assert.doesNotMatch(page, /ButlerSessionSwitcher|ButlerIdentityPage|ButlerConnectionsPanel|Today/);
 
-  assert.match(ui, /butlerPaperConversation: \{/);
-  assert.match(ui, /date: string;/);
-  assert.match(ui, /error: string \| null;/);
-  assert.match(ui, /setButlerPaperConversation:/);
-  assert.match(page, /paperConversation\?\.date === selectedDate/);
-  assert.match(page, /paperConversation\.sessionId === activeSessionId/);
-  assert.match(page, /error: useButler\.getState\(\)\.error/);
-  assert.match(page, /askFromPaper\(inlineQuestion\.text, false\)/);
+  assert.match(history, /<nav className="butler-codex-surface-nav" aria-label="Codex 工作区">/);
+  assert.match(history, /setButlerView\('conversation'\)/);
+  assert.match(history, /setButlerView\('routines'\)/);
+  assert.match(history, /setButlerView\('plugins'\)/);
+  assert.match(history, /await startThread\(\)/);
+  assert.match(history, /void resumeThread\(thread\.id\)/);
+  assert.match(history, /选择工作区/);
+  assert.match(history, /在 Codex App 管理|切换到 Codex App/);
 
-  assert.match(
-    conversation,
-    /<span>\{selectedHosted \? 'AI 托管记录' : '私人工作代理'\}<\/span>[\s\S]*<h2>\{selectedHosted\?\.title \|\| activeSummary\?\.title \|\| '新对话'\}<\/h2>/,
-  );
-  assert.match(conversation, /只有明确委托时，才会启动可暂停的执行任务/);
-  assert.match(conversation, /\{selectedHosted \? \([\s\S]*回到「\{selectedHosted\.roomName\}」/);
-  assert.match(conversation, /const mine = line\.role === 'user'/);
-  assert.match(conversation, /data-speaker=\{line\.role\}/);
-  assert.match(conversation, /aria-label=\{mine \? '你说' : '管家说'\}/);
-  assert.match(conversation, /mine \? 'justify-end' : 'justify-start'/);
-  assert.match(conversation, /mine \? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other\/60'/);
-  assert.match(conversation, /\{mine \? '你' : '管家'\}/);
-  assert.doesNotMatch(conversation, /aria-label="回到纸"/);
-  assert.match(conversation, /useButler\(\(state\) => state\.lines\)/);
-  assert.match(conversation, /useButler\(\(state\) => state\.ask\)/);
-  assert.doesNotMatch(conversation, /<Bot\s/);
+  assert.match(conversation, /const workspaceRoot = useCodexWorkspace\(\(state\) => state\.workspaceRoot\)/);
+  assert.match(conversation, /const threads = useCodexWorkspace\(\(state\) => state\.threads\)/);
+  assert.match(conversation, /const messages = useCodexWorkspace\(\(state\) => state\.messages\)/);
+  assert.match(conversation, /const events = useCodexWorkspace\(\(state\) => state\.events\)/);
+  assert.match(conversation, /const requests = useCodexWorkspace\(\(state\) => state\.pendingRequests\)/);
+  assert.match(conversation, /const send = useCodexWorkspace\(\(state\) => state\.send\)/);
+  assert.match(conversation, /const interrupt = useCodexWorkspace\(\(state\) => state\.interrupt\)/);
+  assert.match(conversation, /在 Codex 中打开/);
+  assert.match(conversation, /placeholder=\{running \? \(followUpMode === 'steer'/);
+  assert.match(conversation, /替我审批/);
+  assert.match(conversation, /只在检测到潜在危险时询问/);
+  assert.match(conversation, /CodexImagePicker/);
+  assert.doesNotMatch(conversation, /<select/);
+  assert.doesNotMatch(conversation, /useButler\(|ButlerSessionSwitcher|openRoomConversation|openStandaloneConversation/);
 });

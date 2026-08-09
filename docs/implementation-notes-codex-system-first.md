@@ -1,5 +1,7 @@
 # 决策 15 实施记录
 
+> 文档状态：**历史实施记录**。本文记录当时的运行时发现与打包切片；当前行为见[Codex Runtime](specs/codex-runtime.md)、[平台与桌面](specs/platform-and-desktop.md)和[兼容性](compatibility.md)。
+
 ## 已落地
 
 - Codex 解析顺序改为手动覆盖 → PATH → 标准安装目录 → 旧版内置资源兜底，并拒绝低于 0.140.0 的版本。

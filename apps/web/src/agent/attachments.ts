@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { RcMessage } from '@rcx/rc-client';
 import { getServerBase, normalizeAssetPath, rest } from '../lib/client';
+import type { CodexImageInput } from '../lib/codexImages';
 import { collectAgentAttachmentSources } from './context';
 
 const MAX_ATTACHMENTS = 10;
@@ -43,6 +44,52 @@ interface AgentAttachmentRuntimePath {
   root: string;
 }
 
+async function writeAgentAttachment(
+  sessionId: string,
+  relativePath: string,
+  bytes: Uint8Array,
+): Promise<AgentAttachmentRuntimePath> {
+  const metadata = new TextEncoder().encode(JSON.stringify({ sessionId, relativePath }));
+  const request = new Uint8Array(4 + metadata.length + bytes.length);
+  new DataView(request.buffer).setUint32(0, metadata.length, true);
+  request.set(metadata, 4);
+  request.set(bytes, 4 + metadata.length);
+  return invoke<AgentAttachmentRuntimePath>('codex_agent_attachment_write', request);
+}
+
+function dataUrlBytes(dataUrl: string): Uint8Array {
+  const match = /^data:[^;,]+;base64,(.+)$/s.exec(dataUrl);
+  if (!match) throw new Error('图片内容不是有效的 data URL');
+  const binary = atob(match[1]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+export interface MaterializedCodexImages {
+  paths: string[];
+  roots: string[];
+}
+
+export async function materializeCodexImages(
+  sessionId: string,
+  images: readonly CodexImageInput[],
+): Promise<MaterializedCodexImages> {
+  const paths: string[] = [];
+  const roots = new Set<string>();
+  const batch = `composer-${crypto.randomUUID()}`;
+  for (const [index, image] of images.entries()) {
+    const runtime = await writeAgentAttachment(
+      sessionId,
+      `${batch}/${index + 1}-${safeSegment(image.name, 'image')}`,
+      dataUrlBytes(image.dataUrl),
+    );
+    paths.push(runtime.path);
+    roots.add(runtime.root);
+  }
+  return { paths, roots: [...roots] };
+}
+
 export async function materializeAgentAttachments(
   sessionId: string,
   messages: readonly RcMessage[],
@@ -66,13 +113,8 @@ export async function materializeAgentAttachments(
         continue;
       }
       const relativePath = `${safeSegment(source.messageId, 'message')}/${index + 1}-${safeSegment(source.name, 'attachment')}`;
-      const metadata = new TextEncoder().encode(JSON.stringify({ sessionId, relativePath }));
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const request = new Uint8Array(4 + metadata.length + bytes.length);
-      new DataView(request.buffer).setUint32(0, metadata.length, true);
-      request.set(metadata, 4);
-      request.set(bytes, 4 + metadata.length);
-      const runtime = await invoke<AgentAttachmentRuntimePath>('codex_agent_attachment_write', request);
+      const runtime = await writeAgentAttachment(sessionId, relativePath, bytes);
       (paths[source.messageId] ??= []).push(runtime.path);
       if (source.image) imagePaths.push(runtime.path);
       roots.add(runtime.root);

@@ -16,18 +16,19 @@ test('RocketX 线程名带场景与明细，空白折叠、超长安全截断', 
   assert.equal(workspaceLabel(undefined), undefined);
 });
 
-test('托管/执行间/管家会话在 Codex 会话库里都有可辨认的名字', () => {
+test('托管、任务与自动化在 Codex 会话库里都有可辨认的名字', () => {
   const client = readFileSync('apps/web/src/agent/protocol/client.ts', 'utf8');
   assert.match(client, /'thread\/name\/set': \{ params: ThreadSetNameParams; result: ThreadSetNameResponse \}/);
 
-  // 三条创建原生线程的路径（含 resume，旧线程补名）都要命名
+  // 托管线程（含 resume）仍有明确名字。
   const shared = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
   assert.match(shared, /rocketxThreadName\('托管'/);
   assert.equal(shared.match(/nameCodexThread\(appServer, /gu)?.length, 2);
-  const local = readFileSync('apps/web/src/stores/localCodex.ts', 'utf8');
-  assert.equal(local.match(/rocketxThreadName\('执行间'/gu)?.length, 2);
-  const butler = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
-  assert.match(butler, /rocketxThreadName\('管家'\)/);
+  const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
+  assert.match(controller, /thread\/name\/set/);
+  const automations = readFileSync('apps/web/src/stores/routines.ts', 'utf8');
+  assert.match(automations, /name: `自动化 · \$\{routine\.name\}`/);
+  assert.throws(() => readFileSync('apps/web/src/stores/localCodex.ts', 'utf8'));
 
   // 托管面板给出原生线程的 codex resume 入口
   const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');

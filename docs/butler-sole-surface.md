@@ -1,5 +1,7 @@
 # 切片规格：管家是唯一界面（执行间退役）
 
+> 文档状态：**已废弃**。RocketX 当前保留确定性的消息、工作台、待办和日历界面，管家是 Codex 任务面而不是产品唯一界面；以[产品原则](specs/product-principles.md)、[管家任务](specs/butler-tasks.md)和[能力矩阵](specs/capability-matrix.md)为准。
+
 **决策 14**：管家页是用户与 AI 打交道的唯一界面。执行发生在 codex 侧（持久线程），厨房可达但不可见——想验货就 `codex resume <threadId>` 或打开 Codex App。执行间（CodexPage / AgentPanel 本机路径）整页退役。
 
 ## 依据（2026-07-26 实测，不是推演）

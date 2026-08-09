@@ -22,7 +22,12 @@ class FakeTransport implements CodexTransport {
   async start(handlers: Parameters<CodexTransport['start']>[0]) {
     this.starts += 1;
     this.handlers = handlers;
-    return { processId: 'test-process', version: this.version, runtimeSource: this.runtimeSource };
+    return {
+      processId: 'test-process',
+      version: this.version,
+      runtimeSource: this.runtimeSource,
+      managedSkillRoots: ['D:/rocketx-skills'],
+    };
   }
 
   async write(message: Record<string, unknown>) {
@@ -74,6 +79,7 @@ test('启动返回并缓存实际 Codex 进程来源，手动运行时类型不�
     processId: 'test-process',
     version: CODEX_APP_SERVER_VERSION,
     runtimeSource: 'manual',
+    managedSkillRoots: ['D:/rocketx-skills'],
   });
   assert.deepEqual(await client.start(), process);
   assert.equal(transport.starts, 1);
@@ -128,6 +134,64 @@ test('turn/steer 按协议要求返回 turnId', async () => {
   const request = transport.writes.at(-1)!;
   transport.line({ id: request.id, result: { turnId: 'turn-2' } });
   assert.deepEqual(await response, { turnId: 'turn-2' });
+});
+
+test('客户端公开当前 Codex App 的模型、权限、App 与线程设置协议', async () => {
+  const transport = new FakeTransport();
+  const client = await startClient(transport);
+
+  const models = client.request('model/list', { includeHidden: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { data: [], nextCursor: null } });
+  assert.deepEqual(await models, { data: [], nextCursor: null });
+
+  const permissions = client.request('permissionProfile/list', { cwd: 'C:/workspace' });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { data: [], nextCursor: null } });
+  assert.deepEqual(await permissions, { data: [], nextCursor: null });
+
+  const apps = client.request('app/list', { threadId: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: { data: [], nextCursor: null } });
+  assert.deepEqual(await apps, { data: [], nextCursor: null });
+
+  const settings = client.request('thread/settings/update', {
+    threadId: 'thread',
+    model: 'gpt-5.4',
+    effort: 'high',
+    permissions: ':workspace',
+    approvalPolicy: 'on-request',
+    approvalsReviewer: 'guardian_subagent',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: {} });
+  assert.deepEqual(await settings, {});
+
+  const turns = client.request('thread/turns/list', {
+    threadId: 'thread',
+    limit: 20,
+    sortDirection: 'desc',
+    itemsView: 'full',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({
+    id: transport.writes.at(-1)!.id,
+    result: { data: [], nextCursor: null, backwardsCursor: null },
+  });
+  assert.deepEqual(await turns, { data: [], nextCursor: null, backwardsCursor: null });
+
+  assert.deepEqual(
+    transport.writes
+      .filter((message) => [
+        'model/list',
+        'permissionProfile/list',
+        'app/list',
+        'thread/settings/update',
+        'thread/turns/list',
+      ].includes(String(message.method)))
+      .map((message) => message.method),
+    ['model/list', 'permissionProfile/list', 'app/list', 'thread/settings/update', 'thread/turns/list'],
+  );
 });
 
 test('原生 Skill、Goal 与 MCP 方法按协议返回结构校验', async () => {
@@ -312,6 +376,11 @@ test('只对实际调用的方法做响应结构与 method not found 能力校�
   await new Promise((resolve) => setImmediate(resolve));
   transport.line({ id: transport.writes.at(-1)!.id, result: {} });
   await assert.rejects(() => invalidSteer, /turn\/steer.*turnId/);
+
+  const invalidModels = client.request('model/list', {});
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.line({ id: transport.writes.at(-1)!.id, result: {} });
+  await assert.rejects(() => invalidModels, /model\/list.*data/);
 
   const missing = client.request('thread/resume', { threadId: 'thread' });
   await new Promise((resolve) => setImmediate(resolve));

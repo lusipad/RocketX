@@ -1,5 +1,7 @@
 # 切片规格：管家单大脑（W1 拆桥）
 
+> 文档状态：**已废弃**。旧管家 Store、可见记忆和 API 大脑均已退出；当前实现以[Codex Runtime](specs/codex-runtime.md)、[Codex 原生 Memory](specs/memory.md)和[权限与审批](specs/approvals-and-permissions.md)为准。正文中“可见的记忆与人设”不是当前能力。
+
 **决策 13**：管家层按职责重切。Codex app-server 是唯一大脑；我们只做 Codex 结构上做不到的三件事——**时机**（什么时候开口）、**呈现与闸门**（卡片 / 结论 / 确认 / 撤销）、**可见的记忆与人设**。
 
 ## 为什么现在做

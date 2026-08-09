@@ -1,64 +1,62 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import {
-  bundledButlerSkills,
-  type ButlerBundledSkillCategory,
-} from '../../apps/web/src/lib/butlerBundledSkills';
-import { renderButlerSkillFile } from '../../apps/web/src/lib/butlerArchive';
 
-const EXPECTED_SKILLS: Readonly<Record<ButlerBundledSkillCategory, readonly string[]>> = {
-  core: [
-    'morning-brief',
-    'evening-review',
-    'room-digest',
-    'weekly-report',
-    'pr-comparison',
-    'commitment-extraction',
-    'butler-memory',
-    'butler-reply-guardian',
-  ],
-  host: ['azure-devops-server'],
-};
+const CORE_SKILLS = [
+  'morning-brief',
+  'evening-review',
+  'room-digest',
+  'weekly-report',
+  'pr-comparison',
+  'commitment-extraction',
+  'message-action-extraction',
+  'butler-reply-guardian',
+] as const;
 
-test('所有托管 Butler Skill 都以独立 SKILL.md 作为唯一正文来源', () => {
-  for (const category of Object.keys(EXPECTED_SKILLS) as ButlerBundledSkillCategory[]) {
-    const skills = bundledButlerSkills(category);
-    assert.deepEqual(
-      skills.map((skill) => skill.name),
-      EXPECTED_SKILLS[category],
-    );
-    for (const skill of skills) {
-      const path = `apps/web/src/butler/skills/${category}/${skill.name}/SKILL.md`;
-      const markdown = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-      assert.equal(skill.source, markdown);
-      assert.equal(renderButlerSkillFile(skill), markdown);
-    }
+function coreSkill(name: typeof CORE_SKILLS[number]): string {
+  return readFileSync(`apps/web/src/butler/skills/core/${name}/SKILL.md`, 'utf8').replace(/\r\n/g, '\n');
+}
+
+test('RocketX 核心 Skills 直接作为 Codex 资源打包，不再经过 Butler 解析器', () => {
+  for (const name of CORE_SKILLS) {
+    const source = coreSkill(name);
+    assert.match(source, new RegExp(`^---\\nname: ${name}\\n`, 'u'), name);
+    assert.match(source, /\ndescription: .+\n---\n/u, name);
   }
+
+  const tauri = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+  assert.equal(
+    tauri.bundle.resources['../../web/src/butler/skills/core/'],
+    'rocketx-core-skills/',
+  );
+  const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
+  assert.match(controller, /skills\/extraRoots\/set/);
+  assert.match(controller, /process\.managedSkillRoots/);
 });
 
-test('TypeScript 只装载 Markdown Skill，不再保存托管 Skill 正文', () => {
-  const profile = readFileSync('apps/web/src/lib/butlerProfile.ts', 'utf8');
-  assert.doesNotMatch(profile, /\bbody:\s*`/);
-  assert.doesNotMatch(profile, /目标是回答“今天先处理什么”|Profile 整理/);
-  assert.match(profile, /bundledButlerSkills\('core'\)/);
-  assert.doesNotMatch(profile, /registerButlerSkillProvider|skillProviders/);
+test('message-action-extraction 是严格 JSON Skill，不允许自由文本输出', () => {
+  const source = coreSkill('message-action-extraction');
+  assert.match(source, /只输出严格 JSON/);
+  assert.match(source, /最终答复只能是一个 JSON 对象/);
+  assert.match(source, /不要 Markdown 代码块、解释或前后缀/);
+  assert.match(source, /"title":"简洁动作标题"/);
 });
 
-test('高风险 Skill 明确绑定覆盖合同，ADO 统一复用 azure-devops-server Skill 与业务 MCP', () => {
-  const skills = new Map(bundledButlerSkills('core').map((skill) => [skill.name, skill.body]));
+test('高风险 Skills 只绑定业务 MCP，不回退到旧 Butler 工具', () => {
+  const roomDigest = coreSkill('room-digest');
+  const commitments = coreSkill('commitment-extraction');
+  const weekly = coreSkill('weekly-report');
+  const comparison = coreSkill('pr-comparison');
+  const host = readFileSync(
+    'apps/desktop/src-tauri/resources/codex-skills/azure-devops-server/SKILL.md',
+    'utf8',
+  );
 
-  assert.match(skills.get('room-digest') ?? '', /list_room_messages/);
-  assert.match(skills.get('room-digest') ?? '', /coverage\.complete=false/);
-  assert.match(skills.get('commitment-extraction') ?? '', /list_room_messages/);
-  assert.match(skills.get('commitment-extraction') ?? '', /覆盖不完整/);
-  assert.match(skills.get('butler-reply-guardian') ?? '', /since/);
-  assert.match(skills.get('butler-reply-guardian') ?? '', /unprocessedOnly: true/);
-  assert.match(skills.get('weekly-report') ?? '', /azure-devops-server/);
-  assert.match(skills.get('weekly-report') ?? '', /rocketx_azure_devops_server_read/);
-  assert.doesNotMatch(skills.get('weekly-report') ?? '', /list_work_items|list_pull_requests|list_builds|工作台.*快照/);
-  assert.match(skills.get('weekly-report') ?? '', /暂无可验证计划，待确认/);
-  assert.match(skills.get('pr-comparison') ?? '', /azure-devops-server/);
-  assert.match(skills.get('pr-comparison') ?? '', /rocketx_azure_devops_server_read/);
-  assert.doesNotMatch(skills.get('pr-comparison') ?? '', /list_pull_requests/);
+  assert.match(roomDigest, /list_room_messages/);
+  assert.match(roomDigest, /coverage\.complete=false/);
+  assert.match(commitments, /覆盖不完整/);
+  assert.match(weekly, /rocketx_azure_devops_server_read/);
+  assert.match(comparison, /rocketx_azure_devops_server_read/);
+  assert.match(host, /只调用 `rocketx_azure_devops_server_read`/);
+  assert.doesNotMatch(`${roomDigest}\n${commitments}\n${weekly}\n${comparison}\n${host}`, /run_azure_devops_server_cli/);
 });

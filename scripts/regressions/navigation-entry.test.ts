@@ -3,34 +3,46 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { MODULE_ORDER } from '../../apps/web/src/stores/ui';
 
-test('管家今日纸与确定性工作台保持独立入口，执行间仍只保留快捷通路', async () => {
-  const [runtime, navRail, workbenchPage, conversation, codexPage] = await Promise.all([
+test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载，不再暴露独立 codex 模块', async () => {
+  const [runtime, navRail, page, history, conversation] = await Promise.all([
     readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/NavRail.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../../apps/web/src/pages/WorkbenchPage.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/pages/ButlerPage.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/components/ButlerConversationHistory.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerConversation.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../../apps/web/src/pages/CodexPage.tsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
+
   assert.match(runtime, /\['workbench', '工作台', WorkbenchModule, undefined\]/);
-  assert.match(runtime, /connected \? <WorkbenchPage \/> : <SettingsPage initialSection="workbench" \/>/);
-  assert.doesNotMatch(runtime, /TodayPage|AiAssistantPage|'today'|'ai-assistant'/);
-  assert.match(runtime, /\['codex', 'Codex', CodexPage, TerminalSquare\]/);
-  assert.match(navRail, /workbench: \{ label: '工作台', icon: LayoutGrid \}/);
+  assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
+  assert.doesNotMatch(runtime, /\['codex', 'Codex'/);
+  assert.doesNotMatch(runtime, /CodexPage/);
+
   assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'todos', 'calendar', 'downloads'\]\);/);
   assert.match(navRail, /const WORK_MODULE_IDS = new Set\(\['workbench', 'contacts'\]\);/);
   assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
-  assert.match(navRail, /id: 'butler',[\s\S]*?ariaLabel: '管家',[\s\S]*?BUTLER_MODULE_IDS\.has\(module\.key\)/);
-  assert.match(workbenchPage, />工作台<\/div>/);
-  assert.match(workbenchPage, /key: 'overview', label: '概览'/);
-  assert.doesNotMatch(navRail, /AI_MODULE_IDS|'today'|'ai-assistant'/);
-  assert.match(navRail, /const HIDDEN_MODULE_IDS = new Set\(\['codex'\]\);/);
-  assert.match(navRail, /const visibleModules = modules\.filter\(\(module\) => !HIDDEN_MODULE_IDS\.has\(module\.key\)\);/);
+  assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: '管家'/);
+  assert.doesNotMatch(navRail, /['"]codex['"]/);
+  assert.doesNotMatch(navRail, /['"]today['"]/);
+  assert.doesNotMatch(navRail, /['"]ai-assistant['"]/);
+
+  assert.match(page, /className="butler-workspace"/);
+  assert.match(page, /<ButlerConversation embedded \/>/);
+  assert.match(page, /<ButlerPluginsPage \/>/);
+  assert.match(page, /<ButlerRoutines \/>/);
+
+  assert.match(history, /aria-label="Codex 工作区"/);
+  assert.match(history, /aria-label="新对话"/);
+  assert.match(history, /aria-label="Codex 对话历史"/);
+  assert.doesNotMatch(history, /aria-label="任务"/);
+  assert.match(history, /setWorkbenchTab\('prs'\)/);
+  assert.match(history, /setModule\('workbench'\)/);
+  assert.match(history, /setButlerView\('routines'\)/);
+  assert.match(history, /setButlerView\('plugins'\)/);
+  assert.match(history, /选择工作区/);
+
+  assert.match(conversation, /在 Codex 中打开/);
   assert.doesNotMatch(conversation, /setModule\('codex'\)/);
-  assert.doesNotMatch(conversation, /aria-label="执行间"/);
-  assert.match(conversation, /在 Codex App 打开/);
-  assert.match(codexPage, />执行间<\/div>/);
-  assert.match(codexPage, /AI 的本地执行区：在指定本地目录中运行 Codex 会话/);
+
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'workbench',
@@ -39,7 +51,6 @@ test('管家今日纸与确定性工作台保持独立入口，执行间仍只�
     'calendar',
     'downloads',
     'contacts',
-    'codex',
     'settings',
   ]);
 });

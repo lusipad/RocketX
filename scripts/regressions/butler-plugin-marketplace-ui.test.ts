@@ -2,26 +2,39 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('Skill 管理以 Codex Plugin 市场为主入口，本地 Markdown 仅作兼容导入', () => {
-  const market = readFileSync('apps/web/src/components/ButlerPluginMarketplace.tsx', 'utf8');
-  const learned = readFileSync('apps/web/src/components/ButlerLearnedPanel.tsx', 'utf8');
+test('插件页读取原生插件、Skill、App 目录，并通过 AppServerController 调用稳定协议', () => {
+  const page = readFileSync('apps/web/src/components/ButlerPluginsPage.tsx', 'utf8');
+  const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
+  const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
 
-  assert.match(market, /listButlerCodexPlugins/);
-  assert.match(market, /listButlerInstalledCodexPlugins/);
-  assert.match(market, /withButlerMarketplaceDeadline/);
-  assert.match(market, /window\.addEventListener\('offline'/);
-  assert.match(market, /addButlerCodexMarketplace/);
-  assert.match(market, /removeButlerCodexMarketplace/);
-  assert.match(market, /installButlerCodexPlugin/);
-  assert.match(market, /uninstallButlerCodexPlugin/);
-  assert.match(market, /Skill 市场/);
-  assert.match(market, /已配置市场/);
-  assert.match(market, /当前离线，仅显示已安装 Plugin 和本地市场/);
-  assert.match(market, />\s*重试\s*</);
-  assert.match(market, /安装后，其 Skills 会自动出现在 \$ 菜单/);
+  assert.match(page, /const \[activeTab, setActiveTab\] = useState<CatalogTab>\('plugins'\)/);
+  assert.match(page, /\['plugins', '插件'\]/);
+  assert.match(page, /\['skills', 'Skills'\]/);
+  assert.match(page, /\['apps', 'Apps'\]/);
+  assert.match(page, /正在读取 Codex 目录/);
+  assert.match(page, /真实的插件、Skills 和 Apps 目录/);
+  assert.match(page, /Apps 目录暂不可用/);
+  assert.match(page, /对话、Skills 和已安排任务仍可正常使用/);
+  assert.match(page, /togglePlugin/);
+  assert.match(page, /toggleSkill/);
+  assert.match(page, /aria-label=\{`查看 Skill \$\{title\}`\}/);
+  assert.match(page, /aria-label=\{`查看 App \$\{app\.name\}`\}/);
+  assert.match(page, /selectedItem\.kind === 'plugin'/);
+  assert.match(page, /selectedItem\.kind === 'skill'/);
+  assert.match(page, /kind: 'app', app/);
+  assert.doesNotMatch(page, /只使用稳定的 skills\/list|插件市场协议已禁用|Memory 由 Codex 自动维护/);
 
-  assert.match(learned, /<ButlerPluginMarketplace/);
-  assert.match(learned, /Codex Skills/);
-  assert.match(learned, /导入本地 SKILL\.md/);
-  assert.doesNotMatch(learned, />装新技能</);
+  assert.match(workspace, /installPlugin: async \(marketplace, pluginName\) => \{/);
+  assert.match(workspace, /uninstallPlugin: async \(pluginId\) => \{/);
+  assert.match(workspace, /setSkillEnabled: async \(path, enabled\) => \{/);
+  assert.match(workspace, /await get\(\)\.refreshCatalog\(\)/);
+
+  assert.match(controller, /client\.request\('skills\/list', \{ cwds: \[workspaceRoot\], forceReload: true \}\)/);
+  assert.match(controller, /Promise\.allSettled/);
+  assert.match(controller, /client\.request\('app\/list', \{ threadId, forceRefetch: true \}\)/);
+  assert.match(controller, /client\.request\('plugin\/list', \{ cwds: \[workspaceRoot\] \}\)/);
+  assert.match(controller, /catalogErrors/);
+  assert.match(controller, /request\('plugin\/install', \{ remoteMarketplaceName, pluginName \}\)/);
+  assert.match(controller, /request\('plugin\/uninstall', \{ pluginId \}\)/);
+  assert.match(controller, /request\('plugin\/read', \{ remoteMarketplaceName, pluginName \}\)/);
 });

@@ -1,31 +1,11 @@
-import { ChevronDown, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
-  AI_CAPABILITIES,
-  loadAiSettings,
-  saveAiSettings,
-  type AiProviderConfig,
-  type AiSettings,
-} from '../kernel/ai/config';
-import { deleteAiSecret, setAiSecret } from '../kernel/ai/secrets';
-import { testAiProvider } from '../kernel/ai/runtime';
-import {
-  BUTLER_CODEX_EFFORTS,
-  codexBrainAvailability,
-  getButlerCodexSettings,
-  setButlerCodexSettings,
-  type ButlerCodexSettings,
-} from '../lib/butlerBrain';
-import {
+  AGENT_HOSTING_CODEX_EFFORTS,
+  AGENT_HOSTING_PERMISSION_PRESETS,
   getAgentHostingCodexSettings,
   setAgentHostingCodexSettings,
+  type AgentHostingCodexSettings,
 } from '../lib/agentHostingSettings';
-import {
-  DEFAULT_PERSONA,
-  getPersona,
-  resetPersona,
-  setPersona,
-} from '../lib/butlerProfile';
 import { isTauri } from '../lib/http';
 import { openExternal } from '../lib/client';
 import {
@@ -38,7 +18,6 @@ import {
   setCodexManualPath,
   useCodexRuntime,
 } from '../stores/codexRuntime';
-import { toast } from '../stores/toast';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import { Row } from './SettingControls';
@@ -46,35 +25,11 @@ import { Row } from './SettingControls';
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
 
-function newProvider(): AiProviderConfig {
-  return {
-    id: `openai-${crypto.randomUUID()}`,
-    kind: 'openai-compatible',
-    name: 'OpenAI-compatible',
-    baseUrl: 'http://localhost:11434/v1',
-    model: '',
-    locality: 'local',
-    hasSecret: false,
-  };
-}
-
-/**
- * AI 设置分三层：运行方式和工作目录是基础设置直接可见；「高级 AI 设置」里
- * 按保存方式分成两组——Provider 与能力路由由「保存 AI 配置」统一保存，
- * 外部集成（反向 MCP、共享 Agent 身份）各自即时生效。
- */
 export default function AiSettings() {
-  const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
-  const [butlerCodex, setButlerCodexState] = useState<ButlerCodexSettings>(getButlerCodexSettings);
-  const [hostingCodex, setHostingCodexState] = useState<ButlerCodexSettings>(getAgentHostingCodexSettings);
-  const [persona, setPersonaState] = useState<string>(getPersona);
-  const [savedPersona, setSavedPersona] = useState<string>(getPersona);
-  const [secrets, setSecrets] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string>();
-  const [results, setResults] = useState<Record<string, string>>({});
+  const [hostingCodex, setHostingCodexState] = useState<AgentHostingCodexSettings>(getAgentHostingCodexSettings);
   const [manualCodexPath, setManualCodexPathState] = useState(getCodexManualPath);
-  const codexRuntime = useCodexRuntime();
   const [ocrRuntime, setOcrRuntime] = useState<ImageOcrRuntimeProbe>();
+  const codexRuntime = useCodexRuntime();
 
   useEffect(() => {
     if (!isTauri) return;
@@ -83,142 +38,18 @@ export default function AiSettings() {
     });
   }, []);
 
-  const updateProvider = (id: string, patch: Partial<AiProviderConfig>) => {
-    setSettings((current) => ({
-      ...current,
-      providers: current.providers.map((provider) =>
-        provider.id === id ? { ...provider, ...patch } : provider,
-      ),
-    }));
-  };
-
-  const persist = async (notify = true): Promise<AiSettings> => {
-    const providers = [...settings.providers];
-    for (let index = 0; index < providers.length; index += 1) {
-      const provider = providers[index];
-      const secret = secrets[provider.id]?.trim();
-      if (secret) {
-        await setAiSecret(provider.id, secret);
-        providers[index] = { ...provider, hasSecret: true };
-      }
-    }
-    const next = { ...settings, providers };
-    saveAiSettings(next);
-    setSettings(next);
-    setSecrets({});
-    if (notify) {
-      toast.success(isTauri ? 'AI 配置已保存，密钥已写入系统钥匙串' : 'AI 配置已保存，密钥仅保留到本次页面会话');
-    }
-    return next;
-  };
-
-  const save = async () => {
-    setBusy('save');
-    try {
-      await persist();
-    } catch (error) {
-      toast.error(error, '保存 AI 配置失败');
-    } finally {
-      setBusy(undefined);
-    }
-  };
-
-  const test = async (providerId: string) => {
-    setBusy(`test:${providerId}`);
-    setResults((current) => ({ ...current, [providerId]: '' }));
-    try {
-      const saved = await persist(false);
-      const provider = saved.providers.find((candidate) => candidate.id === providerId);
-      if (!provider) throw new Error('Provider 不存在');
-      if (provider.locality === 'external' && !provider.hasSecret) {
-        throw new Error('请先填写 API 密钥');
-      }
-      const reply = await testAiProvider(providerId);
-      setResults((current) => ({ ...current, [providerId]: `连接成功：${reply}` }));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setResults((current) => ({ ...current, [providerId]: `连接失败：${message}` }));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-
-  const remove = async (providerId: string) => {
-    if (settings.providers.length === 1) {
-      toast.error('至少保留一个 AI Provider');
-      return;
-    }
-    await deleteAiSecret(providerId);
-    const fallback = settings.providers.find((provider) => provider.id !== providerId)?.id ?? '';
-    setSettings((current) => ({
-      providers: current.providers.filter((provider) => provider.id !== providerId),
-      routes: Object.fromEntries(
-        Object.entries(current.routes).map(([capability, route]) => [
-          capability,
-          route.providerId === providerId ? { ...route, providerId: fallback } : route,
-        ]),
-      ) as AiSettings['routes'],
-    }));
-  };
-
-  const clearSecret = async (providerId: string) => {
-    setBusy(`secret:${providerId}`);
-    try {
-      await deleteAiSecret(providerId);
-      const next = {
-        ...settings,
-        providers: settings.providers.map((provider) =>
-          provider.id === providerId ? { ...provider, hasSecret: false } : provider,
-        ),
-      };
-      saveAiSettings(next);
-      setSettings(next);
-      setSecrets((current) => ({ ...current, [providerId]: '' }));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-
-  const updateButlerCodex = (patch: Partial<ButlerCodexSettings>) => {
-    const next = { ...butlerCodex, ...patch };
-    setButlerCodexSettings(next);
-    setButlerCodexState(next);
-  };
-
-  const updateHostingCodex = (patch: Partial<ButlerCodexSettings>) => {
+  const updateHostingCodex = (patch: Partial<AgentHostingCodexSettings>) => {
     const next = { ...hostingCodex, ...patch };
     setAgentHostingCodexSettings(next);
     setHostingCodexState(next);
   };
 
-  const savePersona = () => {
-    const value = persona.trim();
-    if (!value || value === DEFAULT_PERSONA) {
-      // 清空或改回默认文本都视为恢复默认
-      resetPersona();
-      setPersonaState(DEFAULT_PERSONA);
-      setSavedPersona(DEFAULT_PERSONA);
-    } else {
-      setPersona(persona);
-      setSavedPersona(persona);
-    }
-    toast.success('AI 人设已保存，对下一次提问生效');
-  };
-
-  const restoreDefaultPersona = () => {
-    resetPersona();
-    setPersonaState(DEFAULT_PERSONA);
-    setSavedPersona(DEFAULT_PERSONA);
-    toast.success('已恢复默认人设');
-  };
-
-  const codexAvailability = codexBrainAvailability();
   const codexSourceLabel = codexRuntime.source === 'manual'
     ? '手动指定'
     : codexRuntime.source === 'system'
-      ? '系统'
+      ? '系统 Codex'
       : codexRuntime.source === 'bundled'
-        ? '旧版内置资源'
+        ? 'RocketX 内置 Codex'
         : '未检测到';
   const codexCompatibilityLabel = codexRuntime.compatibilityStatus === 'verified'
     ? '已验证'
@@ -236,16 +67,14 @@ export default function AiSettings() {
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行方式</h2>
-        <div className="rounded-lg bg-surface shadow-raise px-4">
-          {/* 决策 13：Codex 是管家唯一大脑，没有引擎选择。不可用时明说原因，不静默降级。 */}
-          {!codexAvailability.available && (
-            <Row label="管家状态" hint="管家由本机 Codex 驱动；修复后这里会自动恢复。">
+        <h2 className="mb-2 text-sm font-semibold text-ink">Codex</h2>
+        <div className="rounded-lg bg-surface px-4 shadow-raise">
+          {codexRuntime.phase !== 'ready' ? (
+            <Row label="运行状态" hint="RocketX 的任务、Skills、Memory、审批和已安排任务都由 Codex 驱动。">
               <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm leading-6 text-ink">
-                <p>{codexAvailability.reason ?? 'Codex 暂不可用'}</p>
-                {codexRuntime.reasonCode === 'not-found' && (
+                <p>{codexRuntime.reason ?? 'Codex 暂不可用'}</p>
+                {codexRuntime.reasonCode === 'not-found' ? (
                   <div className="mt-2 space-y-2">
-                    <p>这台电脑还没装 Codex。安装后点“重试”即可：</p>
                     <code className="block rounded bg-fill px-2 py-1 font-mono text-xs">
                       npm install -g @openai/codex
                     </code>
@@ -257,7 +86,7 @@ export default function AiSettings() {
                       查看 Codex 官方安装说明
                     </button>
                   </div>
-                )}
+                ) : null}
                 <button
                   type="button"
                   onClick={() => void codexRuntime.probe()}
@@ -268,8 +97,8 @@ export default function AiSettings() {
                 </button>
               </div>
             </Row>
-          )}
-          <Row label="Codex 运行时" hint="默认优先使用系统 Codex；手动路径仅在需要固定其他安装时填写。">
+          ) : null}
+          <Row label="运行时" hint="默认使用系统 Codex；只有需要固定另一份安装时才填写手动路径。">
             <div className="space-y-2">
               <p className="text-sm text-ink-2">
                 {codexSourceLabel}
@@ -277,23 +106,12 @@ export default function AiSettings() {
                 {codexCompatibilityLabel ? ` · ${codexCompatibilityLabel}` : ''}
                 {codexRuntime.executablePath ? ` · ${codexRuntime.executablePath}` : ''}
               </p>
-              {codexRuntime.compatibilityStatus === 'untested-newer' && (
-                <p className="text-xs leading-5 text-warning">
-                  当前 Codex 高于已验证基线 {codexRuntime.protocolBaseline}；启动探测已通过，
-                  但尚未完成 RocketX 全量语义认证。
-                </p>
-              )}
-              {codexRuntime.minimumCandidate && codexRuntime.protocolBaseline && (
-                <p className="text-xs leading-5 text-ink-3">
-                  候选下限 {codexRuntime.minimumCandidate} · 已验证基线 {codexRuntime.protocolBaseline}
-                </p>
-              )}
               <div className="flex max-w-2xl items-center gap-2">
                 <input
                   aria-label="手动 Codex 路径"
                   value={manualCodexPath}
                   onChange={(event) => setManualCodexPathState(event.target.value)}
-                  placeholder="留空自动检测；例如 C:\Users\me\AppData\Roaming\npm\codex.cmd"
+                  placeholder="留空自动检测"
                   className={inputCls}
                 />
                 <button
@@ -307,296 +125,62 @@ export default function AiSettings() {
               </div>
             </div>
           </Row>
-          <Row label="图片文字识别" hint="瘦版默认使用 Windows 系统识别；增强资源存在时自动切到 PP-OCRv5。">
+          <Row label="聊天托管模型" hint="仅影响聊天中的共享 Agent；留空时使用 Codex 默认模型。">
+            <input
+              aria-label="AI 托管 Codex 模型"
+              value={hostingCodex.model}
+              onChange={(event) => updateHostingCodex({ model: event.target.value })}
+              placeholder="跟随 Codex 默认值"
+              className={`${inputCls} max-w-xs`}
+            />
+          </Row>
+          <Row label="聊天托管推理强度" hint="下一次共享 Agent 执行时生效。">
+            <select
+              aria-label="AI 托管 Codex 推理强度"
+              value={hostingCodex.effort}
+              onChange={(event) => updateHostingCodex({ effort: event.target.value as AgentHostingCodexSettings['effort'] })}
+              className={`${inputCls} max-w-xs`}
+            >
+              {AGENT_HOSTING_CODEX_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
+              ))}
+            </select>
+          </Row>
+          <Row label="聊天托管权限" hint="下一次共享 Agent 执行时生效；默认由 Codex 替你审批低风险请求。">
+            <select
+              aria-label="AI 托管 Codex 权限"
+              value={hostingCodex.permissionPreset}
+              onChange={(event) => updateHostingCodex({
+                permissionPreset: event.target.value as AgentHostingCodexSettings['permissionPreset'],
+              })}
+              className={`${inputCls} max-w-xs`}
+            >
+              {AGENT_HOSTING_PERMISSION_PRESETS.map((preset) => (
+                <option key={preset} value={preset}>
+                  {preset === 'ask' ? '询问审批' : preset === 'auto' ? '替我审批' : '完全访问'}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="图片文字识别" hint="增强资源存在时使用 PP-OCRv5，否则使用系统识别。">
             <div className="space-y-2 text-sm text-ink-2">
               <p>
                 {ocrRuntime?.backend ? ocrBackendLabel(ocrRuntime.backend) : '正在检测识别引擎…'}
                 {ocrRuntime?.resourceRoot ? ` · ${ocrRuntime.resourceRoot}` : ''}
               </p>
-              {ocrRuntime?.reason && <p className="text-xs leading-5 text-ink-3">{ocrRuntime.reason}</p>}
-              {ocrRuntime?.backend !== 'pp-ocrv5' && (
-                <p className="text-xs leading-5 text-ink-3">
-                  增强版需要 PP-OCRv5 模型和 ONNX Runtime 1.23.2，建议直接安装 RocketX full 版；
-                  手动安装的资源根目录为 %LOCALAPPDATA%\RocketX\resources\ocr。
-                  {' '}
-                  <button
-                    type="button"
-                    onClick={() => void openExternal('https://github.com/GreatV/oar-ocr/releases/tag/v0.3.0')}
-                    className="text-primary hover:underline"
-                  >
-                    模型下载
-                  </button>
-                  {' · '}
-                  <button
-                    type="button"
-                    onClick={() => void openExternal('https://github.com/microsoft/onnxruntime/releases/tag/v1.23.2')}
-                    className="text-primary hover:underline"
-                  >
-                    ONNX Runtime 下载
-                  </button>
-                </p>
-              )}
+              {ocrRuntime?.reason ? <p className="text-xs leading-5 text-ink-3">{ocrRuntime.reason}</p> : null}
             </div>
-          </Row>
-          <Row
-            label="高级行为指令"
-            hint="名字、头像和相处方式请在“我的管家”修改。这里保留底层行为规则，只影响管家；AI 托管的编码代理和安全纪律不受影响。"
-          >
-            <textarea
-              aria-label="管家高级行为指令"
-              value={persona}
-              onChange={(event) => setPersonaState(event.target.value)}
-              rows={5}
-              className="w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none transition focus:border-primary"
-            />
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                onClick={savePersona}
-                disabled={persona === savedPersona}
-                className="h-8 rounded-md bg-primary px-3 text-sm text-white hover:opacity-90 disabled:opacity-50"
-              >
-                保存指令
-              </button>
-              <button
-                onClick={restoreDefaultPersona}
-                disabled={persona === DEFAULT_PERSONA && savedPersona === DEFAULT_PERSONA}
-                className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
-              >
-                恢复默认指令
-              </button>
-            </div>
-          </Row>
-          <Row label="管家 Codex 模型" hint="留空时跟随 Codex CLI 的默认模型。">
-            <input
-              aria-label="管家 Codex 模型"
-              value={butlerCodex.model}
-              onChange={(event) => updateButlerCodex({ model: event.target.value })}
-              placeholder="例如 gpt-5.4"
-              className={`${inputCls} max-w-xs`}
-            />
-          </Row>
-          <Row label="管家推理强度" hint="只影响 AI 管家；模型不支持时 Codex 会返回明确错误。">
-            <select
-              aria-label="管家 Codex 推理强度"
-              value={butlerCodex.effort}
-              onChange={(event) => updateButlerCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
-              className={`${inputCls} max-w-xs`}
-            >
-              {BUTLER_CODEX_EFFORTS.map((effort) => (
-                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
-              ))}
-            </select>
-          </Row>
-          <Row label="AI 托管 Codex 模型" hint="只影响聊天中的 AI 托管；留空时跟随 Codex CLI 默认模型。">
-            <input
-              aria-label="AI 托管 Codex 模型"
-              value={hostingCodex.model}
-              onChange={(event) => updateHostingCodex({ model: event.target.value })}
-              placeholder="例如 gpt-5.4"
-              className={`${inputCls} max-w-xs`}
-            />
-          </Row>
-          <Row label="AI 托管推理强度" hint="与管家独立，修改后对托管会话的下一次执行生效。">
-            <select
-              aria-label="AI 托管 Codex 推理强度"
-              value={hostingCodex.effort}
-              onChange={(event) => updateHostingCodex({ effort: event.target.value as ButlerCodexSettings['effort'] })}
-              className={`${inputCls} max-w-xs`}
-            >
-              {BUTLER_CODEX_EFFORTS.map((effort) => (
-                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
-              ))}
-            </select>
           </Row>
         </div>
       </section>
 
-      <details className="group rounded-lg bg-surface shadow-raise">
-        <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 transition hover:bg-fill-hover">
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-ink">高级 AI 设置</div>
-            <div className="mt-0.5 text-xs text-ink-3">模型来源、各功能用哪个模型、外部集成</div>
-          </div>
-          <ChevronDown size={16} className="shrink-0 text-ink-3 transition-transform group-open:rotate-180" />
-        </summary>
-
-        <div className="border-t border-line p-4">
-          <section>
-            <div className="mb-2 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-ink">模型 Provider</h2>
-                <p className="mt-0.5 text-xs leading-5 text-ink-3">
-                  供会话总结、消息翻译等功能使用。管家不走这里——它由本机 Codex 驱动。
-                  桌面端密钥只保存到系统钥匙串。
-                </p>
-              </div>
-              <button
-                onClick={() => setSettings((current) => ({ ...current, providers: [...current.providers, newProvider()] }))}
-                className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover"
-              >
-                <Plus size={14} /> 添加 OpenAI-compatible
-              </button>
-            </div>
-            <div className="space-y-3">
-              {settings.providers.map((provider) => (
-                <div key={provider.id} className="rounded-lg bg-surface shadow-raise p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <input
-                      aria-label="Provider 名称"
-                      value={provider.name}
-                      onChange={(event) => updateProvider(provider.id, { name: event.target.value })}
-                      className={`${inputCls} max-w-xs font-medium`}
-                    />
-                    <span className={`rounded px-2 py-1 text-xs ${provider.locality === 'local' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'}`}>
-                      {provider.locality === 'local' ? '本地' : '外部'}
-                    </span>
-                    <button
-                      title="删除 Provider"
-                      onClick={() => void remove(provider.id)}
-                      className="ml-auto rounded p-2 text-ink-3 hover:bg-fill-hover hover:text-danger"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="text-xs text-ink-3">
-                      协议
-                      <select
-                        value={provider.kind}
-                        onChange={(event) => updateProvider(provider.id, { kind: event.target.value as AiProviderConfig['kind'] })}
-                        className={`mt-1 ${inputCls}`}
-                      >
-                        <option value="openai-compatible">OpenAI-compatible</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="azure-openai">Azure OpenAI v1</option>
-                      </select>
-                    </label>
-                    <label className="text-xs text-ink-3">
-                      Base URL
-                      <input
-                        value={provider.baseUrl}
-                        onChange={(event) => updateProvider(provider.id, { baseUrl: event.target.value })}
-                        className={`mt-1 ${inputCls}`}
-                      />
-                    </label>
-                    <label className="text-xs text-ink-3">
-                      Chat 模型
-                      <input
-                        value={provider.model}
-                        onChange={(event) => updateProvider(provider.id, { model: event.target.value })}
-                        placeholder="deepseek-v4-flash"
-                        className={`mt-1 ${inputCls}`}
-                      />
-                    </label>
-                    <label className="text-xs text-ink-3">
-                      网络位置
-                      <select
-                        value={provider.locality}
-                        onChange={(event) => updateProvider(provider.id, { locality: event.target.value as 'local' | 'external' })}
-                        className={`mt-1 ${inputCls}`}
-                      >
-                        <option value="external">外部网络</option>
-                        <option value="local">本机 / 内网</option>
-                      </select>
-                    </label>
-                    <label className="text-xs text-ink-3 sm:col-span-2">
-                      API 密钥 {provider.hasSecret && <span className="text-success">（已保存）</span>}
-                      <div className="mt-1 flex gap-2">
-                        <input
-                          type="password"
-                          value={secrets[provider.id] ?? ''}
-                          onChange={(event) => setSecrets((current) => ({ ...current, [provider.id]: event.target.value }))}
-                          placeholder={provider.hasSecret ? '留空则保留现有密钥' : provider.locality === 'local' ? '本地服务可留空' : '输入后保存到系统钥匙串'}
-                          autoComplete="new-password"
-                          className={inputCls}
-                        />
-                        {provider.hasSecret && (
-                          <button
-                            onClick={() => void clearSecret(provider.id)}
-                            className="shrink-0 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover"
-                          >
-                            清除密钥
-                          </button>
-                        )}
-                      </div>
-                    </label>
-                  </div>
-                  <div className="mt-3 flex items-center gap-3">
-                    <button
-                      onClick={() => void test(provider.id)}
-                      disabled={!!busy}
-                      className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
-                    >
-                      {busy === `test:${provider.id}` ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
-                      测试连接
-                    </button>
-                    {results[provider.id] && (
-                      <span className={`text-xs ${results[provider.id].startsWith('连接成功') ? 'text-success' : 'text-danger'}`}>
-                        {results[provider.id]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="mt-6">
-            <h2 className="mb-2 text-sm font-semibold text-ink">每项功能用哪个模型</h2>
-            <div className="divide-y divide-line rounded-lg bg-surface shadow-raise">
-              {AI_CAPABILITIES.map(({ id, label }) => {
-                const route = settings.routes[id];
-                return (
-                  <div key={id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                    <span className="w-40 text-sm text-ink">{label}</span>
-                    <select
-                      value={route.providerId}
-                      onChange={(event) => setSettings((current) => ({
-                        ...current,
-                        routes: { ...current.routes, [id]: { ...route, providerId: event.target.value } },
-                      }))}
-                      className={`${inputCls} max-w-xs`}
-                    >
-                      {settings.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
-                    </select>
-                    <label className="flex items-center gap-2 text-xs text-ink-2">
-                      <input
-                        type="checkbox"
-                        checked={route.localOnly}
-                        onChange={(event) => setSettings((current) => ({
-                          ...current,
-                          routes: { ...current.routes, [id]: { ...route, localOnly: event.target.checked } },
-                        }))}
-                      />
-                      仅本地模型
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              onClick={() => void save()}
-              disabled={!!busy}
-              className="h-9 rounded-md bg-primary px-5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              {busy === 'save' ? '保存中…' : '保存 AI 配置'}
-            </button>
-            <span className="text-xs text-ink-3">保存上面的模型来源和分配</span>
-          </div>
-
-          <div className="mt-8 space-y-6 border-t border-line pt-5">
-            <div>
-              <h2 className="text-sm font-semibold text-ink">外部集成</h2>
-              <p className="mt-0.5 text-xs text-ink-3">以下配置各自即时生效，不需要点「保存 AI 配置」。</p>
-            </div>
-            <ReverseMcpSettings />
-            <AgentBotSettings />
-          </div>
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">外部集成</h2>
+        <div className="space-y-6 rounded-lg bg-surface p-4 shadow-raise">
+          <ReverseMcpSettings />
+          <AgentBotSettings />
         </div>
-      </details>
+      </section>
     </div>
   );
 }

@@ -34,7 +34,7 @@ export function saveAuth(auth: StoredAuth | null): void {
 const SERVER_KEY = 'rcx-server';
 
 import { httpFetch, isTauri } from './http';
-export { httpFetch, isTauri };
+export { httpFetch, isTauri, isTauriRuntime } from './http';
 
 export function getServerBase(): string {
   try {

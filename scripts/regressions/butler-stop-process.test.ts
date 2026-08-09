@@ -1,115 +1,33 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { setButlerBrainTauriProvider } from '../../apps/web/src/lib/butlerBrain';
-import { setButlerCodexRunner, useButler } from '../../apps/web/src/stores/butler';
 
-// 决策 13：Codex 是唯一大脑；测试环境冒充桌面端
-const restoreTauriForFile = setButlerBrainTauriProvider(() => true);
-test.after(() => restoreTauriForFile());
-
-test('工具调用记录为过程步骤，成功/失败状态可见', async () => {
-  useButler.getState().reset();
-  const restore = setButlerCodexRunner(async (options) => {
-    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-1', name: 'list_pull_requests', arguments: '{}' } });
-    options.onEvent?.({ type: 'tool-result', toolCallId: 'call-1', content: '[]' });
-    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'call-2', name: 'list_builds', arguments: '{}' } });
-    options.onEvent?.({ type: 'tool-result', toolCallId: 'call-2', content: '工具执行失败：超时' });
-    return { text: '查完了' };
-  });
-  try {
-    await useButler.getState().ask('看看 PR 和构建');
-    const steps = useButler.getState().steps;
-    assert.deepEqual(
-      steps.map(({ label, status }) => ({ label, status })),
-      [
-        { label: '查询拉取请求', status: 'done' },
-        { label: '查询构建', status: 'failed' },
-      ],
-    );
-    // 新提问清空上一轮过程
-    await useButler.getState().ask('再看一次');
-    assert.equal(useButler.getState().steps.length, 2);
-  } finally {
-    restore();
-  }
-});
-
-test('当前工作面只进入引擎上下文，工具来源附着到回答', async () => {
-  useButler.getState().reset();
-  let capturedContext: { label?: string } | undefined;
-  const restore = setButlerCodexRunner(async (options) => {
-    capturedContext = options.context as { label?: string } | undefined;
-    options.onEvent?.({ type: 'tool-call', toolCall: { id: 'source-1', name: 'search_messages', arguments: '{}' } });
-    options.onEvent?.({
-      type: 'tool-result',
-      toolCallId: 'source-1',
-      content: JSON.stringify([{ _id: 'm1', rid: 'r1', roomName: '发布群', sender: '张三', text: '构建失败了' }]),
-    });
-    return { text: '查到一条相关消息。' };
-  });
-  try {
-    await useButler.getState().ask('怎么回事', {
-      kind: 'room',
-      label: '发布群',
-      detail: '当前 Rocket.Chat 房间',
-      sources: [{ kind: 'room', id: 'r1', rid: 'r1', label: '发布群' }],
-    });
-    assert.equal(capturedContext?.label, '发布群');
-    assert.equal(useButler.getState().lines.some((line) => line.role === 'user' && line.text.includes('用户当前工作面')), false);
-    assert.deepEqual(useButler.getState().lines.at(-1)?.sources?.map((source) => source.id), ['r1', 'm1']);
-  } finally {
-    restore();
-  }
-});
-
-test('停止回答保留已生成内容，不当错误处理', async () => {
-  useButler.getState().reset();
-  // Codex 的停止是服务端中断后回合就地完成：runner 在 stop 发起后正常返回
-  let releaseTurn!: () => void;
-  const restore = setButlerCodexRunner(async (options) => {
-    options.onEvent?.({ type: 'content', content: '已经写了一半' });
-    await new Promise<void>((resolve) => {
-      releaseTurn = resolve;
-    });
-    return { text: '' };
-  });
-  try {
-    const asking = useButler.getState().ask('写个长回答');
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(useButler.getState().running, true);
-    const stopping = useButler.getState().stop();
-    releaseTurn();
-    await stopping;
-    await asking;
-
-    const state = useButler.getState();
-    assert.equal(state.running, false);
-    assert.equal(state.error, null);
-    assert.equal(state.lines.some((line) => line.text === '已经写了一半'), true);
-  } finally {
-    restore();
-  }
-});
-
-test('完整对话展示过程，纸与窄纸都能停止当前回答', () => {
+test('Codex 任务过程、审批与停止入口都由 codexWorkspace 原生事件流驱动', () => {
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
-  const panel = readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8');
-  const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
-  assert.match(conversation, /ButlerProcess/);
-  for (const source of [conversation, panel, page]) {
-    assert.match(source, /stop/u);
-    assert.match(source, /<Square size=/);
-  }
-  assert.doesNotMatch(panel, /ButlerProcess/);
-  // 停止走 turn/interrupt 并就地完成本轮
-  const codex = readFileSync('apps/web/src/stores/butlerCodex.ts', 'utf8');
-  assert.match(codex, /export async function stopButlerCodexTurn/);
-  assert.match(codex, /'turn\/interrupt'/);
-  const errandCard = readFileSync('apps/web/src/components/ButlerErrandRunCard.tsx', 'utf8');
-  const errandRuns = readFileSync('apps/web/src/stores/butlerErrandRuns.ts', 'utf8');
-  assert.match(errandCard, /stopErrand/);
-  assert.match(errandCard, />\s*叫停\s*</u);
-  assert.match(errandRuns, /stopErrand: async/);
-  assert.match(errandRuns, /'turn\/interrupt'/);
+  const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
+  const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
+
+  assert.match(conversation, /<section className="codex-native-activities" aria-label="任务过程">/);
+  assert.match(conversation, /events\.map\(\(event\) => <Activity key=\{event\.id\} event=\{event\} \/>\)/);
+  assert.match(conversation, /request\.kind === 'approval'/);
+  assert.match(conversation, /<ApprovalCard key=\{request\.id\} request=\{request\} \/>/);
+  assert.match(conversation, /<InputCard key=\{request\.id\} request=\{request\} \/>/);
+  assert.match(conversation, /aria-label="停止任务"/);
+  assert.match(conversation, /onClick=\{\(\) => void interrupt\(\)\}/);
+  assert.doesNotMatch(conversation, /ButlerProcess|useButler\(|stopButlerCodexTurn/);
+
+  assert.match(workspace, /if \(method === 'turn\/started'\)/);
+  assert.match(workspace, /if \(method === 'item\/agentMessage\/delta'\)/);
+  assert.match(workspace, /if \(method === 'item\/started' \|\| method === 'item\/completed'\)/);
+  assert.match(workspace, /if \(method === 'item\/commandExecution\/outputDelta'\)/);
+  assert.match(workspace, /if \(method === 'turn\/diff\/updated'\)/);
+  assert.match(workspace, /if \(method !== 'turn\/completed'\) return;/);
+  assert.match(workspace, /const kind = request\.method === 'item\/tool\/requestUserInput'/);
+  assert.match(workspace, /status: 'waiting-input'/);
+  assert.match(workspace, /interrupt: async \(\) => \{/);
+  assert.match(workspace, /rejectPendingRequests\('用户已停止当前任务'\)/);
+  assert.match(workspace, /set\(\{ status: 'ready', activeTurnId: undefined, streamingText: '', queuedMessages: \[] \}\)/);
+
+  assert.match(controller, /async interruptTurn\(threadId: string, turnId: string\): Promise<void> \{/);
+  assert.match(controller, /request\('turn\/interrupt', \{ threadId, turnId \}\)/);
 });

@@ -40,8 +40,9 @@ import {
   type SearchTimeRange,
 } from '../lib/searchFilters';
 import { focusComposerInput } from '../lib/focus';
+import { handoffToCodexTask } from '../lib/codexTaskHandoff';
 import { runtimeFeatures } from '../lib/runtimeMode';
-import { useButler } from '../stores/butler';
+import { toast } from '../stores/toast';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
@@ -91,7 +92,6 @@ export default function QuickSwitcher({
   const openRoom = useChat((s) => s.openRoom);
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
-  const openButlerConversation = useUI((s) => s.openButlerConversation);
   const setConvFilter = useUI((s) => s.setConvFilter);
   const retainUnread = useUI((s) => s.retainUnread);
   const me = useAuth((s) => s.user?.username);
@@ -496,13 +496,13 @@ export default function QuickSwitcher({
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
-  /** 语义提问交给管家：由大脑理解问题并调用搜索工具回答（issue #95） */
+  /** 语义提问进入统一 Codex 任务，由对应 Skill/App 检索真实数据。 */
   const askButlerFromSearch = () => {
     const query = keyword.trim();
     if (!query) return;
     onClose();
-    openButlerConversation();
-    void useButler.getState().ask(query);
+    void handoffToCodexTask(query, `搜索 · ${query}`)
+      .catch((error) => toast.error(error, '无法创建 Codex 任务'));
   };
 
   const pickConv = (rid: string) => {
@@ -733,11 +733,11 @@ export default function QuickSwitcher({
           />
           {!!keyword.trim() && runtimeFeatures().butler && (
             <button
-              title="把这个问题交给管家，由我查找相关信息后回答"
+              title="创建 Codex 任务，并由 Skills 或 Apps 查找真实信息"
               onClick={askButlerFromSearch}
               className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
             >
-              <Sparkles size={14} />问管家
+              <Sparkles size={14} />创建任务
             </button>
           )}
           <kbd className="rounded border border-line px-1.5 py-0.5 text-2xs text-ink-3">Esc</kbd>

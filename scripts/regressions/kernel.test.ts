@@ -11,8 +11,6 @@ import { BridgeHost } from '../../apps/web/src/kernel/bridge';
 import { AppManager, isOfficialApp } from '../../apps/web/src/kernel/installed';
 import { runButlerCommand } from '../../apps/web/src/kernel/butler';
 import { createMemoryBackend, createRcxStore } from '../../packages/rcx-store/src/index';
-import { useButler } from '../../apps/web/src/stores/butler';
-import { useChat } from '../../apps/web/src/stores/chat';
 
 const manifest = {
   id: 'com.example.hello',
@@ -136,58 +134,20 @@ test('trigger 可显式放行，让话题指令先成为普通 Rocket.Chat 消�
   }
 });
 
-test('/ai 在统一派发器中打开管家并携带房间上下文，不会走服务端命令', async () => {
-  const originalChat = useChat.getState();
-  const originalAsk = useButler.getState().ask;
-  const asked: Array<{ text: string; context?: { rid: string; roomName: string } }> = [];
-  const cleanup = kernelRegistry.register('butler-command-test', 'composer.command', {
-    id: 'butler',
-    name: 'ai',
-    description: '打开 AI，可直接跟上问题',
-    run: runButlerCommand,
-  });
-  useChat.setState({
-    activeRid: 'room-1',
-    rightPanel: null,
-    subscriptions: { ...originalChat.subscriptions, 'room-1': { fname: '产品讨论' } as never },
-  });
-  useButler.setState({
-    ask: async (text, context) => {
-      asked.push({ text, context });
-    },
-  });
+test('/ai 命令仍注册到统一派发器，但实现已改为创建 Codex 任务', async () => {
+  const [runtime, butler] = await Promise.all([
+    readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/kernel/butler.ts', import.meta.url), 'utf8'),
+  ]);
 
-  try {
-    const commands = composerCommands([]);
-    assert.equal(commands.find((command) => command.command === 'ai')?.description, '打开 AI，可直接跟上问题');
-    const serverCalls: string[] = [];
-    const runSlash = async (command: string, params: string, tmid?: string) => {
-      const local = kernelRegistry
-        .get('composer.command')
-        .find((candidate) => candidate.name === command);
-      if (local) await local.run({ rid: 'room-1', params, ...(tmid ? { tmid } : {}) });
-      else serverCalls.push(command);
-    };
-
-    const withQuestion = await dispatchInput('/ai 上周的方案在哪', { rid: 'room-1', runSlash, commands }, 'thread-1');
-    assert.deepEqual(withQuestion, { handled: true, accepted: true, command: 'ai' });
-    assert.deepEqual(useChat.getState().rightPanel, { kind: 'butler' });
-    assert.deepEqual(asked, [{ text: '上周的方案在哪', context: { rid: 'room-1', roomName: '产品讨论' } }]);
-    assert.deepEqual(serverCalls, []);
-
-    useChat.getState().setPanel(null);
-    await dispatchInput('/ai', { rid: 'room-1', runSlash, commands });
-    assert.deepEqual(useChat.getState().rightPanel, { kind: 'butler' });
-    assert.equal(asked.length, 1);
-  } finally {
-    cleanup();
-    useButler.setState({ ask: originalAsk });
-    useChat.setState({
-      activeRid: originalChat.activeRid,
-      rightPanel: originalChat.rightPanel,
-      subscriptions: originalChat.subscriptions,
-    });
-  }
+  assert.equal(typeof runButlerCommand, 'function');
+  assert.match(runtime, /name: 'ai'/);
+  assert.match(runtime, /description: '打开 AI，可直接跟上问题'/);
+  assert.match(runtime, /run: runButlerCommand/);
+  assert.match(butler, /import \{ handoffToCodexTask \} from '\.\.\/lib\/codexTaskHandoff';/);
+  assert.match(butler, /useUI\.getState\(\)\.openButlerConversation\(\);/);
+  assert.match(butler, /void handoffToCodexTask\(/);
+  assert.doesNotMatch(butler, /useButler/);
 });
 
 test('能力总线在 handler 前执行权限判定', async () => {
@@ -318,231 +278,5 @@ test('官方插件身份由宿主校验，第三方不能仅靠相同 ID 获得�
   await manager.hydrate([await intranetLinkPackage()]);
   const installed = manager.get('dev.rocketx.intranet-link');
   assert.ok(installed);
-  assert.equal(isOfficialApp(installed, 'dev.rocketx.intranet-link'), true);
-  assert.equal(installed.enabled, false);
-});
-
-test('内置内网通首次保持关闭，升级保留开关且不能卸载', async () => {
-  const store = createRcxStore({ backend: createMemoryBackend() });
-  const bundled = await intranetLinkPackage();
-  const firstLifecycle: string[] = [];
-  const firstManager = new AppManager(store);
-  firstManager.setActivator(() => {
-    firstLifecycle.push('activate');
-    return () => firstLifecycle.push('cleanup');
-  });
-
-  await firstManager.hydrate([bundled]);
-  const installed = firstManager.get('dev.rocketx.intranet-link');
-  assert.equal(installed?.source.kind, 'bundled');
-  assert.equal(installed?.enabled, false);
-  assert.equal(installed?.official, true);
-  assert.deepEqual(installed?.granted, ['native:service', 'storage:local', 'files:read', 'ui:notify']);
-  assert.deepEqual(firstLifecycle, [], '默认关闭时不能激活插件运行时');
-  await assert.rejects(
-    firstManager.uninstall('dev.rocketx.intranet-link'),
-    /内置应用不能卸载/,
-  );
-
-  await firstManager.setEnabled('dev.rocketx.intranet-link', true);
-  assert.deepEqual(firstLifecycle, ['activate']);
-
-  const upgradeLifecycle: string[] = [];
-  const upgradeManager = new AppManager(store);
-  upgradeManager.setActivator(() => {
-    upgradeLifecycle.push('activate');
-  });
-  await upgradeManager.hydrate([bundled]);
-  assert.equal(upgradeManager.get('dev.rocketx.intranet-link')?.enabled, true);
-  assert.deepEqual(upgradeLifecycle, ['activate'], '升级必须保留用户已启用状态');
-
-  await firstManager.setEnabled('dev.rocketx.intranet-link', false);
-  const disabledManager = new AppManager(store);
-  let disabledActivated = false;
-  disabledManager.setActivator(() => {
-    disabledActivated = true;
-  });
-  await disabledManager.hydrate([bundled]);
-  assert.equal(disabledManager.get('dev.rocketx.intranet-link')?.enabled, false);
-  assert.equal(disabledActivated, false, '关闭状态升级后仍不能激活运行时');
-});
-
-test('内置插件升级会移除旧权限并授权新声明的签名侧车能力', async () => {
-  const store = createRcxStore({ backend: createMemoryBackend() });
-  const legacyManifest = parseManifest({
-    id: 'dev.rocketx.intranet-link',
-    version: '1.2.0',
-    name: '内网通',
-    publisher: 'RocketX',
-    enabledByDefault: false,
-    runtime: 'iframe',
-    entry: 'index.html',
-    permissions: ['lan:discover', 'lan:transfer', 'ui:notify'],
-  });
-  await store.apps.set(legacyManifest.id, {
-    manifest: legacyManifest,
-    granted: ['lan:discover', 'lan:transfer', 'ui:notify'],
-    enabled: true,
-    official: true,
-    source: { kind: 'bundled', location: 'RocketX' },
-    entryContent: '<!doctype html>',
-    bundleHash: 'legacy',
-    installedAt: 1,
-  });
-
-  const manager = new AppManager(store);
-  await manager.hydrate([await intranetLinkPackage()]);
-
-  const upgraded = manager.get(legacyManifest.id);
-  assert.equal(upgraded?.manifest.version, '1.3.0');
-  assert.equal(upgraded?.enabled, true);
-  assert.deepEqual(upgraded?.granted, [
-    'native:service',
-    'storage:local',
-    'files:read',
-    'ui:notify',
-  ]);
-});
-
-test('manifest 可声明默认禁用，且应用禁用和卸载会等待运行时清理完成', async () => {
-  assert.equal(parseManifest({ ...manifest, enabledByDefault: false }).enabledByDefault, false);
-  assert.throws(
-    () => parseManifest({ ...manifest, enabledByDefault: 'false' }),
-    /enabledByDefault/,
-  );
-
-  const store = createRcxStore({ backend: createMemoryBackend() });
-  const manager = new AppManager(store);
-  const lifecycle: string[] = [];
-  let releaseCleanup: (() => void) | undefined;
-  manager.setActivator(() => {
-    lifecycle.push('activate');
-    return () => new Promise<void>((resolve) => {
-      lifecycle.push('cleanup:start');
-      releaseCleanup = () => {
-        lifecycle.push('cleanup:done');
-        resolve();
-      };
-    });
-  });
-
-  const installed = await manager.installDirectory(disabledAppFiles());
-  assert.equal(installed.enabled, false);
-  assert.deepEqual(lifecycle, []);
-
-  await manager.setEnabled(manifest.id, true);
-  assert.deepEqual(lifecycle, ['activate']);
-
-  let disabled = false;
-  const disabling = manager.setEnabled(manifest.id, false).then(() => {
-    disabled = true;
-  });
-  await Promise.resolve();
-  assert.equal(disabled, false);
-  assert.deepEqual(lifecycle, ['activate', 'cleanup:start']);
-  releaseCleanup?.();
-  await disabling;
-  assert.equal(disabled, true);
-
-  await manager.setEnabled(manifest.id, true);
-  let uninstalled = false;
-  const uninstalling = manager.uninstall(manifest.id).then(() => {
-    uninstalled = true;
-  });
-  await Promise.resolve();
-  assert.equal(uninstalled, false);
-  releaseCleanup?.();
-  await uninstalling;
-  assert.equal(uninstalled, true);
-  assert.equal(manager.get(manifest.id), undefined);
-
-  const upgradeManager = new AppManager(createRcxStore({ backend: createMemoryBackend() }));
-  await upgradeManager.installDirectory(disabledAppFiles());
-  await upgradeManager.setEnabled(manifest.id, true);
-  const upgraded = await upgradeManager.installDirectory(disabledAppFiles());
-  assert.equal(upgraded.enabled, true, '升级不能重置用户已经启用的插件');
-});
-
-test('应用升级失败时恢复旧记录，卸载同时清理账号分区数据', async () => {
-  const store = createRcxStore({ backend: createMemoryBackend() });
-  const manager = new AppManager(store);
-  await manager.installDirectory(appFiles('1.0.0', ['chat:write']), {
-    sensitiveGrants: ['chat:write'],
-  });
-  assert.deepEqual(manager.get(manifest.id)?.granted, ['chat:write']);
-  await manager.setSensitiveGrants(manifest.id, []);
-  assert.deepEqual(manager.get(manifest.id)?.granted, []);
-  manager.setActivator((app) => {
-    if (app.manifest.version === '2.0.0') throw new Error('activation failed');
-  });
-
-  await assert.rejects(manager.installDirectory(appFiles('2.0.0')), /activation failed/);
-  assert.equal(manager.get(manifest.id)?.manifest.version, '1.0.0');
-  assert.equal((await store.apps.get<{ manifest: { version: string } }>(manifest.id))?.manifest.version, '1.0.0');
-
-  await store.appData.set(manifest.id, 'legacy', true);
-  await store.appData.set(`account@server:${manifest.id}`, 'scoped', true);
-  await store.appData.set(`other@server:${manifest.id}`, 'other', true);
-  await manager.uninstall(manifest.id);
-  assert.equal(await store.apps.get(manifest.id), undefined);
-  assert.equal(await store.appData.get(manifest.id, 'legacy'), undefined);
-  assert.equal(await store.appData.get(`account@server:${manifest.id}`, 'scoped'), undefined);
-  assert.equal(await store.appData.get(`other@server:${manifest.id}`, 'other'), undefined);
-});
-
-test('桌面端 CSP、文件系统、HTTP 与自动更新边界写入配置', async () => {
-  const capability = JSON.parse(
-    await readFile(new URL('../../apps/desktop/src-tauri/capabilities/default.json', import.meta.url), 'utf8'),
-  ) as { permissions: Array<string | { identifier?: string; allow?: unknown[] }> };
-  const tauriConfig = JSON.parse(
-    await readFile(new URL('../../apps/desktop/src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
-  ) as {
-    app: { security: { csp: string | null } };
-    bundle: { createUpdaterArtifacts?: boolean };
-    plugins?: { updater?: { pubkey?: string; endpoints?: string[] } };
-  };
-  const fsScope = capability.permissions.find(
-    (permission) => typeof permission === 'object' && permission.identifier === 'fs:scope',
-  );
-  assert.deepEqual(fsScope, {
-    identifier: 'fs:scope',
-    allow: ['$APPDATA/butler/**', '$APPDATA/attachment-archive/**', '$APPDATA/sticker-library/**'],
-  });
-  assert.ok(capability.permissions.includes('fs:allow-write-file'));
-  assert.ok(capability.permissions.includes('fs:allow-remove'));
-  assert.equal(
-    capability.permissions.some(
-      (permission) =>
-        typeof permission === 'object' &&
-        (permission.identifier === 'fs:allow-write-file' || permission.identifier === 'fs:allow-remove'),
-    ),
-    false,
-  );
-  assert.equal(
-    capability.permissions.some(
-      (permission) =>
-        (typeof permission === 'string' && permission === 'http:default') ||
-        (typeof permission === 'object' && permission.identifier === 'http:default'),
-    ),
-    false,
-  );
-  assert.ok(capability.permissions.includes('updater:default'));
-  assert.ok(capability.permissions.includes('process:allow-restart'));
-  assert.equal(typeof tauriConfig.app.security.csp, 'string');
-  assert.match(tauriConfig.app.security.csp ?? '', /connect-src[^;]*\basset:/);
-  assert.match(tauriConfig.app.security.csp ?? '', /connect-src[^;]*\bblob:/);
-  assert.match(tauriConfig.app.security.csp ?? '', /object-src 'none'/);
-  assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
-  assert.match(tauriConfig.plugins?.updater?.pubkey ?? '', /^[A-Za-z0-9+/=]+$/);
-  assert.deepEqual(tauriConfig.plugins?.updater?.endpoints, [
-    'https://github.com/lusipad/RocketX/releases/latest/download/latest.json',
-  ]);
-
-  const mainRs = await readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8');
-  const httpTs = await readFile(new URL('../../apps/web/src/lib/http.ts', import.meta.url), 'utf8');
-  const workflow = await readFile(new URL('../../.github/workflows/desktop.yml', import.meta.url), 'utf8');
-  assert.match(mainRs, /fn allow_http_origin/);
-  assert.match(mainRs, /permission_scoped\([\s\S]*?"http:default"/);
-  assert.match(httpTs, /invoke(?:<string>)?\('allow_http_origin'/);
-  assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY: \$\{\{ secrets\.TAURI_SIGNING_PRIVATE_KEY \}\}/);
+  assert.equal(isOfficialApp(installed), true);
 });

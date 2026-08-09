@@ -1,5 +1,7 @@
 # Implementation notes — 管家单页整体重构
 
+> 文档状态：**历史实施记录**。对应的“一张纸”产品方案已经废弃，本文的截图得分和“已完成”只证明当时切片；当前行为见[管家任务](specs/butler-tasks.md)。
+
 Plan: [butler-page-design.md](./butler-page-design.md)
 
 ## Summary

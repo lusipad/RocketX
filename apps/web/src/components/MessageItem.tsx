@@ -64,7 +64,7 @@ import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
 import { findQuoteImage } from '../lib/messageQuote';
-import { butlerBrainGateway } from '../lib/butlerRoundsBrain';
+import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
 import {
@@ -73,7 +73,7 @@ import {
   toWorkItemPrefill,
   type TodoPrefill,
   type WorkItemPrefill,
-} from '../kernel/ai/features/message-extraction';
+} from '../agent/messageActionExtraction';
 import { parseAgentSessionCard, stripAgentSessionMarker } from '../agent/card';
 import {
   canCollectMessageSticker,
@@ -612,11 +612,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   );
 
   const displayName = message.u.name || message.u.username;
-  // 忙碌判定读 getState 而不是订阅 running：MessageItem 每条消息一个实例，
-  // 全量订阅 butler store 会变成无谓的重渲染源。
   const handOverToButler = (): void => {
-    const result = askButlerAboutMessages(message.rid, [message], '这条消息说了什么、需要我做什么？');
-    if (result === 'busy') toast.error('管家正在忙，等它答完这轮');
+    askButlerAboutMessages(message.rid, [message], '这条消息说了什么、需要我做什么？');
   };
   const extractWithAi = async (target: 'todo' | 'workitem') => {
     if (aiExtracting) return;
@@ -642,7 +639,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           text,
           sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
         },
-        butlerBrainGateway(),
+        codexSkillGateway('message-action-extraction', '从消息提取动作'),
       );
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
@@ -770,7 +767,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           },
         ]
       : []),
-    ...(features.butler ? [{ label: '交给管家', icon: Bot, onClick: () => handOverToButler() }] : []),
+    ...(features.butler ? [{ label: '创建 Codex 任务', icon: Bot, onClick: () => handOverToButler() }] : []),
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,

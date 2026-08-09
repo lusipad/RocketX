@@ -13,7 +13,6 @@ export const MODULE_ORDER: ModuleKey[] = [
   'calendar',
   'downloads',
   'contacts',
-  'codex',
   'settings',
 ];
 
@@ -45,8 +44,6 @@ function readPersistedUIValue(storage: ModuleStorage | undefined = browserStorag
 }
 
 export function migratePersistedModule(value: unknown): ModuleKey {
-  if (value === 'today') return 'workbench';
-  if (value === 'ai-assistant') return 'butler-view';
   return typeof value === 'string' && MODULE_ORDER.includes(value) ? value : 'messages';
 }
 
@@ -59,7 +56,7 @@ export function readPersistedModule(storage: ModuleStorage | undefined = browser
       ? record.state as Record<string, unknown>
       : undefined;
     const module = migratePersistedModule(record?.module ?? state?.module ?? parsed);
-    return !runtimeFeatures().ai && (module === 'butler-view' || module === 'codex') ? 'messages' : module;
+    return !runtimeFeatures().ai && module === 'butler-view' ? 'messages' : module;
   } catch {
     return 'messages';
   }
@@ -127,18 +124,8 @@ interface UIState {
   retainedUnreadRid: string | null;
   switcherOpen: boolean;
   switcherCommandCenter: boolean;
-  /** Butler 内部工作视图，也是所有可见入口的唯一导航状态。 */
+  /** Codex 工作区的一级视图。 */
   butlerView: ButlerWorkspaceView;
-  /** 最近一次从今日纸发起的问答；跨模块保留，但不写入长期存储。 */
-  butlerPaperConversation: {
-    date: string;
-    sessionId: string;
-    rounds: number;
-    questionId: string | null;
-    error: string | null;
-  } | null;
-  /** 管家正在看的纸；null 表示今天。只保留在本次运行内。 */
-  butlerPaperDate: string | null;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -154,11 +141,7 @@ interface UIState {
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
   openButlerConversation: () => void;
-  openButlerManage: () => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
-  setButlerPaperConversation: (conversation: UIState['butlerPaperConversation']) => void;
-  openButlerPaper: (date?: string) => void;
-  setButlerPaperDate: (date: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
   setPrTab: (t: 'review' | 'mine') => void;
@@ -173,8 +156,6 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   butlerView: 'conversation',
-  butlerPaperConversation: null,
-  butlerPaperDate: null,
   workbenchTab: 'overview',
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
@@ -206,14 +187,6 @@ export const useUI = create<UIState>((set) => ({
       butlerView: 'conversation',
     });
   },
-  openButlerManage: () => {
-    if (!runtimeFeatures().butler) return;
-    persistUIState({ module: 'butler-view' });
-    set({
-      module: 'butler-view',
-      butlerView: 'routines',
-    });
-  },
   setButlerView: (view) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
@@ -222,17 +195,6 @@ export const useUI = create<UIState>((set) => ({
       butlerView: view,
     });
   },
-  setButlerPaperConversation: (conversation) => set({ butlerPaperConversation: conversation }),
-  openButlerPaper: (date) => {
-    if (!runtimeFeatures().butler) return;
-    persistUIState({ module: 'butler-view' });
-    set({
-      module: 'butler-view',
-      butlerView: 'now',
-      butlerPaperDate: date ?? null,
-    });
-  },
-  setButlerPaperDate: (date) => set({ butlerPaperDate: date }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => {
     persistUIState({ workItemStateFilter: s });

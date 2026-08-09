@@ -36,7 +36,7 @@ export function renderAgentSessionCard(card: AgentSessionCard): string {
     card.environmentName ? `本地项目：${card.environmentName}` : '',
     card.proposedBranch ? `计划分支：\`${card.proposedBranch}\`` : '',
     `主持人：@${card.hostUsername} · 状态：${status}`,
-    card.status === 'active' ? '房间成员：使用 `@ai` 提问；默认只读，代码修改仍由主持人的本机审批。' : '',
+    card.status === 'active' ? '房间成员：使用 `@ai` 提问；权限与审批由主持人的 Codex 任务控制。' : '',
     `宿主租约至：${new Date(card.leaseExpiresAt).toLocaleString()}`,
     `<!--rocketx-agent:${encoded}-->`,
   ].filter(Boolean).join('\n');

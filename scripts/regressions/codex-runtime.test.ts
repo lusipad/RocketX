@@ -1,24 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  codexBrainAvailability,
-  setButlerBrainStorage,
-  setButlerBrainTauriProvider,
-  type ButlerBrainStorage,
-} from '../../apps/web/src/lib/butlerBrain';
-import {
   getCodexManualPath,
   resetCodexRuntimeForTests,
+  setCodexManualPath,
   setCodexRuntimeInvoker,
   setCodexRuntimePlatform,
   setCodexRuntimeStorage,
-  setCodexManualPath,
   useCodexRuntime,
   type CodexRuntimeProbe,
+  type CodexRuntimeStorage,
 } from '../../apps/web/src/stores/codexRuntime';
 import { useToast } from '../../apps/web/src/stores/toast';
 
-class MemoryStorage implements ButlerBrainStorage {
+class MemoryStorage implements CodexRuntimeStorage {
   private readonly entries = new Map<string, string>();
 
   get(key: string): string | null {
@@ -30,14 +25,13 @@ class MemoryStorage implements ButlerBrainStorage {
   }
 }
 
-test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因，绝不静默换大脑', async () => {
-  const restoreStorage = setButlerBrainStorage(new MemoryStorage());
-  const restorePlatform = setCodexRuntimePlatform(() => true);
-  const restoreBrainPlatform = setButlerBrainTauriProvider(() => true);
+test('桌面启动时 Codex probe 只保留路径/版本门禁，不再耦合旧 Butler 大脑', async () => {
   const runtimeStorage = new MemoryStorage();
+  const restorePlatform = setCodexRuntimePlatform(() => true);
   const restoreRuntimeStorage = setCodexRuntimeStorage(runtimeStorage);
   setCodexManualPath(' C:\\Tools\\codex.exe ');
   assert.equal(getCodexManualPath(), 'C:\\Tools\\codex.exe');
+
   let result: CodexRuntimeProbe = {
     ready: true,
     version: '0.144.4',
@@ -53,6 +47,7 @@ test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因�
     invokedArgs = args;
     return result as never;
   });
+
   useToast.setState({ toasts: [] });
   resetCodexRuntimeForTests();
 
@@ -65,7 +60,6 @@ test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因�
     assert.equal(useCodexRuntime.getState().minimumCandidate, '0.140.0');
     assert.deepEqual(useCodexRuntime.getState().verifiedVersions, ['0.144.4']);
     assert.deepEqual(invokedArgs, { manualPath: 'C:\\Tools\\codex.exe' });
-    assert.deepEqual(codexBrainAvailability(), { available: true });
     assert.equal(useToast.getState().toasts.length, 0);
 
     result = {
@@ -81,7 +75,6 @@ test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因�
     await useCodexRuntime.getState().probe();
     assert.equal(useCodexRuntime.getState().phase, 'ready');
     assert.equal(useCodexRuntime.getState().compatibilityStatus, 'untested-newer');
-    assert.deepEqual(codexBrainAvailability(), { available: true });
     assert.equal(useToast.getState().toasts.length, 0);
 
     result = {
@@ -98,11 +91,10 @@ test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因�
     assert.equal(useCodexRuntime.getState().phase, 'unavailable');
     assert.equal(useCodexRuntime.getState().compatibilityStatus, 'blocked');
     assert.equal(useCodexRuntime.getState().reasonCode, 'outdated');
-    // 决策 13：不可用就是不可用，原因透传给 UI，没有备胎大脑
-    assert.deepEqual(codexBrainAvailability(), {
-      available: false,
-      reason: 'Codex 0.140.0 尚未通过 RocketX 兼容认证',
-    });
+    assert.equal(
+      useCodexRuntime.getState().reason,
+      'Codex 0.140.0 尚未通过 RocketX 兼容认证',
+    );
     assert.equal(useToast.getState().toasts.length, 1);
     assert.match(useToast.getState().toasts[0]?.message ?? '', /尚未通过 RocketX 兼容认证/);
 
@@ -112,9 +104,7 @@ test('桌面启动时 Codex 可用则就绪；不可用时只提示一次原因�
     resetCodexRuntimeForTests();
     useToast.setState({ toasts: [] });
     restoreInvoker();
-    restoreBrainPlatform();
-    restorePlatform();
     restoreRuntimeStorage();
-    restoreStorage();
+    restorePlatform();
   }
 });

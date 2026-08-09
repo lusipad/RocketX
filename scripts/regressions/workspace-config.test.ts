@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   adoConnectionChanged,
-  aiProviderEndpointChanged,
-  aiProviderFingerprint,
   mergeAppliedFields,
   parseWorkspaceConfig,
   pendingWorkspaceFields,
@@ -19,18 +17,13 @@ const FULL_CONFIG = JSON.stringify({
   rocketChat: { url: 'https://chat.example.com/' },
   ado: { url: 'http://ado.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
   workItemTemplates: { url: 'https://git.example.com/raw/templates.json' },
-  ai: {
-    providers: [
-      { id: 'deepseek', kind: 'openai-compatible', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
-    ],
-  },
 });
 
 test('解析配置：URL 规范化去尾斜杠，枚举和版本严格校验（issue #67）', () => {
   const config = parseWorkspaceConfig(FULL_CONFIG);
   assert.equal(config.rocketChat?.url, 'https://chat.example.com');
   assert.equal('mode' in (config.ado ?? {}), false);
-  assert.equal(config.ai?.providers[0].id, 'deepseek');
+  assert.equal('ai' in config, false);
 
   assert.throws(() => parseWorkspaceConfig('not json'), /JSON/);
   assert.throws(() => parseWorkspaceConfig('{"version":2}'), /版本/);
@@ -83,7 +76,7 @@ test('工作项模板可内联进工作区配置，且与远程 URL 格式互斥
   );
 });
 
-test('配置文件是不可信输入：内嵌凭据一律拒绝', () => {
+test('配置文件是不可信输入：内嵌凭据和已移除 AI 配置都拒绝', () => {
   assert.throws(
     () => parseWorkspaceConfig('{"version":1,"rocketChat":{"url":"https://user:pw@chat.example.com"}}'),
     /凭据不进配置文件/,
@@ -100,7 +93,7 @@ test('配置文件是不可信输入：内嵌凭据一律拒绝', () => {
           },
         }),
       ),
-    /凭据不进配置文件/,
+    /统一使用 Codex/,
   );
 });
 
@@ -116,7 +109,6 @@ test('字段计划：本地空值默认应用，用户改过的字段默认保�
       adoAuth: '',
       adoWebUrl: '',
       templatesUrl: '',
-      aiProviders: {},
     },
     {},
   );
@@ -160,7 +152,6 @@ test('字段计划：上次从配置应用的值再次同步时跟随新配置�
       serverUrl: 'https://old-chat.example.com',
       // 本地值 ≠ 上次应用值 → 用户后来自己改过，保留
       adoBase: 'http://my-own-ado/tfs/Other',
-      aiProviders: {},
     },
     lastApplied,
   );
@@ -172,24 +163,11 @@ test('字段计划：上次从配置应用的值再次同步时跟随新配置�
   assert.equal(byKey.get('ado.base')?.overridden, true);
 });
 
-test('AI Provider 按指纹比对，webUrl 缺省时回退 ado.url', () => {
+test('ADO webUrl 缺省时回退 ado.url', () => {
   const config = parseWorkspaceConfig(FULL_CONFIG);
-  const fields = planWorkspaceFields(
-    config,
-    {
-      aiProviders: {
-        deepseek: aiProviderFingerprint({
-          kind: 'openai-compatible',
-          baseUrl: 'https://api.deepseek.com',
-          model: 'deepseek-chat',
-        }),
-      },
-    },
-    {},
-  );
+  const fields = planWorkspaceFields(config, {}, {});
   const byKey = new Map(fields.map((field) => [field.key, field]));
 
-  assert.equal(byKey.get('ai.provider.deepseek')?.unchanged, true);
   assert.equal(byKey.get('ado.webUrl')?.incoming, 'http://ado.example.com/tfs/DefaultCollection');
 });
 
@@ -306,7 +284,7 @@ test('应用记录合并：只记录本次应用的字段，未勾选字段保�
   });
 });
 
-test('端点变化会触发 ADO PAT 与 AI 密钥解绑，纯模型变化不会误删密钥', () => {
+test('ADO 端点变化会触发 PAT 解绑', () => {
   assert.equal(
     adoConnectionChanged(
       { adoBase: 'https://ado.old', auth: 'pat' },
@@ -318,20 +296,6 @@ test('端点变化会触发 ADO PAT 与 AI 密钥解绑，纯模型变化不会�
     adoConnectionChanged(
       { adoBase: 'https://ado.old', auth: 'pat' },
       { adoBase: 'https://ado.old', auth: 'pat' },
-    ),
-    false,
-  );
-  assert.equal(
-    aiProviderEndpointChanged(
-      { kind: 'openai-compatible', baseUrl: 'https://ai.old/v1/' },
-      { kind: 'openai-compatible', baseUrl: 'https://ai.new/v1' },
-    ),
-    true,
-  );
-  assert.equal(
-    aiProviderEndpointChanged(
-      { kind: 'openai-compatible', baseUrl: 'https://ai.same/v1/' },
-      { kind: 'openai-compatible', baseUrl: 'https://ai.same/v1' },
     ),
     false,
   );

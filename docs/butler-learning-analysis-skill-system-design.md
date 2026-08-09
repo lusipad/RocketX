@@ -1,6 +1,8 @@
 # RocketX Butler · 了解用户、工作分析与小 Skill 自我增益设计
 
-> 状态：第一批能力已实现并完成 dogfooding
+> 文档状态：**已废弃**。旧 `Profile.md`、学习 Extension 和自建小 Skill 闭环已退出；当前只使用 Codex 原生 Memory 与 Skills/Plugins，见[Memory](specs/memory.md)和[Skills、Plugins 与 Apps](specs/skills-and-plugins.md)。
+>
+> 原记录状态：第一批能力已实现并完成 dogfooding
 > 日期：2026-07-28
 > 范围：Profile、工作分析、重复操作发现、小 Skill 提议、试跑和效果复盘。
 > 上位设计：[持续在场的工作伙伴设计](butler-human-presence-system-design.md)

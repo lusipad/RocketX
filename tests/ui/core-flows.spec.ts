@@ -7,16 +7,6 @@ const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'on
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 
-async function openLegacyButlerPaper(page: Page): Promise<void> {
-  await expect(page.getByRole('region', { name: '完整对话' })).toBeVisible();
-  await page.evaluate(async () => {
-    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
-      useUI: { getState: () => { setButlerView: (view: 'now') => void } };
-    }>;
-    (await loadUI()).useUI.getState().setButlerView('now');
-  });
-}
-
 async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
   await page.addInitScript(({ config }) => {
     let responseUrl = '';
@@ -983,7 +973,7 @@ test('桌面重启后会重新授权并检查团队配置 URL', async ({ page })
   expect(pageErrors).toEqual([]);
 });
 
-test('团队端点变化会解绑 ADO PAT 和 AI 密钥状态', async ({ page }) => {
+test('团队 ADO 端点变化会解绑 PAT，并保持旧 AI 设置不被工作区导入接管', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rcx-workbench', JSON.stringify({
       mode: 'direct',
@@ -1016,7 +1006,6 @@ test('团队端点变化会解绑 ADO PAT 和 AI 密钥状态', async ({ page })
         'ado.base': 'https://ado-old.example.com/tfs/DefaultCollection',
         'ado.mode': 'direct',
         'ado.auth': 'pat',
-        'ai.provider.team-ai': 'openai-compatible|https://ai-old.example.com/v1|old-model',
       },
     }));
   });
@@ -1030,15 +1019,6 @@ test('团队端点变化会解绑 ADO PAT 和 AI 密钥状态', async ({ page })
       version: 1,
       name: '新团队',
       ado: { url: 'https://ado-new.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
-      ai: {
-        providers: [{
-          id: 'team-ai',
-          kind: 'openai-compatible',
-          name: 'Team AI',
-          baseUrl: 'https://ai-new.example.com/v1',
-          model: 'new-model',
-        }],
-      },
     })),
   });
   await page.getByRole('button', { name: /应用 \d+ 项/ }).click();
@@ -1052,9 +1032,9 @@ test('团队端点变化会解绑 ADO PAT 和 AI 密钥状态', async ({ page })
   expect(stored.workbench.adoBase).toBe('https://ado-new.example.com/tfs/DefaultCollection');
   expect(stored.ai.providers[0]).toMatchObject({
     id: 'team-ai',
-    baseUrl: 'https://ai-new.example.com/v1',
-    locality: 'external',
-    hasSecret: false,
+    baseUrl: 'https://ai-old.example.com/v1',
+    locality: 'local',
+    hasSecret: true,
   });
   expect(stored.source).not.toHaveProperty('url');
   expect(stored.source).not.toHaveProperty('follow');
@@ -1124,13 +1104,8 @@ test('打开管家页后可返回消息', async ({ page }) => {
     .getByRole('button', { name: '工作台', exact: true })).toBeVisible();
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByText('私人工作代理', { exact: true }).first()).toBeVisible();
-  await expect(
-    page
-      .getByRole('navigation', { name: '管家工作视图' })
-      .getByRole('button', { name: '对话', exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole('textbox', { name: '给管家发消息' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -1485,7 +1460,7 @@ test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126
   expect(pageErrors).toEqual([]);
 });
 
-test('消息待办可记录承诺对象，并直接投影到管家纸', async ({ page }) => {
+test('消息待办可记录承诺对象，并保留在确定性的待办界面', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
   await page.getByText('Welcome to General', { exact: true }).click({ button: 'right' });
@@ -1500,14 +1475,11 @@ test('消息待办可记录承诺对象，并直接投影到管家纸', async ({
   await page.getByRole('button', { name: '加入待办' }).click();
   const [saved] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
   expect(saved).toMatchObject({ committedTo: '张三' });
-  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await openLegacyButlerPaper(page);
-  await expect(page.getByRole('heading', { name: '我答应的', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: '待办' })).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
+  await expect(page.getByText('待办 · 1 项', { exact: true })).toBeVisible();
   await expect(page.getByText('Welcome to General', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('管家空状态')).toHaveCount(0);
-  await page.getByRole('button', { name: '完成待办：Welcome to General' }).click();
-  await expect(page.getByRole('region', { name: '待办' })).toHaveCount(0);
+  await page.getByRole('button', { name: '标记为完成' }).click();
+  await expect(page.getByText('待办 · 0 项', { exact: true })).toBeVisible();
   const [completed] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
   expect(completed).toMatchObject({ done: true, committedTo: '张三' });
   expect(pageErrors).toEqual([]);
@@ -1557,6 +1529,7 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
       auth: 'none',
       account: 'tester',
     }));
+    localStorage.setItem('rcx-ado-web', `${location.origin}/ado`);
   });
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -1663,39 +1636,15 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
-  await page
-    .getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: '对话', exact: true })
-    .click();
-  await expect(page.getByText('我是你的管家。消息、待办、日程、工作项都可以直接问我。')).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '在 Codex App 打开', exact: true })).toBeVisible();
-  expect(pageErrors).toEqual([]);
-});
-
-test('管家纸上输入先即席回答，进入完整对话再回纸仍保留上下文', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await openLegacyButlerPaper(page);
-  await page.getByRole('textbox', { name: '跟管家说件事' }).fill('记住这段桌面对话');
-  await page.getByRole('button', { name: '交给管家', exact: true }).click();
-  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
-
-  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
-  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await expect(
-    page.getByLabel('你说').getByText('记住这段桌面对话', { exact: true }),
-  ).toBeVisible();
-  await openLegacyButlerPaper(page);
-  await expect(page.getByRole('region', { name: '临时问答' })).toContainText('记住这段桌面对话');
-  await expect(page.getByRole('textbox', { name: '跟管家说件事' })).toBeVisible();
-  await page
-    .getByRole('navigation', { name: '管家工作视图' })
-    .getByRole('button', { name: '对话', exact: true })
+  await expect(page.getByRole('button', { name: '切换到 Codex App', exact: true })).toBeDisabled();
+  await page.getByRole('navigation', { name: 'Codex 工作区' })
+    .getByRole('button', { name: '已安排', exact: true })
     .click();
-  await expect(
-    page.getByLabel('你说').getByText('记住这段桌面对话', { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole('region', { name: '已安排', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在 Codex App 管理' })).toBeDisabled();
   expect(pageErrors).toEqual([]);
 });
 
@@ -1865,132 +1814,6 @@ test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局
   expect(pageErrors).toEqual([]);
 });
 
-test('共享 Agent 恢复失败会回到可重试状态，成功重试不重放旧 turn', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await conversation(page, 'General').click();
-  await page.evaluate(async ({ server, me }) => {
-    const deviceId = 'device-ui-resume';
-    const tmid = 'room:room-general';
-    localStorage.setItem('rcx-agent-device-id', deviceId);
-    const loadAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<{
-      setSharedAgentClientFactory: (
-        factory: (sessionId: string, workspaceRoot: string, options: Record<string, unknown>) => Promise<unknown>,
-      ) => () => void;
-      useSharedAgent: { setState: (state: Record<string, unknown>) => void };
-    }>;
-    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
-      useChat: { getState: () => { setPanel: (panel: Record<string, unknown>) => void } };
-    }>;
-    const { setSharedAgentClientFactory, useSharedAgent } = await loadAgent();
-    const { useChat } = await loadChat();
-    let attempts = 0;
-    const calls: string[] = [];
-    (window as Window & { __sharedAgentResume?: { attempts: number; calls: string[] } }).__sharedAgentResume = {
-      attempts,
-      calls,
-    };
-    setSharedAgentClientFactory(async () => ({
-      processInfo: { processId: 'ui-fake', version: '0.144.4', runtimeSource: 'system' },
-      request: async (method: string) => {
-        calls.push(method);
-        if (method === 'thread/resume') {
-          attempts += 1;
-          (window as Window & { __sharedAgentResume?: { attempts: number; calls: string[] } }).__sharedAgentResume = {
-            attempts,
-            calls,
-          };
-          if (attempts === 1) throw new Error('thread/resume UI 测试失败');
-          return { thread: { id: 'codex-thread-ui' } };
-        }
-        return {};
-      },
-      stop: async () => undefined,
-    }));
-    const now = Date.now();
-    useSharedAgent.setState({
-      sessions: {
-        [tmid]: {
-          sessionId: 'session-ui-resume',
-          serverId: server,
-          ownerUserId: me._id,
-          rid: 'room-general',
-          tmid,
-          host: {
-            userId: me._id,
-            deviceId,
-            heartbeatAt: now,
-            expiresAt: now + 90_000,
-          },
-          access: 'room-members',
-          approvedMemberIds: [],
-          status: 'interrupted',
-          codexThreadId: 'codex-thread-ui',
-          activeTurnId: 'stale-turn-ui',
-          workspaceRoots: ['D:/Repos/rocketchatx'],
-          sandboxMode: 'read-only',
-          updatedAt: now,
-        },
-        'room:other': {
-          sessionId: 'session-ui-other',
-          serverId: server,
-          ownerUserId: me._id,
-          rid: 'room-other',
-          tmid: 'room:other',
-          host: {
-            userId: me._id,
-            deviceId,
-            heartbeatAt: now,
-            expiresAt: now + 90_000,
-          },
-          access: 'room-members',
-          approvedMemberIds: [],
-          status: 'interrupted',
-          codexThreadId: 'codex-thread-other',
-          workspaceRoots: ['D:/Repos/other'],
-          sandboxMode: 'read-only',
-          updatedAt: now,
-        },
-      },
-      remoteCards: {},
-      traces: {},
-      approvals: [],
-      memberRequests: [],
-      error: null,
-    });
-    useChat.getState().setPanel({ kind: 'agent', tmid });
-  }, { server: SERVER, me: ME });
-
-  await expect(page.getByText('共享 Agent', { exact: true })).toBeVisible();
-  await expect(page.getByText('已中断', { exact: true }).first()).toBeVisible();
-  await page.getByRole('button', { name: '恢复', exact: true }).click();
-  await expect(page.getByText('thread/resume UI 测试失败', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '恢复', exact: true })).toBeVisible();
-  expect(await page.evaluate(async () => {
-    const loadAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<{
-      useSharedAgent: { getState: () => { sessions: Record<string, { status: string; lastError?: string }> } };
-    }>;
-    const { useSharedAgent } = await loadAgent();
-    const state = useSharedAgent.getState();
-    return {
-      target: state.sessions['room:room-general'],
-      other: {
-        status: state.sessions['room:other']?.status,
-        lastError: state.sessions['room:other']?.lastError ?? null,
-      },
-    };
-  })).toMatchObject({
-    target: { status: 'interrupted', lastError: 'thread/resume UI 测试失败' },
-    other: { status: 'interrupted', lastError: null },
-  });
-
-  await page.getByRole('button', { name: '恢复', exact: true }).click();
-  await expect(page.getByText('待命', { exact: true }).first()).toBeVisible();
-  expect(await page.evaluate(() => (
-    (window as Window & { __sharedAgentResume?: { attempts: number; calls: string[] } }).__sharedAgentResume
-  ))).toEqual({ attempts: 2, calls: ['thread/resume', 'thread/resume', 'thread/name/set'] });
-  expect(pageErrors).toEqual([]);
-});
-
 test('本地工作区归入工作区设置，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
@@ -2015,25 +1838,18 @@ test('本地工作区归入工作区设置，AI 设置只保留模型运行配�
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
 
-  // 基础设置直接可见：运行方式在最上面（报错提示会引导用户来这里切换大脑）
-  await expect(page.getByRole('heading', { name: 'AI 运行方式' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex' })).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
   await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
-  await expect(page.getByText(/系统 · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
-  await expect(page.getByText(/当前 Codex 高于已验证基线 0\.144\.4/)).toBeVisible();
-  await expect(page.getByText('候选下限 0.140.0 · 已验证基线 0.144.4', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveValue('auto');
+  await expect(page.getByText(/系统 Codex · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
   await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '本地工作区' })).not.toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
-  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
-  await page.getByText('高级 AI 设置', { exact: true }).click();
-  // 高级设置按保存方式分组：Provider/路由归「保存 AI 配置」，外部集成即时生效
-  await expect(page.getByRole('heading', { name: '模型 Provider' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '每项功能用哪个模型' })).toBeVisible();
-  await expect(page.getByText('保存上面的模型来源和分配', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
 
   await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
   await expect(page.getByRole('heading', { name: '本地工作区' })).toBeVisible();

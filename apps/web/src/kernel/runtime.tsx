@@ -1,6 +1,6 @@
 import { lazy, Suspense, type ComponentType } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
-import { Bell, Blocks, Download, TerminalSquare } from 'lucide-react';
+import { Bell, Blocks, Download } from 'lucide-react';
 import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -35,10 +35,10 @@ import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
 import { runtimeFeatures } from '../lib/runtimeMode';
-import { hydrateButlerArchive } from '../lib/butlerArchive';
 import { kernelStore } from './store';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
+import { handoffToCodexTask } from '../lib/codexTaskHandoff';
 
 export { kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -64,7 +64,6 @@ function lazyComponent(
 }
 
 const ButlerPage = lazyComponent(() => import('../pages/ButlerPage'));
-const CodexPage = lazyComponent(() => import('../pages/CodexPage'));
 const SummaryPanel = lazyComponent(() => import('../components/SummaryPanel'));
 const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
 const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
@@ -83,11 +82,6 @@ async function endSharedAgentSession(tmid: string): Promise<void> {
 async function runSharedAgentBridge(): Promise<void> {
   const { startSharedAgentBridge } = await import('../stores/sharedAgent');
   startSharedAgentBridge();
-}
-
-async function initializeAiFeatures(): Promise<void> {
-  const { initializeAiRuntime } = await import('./ai/runtime');
-  initializeAiRuntime(kernelStore);
 }
 
 function scopedAppId(appId: string): string {
@@ -508,10 +502,9 @@ function registerBuiltins(): void {
     ['todos', '待办', TodosPage, undefined],
     ['calendar', '日历', CalendarPage, undefined],
     ['contacts', '通讯录', ContactsPage, undefined],
-    ['codex', 'Codex', CodexPage, TerminalSquare],
   ] as const;
   for (const [id, label, render, icon] of modules) {
-    if ((id === 'butler-view' && !features.butler) || (id === 'codex' && !features.ai)) continue;
+    if (id === 'butler-view' && !features.butler) continue;
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
     if (id === 'calendar' && isTauri) {
       kernelRegistry.register('core', 'nav.module', {
@@ -562,10 +555,11 @@ function registerBuiltins(): void {
         // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
         if (context.tmid) return false;
         try {
-          const { runCodexTrigger } = await import('../lib/codexOnce');
-          await runCodexTrigger(context);
+          const prompt = context.text.replace(/^\$codex(?:\s+|$)/i, '').trim();
+          if (!prompt) throw new Error('$codex 后面需要写任务');
+          await handoffToCodexTask(prompt, '来自聊天的 Codex 任务');
         } catch (error) {
-          toast.error(error, 'Codex 执行失败');
+          toast.error(error, 'Codex 任务创建失败');
         }
       },
     });
@@ -620,7 +614,6 @@ export async function initializeKernel(): Promise<void> {
   if (initialized) return;
   initialized = true;
   if (runtimeFeatures().ai) {
-    await initializeAiFeatures();
   }
   setActiveAppManager(installedApps);
   registerCapabilities();
@@ -635,7 +628,7 @@ export async function initializeKernel(): Promise<void> {
   installedApps.setActivator(activateApp);
   bridgeHost.start();
   if (runtimeFeatures().routines) {
-    void hydrateButlerArchive().finally(startRoutineScheduler);
+    startRoutineScheduler();
   }
   void installedApps.hydrate(BUNDLED_APPS).catch((error) => toast.error(error, '加载扩展应用失败'));
 }

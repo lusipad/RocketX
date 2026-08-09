@@ -1,630 +1,671 @@
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   ArrowUpRight,
+  Bot,
+  Check,
   ChevronDown,
+  CircleAlert,
+  FolderOpen,
   Loader2,
+  PanelLeft,
+  RefreshCw,
   Send,
-  Share2,
   Square,
+  X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { useStore } from 'zustand';
-import type { RcMessage } from '@rcx/rc-client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { openCodexNewThread, openCodexThread } from '../agent/codexTransfer';
+import { isTauriRuntime } from '../lib/client';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
-import { useAuth } from '../stores/auth';
+import type { CodexHostInput } from '../agent/codexHostInput';
+import type { CodexImageInput } from '../lib/codexImages';
 import {
-  appendButlerLine,
-  butlerRecapAgoLabel,
-  butlerSessionRecap,
-  useButler,
-} from '../stores/butler';
-import {
-  BUTLER_BOUNDARY_NOTE,
-  BUTLER_SCENE_PROMPTS,
-  butlerSlashQuery,
-  filterButlerSlashOptions,
-} from '../lib/butlerPrompts';
-import { transferConversationToCodexApp } from '../stores/butlerCodex';
+  useCodexWorkspace,
+  type CodexFollowUpMode,
+  type CodexPendingRequest,
+  type CodexWorkspaceEvent,
+} from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
-import { useWorkbench } from '../stores/workbench';
-import ButlerSlashMenu, { useSlashMenu } from './ButlerSlashMenu';
-import ButlerProcess from './ButlerProcess';
-import ButlerSources from './ButlerSources';
-import ButlerConclusionActions from './ButlerConclusionActions';
 import ButlerConversationHistory from './ButlerConversationHistory';
-import ButlerErrandCard from './ButlerErrandCard';
-import ButlerErrandRunCard from './ButlerErrandRunCard';
-import { ButlerActionCard } from './ButlerActions';
-import ButlerImagePicker, {
-  ButlerImageAttachments,
-  ButlerImagePreviews,
-  pasteButlerImages,
-} from './ButlerImagePicker';
-import ButlerSessionSwitcher from './ButlerSessionSwitcher';
-import ButlerToolApprovals from './ButlerToolApprovals';
-import type { ButlerImageInput } from '../lib/butlerImages';
-import {
-  projectHostedConversation,
-  type HostedConversationLine,
-} from '../agent/hostedConversation';
-import {
-  loadSharedAgentConversationMessages,
-  useSharedAgent,
-} from '../stores/sharedAgent';
-import { useChat } from '../stores/chat';
-import { openButlerSource } from '../lib/butlerSourceNavigation';
-import ButlerSkillMenu, { useButlerSkillMenu } from './ButlerSkillMenu';
-import {
-  butlerEfficiency,
-  createExplicitButlerSkillDraft,
-  recordButlerConversationTurn,
-} from '../butler/extensions/learning/runtime';
-import { isButlerSkillDraftRequest } from '../butler/extensions/learning/conversationReceipt';
-import ButlerSkillDraftCard from './ButlerSkillDraftCard';
+import ButlerErrandInputCard from './ButlerErrandInputCard';
+import CodexImagePicker, {
+  CodexImageAttachments,
+  CodexImagePreviews,
+  pasteCodexImages,
+} from './CodexImagePicker';
 
-const RECAP_GAP_MS = 30 * 60 * 1000;
-
-function mergeMessages(
-  loaded: readonly RcMessage[] | undefined,
-  cached: readonly RcMessage[] | undefined,
-): RcMessage[] {
-  const messages = new Map<string, RcMessage>();
-  for (const message of loaded ?? []) messages.set(message._id, message);
-  for (const message of cached ?? []) messages.set(message._id, message);
-  return [...messages.values()];
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
-function routineDaysLabel(days?: number[]): string {
-  if (!days?.length) return '每天';
-  return days.map((day) => `周${'日一二三四五六'[day] ?? day}`).join('、');
+function approvalSummary(request: CodexPendingRequest): string {
+  const params = request.params;
+  if (typeof params.command === 'string') return params.command;
+  if (Array.isArray(params.command)) return params.command.filter((part) => typeof part === 'string').join(' ');
+  const changes = record(params.fileChanges);
+  if (Object.keys(changes).length > 0) return Object.keys(changes).join('\n');
+  const permissions = record(params.permissions ?? params.additionalPermissions);
+  if (Object.keys(permissions).length > 0) return JSON.stringify(permissions, null, 2);
+  if (typeof params.reason === 'string') return params.reason;
+  return request.method;
 }
 
-export default function ButlerConversation({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
-  const userId = useAuth((state) => state.user?._id);
-  const config = useWorkbench((state) => state.config);
-  const lastRefresh = useWorkbench((state) => state.lastRefresh);
-  const refreshWorkbench = useWorkbench((state) => state.refresh);
-  const lines = useButler((state) => state.lines);
-  const activity = useButler((state) => state.activity);
-  const running = useButler((state) => state.running);
-  const butlerError = useButler((state) => state.error);
-  const steps = useButler((state) => state.steps);
-  const askButler = useButler((state) => state.ask);
-  const stopButler = useButler((state) => state.stop);
-  const routineDraft = useButler((state) => state.routineDraft);
-  const errandDraft = useButler((state) => state.errandDraft);
-  const errands = useButler((state) => state.errands);
-  const runtimeCheckpoints = useButler((state) => state.runtimeCheckpoints);
-  const actionDraft = useButler((state) => state.actionDraft);
-  const confirmRoutineDraft = useButler((state) => state.confirmRoutineDraft);
-  const dismissRoutineDraft = useButler((state) => state.dismissRoutineDraft);
-  const hydrateButler = useButler((state) => state.hydrate);
-  const context = useButler((state) => state.context);
-  const sharedAgentSessions = useSharedAgent((state) => state.sessions);
-  const restoreSharedAgent = useSharedAgent((state) => state.restore);
-  const roomMessages = useChat((state) => state.messages);
-  const rooms = useChat((state) => state.rooms);
-  const subscriptions = useChat((state) => state.subscriptions);
-  const [input, setInput] = useState('');
-  const [images, setImages] = useState<ButlerImageInput[]>([]);
-  const [transferring, setTransferring] = useState(false);
-  const [loadedHostedMessages, setLoadedHostedMessages] = useState<Record<string, RcMessage[]>>({});
-  const [selectedHostedId, setSelectedHostedId] = useState<string | null>(null);
-  const skillMenu = useButlerSkillMenu(input, setInput);
-  // 打 / 唤起能力菜单：选中只填输入框不发送（例句里的人名编号是占位符）
-  const slashQuery = butlerSlashQuery(input);
-  const slashOptions = useMemo(
-    () => (slashQuery === null ? [] : filterButlerSlashOptions(slashQuery)),
-    [slashQuery],
-  );
-  const slash = useSlashMenu(slashOptions);
-  const pickSlashOption = (option: { prompt: string }): void => {
-    setInput(option.prompt);
-    slash.dismiss();
-  };
-  const sessions = useButler((state) => state.sessions);
-  const activeSessionId = useButler((state) => state.activeSessionId);
-  const efficiencyState = useStore(butlerEfficiency.store);
-  const skillDraftsByLineId = useMemo(() => {
-    const statuses = new Map(
-      efficiencyState.proposals.map((proposal) => [proposal.id, proposal.status]),
-    );
-    const entries = efficiencyState.drafts.flatMap((draft) => {
-      if (draft.source.sessionId !== activeSessionId) return [];
-      if (draft.conversationHidden) return [];
-      if (draft.proposalId && !['suggested', 'dry-run'].includes(statuses.get(draft.proposalId) ?? '')) {
-        return [];
-      }
-      const anchor = draft.source.lineIds.at(-1);
-      return anchor ? [[anchor, draft] as const] : [];
-    });
-    return new Map(entries);
-  }, [activeSessionId, efficiencyState.drafts, efficiencyState.proposals]);
-  const activeSummary = sessions.find((session) => session.id === activeSessionId);
-  const sharedSessionKeys = Object.keys(sharedAgentSessions).sort().join('\n');
-  const hostedConversations = useMemo(
-    () =>
-      Object.values(sharedAgentSessions)
-        .map((session) => {
-          const room = subscriptions[session.rid] ?? rooms[session.rid];
-          const roomName = room?.fname || room?.name || session.workItem?.title || '房间';
-          return projectHostedConversation(
-            session,
-            roomName,
-            mergeMessages(loadedHostedMessages[session.tmid], roomMessages[session.rid]),
-          );
-        })
-        .filter((conversation) => conversation !== null)
-        .sort((left, right) => right.updatedAt - left.updatedAt),
-    [loadedHostedMessages, roomMessages, rooms, sharedAgentSessions, subscriptions],
-  );
-  const selectedHosted = hostedConversations.find(
-    (conversation) => conversation.id === selectedHostedId,
-  );
-  const visibleLines = selectedHosted?.lines ?? lines;
-  const hasConversation = visibleLines.some((item) => item.role === 'user');
-  // 锚定在「进入这个会话时」：updatedAt 走 500ms 防抖落盘，而 lines 是实时的，
-  // 不锚就会把用户刚发出的那句话当成「3 天前你问的」显示出来。本轮一有新提问就撤卡。
-  const askCount = lines.reduce((count, item) => count + (item.role === 'user' ? 1 : 0), 0);
-  const [recapAnchor, setRecapAnchor] = useState<{ sessionId: string; askCount: number } | null>(null);
-  if (recapAnchor?.sessionId !== activeSessionId) setRecapAnchor({ sessionId: activeSessionId, askCount });
-  const recap = !selectedHosted
-    && hasConversation
-    && activeSummary
-    && recapAnchor?.sessionId === activeSessionId
-    && recapAnchor.askCount === askCount
-    && Date.now() - activeSummary.updatedAt > RECAP_GAP_MS
-    ? butlerSessionRecap(lines)
-    : null;
-  const routineCheckpoint = routineDraft
-    ? runtimeCheckpoints.find((item) => item.id === routineDraft.checkpointId)
-    : undefined;
-
-  const transferToCodex = async () => {
-    setTransferring(true);
+function ApprovalCard({ request }: { request: CodexPendingRequest }) {
+  const resolve = useCodexWorkspace((state) => state.resolveRequest);
+  const decide = (action: 'accept' | 'accept-session' | 'decline'): void => {
     try {
-      const result = await transferConversationToCodexApp(
-        selectedHosted
-          ? selectedHosted.lines.map((line) => ({
-              role: line.role,
-              text: line.role === 'user' ? `${line.speaker}：${line.text}` : line.text,
-            }))
-          : lines.map(({ role, text }) => ({ role, text })),
-      );
-      if (result === 'unavailable') throw new Error('无法打开 Codex App，也无法复制对话记录');
-      toast.success(
-        result === 'opened'
-          ? '已打开 Codex App，完整记录已填入，请确认后发送'
-          : result === 'opened-with-copy'
-            ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
-            : 'Codex App 打开失败，完整记录已复制',
-      );
-    } catch (error) {
-      toast.error(error, '在 Codex App 打开失败');
-    } finally {
-      setTransferring(false);
+      resolve(request.id, { action });
+    } catch (reason) {
+      toast.error(reason, '无法提交审批');
     }
   };
+  return (
+    <section className="codex-native-request" aria-label="Codex 请求审批">
+      <header>
+        <CircleAlert size={15} aria-hidden="true" />
+        <strong>Codex 请求执行操作</strong>
+      </header>
+      <pre>{approvalSummary(request)}</pre>
+      <footer>
+        <button type="button" onClick={() => decide('decline')}>拒绝</button>
+        <button type="button" onClick={() => decide('accept-session')}>本次任务允许</button>
+        <button type="button" className="is-primary" onClick={() => decide('accept')}>允许一次</button>
+      </footer>
+    </section>
+  );
+}
 
-  useEffect(() => {
-    if (!userId) return;
-    void hydrateButler();
-    void restoreSharedAgent();
-  }, [hydrateButler, restoreSharedAgent, userId]);
+function InputCard({ request }: { request: CodexPendingRequest }) {
+  const resolve = useCodexWorkspace((state) => state.resolveRequest);
+  const input: CodexHostInput = {
+    id: request.id,
+    method: request.method as CodexHostInput['method'],
+    policy: 'host-input',
+    params: request.params,
+    at: Date.now(),
+  };
+  return (
+    <ButlerErrandInputCard
+      input={input}
+      onResolve={(response) => {
+        if ('answers' in response) {
+          const values = Object.fromEntries(Object.entries(response.answers).map(([key, answer]) => [
+            key,
+            answer?.answers ?? [],
+          ]));
+          resolve(request.id, { action: 'accept', values });
+          return;
+        }
+        resolve(request.id, {
+          action: response.action,
+          values: record(response.content),
+        });
+      }}
+    />
+  );
+}
 
-  useEffect(() => {
-    setLoadedHostedMessages({});
-    setSelectedHostedId(null);
-  }, [userId]);
+interface ComposerChoice {
+  id: string;
+  label: string;
+  description?: string;
+}
 
+function ComposerMenu({
+  ariaLabel,
+  label,
+  value,
+  choices,
+  disabled,
+  onChange,
+}: {
+  ariaLabel: string;
+  label: string;
+  value: string;
+  choices: readonly ComposerChoice[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
-    if (!sharedSessionKeys) return;
-    let cancelled = false;
-    void Promise.all(
-      sharedSessionKeys
-        .split('\n')
-        .map(async (sessionKey) => [
-          sessionKey,
-          await loadSharedAgentConversationMessages(sessionKey),
-        ] as const),
-    ).then((entries) => {
-      if (cancelled) return;
-      setLoadedHostedMessages((current) => ({
-        ...current,
-        ...Object.fromEntries(entries),
-      }));
-    });
-    return () => {
-      cancelled = true;
+    const close = (event: PointerEvent) => {
+      if (!detailsRef.current?.contains(event.target as Node)) detailsRef.current?.removeAttribute('open');
     };
-  }, [sharedSessionKeys, userId]);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') detailsRef.current?.removeAttribute('open');
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, []);
 
-  // 漏一个就等于那张卡不存在：它渲染在消息之后，不触发自动滚动就永远在视口下方。
-  // 真机上「从桌面页派活」因此整条链路静默失败——卡片在，只是没人看得见。
+  return (
+    <details ref={detailsRef} className="codex-native-menu">
+      <summary
+        aria-label={ariaLabel}
+        aria-disabled={disabled}
+        onClick={(event) => {
+          if (disabled) event.preventDefault();
+        }}
+      >
+        <span>{label}</span>
+        <ChevronDown size={12} aria-hidden="true" />
+      </summary>
+      <div role="menu" aria-label={`${ariaLabel}选项`}>
+        {choices.map((choice) => (
+          <button
+            key={choice.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={choice.id === value}
+            onClick={() => {
+              detailsRef.current?.removeAttribute('open');
+              onChange(choice.id);
+            }}
+          >
+            <span>{choice.label}{choice.id === value ? <Check size={13} aria-hidden="true" /> : null}</span>
+            {choice.description ? <small>{choice.description}</small> : null}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function Activity({ event }: { event: CodexWorkspaceEvent }) {
+  const statusIcon = event.status === 'running'
+    ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+    : event.status === 'failed'
+      ? <X size={13} aria-hidden="true" />
+      : <Check size={13} aria-hidden="true" />;
+  const heading = (
+    <>
+      {statusIcon}
+      <span>
+        <strong>{event.title}</strong>
+        {event.summary ? <small>{event.summary}</small> : null}
+      </span>
+      {event.detail ? <ChevronDown size={13} aria-hidden="true" /> : null}
+    </>
+  );
+  return event.detail ? (
+    <details className="codex-native-activity" data-status={event.status}>
+      <summary>{heading}</summary>
+      <pre>{event.detail}</pre>
+    </details>
+  ) : (
+    <div className="codex-native-activity" data-status={event.status}>{heading}</div>
+  );
+}
+
+const PERMISSION_CHOICES: readonly ComposerChoice[] = [
+  {
+    id: 'ask',
+    label: '询问审批',
+    description: '修改工作区外文件或使用网络时总是询问',
+  },
+  {
+    id: 'auto',
+    label: '替我审批',
+    description: '只在检测到潜在危险时询问',
+  },
+  {
+    id: 'full',
+    label: '完全访问',
+    description: '可访问网络与电脑上的任意文件',
+  },
+];
+
+const FOLLOW_UP_CHOICES: readonly ComposerChoice[] = [
+  { id: 'steer', label: '立即调整', description: '将消息加入当前任务' },
+  { id: 'queue', label: '排队', description: '当前任务完成后发送' },
+];
+
+function effortLabel(effort: string): string {
+  return ({ low: '低', medium: '中', high: '高', xhigh: '超高' } as Record<string, string>)[effort] ?? effort;
+}
+
+export default function ButlerConversation({ embedded = false }: { embedded?: boolean }) {
+  const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const status = useCodexWorkspace((state) => state.status);
+  const error = useCodexWorkspace((state) => state.error);
+  const threads = useCodexWorkspace((state) => state.threads);
+  const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
+  const messages = useCodexWorkspace((state) => state.messages);
+  const streamingText = useCodexWorkspace((state) => state.streamingText);
+  const events = useCodexWorkspace((state) => state.events);
+  const requests = useCodexWorkspace((state) => state.pendingRequests);
+  const queuedMessages = useCodexWorkspace((state) => state.queuedMessages);
+  const composerDraft = useCodexWorkspace((state) => state.composerDraft);
+  const models = useCodexWorkspace((state) => state.models);
+  const selectedModel = useCodexWorkspace((state) => state.selectedModel);
+  const selectedEffort = useCodexWorkspace((state) => state.selectedEffort);
+  const permissionPreset = useCodexWorkspace((state) => state.permissionPreset);
+  const followUpMode = useCodexWorkspace((state) => state.followUpMode);
+  const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
+  const connect = useCodexWorkspace((state) => state.connect);
+  const refreshFromCodex = useCodexWorkspace((state) => state.refreshFromCodex);
+  const send = useCodexWorkspace((state) => state.send);
+  const interrupt = useCodexWorkspace((state) => state.interrupt);
+  const setModel = useCodexWorkspace((state) => state.setModel);
+  const setEffort = useCodexWorkspace((state) => state.setEffort);
+  const setPermissionPreset = useCodexWorkspace((state) => state.setPermissionPreset);
+  const setFollowUpMode = useCodexWorkspace((state) => state.setFollowUpMode);
+  const clearComposerDraft = useCodexWorkspace((state) => state.clearComposerDraft);
+  const [input, setInput] = useState('');
+  const [images, setImages] = useState<CodexImageInput[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [refreshingFromCodex, setRefreshingFromCodex] = useState(false);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const historyCloseRef = useRef<HTMLButtonElement>(null);
+  const historyPanelRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
+  const running = status === 'running' || status === 'waiting-input';
+  const activityStatus = running
+    ? '正在工作'
+    : status === 'interrupted' || error === 'Codex 本轮已中断'
+      ? '已中断'
+      : events.some((event) => event.status === 'failed')
+        ? '未完成'
+        : '已完成';
+  const desktopRuntime = isTauriRuntime();
+  const canCompose = desktopRuntime
+    && Boolean(workspaceRoot)
+    && !['idle', 'connecting', 'interrupted', 'unavailable'].includes(status);
+  const title = activeThread?.name?.trim() || activeThread?.preview.trim() || '新任务';
+  const modelChoices = useMemo<ComposerChoice[]>(() => models.map((model) => ({
+    id: model.model,
+    label: model.displayName,
+    description: model.description,
+  })), [models]);
+  const effortChoices = useMemo<ComposerChoice[]>(() => (
+    activeModel?.supportedReasoningEfforts.map((effort) => ({
+      id: effort.reasoningEffort,
+      label: effortLabel(effort.reasoningEffort),
+      description: effort.description,
+    })) ?? []
+  ), [activeModel]);
+  const permissionLabel = PERMISSION_CHOICES.find((choice) => choice.id === permissionPreset)?.label ?? '权限';
+
+  const closeHistory = useCallback((): void => {
+    setHistoryOpen(false);
+    requestAnimationFrame(() => historyButtonRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    requestAnimationFrame(() => historyCloseRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeHistory();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const panel = historyPanelRef.current;
+      if (!panel) return;
+      const focusable = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')]
+        .filter((item) => item.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [closeHistory, historyOpen]);
+
+  useEffect(() => {
+    if (!composerDraft) return;
+    setInput(composerDraft);
+    clearComposerDraft();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [clearComposerDraft, composerDraft]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = '0px';
+    textarea.style.height = `${Math.min(180, Math.max(24, textarea.scrollHeight))}px`;
+  }, [images, input]);
+
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
-    visibleLines,
-    activity,
-    butlerError,
-    routineDraft,
-    errandDraft,
-    errands,
-    runtimeCheckpoints,
-    actionDraft,
-    steps,
-    efficiencyState.drafts,
-    efficiencyState.proposals,
-    selectedHostedId,
+    messages,
+    streamingText,
+    events,
+    requests,
+    queuedMessages,
   ]);
 
-  useEffect(() => {
-    if (config && !lastRefresh) void refreshWorkbench();
-  }, [config, lastRefresh, refreshWorkbench]);
+  const chooseWorkspace = async (): Promise<void> => {
+    if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
+    const path = await open({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+    if (typeof path !== 'string') return;
+    await setWorkspaceRoot(path);
+    await connect();
+  };
 
-  const submit = async (text = input) => {
+  const submit = async (text = input, modeOverride?: CodexFollowUpMode): Promise<void> => {
     const value = text.trim();
-    if ((!value && !images.length) || running) return;
-    const before = useButler.getState();
-    const start = before.lines.length;
-    const submittedImages = images;
+    if (!value && images.length === 0) return;
+    const outgoingImages = images;
     setInput('');
     setImages([]);
     stickToBottom.current = true;
-    if (
-      submittedImages.length === 0
-      && isButlerSkillDraftRequest(value)
-      && before.taskState?.status === 'completed'
-    ) {
-      const sourceLineIds = before.lines.slice(-2).map((line) => line.id);
-      appendButlerLine('user', value);
-      appendButlerLine('assistant', '我已经把刚才的做法整理成草稿。先看一遍，确认后才会保存到技能中心。');
-      const current = useButler.getState();
-      createExplicitButlerSkillDraft({
-        task: before.taskState,
-        sessionId: before.activeSessionId,
-        lineIds: [...sourceLineIds, ...current.lines.slice(start).map((line) => line.id)],
-        steps: before.steps,
-      });
-      return;
-    }
     try {
-      await askButler(value, undefined, submittedImages);
-    } finally {
-      const current = useButler.getState();
-      recordButlerConversationTurn({
-        task: current.taskState,
-        surface: 'conversation',
-        sessionId: current.activeSessionId,
-        lineIds: current.lines.slice(start).map((line) => line.id),
-        steps: current.steps,
-      });
+      await send(value, outgoingImages, modeOverride);
+    } catch (reason) {
+      setInput(value);
+      setImages(outgoingImages);
+      toast.error(reason, '任务没有发出');
     }
   };
 
-  const renderHostedLine = (line: HostedConversationLine) => {
-    const mine = line.role === 'user';
-    return (
-      <article
-        key={line.id}
-        data-speaker={line.role}
-        aria-label={`${line.speaker}说`}
-        className={`flex pb-3 ${mine ? 'justify-end' : 'justify-start'}`}
-      >
-        <div
-          className={`flex min-w-0 flex-col ${
-            mine ? 'max-w-[82%] items-end sm:max-w-[68%]' : 'max-w-[88%] items-start sm:max-w-[82%]'
-          }`}
-        >
-          <div className="mb-1 text-[11px] font-medium text-ink-3">{line.speaker}</div>
-          <div
-            className={`min-w-0 break-words rounded-lg px-3 py-2 text-sm leading-7 text-ink ${
-              mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
-            }`}
-          >
-            {line.role === 'assistant' ? (
-              <ButlerSources
-                sources={[{
-                  kind: 'room',
-                  id: selectedHosted?.rid ?? '',
-                  rid: selectedHosted?.rid,
-                  label: selectedHosted?.roomName ?? '房间',
-                }]}
-                text={line.text}
-              >
-                {(renderLink) => (
-                  <div className="butler-conversation-markdown">
-                    {renderMarkdown(line.text, undefined, renderLink)}
-                  </div>
-                )}
-              </ButlerSources>
-            ) : line.text}
-          </div>
-        </div>
-      </article>
-    );
+  const openInCodex = async (): Promise<void> => {
+    const result = activeThreadId
+      ? await openCodexThread(activeThreadId)
+      : workspaceRoot
+        ? await openCodexNewThread('', workspaceRoot)
+        : 'unavailable';
+    if (result === 'unavailable') toast.error('无法打开 Codex App');
   };
+
+  const refreshCodexThread = async (): Promise<void> => {
+    if (refreshingFromCodex) return;
+    setRefreshingFromCodex(true);
+    try {
+      const added = await refreshFromCodex();
+      toast.success(added > 0
+        ? `已从 Codex 同步 ${added} 个新步骤`
+        : 'Codex 内容已是最新');
+    } catch (reason) {
+      toast.error(reason, '无法从 Codex 刷新');
+    } finally {
+      setRefreshingFromCodex(false);
+    }
+  };
+
+  const suggestions = useMemo(() => [
+    '梳理这个工作区目前最需要处理的问题',
+    '查看当前改动，并给出下一步建议',
+    '帮我定位最近一次失败的原因',
+  ], []);
 
   return (
-    <div className={`butler-conversation-layout ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
-      <ButlerConversationHistory
-        hostedConversations={hostedConversations}
-        selectedHostedId={selectedHostedId}
-        onSelectHosted={setSelectedHostedId}
-        onSelectButler={() => setSelectedHostedId(null)}
-        onNewConversation={() => setSelectedHostedId(null)}
-      />
-      <div className="butler-conversation-pane">
+    <div className={`butler-conversation-layout codex-native-workspace ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
+      <ButlerConversationHistory />
+      {historyOpen ? (
+        <div className="butler-conversation-mobile-drawer">
+          <button type="button" tabIndex={-1} aria-label="关闭任务列表" className="butler-conversation-mobile-backdrop" onClick={closeHistory} />
+          <div ref={historyPanelRef} role="dialog" aria-modal="true" aria-label="任务列表" className="butler-conversation-mobile-panel">
+            <button ref={historyCloseRef} type="button" aria-label="关闭任务列表" className="butler-conversation-mobile-close" onClick={closeHistory}>
+              <X size={17} aria-hidden="true" />
+            </button>
+            <div className="h-full" onClickCapture={(event) => {
+              if ((event.target as HTMLElement).closest('button')) closeHistory();
+            }}>
+              <ButlerConversationHistory onNavigate={closeHistory} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <section className="butler-conversation-pane" aria-label="Codex 任务">
         <header className="butler-conversation-header">
           <div className="min-w-0">
-            <span>{selectedHosted ? 'AI 托管记录' : '私人工作代理'}</span>
-            <h2>{selectedHosted?.title || activeSummary?.title || '新对话'}</h2>
-            <p>
-              {selectedHosted
-                ? `来自「${selectedHosted.roomName}」的只读记录`
-                : context
-                  ? `当前工作面：${context.label}`
-                  : '先回答、整理或起草；只有明确委托时，才会启动可暂停的执行任务。'}
-            </p>
+            <span>{workspaceRoot ? workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) : 'Codex'}</span>
+            <h2>{title}</h2>
+            {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot}</p> : null}
           </div>
           <div className="butler-conversation-header-actions">
-            <div className="butler-conversation-mobile-switcher">
-              <ButlerSessionSwitcher
-                compact
-                hostedConversations={hostedConversations}
-                selectedHostedId={selectedHostedId}
-                onSelectHosted={setSelectedHostedId}
-                onSelectButler={() => setSelectedHostedId(null)}
-                onNewConversation={() => setSelectedHostedId(null)}
-              />
-            </div>
-            <div className="butler-conversation-session-actions">
-              <ButlerSessionSwitcher
-                compact
-                actionsOnly
-                selectedHostedId={selectedHostedId}
-              />
-            </div>
+            <button
+              ref={historyButtonRef}
+              type="button"
+              aria-label="打开任务列表"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen(true)}
+              className="butler-conversation-mobile-switcher"
+            >
+              <PanelLeft size={15} aria-hidden="true" />
+              任务
+            </button>
+            {activeThreadId ? (
+              <button
+                type="button"
+                aria-label="从 Codex 刷新"
+                title={running ? '任务运行中，完成后再刷新' : '重新连接并读取 Codex App 中的最新内容'}
+                disabled={!desktopRuntime || running || status === 'connecting' || refreshingFromCodex}
+                onClick={() => void refreshCodexThread()}
+                className="codex-native-refresh"
+              >
+                {refreshingFromCodex
+                  ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  : <RefreshCw size={14} aria-hidden="true" />}
+                {refreshingFromCodex ? '刷新中' : '从 Codex 刷新'}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => void transferToCodex()}
-              disabled={(!selectedHosted && running) || transferring || !hasConversation}
-              aria-label="在 Codex App 打开"
-              title="在 Codex App 打开新对话并填好当前完整记录，由你按回车发出"
-              className="flex h-8 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:opacity-40"
+              disabled={!desktopRuntime || running || status === 'connecting'}
+              onClick={() => void openInCodex()}
+              className="codex-native-open-app"
             >
-              {transferring ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Share2 size={13} />}
-              Codex
+              <ArrowUpRight size={14} aria-hidden="true" />
+              在 Codex 中打开
             </button>
           </div>
         </header>
 
-        {!selectedHosted && errands.some((errand) => !errand.archivedAt) ? (
-          <details className="group shrink-0 border-b border-line/70 px-6">
-            <summary className="mx-auto flex max-w-[840px] cursor-pointer list-none items-center justify-between py-2 text-xs text-ink-3 hover:text-ink">
-              <span>{errands.filter((errand) => !errand.archivedAt).length} 件在办</span>
-              <ChevronDown
-                size={13}
-                className="transition-transform motion-reduce:transition-none group-open:rotate-180"
-              />
-            </summary>
-            <div className="mx-auto max-h-[36vh] max-w-[840px] overflow-y-auto pb-4">
-              <ButlerErrandRunCard />
+        <main ref={scrollRef} onScroll={onScroll} className="codex-native-transcript">
+          {!desktopRuntime ? (
+            <div className="codex-native-landing">
+              <span><Bot size={24} aria-hidden="true" /></span>
+              <h1>网页版没有本地 Codex 执行面</h1>
+              <p>消息、工作台和确定性功能仍可使用；运行 Codex 任务、Skills、Memory 和审批请打开 RocketX 桌面端。</p>
             </div>
-          </details>
-        ) : null}
-
-        <main ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          <div className="mx-auto min-h-full w-full max-w-[840px] space-y-5">
-          {recap && activeSummary ? (
-            <div className="sticky top-0 z-10 border-l border-primary/45 bg-surface py-1 pl-4 text-xs leading-5 text-ink-2">
-              <span className="font-medium text-ink">上回说到</span>
-              （{butlerRecapAgoLabel(activeSummary.updatedAt)}）：你问「{recap.lastAsk}」
-              {recap.lastReply ? <>，我答到「{recap.lastReply}」</> : null}。接着说就能继续。
+          ) : !workspaceRoot ? (
+            <div className="codex-native-landing">
+              <span><FolderOpen size={24} aria-hidden="true" /></span>
+              <h1>选择一个工作区</h1>
+              <p>Codex 会在这里读取代码、运行工具并维护任务记忆。</p>
+              <button type="button" onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法打开工作区'))}>
+                <FolderOpen size={15} aria-hidden="true" />
+                选择文件夹
+              </button>
             </div>
-          ) : null}
-          {!selectedHosted && !hasConversation && (
-            <details className="group text-xs text-ink-3">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 hover:text-ink">
-                可以这样问
-                <ChevronDown
-                  size={13}
-                  className="transition-transform motion-reduce:transition-none group-open:rotate-180"
-                />
-              </summary>
-              <div className="mt-2 flex flex-col items-start gap-1">
-                {BUTLER_SCENE_PROMPTS.map((item) => (
-                  <button
-                    key={item.scene}
-                    type="button"
-                    onClick={() => setInput(item.prompt)}
-                    className="py-1 text-left text-xs text-ink-2 hover:text-ink"
-                  >
-                    <span className="mr-2 text-ink-3">{item.scene}</span>
-                    {item.prompt}
-                  </button>
-                ))}
-                <div className="mt-2 border-t border-line pt-2 text-xs text-ink-3">{BUTLER_BOUNDARY_NOTE}</div>
+          ) : status === 'connecting' || status === 'idle' ? (
+            <div className="codex-native-landing">
+              <Loader2 size={24} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              <h1>正在连接 Codex</h1>
+              <p>正在读取模型、权限、插件和任务。</p>
+            </div>
+          ) : status === 'unavailable' ? (
+            <div className="codex-native-landing is-error">
+              <CircleAlert size={24} aria-hidden="true" />
+              <h1>Codex Runtime 不可用</h1>
+              <p>{error || '当前运行时缺少必需能力，请升级 Codex 后重试。'}</p>
+              <div>
+                <button type="button" onClick={() => void connect().catch(() => undefined)}>重试</button>
+                <button type="button" onClick={() => void chooseWorkspace().catch(() => undefined)}>更换工作区</button>
               </div>
-            </details>
-          )}
-          {/* 过程显示在它产出的那条回答上方(issue #99):
-              最后一行是 assistant 时,步骤插在它前面——先看做了什么,再看结论 */}
-          {selectedHosted ? selectedHosted.lines.map(renderHostedLine) : (() => {
-            const splitAt =
-              lines.length > 0 && lines[lines.length - 1].role === 'assistant'
-                ? lines.length - 1
-                : lines.length;
-            const renderLine = (line: (typeof lines)[number]) => {
-              const mine = line.role === 'user';
-              const skillDraft = skillDraftsByLineId.get(line.id);
-              return (
-                <article
-                  key={line.id}
-                  data-speaker={line.role}
-                  aria-label={mine ? '你说' : '管家说'}
-                  className={`flex pb-3 ${mine ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`flex min-w-0 flex-col ${
-                      mine ? 'max-w-[82%] items-end sm:max-w-[68%]' : 'max-w-[88%] items-start sm:max-w-[82%]'
-                    }`}
+            </div>
+          ) : !activeThreadId && messages.length === 0 ? (
+            <div className="codex-native-landing">
+              <span><Bot size={24} aria-hidden="true" /></span>
+              <h1>从一个任务开始</h1>
+              <p>描述结果即可。Codex 会选择合适的 Skill、工具和步骤。</p>
+              <div className="codex-native-suggestions">
+                {suggestions.map((suggestion) => (
+                  <button key={suggestion} type="button" onClick={() => void submit(suggestion)}>{suggestion}</button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="codex-native-transcript-inner">
+              {status === 'interrupted' ? (
+                <section className="codex-native-interruption" role="alert" aria-label="Codex 本轮已中断">
+                  <div>
+                    <h2>Codex 本轮已中断</h2>
+                    <p>{error || '本地 Codex Runtime 已退出。已保留收到的部分结果。'}</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={refreshingFromCodex}
+                    onClick={() => void refreshCodexThread()}
                   >
-                    <div className="mb-1 text-[11px] font-medium text-ink-3">
-                      {mine ? '你' : '管家'}
-                    </div>
-                    <div
-                      className={`min-w-0 break-words rounded-lg px-3 py-2 text-sm leading-7 text-ink ${
-                        mine ? 'rounded-tr-sm bg-bubble-mine' : 'rounded-tl-sm bg-bubble-other/60'
-                      }`}
-                    >
-                      {line.role === 'assistant' ? (
-                        <ButlerSources sources={line.sources} text={line.text}>
-                          {(renderLink) => line.text.startsWith('📌')
-                            ? line.text
-                            : (
-                                <div className="butler-conversation-markdown">
-                                  {renderMarkdown(line.text, undefined, renderLink)}
-                                </div>
-                              )}
-                        </ButlerSources>
-                      ) : line.text}
-                      {line.role === 'user' ? <ButlerImageAttachments attachments={line.attachments} /> : null}
-                      {line.role === 'assistant' ? <ButlerConclusionActions line={line} disabled={running} /> : null}
-                    </div>
-                    {line.role === 'assistant' && skillDraft ? (
-                      <ButlerSkillDraftCard draft={skillDraft} />
-                    ) : null}
+                    {refreshingFromCodex
+                      ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                      : <RefreshCw size={14} aria-hidden="true" />}
+                    {refreshingFromCodex ? '刷新中' : '从 Codex 刷新'}
+                  </button>
+                </section>
+              ) : null}
+              {messages.map((entry) => (
+                <article key={entry.id} data-speaker={entry.role} className="codex-native-message">
+                  <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
+                  <div className="butler-conversation-markdown">
+                    {entry.text ? (entry.role === 'assistant' ? renderMarkdown(entry.text) : entry.text) : null}
+                    <CodexImageAttachments attachments={entry.attachments} />
                   </div>
                 </article>
-              );
-            };
-            return (
-              <>
-                {lines.slice(0, splitAt).map(renderLine)}
-                <ButlerProcess steps={steps} running={running} className="border-l-2 border-primary/35 pl-4" />
-                {lines.slice(splitAt).map(renderLine)}
-              </>
-            );
-          })()}
-          {!selectedHosted && butlerError ? (
-            <div className="border-l border-danger pl-4 text-sm text-danger">{butlerError}</div>
-          ) : null}
-          {!selectedHosted && activity ? (
-            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />{activity}</div>
-          ) : !selectedHosted && running ? (
-            <div className="flex items-center gap-2 text-sm text-ink-3"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />正在处理请求…</div>
-          ) : null}
+              ))}
 
-          {!selectedHosted ? <ButlerToolApprovals /> : null}
-
-          {!selectedHosted && routineDraft ? (
-            <div className="border-l border-primary/45 pl-4">
-              <div className="text-xs font-medium text-primary">定时任务草案</div>
-              <div className="mt-2 font-medium text-ink">{routineDraft.name}</div>
-              <div className="mt-1 text-sm text-ink-2">{routineDraft.time} · {routineDaysLabel(routineDraft.days)} · 技能：{routineDraft.skillName}</div>
-              {routineCheckpoint?.error ? (
-                <div className="mt-1 text-xs text-danger">{routineCheckpoint.error.message}</div>
+              {events.length > 0 ? (
+                <section className="codex-native-activities" aria-label="任务过程">
+                  <header>
+                    <span>{activityStatus}</span>
+                    <small>{events.length} 项活动</small>
+                  </header>
+                  <div>
+                    {events.map((event) => <Activity key={event.id} event={event} />)}
+                  </div>
+                </section>
               ) : null}
-              <div className="mt-3 flex items-center justify-end gap-2">
-                <button type="button" onClick={() => void dismissRoutineDraft()} className="h-7 rounded px-2 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink">取消</button>
-                <button type="button" onClick={() => void confirmRoutineDraft()} className="h-7 rounded bg-primary px-2.5 text-xs text-white hover:bg-primary-hover">确认启用</button>
-              </div>
+
+              {requests.map((request) => request.kind === 'approval'
+                ? <ApprovalCard key={request.id} request={request} />
+                : <InputCard key={request.id} request={request} />)}
+
+              {streamingText ? (
+                <article data-speaker="assistant" className="codex-native-message is-streaming">
+                  <span>Codex</span>
+                  <div className="butler-conversation-markdown">{renderMarkdown(streamingText)}</div>
+                </article>
+              ) : null}
+
+              {queuedMessages.length > 0 ? (
+                <div className="codex-native-queue">
+                  <strong>已排队 {queuedMessages.length} 条</strong>
+                  {queuedMessages.map((entry) => (
+                    <span key={entry.id}>{entry.text || `${entry.images.length} 张图片`}</span>
+                  ))}
+                </div>
+              ) : null}
+              {error && status !== 'interrupted'
+                ? <div className="codex-native-inline-error" role="alert">{error}</div>
+                : null}
             </div>
-          ) : null}
-          {!selectedHosted ? <ButlerErrandCard /> : null}
-          {!selectedHosted ? <ButlerActionCard /> : null}
-          </div>
+          )}
         </main>
 
-        <footer className="butler-conversation-footer">
-          <div className="mx-auto w-full max-w-[840px]">
-            {selectedHosted ? (
-              <div className="butler-conversation-composer items-center justify-between gap-4 px-4 py-3">
-                <div className="min-w-0">
-                  <strong className="block text-sm font-medium text-ink">这是房间里的 AI 托管记录</strong>
-                  <span className="mt-0.5 block text-xs text-ink-3">回到原房间可以继续讨论或再次托管。</span>
-                </div>
+        <footer className="butler-conversation-footer codex-native-footer">
+          <div className="codex-native-composer">
+            <CodexImagePreviews images={images} onChange={setImages} />
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onPaste={(event) => void pasteCodexImages(event, images, setImages)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
+                  event.preventDefault();
+                  const opposite = followUpMode === 'steer' ? 'queue' : 'steer';
+                  void submit(input, opposite);
+                  return;
+                }
+                if (event.shiftKey) return;
+                event.preventDefault();
+                void submit();
+              }}
+              disabled={!canCompose}
+              aria-label="给 Codex 的任务"
+              placeholder={running ? (followUpMode === 'steer' ? '输入指令，立即调整当前任务' : '输入后续消息，将在当前任务后执行') : '给 Codex 一个任务'}
+              rows={1}
+            />
+            <div className="codex-native-composer-bar">
+              <div>
+                <CodexImagePicker images={images} onChange={setImages} disabled={!canCompose} />
+                <ComposerMenu
+                  ariaLabel="模型"
+                  label={activeModel?.displayName ?? '模型'}
+                  value={selectedModel}
+                  choices={modelChoices}
+                  disabled={!canCompose}
+                  onChange={(model) => void setModel(model).catch((reason) => toast.error(reason))}
+                />
+                {activeModel && activeModel.supportedReasoningEfforts.length > 1 ? (
+                  <ComposerMenu
+                    ariaLabel="推理强度"
+                    label={selectedEffort ? effortLabel(selectedEffort) : '推理'}
+                    value={selectedEffort ?? ''}
+                    choices={effortChoices}
+                    disabled={!canCompose}
+                    onChange={(effort) => void setEffort(effort || null).catch((reason) => toast.error(reason))}
+                  />
+                ) : null}
+                <ComposerMenu
+                  ariaLabel="权限"
+                  label={permissionLabel}
+                  value={permissionPreset}
+                  choices={PERMISSION_CHOICES}
+                  disabled={!canCompose}
+                  onChange={(preset) => void setPermissionPreset(preset as 'ask' | 'auto' | 'full').catch((reason) => toast.error(reason))}
+                />
+                {running ? (
+                  <ComposerMenu
+                    ariaLabel="后续消息处理方式"
+                    label={followUpMode === 'steer' ? '立即调整' : '排队'}
+                    value={followUpMode}
+                    choices={FOLLOW_UP_CHOICES}
+                    onChange={(mode) => setFollowUpMode(mode as CodexFollowUpMode)}
+                  />
+                ) : null}
+              </div>
+              <div>
+                {running ? (
+                  <button type="button" aria-label="停止任务" className="codex-native-stop" onClick={() => void interrupt()}>
+                    <Square size={13} fill="currentColor" aria-hidden="true" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => void openButlerSource({
-                    kind: 'room',
-                    id: selectedHosted.rid,
-                    rid: selectedHosted.rid,
-                    label: selectedHosted.roomName,
-                  })}
-                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary-hover"
+                  aria-label={running ? '发送后续消息' : '发送'}
+                  title={running ? 'Enter 发送；Ctrl+Shift+Enter 使用另一种后续方式' : 'Enter 发送；Shift+Enter 换行'}
+                  disabled={!canCompose || (!input.trim() && images.length === 0)}
+                  onClick={() => void submit()}
                 >
-                  回到「{selectedHosted.roomName}」
-                  <ArrowUpRight size={13} />
+                  <Send size={14} aria-hidden="true" />
                 </button>
               </div>
-            ) : (
-              <>
-                <form
-                  aria-label="发送消息给管家"
-                  onSubmit={(event) => { event.preventDefault(); void submit(); }}
-                  className="butler-conversation-composer"
-                >
-                  <ButlerSlashMenu
-                    options={slashOptions}
-                    activeIndex={slash.activeIndex}
-                    onPick={pickSlashOption}
-                    onHover={slash.setActiveIndex}
-                  />
-                  <ButlerSkillMenu
-                    options={skillMenu.options}
-                    activeIndex={skillMenu.activeIndex}
-                    onPick={skillMenu.pick}
-                    onHover={skillMenu.setActiveIndex}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <ButlerImagePreviews images={images} onChange={setImages} />
-                    <div className="flex items-end">
-                      <ButlerImagePicker images={images} onChange={setImages} disabled={running} />
-                      <textarea
-                        rows={2}
-                        value={input}
-                        onChange={(event) => {
-                          setInput(event.target.value);
-                          slash.reopen();
-                          skillMenu.reopen();
-                        }}
-                        onKeyDown={(event) => {
-                          if (skillMenu.handleKeyDown(event, skillMenu.pick)) return;
-                          if (slash.handleKeyDown(event, pickSlashOption)) return;
-                          if (event.key === 'Enter' && !event.shiftKey) {
-                            event.preventDefault();
-                            void submit();
-                          }
-                        }}
-                        onBlur={() => {
-                          slash.dismiss();
-                          skillMenu.dismiss();
-                        }}
-                        onPaste={(event) => void pasteButlerImages(event, images, setImages)}
-                        aria-label="给管家发消息"
-                        placeholder="给管家发消息……"
-                        className="min-h-12 w-full min-w-0 resize-none bg-transparent px-2 py-2 text-sm leading-5 text-ink outline-none placeholder:text-ink-3"
-                      />
-                    </div>
-                  </div>
-                  {running ? (
-                    <button type="button" aria-label="停止回答" title="停止回答" onClick={() => void stopButler()} className="flex h-8 w-8 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-ink">
-                      <Square size={12} />
-                    </button>
-                  ) : (
-                    <button type="submit" aria-label="发送" title="发送" disabled={!input.trim() && !images.length} className="flex h-8 w-8 items-center justify-center rounded text-primary hover:bg-primary-light disabled:text-ink-3/40"><Send size={14} /></button>
-                  )}
-                </form>
-                <p>输入 $ 使用 Skill · Enter 发送 · Shift + Enter 换行</p>
-              </>
-            )}
+            </div>
           </div>
         </footer>
-      </div>
+      </section>
     </div>
   );
 }

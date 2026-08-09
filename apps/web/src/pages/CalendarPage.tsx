@@ -4,7 +4,6 @@ import {
   CircleDot,
   ChevronRight,
   Clock,
-  FileText,
   ListTodo,
   Plus,
   Repeat,
@@ -26,7 +25,6 @@ import {
   type CalendarView,
 } from '../stores/calendar';
 import { useTodos, todayKey, isOverdue, type Todo } from '../stores/todos';
-import { useUI } from '../stores/ui';
 import { adoDateToLocal, isWorkItemDone, useWorkbench, type WorkItem } from '../stores/workbench';
 import { openExternal } from '../lib/client';
 import CalendarEventDialog from '../components/CalendarEventDialog';
@@ -596,15 +594,6 @@ export default function CalendarPage() {
                 : '选择日期'}
             </span>
             <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => useUI.getState().openButlerPaper(selectedDate ?? today)}
-                aria-label="打开这天的纸"
-                title="打开这天的纸"
-                className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-              >
-                <FileText size={13} />
-              </button>
               <button
                 type="button"
                 onClick={() =>

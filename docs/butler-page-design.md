@@ -1,13 +1,6 @@
 # 管家页面整体设计（首轮历史方案）
 
-> 状态：历史记录。此方案记录了首轮“一张纸”收敛，已于 2026-07-28 被后续确认的
-> [管家持续工作系统设计](./butler-continuous-work-system-design.md) 取代，不再作为当前验收标准。
->
-> 当前信息架构仍只有一个管家应用，但应用内明确分为现在、任务、例行照看、对话、
-> 记忆与偏好、连接与权限六个工作面。左侧管家导航是应用内视图选择器，不是六个
-> RocketX 一级入口；六个工作面共享同一状态内核，以免重新堆回信息过载的单页。
->
-> 相关技术切片：[butler-sole-surface.md](./butler-sole-surface.md)
+> 文档状态：**已废弃**。本文记录首轮“一张纸”方案，后续持续工作系统方案也已退出；当前管家是 Codex 任务面，入口和交互以[管家任务](specs/butler-tasks.md)、[已安排任务](specs/scheduled-tasks.md)和[Skills、Plugins 与 Apps](specs/skills-and-plugins.md)为准。
 
 ## 一句话定义
 

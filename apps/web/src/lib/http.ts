@@ -6,7 +6,11 @@
  * 一 import 就把整个 IM 客户端和浏览器全局拖进来，Node 里跑不了、也没法测。
  */
 
-export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+export function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export const isTauri = isTauriRuntime();
 
 // 桌面端：HTTP 走 Tauri 的 Rust 通道（plugin-http），绕开 webview CORS，
 // 连任意服务器都不需要服务端配合。

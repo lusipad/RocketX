@@ -21,18 +21,21 @@ class MemoryStorage {
   }
 }
 
-test('退役的今天值迁到全局今天，旧 AI 助手值迁到管家', () => {
-  assert.equal(migratePersistedModule('today'), 'workbench');
-  assert.equal(migratePersistedModule('ai-assistant'), 'butler-view');
+test('退役的 today / ai-assistant / codex 持久化值不再迁移到新页面，统一回到安全默认模块', () => {
+  assert.equal(migratePersistedModule('today'), 'messages');
+  assert.equal(migratePersistedModule('ai-assistant'), 'messages');
+  assert.equal(migratePersistedModule('codex'), 'messages');
   assert.equal(migratePersistedModule('butler-view'), 'butler-view');
   assert.equal(migratePersistedModule('downloads'), 'downloads');
   assert.equal(migratePersistedModule('unknown'), 'messages');
 
   const storage = new MemoryStorage();
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ module: 'today' }));
-  assert.equal(readPersistedModule(storage), 'workbench');
+  assert.equal(readPersistedModule(storage), 'messages');
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'ai-assistant' } }));
-  assert.equal(readPersistedModule(storage), 'butler-view');
+  assert.equal(readPersistedModule(storage), 'messages');
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'codex' } }));
+  assert.equal(readPersistedModule(storage), 'messages');
 });
 
 test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () => {
@@ -46,18 +49,19 @@ test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () =>
   assert.equal(readPersistedWorkItemStateFilter(storage), '活动');
 });
 
-test('可编程入口只通过 butlerView 原子打开管家视图', () => {
-  useUI.setState({ module: 'messages', butlerView: 'now' });
+test('可编程入口只通过 butlerView 驱动任务、已安排、插件三个工作面', () => {
+  useUI.setState({ module: 'messages', butlerView: 'conversation' });
   useUI.getState().openButlerConversation();
   assert.equal(useUI.getState().module, 'butler-view');
   assert.equal(useUI.getState().butlerView, 'conversation');
 
-  useUI.getState().openButlerManage();
+  useUI.getState().setButlerView('routines');
   assert.equal(useUI.getState().module, 'butler-view');
   assert.equal(useUI.getState().butlerView, 'routines');
 
-  useUI.getState().setButlerView('now');
-  assert.equal(useUI.getState().butlerView, 'now');
+  useUI.getState().setButlerView('plugins');
+  assert.equal(useUI.getState().module, 'butler-view');
+  assert.equal(useUI.getState().butlerView, 'plugins');
 
   useUI.getState().setModule('butler-view');
   assert.equal(useUI.getState().butlerView, 'conversation');

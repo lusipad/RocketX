@@ -8,7 +8,7 @@ Use GitHub's private vulnerability reporting flow for this repository:
 
 <https://github.com/lusipad/RocketX/security/advisories/new>
 
-Include the affected commit or release, operating system, deployment mode (Web or desktop), a minimal reproduction, impact, and any suggested mitigation. Remove passwords, Rocket.Chat tokens, Azure DevOps PATs, AI provider keys, private messages, and other real user data from the report.
+Include the affected commit or release, operating system, deployment mode (Web or desktop), a minimal reproduction, impact, and any suggested mitigation. Remove passwords, Rocket.Chat tokens, Azure DevOps PATs, Codex authentication data, Memory content, private messages, and other real user data from the report.
 
 You should receive an acknowledgement within seven days. The maintainer will coordinate reproduction, a fix, release timing, and disclosure through the private advisory. If private reporting is temporarily unavailable, open a public issue containing only a request for a private contact channel; do not include vulnerability details.
 
@@ -21,7 +21,7 @@ The Rocket.Chat server is a separate upstream product. Report a Rocket.Chat serv
 ## Security boundaries
 
 - RocketX authenticates through Rocket.Chat's public APIs and must not log or commit credentials.
-- Desktop AI provider credentials belong in the operating-system credential store. They must not be placed in source files, `.env` files committed to Git, browser storage, screenshots, or issue reports.
+- Codex authentication, sessions, and local Memory are owned by the user's local Codex installation. RocketX must not copy their secrets into source files, committed `.env` files, browser storage, screenshots, logs, or issue reports.
 - Third-party RocketX applications run behind manifest validation, explicit permissions, and a sandboxed Bridge. Remote applications cannot request process or Agent spawning permissions.
 - The authenticated M9 LAN transport and legacy IP Messenger compatibility mode are separate trust domains. IP Messenger is unauthenticated, disabled by default, and must not be treated as a trusted identity channel.
 - The bundled Compose credentials and permissive CORS setting are for local evaluation. Change credentials, restrict network exposure, configure TLS, and establish backups before non-local deployment.

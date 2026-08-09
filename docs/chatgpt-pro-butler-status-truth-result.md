@@ -1,5 +1,7 @@
 # ChatGPT Pro 协作验收结果：Butler 状态真相闭环
 
+> 文档状态：**历史外部验收快照**。本文验证的是旧 Butler Errand 状态模型，不代表当前状态合同；现状见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。
+
 ## 结论
 
 - 最终 verdict：`PASS`

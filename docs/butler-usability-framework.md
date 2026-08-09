@@ -1,5 +1,7 @@
 # AI 管家好用性系统框架（五层委托模型）
 
+> 文档状态：**历史评价框架**。五层委托模型可用于理解早期取舍，但不定义当前入口、状态或完成度；现行判据见[产品原则](specs/product-principles.md)和[管家任务](specs/butler-tasks.md)。
+
 写于 2026-07-25。回答一个问题：**「管家怎么样才算好用、现在差在哪、按什么顺序补」**。
 与 [`ai-design.md`](ai-design.md)（对账员：管家做什么）的分工：本文是好用性的**评价体系与迭代地图**，
 不改变产品定位。终局设想见 [`vision.md`](vision.md)——本文回答「怎么走」，那份回答「走去哪」。与 [`m12-implementation-plan.md`](m12-implementation-plan.md) 的关系：架构 phase 必须

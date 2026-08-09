@@ -20,8 +20,6 @@ import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
-import { useButler } from '../stores/butler';
-import { useRoutines } from '../stores/routines';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
@@ -43,12 +41,11 @@ const MODULE_META: Record<string, {
 const PRIMARY_MODULE_IDS = new Set(['messages', 'todos', 'calendar', 'downloads']);
 const BUTLER_MODULE_IDS = new Set(['butler-view']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
-const HIDDEN_MODULE_IDS = new Set(['codex']);
+const HIDDEN_MODULE_IDS = new Set<string>();
 const KNOWN_CORE_MODULE_IDS = new Set([
   ...PRIMARY_MODULE_IDS,
   ...BUTLER_MODULE_IDS,
   ...WORK_MODULE_IDS,
-  'codex',
 ]);
 
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表 */
@@ -129,23 +126,6 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     };
   }, [todos]);
 
-  /**
-   * 管家角标 = 派出去的活需要你。人不在管家页时这是唯一的信号——
-   * 「等你点头」会把活卡死，所以标红；「回话了」只是提醒，标主色。
-   * 正在干的时候不打扰。
-   */
-  const errands = useButler((s) => s.errands);
-  const butlerEventCards = useRoutines((s) => s.eventCards);
-  const errandBadge: 'waiting' | 'replied' | null = useMemo(() => {
-    if (active === 'butler-view') return null;
-    const visible = errands.filter((errand) => !errand.archivedAt);
-    if (visible.some((errand) => errand.status === 'awaiting-approval')) return 'waiting';
-    return visible.some((errand) => errand.status === 'replied' || errand.status === 'failed')
-      || butlerEventCards.length > 0
-      ? 'replied'
-      : null;
-  }, [active, butlerEventCards.length, errands]);
-
   const calendarEvents = useCalendar((s) => s.events);
   /**
    * 日历角标 = 今天的日程 + 今天到期的待办。
@@ -170,7 +150,10 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   );
 
   return (
-    <nav className="flex w-[210px] shrink-0 flex-col border-r border-line-strong bg-surface-1 px-3 py-3 text-ink">
+    <nav
+      aria-label="RocketX 主导航"
+      className="flex w-[210px] shrink-0 flex-col border-r border-line-strong bg-surface-1 px-3 py-3 text-ink"
+    >
       {/* 头像 + 发起会话 */}
       <div className="flex items-center justify-between px-1 pb-3">
         <button onClick={() => setSelfCard(true)} title="个人信息">
@@ -254,15 +237,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               return (
                 <button
                   key={key}
-                  onClick={() => {
-                    if (key === 'butler-view' && active !== 'butler-view') {
-                      void useButler.getState().openStandaloneConversation()
-                        .catch(() => undefined)
-                        .then(() => setModule(key));
-                      return;
-                    }
-                    setModule(key);
-                  }}
+                  onClick={() => setModule(key)}
                   title={label}
                   className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition ${
                     isActive
@@ -286,15 +261,6 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                     ) : hasAlert ? (
                       <span className="ml-auto h-2 w-2 rounded-full bg-danger" />
                     ) : null)}
-                  {/* 等审批会卡住所以标红；回话只需提醒，用主色。 */}
-                  {key === 'butler-view' && errandBadge && (
-                    <span
-                      className={`ml-auto h-2 w-2 rounded-full ${
-                        errandBadge === 'waiting' ? 'bg-danger' : 'bg-primary'
-                      }`}
-                      title={errandBadge === 'waiting' ? '派出去的活等你点头' : '管家有新结果或提醒'}
-                    />
-                  )}
                   {/* 日历：今天日程数 */}
                   {key === 'calendar' && todayEventCount > 0 && (
                     <span className="ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-fill-active px-1.5 text-2xs font-medium text-ink-2">

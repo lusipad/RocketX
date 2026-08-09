@@ -1,6 +1,8 @@
 # RocketX Butler · 持续在场的工作伙伴设计
 
-> 状态：产品与系统设计草案
+> 文档状态：**已废弃**。自建 Presence Engine、Profile 和主动介入运行时没有进入当前架构；当前主动执行仅按[已安排任务](specs/scheduled-tasks.md)、[Codex 原生 Memory](specs/memory.md)及[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)定义。
+>
+> 原记录状态：产品与系统设计草案
 > 日期：2026-07-28
 > 范围：先完成产品、交互、领域模型、运行链路与 Skill 合同设计；本轮不修改实现。
 > 继承：[Butler 持续工作系统设计](butler-continuous-work-system-design.md)、[管家主动性设计](ai-proactivity-design.md)、[Agent Runtime 可靠性设计](agent-runtime-reliability-design.md)

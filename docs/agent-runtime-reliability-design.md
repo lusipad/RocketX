@@ -1,7 +1,9 @@
 # RocketX Agent Runtime 可靠性与 Codex 兼容设计
 
+> 文档状态：**已废弃**。当前架构不再保留旧 Agent Runtime 或 AI Provider 兼容层；以[管家任务](specs/butler-tasks.md)、[Codex Runtime](specs/codex-runtime.md)和[权限与审批](specs/approvals-and-permissions.md)为准。
+
 日期：2026-07-26  
-状态：实施中  
+原记录状态：实施中
 参考实现：`D:\Repos\openworker`（`db93d75`，MIT）  
 关联决策：`docs/blueprint.md` 决策 9 / 13、`docs/butler-single-brain.md`、`docs/codex-system-first.md`
 

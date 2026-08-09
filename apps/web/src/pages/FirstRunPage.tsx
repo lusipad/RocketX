@@ -21,14 +21,6 @@ function configSummary(config: WorkspaceConfig): { label: string; value: string 
   const items: { label: string; value: string }[] = [];
   if (config.rocketChat) items.push({ label: 'Rocket.Chat', value: config.rocketChat.url });
   if (config.ado?.url) items.push({ label: 'Azure DevOps', value: config.ado.url });
-  if (config.ai?.providers.length) {
-    items.push({
-      label: 'AI 服务',
-      value: config.ai.providers
-        .map((provider) => `${provider.name || provider.id} · ${provider.baseUrl} · ${provider.model}`)
-        .join('、'),
-    });
-  }
   if (config.workItemTemplates) {
     items.push({
       label: '工作项模板',

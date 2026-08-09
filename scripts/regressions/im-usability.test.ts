@@ -69,7 +69,7 @@ const baseView = {
   sortBy: 'activity' as const,
 };
 
-test('模块快捷键保留执行间直达顺序', () => {
+test('模块快捷键顺序不再包含独立 Codex 页面，全局入口只保留管家工作区', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
     'workbench',
@@ -78,7 +78,6 @@ test('模块快捷键保留执行间直达顺序', () => {
     'calendar',
     'downloads',
     'contacts',
-    'codex',
     'settings',
   ]);
 });

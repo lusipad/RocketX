@@ -6,16 +6,12 @@ import { getServerBase, setServerBase } from '../lib/client';
 import { ADO_WEB_KEY, adoWebBase, loadWorkbenchConfig } from '../lib/ado';
 import { useWorkbench } from '../stores/workbench';
 import { useWiTemplates } from '../stores/wiTemplates';
-import { loadAiSettings, saveAiSettings, type AiProviderConfig } from '../kernel/ai/config';
 import { loadUpdateSource, saveUpdateSource } from '../lib/updateSource';
 import { loadHierarchyLayout, saveHierarchyLayout } from '../stores/wiTemplates';
-import { deleteAiSecret } from '../kernel/ai/secrets';
 import { useAuth } from '../stores/auth';
 import { fetchWorkspaceConfig } from '../lib/workspaceConfigSource';
 import {
-  aiProviderFingerprint,
   adoConnectionChanged,
-  aiProviderEndpointChanged,
   inlineWorkItemTemplatesFingerprint,
   loadWorkspaceSource,
   mergeAppliedFields,
@@ -31,12 +27,11 @@ import {
 /**
  * 工作区配置导入（issue #67）。
  * 配置文件提供默认值；用户自己改过的字段默认保留本地值（仍可勾选强制覆盖），
- * 其余字段跟随配置。凭据（PAT / AI key）不在配置文件里；端点变化时旧凭据解绑。
+ * 其余字段跟随配置。凭据不在配置文件里。
  */
 
 export function collectCurrentValues(): WorkspaceCurrentValues {
   const workbench = loadWorkbenchConfig();
-  const ai = loadAiSettings();
   const templateState = useWiTemplates.getState();
   return {
     serverUrl: getServerBase(),
@@ -47,9 +42,6 @@ export function collectCurrentValues(): WorkspaceCurrentValues {
     templatesInline: !templateState.url && templateState.remote
       ? inlineWorkItemTemplatesFingerprint(templateState.remote)
       : '',
-    aiProviders: Object.fromEntries(
-      ai.providers.map((provider) => [provider.id, aiProviderFingerprint(provider)]),
-    ),
     updateSource: updateSourceFingerprint(loadUpdateSource()),
     hierarchyLayout: loadHierarchyLayout(),
   };
@@ -65,20 +57,6 @@ async function applySelectedFields(
   for (const field of fields) {
     if (selected.has(field.key)) applied[field.key] = field.incoming;
   }
-
-  const pickedProviders = (config.ai?.providers ?? []).filter((provider) =>
-    selected.has(`ai.provider.${provider.id}`),
-  );
-  const aiSettings = pickedProviders.length > 0 ? loadAiSettings() : undefined;
-  const providerUpdates = pickedProviders.map((provider) => {
-    const existing = aiSettings?.providers.find((entry) => entry.id === provider.id);
-    return { provider, existing, endpointChanged: aiProviderEndpointChanged(existing, provider) };
-  });
-  await Promise.all(
-    providerUpdates
-      .filter(({ endpointChanged }) => endpointChanged)
-      .map(({ provider }) => deleteAiSecret(provider.id)),
-  );
 
   const serverChanged = selected.has('server.url')
     && !!config.rocketChat
@@ -134,24 +112,6 @@ async function applySelectedFields(
 
   if (selected.has('workItems.hierarchyLayout') && config.workItems?.hierarchyLayout) {
     saveHierarchyLayout(config.workItems.hierarchyLayout);
-  }
-
-  if (aiSettings) {
-    for (const { provider, existing, endpointChanged } of providerUpdates) {
-      const next: AiProviderConfig = {
-        id: provider.id,
-        kind: provider.kind,
-        baseUrl: provider.baseUrl,
-        model: provider.model,
-        name: provider.name || existing?.name || provider.id,
-        locality: endpointChanged ? 'external' : (existing?.locality ?? 'external'),
-        hasSecret: endpointChanged ? false : (existing?.hasSecret ?? false),
-      };
-      aiSettings.providers = existing
-        ? aiSettings.providers.map((entry) => (entry.id === provider.id ? next : entry))
-        : [...aiSettings.providers, next];
-    }
-    saveAiSettings(aiSettings);
   }
 
   saveWorkspaceSource(
@@ -272,7 +232,7 @@ export function ImportPreviewDialog({
   return (
     <Dialog
       title={config.name ? `导入「${config.name}」` : '导入工作区配置'}
-      hint="勾选字段会写入本地配置；本地修改默认保留。端点变化时会清除对应 PAT/AI 密钥，Rocket.Chat 变化时需要重新登录。"
+      hint="勾选字段会写入本地配置；本地修改默认保留。ADO 端点变化时会清除对应 PAT，Rocket.Chat 变化时需要重新登录。"
       onClose={onClose}
       footer={
         <>
@@ -348,9 +308,9 @@ export function WorkspaceConfigSection() {
     <>
       <h2 className="text-base font-semibold text-ink">工作区配置</h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-3">
-        从团队共享的 rcx.workspace.json 一次性配好服务器、ADO、AI 和模板地址。
+        从团队共享的 rcx.workspace.json 一次性配好服务器、ADO、模板和更新地址。
         配置提供默认值：你自己改过的字段会保留本地值，其余跟随配置。
-        凭据（PAT、AI 密钥）不在配置文件里，需要单独填写。
+        凭据（如 PAT）不在配置文件里，需要单独填写。
       </p>
 
       {source && (

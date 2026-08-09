@@ -1,6 +1,8 @@
 # 架构决策记录
 
-日期：2026-07-13
+> 文档状态：**当前架构说明**。用户可见能力、平台边界和验收以 [功能规格](specs/README.md) 为准；本文件只记录稳定架构决策与实现陷阱。
+
+首次记录：2026-07-13；最近校准：2026-08-09
 
 ## 决策 1：自研客户端 + 原版 Rocket.Chat 后端
 
@@ -31,9 +33,18 @@ React + Vite + Tailwind v4 + zustand。验证体验后用 Tauri 打包桌面端�
 
 产品定位为个人与小团队自用 + 开源作品，不面向政企市场：信创适配、等保、应用市场、
 rcx-hub 集中管控等平台级投入全部冻结。功能取舍以「GTD 五阶段 + 注意力保护」双支柱
-为判据，详见 `docs/blueprint.md`（v2）§1 主旨与 §11 冻结区。
+为判据，详见 [产品原则](specs/product-principles.md)。`docs/blueprint.md` 保留愿景与历史规划，
+不再作为当前功能清单。
 
 ## 关键技术点
+
+### 确定性界面与 Codex 原生 AI 边界
+
+- 消息、工作台、待办、日历和通讯录保存可查询、可编辑的权威事实；AI 回答不构成第二套业务数据。
+- 管家、Skills/Plugins/Apps、原生 Memory、已安排执行和共享 Agent 统一通过本机 Codex `app-server`，不再运行旧 Butler 大脑、Blackboard 或自建 Memory Store。
+- 桌面端通过 Tauri 发现并管理用户已安装、已登录且通过版本门禁的 Codex。精简包和全量包都不捆绑 Codex。
+- 网页版保留 Rocket.Chat 与确定性工作界面，但当前没有本地 Codex Transport。详细降级行为见 [能力矩阵](specs/capability-matrix.md)。
+- 交互式请求按 Codex Thread 隔离；“替我审批”仍使用工作区沙箱，“完全访问”才放开到 `danger-full-access`。
 
 ### 与 Rocket.Chat 的通信
 
@@ -118,9 +129,11 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 最近表情 | `rcx-recent-emojis` | |
 | ADO 工作台配置 | `rcx-workbench` / `rcx-ado-web` | 跟 Rocket.Chat 账号与服务器隔离；直连 PAT 只留在当前设备 |
 | ADO 自定义查询 | `rcx-custom-queries` | 跟 Rocket.Chat 账号隔离，再按稳定的 ADO 基址与认证方式分区；旧查询只在匹配连接后认领 |
-| 本地 Codex | `rcx-local-codex-v1` | 按 Rocket.Chat 服务器与账号保存所选目录、sessionId、threadId 和安全模式；对话正文与过程不写入 localStorage |
-| 管家 / AI 托管 Codex 设置 | `rcx-butler-v1:codex-*` / `rcx-agent-hosting-v1:codex-*` | 两套模型与推理强度独立保存；升级时 AI 托管仅首次继承已有管家设置 |
-| 管家 Memory v2 | rcx-store `rocketx.butler/archive` 内的 `rcx-butler-v2:memory` | 只保存经确认的别名、偏好和承诺；按服务器、账号及可选项目/房间隔离，可撤销、恢复，旧版记忆默认隔离 |
+| 管家 Codex 工作区设置 | `rcx-codex-workspace-v1:<scope>` | 按 Rocket.Chat 服务器与账号保存工作区、模型、推理强度、权限档和后续消息模式；Thread/Turn 正文由 Codex Home 管理，不写入该 key |
+| AI 托管 Codex 设置 | `rcx-agent-hosting-v1:codex-*` | 共享 Agent 独立保存模型、推理强度和权限档；权限默认“替我审批” |
+| 已安排任务 | `rcx-codex-automations-v1:*` | 保存本机计划、版本、触发游标与最近结果；只在 RocketX 进程存活且 Codex 可用时执行，不跨设备同步 |
+| 本地 Agent 环境 | `rcx-agent-environments` | 保存用户明确允许共享 Agent 使用的目录、项目映射和活动绑定；一个环境不能同时绑定两个活动 Discussion |
+| Codex Memory | Codex Home（例如 `~/.codex/memories`） | 由 Codex 原生管理；RocketX 在 Thread 启动前请求启用，不维护独立用户画像库，也不与 ChatGPT Web Memory 混用 |
 | LAN 设备信任 | IndexedDB `appData` + OS keychain | 公钥按服务器/用户/设备固定；Ed25519 私钥只进系统凭据库，mDNS/UDP 广播永远不直接建立信任 |
 | LAN 离线消息 | IndexedDB `outbox` | 作者保存稳定 `_id` 并负责回灌；接收方只保存本地副本，避免代发造成身份错误和重复消息 |
 
@@ -147,11 +160,12 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 
 | 命令 | 覆盖 |
 | --- | --- |
-| `pnpm smoke` | 53 项，打真实 RC：登录、收发、引用展开、话题、讨论卡片、中文文件名上传、带认证下载、收藏/免打扰、目录搜索、WebSocket 实时推送、斜杠命令、群管理（踢人/角色/禁言/归档/只读）、文件与提及面板、改昵称与头像。**写操作跑完全部还原**（改名改回去、头像 resetAvatar、建的房间删掉） |
-| `pnpm test:pure` | 230 项纯函数：拼音匹配与排序、日期分割线、分组规则、待办、备注名、emoji、PR 分流、markdown、日历重复与网格、ADO、斜杠命令、群管理权限与安全边界 |
-| `pnpm test:regression` | 980 项回归测试：快捷搜索并发、本机即时结果、受控搜索范围、远端渐进补全与滚动分页，目录与成员分页、跨房间发送与结果隔离，ADO 配置/查询/链接卡片与工作项层级，讨论访问与订阅边界、初始滚动，任务栏与托盘未读状态、缓存边界、账号隔离、管家任务编译/业务 MCP/原生 Skill/作用域 Memory/主动 workflow、团队配置订阅、更新源、共享 Agent 会话与发布合同 |
-| `pnpm test:ui` | 108 项浏览器流程：登录、首次引导、会话与消息、搜索、管家任务与审批、Skill 市场、AI 设置、ADO 卡片、待办、共享 Agent 与插件 Bridge |
-| `pnpm test:classify` | 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序不受「打开」影响 |
+| `pnpm smoke` | 打真实 Rocket.Chat 的读写主流程；会修改测试数据并在结束时尝试还原 |
+| `pnpm test:pure` | 纯函数、数据转换与安全边界 |
+| `pnpm test:regression` | 消息、搜索、工作台、Codex Runtime、管家、Skills、Memory、已安排、共享 Agent 与桌面桥接回归 |
+| `pnpm test:ui` | 核心浏览器交互；mock 通过不能替代真实 Rocket.Chat、ADO 或 Codex 集成 |
+| `pnpm smoke:codex-lifecycle` | 使用真实 Codex 验证 `app-server`、Thread、Turn、恢复和停止生命周期 |
+| `pnpm test:classify` | 打真实 Rocket.Chat 的房间分类与排序检查 |
 
 **自动测试跑绿不等于所有界面都是好的。** `test:ui` 覆盖核心浏览器流程；没有进入这些
 流程的界面仍要真正在浏览器或桌面端点一遍。
@@ -168,3 +182,5 @@ Vite HMR 会导致 store 模块分叉（`window.__chat` 与界面里的 store �
   客服（Omnichannel）、管理后台、邀请链接、批量清理消息（prune）；
 - 单聊 / 多人聊天没有群管理能力（这是 RC 的模型限制：它们都是 `t='d'`）；
 - 分组、备注名、待办只存本机（见上方「本地数据」）。
+- 管家、原生 Memory、已安排执行和共享 Agent 当前只在桌面端且本地 Codex 可用时运行；网页版没有远端执行面。
+- 已安排任务不是操作系统或云端常驻调度，RocketX 真正退出、电脑关机或休眠时不执行。

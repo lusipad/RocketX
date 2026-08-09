@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
-import { setCodexBrainUnavailableReason } from '../lib/butlerBrain';
 import { isTauri } from '../lib/http';
 import { toast } from './toast';
 
@@ -68,10 +67,9 @@ export function setCodexManualPath(path: string): void {
  * 悄悄换一个能力不同的大脑，用户根本无从察觉自己拿到的答案是谁给的。
  */
 function activateUnavailable(reason: string): void {
-  setCodexBrainUnavailableReason(reason);
   if (!unavailableNotified) {
     unavailableNotified = true;
-    toast.info(`管家暂时用不了：${reason}`);
+    toast.info(`Codex 暂时用不了：${reason}`);
   }
 }
 
@@ -96,14 +94,12 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
       return;
     }
     set({ phase: 'checking', reason: undefined });
-    setCodexBrainUnavailableReason('AI 正在准备中…');
     try {
       const result = await runtimeInvoke<CodexRuntimeProbe>('codex_runtime_probe', {
         manualPath: getCodexManualPath() || null,
       });
       if (revision !== probeRevision) return;
       if (result.ready && result.compatibilityStatus !== 'blocked') {
-        setCodexBrainUnavailableReason(undefined);
         set({
           phase: 'ready',
           version: result.version,
@@ -179,7 +175,6 @@ export function setCodexRuntimePlatform(provider: () => boolean): () => void {
 export function resetCodexRuntimeForTests(): void {
   probeRevision += 1;
   unavailableNotified = false;
-  setCodexBrainUnavailableReason(undefined);
   useCodexRuntime.setState({
     phase: desktopAvailable() ? 'idle' : 'web',
     version: undefined,

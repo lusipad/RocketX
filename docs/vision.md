@@ -1,7 +1,9 @@
 # 终局设想：替你记着，替你挡着
 
-写于 2026-07-25。这是**方向的锚**，不是路线图——路线图在 [`blueprint.md`](blueprint.md)，
-判据与迭代地图在 [`butler-usability-framework.md`](butler-usability-framework.md)。
+> 文档状态：**愿景**。用于判断长期方向，不表示当前已实现，也不构成路线图或版本承诺；当前能力见[功能规格](specs/README.md)。
+
+写于 2026-07-25。这是**方向的锚**，不是路线图；[`blueprint.md`](blueprint.md)和
+[`butler-usability-framework.md`](butler-usability-framework.md)同样只保留历史规划与评价框架。
 
 本文回答一个问题：**当每个切片都做对了，最终会长成什么？** 以后每个功能都可以对着它问一句：
 「这一步是在往那个终局走，还是只是在原地加功能？」

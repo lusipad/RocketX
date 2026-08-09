@@ -1,5 +1,7 @@
 # Implementation notes — M8 共享 Agent 与反向 MCP
 
+> 文档状态：**历史实施记录**。本文只说明 M8 当时的实现与验证，不承担当前共享 Agent 合同；现状见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。
+
 Plan: `docs/m8-implementation-plan.md`
 
 ## Shipped vs planned

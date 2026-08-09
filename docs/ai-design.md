@@ -1,7 +1,6 @@
 # RocketChatX · AI 管家设计（历史方案：v3「对账员」）
 
-> 状态：历史记录 · 2026-07-19。本文保留规则管家被证伪后转向“判断力”的产品依据，
-> 但不再是 `v0.36.5` 的实现合同。当前实现以
+> 文档状态：**已废弃** · 2026-07-19 的历史方案。本文保留规则管家被证伪后转向“判断力”的产品依据，但不再是实现合同。当前行为以[产品原则](specs/product-principles.md)、[管家任务](specs/butler-tasks.md)、[Memory](specs/memory.md)和[已安排任务](specs/scheduled-tasks.md)为准；以下链接仅用于追溯演进：
 > [个人 Agent 重构计划](butler-personal-agent-restructure-plan.md)、
 > [Codex 原生 Skill 与 Marketplace](codex-native-skill-marketplace-review.md)、
 > [业务 MCP 迁移说明](implementation-notes-codex-business-mcp-migration.md)、

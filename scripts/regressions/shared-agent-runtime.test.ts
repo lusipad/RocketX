@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMemoryBackend, createRcxStore } from '@rcx/rcx-store';
-import { AppServerClient, type AppServerClientOptions } from '../../apps/web/src/agent/protocol/client';
+import type {
+  AppServerControllerOptions,
+  CodexCatalog,
+  CodexRuntimeSelection,
+} from '../../apps/web/src/agent/AppServerController';
 import type { AgentSession } from '../../apps/web/src/agent/session';
 
 const values = new Map<string, string>();
@@ -23,7 +27,21 @@ test.afterEach(() => {
   restoreAgentSessionAppData = undefined;
 });
 
+function ensureTauriWindow(): void {
+  if (typeof window === 'undefined') {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: globalThis,
+    });
+  }
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {},
+  });
+}
+
 async function loadModules() {
+  ensureTauriWindow();
   const [{ useAuth }, sharedAgent, sessionStore, clientModule] = await Promise.all([
     import('../../apps/web/src/stores/auth'),
     import('../../apps/web/src/stores/sharedAgent'),
@@ -62,70 +80,109 @@ function interruptedSession(tmid: string, overrides: Partial<AgentSession> = {})
 interface FakeClientState {
   calls: string[];
   stopped: boolean;
-  options: AppServerClientOptions;
+  options: AppServerControllerOptions;
 }
 
-interface FakeTransport {
-  startHandlers?: { onLine: (line: string) => void; onExit: (code: number | null) => void };
-  stopCalled: boolean;
-  writes: Array<Record<string, unknown>>;
-}
+const CATALOG: CodexCatalog = {
+  models: [{
+    id: 'gpt-test',
+    model: 'gpt-test',
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: 'GPT Test',
+    description: 'test',
+    hidden: false,
+    supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'careful' }],
+    defaultReasoningEffort: 'high',
+    inputModalities: ['text'],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: true,
+  }],
+  permissionProfiles: [
+    { id: ':workspace', description: null, allowed: true },
+    { id: ':danger-full-access', description: null, allowed: true },
+  ],
+  skills: [],
+  apps: [],
+  plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+};
 
-function fakeClient(
-  options: AppServerClientOptions,
+function fakeController(
+  options: AppServerControllerOptions,
   request: (method: string) => Promise<unknown>,
-): { client: AppServerClient; state: FakeClientState } {
+): { controller: { currentCatalog?: CodexCatalog; processInfo: { version: string; runtimeSource: 'system' } }; state: FakeClientState } {
   const state: FakeClientState = { calls: [], stopped: false, options };
-  const client = {
-    processInfo: { processId: 'fake', version: '0.144.4', runtimeSource: 'system' },
-    request: async (method: string) => {
-      state.calls.push(method);
-      if (method === 'thread/name/set') return {};
-      return request(method);
+  const controller = {
+    currentCatalog: undefined as CodexCatalog | undefined,
+    processInfo: { version: '0.144.4', runtimeSource: 'system' as const },
+    connect: async () => {
+      state.calls.push('connect');
+      controller.currentCatalog = CATALOG;
+      return CATALOG;
+    },
+    startThread: async (_selection: CodexRuntimeSelection) => {
+      state.calls.push('startThread');
+      return request('startThread') as Promise<{ id: string }>;
+    },
+    resumeThread: async (_threadId: string, _selection: CodexRuntimeSelection) => {
+      state.calls.push('resumeThread');
+      return request('resumeThread') as Promise<{ id: string }>;
+    },
+    startTurn: async () => {
+      state.calls.push('startTurn');
+      return request('startTurn') as Promise<string>;
+    },
+    interruptTurn: async () => {
+      state.calls.push('interruptTurn');
+    },
+    renameThread: async () => {
+      state.calls.push('renameThread');
     },
     stop: async () => {
       state.stopped = true;
     },
-  } as unknown as AppServerClient;
-  return { client, state };
+  };
+  return { controller, state };
 }
 
-function fakeTransport(): { transport: ConstructorParameters<typeof AppServerClient>[0]; state: FakeTransport } {
-  const state: FakeTransport = { stopCalled: false, writes: [] };
-  return {
-    transport: {
-      start: async (handlers) => {
-        state.startHandlers = handlers;
-        return { processId: 'transport', version: '0.144.4', runtimeSource: 'system' as const };
-      },
-      write: async (message) => {
-        state.writes.push(message);
-        if (message.method === 'initialize') {
-          queueMicrotask(() => state.startHandlers?.onLine(JSON.stringify({ id: message.id, result: { userAgent: 'rocketx/0.144.4' } })));
-          return;
-        }
-        if (message.method === 'initialized') return;
-      },
-      stop: async () => {
-        state.stopCalled = true;
-      },
+function failingConnectController(
+  options: AppServerControllerOptions,
+  message: string,
+): { controller: { currentCatalog?: CodexCatalog }; state: FakeClientState } {
+  const state: FakeClientState = { calls: [], stopped: false, options };
+  const controller = {
+    currentCatalog: undefined as CodexCatalog | undefined,
+    connect: async () => {
+      state.calls.push('connect');
+      throw new Error(message);
     },
-    state,
+    startThread: async () => {
+      state.calls.push('startThread');
+      return { id: 'unused' };
+    },
+    resumeThread: async () => {
+      state.calls.push('resumeThread');
+      return { id: 'unused' };
+    },
+    startTurn: async () => {
+      state.calls.push('startTurn');
+      return 'unused';
+    },
+    interruptTurn: async () => {
+      state.calls.push('interruptTurn');
+    },
+    renameThread: async () => {
+      state.calls.push('renameThread');
+    },
+    stop: async () => {
+      state.stopped = true;
+    },
   };
-}
-
-function withShortClientTimeout() {
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-    const shortened = timeout === 15_000 ? 5 : timeout;
-    return originalSetTimeout(handler, shortened as number, ...args);
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((handle: ReturnType<typeof setTimeout>) => originalClearTimeout(handle)) as typeof clearTimeout;
-  return () => {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-  };
+  return { controller, state };
 }
 
 async function prepareStore(sessions: AgentSession[]) {
@@ -147,13 +204,13 @@ async function prepareStore(sessions: AgentSession[]) {
   return { useAuth, useSharedAgent };
 }
 
-test('共享 Agent 在 ensureClient 失败后离开 starting，并保留同一线程供显式重试', { concurrency: false }, async () => {
+test('共享 Agent 在 Controller connect 失败后离开 starting，并保留同一线程供显式重试', { concurrency: false }, async () => {
   const target = interruptedSession('client-start-failed');
   const other = interruptedSession('client-start-other', { activeTurnId: undefined });
-  const { useSharedAgent, setSharedAgentClientFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([target, other]);
-  const restoreFactory = setSharedAgentClientFactory(async () => {
-    throw new Error('client start failed');
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    return failingConnectController(options, 'client start failed').controller as never;
   });
 
   try {
@@ -173,16 +230,16 @@ test('共享 Agent 在 ensureClient 失败后离开 starting，并保留同一�
 
 test('共享 Agent 的 thread/resume 明确失败后离开 starting，并保留同一线程供显式重试', { concurrency: false }, async () => {
   const original = interruptedSession('resume-explicit-error');
-  const { useSharedAgent, setSharedAgentClientFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([original]);
   let fake!: FakeClientState;
-  const restoreFactory = setSharedAgentClientFactory(async (_sessionId, _workspaceRoot, options) => {
-    const built = fakeClient(options, async (method) => {
-      if (method === 'thread/resume') throw new Error('thread/resume 测试失败');
-      return {};
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'resumeThread') throw new Error('thread/resume 测试失败');
+      return { id: original.codexThreadId! };
     });
     fake = built.state;
-    return built.client;
+    return built.controller as never;
   });
 
   try {
@@ -194,7 +251,7 @@ test('共享 Agent 的 thread/resume 明确失败后离开 starting，并保留�
     assert.equal(failed?.activeTurnId, undefined);
     assert.match(failed?.lastError ?? '', /thread\/resume 测试失败/);
     assert.equal(fake.stopped, true);
-    assert.deepEqual(fake.calls, ['thread/resume']);
+    assert.deepEqual(fake.calls, ['connect', 'resumeThread']);
   } finally {
     restoreFactory();
   }
@@ -203,7 +260,7 @@ test('共享 Agent 的 thread/resume 明确失败后离开 starting，并保留�
 test('共享 Agent 在 resume 中收到 app-server 退出时清理本会话审批且不污染其他会话', { concurrency: false }, async () => {
   const target = interruptedSession('resume-exit');
   const other = interruptedSession('other-session', { activeTurnId: undefined });
-  const { useSharedAgent, setSharedAgentClientFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([target, other]);
   useSharedAgent.setState({
     approvals: [
@@ -211,16 +268,16 @@ test('共享 Agent 在 resume 中收到 app-server 退出时清理本会话审�
       { id: 'approval-other', tmid: other.tmid, method: 'applyPatchApproval', policy: 'legacy-approval', params: {} },
     ],
   });
-  const restoreFactory = setSharedAgentClientFactory(async (_sessionId, _workspaceRoot, options) => {
-    const built = fakeClient(options, async (method) => {
-      if (method === 'thread/resume') {
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'resumeThread') {
         const error = new Error('Codex app-server 已退出（137）');
         options.onInterrupted?.(error);
         throw error;
       }
-      return {};
+      return { id: target.codexThreadId! };
     });
-    return built.client;
+    return built.controller as never;
   });
 
   try {
@@ -236,17 +293,17 @@ test('共享 Agent 在 resume 中收到 app-server 退出时清理本会话审�
   }
 });
 
-test('共享 Agent 的 thread/resume 真实超时后会回到 interrupted，且错误仅落到目标会话', { concurrency: false }, async () => {
+test('共享 Agent 的 thread/resume 超时错误会回到 interrupted，且错误仅落到目标会话', { concurrency: false }, async () => {
   const target = interruptedSession('resume-timeout');
   const other = interruptedSession('resume-timeout-other', { activeTurnId: undefined });
-  const { useSharedAgent, setSharedAgentClientFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([target, other]);
-  const restoreTimeout = withShortClientTimeout();
-  const restoreFactory = setSharedAgentClientFactory(async (_sessionId, _workspaceRoot, options) => {
-    const { transport } = fakeTransport();
-    const client = new AppServerClient(transport, options);
-    await client.start();
-    return client;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'resumeThread') throw new Error('请求超时：thread/resume');
+      return { id: target.codexThreadId! };
+    });
+    return built.controller as never;
   });
 
   try {
@@ -258,26 +315,25 @@ test('共享 Agent 的 thread/resume 真实超时后会回到 interrupted，且�
     assert.equal(state.sessions[other.tmid]?.lastError, undefined);
   } finally {
     restoreFactory();
-    restoreTimeout();
   }
 });
 
 test('共享 Agent 在恢复成功后租约卡片同步失败时保持 ready，并留下可诊断 warning', { concurrency: false }, async () => {
   const target = interruptedSession('resume-card-warning', { leaseMessageId: 'lease-message-1' });
-  const { useSharedAgent, setSharedAgentClientFactory, clientModule } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory, clientModule } = await loadModules();
   await prepareStore([target]);
   const originalUpdateMessage = clientModule.rest.updateMessage.bind(clientModule.rest);
   clientModule.rest.updateMessage = async () => {
     throw new Error('rocket.chat updateMessage failed');
   };
   let fake!: FakeClientState;
-  const restoreFactory = setSharedAgentClientFactory(async (_sessionId, _workspaceRoot, options) => {
-    const built = fakeClient(options, async (method) => {
-      if (method === 'thread/resume') return { thread: { id: target.codexThreadId } };
-      return {};
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'resumeThread') return { id: target.codexThreadId! };
+      return { id: target.codexThreadId! };
     });
     fake = built.state;
-    return built.client;
+    return built.controller as never;
   });
 
   try {
@@ -296,19 +352,19 @@ test('共享 Agent 在恢复成功后租约卡片同步失败时保持 ready，�
 test('共享 Agent 失败后再次显式恢复成功，不会自动重放旧 turn 或跨会话错误', { concurrency: false }, async () => {
   const target = interruptedSession('resume-retry');
   const other = interruptedSession('retry-other', { activeTurnId: undefined });
-  const { useSharedAgent, setSharedAgentClientFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([target, other]);
   let resumeAttempts = 0;
   const calls: string[] = [];
-  const restoreFactory = setSharedAgentClientFactory(async (_sessionId, _workspaceRoot, options) => {
-    const built = fakeClient(options, async (method) => {
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
       calls.push(method);
-      if (method !== 'thread/resume') return {};
+      if (method !== 'resumeThread') return { id: target.codexThreadId! };
       resumeAttempts += 1;
       if (resumeAttempts === 1) throw new Error('Codex app-server 请求超时：thread/resume');
-      return { thread: { id: target.codexThreadId } };
+      return { id: target.codexThreadId! };
     });
-    return built.client;
+    return built.controller as never;
   });
 
   try {
@@ -321,8 +377,28 @@ test('共享 Agent 失败后再次显式恢复成功，不会自动重放旧 tur
     assert.equal(state.sessions[target.tmid]?.lastError, undefined);
     assert.equal(state.sessions[other.tmid]?.lastError, undefined);
     assert.equal(resumeAttempts, 2);
-    assert.equal(calls.includes('turn/start'), false);
+    assert.equal(calls.includes('startTurn'), false);
   } finally {
     restoreFactory();
   }
+});
+
+test('共享 Agent 审批区分拒绝、允许一次和本次任务允许', { concurrency: false }, async () => {
+  const { sharedAgentApprovalResult } = await loadModules();
+  assert.deepEqual(
+    sharedAgentApprovalResult('item/commandExecution/requestApproval', 'decline'),
+    { decision: 'decline' },
+  );
+  assert.deepEqual(
+    sharedAgentApprovalResult('item/commandExecution/requestApproval', 'accept'),
+    { decision: 'accept' },
+  );
+  assert.deepEqual(
+    sharedAgentApprovalResult('item/commandExecution/requestApproval', 'accept-session'),
+    { decision: 'acceptForSession' },
+  );
+  assert.deepEqual(
+    sharedAgentApprovalResult('item/permissions/requestApproval', 'accept-session', { network: true }),
+    { permissions: { network: true }, scope: 'session', strictAutoReview: true },
+  );
 });

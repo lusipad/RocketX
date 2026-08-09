@@ -1,5 +1,7 @@
 # RocketX 管家持续工作系统产品设计
 
+> 文档状态：**已废弃**。Presence Engine、Task/Run 自建运行时和持续主动工作面没有成为当前架构；现状以[管家任务](specs/butler-tasks.md)、[已安排任务](specs/scheduled-tasks.md)和[Codex 原生 Memory](specs/memory.md)为准。正文的“已确认”“唯一合同”和“当前”均为历史方案措辞。
+
 > 状态：1A 完整重构方案，产品与视觉方向已确认，待工程评审  
 > 日期：2026-07-28  
 > 输入：`competitive-analysis-town-ai.md`、RocketX 现有愿景与 Butler 已实现合同  

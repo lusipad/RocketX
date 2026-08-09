@@ -1,7 +1,7 @@
 # RocketChatX · 管家主动性设计（AI 的灵魂）
 
 > 状态：历史草案 · 2026-07-19 · 配套 [AI 管家 v3 历史方案](ai-design.md)
-> 当前主动工作以可暂停、可追踪、可审批的委托与例行事务运行时为准，本文只保留早期理念演进。
+> 当前主动执行以[已安排任务](specs/scheduled-tasks.md)为准；独立委托当前未实现，详见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。本文只保留早期理念演进。
 > 主张：主动性不是管家的一个 feature，而是「AI 助理 vs AI 工具」的分水岭，是本产品的差异化灵魂。
 
 ---

@@ -5,7 +5,7 @@ import type { McpElicitationPrimitiveSchema } from '../agent/protocol/generated/
 import type { McpElicitationStringSchema } from '../agent/protocol/generated/v2/McpElicitationStringSchema';
 import type { McpServerElicitationRequestParams } from '../agent/protocol/generated/v2/McpServerElicitationRequestParams';
 import type { ToolRequestUserInputParams } from '../agent/protocol/generated/v2/ToolRequestUserInputParams';
-import type { ButlerErrandInput } from '../lib/butlerErrands';
+import type { CodexHostInput } from '../agent/codexHostInput';
 import {
   safeButlerExternalUrl,
   type ButlerErrandInputResponse,
@@ -70,7 +70,7 @@ export default function ButlerErrandInputCard({
   input,
   onResolve,
 }: {
-  input: ButlerErrandInput;
+  input: CodexHostInput;
   onResolve: (response: ButlerErrandInputResponse) => void | Promise<void>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});

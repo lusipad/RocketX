@@ -1,5 +1,7 @@
 # Butler 状态真相闭环计划
 
+> 文档状态：**已废弃的历史计划**。旧 `ButlerErrandStatus` 和 Errand 投影不再是当前状态模型；共享 Agent 与独立委托现状见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。
+
 ## 1. 最可能需要调整的决策
 
 ### 决策 A：不新增第二套运行时状态机

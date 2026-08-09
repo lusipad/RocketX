@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { AiChatRequest, AiChunk } from '../../apps/web/src/kernel/ai/provider';
 import {
   extractMessageAction,
   toTodoPrefill,
   toWorkItemPrefill,
-} from '../../apps/web/src/kernel/ai/features/message-extraction';
-import type { AiChatGateway } from '../../apps/web/src/kernel/ai/features/structured-output';
+} from '../../apps/web/src/agent/messageActionExtraction';
+import type {
+  AiChatGateway,
+  AiChatRequest,
+  AiChunk,
+} from '../../apps/web/src/agent/structuredOutput';
 
 function gateway(chunks: AiChunk[], inspect?: (request: AiChatRequest) => void): AiChatGateway {
   return {
@@ -17,7 +20,7 @@ function gateway(chunks: AiChunk[], inspect?: (request: AiChatRequest) => void):
   };
 }
 
-test('消息提取完整消费 DeepSeek JSON 流并生成待办/工作项预填', async () => {
+test('消息提取完整消费 Codex Skill JSON 流并生成待办/工作项预填', async () => {
   let request: AiChatRequest | undefined;
   const draft = await extractMessageAction(
     {

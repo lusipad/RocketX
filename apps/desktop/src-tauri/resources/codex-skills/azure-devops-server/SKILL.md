@@ -1,143 +1,36 @@
 ---
 name: azure-devops-server
-description: Use for Azure DevOps Server or on-prem TFS/Azure DevOps REST work when Codex needs to inspect projects, repositories, pull requests, work items, WIQL queries, wikis, search routes, test plans, test runs, test results, builds, compare pull requests, or conditionally use releases on a collection URL. Triggers include "Azure DevOps Server", "on-prem Azure DevOps", "TFS", collection-based REST calls, PR comparison, Windows-auth/PAT automation, and cases where the official Azure DevOps MCP for Azure DevOps Services is not the right fit.
+description: Use when a RocketX Codex task needs to query Azure DevOps Server projects, iterations, work items, pull requests, builds, tests, wikis, or related delivery data through the configured Workbench connection.
 ---
 
 # Azure DevOps Server
 
-Use this skill for current Azure DevOps Server, Azure DevOps Server 2020/2022, and best-effort older TFS scenarios. Prefer the bundled PowerShell helpers over ad hoc REST boilerplate so auth, URL handling, support boundaries, and write safety stay consistent.
+这个 Skill 是 RocketX 中 Azure DevOps Server 查询的唯一 AI 入口。工作台负责连接、凭据和确定性操作；Codex 负责理解用户意图并组合查询。
 
-## Workflow
+## 工具边界
 
-### 1. Confirm the target fits this skill
+- 只调用 `rocketx_azure_devops_server_read` 读取实时数据。
+- 不要直接执行 PowerShell、命令行或网络请求（包括 `curl`）。
+- 不要要求用户在对话中提供集合地址、PAT 或 Windows 凭据；工具会使用工作台当前连接。
+- 不要把工作台快照、聊天历史中的旧数字或模型猜测当成实时结果。
+- 当前工具是只读的。用户要求修改工作项、调整迭代或安排任务时，先读取并核对目标，再明确说明需要在工作台完成确定性写入，不要伪造成功。
 
-Use this skill when the target is an on-prem Azure DevOps Server or TFS deployment and the caller can provide a collection URL such as:
+## 查询流程
 
-- `https://ado-server/tfs/DefaultCollection`
-- `https://ado-server/DefaultCollection`
+1. 从用户表述中确定项目、团队、迭代、工作项、PR 或时间范围；缺少会改变查询结果的关键条件时再询问。
+2. 使用最窄的资源和查询条件调用 `rocketx_azure_devops_server_read`。
+3. 需要跨页统计时持续读取，直到覆盖完整；不能完整覆盖时明确写出范围和缺口。
+4. 需要详情时使用前一步返回的真实 ID 继续读取，不猜测 ID、项目名、状态或数量。
+5. 回答中给出结论、必要明细和工具返回的可引用链接；没有链接时如实说明。
 
-Do not use this skill as a drop-in replacement for the official Azure DevOps Services MCP. This skill is intentionally narrower and server-specific.
+## 常用资源
 
-Support policy:
+- 项目：`resource=projects`
+- WIQL：`method=POST`、`area=wit`、`resource=wiql`，在 `body.query` 中提供 WIQL
+- 工作项详情：`area=wit`、`resource=workitems/{id}`
+- 团队迭代：`area=work`、`resource=teamsettings/iterations`
+- 仓库与 PR：`area=git`
+- 构建：`area=build`
+- 测试、Wiki、发布和搜索：使用工具 schema 允许的对应 area；条件能力失败时直接报告服务端限制
 
-- First-class: current Azure DevOps Server 20.0, Azure DevOps Server 2022/2022.1, and Azure DevOps Server 2020
-- Best-effort: older TFS
-- Required: `projects`, `git`, `wit`, `build`, `work`
-- Supported: `wiki`, `testplan`, `test`
-- Conditional: `release`, `search`, `testresults`
-- Deferred: `advanced security`, `MCP-app` style integrations, and other cloud-only domains
-
-### 2. Collect configuration and bootstrap the connection
-
-Prefer environment variables:
-
-- `AZURE_DEVOPS_SERVER_COLLECTION_URL`
-- `AZURE_DEVOPS_SERVER_AUTH_MODE` as `pat` or `default-credentials`
-- `AZURE_DEVOPS_SERVER_PAT` when auth mode is `pat`
-- `AZURE_DEVOPS_SERVER_PROJECT` optional default project
-- `AZURE_DEVOPS_SERVER_TEAM` optional default team for team-scoped `work` routes
-- `AZURE_DEVOPS_SERVER_API_VERSION` optional override
-- `AZURE_DEVOPS_SERVER_SERVER_VERSION` optional hint: `current`, `20.0`, `2022.1`, `2022`, `2020`, `2019`, `2018`, `2017`, `2015`, or `legacy`
-- `AZURE_DEVOPS_SERVER_SEARCH_BASE_URL` optional override when search is exposed on a dedicated host
-- `AZURE_DEVOPS_SERVER_TESTRESULTS_BASE_URL` optional override when test results are exposed on a dedicated host
-
-The helpers also fall back to pipeline-style variables when available:
-
-- `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI`
-- `SYSTEM_TEAMPROJECT`
-
-Run the bootstrap helper before other workflows:
-
-```powershell
-pwsh -File .\scripts\Test-AzureDevOpsServerConnection.ps1
-pwsh -File .\scripts\Test-AzureDevOpsServerConnection.ps1 -CheckReleaseArea
-pwsh -File .\scripts\Test-AzureDevOpsServerConnection.ps1 -CheckSearchArea
-pwsh -File .\scripts\Test-AzureDevOpsServerConnection.ps1 -CheckTestResultsArea
-pwsh -File .\scripts\Test-AzureDevOpsServerConnection.ps1 -CheckReleaseArea -DryRun
-```
-
-Read [references/auth-and-configuration.md](references/auth-and-configuration.md) when auth inputs are unclear.
-Read [references/url-and-resource-areas.md](references/url-and-resource-areas.md) when URL shape or area routing is unclear.
-
-### 3. Use the generic API wrapper for supported reads
-
-Use `scripts/Invoke-AzureDevOpsServerApi.ps1` for supported reads. Pass an explicit `-Area` and `-Resource` instead of hand-building URLs. When passing `-Query` or `-Body` hashtables, invoke the script with `&` in the current PowerShell session; a nested `pwsh -File` process stringifies those objects.
-
-Examples:
-
-```powershell
-& .\scripts\Invoke-AzureDevOpsServerApi.ps1 `
-  -Method GET `
-  -Resource projects `
-  -Query @{ '$top' = 25 }
-
-& .\scripts\Invoke-AzureDevOpsServerApi.ps1 `
-  -Method GET `
-  -Area git `
-  -Project Fabrikam `
-  -Resource repositories
-```
-
-Read [references/workflow-recipes.md](references/workflow-recipes.md) for common routes.
-Read [references/work-support.md](references/work-support.md) for team settings, iterations, backlogs, and capacity routes.
-Read [references/build-support.md](references/build-support.md) for build definitions, builds, logs, artifacts, and queue previews.
-Read [references/release-support.md](references/release-support.md) for release definitions, releases, environments, deployments, and preview-first mutation flows.
-Read [references/repo-support.md](references/repo-support.md) for repository, branch, and pull-request routes.
-Read [references/work-item-support.md](references/work-item-support.md) for work item, WIQL, query, comment, and JSON Patch routes.
-Read [references/wiki-support.md](references/wiki-support.md) for wiki listing, page reads, and pages-batch routes.
-Read [references/search-support.md](references/search-support.md) for search routes and host/base-URL caveats.
-Read [references/test-support.md](references/test-support.md) for test plans, suites, runs, and run-scoped result routes.
-Read [references/test-results-support.md](references/test-results-support.md) for build-linked and work-item-linked test result routes.
-Read [references/api-version-matrix.md](references/api-version-matrix.md) before changing `api-version`.
-
-### 4. Inspect or compare pull requests from fixed snapshots
-
-Use `Invoke-AzureDevOpsServerApi.ps1` for the whole workflow:
-
-1. Resolve each explicit PR ID through collection-scoped `pullrequests/{id}`.
-2. Read its iterations and select the highest iteration ID.
-3. Use `commonRefCommit` as the before side and `sourceRefCommit` as the after side. Keep `targetRefCommit` as metadata only.
-4. Request cumulative iteration changes with `$compareTo=0` and follow `nextSkip`/`nextTop`.
-5. Read only the files needed for the conclusion. Before requesting content, check item metadata and blob size with `$format=json`; skip binary files and files above 256 KiB.
-
-For renamed or deleted files, read `originalPath` from `commonRefCommit`. Do not guess PR IDs or paths. Keep each comparison to at most 20 file reads and 1 MiB of returned text. Do not clone the repository or perform PR writes.
-
-Read [references/repo-support.md](references/repo-support.md) for exact generic CLI commands, pagination, and guarded file reads.
-
-### 5. Treat writes as explicit and preview-first
-
-For `POST`, `PATCH`, `PUT`, or `DELETE`:
-
-1. Run with `-DryRun` first.
-2. Summarize the exact method, URL, query, and body that would be sent.
-3. Only perform the live request when the user explicitly wants the mutation.
-4. Add `-AllowWrite` to the second run.
-
-The wrapper refuses live writes unless `-AllowWrite` is present.
-
-Use `-JsonPatch` only for work item patch payloads.
-
-### 6. Handle conditional and route-limited areas honestly
-
-- `release` is conditional. Run `Test-AzureDevOpsServerConnection.ps1 -CheckReleaseArea` first and use `-AllowConditionalArea` only after the probe succeeds.
-- `search` is conditional. Run `Test-AzureDevOpsServerConnection.ps1 -CheckSearchArea` first. Set `AZURE_DEVOPS_SERVER_SEARCH_BASE_URL` when the deployment uses a dedicated search host.
-- `testresults` is conditional. Run `Test-AzureDevOpsServerConnection.ps1 -CheckTestResultsArea` first. Set `AZURE_DEVOPS_SERVER_TESTRESULTS_BASE_URL` when the deployment uses a dedicated test results host.
-- Only explicitly allowlisted POST read routes bypass write gating.
-- Deferred cloud-only domains must still fail clearly. Do not fake Azure DevOps Services parity.
-- If the server behaves like an older or nonstandard TFS deployment, report that it is outside first-class support instead of guessing.
-
-### 7. Escalate to references only when needed
-
-- Auth choices or environment setup: [references/auth-and-configuration.md](references/auth-and-configuration.md)
-- URL construction and resource-area caveats: [references/url-and-resource-areas.md](references/url-and-resource-areas.md)
-- Version-selection guidance: [references/api-version-matrix.md](references/api-version-matrix.md)
-- Common task recipes: [references/workflow-recipes.md](references/workflow-recipes.md)
-- Team iterations, team settings, backlogs, and capacity: [references/work-support.md](references/work-support.md)
-- Builds, timelines, artifacts, and queue previews: [references/build-support.md](references/build-support.md)
-- Release definitions, releases, environments, and deployments: [references/release-support.md](references/release-support.md)
-- Repositories, branches, and pull requests: [references/repo-support.md](references/repo-support.md)
-- Work items, WIQL, saved queries, comments, and revisions: [references/work-item-support.md](references/work-item-support.md)
-- Wikis and wiki pages: [references/wiki-support.md](references/wiki-support.md)
-- Search routes and caveats: [references/search-support.md](references/search-support.md)
-- Test plans, suites, and runs: [references/test-support.md](references/test-support.md)
-- Build- and work-item-linked test results: [references/test-results-support.md](references/test-results-support.md)
+把工具错误翻译成用户可执行的说明，但保留关键错误码或错误摘要，不用臆测结果补齐失败的数据。

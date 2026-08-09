@@ -5,7 +5,6 @@ import {
   normalizeRuntimeMode,
   readRuntimeMode,
   runtimeFeatures,
-  type RuntimeMode,
 } from '../../apps/web/src/lib/runtimeMode';
 
 function source(path: string): string {
@@ -59,7 +58,7 @@ test('启动前先应用运行模式，再按模式决定是否初始化 kernel'
   assert.match(main, /ReactDOM\.createRoot/);
 });
 
-test('performance 模式不注册或启动 AI 专属入口与后台副作用', () => {
+test('performance 模式不启动旧 polling bridge，仍屏蔽 AI 相关入口与副作用', () => {
   const runtime = source('apps/web/src/kernel/runtime.tsx');
   const app = source('apps/web/src/App.tsx');
   const mainPage = source('apps/web/src/pages/MainPage.tsx');
@@ -71,7 +70,9 @@ test('performance 模式不注册或启动 AI 专属入口与后台副作用', (
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.ai\)/);
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.sharedAgent\)/);
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.routines\)/);
-  assert.match(app, /runtimeFeatures\(\)\.polling/);
+  assert.match(runtime, /startRoutineScheduler\(\)/);
+  assert.doesNotMatch(runtime, /ButlerPollerBridge|startButlerPoller|poller bridge/i);
+  assert.doesNotMatch(app, /ButlerPollerBridge/);
   assert.match(mainPage, /runtimeFeatures\(\)\.runtimeProbes/);
   assert.match(chatArea, /(?:features|runtimeFeatures\(\))\.butler/);
   assert.match(quickSwitcher, /runtimeFeatures\(\)\.butler/);

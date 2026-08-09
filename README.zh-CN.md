@@ -2,8 +2,9 @@
 
 以**原版 Rocket.Chat 为内核**、体验对标**飞书**的团队协作客户端。
 
-核心主旨：**团队版 GTD 可信系统**——GTD 管"承诺怎么处理"，注意力保护管"信息怎么到达"，
-AI 管家承担理清与回顾，Agent 延伸执行（详见 [`docs/blueprint.md`](docs/blueprint.md)）。
+核心主旨：**团队版 GTD 可信系统**——GTD 管“承诺怎么处理”，注意力保护管“信息怎么到达”。
+消息、工作台、待办和日历承载确定性事实；管家通过 Codex 原生能力执行与协助，具体边界见
+[`产品原则`](docs/specs/product-principles.md)和[`能力矩阵`](docs/specs/capability-matrix.md)。
 
 Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实时 WebSocket API 通信，
 官方服务端可独立升级（升级前对照下方「兼容性承诺」的已验证版本矩阵），原生客户端可共存
@@ -33,9 +34,9 @@ Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实�
 | `docker/` | 本地 Rocket.Chat 开发环境（原版镜像 + MongoDB 副本集） |
 | `docs/` | 架构决策记录 |
 
-项目资料：[`CHANGELOG.md`](CHANGELOG.md) · [`架构决策`](docs/architecture.md) ·
-[`实施记录`](docs/implementation-notes.md) · [`后续蓝图`](docs/blueprint.md) ·
-[`质量审查`](docs/quality-audit.md) · [`MIT License`](LICENSE)
+当前用户可见行为以[`功能规格`](docs/specs/README.md)为准；从[`文档目录`](docs/README.md)可区分当前说明、愿景和历史记录。项目资料：[`CHANGELOG.md`](CHANGELOG.md) · [`架构决策`](docs/architecture.md) ·
+[`历史实施记录`](docs/implementation-notes.md) · [`愿景与历史蓝图`](docs/blueprint.md) ·
+[`历史质量审查`](docs/quality-audit.md) · [`MIT License`](LICENSE)
 
 ## 快速开始
 
@@ -57,19 +58,17 @@ pnpm dev
 
 桌面端全新安装会先用 GTD 流程说明 RocketX 如何可靠捕获、理清下一步并保护注意力，再进入
 团队或个人设置。选择「加入团队」时，可从本地文件或无需登录的 HTTP(S) / Git Raw URL 导入
-不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、AI、模板和更新源等默认值后，再在本机
-填写密码、PAT 与 API key。URL 团队配置每 24 小时检查一次，有变化时先展示差异，不会静默
+不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、工作项模板、层级布局和更新源等默认值后，再在本机
+填写密码与 PAT。URL 团队配置每 24 小时检查一次，有变化时先展示差异，不会静默
 覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
-登录后可从左侧进入「管家」，用自然语言搜索消息与工作数据、查询或调整 ADO 计划、安排任务，
-以及运行例行复盘。确定性的事实、计划和状态继续由工作台界面承载；AI 侧统一通过 Codex 原生
-Skills 执行，Plugin 市场也直接复用 Codex 的安装与更新协议。管家的 Memory 只轻量装载当前
-账号和工作范围内已确认的画像、偏好与习惯，支持查看、撤销和恢复；Codex 自带 Memory 不参与。
-完整页和房间侧栏都能附加图片并传给 Codex。副作用仍由确定性界面或任务卡确认，运行过程中
-需要补充输入或审批时会回到所属任务卡继续处理。也可把管家或群托管对话转进 Codex App / CLI
-的原生线程列表继续。管家与 AI 托管可在「设置 → AI」分别选择 Codex 模型和推理强度；密钥只
-进入操作系统凭据库。
+登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。「管家」复用 Codex 原生
+Thread、模型、权限、Skills、Plugins、Apps 和本地 Memory，并通过 `app-server` 真实执行；运行中
+需要补充输入或审批时，请求只回到所属任务。管家任务可与 Codex App 顺序接续并显式刷新，群聊
+AI 托管也可把记录交给 Codex App 形成新任务草稿。已安排任务保存在当前设备，只有 RocketX 进程
+仍在运行且本地 Codex 可用时才会执行。当前桌面安装包不捆绑 Codex；网页版可正常使用消息和
+确定性工作界面，但没有本地 Codex 执行通道。具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
 
 随 Windows 发布包提供的「飞鸽 / IPMSG」官方插件默认关闭，可随时禁用。协议、GBK 编码、UDP/TCP `2425`、消息和普通文件传输都在插件自己的 Rust Sidecar 中，RocketX 核心只提供通用进程桥。标准 IPMSG/飞鸽支持消息与文件；原版内网通仅支持 `1@shiyeline` 的 2425 发现和文本，不实现私有 `9011`。该旧协议能力不等同于 RocketX 的认证 LAN 通道。
 
@@ -111,7 +110,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.36.5`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.40.0`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
@@ -124,7 +123,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
 - **本地开发**：`pnpm --filter @rcx/desktop dev`（需要 [Rust 工具链](https://tauri.app/start/prerequisites/)）。
 
-共享 Agent 需要已安装并登录的兼容 Codex CLI。它直接使用用户选择的本地工作目录与 Codex
+共享 Agent 需要已安装并登录的兼容本地 Codex Runtime。它直接使用用户选择的本地工作目录与 Codex
 原生沙箱、审批和会话能力，不再构建或运行 Agent Runner Docker 镜像。
 
 桌面端在登录页填写 Rocket.Chat 服务器地址直连。服务器需开启 CORS：
@@ -136,7 +135,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 ## 已实现
 
 > 以下为已完成里程碑（M1~M5 及其子里程碑）的存档记录，仅作历史参考。
-> 后续规划见 [`docs/blueprint.md`](docs/blueprint.md)。
+> 当前能力与已知缺口请查看[`功能规格`](docs/specs/README.md)和[`追踪索引`](docs/specs/traceability.md)。
 
 **M5 · Rocket.Chat 原生能力补齐**
 
@@ -267,15 +266,12 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 - 粘贴 / 拖拽 / 按钮上传统一走「发送给 xx」确认预览弹窗
 - Esc 关闭面板、拖拽悬浮提示、删除二次确认弹窗
 
-## 路线图
+## 文档与后续方向
 
-唯一路线图入口：[`docs/blueprint.md`](docs/blueprint.md)（v2，2026-07-17）——核心主旨
-（GTD + 注意力保护双支柱）、可判定目标、M6~M11 里程碑定义与稳定化轨道都在那里。概览：
-
-- **M6** 扩展内核 → **M7** AI 管家 + 统一收件箱「今日」 → **M8** 共享 Agent 会话（$codex）
-  → **M9（v0.18.0）** LAN 直传 / 断网降级 → **M10（v0.19.0）** IPMSG 共存 → **M11（v0.20.0）** 开源发布与应用生态 v0；1.0 成熟度验收后置
-- 工作台再进阶（原 M3.5）与桌面自动更新已并入蓝图的稳定化轨道 T
-- 云文档、音视频会议不开发（导航项已移除）
+- 当前可用能力、平台限制和失败语义：[`docs/specs/`](docs/specs/README.md)；
+- 已交付版本：[`CHANGELOG.md`](CHANGELOG.md)与 Git tag；
+- GTD、注意力保护和 AI 边界：[`产品原则`](docs/specs/product-principles.md)；
+- [`终局设想`](docs/vision.md)与[`产品蓝图`](docs/blueprint.md)仅保留方向和历史演进，不是当前路线图或交付承诺。
 
 ## 兼容性承诺
 

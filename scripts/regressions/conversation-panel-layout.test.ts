@@ -21,7 +21,7 @@ test('清除临时收窄标记后恢复用户宽度', () => {
   assert.equal(effectiveConversationWidth(320, false, null, 480), 320);
 });
 
-test('房间管家作为覆盖层，不收窄分组与会话列表', async () => {
+test('房间任务面板仍作为覆盖层，不收窄分组与会话列表', async () => {
   const [mainPage, layout] = await Promise.all([
     readFile(new URL('../../apps/web/src/pages/MainPage.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/lib/conversationPanelLayout.ts', import.meta.url), 'utf8'),
@@ -32,32 +32,24 @@ test('房间管家作为覆盖层，不收窄分组与会话列表', async () =>
     /const layoutPanelOpen = rightPanel !== null && rightPanel\.kind !== 'butler';/,
   );
   assert.match(mainPage, /<ConversationList width=\{conversationWidth\} \/>/);
-  assert.doesNotMatch(mainPage, /butlerPanelOpen|avatarOnly=\{/);
+  assert.doesNotMatch(mainPage, /avatarOnly=\{/);
   assert.doesNotMatch(layout, /AVATAR_ONLY_CONVERSATION_WIDTH|avatarOnly/);
 });
 
-test('房间管家使用右下浮动入口和覆盖层，其他右侧面板仍使用固定外壳', async () => {
+test('房间侧栏只负责创建 Codex 任务，不再 import useButler 或运行第二套会话', async () => {
   const [chatArea, butlerPanel] = await Promise.all([
     readFile(new URL('../../apps/web/src/components/ChatArea.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerPanel.tsx', import.meta.url), 'utf8'),
   ]);
 
   assert.match(chatArea, /const butlerPanelOpen = rightPanel\?\.kind === 'butler';/);
-  assert.match(chatArea, /aria-controls="room-butler-panel"/);
-  assert.match(
-    chatArea,
-    /aria-label=\{butlerPanelOpen \? '收起房间管家' : '打开房间管家'\}/,
-  );
-  assert.match(chatArea, /aria-label="关闭房间管家浮层"/);
+  assert.match(chatArea, /registeredPanels\.find\(\(candidate\) => candidate\.id === 'butler'\)\?\.render/);
   assert.match(chatArea, /butlerPanelOpen && ButlerPanel/);
-  assert.doesNotMatch(chatArea, /label="AI"[\s\S]*kind: 'butler'/);
 
-  assert.match(butlerPanel, /id="room-butler-panel"/);
-  assert.match(butlerPanel, /role="dialog"/);
-  assert.match(butlerPanel, /只看 \{roomContext\?\.roomName \?\? '这个房间'\}/);
-  assert.match(butlerPanel, /aria-label="调整房间管家宽度"/);
-  assert.match(butlerPanel, /useImLayout/);
-  assert.match(butlerPanel, /openButlerConversation\(\)/);
-  assert.match(butlerPanel, /aria-label="关闭房间管家"/);
-  assert.doesNotMatch(butlerPanel, /PanelShell/);
+  assert.match(butlerPanel, /import \{ handoffToCodexTask \} from '\.\.\/lib\/codexTaskHandoff';/);
+  assert.match(butlerPanel, /<h2 className="text-sm font-semibold text-ink">在 Codex 中处理<\/h2>/);
+  assert.match(butlerPanel, /aria-label="创建 Codex 任务"/);
+  assert.match(butlerPanel, /useUI\.getState\(\)\.openButlerConversation\(\)/);
+  assert.doesNotMatch(butlerPanel, /useButler/);
+  assert.doesNotMatch(butlerPanel, /PanelShell|useImLayout|调整房间管家宽度/);
 });

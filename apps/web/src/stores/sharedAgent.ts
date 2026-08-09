@@ -1,15 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
-import { getServerBase, isTauri, rest } from '../lib/client';
+import { getServerBase, isTauriRuntime, rest } from '../lib/client';
 import { useAuth } from './auth';
 import { useChat } from './chat';
 import {
-  AppServerClient,
-  TauriCodexTransport,
-  type AppServerClientOptions,
-  type ServerRequestPolicy,
-} from '../agent/protocol';
+  AppServerController,
+  type AppServerControllerOptions,
+  type CodexCatalog,
+  type CodexRuntimeSelection,
+} from '../agent/AppServerController';
+import type { ServerRequestPolicy } from '../agent/protocol';
 import { agentDeviceId } from '../agent/device';
 import {
   agentSessionCardMatchesMessage,
@@ -21,7 +22,6 @@ import {
 import {
   agentMessageInstruction,
   agentTurnInput,
-  buildAgentDeveloperInstructions,
   buildAgentContext,
   collectLinkedWorkItems,
   quoteMessageIds,
@@ -50,7 +50,7 @@ import {
 } from '../agent/session';
 import { listAgentSessions, saveAgentSession } from '../agent/sessionStore';
 import { useWorkbench } from './workbench';
-import { useLocalCodex } from './localCodex';
+import { useCodexWorkspace } from './codexWorkspace';
 import { resolveAgentSessionKey, useAgentEnvironments } from './agentEnvironments';
 import { getAgentHostingCodexSettings } from '../lib/agentHostingSettings';
 import {
@@ -61,31 +61,16 @@ import {
   validatePermissionRequest,
 } from '../agent/safety';
 import { agentMessageBridgeChanges } from '../agent/messageBridge';
+import type { CodexHostInput } from '../agent/codexHostInput';
+import {
+  isButlerErrandInputMethod,
+  validateButlerErrandInputResponse,
+  type ButlerErrandInputResponse,
+} from '../lib/butlerHostInput';
 
 const LEASE_MS = 90_000;
 const ORPHAN_SESSION_MS = 30 * 60_000;
 const TRACE_LIMIT = 200;
-const APPROVAL_POLICY = {
-  granular: {
-    sandbox_approval: true,
-    rules: false,
-    skill_approval: false,
-    request_permissions: true,
-    mcp_elicitations: false,
-  },
-} as const;
-
-function sandboxPolicy(mode: AgentSession['sandboxMode'], writableRoots: string[]) {
-  return mode === 'workspace-write'
-    ? {
-        type: 'workspaceWrite' as const,
-        writableRoots,
-        networkAccess: false,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
-      }
-    : { type: 'readOnly' as const, networkAccess: false };
-}
 
 export interface AgentTrace {
   id: string;
@@ -100,6 +85,10 @@ export interface AgentApproval {
   method: string;
   policy: ServerRequestPolicy;
   params: unknown;
+}
+
+export interface AgentInput extends CodexHostInput {
+  tmid: string;
 }
 
 export interface AgentMemberRequest {
@@ -123,6 +112,7 @@ interface SharedAgentState {
   remoteCards: Record<string, AgentSessionCard>;
   traces: Record<string, AgentTrace[]>;
   approvals: AgentApproval[];
+  inputs: AgentInput[];
   memberRequests: AgentMemberRequest[];
   error: string | null;
   restore: () => Promise<void>;
@@ -130,8 +120,8 @@ interface SharedAgentState {
   startSession: (rid: string, sessionKey: string, options?: AgentSessionStartOptions) => Promise<AgentSession>;
   handleMessage: (message: RcMessage) => Promise<void>;
   approveMemberRequest: (id: string, allowed: boolean) => Promise<void>;
-  resolveApproval: (id: string, approved: boolean) => Promise<void>;
-  setSandboxMode: (tmid: string, mode: AgentSession['sandboxMode']) => Promise<void>;
+  resolveApproval: (id: string, resolution: AgentApprovalResolution) => Promise<void>;
+  resolveInput: (id: string, response: ButlerErrandInputResponse) => Promise<void>;
   setAccess: (tmid: string, access: AgentSession['access']) => Promise<void>;
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
@@ -150,25 +140,43 @@ const approvalWaiters = new Map<
   string,
   { tmid: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
 >();
+const inputWaiters = new Map<
+  string,
+  { tmid: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
+>();
 const processedMessages = new Set<string>();
 const startingSessions = new Map<string, Promise<AgentSession>>();
-const clients = new Map<string, AppServerClient>();
-const clientStarts = new Map<string, Promise<AppServerClient>>();
+const controllers = new Map<string, SharedAgentController>();
+const controllerStarts = new Map<string, Promise<{ controller: SharedAgentController; catalog: CodexCatalog }>>();
 let restoredScope = '';
 let restoreGeneration = 0;
 
-type SharedAgentClientFactory = (
-  sessionId: string,
-  workspaceRoot: string,
-  options: AppServerClientOptions,
-) => Promise<AppServerClient>;
-
-let sharedAgentClientFactory: SharedAgentClientFactory = async (sessionId, workspaceRoot, options) => {
-  if (!isTauri) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
-  const client = new AppServerClient(new TauriCodexTransport(sessionId, workspaceRoot), options);
-  await client.start();
-  return client;
+type SharedAgentController = {
+  currentCatalog?: CodexCatalog;
+  processInfo?: {
+    version: string;
+    runtimeSource: AgentSession['createdWithRuntimeSource'];
+  };
+  connect: (sessionId: string, workspaceRoot: string) => Promise<CodexCatalog>;
+  startThread: (
+    selection: CodexRuntimeSelection,
+    name?: string,
+  ) => Promise<{ id: string }>;
+  resumeThread: (threadId: string, selection: CodexRuntimeSelection) => Promise<{ id: string }>;
+  startTurn: (
+    threadId: string,
+    input: Parameters<AppServerController['startTurn']>[1],
+    selection: CodexRuntimeSelection,
+    options?: Parameters<AppServerController['startTurn']>[3],
+  ) => Promise<string>;
+  interruptTurn: (threadId: string, turnId: string) => Promise<void>;
+  renameThread: (threadId: string, name: string) => Promise<void>;
+  stop: () => Promise<void>;
 };
+
+type SharedAgentControllerFactory = (options: AppServerControllerOptions) => SharedAgentController;
+
+let sharedAgentControllerFactory: SharedAgentControllerFactory = (options) => new AppServerController(options);
 
 function emptySharedAgentScope() {
   return {
@@ -176,6 +184,7 @@ function emptySharedAgentScope() {
     remoteCards: {},
     traces: {},
     approvals: [],
+    inputs: [],
     memberRequests: [],
     error: null,
   };
@@ -190,6 +199,49 @@ function actor() {
   const user = useAuth.getState().user;
   if (!user) throw new Error('需要先登录 Rocket.Chat');
   return { userId: user._id, deviceId: agentDeviceId() };
+}
+
+export type AgentApprovalResolution = 'accept' | 'accept-session' | 'decline';
+
+export function sharedAgentApprovalResult(
+  method: string,
+  resolution: AgentApprovalResolution,
+  permissions: Record<string, unknown> = {},
+): unknown {
+  const accepted = resolution !== 'decline';
+  if (method === 'item/permissions/requestApproval') {
+    return {
+      permissions: accepted ? permissions : {},
+      scope: resolution === 'accept-session' ? 'session' : 'turn',
+      strictAutoReview: true,
+    };
+  }
+  if (method.startsWith('item/')) {
+    return {
+      decision: accepted
+        ? resolution === 'accept-session' ? 'acceptForSession' : 'accept'
+        : 'decline',
+    };
+  }
+  return { decision: accepted ? 'approved' : 'denied' };
+}
+
+function runtimeSelection(catalog: CodexCatalog): CodexRuntimeSelection {
+  const saved = getAgentHostingCodexSettings();
+  const model = catalog.models.find((item) => item.model === saved.model || item.id === saved.model)
+    ?? catalog.models.find((item) => item.isDefault)
+    ?? catalog.models[0];
+  if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
+  const requestedEffort = saved.effort === 'default' ? null : saved.effort;
+  const effort = requestedEffort
+    && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
+    ? requestedEffort
+    : model.defaultReasoningEffort;
+  return {
+    model: model.model,
+    effort,
+    permissionPreset: saved.permissionPreset,
+  };
 }
 
 function replyTmid(session: AgentSession): string | undefined {
@@ -259,7 +311,7 @@ function trace(tmid: string, kind: AgentTrace['kind'], text: string): void {
  * 托管线程是原生 Codex 线程（落盘于 CODEX_HOME 会话库，可在 codex resume /
  * Codex App 里继续），起名让它在列表里可辨认。失败不影响托管本身。
  */
-function nameCodexThread(appServer: AppServerClient, session: AgentSession): void {
+function nameCodexThread(appServer: SharedAgentController, session: AgentSession): void {
   if (!session.codexThreadId) return;
   const chat = useChat.getState();
   const room = chat.subscriptions[session.rid] ?? chat.rooms[session.rid];
@@ -267,10 +319,7 @@ function nameCodexThread(appServer: AppServerClient, session: AgentSession): voi
     ? `#${session.workItem.id} ${session.workItem.title}`
     : room?.fname || room?.name || session.environmentName;
   void appServer
-    .request('thread/name/set', {
-      threadId: session.codexThreadId,
-      name: rocketxThreadName('托管', detail),
-    })
+    .renameThread(session.codexThreadId, rocketxThreadName('托管', detail))
     .catch(() => undefined);
 }
 
@@ -298,6 +347,23 @@ async function onServerRequest(request: {
   if (request.policy === 'unknown') throw new Error('未知服务端请求已被安全拒绝');
   if (request.policy === 'safe-reject' || request.policy === 'dynamic-tool') {
     throw new Error('该服务端请求在 RocketX 共享会话中默认禁用');
+  }
+  if (request.policy === 'host-input' && isButlerErrandInputMethod(request.method)) {
+    const inputId = id('input');
+    const input: AgentInput = {
+      id: inputId,
+      tmid: session.tmid,
+      method: request.method,
+      policy: 'host-input',
+      params: request.params,
+      at: Date.now(),
+    };
+    useSharedAgent.setState((state) => ({ inputs: [...state.inputs, input] }));
+    updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
+    trace(session.tmid, 'tool', `等待宿主输入：${request.method}`);
+    return new Promise((resolve, reject) => {
+      inputWaiters.set(inputId, { tmid: session.tmid, resolve, reject });
+    });
   }
   const actionable = new Set([
     'item/commandExecution/requestApproval',
@@ -401,8 +467,8 @@ async function completeTurn(session: AgentSession, turnId: string, status: strin
 }
 
 function onInterrupted(tmid: string, error: Error): void {
-  clients.delete(tmid);
-  clientStarts.delete(tmid);
+  controllers.delete(tmid);
+  controllerStarts.delete(tmid);
   const session = useSharedAgent.getState().sessions[tmid];
   if (session && session.status !== 'ended') {
     const detail = redactAgentOutput(error.message).text;
@@ -424,40 +490,58 @@ function onInterrupted(tmid: string, error: Error): void {
     waiter.reject(error);
     approvalWaiters.delete(approvalId);
   }
+  for (const [inputId, waiter] of inputWaiters) {
+    if (waiter.tmid !== tmid) continue;
+    waiter.reject(error);
+    inputWaiters.delete(inputId);
+  }
   useSharedAgent.setState((state) => ({
     approvals: state.approvals.filter((approval) => approval.tmid !== tmid),
+    inputs: state.inputs.filter((input) => input.tmid !== tmid),
   }));
 }
 
-async function ensureClient(session: AgentSession): Promise<AppServerClient> {
-  const current = clients.get(session.tmid);
-  if (current) return current;
-  const pending = clientStarts.get(session.tmid);
+async function ensureController(
+  session: AgentSession,
+): Promise<{ controller: SharedAgentController; catalog: CodexCatalog }> {
+  if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
+  const current = controllers.get(session.tmid);
+  if (current) {
+    const catalog = current.currentCatalog ?? await current.connect(session.sessionId, session.workspaceRoots[0]);
+    return { controller: current, catalog };
+  }
+  const pending = controllerStarts.get(session.tmid);
   if (pending) return pending;
   const start = (async () => {
-    const next = await sharedAgentClientFactory(session.sessionId, session.workspaceRoots[0], {
+    const next = sharedAgentControllerFactory({
       onNotification,
       onServerRequest,
       onInterrupted: (error) => onInterrupted(session.tmid, error),
     });
-    clients.set(session.tmid, next);
-    return next;
+    try {
+      const catalog = await next.connect(session.sessionId, session.workspaceRoots[0]);
+      controllers.set(session.tmid, next);
+      return { controller: next, catalog };
+    } catch (error) {
+      await next.stop().catch(() => undefined);
+      throw error;
+    }
   })();
-  clientStarts.set(session.tmid, start);
+  controllerStarts.set(session.tmid, start);
   try {
     return await start;
   } finally {
-    clientStarts.delete(session.tmid);
+    controllerStarts.delete(session.tmid);
   }
 }
 
-async function stopClient(tmid: string): Promise<void> {
-  const pending = clientStarts.get(tmid);
-  let current = clients.get(tmid);
-  clients.delete(tmid);
-  clientStarts.delete(tmid);
-  if (!current && pending) current = await pending.catch(() => undefined);
-  clients.delete(tmid);
+async function stopController(tmid: string): Promise<void> {
+  const pending = controllerStarts.get(tmid);
+  let current = controllers.get(tmid);
+  controllers.delete(tmid);
+  controllerStarts.delete(tmid);
+  if (!current && pending) current = (await pending.catch(() => undefined))?.controller;
+  controllers.delete(tmid);
   if (current) await current.stop();
 }
 
@@ -531,8 +615,7 @@ export async function loadSharedAgentConversationMessages(tmid: string): Promise
 
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
   const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
-  const appServer = await ensureClient(current);
-  const codexSettings = getAgentHostingCodexSettings();
+  const { controller, catalog } = await ensureController(current);
   const messages = await loadContextMessages(current, message);
   const selectedMessages = replyTmid(current)
     ? selectAgentContextMessages(message, messages)
@@ -552,18 +635,12 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
     ),
   });
   updateSession({ ...current, status: 'running', lastError: undefined, updatedAt: Date.now() });
-  const response = await appServer.request('turn/start', {
-    ...(codexSettings.model ? { model: codexSettings.model } : {}),
-    ...(codexSettings.effort === 'default' ? {} : { effort: codexSettings.effort }),
-    threadId: current.codexThreadId!,
-    input: agentTurnInput(prompt, attachments.imagePaths),
-    approvalPolicy: APPROVAL_POLICY,
-    approvalsReviewer: 'user',
-    cwd: current.workspaceRoots[0],
-    runtimeWorkspaceRoots: [...current.workspaceRoots, ...attachments.roots],
-    sandboxPolicy: sandboxPolicy(current.sandboxMode, current.workspaceRoots),
-  });
-  const turnId = response.turn.id;
+  const turnId = await controller.startTurn(
+    current.codexThreadId!,
+    agentTurnInput(prompt, attachments.imagePaths),
+    runtimeSelection(catalog),
+    { runtimeWorkspaceRoots: attachments.roots },
+  );
   updateSession({ ...current, status: 'running', activeTurnId: turnId, updatedAt: Date.now() });
   await new Promise<void>((resolve, reject) =>
     turnWaiters.set(turnId, { tmid: current.tmid, resolve, reject }),
@@ -597,6 +674,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   remoteCards: {},
   traces: {},
   approvals: [],
+  inputs: [],
   memberRequests: [],
   error: null,
 
@@ -662,6 +740,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   },
 
   startSession: async (rid, tmid, options = {}) => {
+    if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
     const pending = startingSessions.get(tmid);
     if (pending) return pending;
     const existing = get().sessions[tmid];
@@ -677,7 +756,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       const sessionId = id('session');
       const root =
         options.workspaceRoot ||
-        useLocalCodex.getState().workspaceRoot ||
+        useCodexWorkspace.getState().workspaceRoot ||
         (await invoke<string>('codex_agent_workspace', { sessionId }));
       assertAllowedWorkspacePath(root, [root]);
       let session: AgentSession = {
@@ -697,34 +776,27 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         workItem: options.workItem,
         proposedBranch: options.proposedBranch,
         baseBranch: options.baseBranch,
-        sandboxMode: 'read-only',
         updatedAt: now,
       };
       updateSession(session);
-      const appServer = await ensureClient(session);
-      const codexSettings = getAgentHostingCodexSettings();
-      const response = await appServer.request('thread/start', {
-        ...(codexSettings.model ? { model: codexSettings.model } : {}),
-        cwd: root,
-        runtimeWorkspaceRoots: [root],
-        approvalPolicy: APPROVAL_POLICY,
-        approvalsReviewer: 'user',
-        sandbox: session.sandboxMode,
-        ephemeral: false,
-        developerInstructions: buildAgentDeveloperInstructions(options),
-      });
+      const { controller: appServer, catalog } = await ensureController(session);
+      const response = await appServer.startThread(runtimeSelection(catalog));
       session = {
         ...session,
-        codexThreadId: response.thread.id,
-        createdWithCodexVersion: appServer.processInfo!.version,
-        createdWithRuntimeSource: appServer.processInfo!.runtimeSource,
+        codexThreadId: response.id,
+        ...(appServer.processInfo?.version
+          ? { createdWithCodexVersion: appServer.processInfo.version }
+          : {}),
+        ...(appServer.processInfo?.runtimeSource
+          ? { createdWithRuntimeSource: appServer.processInfo.runtimeSource }
+          : {}),
         status: 'ready',
         lastError: undefined,
         updatedAt: Date.now(),
       };
       updateSession(session);
       nameCodexThread(appServer, session);
-      trace(tmid, 'status', `Agent 会话已启动，Codex ${response.thread.cliVersion}`);
+      trace(tmid, 'status', 'Agent 会话已启动');
       const leaseMessage = await rest.sendMessage(rid, renderAgentSessionCard(cardFor(session)), replyTmid(session));
       session = { ...session, leaseMessageId: leaseMessage._id, updatedAt: Date.now() };
       updateSession(session);
@@ -736,7 +808,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       set({ error: detail });
-      await stopClient(tmid).catch(() => undefined);
+      await stopController(tmid).catch(() => undefined);
       const failed = get().sessions[tmid];
       if (failed && failed.status !== 'ended') {
         updateSession(
@@ -837,14 +909,14 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     if (message) await queueCommand(approved, message);
   },
 
-  resolveApproval: async (approvalId, approved) => {
+  resolveApproval: async (approvalId, resolution) => {
     const approval = get().approvals.find((item) => item.id === approvalId);
     if (!approval) return;
     const session = get().sessions[approval.tmid];
     if (!session) return;
     assertHost(session, actor());
     const params = recordParams(approval.params);
-    let safeApproval = approved;
+    let safeApproval = resolution !== 'decline';
     if (safeApproval) {
       try {
         validateApprovalPaths(params, session.workspaceRoots);
@@ -869,12 +941,11 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         trace(session.tmid, 'warning', error instanceof Error ? error.message : String(error));
       }
     }
-    const decision =
-      approval.method === 'item/permissions/requestApproval'
-        ? { permissions: safeApproval ? permissions : {}, scope: 'turn', strictAutoReview: true }
-        : approval.method.startsWith('item/')
-          ? { decision: safeApproval ? 'accept' : 'decline' }
-          : { decision: safeApproval ? 'approved' : 'denied' };
+    const decision = sharedAgentApprovalResult(
+      approval.method,
+      safeApproval ? resolution : 'decline',
+      permissions,
+    );
     approvalWaiters.get(approvalId)?.resolve(decision);
     approvalWaiters.delete(approvalId);
     set((state) => ({ approvals: state.approvals.filter((item) => item.id !== approvalId) }));
@@ -882,12 +953,18 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     trace(session.tmid, 'status', safeApproval ? '宿主已允许请求' : '宿主已拒绝请求');
   },
 
-  setSandboxMode: async (tmid, mode) => {
-    const session = get().sessions[tmid];
+  resolveInput: async (inputId, response) => {
+    const input = get().inputs.find((item) => item.id === inputId);
+    if (!input) return;
+    const session = get().sessions[input.tmid];
     if (!session) return;
     assertHost(session, actor());
-    updateSession({ ...session, sandboxMode: mode, updatedAt: Date.now() });
-    trace(tmid, 'warning', mode === 'workspace-write' ? '宿主已启用工作区写入模式' : '已恢复只读模式');
+    const validated = validateButlerErrandInputResponse(input.method, input.params, response);
+    inputWaiters.get(inputId)?.resolve(validated);
+    inputWaiters.delete(inputId);
+    set((state) => ({ inputs: state.inputs.filter((item) => item.id !== inputId) }));
+    updateSession({ ...session, status: 'running', updatedAt: Date.now() });
+    trace(session.tmid, 'status', '宿主已提交所需输入');
   },
 
   setAccess: async (tmid, access) => {
@@ -912,24 +989,17 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const resuming = { ...enterResumeState(leased, host, now), lastError: undefined };
     updateSession(resuming);
     try {
-      const appServer = await ensureClient(resuming);
-      const { model } = getAgentHostingCodexSettings();
-      const response = await appServer.request('thread/resume', {
-        ...(model ? { model } : {}),
-        threadId: resuming.codexThreadId!,
-        cwd: resuming.workspaceRoots[0],
-        runtimeWorkspaceRoots: resuming.workspaceRoots,
-        approvalPolicy: APPROVAL_POLICY,
-        approvalsReviewer: 'user',
-        sandbox: resuming.sandboxMode,
-        excludeTurns: true,
-      });
+      const { controller: appServer, catalog } = await ensureController(resuming);
+      const response = await appServer.resumeThread(resuming.codexThreadId!, runtimeSelection(catalog));
       const resumed: AgentSession = {
         ...resuming,
-        codexThreadId: response.thread.id,
-        lastResumedWithCodexVersion: appServer.processInfo!.version,
-        lastResumedWithRuntimeSource: appServer.processInfo!.runtimeSource,
-        lastResumeMode: 'native',
+        codexThreadId: response.id,
+        ...(appServer.processInfo?.version
+          ? { lastResumedWithCodexVersion: appServer.processInfo.version }
+          : {}),
+        ...(appServer.processInfo?.runtimeSource
+          ? { lastResumedWithRuntimeSource: appServer.processInfo.runtimeSource }
+          : {}),
         status: 'ready',
         lastError: undefined,
         updatedAt: Date.now(),
@@ -945,7 +1015,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      await stopClient(tmid).catch(() => undefined);
+      await stopController(tmid).catch(() => undefined);
       onInterrupted(tmid, failure);
       throw failure;
     }
@@ -987,16 +1057,26 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const session = get().sessions[tmid];
     if (!session) return;
     assertHost(session, actor());
-    const appServer = clients.get(tmid);
+    const appServer = controllers.get(tmid);
     if (session.activeTurnId && appServer) {
-      await appServer
-        .request('turn/interrupt', {
-          threadId: session.codexThreadId!,
-          turnId: session.activeTurnId,
-        })
-        .catch(() => undefined);
+      await appServer.interruptTurn(session.codexThreadId!, session.activeTurnId).catch(() => undefined);
     }
-    await stopClient(tmid).catch(() => undefined);
+    await stopController(tmid).catch(() => undefined);
+    const endedError = new Error('Agent 会话已结束');
+    for (const [approvalId, waiter] of approvalWaiters) {
+      if (waiter.tmid !== tmid) continue;
+      waiter.reject(endedError);
+      approvalWaiters.delete(approvalId);
+    }
+    for (const [inputId, waiter] of inputWaiters) {
+      if (waiter.tmid !== tmid) continue;
+      waiter.reject(endedError);
+      inputWaiters.delete(inputId);
+    }
+    set((state) => ({
+      approvals: state.approvals.filter((item) => item.tmid !== tmid),
+      inputs: state.inputs.filter((item) => item.tmid !== tmid),
+    }));
     const ended = { ...session, status: 'ended' as const, activeTurnId: undefined, updatedAt: Date.now() };
     updateSession(ended);
     trace(tmid, 'status', 'Agent 会话已结束');
@@ -1006,11 +1086,11 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   },
 }));
 
-export function setSharedAgentClientFactory(factory: SharedAgentClientFactory): () => void {
-  const previous = sharedAgentClientFactory;
-  sharedAgentClientFactory = factory;
+export function setSharedAgentControllerFactory(factory: SharedAgentControllerFactory): () => void {
+  const previous = sharedAgentControllerFactory;
+  sharedAgentControllerFactory = factory;
   return () => {
-    sharedAgentClientFactory = previous;
+    sharedAgentControllerFactory = previous;
   };
 }
 

@@ -29,7 +29,6 @@ import { askButlerAboutPullRequests } from '../kernel/butler';
 import CalendarEventDialog from './CalendarEventDialog';
 import { todayKey } from '../stores/todos';
 import { butlerComparePullRequestsPrompt } from '../lib/butlerPrompts';
-import { toast } from '../stores/toast';
 import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
 import { DEFAULT_WORK_ITEM_STATE_FILTER, useUI } from '../stores/ui';
@@ -424,11 +423,10 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
   const [calendarPr, setCalendarPr] = useState<PullRequest | null>(null);
 
   const askButler = (pr: PullRequest): void => {
-    const result = askButlerAboutPullRequests(
+    askButlerAboutPullRequests(
       [pr],
       `看看这个 PR：改动重点、风险、我该先看哪里。PR 编号 ${pr.id}。`,
     );
-    if (result === 'busy') toast.error('管家正在忙，等它答完这轮');
   };
 
   const toggleCompare = (pr: PullRequest): void => {
@@ -443,14 +441,10 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
       return;
     }
     const [first, second] = next;
-    const result = askButlerAboutPullRequests(
+    askButlerAboutPullRequests(
       next,
       butlerComparePullRequestsPrompt(first.id, second.id),
     );
-    if (result === 'busy') {
-      toast.error('管家正在忙，等它答完这轮');
-      return;
-    }
     setComparing([]);
   };
 

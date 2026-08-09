@@ -1,5 +1,7 @@
 # Butler 学习、工作分析与 Skill 形成系统：实现记录
 
+> 文档状态：**已废弃方案的历史实施记录**。旧 Profile、学习 Extension 和 micro Skill 运行链路已退出；当前见[Memory](specs/memory.md)和[Skills、Plugins 与 Apps](specs/skills-and-plugins.md)。
+
 ## Plan
 
 - 设计依据：`docs/butler-learning-analysis-skill-system-design.md`

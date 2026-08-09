@@ -22,10 +22,7 @@ const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 const BUTLER_BUNDLED_SKILLS_DIR: &str = "codex-skills";
-const AZURE_DEVOPS_SERVER_SKILL_NAME: &str = "azure-devops-server";
 const AZURE_DEVOPS_SERVER_HOST_ADAPTER: &str = "azure-devops-server-host-adapter.ps1";
-const AZURE_DEVOPS_SERVER_MARKER_FILE: &str = ".rocketx-managed.json";
-const AZURE_DEVOPS_SERVER_UPSTREAM_COMMIT: &str = "293b09774cf9d1ef880a889baf212a9b661e0a75";
 const AZURE_DEVOPS_SERVER_STDOUT_LIMIT: usize = 1024 * 1024;
 const AZURE_DEVOPS_SERVER_STDERR_LIMIT: usize = 32 * 1024;
 const AZURE_DEVOPS_SERVER_BODY_LIMIT: usize = 64 * 1024;
@@ -71,6 +68,7 @@ pub struct CodexProcessInfo {
     version: String,
     runtime_workspace_root: String,
     runtime_source: CodexRuntimeSource,
+    managed_skill_roots: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -511,10 +509,6 @@ fn resolve_codex(app: &tauri::AppHandle) -> Result<ResolvedCodex, String> {
     )
 }
 
-pub(crate) fn codex_command(app: &tauri::AppHandle) -> Result<Command, String> {
-    Ok(resolve_codex(app)?.command())
-}
-
 fn version_token(token: &str) -> Option<&str> {
     let token = token.strip_prefix('v').unwrap_or(token);
     if !token
@@ -653,36 +647,6 @@ fn app_server_launch_args(resolved: &ResolvedCodex) -> Result<Vec<&'static str>,
     )?))
 }
 
-/// `codex exec` 的可选参数同样存在版本漂移：任何一个被新版移除都会让进程
-/// 以退出码 2 直接退出（与 app-server --stdio 同构）。按 `exec --help` 是否
-/// 列出决定传不传；`--json` 与 `--sandbox` 是协议/安全必需，不做降级——
-/// 真缺了就让错误明确暴露，绝不能悄悄放开沙箱跑。
-pub(crate) fn exec_optional_args_for_help(help: &str) -> Vec<&'static str> {
-    let mut args = Vec::new();
-    if help.contains("--ephemeral") {
-        args.push("--ephemeral");
-    }
-    if help.contains("--ignore-user-config") {
-        args.push("--ignore-user-config");
-    }
-    if help.contains("--skip-git-repo-check") {
-        args.push("--skip-git-repo-check");
-    }
-    if help.contains("--color") {
-        args.extend(["--color", "never"]);
-    }
-    args
-}
-
-pub(crate) fn codex_exec_optional_args(
-    app: &tauri::AppHandle,
-) -> Result<Vec<&'static str>, String> {
-    let resolved = resolve_codex(app)?;
-    Ok(exec_optional_args_for_help(&subcommand_help(
-        &resolved, "exec",
-    )?))
-}
-
 #[tauri::command]
 pub fn codex_runtime_probe(
     app: tauri::AppHandle,
@@ -808,22 +772,6 @@ fn host_path(path: &Path) -> String {
     value.into_owned()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BundledSkillOwnership {
-    Missing,
-    ManagedCurrent,
-    ManagedOutdated,
-    External,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BundledSkillInstallResult {
-    Installed,
-    AlreadyCurrent,
-    Updated,
-    PreservedExternal,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ButlerAzureDevOpsServerReadRequest {
@@ -884,153 +832,6 @@ struct StreamCapture {
     truncated: bool,
 }
 
-fn azure_devops_server_marker_path(skill_dir: &Path) -> PathBuf {
-    skill_dir.join(AZURE_DEVOPS_SERVER_MARKER_FILE)
-}
-
-fn azure_devops_server_marker_payload() -> String {
-    serde_json::json!({
-        "managedBy": "rocketx",
-        "skill": AZURE_DEVOPS_SERVER_SKILL_NAME,
-        "source": "bundled-resource",
-        "upstreamCommit": AZURE_DEVOPS_SERVER_UPSTREAM_COMMIT,
-    })
-    .to_string()
-}
-
-fn classify_bundled_skill_ownership(skill_dir: &Path) -> Result<BundledSkillOwnership, String> {
-    if !skill_dir.exists() {
-        return Ok(BundledSkillOwnership::Missing);
-    }
-    if !skill_dir.is_dir() {
-        return Err(format!(
-            "Butler Skill 目标不是目录：{}",
-            skill_dir.display()
-        ));
-    }
-    let marker_path = azure_devops_server_marker_path(skill_dir);
-    if !marker_path.is_file() {
-        return Ok(BundledSkillOwnership::External);
-    }
-    let marker = std::fs::read_to_string(marker_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
-    let Some(marker) = marker else {
-        return Ok(BundledSkillOwnership::External);
-    };
-    let managed = marker.get("managedBy").and_then(serde_json::Value::as_str) == Some("rocketx")
-        && marker.get("skill").and_then(serde_json::Value::as_str)
-            == Some(AZURE_DEVOPS_SERVER_SKILL_NAME)
-        && marker.get("source").and_then(serde_json::Value::as_str) == Some("bundled-resource");
-    if !managed {
-        return Ok(BundledSkillOwnership::External);
-    }
-    Ok(
-        if marker
-            .get("upstreamCommit")
-            .and_then(serde_json::Value::as_str)
-            == Some(AZURE_DEVOPS_SERVER_UPSTREAM_COMMIT)
-        {
-            BundledSkillOwnership::ManagedCurrent
-        } else {
-            BundledSkillOwnership::ManagedOutdated
-        },
-    )
-}
-
-fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
-    if !source.is_dir() {
-        return Err(format!("Skill 资源目录不存在：{}", source.display()));
-    }
-    std::fs::create_dir_all(target)
-        .map_err(|error| format!("无法创建 Skill 目录 {}：{error}", target.display()))?;
-    for entry in std::fs::read_dir(source)
-        .map_err(|error| format!("无法读取 Skill 目录 {}：{error}", source.display()))?
-    {
-        let entry = entry.map_err(|error| format!("无法遍历 Skill 目录：{error}"))?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("无法读取 Skill 文件类型：{error}"))?;
-        if file_type.is_dir() {
-            copy_directory_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            if let Some(parent) = target_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| {
-                    format!("无法创建 Skill 父目录 {}：{error}", parent.display())
-                })?;
-            }
-            std::fs::copy(&source_path, &target_path).map_err(|error| {
-                format!(
-                    "无法复制 Skill 文件 {} -> {}：{error}",
-                    source_path.display(),
-                    target_path.display()
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn install_bundled_azure_devops_server_skill_from_paths(
-    bundled_skill_dir: &Path,
-    butler_root: &Path,
-) -> Result<BundledSkillInstallResult, String> {
-    let target = butler_root
-        .join(".agents")
-        .join("skills")
-        .join(AZURE_DEVOPS_SERVER_SKILL_NAME);
-    let ownership = classify_bundled_skill_ownership(&target)?;
-    if ownership == BundledSkillOwnership::External {
-        return Ok(BundledSkillInstallResult::PreservedExternal);
-    }
-    if ownership == BundledSkillOwnership::ManagedCurrent {
-        return Ok(BundledSkillInstallResult::AlreadyCurrent);
-    }
-
-    let parent = target
-        .parent()
-        .ok_or_else(|| "Butler Skill 目标目录无效".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("无法准备 Butler Skill 目录：{error}"))?;
-
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let staging = parent.join(format!(".{AZURE_DEVOPS_SERVER_SKILL_NAME}.tmp-{stamp}"));
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .map_err(|error| format!("无法清理 Skill 临时目录 {}：{error}", staging.display()))?;
-    }
-    copy_directory_recursive(bundled_skill_dir, &staging)?;
-    std::fs::write(
-        azure_devops_server_marker_path(&staging),
-        azure_devops_server_marker_payload(),
-    )
-    .map_err(|error| format!("无法写入 Butler Skill 标记：{error}"))?;
-
-    if target.exists() {
-        std::fs::remove_dir_all(&target)
-            .map_err(|error| format!("无法更新 Butler Skill 目录 {}：{error}", target.display()))?;
-    }
-    std::fs::rename(&staging, &target).map_err(|error| {
-        format!(
-            "无法启用 Butler Skill 目录 {} -> {}：{error}",
-            staging.display(),
-            target.display()
-        )
-    })?;
-
-    Ok(match ownership {
-        BundledSkillOwnership::Missing => BundledSkillInstallResult::Installed,
-        BundledSkillOwnership::ManagedOutdated => BundledSkillInstallResult::Updated,
-        BundledSkillOwnership::ManagedCurrent => BundledSkillInstallResult::AlreadyCurrent,
-        BundledSkillOwnership::External => BundledSkillInstallResult::PreservedExternal,
-    })
-}
-
 fn contained_existing_path(root: &Path, target: &Path) -> Result<PathBuf, String> {
     let canonical_root = std::fs::canonicalize(root)
         .map_err(|error| format!("资源目录不可用 {}：{error}", root.display()))?;
@@ -1042,13 +843,18 @@ fn contained_existing_path(root: &Path, target: &Path) -> Result<PathBuf, String
     Ok(canonical_target)
 }
 
-fn bundled_azure_devops_server_skill_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let root = app
+fn bundled_codex_skill_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+    let resource_dir = app
         .path()
         .resource_dir()
-        .map_err(|error| format!("无法定位 RocketX Skill 资源目录：{error}"))?
-        .join(BUTLER_BUNDLED_SKILLS_DIR);
-    contained_existing_path(&root, &root.join(AZURE_DEVOPS_SERVER_SKILL_NAME))
+        .map_err(|error| format!("无法定位 RocketX Skill 资源目录：{error}"))?;
+    ["codex-skills", "rocketx-core-skills"]
+        .into_iter()
+        .map(|directory| {
+            let root = resource_dir.join(directory);
+            contained_existing_path(&root, &root)
+        })
+        .collect()
 }
 
 fn bundled_azure_devops_server_adapter_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1103,14 +909,6 @@ fn resolve_pwsh_program() -> Result<PathBuf, String> {
 #[cfg(not(windows))]
 fn resolve_pwsh_program() -> Result<PathBuf, String> {
     find_program("pwsh").ok_or_else(|| "未找到可用的 pwsh 运行时。".to_string())
-}
-
-fn install_bundled_azure_devops_server_skill(
-    app: &tauri::AppHandle,
-    butler_root: &Path,
-) -> Result<BundledSkillInstallResult, String> {
-    let bundled_skill_dir = bundled_azure_devops_server_skill_dir(app)?;
-    install_bundled_azure_devops_server_skill_from_paths(&bundled_skill_dir, butler_root)
 }
 
 fn validate_plain_string(label: &str, value: &str, max_len: usize) -> Result<String, String> {
@@ -1776,6 +1574,10 @@ pub fn codex_app_server_start(
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
     let workspace_root = host_path(&canonical_directory(&workspace_root)?);
+    let managed_skill_roots = bundled_codex_skill_roots(&app)?
+        .into_iter()
+        .map(|path| host_path(&path))
+        .collect::<Vec<_>>();
     let resolved = resolve_codex(&app)?;
     let version = resolved.version.clone();
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
@@ -1793,6 +1595,7 @@ pub fn codex_app_server_start(
             version: process.version.clone(),
             runtime_workspace_root: process.workspace_root.clone(),
             runtime_source: process.runtime_source,
+            managed_skill_roots,
         });
     }
 
@@ -1846,6 +1649,7 @@ pub fn codex_app_server_start(
         version,
         runtime_workspace_root: workspace_root,
         runtime_source: resolved.source,
+        managed_skill_roots,
     })
 }
 
@@ -2017,23 +1821,6 @@ pub fn codex_agent_workspace(app: tauri::AppHandle, session_id: String) -> Resul
     std::fs::create_dir_all(&path)
         .map_err(|error| format!("failed to prepare Agent workspace: {error}"))?;
     Ok(path.to_string_lossy().into_owned())
-}
-
-#[tauri::command]
-pub async fn butler_home_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let path = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("failed to resolve Butler home directory: {error}"))?
-        .join("butler");
-    std::fs::create_dir_all(&path)
-        .map_err(|error| format!("failed to prepare Butler home directory: {error}"))?;
-    for directory in ["memory", ".agents", ".agents/skills", "scratch"] {
-        std::fs::create_dir_all(path.join(directory))
-            .map_err(|error| format!("failed to prepare Butler {directory} directory: {error}"))?;
-    }
-    install_bundled_azure_devops_server_skill(&app, &path)?;
-    Ok(host_path(&path))
 }
 
 #[tauri::command]
@@ -2321,19 +2108,15 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        app_server_args_for_help, azure_devops_server_marker_path,
-        azure_devops_server_marker_payload, classify_bundled_skill_ownership,
-        classify_codex_version, decode_attachment_request, encode_message,
-        exec_optional_args_for_help, host_path,
-        install_bundled_azure_devops_server_skill_from_paths, parse_codex_cli_version,
-        parse_semantic_version, probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
+        app_server_args_for_help, classify_codex_version, decode_attachment_request,
+        encode_message, host_path, parse_codex_cli_version, parse_semantic_version,
+        probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
         resolve_codex_from_candidates_with_probe, resolve_update_package,
         run_business_azure_devops_server_read_with, run_butler_azure_devops_server_read,
         safe_attachment_path, standalone_azure_devops_server_adapter_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
-        verify_update_package, BundledSkillInstallResult, BundledSkillOwnership,
-        ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus, CodexProcessInfo,
-        CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
+        verify_update_package, ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus,
+        CodexProcessInfo, CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
         AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
         CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
     };
@@ -2490,136 +2273,12 @@ mod tests {
     }
 
     #[test]
-    fn exec_optional_flags_follow_cli_help() {
-        assert_eq!(
-            exec_optional_args_for_help(
-                "--ephemeral  --ignore-user-config  --skip-git-repo-check  --color <WHEN>",
-            ),
-            vec![
-                "--ephemeral",
-                "--ignore-user-config",
-                "--skip-git-repo-check",
-                "--color",
-                "never"
-            ],
-        );
-        // 新版移除的参数不再传，避免 clap 以退出码 2 拒绝
-        assert_eq!(
-            exec_optional_args_for_help("Usage: codex exec [OPTIONS]\n  --skip-git-repo-check"),
-            vec!["--skip-git-repo-check"],
-        );
-        assert_eq!(
-            exec_optional_args_for_help("Usage: codex exec"),
-            Vec::<&str>::new()
-        );
-    }
-
-    #[test]
     fn host_paths_do_not_keep_windows_extended_prefixes() {
         let value = host_path(Path::new(r"\\?\C:\work\repo"));
         #[cfg(windows)]
         assert_eq!(value, r"C:\work\repo");
         #[cfg(not(windows))]
         assert_eq!(value, r"\\?\C:\work\repo");
-    }
-
-    #[test]
-    fn bundled_skill_ownership_only_trusts_rocketx_marker() {
-        let root = unique_temp_dir("ownership");
-        let skill_dir = root.join("azure-devops-server");
-        fs::create_dir_all(&skill_dir).unwrap();
-        assert_eq!(
-            classify_bundled_skill_ownership(&root.join("missing")).unwrap(),
-            BundledSkillOwnership::Missing
-        );
-        assert_eq!(
-            classify_bundled_skill_ownership(&skill_dir).unwrap(),
-            BundledSkillOwnership::External
-        );
-        fs::write(azure_devops_server_marker_path(&skill_dir), "{}").unwrap();
-        assert_eq!(
-            classify_bundled_skill_ownership(&skill_dir).unwrap(),
-            BundledSkillOwnership::External
-        );
-        fs::write(
-            azure_devops_server_marker_path(&skill_dir),
-            azure_devops_server_marker_payload(),
-        )
-        .unwrap();
-        assert_eq!(
-            classify_bundled_skill_ownership(&skill_dir).unwrap(),
-            BundledSkillOwnership::ManagedCurrent
-        );
-        fs::write(
-            azure_devops_server_marker_path(&skill_dir),
-            r#"{"managedBy":"rocketx","skill":"azure-devops-server","source":"bundled-resource","upstreamCommit":"older"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            classify_bundled_skill_ownership(&skill_dir).unwrap(),
-            BundledSkillOwnership::ManagedOutdated
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn bundled_skill_install_preserves_external_skill_directory() {
-        let root = unique_temp_dir("preserve-external");
-        let bundled = root.join("bundled");
-        let butler = root.join("butler");
-        fs::create_dir_all(&bundled).unwrap();
-        fs::write(bundled.join("SKILL.md"), "bundled").unwrap();
-        let external = butler
-            .join(".agents")
-            .join("skills")
-            .join("azure-devops-server");
-        fs::create_dir_all(&external).unwrap();
-        fs::write(external.join("SKILL.md"), "user-owned").unwrap();
-
-        let result =
-            install_bundled_azure_devops_server_skill_from_paths(&bundled, &butler).unwrap();
-        assert_eq!(result, BundledSkillInstallResult::PreservedExternal);
-        assert_eq!(
-            fs::read_to_string(external.join("SKILL.md")).unwrap(),
-            "user-owned"
-        );
-        assert!(!azure_devops_server_marker_path(&external).exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn bundled_skill_install_updates_marker_owned_directory() {
-        let root = unique_temp_dir("update-managed");
-        let bundled = root.join("bundled");
-        let butler = root.join("butler");
-        fs::create_dir_all(bundled.join("scripts")).unwrap();
-        fs::write(bundled.join("SKILL.md"), "bundled").unwrap();
-        fs::write(bundled.join("scripts").join("tool.ps1"), "new").unwrap();
-        let target = butler
-            .join(".agents")
-            .join("skills")
-            .join("azure-devops-server");
-        fs::create_dir_all(target.join("scripts")).unwrap();
-        fs::write(target.join("SKILL.md"), "old").unwrap();
-        fs::write(
-            azure_devops_server_marker_path(&target),
-            r#"{"managedBy":"rocketx","skill":"azure-devops-server","source":"bundled-resource","upstreamCommit":"older"}"#,
-        )
-        .unwrap();
-
-        let result =
-            install_bundled_azure_devops_server_skill_from_paths(&bundled, &butler).unwrap();
-        assert_eq!(result, BundledSkillInstallResult::Updated);
-        assert_eq!(
-            fs::read_to_string(target.join("SKILL.md")).unwrap(),
-            "bundled"
-        );
-        assert_eq!(
-            fs::read_to_string(target.join("scripts").join("tool.ps1")).unwrap(),
-            "new"
-        );
-        assert!(azure_devops_server_marker_path(&target).is_file());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3197,6 +2856,10 @@ param(
             Some("codex-skills/")
         );
         assert_eq!(
+            config["bundle"]["resources"]["../../web/src/butler/skills/core/"].as_str(),
+            Some("rocketx-core-skills/")
+        );
+        assert_eq!(
             config["bundle"]["resources"]["target/codex-resources/codex/"].as_str(),
             None
         );
@@ -3403,9 +3066,11 @@ param(
             version: "0.144.4".to_string(),
             runtime_workspace_root: "C:\\workspace".to_string(),
             runtime_source: CodexRuntimeSource::Bundled,
+            managed_skill_roots: vec!["C:\\RocketX\\skills".to_string()],
         })
         .unwrap();
         assert_eq!(process["runtimeSource"], "bundled");
+        assert_eq!(process["managedSkillRoots"], json!(["C:\\RocketX\\skills"]));
     }
 
     #[cfg(windows)]

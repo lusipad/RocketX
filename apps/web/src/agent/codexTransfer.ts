@@ -3,7 +3,16 @@ import { isTauri } from '../lib/http';
 
 const MAX_EXTERNAL_URL_LENGTH = 8192;
 
-export type CodexHandoffResult = 'opened' | 'opened-with-copy' | 'copied' | 'unavailable';
+export type CodexHandoffResult = 'opened-existing' | 'opened' | 'opened-with-copy' | 'copied' | 'unavailable';
+
+export type CodexSurface = 'scheduled' | 'plugins' | 'skills' | 'settings';
+
+const CODEX_SURFACE_DEEP_LINKS: Record<CodexSurface, string> = {
+  scheduled: 'codex://automations',
+  plugins: 'codex://plugins/',
+  skills: 'codex://skills',
+  settings: 'codex://settings',
+};
 
 /** 待转移的对话行（结构化定义，避免依赖 butler store 造成环） */
 export interface TransferLine {
@@ -26,11 +35,57 @@ export function codexNewThreadDeepLink(prompt: string, path: string): string {
   return `codex://threads/new?${query.toString()}`;
 }
 
-async function openCodexUrl(url: string): Promise<void> {
+async function defaultCodexUrlOpener(url: string): Promise<void> {
   if (isTauri) {
     await invoke('open_external_url', { url });
   } else {
     window.location.assign(url);
+  }
+}
+
+export function codexThreadDeepLink(threadId: string): string {
+  const normalized = threadId.trim();
+  if (
+    !normalized
+    || normalized.length > 256
+    || !/^[A-Za-z0-9_-]+$/.test(normalized)
+    || normalized === 'new'
+  ) {
+    throw new Error('Codex 线程编号无效');
+  }
+  return `codex://threads/${normalized}`;
+}
+
+let codexUrlOpener = defaultCodexUrlOpener;
+
+export function setCodexUrlOpener(opener: (url: string) => Promise<void>): () => void {
+  const previous = codexUrlOpener;
+  codexUrlOpener = opener;
+  return () => {
+    codexUrlOpener = previous;
+  };
+}
+
+export function codexSurfaceDeepLink(surface: CodexSurface): string {
+  return CODEX_SURFACE_DEEP_LINKS[surface];
+}
+
+/** 从 RocketX 内嵌工作面显式切到 Codex App 对应的管理页面。 */
+export async function openCodexSurface(surface: CodexSurface): Promise<'opened' | 'unavailable'> {
+  try {
+    await codexUrlOpener(codexSurfaceDeepLink(surface));
+    return 'opened';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+export async function openCodexThread(threadId: string): Promise<'opened-existing' | 'unavailable'> {
+  try {
+    await codexUrlOpener(codexThreadDeepLink(threadId));
+    return 'opened-existing';
+  } catch {
+    return 'unavailable';
   }
 }
 
@@ -56,14 +111,14 @@ export async function openCodexNewThread(
   if (url.length > MAX_EXTERNAL_URL_LENGTH) {
     if (!(await copyCodexPrompt(prompt))) return 'unavailable';
     try {
-      await openCodexUrl(codexNewThreadDeepLink('', path));
+      await codexUrlOpener(codexNewThreadDeepLink('', path));
       return 'opened-with-copy';
     } catch {
       return 'copied';
     }
   }
   try {
-    await openCodexUrl(url);
+    await codexUrlOpener(url);
     return 'opened';
   } catch {
     return (await copyCodexPrompt(prompt)) ? 'copied' : 'unavailable';

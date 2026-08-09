@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useAuth } from './stores/auth';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
@@ -12,9 +12,8 @@ import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
 import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
-import { runtimeFeatures } from './lib/runtimeMode';
-
-const ButlerPollerBridge = lazy(() => import('./components/ButlerPollerBridge'));
+import { getServerBase } from './lib/client';
+import { useCodexWorkspace } from './stores/codexWorkspace';
 
 export default function App() {
   const status = useAuth((s) => s.status);
@@ -28,6 +27,7 @@ export default function App() {
   const hydrateFileIndex = useFileIndex((s) => s.hydrate);
   const downloadHistoryOwnerId = useDownloadHistory((s) => s.ownerId);
   const hydrateDownloadHistory = useDownloadHistory((s) => s.hydrate);
+  const hydrateCodexWorkspace = useCodexWorkspace((s) => s.hydrate);
 
   useEffect(() => {
     void resume();
@@ -39,8 +39,9 @@ export default function App() {
       hydrateImLayout(userId);
       hydrateFileIndex(userId);
       hydrateDownloadHistory(userId);
+      hydrateCodexWorkspace(`${getServerBase() || 'same-origin'}:${userId}`);
     }
-  }, [hydrateDownloadHistory, hydrateFileIndex, hydrateImLayout, hydrateOnboarding, status, userId]);
+  }, [hydrateCodexWorkspace, hydrateDownloadHistory, hydrateFileIndex, hydrateImLayout, hydrateOnboarding, status, userId]);
 
   let content;
   if (status === 'boot') {
@@ -68,11 +69,6 @@ export default function App() {
   }
   return (
     <>
-      {runtimeFeatures().polling ? (
-        <Suspense fallback={null}>
-          <ButlerPollerBridge />
-        </Suspense>
-      ) : null}
       <DiagnosticBridge />
       <UpdaterBridge />
       <WorkspaceSyncBridge />

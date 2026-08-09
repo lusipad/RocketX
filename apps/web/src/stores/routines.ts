@@ -1,36 +1,20 @@
 import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
-import type { AgentLoopEvent } from '../kernel/ai/agent-loop';
-import { butlerArchiveStorage } from '../lib/butlerArchive';
-import { codexBrainAvailability } from '../lib/butlerBrain';
-import {
-  extractButlerSources,
-  mergeButlerSources,
-  type ButlerSource,
-} from '../lib/butlerContext';
+import { runCodexAutomation, type CodexAutomationOptions } from '../agent/codexAutomation';
 import {
   findButlerAbilityTemplate,
   type ButlerAbilityTemplate,
   type ButlerAbilityTemplateId,
   type RoutinePrecheck,
 } from '../lib/butlerAbilityTemplates';
-import {
-  canUseNativeButlerSkill,
-  isButlerSkillEnabled,
-  loadButlerSkill,
-  type ButlerProfileStorage,
-} from '../lib/butlerProfile';
 import { shouldRunRoutine } from '../lib/routinePrecheck';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
-import { friendlyButlerCodexError, runButlerCodexEphemeral } from './butlerCodex';
-import { pauseButlerWorkflowTask, runButlerWorkflowTask } from './butler';
 import { useChat } from './chat';
+import { useCodexWorkspace } from './codexWorkspace';
 import { useAuth } from './auth';
-import { getServerBase } from '../lib/client';
-import { buildButlerLightweightMemoryContext } from '../lib/butlerMemoryContext';
 
-const ROUTINES_KEY = 'rcx-butler-v1:routines';
-const WATCHER_KEYS_KEY = 'rcx-butler-v1:routine-seen';
+const ROUTINES_KEY = 'rcx-codex-automations-v1:routines';
+const WATCHER_KEYS_KEY = 'rcx-codex-automations-v1:watcher-seen';
 const RUN_LIMIT = 10;
 const EVENT_CARD_LIMIT = 30;
 
@@ -68,8 +52,7 @@ export interface RoutineVersion {
   params?: { rooms?: string[] };
 }
 
-// 默认类型参数保留旧 UI/调用方的静态兼容；引擎边界显式传 RoutineTrigger 做严格校验。
-export interface Routine<TTrigger extends RoutineTrigger = any> {
+export interface Routine<TTrigger extends RoutineTrigger = RoutineTrigger> {
   id: string;
   name: string;
   trigger: TTrigger;
@@ -78,7 +61,6 @@ export interface Routine<TTrigger extends RoutineTrigger = any> {
   templateId?: ButlerAbilityTemplateId;
   precheck?: RoutinePrecheck;
   params?: { rooms?: string[] };
-  delivery: 'today';
   enabled: boolean;
   createdAt: number;
   updatedAt?: number;
@@ -119,17 +101,34 @@ interface RoutineState {
   dismissCard: (id: string) => void;
   runNow: (
     id: string,
-    options?: { triggerReason?: string; onAdmitted?: () => void },
-  ) => Promise<void>;
+    options?: { triggerReason?: string },
+  ) => Promise<boolean>;
   tick: (now?: number) => Promise<void>;
 }
 
-let routineStorage: ButlerProfileStorage = butlerArchiveStorage;
-let routineCodexRunner: typeof runButlerCodexEphemeral = runButlerCodexEphemeral;
+export interface RoutineStorage {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+}
+
+const browserRoutineStorage: RoutineStorage = {
+  get: (key) => typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function'
+    ? null
+    : localStorage.getItem(key),
+  set: (key, value) => {
+    if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+      localStorage.setItem(key, value);
+    }
+  },
+};
+
+let routineStorage: RoutineStorage = browserRoutineStorage;
+let routineCodexRunner: (options: CodexAutomationOptions) => Promise<{ text: string }> = runCodexAutomation;
 let routineNow = () => Date.now();
 let scheduler: ReturnType<typeof setInterval> | undefined;
+const routineAbortControllers = new Map<string, AbortController>();
 
-export function setRoutineStorage(storage: ButlerProfileStorage): () => void {
+export function setRoutineStorage(storage: RoutineStorage): () => void {
   const previous = routineStorage;
   routineStorage = storage;
   return () => {
@@ -137,7 +136,7 @@ export function setRoutineStorage(storage: ButlerProfileStorage): () => void {
   };
 }
 
-export function setRoutineCodexRunner(runner: typeof runButlerCodexEphemeral): () => void {
+export function setRoutineCodexRunner(runner: (options: CodexAutomationOptions) => Promise<{ text: string }>): () => void {
   const previous = routineCodexRunner;
   routineCodexRunner = runner;
   return () => {
@@ -262,7 +261,6 @@ function routineFromTemplate(
     templateId: template.id,
     precheck: template.precheck,
     ...(rooms ? { params: { rooms: [...rooms] } } : {}),
-    delivery: 'today',
     enabled: options?.enabled ?? true,
     createdAt,
     updatedAt: createdAt,
@@ -275,34 +273,22 @@ function routineFromTemplate(
 
 function normalizeRoutine(value: unknown): Routine | undefined {
   if (!value || typeof value !== 'object') return undefined;
-  const routine = value as Partial<Routine>;
+  const routine = { ...value } as Partial<Routine> & { delivery?: unknown };
+  delete routine.delivery;
   const trigger = normalizeTrigger(routine.trigger);
   if (
     typeof routine.id !== 'string' ||
     typeof routine.name !== 'string' ||
     !trigger ||
     (typeof routine.skillName !== 'string' && typeof routine.prompt !== 'string') ||
-    routine.delivery !== 'today' ||
     typeof routine.enabled !== 'boolean' ||
     typeof routine.createdAt !== 'number' ||
     !Array.isArray(routine.runs)
   ) return undefined;
-  const template = routine.templateId
-    ? findButlerAbilityTemplate(routine.templateId)
-    : routine.id === 'builtin-morning-brief'
-      ? findButlerAbilityTemplate('morning-brief')
-      : routine.id === 'builtin-evening-review'
-        ? findButlerAbilityTemplate('evening-review')
-        : undefined;
   const normalized = {
     ...routine,
     trigger,
     runs: routine.runs.slice(0, RUN_LIMIT),
-    ...(template && !routine.templateId ? { templateId: template.id } : {}),
-    ...(template?.skillName && !routine.skillName && !routine.prompt
-      ? { skillName: template.skillName }
-      : {}),
-    ...(template && !routine.precheck ? { precheck: template.precheck } : {}),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
   } as Routine;
   const versions = Array.isArray(routine.versions)
@@ -324,21 +310,13 @@ function normalizeRoutine(value: unknown): Routine | undefined {
     }).slice(-20)
     : [];
   const currentVersion = Math.max(1, routine.contractVersion ?? versions.at(-1)?.version ?? 1);
-  const templateSkillName = template?.skillName;
-  const migrated = templateSkillName
-    && template?.id === 'room-digest'
-    && !routine.skillName
-    && typeof routine.prompt === 'string'
-    && currentVersion === 1
-    ? { ...normalized, skillName: templateSkillName, prompt: undefined }
-    : normalized;
   return {
-    ...migrated,
+    ...normalized,
     updatedAt: routine.updatedAt ?? routine.createdAt,
     contractVersion: currentVersion,
     versions: versions.length
       ? versions
-      : [routineVersion(migrated, currentVersion, routine.createdAt, '从旧版本迁移')],
+      : [routineVersion(normalized, currentVersion, routine.createdAt, '创建已安排任务')],
   };
 }
 
@@ -405,32 +383,9 @@ function emptyPrecheckResult(routine: Routine): string {
     : '选定房间从上次整理后没有新消息。';
 }
 
-async function recordWatcherWorkflow(events: readonly ReturnType<typeof checkWatchers>[number][]): Promise<void> {
-  if (!events.length) return;
-  const sources = mergeButlerSources(events.map((event) => ({
-    kind: 'room',
-    id: event.rid,
-    rid: event.rid,
-    label: event.title.replace(/^@我未回应：/, '').replace(/（\d+小时前）$/, ''),
-  })));
-  await runButlerWorkflowTask({
-    key: 'watcher:mentions',
-    kind: 'watcher',
-    goal: '检查 Today 中长期未回应的 @我 提醒',
-    triggerReason: 'watcher',
-    context: {
-      kind: 'surface',
-      label: 'Today',
-      detail: '只记录达到提醒阈值且尚未处理的 @我 房间。',
-      sources,
-    },
-    sources,
-    execute: async () => ({
-      value: undefined,
-      summary: `发现 ${events.length} 个需要处理的 @我 房间。`,
-      sources,
-    }),
-  });
+function knownSkillDisabled(skillName: string): boolean {
+  const skill = useCodexWorkspace.getState().skills.find((item) => item.name === skillName);
+  return skill?.enabled === false;
 }
 
 export const useRoutines = create<RoutineState>((set, get) => ({
@@ -443,11 +398,9 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   hydrate: () => {
     const saved = readJson(ROUTINES_KEY);
-    const stored = Array.isArray(saved)
-      ? saved
-      : saved && typeof saved === 'object' && Array.isArray((saved as PersistedRoutines).routines)
-        ? (saved as PersistedRoutines).routines
-        : [];
+    const stored = saved && typeof saved === 'object' && Array.isArray((saved as PersistedRoutines).routines)
+      ? (saved as PersistedRoutines).routines
+      : [];
     const cards = saved && typeof saved === 'object' && Array.isArray((saved as PersistedRoutines).eventCards)
       ? (saved as PersistedRoutines).eventCards as ButlerEventCard[]
       : [];
@@ -474,13 +427,11 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   setEnabled: (id, enabled) => {
     const target = get().routines.find((routine) => routine.id === id);
-    if (enabled && target?.skillName && !isButlerSkillEnabled(target.skillName)) return;
+    if (enabled && target?.skillName && knownSkillDisabled(target.skillName)) return;
     const routines = get().routines.map((routine) => routine.id === id ? { ...routine, enabled } : routine);
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
-    if (!enabled) {
-      void pauseButlerWorkflowTask(`routine:${id}`, '用户停用例行事务').catch(() => undefined);
-    }
+    if (!enabled) routineAbortControllers.get(id)?.abort(new Error('用户停用已安排任务'));
   },
 
   loadTemplate: (templateId, params) => {
@@ -488,7 +439,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (existing) return existing;
     const template = findButlerAbilityTemplate(templateId);
     if (!template) return undefined;
-    if (!isButlerSkillEnabled(template.skillName)) return undefined;
+    if (knownSkillDisabled(template.skillName)) return undefined;
     const routine = routineFromTemplate(template, routineNow(), params);
     if (!routine) return undefined;
     const routines = [routine, ...get().routines];
@@ -507,7 +458,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       : get().unloadedTemplateIds;
     set({ routines, unloadedTemplateIds });
     persist(routines, get().eventCards, get().seenKeys, unloadedTemplateIds);
-    void pauseButlerWorkflowTask(`routine:${id}`, '用户卸载例行事务').catch(() => undefined);
+    routineAbortControllers.get(id)?.abort(new Error('用户删除已安排任务'));
   },
 
   addRoutine: (routine) => {
@@ -585,15 +536,28 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   runNow: async (id, options) => {
     const routine = get().routines.find((item) => item.id === id);
-    if (!routine) return;
+    if (!routine) return false;
     const at = routineNow();
-    if (routine.skillName && !isButlerSkillEnabled(routine.skillName)) {
-      if (options?.triggerReason === 'schedule') return;
+    if (!useAuth.getState().user?._id) {
       const run: RoutineRun = {
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: `技能「${routine.skillName}」已停用或已卸载，请先到“技能中心”重新启用。`,
+        text: '登录后才能运行已安排任务。',
+      };
+      const routines = get().routines.map((item) => item.id === id
+        ? { ...item, runs: [run, ...item.runs].slice(0, RUN_LIMIT) }
+        : item);
+      set({ routines });
+      persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+      return true;
+    }
+    if (routine.skillName && knownSkillDisabled(routine.skillName)) {
+      const run: RoutineRun = {
+        id: crypto.randomUUID(),
+        at,
+        status: 'error',
+        text: `Skill「${routine.skillName}」已停用或已卸载，请先到“插件”重新启用。`,
       };
       let routines: Routine[] = [];
       set((state) => {
@@ -603,11 +567,11 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         return { routines };
       });
       persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
-      return;
+      return true;
     }
     const precheckPassed = shouldRunRoutine(routine, at);
-    if (!precheckPassed && options?.triggerReason === 'schedule') return;
-    if (get().runningIds.includes(id)) return;
+    if (!precheckPassed && options?.triggerReason === 'schedule') return false;
+    if (get().runningIds.includes(id)) return false;
     if (!precheckPassed) {
       const run: RoutineRun = {
         id: crypto.randomUUID(),
@@ -623,93 +587,36 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         return { routines };
       });
       persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
-      return;
+      return true;
     }
     set((state) => ({ runningIds: [...state.runningIds, id] }));
-    let admitted = false;
+    const abortController = new AbortController();
+    routineAbortControllers.set(id, abortController);
     let run: RoutineRun;
     try {
-      const result = await runButlerWorkflowTask({
-        key: `routine:${routine.id}`,
-        kind: 'routine',
-        goal: `运行 Today 例行事务：${routine.name}`,
-        triggerReason: options?.triggerReason?.trim() || 'manual',
-        context: {
-          kind: 'surface',
-          label: 'Today',
-          detail: `例行事务“${routine.name}”按已装载的方法运行，结果投递到 Today。`,
-          sources: [],
-        },
-        execute: async ({ signal, toolRuntimeContext }) => {
-          admitted = true;
-          options?.onAdmitted?.();
-          let sources: ButlerSource[] = [];
-          const toolNames = new Map<string, string>();
-          const onEvent = (event: AgentLoopEvent) => {
-            if (event.type === 'tool-call') {
-              toolNames.set(event.toolCall.id, event.toolCall.name);
-            } else if (event.type === 'tool-result') {
-              sources = mergeButlerSources(
-                sources,
-                extractButlerSources(toolNames.get(event.toolCallId), event.content),
-              );
-            }
-          };
-          const runtimeContext = (toolCall: { id: string }) => toolRuntimeContext(toolCall.id, sources);
-          const availability = codexBrainAvailability();
-          if (!availability.available) throw new Error(availability.reason ?? 'Codex 暂不可用');
-          const previousSuccessfulRunAt = routine.runs
-            .filter((item) => item.status === 'ok')
-            .reduce((latest, item) => Math.max(latest, item.at), 0);
-          const taskText = [
-            `执行 Today 例行事务“${routine.name}”，直接输出结果。`,
-            ...(previousSuccessfulRunAt > 0
-              ? [`该例行事务上次成功运行时间：${new Date(previousSuccessfulRunAt).toISOString()}。`]
-              : ['这是该例行事务首次成功运行前的检查。']),
-            ...(routine.params?.rooms?.length
-              ? [`只处理这些房间：${routine.params.rooms.join('、')}。`]
-              : []),
-          ].join('\n');
-          const user = useAuth.getState().user;
-          const memoryContext = buildButlerLightweightMemoryContext(
-            taskText,
-            user?._id
-              ? { server: getServerBase() || 'same-origin', account: user._id }
-              : undefined,
-          );
-          const value = routine.prompt
-            ? await routineCodexRunner({
-              text: `${taskText}\n\n请按以下自定义方法执行：\n\n${routine.prompt}`,
-              taskContext: memoryContext || undefined,
-              now: at,
-              signal,
-              onEvent,
-              toolRuntimeContext: runtimeContext,
-            })
-            : routine.skillName && canUseNativeButlerSkill(routine.skillName)
-            ? await routineCodexRunner({
-              text: taskText,
-              skillName: routine.skillName,
-              taskContext: memoryContext || undefined,
-              now: at,
-              signal,
-              onEvent,
-              toolRuntimeContext: runtimeContext,
-            })
-            : await routineCodexRunner({
-              text: `${taskText}\n\n请按以下方法论执行并直接输出结果：\n\n${loadButlerSkill(routine.skillName ?? '')}`,
-              taskContext: memoryContext || undefined,
-              now: at,
-              signal,
-              onEvent,
-              toolRuntimeContext: runtimeContext,
-            });
-          return {
-            value,
-            summary: `例行事务“${routine.name}”已完成并投递到 Today。`,
-            sources,
-          };
-        },
+      const workspace = useCodexWorkspace.getState();
+      const previousSuccessfulRunAt = routine.runs
+        .filter((item) => item.status === 'ok')
+        .reduce((latest, item) => Math.max(latest, item.at), 0);
+      const taskText = [
+        ...(routine.skillName ? [`$${routine.skillName}`] : []),
+        `执行已安排任务“${routine.name}”，直接输出结果。`,
+        ...(previousSuccessfulRunAt > 0
+          ? [`该任务上次成功运行时间：${new Date(previousSuccessfulRunAt).toISOString()}。`]
+          : ['这是该任务首次成功运行前的检查。']),
+        ...(routine.params?.rooms?.length
+          ? [`只处理这些房间：${routine.params.rooms.join('、')}。`]
+          : []),
+        ...(routine.prompt ? ['', '请按以下自定义要求执行：', routine.prompt] : []),
+      ].join('\n');
+      const result = await routineCodexRunner({
+        workspaceRoot: workspace.workspaceRoot,
+        text: taskText,
+        name: `自动化 · ${routine.name}`,
+        model: workspace.selectedModel || undefined,
+        effort: workspace.selectedEffort,
+        skillName: routine.skillName,
+        signal: abortController.signal,
       });
       run = { id: crypto.randomUUID(), at, status: 'ok', text: result.text };
     } catch (error) {
@@ -717,14 +624,10 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: friendlyButlerCodexError(error),
+        text: error instanceof Error ? error.message : String(error),
       };
-    }
-    if (!admitted && options?.triggerReason === 'schedule') {
-      set((state) => ({
-        runningIds: state.runningIds.filter((runningId) => runningId !== id),
-      }));
-      return;
+    } finally {
+      routineAbortControllers.delete(id);
     }
     let routines: Routine[] = [];
     set((state) => {
@@ -734,12 +637,11 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       return { routines, runningIds: state.runningIds.filter((runningId) => runningId !== id) };
     });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+    return true;
   },
 
   tick: async (now = routineNow()) => {
     const watched = checkWatchers(watcherSnapshot(get().seenKeys), now);
-    const workflowRecorded = watched.length === 0
-      || await recordWatcherWorkflow(watched).then(() => true).catch(() => false);
     const retainedCards = get().eventCards.filter((card) => card.kind === 'mention-stale');
     if (watched.length > 0 || retainedCards.length !== get().eventCards.length) {
       const watchedCards = watched.map(({ dedupeKey: _dedupeKey, ...card }) => card);
@@ -748,20 +650,15 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         ...watchedCards,
         ...retainedCards.filter((card) => !watchedIds.has(card.id)),
       ].slice(0, EVENT_CARD_LIMIT);
-      const seenKeys = workflowRecorded
-        ? [...new Set([...get().seenKeys, ...watched.map((card) => card.dedupeKey)])]
-        : get().seenKeys;
+      const seenKeys = [...new Set([...get().seenKeys, ...watched.map((card) => card.dedupeKey)])];
       set({ eventCards, seenKeys });
       persist(get().routines, eventCards, seenKeys, get().unloadedTemplateIds);
     }
-    const due = dueRoutines(get().routines, now).filter(
-      (routine) => !routine.skillName || isButlerSkillEnabled(routine.skillName),
-    );
+    const due = dueRoutines(get().routines, now);
     const firedIds = new Set<string>();
-    await Promise.all(due.map((routine) => get().runNow(routine.id, {
-      triggerReason: 'schedule',
-      onAdmitted: () => firedIds.add(routine.id),
-    })));
+    await Promise.all(due.map(async (routine) => {
+      if (await get().runNow(routine.id, { triggerReason: 'schedule' })) firedIds.add(routine.id);
+    }));
     if (firedIds.size > 0) {
       const today = localDate(now);
       const routines = get().routines.map((routine) => firedIds.has(routine.id)

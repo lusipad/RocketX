@@ -1,5 +1,7 @@
 # Implementation notes — Butler 持续工作系统
 
+> 文档状态：**已废弃方案的历史实施记录**。旧 Rounds、Errand Run、自建 Memory 和持续工作投影已退出；当前见[管家任务](specs/butler-tasks.md)、[已安排任务](specs/scheduled-tasks.md)和[Memory](specs/memory.md)。
+
 Plan: `docs/butler-continuous-work-system-design.md`
 
 ## Decisions

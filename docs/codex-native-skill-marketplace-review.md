@@ -1,5 +1,7 @@
 # Codex 原生 Skill 与 Marketplace 改造
 
+> 文档状态：**历史评审记录**。本文截图和项目 Skill 数量是当时快照；当前发现、启停、安装、卸载和平台边界见[Skills、Plugins 与 Apps](specs/skills-and-plugins.md)。
+
 ![Skill 管理页](../tests/ui/butler-workspace.spec.ts-snapshots/butler-identity-skills-dark-wide-win32.png)
 
 > 管理页只保留 8 个可执行的项目 Skill；市场是 Codex 原生入口，浏览器版明确提示需在桌面端使用。

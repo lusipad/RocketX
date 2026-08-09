@@ -33,6 +33,8 @@ RocketX development runs at <http://127.0.0.1:1420>; the pinned Rocket.Chat serv
 - Add or update a regression test before changing behavior when practical.
 - Keep third-party application permissions minimal and document any new capability or trust boundary.
 - Update English and Chinese documentation together when user-facing instructions change.
+- Update the relevant [functional specification](docs/specs/README.md), capability matrix, and traceability entry whenever a user-visible capability, platform boundary, permission, data location, or failure behavior changes.
+- Follow the lifecycle rules in the [documentation index](docs/README.md): current documentation must stay factual; plans and implementation notes remain historical records and must not be presented as current behavior.
 
 ## Verification
 

@@ -1,5 +1,7 @@
 # RocketX application development
 
+> Document status: **current application-development reference**. User-visible installation and platform availability are defined by the [Skills, Plugins, and Apps specification](specs/skills-and-plugins.md).
+
 RocketX applications are static iframe or worker bundles described by `rcx.app.json`. The host validates the manifest, grants only declared permissions, and exposes capabilities through a JSON-RPC Bridge. An application must not depend on Tauri internals or RocketX private modules.
 
 The package and CLI sources are in this repository. Do not assume they are available from npm until the npm registry confirms a published version.

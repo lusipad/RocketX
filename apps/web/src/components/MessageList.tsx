@@ -11,7 +11,6 @@ import DiscussionCard from './DiscussionCard';
 import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
 import { askButlerAboutMessages } from '../kernel/butler';
-import { useButler } from '../stores/butler';
 import {
   BUTLER_EXTRACT_COMMITMENTS_PROMPT,
   BUTLER_SUMMARIZE_PROMPT,
@@ -107,8 +106,6 @@ export default function MessageList({ rid }: { rid: string }) {
   const selectMode = useChat((s) => s.selectMode);
   const selectedMids = useChat((s) => s.selectedMids);
   const exitSelectMode = useChat((s) => s.exitSelectMode);
-  // MessageList 是单实例，这里可以放心订阅 running（对比 MessageItem 每条一个实例）
-  const butlerRunning = useButler((s) => s.running);
   const deleteMessage = useChat((s) => s.deleteMessage);
   const toggleStar = useChat((s) => s.toggleStar);
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -342,12 +339,8 @@ export default function MessageList({ rid }: { rid: string }) {
 
   const handOverToButler = (question: string, actionLabel: string): void => {
     if (!selectedMessages.length) return;
-    const result = askButlerAboutMessages(rid, selectedMessages, question);
-    if (result === 'busy') {
-      toast.error('管家正在忙，等它答完这轮');
-      return;
-    }
-    toast.success(`已把 ${selectedMessages.length} 条消息交给管家：${actionLabel}`);
+    askButlerAboutMessages(rid, selectedMessages, question);
+    toast.success(`已创建 Codex 任务：${actionLabel}`);
     exitSelectMode();
   };
   const deletableSelected = selectedMessages.filter((message) => message.u._id === myId);
@@ -401,7 +394,7 @@ export default function MessageList({ rid }: { rid: string }) {
               <>
                 <button
                   onClick={() => handOverToButler(BUTLER_EXTRACT_COMMITMENTS_PROMPT, '提取承诺')}
-                  disabled={selectedMessages.length === 0 || butlerRunning}
+                  disabled={selectedMessages.length === 0}
                   className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
                   title="让管家从这些消息里提取承诺"
                 >
@@ -410,7 +403,7 @@ export default function MessageList({ rid }: { rid: string }) {
                 </button>
                 <button
                   onClick={() => handOverToButler(BUTLER_SUMMARIZE_PROMPT, '总结这段')}
-                  disabled={selectedMessages.length === 0 || butlerRunning}
+                  disabled={selectedMessages.length === 0}
                   className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
                   title="让管家总结这段对话"
                 >

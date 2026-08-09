@@ -1,5 +1,7 @@
 import type { ExternalAgentConfigImportParams } from './generated/v2/ExternalAgentConfigImportParams';
 import type { ExternalAgentConfigImportResponse } from './generated/v2/ExternalAgentConfigImportResponse';
+import type { AppsListParams } from './generated/v2/AppsListParams';
+import type { AppsListResponse } from './generated/v2/AppsListResponse';
 import type { InitializeParams } from './generated/InitializeParams';
 import type { InitializeResponse } from './generated/InitializeResponse';
 import type { ListMcpServerStatusParams } from './generated/v2/ListMcpServerStatusParams';
@@ -12,6 +14,10 @@ import type { MarketplaceRemoveParams } from './generated/v2/MarketplaceRemovePa
 import type { MarketplaceRemoveResponse } from './generated/v2/MarketplaceRemoveResponse';
 import type { MarketplaceUpgradeParams } from './generated/v2/MarketplaceUpgradeParams';
 import type { MarketplaceUpgradeResponse } from './generated/v2/MarketplaceUpgradeResponse';
+import type { ModelListParams } from './generated/v2/ModelListParams';
+import type { ModelListResponse } from './generated/v2/ModelListResponse';
+import type { PermissionProfileListParams } from './generated/v2/PermissionProfileListParams';
+import type { PermissionProfileListResponse } from './generated/v2/PermissionProfileListResponse';
 import type { PluginInstallParams } from './generated/v2/PluginInstallParams';
 import type { PluginInstallResponse } from './generated/v2/PluginInstallResponse';
 import type { PluginInstalledParams } from './generated/v2/PluginInstalledParams';
@@ -26,6 +32,8 @@ import type { PluginUninstallParams } from './generated/v2/PluginUninstallParams
 import type { PluginUninstallResponse } from './generated/v2/PluginUninstallResponse';
 import type { SkillsConfigWriteParams } from './generated/v2/SkillsConfigWriteParams';
 import type { SkillsConfigWriteResponse } from './generated/v2/SkillsConfigWriteResponse';
+import type { SkillsExtraRootsSetParams } from './generated/v2/SkillsExtraRootsSetParams';
+import type { SkillsExtraRootsSetResponse } from './generated/v2/SkillsExtraRootsSetResponse';
 import type { SkillsListParams } from './generated/v2/SkillsListParams';
 import type { SkillsListResponse } from './generated/v2/SkillsListResponse';
 import type { ThreadArchiveParams } from './generated/v2/ThreadArchiveParams';
@@ -48,6 +56,10 @@ import type { ThreadReadParams } from './generated/v2/ThreadReadParams';
 import type { ThreadReadResponse } from './generated/v2/ThreadReadResponse';
 import type { ThreadStartParams } from './generated/v2/ThreadStartParams';
 import type { ThreadStartResponse } from './generated/v2/ThreadStartResponse';
+import type { ThreadSettingsUpdateParams } from './generated/v2/ThreadSettingsUpdateParams';
+import type { ThreadSettingsUpdateResponse } from './generated/v2/ThreadSettingsUpdateResponse';
+import type { ThreadTurnsListParams } from './generated/v2/ThreadTurnsListParams';
+import type { ThreadTurnsListResponse } from './generated/v2/ThreadTurnsListResponse';
 import type { TurnInterruptParams } from './generated/v2/TurnInterruptParams';
 import type { TurnInterruptResponse } from './generated/v2/TurnInterruptResponse';
 import type { TurnStartParams } from './generated/v2/TurnStartParams';
@@ -61,6 +73,7 @@ export interface CodexProcessInfo {
   processId: string;
   version: string;
   runtimeSource: 'manual' | 'bundled' | 'system';
+  managedSkillRoots: string[];
 }
 
 export interface CodexTransportHandlers {
@@ -76,10 +89,20 @@ export interface CodexTransport {
 
 interface ClientMethods {
   initialize: { params: InitializeParams; result: InitializeResponse };
+  'model/list': { params: ModelListParams; result: ModelListResponse };
+  'permissionProfile/list': {
+    params: PermissionProfileListParams;
+    result: PermissionProfileListResponse;
+  };
+  'app/list': { params: AppsListParams; result: AppsListResponse };
   'skills/list': { params: SkillsListParams; result: SkillsListResponse };
   'skills/config/write': {
     params: SkillsConfigWriteParams;
     result: SkillsConfigWriteResponse;
+  };
+  'skills/extraRoots/set': {
+    params: SkillsExtraRootsSetParams;
+    result: SkillsExtraRootsSetResponse;
   };
   'marketplace/add': {
     params: MarketplaceAddParams;
@@ -121,6 +144,10 @@ interface ClientMethods {
   };
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
+  'thread/settings/update': {
+    params: ThreadSettingsUpdateParams;
+    result: ThreadSettingsUpdateResponse;
+  };
   'thread/archive': { params: ThreadArchiveParams; result: ThreadArchiveResponse };
   'thread/goal/set': { params: ThreadGoalSetParams; result: ThreadGoalSetResponse };
   'thread/goal/get': { params: ThreadGoalGetParams; result: ThreadGoalGetResponse };
@@ -135,6 +162,10 @@ interface ClientMethods {
   };
   'thread/list': { params: ThreadListParams; result: ThreadListResponse };
   'thread/read': { params: ThreadReadParams; result: ThreadReadResponse };
+  'thread/turns/list': {
+    params: ThreadTurnsListParams;
+    result: ThreadTurnsListResponse;
+  };
   'externalAgentConfig/import': {
     params: ExternalAgentConfigImportParams;
     result: ExternalAgentConfigImportResponse;
@@ -185,6 +216,12 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
   if (method === 'thread/start' || method === 'thread/resume') {
     if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
       throw new Error(`Codex app-server ${method} 响应缺少 thread.id。`);
+    }
+    return;
+  }
+  if (method === 'model/list' || method === 'permissionProfile/list' || method === 'app/list') {
+    if (!Array.isArray(response.data)) {
+      throw new Error(`Codex app-server ${method} 响应缺少 data。`);
     }
     return;
   }
@@ -289,9 +326,9 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
     }
     return;
   }
-  if (method === 'thread/list') {
+  if (method === 'thread/list' || method === 'thread/turns/list') {
     if (!Array.isArray(response.data)) {
-      throw new Error('Codex app-server thread/list 响应缺少 data。');
+      throw new Error(`Codex app-server ${method} 响应缺少 data。`);
     }
     return;
   }

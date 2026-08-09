@@ -17,6 +17,9 @@ const child = spawn(cli.command, [...cli.args, ...cli.appServerArgs], {
 let nextId = 1;
 const pending = new Map();
 let answer = '';
+let catalogSummary = '';
+let smokeThreadId = '';
+let finishing = false;
 
 function write(message) {
   child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -59,17 +62,29 @@ createInterface({ input: child.stdout }).on('line', (line) => {
     return;
   }
   if (message.method === 'item/agentMessage/delta') answer += message.params.delta ?? '';
-  if (message.method === 'turn/completed') {
-    clearTimeout(timer);
-    if (!answer.includes('RCX_M8_OK')) {
-      console.error(`未收到预期回复：${answer}`);
-      process.exitCode = 1;
-    } else {
-      console.log(
-        `Codex app-server ${cliVersion}（${cli.source}，${cli.displayPath}）真实 turn 通过：RCX_M8_OK`,
-      );
-    }
-    child.kill();
+  if (message.method === 'turn/completed' && !finishing) {
+    finishing = true;
+    void (async () => {
+      try {
+        if (!answer.includes('RCX_M8_OK')) {
+          console.error(`未收到预期回复：${answer}`);
+          process.exitCode = 1;
+        } else {
+          console.log(
+            `Codex app-server ${cliVersion}（${cli.source}，${cli.displayPath}）真实 turn 通过：RCX_M8_OK`,
+          );
+          console.log(`真实目录通过：${catalogSummary}`);
+          console.log('原生 Memory 已为该 Thread 启用');
+        }
+        if (smokeThreadId) await request('thread/archive', { threadId: smokeThreadId });
+      } catch (error) {
+        console.error(`Smoke 清理失败：${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      } finally {
+        clearTimeout(timer);
+        child.kill();
+      }
+    })();
   }
 });
 
@@ -82,24 +97,55 @@ const initialized = await request('initialize', {
     optOutNotificationMethods: null,
   },
 });
-const initializedVersion = initialized.userAgent?.match(/^Codex Desktop\/(\d+\.\d+\.\d+)/)?.[1];
+const initializedVersion = initialized.userAgent?.match(/^rocketx-smoke\/(\d+\.\d+\.\d+)/)?.[1];
 if (initializedVersion !== cliVersion) {
   throw new Error(`初始化版本不匹配：${initialized.userAgent}`);
 }
 write({ method: 'initialized' });
+await request('skills/extraRoots/set', {
+  extraRoots: [
+    resolve(root, 'apps/web/src/butler/skills/core'),
+    resolve(root, 'apps/desktop/src-tauri/resources/codex-skills'),
+  ],
+});
+const [models, permissionProfiles, skills] = await Promise.all([
+  request('model/list', { includeHidden: false }),
+  request('permissionProfile/list', { cwd: root }),
+  request('skills/list', { cwds: [root], forceReload: true }),
+]);
+const [apps, plugins] = await Promise.allSettled([
+  request('app/list', { threadId: null, forceRefetch: true }),
+  request('plugin/list', { cwds: [root] }),
+]);
+if (!models.data?.length) throw new Error('真实模型目录为空');
+if (!permissionProfiles.data?.length) throw new Error('真实权限目录为空');
+const skillNames = skills.data?.flatMap((entry) => entry.skills ?? []).map((skill) => skill.name) ?? [];
+for (const expected of ['room-digest', 'message-action-extraction', 'azure-devops-server']) {
+  if (!skillNames.includes(expected)) throw new Error(`真实 Skills 目录缺少 ${expected}`);
+}
+catalogSummary = [
+  `${models.data.length} models`,
+  `${permissionProfiles.data.length} permission profiles`,
+  `${skillNames.length} skills`,
+  apps.status === 'fulfilled' ? `${apps.value.data?.length ?? 0} apps` : 'apps unavailable（已隔离）',
+  plugins.status === 'fulfilled'
+    ? `${plugins.value.marketplaces?.flatMap((entry) => entry.plugins ?? []).length ?? 0} plugins`
+    : 'plugins unavailable（已隔离）',
+].join('，');
 const thread = await request('thread/start', {
   cwd: root,
   runtimeWorkspaceRoots: [root],
+  permissions: ':workspace',
   approvalPolicy: 'on-request',
-  approvalsReviewer: 'user',
-  sandbox: 'read-only',
-  ephemeral: true,
+  approvalsReviewer: 'guardian_subagent',
   developerInstructions: 'Do not use tools. Reply with the exact requested marker only.',
 });
+smokeThreadId = thread.thread.id;
+await request('thread/memoryMode/set', { threadId: thread.thread.id, mode: 'enabled' });
 await request('turn/start', {
   threadId: thread.thread.id,
   input: [{ type: 'text', text: 'Reply exactly RCX_M8_OK', text_elements: [] }],
+  permissions: ':workspace',
   approvalPolicy: 'on-request',
-  approvalsReviewer: 'user',
-  sandboxPolicy: { type: 'readOnly', networkAccess: false },
+  approvalsReviewer: 'guardian_subagent',
 });

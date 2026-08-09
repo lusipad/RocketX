@@ -1,7 +1,7 @@
 {
   "name": "rocketchatx",
   "private": true,
-  "version": "0.36.5",
+  "version": "0.40.0",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "dev": "pnpm --filter @rcx/web dev",
@@ -20,10 +20,6 @@
     "smoke:codex-app-server:system": "tsx scripts/smoke-codex-app-server.mjs --runtime system",
     "smoke:codex-lifecycle": "tsx scripts/smoke-codex-lifecycle.ts --runtime pinned",
     "smoke:codex-lifecycle:system": "tsx scripts/smoke-codex-lifecycle.ts --runtime system",
-    "spike:butler-dynamic-tools": "tsx scripts/spike-butler-dynamic-tools.mjs --runtime system",
-    "spike:butler-azure-skill-adapter-path": "tsx scripts/spike-butler-azure-skill-adapter-path.ts",
-    "spike:butler-native-skills": "tsx scripts/spike-butler-native-skills.ts --runtime pinned",
-    "spike:butler-native-skills:system": "tsx scripts/spike-butler-native-skills.ts --runtime system",
     "spike:codex-shell-contract": "tsx scripts/spike-codex-shell-contract.ts",
     "spike:codex-mcp-config": "tsx scripts/spike-codex-mcp-config.ts",
     "spike:business-mcp-runtime": "tsx scripts/spike-business-mcp-runtime.ts",

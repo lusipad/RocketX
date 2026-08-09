@@ -1,5 +1,7 @@
 # ChatGPT Pro 工程任务：Butler paused / unknown 状态可信闭环
 
+> 文档状态：**已废弃方案的历史任务书**。本文要求和源码基线只适用于旧 Butler Errand Runtime；当前状态见[聊天 AI 托管与委托](specs/delegation-and-shared-agent.md)。
+
 ## 背景与目标
 
 RocketX 是基于 Codex App Server 协议、深度集成 Rocket.Chat 与 Azure DevOps 的文字个人助理。产品必须让用户始终知道任务是在运行、等待、暂停、已交付、已知失败，还是结果暂时无法确认，并提供安全的下一步。
