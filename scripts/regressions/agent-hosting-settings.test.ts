@@ -1,82 +1,52 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import {
-  AGENT_HOSTING_CODEX_EFFORTS,
-  AGENT_HOSTING_PERMISSION_PRESETS,
-  getAgentHostingCodexSettings,
-  setAgentHostingCodexSettings,
-  setAgentHostingSettingsStorage,
-  type AgentHostingSettingsStorage,
-} from '../../apps/web/src/lib/agentHostingSettings';
 
-class MemoryStorage implements AgentHostingSettingsStorage {
-  private readonly entries = new Map<string, string>();
+test('AI 托管使用账号级独立模型配置，审批权限仍由 AI 管家统一管理', () => {
+  const sharedAgent = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
+  const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
+  const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
 
-  get(key: string): string | null {
-    return this.entries.get(key) ?? null;
-  }
-
-  set(key: string, value: string): void {
-    this.entries.set(key, value);
-  }
-}
-
-function withStorage(run: (storage: MemoryStorage) => void): void {
-  const storage = new MemoryStorage();
-  const restore = setAgentHostingSettingsStorage(storage);
-  try {
-    run(storage);
-  } finally {
-    restore();
-  }
-}
-
-test('AI 托管 Codex 设置独立持久化，默认 high 与替我审批，非法值回退默认档', () => {
-  withStorage((storage) => {
-    assert.deepEqual(AGENT_HOSTING_CODEX_EFFORTS, [
-      'default',
-      'minimal',
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-      'ultra',
-    ]);
-    assert.deepEqual(AGENT_HOSTING_PERMISSION_PRESETS, ['ask', 'auto', 'full']);
-    assert.deepEqual(getAgentHostingCodexSettings(), {
-      model: '',
-      effort: 'high',
-      permissionPreset: 'auto',
-    });
-
-    setAgentHostingCodexSettings({ model: ' gpt-5.4 ', effort: 'ultra', permissionPreset: 'full' });
-    assert.deepEqual(getAgentHostingCodexSettings(), {
-      model: 'gpt-5.4',
-      effort: 'ultra',
-      permissionPreset: 'full',
-    });
-    assert.equal(storage.get('rcx-agent-hosting-v1:codex-model'), 'gpt-5.4');
-    assert.equal(storage.get('rcx-agent-hosting-v1:codex-effort'), 'ultra');
-    assert.equal(storage.get('rcx-agent-hosting-v1:codex-permission'), 'full');
-
-    storage.set('rcx-agent-hosting-v1:codex-effort', 'unsupported');
-    storage.set('rcx-agent-hosting-v1:codex-permission', 'unsupported');
-    assert.deepEqual(getAgentHostingCodexSettings(), {
-      model: 'gpt-5.4',
-      effort: 'high',
-      permissionPreset: 'auto',
-    });
-  });
+  assert.match(sharedAgent, /const workspace = useCodexWorkspace\.getState\(\)/);
+  assert.match(sharedAgent, /workspace\.hostingModel/);
+  assert.match(sharedAgent, /workspace\.hostingEffort/);
+  assert.match(sharedAgent, /permissionPreset: workspace\.permissionPreset/);
+  assert.match(workspace, /hostingModel/);
+  assert.match(workspace, /hostingEffort/);
+  assert.match(workspace, /setHostingModel/);
+  assert.match(workspace, /setHostingEffort/);
+  assert.match(conversation, /aria-label="AI 托管设置"/);
+  assert.match(conversation, /ariaLabel="AI 托管模型"/);
+  assert.match(conversation, /ariaLabel="AI 托管推理强度"/);
+  assert.doesNotMatch(sharedAgent, /agentHostingSettings|getAgentHostingCodexSettings/);
+  assert.doesNotMatch(settings, /AI 托管 Codex 模型|AI 托管 Codex 推理强度|AI 托管 Codex 权限/);
 });
 
-test('设置页只暴露独立 AI 托管配置，不再迁移或展示旧管家模型配置', () => {
-  const source = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
-  assert.match(source, /label="AI 托管 Codex 模型"/);
-  assert.match(source, /label="AI 托管 Codex 推理强度"/);
-  assert.match(source, /label="AI 托管 Codex 权限"/);
-  assert.doesNotMatch(source, /label="管家 Codex 模型"/);
-  assert.doesNotMatch(source, /label="管家推理强度"/);
-  assert.doesNotMatch(source, /getButlerCodexSettings|setButlerCodexSettings|setButlerBrainStorage/);
+test('聊天托管面板展示独立托管配置，并提供管家统一管理入口', () => {
+  const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
+
+  assert.match(panel, /AI 托管独立配置/);
+  assert.match(panel, /hostingModel/);
+  assert.match(panel, /hostingEffort/);
+  assert.match(panel, /permissionPreset/);
+  assert.match(panel, /在 AI 管家中调整/);
+  assert.match(panel, /openButlerConversation/);
+  assert.match(panel, /workspaceRoots/);
+  assert.match(panel, /workspaceRoot/);
+  assert.match(panel, /defaultWorkspaceRoot/);
+  assert.match(panel, /butlerWorkspaceRoot/);
+  assert.match(panel, /aria-label="AI 托管项目"/);
+  assert.match(panel, /isSystemCodexWorkspace/);
+  assert.match(panel, /roomHostingWorkspaceRoot/);
+  assert.match(panel, /setRoomHostingWorkspace/);
+  assert.doesNotMatch(panel, /临时工作区（系统默认）/);
+  assert.doesNotMatch(panel, /临时选择 AI 托管项目|其他目录/);
+  const chat = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
+  assert.match(chat, /aria-label="开启 AI 托管"/);
+  assert.match(chat, /aria-label="选择 AI 托管项目"/);
+  assert.match(chat, /startRoomAgentHosting\(activeRid, rawName, \{ workspaceRoot \}\)/);
+  assert.match(chat, /butlerWorkspaceRoot/);
+  assert.match(chat, /isSystemCodexWorkspace/);
+  assert.match(chat, /setRoomHostingWorkspace\(activeRid, workspaceRoot\)/);
 });

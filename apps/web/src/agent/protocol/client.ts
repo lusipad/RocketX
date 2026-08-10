@@ -44,6 +44,8 @@ import type { ThreadGoalGetParams } from './generated/v2/ThreadGoalGetParams';
 import type { ThreadGoalGetResponse } from './generated/v2/ThreadGoalGetResponse';
 import type { ThreadGoalSetParams } from './generated/v2/ThreadGoalSetParams';
 import type { ThreadGoalSetResponse } from './generated/v2/ThreadGoalSetResponse';
+import type { ThreadForkParams } from './generated/v2/ThreadForkParams';
+import type { ThreadForkResponse } from './generated/v2/ThreadForkResponse';
 import type { ThreadResumeParams } from './generated/v2/ThreadResumeParams';
 import type { ThreadResumeResponse } from './generated/v2/ThreadResumeResponse';
 import type { ThreadSetNameParams } from './generated/v2/ThreadSetNameParams';
@@ -74,6 +76,7 @@ export interface CodexProcessInfo {
   version: string;
   runtimeSource: 'manual' | 'bundled' | 'system';
   managedSkillRoots: string[];
+  runtimeWorkspaceRoot?: string;
 }
 
 export interface CodexTransportHandlers {
@@ -144,6 +147,7 @@ interface ClientMethods {
   };
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
   'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
+  'thread/fork': { params: ThreadForkParams; result: ThreadForkResponse };
   'thread/settings/update': {
     params: ThreadSettingsUpdateParams;
     result: ThreadSettingsUpdateResponse;
@@ -213,7 +217,7 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
     }
     return;
   }
-  if (method === 'thread/start' || method === 'thread/resume') {
+  if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
     if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
       throw new Error(`Codex app-server ${method} 响应缺少 thread.id。`);
     }

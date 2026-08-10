@@ -28,9 +28,8 @@ export default function DownloadsPage() {
     }
     setBusy(`${id}:${reveal ? 'reveal' : 'open'}`);
     try {
-      const { openPath, revealItemInDir } = await import('@tauri-apps/plugin-opener');
-      if (reveal) await revealItemInDir(path);
-      else await openPath(path);
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke(reveal ? 'download_history_reveal' : 'download_history_open', { path });
     } catch (error) {
       toast.error(error, reveal ? '无法打开所在文件夹' : '无法打开文件');
     } finally {

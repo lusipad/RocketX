@@ -139,6 +139,8 @@ async function installFullTauriMock(page: Page) {
             ? (args as Record<string, any>)
             : undefined;
           if (command === 'allow_http_origin') return new URL(String(invokeArgs?.origin)).origin;
+          if (command === 'codex_default_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-projectless';
+          if (command === 'codex_butler_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-butler';
           if (command === 'plugin:dialog|open') {
             const queue = (window as unknown as { __dialogOpenResponses?: Array<string | string[] | null> }).__dialogOpenResponses ?? [];
             return queue.length > 0 ? queue.shift() ?? null : null;
@@ -1120,7 +1122,54 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('高性能模式关闭 AI 入口但保留常规聊天流程（issue #264）', async ({ page }) => {
+test('内容异步撑高并触发浏览器滚动锚定后仍保持贴底', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        getState: () => { messages: Record<string, unknown[]> };
+        setState: (state: { messages: Record<string, unknown[]> }) => void;
+      };
+    }>;
+    const { useChat } = await load();
+    const state = useChat.getState();
+    useChat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': Array.from({ length: 40 }, (_, index) => ({
+          _id: `scroll-regression-${index}`,
+          rid: 'room-general',
+          msg: `Scroll regression message ${index}`,
+          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+        })),
+      },
+    });
+  });
+
+  const viewport = page.getByTestId('message-scroll');
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+
+  await viewport.evaluate((element) => {
+    const content = element.firstElementChild as HTMLElement;
+    const oldTop = element.scrollTop;
+    const spacer = document.createElement('div');
+    spacer.style.height = '600px';
+    content.append(spacer);
+    element.scrollTop = oldTop + 120;
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('精简模式关闭 AI 入口但保留常规聊天流程（issue #264）', async ({ page }) => {
   const aiModuleRequests: string[] = [];
   page.on('request', (request) => {
     const url = request.url();
@@ -1163,7 +1212,7 @@ test('高性能模式关闭 AI 入口但保留常规聊天流程（issue #264）
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
   await page.getByRole('complementary').getByRole('button', { name: '桌面端', exact: true }).click();
-  await expect(page.getByText('高性能', { exact: true })).toBeVisible();
+  await expect(page.getByText('精简模式', { exact: true })).toBeVisible();
 
   expect(aiModuleRequests).toEqual([]);
   expect(pageErrors).toEqual([]);
@@ -1644,7 +1693,7 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
     .getByRole('button', { name: '已安排', exact: true })
     .click();
   await expect(page.getByRole('region', { name: '已安排', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '在 Codex App 管理' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '使用 Codex 创建已安排任务' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -1730,8 +1779,20 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
+    await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\another-project');
+    await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\rocketchatx');
+  });
   await conversation(page, 'General').click();
   await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 rocketchatx/);
+  await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
+  await expect(page.getByRole('button', { name: /rocketchatx（默认）/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
+  await page.getByRole('button', { name: '托管设置…' }).click();
+  await expect(page.getByText('AI 托管独立配置', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在 AI 管家中调整' })).toBeVisible();
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
   expect(pageErrors).toEqual([]);
 });
@@ -1839,9 +1900,9 @@ test('本地工作区归入工作区设置，AI 设置只保留模型运行配�
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
 
   await expect(page.getByRole('heading', { name: 'Codex' })).toBeVisible();
-  await expect(page.getByLabel('AI 托管 Codex 模型')).toBeVisible();
-  await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveValue('high');
-  await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveValue('auto');
+  await expect(page.getByLabel('AI 托管 Codex 模型')).toHaveCount(0);
+  await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveCount(0);
+  await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveCount(0);
   await expect(page.getByText(/系统 Codex · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
   await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();

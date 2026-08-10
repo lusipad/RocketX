@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -332,6 +333,16 @@ test('PR 卡片摘要保留批准进度和必审组', () => {
     total: 2,
     requiredGroups: ['Core Team'],
   });
+});
+
+test('PR 列表默认交给 Codex 审查，外部打开是独立次要动作', () => {
+  const source = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
+  const row = source.slice(source.indexOf('function PrRow('), source.indexOf('/** 拉取请求：'));
+
+  assert.match(row, /onClick=\{\(\) => onAsk\(pr\)\}/);
+  assert.match(row, /AI 审查/);
+  assert.match(row, /aria-label=\{`在 Azure DevOps 中打开 PR !\$\{pr\.id\}`\}/);
+  assert.doesNotMatch(row, /<a\s+href=\{pr\.webUrl\}[\s\S]*className="flex min-w-0 flex-1/);
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

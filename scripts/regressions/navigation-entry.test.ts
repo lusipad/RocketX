@@ -38,7 +38,7 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.match(history, /setModule\('workbench'\)/);
   assert.match(history, /setButlerView\('routines'\)/);
   assert.match(history, /setButlerView\('plugins'\)/);
-  assert.match(history, /选择工作区/);
+  assert.match(history, /选择 Codex 工作区/);
 
   assert.match(conversation, /在 Codex 中打开/);
   assert.doesNotMatch(conversation, /setModule\('codex'\)/);

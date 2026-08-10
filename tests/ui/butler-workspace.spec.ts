@@ -20,18 +20,49 @@ async function installCodexRuntime(page: Page): Promise<void> {
       __codexCatalog?: any;
       __codexControllerCount?: number;
       __codexStopCount?: number;
+      __codexInterruptCount?: number;
+      __codexListRoots?: string[][];
+      __tauriInvocations?: Array<{ command: string; args?: Record<string, unknown> }>;
+      __codexAutomationFiles?: Record<string, string>;
       __appendExternalCodexTurn?: (threadId: string, text: string) => void;
     };
     testWindow.__codexMethods = [];
     testWindow.__codexTurns = [];
     testWindow.__codexControllerCount = 0;
     testWindow.__codexStopCount = 0;
+    testWindow.__codexInterruptCount = 0;
+    testWindow.__codexListRoots = [];
+    testWindow.__tauriInvocations = [];
+    testWindow.__codexAutomationFiles = {};
+    const defaultWorkspaceRoot = 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless';
+    const butlerWorkspaceRoot = 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler';
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
-        invoke: async (command: string) => {
+        invoke: async (command: string, args?: Record<string, unknown>) => {
+          testWindow.__tauriInvocations!.push({ command, args });
+          if (command === 'codex_default_workspace') {
+            return defaultWorkspaceRoot;
+          }
+          if (command === 'codex_butler_workspace') {
+            return butlerWorkspaceRoot;
+          }
           if (command === 'codex_agent_attachment_write') {
             return { path: 'D:/runtime/composer/image.png', root: 'D:/runtime' };
+          }
+          if (command === 'codex_artifact_read') {
+            return btoa('<!doctype html><html><body><h1>WBS preview</h1><p>Artifact rendered inline.</p></body></html>');
+          }
+          if (command === 'codex_automation_list') {
+            return Object.entries(testWindow.__codexAutomationFiles!).map(([id, content]) => ({ id, content }));
+          }
+          if (command === 'codex_automation_write') {
+            testWindow.__codexAutomationFiles![String(args?.id)] = String(args?.content);
+            return null;
+          }
+          if (command === 'codex_automation_delete') {
+            delete testWindow.__codexAutomationFiles![String(args?.id)];
+            return null;
           }
           return null;
         },
@@ -41,7 +72,7 @@ async function installCodexRuntime(page: Page): Promise<void> {
     });
     const workspaceRoot = 'D:/Repos/rocketchatx';
     const now = Math.floor(Date.now() / 1_000);
-    const makeThread = (id: string, name: string, preview: string) => ({
+    const makeThread = (id: string, name: string, preview: string, cwd = workspaceRoot) => ({
       id,
       extra: null,
       sessionId: id,
@@ -56,7 +87,7 @@ async function installCodexRuntime(page: Page): Promise<void> {
       recencyAt: now,
       status: { type: 'idle' },
       path: null,
-      cwd: workspaceRoot,
+      cwd,
       cliVersion: 'test',
       source: 'appServer',
       threadSource: null,
@@ -210,6 +241,7 @@ async function installCodexRuntime(page: Page): Promise<void> {
       testWindow.__codexControllerOptions = options;
       return {
         currentSessionId: 'workspace-ui-session',
+        switchWorkspaceRoot: () => true,
         connect: async () => {
           testWindow.__codexMethods!.push('model/list', 'permissionProfile/list', 'skills/list', 'app/list', 'plugin/list');
           return catalog;
@@ -218,13 +250,22 @@ async function installCodexRuntime(page: Page): Promise<void> {
           testWindow.__codexMethods!.push('plugin/list');
           return catalog;
         },
-        listThreads: async () => threads,
+        listThreads: async (roots?: readonly string[]) => {
+          const requested = roots?.length ? [...roots] : [useCodexWorkspace.getState().workspaceRoot];
+          testWindow.__codexListRoots!.push(requested);
+          return threads.filter((thread) => requested.includes(thread.cwd));
+        },
         readThread: async (threadId: string) => ({
           thread: threads.find((thread) => thread.id === threadId),
           turns: turns.get(threadId) ?? [],
         }),
         startThread: async (_selection: unknown, name?: string) => {
-          const next = makeThread(`thread-${threads.length + 1}`, name || '新任务', '');
+          const next = makeThread(
+            `thread-${threads.length + 1}`,
+            name || '新任务',
+            '',
+            useCodexWorkspace.getState().workspaceRoot,
+          );
           threads = [next, ...threads];
           return next;
         },
@@ -238,6 +279,13 @@ async function installCodexRuntime(page: Page): Promise<void> {
         updateSettings: async () => { testWindow.__codexMethods!.push('thread/settings/update'); },
         startTurn: async (threadId: string, input: Array<{ text?: string }>) => {
           const text = input[0]?.text ?? '';
+          const roomQuestion = text.includes('<<<ROCKETX_ROOM_MESSAGE>>>')
+            ? text.split('<<<ROCKETX_ROOM_MESSAGE>>>').at(-1)?.trim() || text
+            : null;
+          const sourceUrl = 'https://chat.example.test/channel/general?msg=general-release';
+          const answerText = roomQuestion
+            ? `已处理：${roomQuestion}。[来源](${sourceUrl})`
+            : `已处理：${text}`;
           testWindow.__codexTurns!.push({ text, mode: 'start' });
           const turnId = `turn-${testWindow.__codexTurns!.length}`;
           setTimeout(() => {
@@ -282,7 +330,28 @@ async function installCodexRuntime(page: Page): Promise<void> {
               turnId,
               diff: 'diff --git a/src/task.ts b/src/task.ts\n+export const ready = true;',
             });
-            options.onNotification?.('item/agentMessage/delta', { threadId, turnId, delta: `已处理：${text}` });
+            options.onNotification?.('item/agentMessage/delta', { threadId, turnId, delta: answerText });
+            const sourceItems = roomQuestion ? [{
+              type: 'dynamicToolCall',
+              id: `${turnId}-room-source`,
+              namespace: 'rocketx',
+              tool: 'list_mentions',
+              arguments: {},
+              status: 'completed',
+              contentItems: [{
+                type: 'inputText',
+                text: JSON.stringify([{
+                  id: 'general-release',
+                  rid: 'room-general',
+                  roomName: 'General',
+                  sender: 'alice',
+                  text: 'Release checklist ready',
+                  link: sourceUrl,
+                }]),
+              }],
+              success: true,
+              durationMs: 4,
+            }] : [];
             turns.set(threadId, [{
               id: turnId,
               itemsView: 'full',
@@ -291,8 +360,11 @@ async function installCodexRuntime(page: Page): Promise<void> {
               startedAt: now,
               completedAt: now,
               durationMs: 20,
-              items: [{ type: 'userMessage', id: `${turnId}-u`, content: [{ type: 'text', text, text_elements: [] }] },
-                { type: 'agentMessage', id: `${turnId}-a`, text: `已处理：${text}`, phase: null }],
+              items: [
+                { type: 'userMessage', id: `${turnId}-u`, content: [{ type: 'text', text, text_elements: [] }] },
+                ...sourceItems,
+                { type: 'agentMessage', id: `${turnId}-a`, text: answerText, phase: 'final_answer' },
+              ],
             }]);
             options.onNotification?.('turn/completed', { threadId, turn: { id: turnId, status: 'completed' } });
           }, 1_200);
@@ -302,7 +374,7 @@ async function installCodexRuntime(page: Page): Promise<void> {
           testWindow.__codexTurns!.push({ text: input[0]?.text ?? '', mode: 'steer' });
           return _turnId;
         },
-        interruptTurn: async () => undefined,
+        interruptTurn: async () => { testWindow.__codexInterruptCount! += 1; },
         installPlugin: async (_marketplace: string, pluginName: string) => {
           testWindow.__codexMethods!.push('plugin/install');
           const plugin = catalog.plugins.marketplaces[0].plugins.find((item: any) => item.name === pluginName);
@@ -327,6 +399,7 @@ async function installCodexRuntime(page: Page): Promise<void> {
     const userId = useAuth.getState().user?._id;
     if (!userId) throw new Error('test user missing');
     useCodexWorkspace.getState().hydrate(`${getServerBase() || 'same-origin'}:${userId}`);
+    await useCodexWorkspace.getState().ensureDefaultWorkspace();
     await useCodexWorkspace.getState().setWorkspaceRoot(workspaceRoot);
     await useCodexWorkspace.getState().connect();
   });
@@ -380,12 +453,189 @@ test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请�
   await expect(page.getByRole('button', { name: '新对话', exact: true })).toBeVisible();
   await expect(codex.getByRole('button', { name: '任务', exact: true })).toHaveCount(0);
   await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByText('临时会话', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByText('管家会话', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByLabel('托管项目')).toBeVisible();
+  await expect(page.getByRole('button', { name: '移除项目：临时会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '移除项目：管家会话' })).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: 'Codex 对话历史' })).toContainText('候选版本准备');
   await page.getByRole('navigation', { name: 'Codex 对话历史' }).getByRole('button', { name: /^候选版本准备/ }).click();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toContainText('我会先检查改动、测试与发布门禁。');
   await expect(page.getByLabel('模型', { exact: true })).toContainText('GPT-5.6 Sol');
   await expect(page.getByLabel('推理强度', { exact: true })).toContainText('中');
   await expect(page.getByLabel('权限', { exact: true })).toContainText('替我审批');
+});
+
+test('项目树按三类工作区嵌套会话，普通新对话固定进入管家会话', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await openWorkspace(page);
+
+  const projects = page.getByLabel('项目目录');
+  const project = projects.getByRole('region', { name: '项目：rocketchatx' });
+  await expect(project.getByRole('navigation', { name: 'Codex 对话历史' })).toContainText('候选版本准备');
+  await expect(project.getByRole('button', { name: 'rocketchatx 2', exact: true })).toContainText('2');
+  await expect(project.getByText('还没有对话', { exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: '新对话', exact: true }).click();
+
+  const butler = projects.getByRole('region', { name: '项目：管家会话' });
+  await expect(butler.getByRole('navigation', { name: 'Codex 对话历史' })).toContainText('新任务');
+  await expect(butler.getByRole('button', { name: '管家会话 1', exact: true })).toContainText('1');
+  expect(await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const state = useCodexWorkspace.getState();
+    const active = state.threads.find((thread: { id: string }) => thread.id === state.activeThreadId);
+    return {
+      workspaceRoot: state.workspaceRoot,
+      threadRoot: active?.cwd,
+      listRoots: (window as typeof window & { __codexListRoots?: string[][] }).__codexListRoots?.at(-1),
+    };
+  })).toEqual({
+    workspaceRoot: 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler',
+    threadRoot: 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler',
+    listRoots: [
+      'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless',
+      'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler',
+      'D:/Repos/rocketchatx',
+    ],
+  });
+});
+
+test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显式新建会话', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootAuthenticated(page);
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+
+  let panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('button', { name: '新建房间会话' })).toBeVisible();
+  await expect(panel.getByText(/临时工作区：.*codex-projectless/)).toBeVisible();
+  expect(await page.evaluate(() => ({
+    controllers: (window as typeof window & { __codexControllerCount?: number }).__codexControllerCount,
+    stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
+  }))).toEqual({ controllers: 1, stops: 0 });
+
+  const separator = panel.getByRole('separator', { name: '调整房间 Codex 会话宽度' });
+  const initialWidth = (await panel.boundingBox())!.width;
+  const separatorBox = (await separator.boundingBox())!;
+  await page.mouse.move(separatorBox.x + 1, separatorBox.y + separatorBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(separatorBox.x - 79, separatorBox.y + separatorBox.height / 2);
+  await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(initialWidth + 60);
+  const resizedWidth = (await panel.boundingBox())!.width;
+
+  const question = Array.from({ length: 16 }, (_, index) => `第 ${index + 1} 项请提取本群关键工作`).join('，');
+  await panel.getByPlaceholder('在这个会话里继续提问').fill(question);
+  await panel.getByRole('button', { name: '发送到房间 Codex 会话' }).click();
+  await expect(panel.getByText(question, { exact: true })).toBeVisible();
+
+  await panel.getByRole('button', { name: '关闭房间会话' }).click();
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel.getByText('正在接回房间会话', { exact: true })).toHaveCount(0);
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount ?? -1
+  ))).toBe(0);
+  await expect(panel.getByText(/已处理：/).last()).toBeVisible({ timeout: 5_000 });
+  const transcript = panel.locator('div.min-h-0.flex-1.overflow-y-auto');
+  await expect.poll(() => transcript.evaluate((element) => (
+    element.scrollHeight - element.scrollTop - element.clientHeight
+  ))).toBeLessThan(3);
+  const citation = panel.getByRole('button', { name: '查看参考来源 1' });
+  await expect(citation).toBeVisible();
+  await citation.click();
+  await expect(panel.getByText('参考来源（1）', { exact: true })).toBeVisible();
+  const source = panel.getByTitle('打开来源：General · alice：Release checklist ready');
+  await expect(source).toBeVisible();
+  const composer = panel.getByPlaceholder('在这个会话里继续提问');
+  const composerCard = composer.locator('..');
+  const borderBeforeFocus = await composerCard.evaluate((element) => getComputedStyle(element).borderColor);
+  await composer.focus();
+  await expect.poll(() => composerCard.evaluate((element) => getComputedStyle(element).borderColor))
+    .toBe(borderBeforeFocus);
+  await expect.poll(() => composer.evaluate((element) => getComputedStyle(element).outlineStyle))
+    .toBe('none');
+  await panel.screenshot({ path: testInfo.outputPath('room-codex-conversation.png') });
+  await source.click();
+  await expect.poll(() => page.evaluate(async () => {
+    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<any>;
+    const { useChat } = await loadChat();
+    return useChat.getState().highlightMid;
+  })).toBe('general-release');
+
+  await panel.getByRole('button', { name: '新建房间会话' }).click();
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
+  await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
+});
+
+test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务', async ({ page }) => {
+  await bootAuthenticated(page);
+  await installCodexRuntime(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'running',
+      activeThreadId: 'thread-release',
+      activeTurnId: 'turn-running-elsewhere',
+    });
+  });
+
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel.getByRole('alert')).toContainText('另一个 Codex 任务正在运行');
+  await expect(panel.getByPlaceholder(/在这个会话里继续提问|输入后续要求/)).toBeDisabled();
+  expect(await page.evaluate(() => ({
+    interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
+    stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
+  }))).toEqual({ interrupts: 0, stops: 0 });
+});
+
+test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目栏并支持右键浏览器打开', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      messages: [{
+        id: 'artifact-message',
+        role: 'assistant',
+        text: 'WBS 已生成：[D:\\Repos\\rocketchatx\\ado_wbs.html](/D:/Repos/rocketchatx/ado_wbs.html)。',
+      }],
+    });
+  });
+
+  const artifact = page.getByRole('complementary', { name: 'Artifact ado_wbs.html' });
+  await expect(artifact).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeHidden();
+  await expect(page.getByRole('button', { name: '打开任务列表' })).toBeVisible();
+  await expect(artifact.getByRole('button', { name: '预览' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.frameLocator('iframe[title="预览 ado_wbs.html"]').getByRole('heading', { name: 'WBS preview' })).toBeVisible();
+
+  const artifactLink = page.getByRole('button', { name: 'D:\\Repos\\rocketchatx\\ado_wbs.html' });
+  await artifactLink.click({ button: 'right' });
+  await page.getByRole('button', { name: '在浏览器中打开', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & { __tauriInvocations?: Array<{ command: string }> })
+      .__tauriInvocations?.some((entry) => entry.command === 'codex_artifact_open') ?? false
+  ))).toBe(true);
+
+  if (process.env.CODEX_VISUAL_ARTIFACT) {
+    await page.screenshot({ path: process.env.CODEX_VISUAL_ARTIFACT, fullPage: true });
+  }
+
+  await artifact.getByRole('button', { name: '源码' }).click();
+  await expect(artifact).toContainText('Artifact rendered inline.');
+  await artifact.getByRole('button', { name: '关闭 Artifact' }).click();
+  await expect(artifact).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
 });
 
 test('从 Codex 刷新会硬重连同一线程并加载外部新增 Turn', async ({ page }) => {
@@ -463,7 +713,7 @@ test('app-server 运行中退出会保留部分输出，并从原线程显式刷
 
   await expect(page.getByRole('heading', { name: 'Codex 本轮已中断' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toContainText('已完成前半段真实验证');
-  await expect(page.getByRole('region', { name: '任务过程' }).getByText('已中断', { exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: '任务过程' }).getByText('已中断', { exact: true })).toBeVisible();
   await expect(page.getByLabel('给 Codex 的任务')).toBeDisabled();
 
   await page.evaluate(() => {
@@ -521,7 +771,7 @@ test('对话列表可在原位重命名和归档原生 Thread', async ({ page })
   await expect(page.getByRole('navigation', { name: 'Codex 对话历史' })).not.toContainText('迭代计划');
 });
 
-test('已安排在当前页面创建、启停、立即运行，并明确保存在此设备', async ({ page }) => {
+test('已安排在当前页面创建、启停和运行，并同步 Codex 原生计划文件', async ({ page }) => {
   await openWorkspace(page);
   await page.evaluate(async () => {
     const { setRoutineCodexRunner } = await import('/src/stores/routines.ts');
@@ -533,18 +783,85 @@ test('已安排在当前页面创建、启停、立即运行，并明确保存�
     });
   });
   await openScheduled(page);
-  await expect(page.getByText('保存在此设备；执行时使用当前 Codex 工作区。')).toBeVisible();
-  await page.getByRole('button', { name: '新建安排' }).click();
-  await page.getByLabel('任务名称').fill('每日候选版检查');
-  await page.getByLabel('执行 Skill').selectOption('release-check');
-  await page.getByRole('button', { name: '创建并启用' }).click();
-  const row = page.getByRole('article').filter({ hasText: '每日候选版检查' });
+  await expect(page.getByRole('region', { name: '建议' })).toContainText('晨报');
+  await expect(page.getByRole('region', { name: '建议' })).toContainText('晚间回顾');
+  await page.getByRole('button', { name: '选择创建方式' }).click();
+  await page.getByRole('menuitem', { name: '手动设置' }).click();
+  const editor = page.getByRole('region', { name: '新建已安排任务' });
+  await editor.getByLabel('名称').fill('每日候选版检查');
+  await editor.getByLabel('任务说明').fill('检查候选版本门禁，并汇总失败项与下一步。');
+  await editor.getByLabel('重复').selectOption('interval');
+  await editor.getByLabel('每隔（分钟）').fill('15');
+  await editor.getByText('只在指定时段运行', { exact: true }).click();
+  await editor.getByLabel('开始时间').fill('09:00');
+  await editor.getByLabel('结束时间').fill('20:00');
+  await editor.getByRole('button', { name: '创建', exact: true }).click();
+  const row = page.getByRole('button', { name: '打开每日候选版检查详情' });
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: '立即运行每日候选版检查' }).click();
-  await expect(row).toContainText('候选版本门禁全部通过。');
+  await expect(row).toContainText('每天 09:00–20:00，每 15 分钟');
+  const nativeFile = await page.evaluate(() => Object.values((
+    window as typeof window & { __codexAutomationFiles?: Record<string, string> }
+  ).__codexAutomationFiles ?? {})[0]);
+  expect(nativeFile).toContain('name = "每日候选版检查"');
+  expect(nativeFile).toContain('status = "ACTIVE"');
+  expect(nativeFile).toContain('rrule = "RRULE:FREQ=DAILY;BYHOUR=9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"');
+
+  await row.click();
+  const detail = page.getByRole('complementary', { name: '已安排任务详情' });
+  await detail.getByRole('button', { name: '立即运行每日候选版检查' }).click();
+  await expect(detail).toContainText('候选版本门禁全部通过。');
+  await detail.getByRole('button', { name: '立即运行每日候选版检查' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as typeof window & { __routineRuns?: string[] }
-  ).__routineRuns?.length)).toBe(1);
+  ).__routineRuns?.length)).toBe(2);
+  await expect(page.getByRole('button', { name: '打开每日候选版检查详情' })).toHaveCount(1);
+  await expect(detail.locator('.butler-scheduled-run-history details')).toHaveCount(2);
+
+  await detail.getByRole('button', { name: '管理每日候选版检查' }).click();
+  await detail.getByRole('menuitem', { name: '暂停' }).click();
+  await expect(detail).toContainText('已暂停');
+  expect(await page.evaluate(() => Object.values((
+    window as typeof window & { __codexAutomationFiles?: Record<string, string> }
+  ).__codexAutomationFiles ?? {})[0])).toContain('status = "PAUSED"');
+});
+
+test('输出已安排功能视觉门禁截图', async ({ page }) => {
+  const pagePath = process.env.CODEX_VISUAL_SCHEDULE;
+  const editorPath = process.env.CODEX_VISUAL_SCHEDULE_EDITOR;
+  test.skip(!pagePath, '仅在已安排视觉门禁任务中输出截图');
+
+  await page.setViewportSize({ width: 1800, height: 1014 });
+  await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
+  await openWorkspace(page);
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & { __codexAutomationFiles?: Record<string, string> };
+    testWindow.__codexAutomationFiles!['rocketx-issue'] = [
+      'version = 1',
+      'id = "rocketx-issue"',
+      'kind = "cron"',
+      'name = "每小时处理 RocketX 新 Issue"',
+      'prompt = "每小时检查 RocketX 的新 Issue，先判断是否重复、是否可复现，再给出处理建议。"',
+      'status = "PAUSED"',
+      'rrule = "RRULE:FREQ=HOURLY;INTERVAL=2"',
+      'model = "gpt-5.6-sol"',
+      'reasoning_effort = "medium"',
+      'execution_environment = "local"',
+      'cwds = ["D:/Repos/rocketchatx"]',
+      'created_at = 1786233600000',
+      'updated_at = 1786233600000',
+      '',
+    ].join('\n');
+  });
+  await openScheduled(page);
+  await page.getByRole('button', { name: '打开每小时处理 RocketX 新 Issue详情' }).click();
+  await page.screenshot({ path: pagePath, animations: 'disabled' });
+
+  if (editorPath) {
+    await page.getByRole('button', { name: '关闭已安排任务详情' }).click();
+    await page.getByRole('button', { name: '选择创建方式' }).click();
+    await page.getByRole('menuitem', { name: '手动设置' }).click();
+    await page.screenshot({ path: editorPath, animations: 'disabled' });
+  }
 });
 
 test('插件、Skills 与 Apps 使用真实目录和安装/启停动作', async ({ page }) => {
@@ -599,7 +916,6 @@ test('输出 Codex 工作区视觉门禁截图', async ({ page }) => {
   await page.getByLabel('给 Codex 的任务').fill('检查候选版本发布条件');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toContainText('530 tests passed');
-  await page.getByText('运行命令', { exact: true }).click();
   await page.getByLabel('权限', { exact: true }).click();
   await page.screenshot({ path: desktopPath, animations: 'disabled' });
 

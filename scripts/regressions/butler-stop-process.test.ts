@@ -7,8 +7,17 @@ test('Codex 任务过程、审批与停止入口都由 codexWorkspace 原生事�
   const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
   const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
 
-  assert.match(conversation, /<section className="codex-native-activities" aria-label="任务过程">/);
+  assert.match(conversation, /const latestActivity = events\.at\(-1\)/);
+  assert.match(conversation, /const completedMessage = !running && events\.length > 0 && messages\.at\(-1\)\?\.role === 'assistant'/);
+  assert.match(conversation, /const visibleMessages = completedMessage \? messages\.slice\(0, -1\) : messages/);
+  assert.match(conversation, /<details className="codex-native-activities" aria-label="任务过程">/);
+  assert.doesNotMatch(conversation, /<details open=\{running\} className="codex-native-activities"/);
+  assert.match(conversation, /<summary>[\s\S]*?\{activityStatus\}[\s\S]*?\{latestActivity\?\.title\}[\s\S]*?\{events\.length\} 项活动[\s\S]*?<\/summary>/);
   assert.match(conversation, /events\.map\(\(event\) => <Activity key=\{event\.id\} event=\{event\} \/>\)/);
+  assert.match(
+    conversation,
+    /\{visibleMessages\.map\(\(entry\) => <ConversationMessage key=\{entry\.id\} entry=\{entry\} renderLink=\{renderArtifactLink\} \/>\)\}[\s\S]*?<details className="codex-native-activities"[\s\S]*?\{completedMessage \? <ConversationMessage entry=\{completedMessage\} renderLink=\{renderArtifactLink\} \/> : null\}/,
+  );
   assert.match(conversation, /request\.kind === 'approval'/);
   assert.match(conversation, /<ApprovalCard key=\{request\.id\} request=\{request\} \/>/);
   assert.match(conversation, /<InputCard key=\{request\.id\} request=\{request\} \/>/);

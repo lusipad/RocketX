@@ -12,6 +12,7 @@ import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope } from '../lib/accountScope';
 import { restoreTrayAttention } from '../lib/tray';
 import { loginFailureMessage } from '../lib/loginDiagnostic';
+import { startupPresence } from '../lib/presencePreference';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -98,6 +99,18 @@ async function clearBusinessMcpSession(): Promise<void> {
   ]);
 }
 
+async function applyStartupPresence(user: RcUser, userId: string): Promise<RcUser> {
+  const status = startupPresence(getServerBase(), userId);
+  if (user.status === status) return user;
+  try {
+    await rest.setStatus(status);
+    return { ...user, status };
+  } catch {
+    // 在线状态失败不应把一个仍然有效的登录会话踢回登录页。
+    return user;
+  }
+}
+
 export const useAuth = create<AuthState>((set, get) => ({
   status: 'boot',
   user: null,
@@ -124,7 +137,7 @@ export const useAuth = create<AuthState>((set, get) => ({
         location.reload();
         return;
       }
-      set({ status: 'authed', user: data.me, error: null });
+      set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
     } catch {
       saveAuth(null);
       await clearBusinessMcpSession();
@@ -144,7 +157,7 @@ export const useAuth = create<AuthState>((set, get) => ({
         location.reload();
         return;
       }
-      set({ status: 'authed', user: data.me, error: null });
+      set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
     } catch (err) {
       await clearBusinessMcpSession();
       set({ status: 'guest', error: loginFailureMessage(err) });

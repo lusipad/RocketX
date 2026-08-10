@@ -36,19 +36,20 @@ function ensureTauriWindow(): void {
   }
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
-    value: {},
+    value: { invoke: async () => [] },
   });
 }
 
 async function loadModules() {
   ensureTauriWindow();
-  const [{ useAuth }, sharedAgent, sessionStore, clientModule] = await Promise.all([
+  const [{ useAuth }, sharedAgent, sessionStore, clientModule, codexWorkspace] = await Promise.all([
     import('../../apps/web/src/stores/auth'),
     import('../../apps/web/src/stores/sharedAgent'),
     import('../../apps/web/src/agent/sessionStore'),
     import('../../apps/web/src/lib/client'),
+    import('../../apps/web/src/stores/codexWorkspace'),
   ]);
-  return { useAuth, ...sharedAgent, ...sessionStore, clientModule };
+  return { useAuth, ...sharedAgent, ...sessionStore, clientModule, ...codexWorkspace };
 }
 
 function interruptedSession(tmid: string, overrides: Partial<AgentSession> = {}): AgentSession {
@@ -79,6 +80,7 @@ function interruptedSession(tmid: string, overrides: Partial<AgentSession> = {})
 
 interface FakeClientState {
   calls: string[];
+  selections: CodexRuntimeSelection[];
   stopped: boolean;
   options: AppServerControllerOptions;
 }
@@ -101,6 +103,23 @@ const CATALOG: CodexCatalog = {
     serviceTiers: [],
     defaultServiceTier: null,
     isDefault: true,
+  }, {
+    id: 'gpt-hosting',
+    model: 'gpt-hosting',
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: 'GPT Hosting',
+    description: 'heavy work',
+    hidden: false,
+    supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'careful' }],
+    defaultReasoningEffort: 'high',
+    inputModalities: ['text'],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: false,
   }],
   permissionProfiles: [
     { id: ':workspace', description: null, allowed: true },
@@ -115,7 +134,7 @@ function fakeController(
   options: AppServerControllerOptions,
   request: (method: string) => Promise<unknown>,
 ): { controller: { currentCatalog?: CodexCatalog; processInfo: { version: string; runtimeSource: 'system' } }; state: FakeClientState } {
-  const state: FakeClientState = { calls: [], stopped: false, options };
+  const state: FakeClientState = { calls: [], selections: [], stopped: false, options };
   const controller = {
     currentCatalog: undefined as CodexCatalog | undefined,
     processInfo: { version: '0.144.4', runtimeSource: 'system' as const },
@@ -124,12 +143,14 @@ function fakeController(
       controller.currentCatalog = CATALOG;
       return CATALOG;
     },
-    startThread: async (_selection: CodexRuntimeSelection) => {
+    startThread: async (selection: CodexRuntimeSelection) => {
       state.calls.push('startThread');
+      state.selections.push(selection);
       return request('startThread') as Promise<{ id: string }>;
     },
-    resumeThread: async (_threadId: string, _selection: CodexRuntimeSelection) => {
+    resumeThread: async (_threadId: string, selection: CodexRuntimeSelection) => {
       state.calls.push('resumeThread');
+      state.selections.push(selection);
       return request('resumeThread') as Promise<{ id: string }>;
     },
     startTurn: async () => {
@@ -153,7 +174,7 @@ function failingConnectController(
   options: AppServerControllerOptions,
   message: string,
 ): { controller: { currentCatalog?: CodexCatalog }; state: FakeClientState } {
-  const state: FakeClientState = { calls: [], stopped: false, options };
+  const state: FakeClientState = { calls: [], selections: [], stopped: false, options };
   const controller = {
     currentCatalog: undefined as CodexCatalog | undefined,
     connect: async () => {
@@ -203,6 +224,60 @@ async function prepareStore(sessions: AgentSession[]) {
   });
   return { useAuth, useSharedAgent };
 }
+
+test('AI 托管拒绝临时会话和管家系统目录', { concurrency: false }, async () => {
+  const { useSharedAgent, useCodexWorkspace } = await loadModules();
+  await prepareStore([]);
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+    workspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+  });
+
+  await assert.rejects(
+    useSharedAgent.getState().startSession('room-system', 'thread-system', {
+      workspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    }),
+    /AI 托管必须选择在 AI 管家中添加的专用工作项目/,
+  );
+  await assert.rejects(
+    useSharedAgent.getState().startSession('room-butler', 'thread-butler', {
+      workspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+    }),
+    /AI 托管必须选择在 AI 管家中添加的专用工作项目/,
+  );
+});
+
+test('AI 托管恢复会话时使用独立模型与推理强度，权限仍跟随管家', { concurrency: false }, async () => {
+  const target = interruptedSession('hosting-profile');
+  const { useSharedAgent, useCodexWorkspace, setSharedAgentControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  useCodexWorkspace.setState({
+    selectedModel: 'gpt-test',
+    selectedEffort: 'medium',
+    hostingModel: 'gpt-hosting',
+    hostingEffort: 'high',
+    permissionPreset: 'auto',
+  });
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async () => ({ id: target.codexThreadId! }));
+    fake = built.state;
+    return built.controller as never;
+  });
+
+  try {
+    await useSharedAgent.getState().resumeSession(target.tmid);
+    assert.deepEqual(fake.selections.at(-1), {
+      model: 'gpt-hosting',
+      effort: 'high',
+      permissionPreset: 'auto',
+    });
+  } finally {
+    restoreFactory();
+  }
+});
 
 test('共享 Agent 在 Controller connect 失败后离开 starting，并保留同一线程供显式重试', { concurrency: false }, async () => {
   const target = interruptedSession('client-start-failed');

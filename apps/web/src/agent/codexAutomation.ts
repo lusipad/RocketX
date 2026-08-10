@@ -1,9 +1,11 @@
 import {
   AppServerController,
   type AppServerControllerOptions,
+  type CodexPermissionPreset,
   type CodexRuntimeSelection,
 } from './AppServerController';
 import type { Turn } from './protocol/generated/v2/Turn';
+import { runExistingThreadAutomation } from '../stores/codexWorkspace';
 
 export interface CodexAutomationOptions {
   workspaceRoot: string;
@@ -11,7 +13,9 @@ export interface CodexAutomationOptions {
   name: string;
   model?: string;
   effort?: string | null;
+  permissionPreset?: CodexPermissionPreset;
   skillName?: string;
+  targetThreadId?: string;
   signal?: AbortSignal;
   onAdmitted?: () => void;
 }
@@ -39,6 +43,7 @@ function selection(
   models: Awaited<ReturnType<AppServerController['connect']>>['models'],
   requestedModel?: string,
   requestedEffort?: string | null,
+  permissionPreset: CodexPermissionPreset = 'auto',
 ): CodexRuntimeSelection {
   const model = models.find((item) => item.model === requestedModel || item.id === requestedModel)
     ?? models.find((item) => item.isDefault)
@@ -48,7 +53,7 @@ function selection(
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
     ? requestedEffort
     : model.defaultReasoningEffort;
-  return { model: model.model, effort, permissionPreset: 'auto' };
+  return { model: model.model, effort, permissionPreset };
 }
 
 /** 已安排任务与手动任务共享同一 App Server 协议；无人值守时不代答用户输入。 */
@@ -58,6 +63,17 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
   if (!workspaceRoot) throw new Error('请先在“任务”中选择工作区');
   if (!text) throw new Error('已安排任务缺少执行内容');
   if (options.signal?.aborted) throw options.signal.reason ?? new Error('任务已取消');
+  if (options.targetThreadId) {
+    return runExistingThreadAutomation({
+      threadId: options.targetThreadId,
+      workspaceRoot,
+      text,
+      model: options.model,
+      effort: options.effort,
+      permissionPreset: options.permissionPreset,
+      signal: options.signal,
+    });
+  }
 
   let threadId = '';
   let turnId = '';
@@ -76,9 +92,17 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
     onServerRequest: async ({ method, policy }) => {
       if (policy === 'host-input') throw new Error('该已安排任务需要用户输入，请手动运行后回答');
       if (method === 'item/permissions/requestApproval') {
+        if (options.permissionPreset === 'ask') {
+          throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+        }
         return { permissions: {}, scope: 'turn', strictAutoReview: true };
       }
-      if (policy === 'host-approval') return { decision: 'decline' };
+      if (policy === 'host-approval') {
+        if (options.permissionPreset === 'ask') {
+          throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+        }
+        return { decision: 'decline' };
+      }
       throw new Error(`无人值守任务不能处理 ${method}`);
     },
     onInterrupted: (error) => fail?.(error),
@@ -97,7 +121,12 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
       if (!skill) throw new Error(`Codex 没有找到 Skill「${options.skillName}」`);
       if (!skill.enabled) throw new Error(`Skill「${options.skillName}」已停用`);
     }
-    const runtimeSelection = selection(catalog.models, options.model, options.effort);
+    const runtimeSelection = selection(
+      catalog.models,
+      options.model,
+      options.effort,
+      options.permissionPreset,
+    );
     const thread = await controller.startThread(runtimeSelection, options.name);
     threadId = thread.id;
     options.onAdmitted?.();

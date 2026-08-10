@@ -7,14 +7,14 @@ import {
 } from '../../apps/web/src/lib/butlerAbilityTemplates';
 import { MIN_INTERVAL_MINUTES } from '../../apps/web/src/stores/routines';
 
-test('例行任务模板只保留最终四个 Codex 能力模板', () => {
+test('协作动作继续走 Skill，晨报和晚间回顾使用内置任务说明', () => {
   assert.deepEqual(
     BUTLER_ABILITY_TEMPLATES.map(({ id, skillName, precheck }) => ({ id, skillName, precheck })),
     [
       { id: 'mention-triage', skillName: 'butler-reply-guardian', precheck: 'new-mentions' },
       { id: 'room-digest', skillName: 'room-digest', precheck: 'room-activity' },
-      { id: 'morning-brief', skillName: 'morning-brief', precheck: 'none' },
-      { id: 'evening-review', skillName: 'evening-review', precheck: 'none' },
+      { id: 'morning-brief', skillName: undefined, precheck: 'none' },
+      { id: 'evening-review', skillName: undefined, precheck: 'none' },
     ],
   );
 });

@@ -126,7 +126,19 @@ fn validate_azure_http_consent(
 ) -> Result<(), String> {
     let parsed = tauri::Url::parse(collection_url)
         .map_err(|_| "Azure DevOps collection URL 无效".to_string())?;
+    let is_loopback = parsed
+        .host_str()
+        .map(|host| {
+            let host = host.trim_matches(['[', ']']);
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .map(|address| address.is_loopback())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
     if parsed.scheme() == "http"
+        && !is_loopback
         && matches!(auth_mode, "default-credentials" | "pat")
         && !allow_insecure_ado_http
     {
@@ -894,6 +906,16 @@ mod tests {
 
     #[test]
     fn http_ado_credentials_require_explicit_intranet_consent() {
+        for loopback in [
+            "http://localhost:8081/DefaultCollection",
+            "http://127.0.0.1:8081/DefaultCollection",
+            "http://[::1]:8081/DefaultCollection",
+        ] {
+            assert!(
+                validate_azure_http_consent(loopback, "default-credentials", false).is_ok(),
+                "本机回环地址不应要求内网 HTTP 授权：{loopback}",
+            );
+        }
         assert!(validate_azure_http_consent(
             "http://ado.local/DefaultCollection",
             "default-credentials",

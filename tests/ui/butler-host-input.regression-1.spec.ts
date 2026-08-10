@@ -31,6 +31,7 @@ async function openNativeTask(page: Page): Promise<string[]> {
       id: 'native-thread',
       name: '候选版本准备',
       preview: '准备候选版本',
+      cwd: workspaceRoot,
       status: { type: 'idle' },
       createdAt: 1,
       updatedAt: 1,

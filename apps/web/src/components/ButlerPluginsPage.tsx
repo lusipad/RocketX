@@ -1,3 +1,4 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   Blocks,
   Check,
@@ -10,15 +11,106 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppInfo, PluginDetail, PluginSummary, SkillMetadata } from '../agent/protocol/generated/v2';
+import { isTauriRuntime } from '../lib/client';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 
 type SkillScopeFilter = 'all' | SkillMetadata['scope'];
 type CatalogTab = 'plugins' | 'skills' | 'apps';
+type PluginDirectoryTab = 'public' | 'workspace' | 'personal';
 type DetailItem =
-  | { kind: 'plugin'; marketplaceName: string; marketplaceLabel: string; plugin: PluginSummary; detail?: PluginDetail }
+  | {
+    kind: 'plugin';
+    marketplaceName: string;
+    marketplaceLabel: string;
+    plugin: PluginSummary;
+    detail?: PluginDetail;
+    detailError?: boolean;
+  }
   | { kind: 'skill'; skill: SkillMetadata }
   | { kind: 'app'; app: AppInfo };
+
+function assetUrl(value: string | null | undefined): string | undefined {
+  const source = value?.trim();
+  if (!source) return undefined;
+  if (/^(?:https?:|data:|blob:|asset:)/iu.test(source)) return source;
+  return isTauriRuntime() ? convertFileSrc(source) : undefined;
+}
+
+function firstAsset(assets: Record<string, string | undefined> | null): string | undefined {
+  return assets ? Object.values(assets).find((value): value is string => Boolean(value?.trim())) : undefined;
+}
+
+function pluginAssets(plugin: PluginSummary): { light?: string; dark?: string; brandColor?: string } {
+  return {
+    light: assetUrl(plugin.interface?.logo)
+      ?? assetUrl(plugin.interface?.logoUrl)
+      ?? assetUrl(plugin.interface?.composerIcon)
+      ?? assetUrl(plugin.interface?.composerIconUrl),
+    dark: assetUrl(plugin.interface?.logoDark) ?? assetUrl(plugin.interface?.logoUrlDark),
+    brandColor: plugin.interface?.brandColor ?? undefined,
+  };
+}
+
+function appAssets(app: AppInfo): { light?: string; dark?: string } {
+  return {
+    light: assetUrl(app.logoUrl) ?? assetUrl(firstAsset(app.iconAssets)),
+    dark: assetUrl(app.logoUrlDark) ?? assetUrl(firstAsset(app.iconDarkAssets)),
+  };
+}
+
+function skillAssets(skill: SkillMetadata): { light?: string; brandColor?: string } {
+  return {
+    light: assetUrl(skill.interface?.iconLarge) ?? assetUrl(skill.interface?.iconSmall),
+    brandColor: skill.interface?.brandColor,
+  };
+}
+
+function CatalogIcon({
+  light,
+  dark,
+  brandColor,
+}: {
+  light?: string;
+  dark?: string;
+  brandColor?: string;
+}) {
+  return (
+    <span
+      className="butler-plugin-icon"
+      style={brandColor ? { backgroundColor: `color-mix(in srgb, ${brandColor} 14%, transparent)` } : undefined}
+    >
+      <Blocks size={17} aria-hidden="true" />
+      {light ? (
+        <img
+          className={dark ? 'is-light has-dark' : 'is-light'}
+          src={light}
+          alt=""
+          onError={(event) => { event.currentTarget.hidden = true; }}
+        />
+      ) : null}
+      {dark ? (
+        <img
+          className="is-dark"
+          src={dark}
+          alt=""
+          onError={(event) => { event.currentTarget.hidden = true; }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function marketplaceDirectory(
+  name: string,
+  path: string | null,
+  workspaceRoot: string,
+): PluginDirectoryTab {
+  if (!path || /openai|curated|bundled/iu.test(name)) return 'public';
+  const normalizedPath = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
+  const normalizedWorkspace = workspaceRoot.replaceAll('\\', '/').replace(/\/+$/u, '').toLocaleLowerCase('en-US');
+  return normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`) ? 'workspace' : 'personal';
+}
 
 function scopeLabel(scope: SkillMetadata['scope']): string {
   if (scope === 'repo') return '当前工作区';
@@ -121,6 +213,7 @@ export default function ButlerPluginsPage() {
   const setSkillEnabled = useCodexWorkspace((state) => state.setSkillEnabled);
 
   const [activeTab, setActiveTab] = useState<CatalogTab>('plugins');
+  const [directoryTab, setDirectoryTab] = useState<PluginDirectoryTab>('public');
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<SkillScopeFilter>('all');
   const [selectedItem, setSelectedItem] = useState<DetailItem | null>(null);
@@ -168,7 +261,7 @@ export default function ButlerPluginsPage() {
   }, [selectedItem]);
 
   const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN');
-  const pluginGroups = useMemo(() => {
+  const allPluginGroups = useMemo(() => {
     const marketplaces = plugins?.marketplaces ?? [];
     return marketplaces.flatMap((marketplace) => {
       const marketplaceLabel = firstNonEmpty(marketplace.interface?.displayName, marketplace.name) ?? marketplace.name;
@@ -189,10 +282,18 @@ export default function ButlerPluginsPage() {
       return items.length > 0 ? [{
         id: marketplace.name,
         label: marketplaceLabel,
+        directory: marketplaceDirectory(marketplace.name, marketplace.path, workspaceRoot),
         items,
       }] : [];
     });
-  }, [normalizedQuery, plugins]);
+  }, [normalizedQuery, plugins, workspaceRoot]);
+  const installedPlugins = useMemo(() => allPluginGroups.flatMap((group) => group.items
+    .filter((plugin) => plugin.installed)
+    .map((plugin) => ({ marketplaceName: group.id, marketplaceLabel: group.label, plugin }))), [allPluginGroups]);
+  const pluginGroups = useMemo(() => allPluginGroups
+    .filter((group) => group.directory === directoryTab)
+    .map((group) => ({ ...group, items: group.items.filter((plugin) => !plugin.installed) }))
+    .filter((group) => group.items.length > 0), [allPluginGroups, directoryTab]);
   const visibleSkills = useMemo(() => skills.filter((skill) => {
     if (scope !== 'all' && skill.scope !== scope) return false;
     if (!normalizedQuery) return true;
@@ -279,18 +380,60 @@ export default function ButlerPluginsPage() {
     plugin: PluginSummary,
   ): Promise<void> => {
     const key = `plugin-detail:${plugin.id}`;
-    setSelectedItem({ kind: 'plugin', marketplaceName, marketplaceLabel, plugin });
+    setSelectedItem({ kind: 'plugin', marketplaceName, marketplaceLabel, plugin, detailError: false });
     setDetailLoadingKey(key);
     try {
       const detail = await readPlugin(marketplaceName, plugin.name);
       setSelectedItem((current) => current?.kind === 'plugin' && current.plugin.id === plugin.id
-        ? { ...current, detail }
+        ? { ...current, detail, detailError: false }
         : current);
-    } catch (reason) {
-      toast.error(reason, '读取插件详情失败');
+    } catch {
+      setSelectedItem((current) => current?.kind === 'plugin' && current.plugin.id === plugin.id
+        ? { ...current, detailError: true }
+        : current);
     } finally {
       setDetailLoadingKey((current) => current === key ? '' : current);
     }
+  };
+
+  const renderPlugin = (
+    marketplaceName: string,
+    marketplaceLabel: string,
+    plugin: PluginSummary,
+  ) => {
+    const title = pluginTitle(plugin);
+    const changing = busyKey === `plugin:${plugin.id}`;
+    const installable = !plugin.installed
+      && plugin.availability === 'AVAILABLE'
+      && plugin.installPolicy !== 'NOT_AVAILABLE';
+    return (
+      <article key={plugin.id} className="butler-plugin-item">
+        <button
+          type="button"
+          onClick={() => void openPluginDetail(marketplaceName, marketplaceLabel, plugin)}
+          aria-label={`查看插件 ${title}`}
+        >
+          <CatalogIcon {...pluginAssets(plugin)} />
+          <span>
+            <strong>{title}</strong>
+            <small>{`${pluginSummary(plugin)} · ${pluginStateLabel(plugin)}`}</small>
+          </span>
+        </button>
+        <button
+          type="button"
+          aria-label={plugin.installed ? `卸载插件 ${plugin.name}` : `安装插件 ${plugin.name}`}
+          disabled={changing || (!plugin.installed && !installable)}
+          onClick={() => void togglePlugin(marketplaceName, plugin)}
+          className="butler-plugin-install"
+        >
+          {changing
+            ? <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            : plugin.installed
+              ? <X size={15} aria-hidden="true" />
+              : <Plus size={15} aria-hidden="true" />}
+        </button>
+      </article>
+    );
   };
 
   return (
@@ -323,13 +466,31 @@ export default function ButlerPluginsPage() {
         </header>
 
         <div className="butler-plugin-heading">
-          <h1>扩展 Codex</h1>
+          <h1>插件</h1>
           <p>{workspaceRoot.trim() ? statusLabel(status) : '尚未选择 Codex 工作区'}</p>
           {error ? <p>{error}</p> : null}
         </div>
 
         <div className="butler-plugin-filters">
-          {activeTab === 'skills' ? (
+          {activeTab === 'plugins' ? (
+            <div role="tablist" aria-label="插件目录">
+              {([
+                ['public', '公开'],
+                ['workspace', '工作区'],
+                ['personal', '个人'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={directoryTab === value}
+                  onClick={() => setDirectoryTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : activeTab === 'skills' ? (
             <div role="tablist" aria-label="Skill 来源">
               {([
                 ['all', '全部'],
@@ -386,54 +547,32 @@ export default function ButlerPluginsPage() {
               <p>对话、Skills 和已安排任务仍可正常使用；可稍后刷新重试。</p>
             </div>
           ) : activeTab === 'plugins' ? (
-            pluginGroups.length === 0 ? (
+            pluginGroups.length === 0 && installedPlugins.length === 0 ? (
               <div className="butler-codex-empty-list">
                 <Blocks size={26} aria-hidden="true" />
                 <h2>{emptyTitle}</h2>
                 <p>{emptyDescription}</p>
               </div>
-            ) : pluginGroups.map((group) => (
-              <section key={group.id} className="butler-plugin-group" aria-labelledby={`plugin-group-${group.id}`}>
-                <h2 id={`plugin-group-${group.id}`}>{group.label}</h2>
-                <div>
-                  {group.items.map((plugin) => {
-                    const title = pluginTitle(plugin);
-                    const changing = busyKey === `plugin:${plugin.id}`;
-                    const installable = !plugin.installed
-                      && plugin.availability === 'AVAILABLE'
-                      && plugin.installPolicy !== 'NOT_AVAILABLE';
-                    return (
-                      <article key={plugin.id} className="butler-plugin-item">
-                        <button
-                          type="button"
-                          onClick={() => void openPluginDetail(group.id, group.label, plugin)}
-                          aria-label={`查看插件 ${title}`}
-                        >
-                          <span className="butler-plugin-icon"><Blocks size={17} aria-hidden="true" /></span>
-                          <span>
-                            <strong>{title}</strong>
-                            <small>{`${pluginSummary(plugin)} · ${pluginStateLabel(plugin)}`}</small>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={plugin.installed ? `卸载插件 ${plugin.name}` : `安装插件 ${plugin.name}`}
-                          disabled={changing || (!plugin.installed && !installable)}
-                          onClick={() => void togglePlugin(group.id, plugin)}
-                          className="butler-plugin-install"
-                        >
-                          {changing
-                            ? <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                            : plugin.installed
-                              ? <X size={15} aria-hidden="true" />
-                              : <Plus size={15} aria-hidden="true" />}
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            ))
+            ) : (
+              <>
+                {installedPlugins.length > 0 ? (
+                  <section className="butler-plugin-group" aria-labelledby="plugin-group-installed">
+                    <h2 id="plugin-group-installed">已安装</h2>
+                    <div>
+                      {installedPlugins.map(({ marketplaceName, marketplaceLabel, plugin }) => (
+                        renderPlugin(marketplaceName, marketplaceLabel, plugin)
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+                {pluginGroups.map((group) => (
+                  <section key={group.id} className="butler-plugin-group" aria-labelledby={`plugin-group-${group.id}`}>
+                    <h2 id={`plugin-group-${group.id}`}>{group.label}</h2>
+                    <div>{group.items.map((plugin) => renderPlugin(group.id, group.label, plugin))}</div>
+                  </section>
+                ))}
+              </>
+            )
           ) : activeTab === 'skills' ? (
             skillGroups.length === 0 ? (
               <div className="butler-codex-empty-list">
@@ -451,7 +590,7 @@ export default function ButlerPluginsPage() {
                     return (
                       <article key={skill.path} className="butler-plugin-item">
                         <button type="button" onClick={() => setSelectedItem({ kind: 'skill', skill })} aria-label={`查看 Skill ${title}`}>
-                          <span className="butler-plugin-icon"><Blocks size={17} aria-hidden="true" /></span>
+                          <CatalogIcon {...skillAssets(skill)} />
                           <span>
                             <strong>{title}</strong>
                             <small>{skillSummary(skill)}</small>
@@ -491,7 +630,7 @@ export default function ButlerPluginsPage() {
                 {visibleApps.map((app) => (
                   <article key={app.id} className="butler-plugin-item">
                     <button type="button" onClick={() => setSelectedItem({ kind: 'app', app })} aria-label={`查看 App ${app.name}`}>
-                      <span className="butler-plugin-icon"><Blocks size={17} aria-hidden="true" /></span>
+                      <CatalogIcon {...appAssets(app)} />
                       <span>
                         <strong>{app.name}</strong>
                         <small>{`${appSummary(app)} · ${appStateLabel(app)}`}</small>
@@ -527,7 +666,11 @@ export default function ButlerPluginsPage() {
         }}>
           <section role="dialog" aria-modal="true" aria-label={`插件详情 ${detailLabel(selectedItem)}`} className="butler-plugin-detail">
             <header>
-              <span className="butler-plugin-icon"><Blocks size={18} aria-hidden="true" /></span>
+              {selectedItem.kind === 'plugin'
+                ? <CatalogIcon {...pluginAssets(selectedItem.plugin)} />
+                : selectedItem.kind === 'skill'
+                  ? <CatalogIcon {...skillAssets(selectedItem.skill)} />
+                  : <CatalogIcon {...appAssets(selectedItem.app)} />}
               <div>
                 <h2>{detailLabel(selectedItem)}</h2>
                 <p>
@@ -552,6 +695,21 @@ export default function ButlerPluginsPage() {
                       <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       正在读取插件详情…
                     </p>
+                  ) : null}
+                  {selectedItem.detailError ? (
+                    <div className="butler-plugin-detail-warning" role="status">
+                      <span>更多详情暂不可用，当前摘要和安装状态仍可使用。</span>
+                      <button
+                        type="button"
+                        onClick={() => void openPluginDetail(
+                          selectedItem.marketplaceName,
+                          selectedItem.marketplaceLabel,
+                          selectedItem.plugin,
+                        )}
+                      >
+                        重试
+                      </button>
+                    </div>
                   ) : null}
                   <h3>状态</h3>
                   <p>{pluginStateLabel(selectedItem.plugin)}</p>

@@ -46,6 +46,33 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
   assert.doesNotMatch(pkg, /agent:runner:(?:build|test)/);
 });
 
+test('桌面端自动准备临时会话与管家会话目录，并把用户目录归为托管项目', async () => {
+  const [proc, main, workspace, history, panel] = await Promise.all([
+    readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8'),
+    readFile(new URL('apps/desktop/src-tauri/src/main.rs', root), 'utf8'),
+    readFile(new URL('apps/web/src/stores/codexWorkspace.ts', root), 'utf8'),
+    readFile(new URL('apps/web/src/components/ButlerConversationHistory.tsx', root), 'utf8'),
+    readFile(new URL('apps/web/src/components/ButlerPanel.tsx', root), 'utf8'),
+  ]);
+
+  assert.match(proc, /pub fn codex_default_workspace/);
+  assert.match(proc, /codex_workspace_directory\(&app, ""\)/);
+  assert.match(proc, /pub fn codex_butler_workspace/);
+  assert.match(proc, /codex-butler/);
+  assert.match(main, /proc::codex_default_workspace/);
+  assert.match(main, /proc::codex_butler_workspace/);
+  assert.match(workspace, /ensureDefaultWorkspace/);
+  assert.match(workspace, /invoke<string>\('codex_default_workspace'\)/);
+  assert.match(workspace, /invoke<string>\('codex_butler_workspace'\)/);
+  assert.match(workspace, /defaultWorkspaceRoot/);
+  assert.match(workspace, /butlerWorkspaceRoot/);
+  assert.match(history, /临时会话/);
+  assert.match(history, /管家会话/);
+  assert.match(history, /托管项目/);
+  assert.match(history, /butlerWorkspaceRoot/);
+  assert.match(panel, /系统临时工作区/);
+});
+
 test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版传了会以退出码 2 退出）', async () => {
   const proc = await readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8');
   // 按 app-server --help 是否列出 --stdio 决定传不传
@@ -65,13 +92,16 @@ test('会话只保留一个 AI 托管入口，并支持按房间自动开启', a
   ]);
 
   assert.match(chatArea, /aria-label="开启 AI 托管"/);
-  assert.match(chatArea, /startRoomAgentHosting\(activeRid, rawName\)/);
+  assert.match(chatArea, /startRoomAgentHosting\(activeRid, rawName, \{ workspaceRoot \}\)/);
+  assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
+  assert.match(chatArea, /setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)/);
   assert.match(chatArea, /aria-label=\{localAgentActive \? '关闭 AI 托管'/);
   assert.match(chatArea, /await endAgentSession\(agentSessionKey\)/);
-  assert.doesNotMatch(chatArea, /localAgentActive && togglePanel\(\{ kind: 'agent'/);
   assert.doesNotMatch(threadPanel, /共享 Agent/);
   assert.match(hosting, /autoHostEnvironmentId/);
   assert.match(hosting, /fetchWorkItem\(workItemId\)/);
+  assert.match(hosting, /await workspaceState\.ensureDefaultWorkspace\(\)/);
+  assert.match(hosting, /isSystemCodexWorkspace\(workspaceRoot, defaultWorkspaceRoot, butlerWorkspaceRoot\)/);
   assert.match(agentPanel, /进入本房间时自动开启托管/);
   assert.doesNotMatch(agentPanel, /state\.traces\[tmid\] \?\? \[\]/);
   assert.match(agentPanel, /useMemo\(\s*\(\) => allApprovals\.filter/);

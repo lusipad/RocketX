@@ -1,14 +1,20 @@
-import { open } from '@tauri-apps/plugin-dialog';
-import { Bot, Check, ChevronLeft, Copy, FolderOpen, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Copy, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { permissionRequestSummary } from '../agent/safety';
-import { autoHostEnvironmentId, setRoomAutoHosting } from '../lib/agentHosting';
+import {
+  autoHostEnvironmentId,
+  roomHostingWorkspaceRoot,
+  setRoomAutoHosting,
+  setRoomHostingWorkspace,
+} from '../lib/agentHosting';
 import { isTauriRuntime } from '../lib/client';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
-import { environmentIsBusy, proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
+import { proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
+import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
+import { useUI } from '../stores/ui';
 import PanelShell from './PanelShell';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
 
@@ -26,8 +32,12 @@ function approvalSummary(method: string, params: unknown): string {
   return method;
 }
 
+function projectName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
 export default function AgentPanel() {
-  const [workspaceRoot, setWorkspaceRoot] = useState<string>();
+  const [projectOverride, setProjectOverride] = useState<string>();
   const [autoHost, setAutoHost] = useState(false);
   const panel = useChat((state) => state.rightPanel);
   const tmid = panel?.kind === 'agent' ? panel.tmid : null;
@@ -36,12 +46,29 @@ export default function AgentPanel() {
   const session = useSharedAgent((state) => (tmid ? state.sessions[tmid] : undefined));
   const binding = useAgentEnvironments((state) => state.bindings.find((item) => item.sessionKey === tmid && item.status === 'active'));
   const environments = useAgentEnvironments((state) => state.environments);
-  const bindings = useAgentEnvironments((state) => state.bindings);
+  const currentProject = useCodexWorkspace((state) => state.workspaceRoot);
+  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
+  const projects = useCodexWorkspace((state) => state.workspaceRoots);
   const boundEnvironment = environments.find((item) => item.id === binding?.environmentId);
-  const defaultEnvironment = environments.find(
-    (environment) => environment.enabled && !environmentIsBusy(environment.id, bindings),
+  const dedicatedProjects = projects.filter((path) => !isSystemCodexWorkspace(
+    path,
+    defaultWorkspaceRoot,
+    butlerWorkspaceRoot,
+  ));
+  const roomProject = rid ? roomHostingWorkspaceRoot(rid) : undefined;
+  const selectedProject = projectOverride
+    || boundEnvironment?.path
+    || (roomProject && dedicatedProjects.includes(roomProject) ? roomProject : undefined)
+    || (!isSystemCodexWorkspace(currentProject, defaultWorkspaceRoot, butlerWorkspaceRoot)
+      && dedicatedProjects.includes(currentProject) ? currentProject : undefined)
+    || dedicatedProjects[0];
+  const projectEnvironment = environments.find(
+    (environment) => environment.enabled && environment.path === selectedProject,
   );
-  const selectedEnvironment = boundEnvironment ?? defaultEnvironment;
+  const projectOptions = selectedProject && !dedicatedProjects.includes(selectedProject)
+    ? [selectedProject, ...dedicatedProjects]
+    : dedicatedProjects;
   const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
   const allApprovals = useSharedAgent((state) => state.approvals);
   const allInputs = useSharedAgent((state) => state.inputs);
@@ -68,6 +95,10 @@ export default function AgentPanel() {
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
   const transferToCodexApp = useSharedAgent((state) => state.transferToCodexApp);
+  const hostingModel = useCodexWorkspace((state) => state.hostingModel);
+  const hostingEffort = useCodexWorkspace((state) => state.hostingEffort);
+  const permissionPreset = useCodexWorkspace((state) => state.permissionPreset);
+  const openButlerConversation = useUI((state) => state.openButlerConversation);
   const [transferring, setTransferring] = useState(false);
   const [resumingTmid, setResumingTmid] = useState<string | null>(null);
   const desktopRuntime = isTauriRuntime();
@@ -78,6 +109,10 @@ export default function AgentPanel() {
   useEffect(() => {
     setAutoHost(!!rid && !!autoHostEnvironmentId(rid));
   }, [rid, session?.environmentId]);
+
+  useEffect(() => {
+    setProjectOverride(undefined);
+  }, [rid]);
 
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
@@ -106,10 +141,27 @@ export default function AgentPanel() {
             <ChevronLeft size={16} />
           </button>
           <Bot size={16} className="text-primary" />
-          共享 Agent
+          AI 托管
         </span>
       }
     >
+      <div className="flex items-center justify-between gap-3 border-b border-line bg-fill-1 px-4 py-2.5 text-xs">
+        <div className="min-w-0">
+          <div className="font-medium text-ink">AI 托管独立配置</div>
+          <div className="mt-0.5 truncate text-ink-3" title={hostingModel || 'Codex 默认模型'}>
+            {hostingModel || 'Codex 默认模型'} · {hostingEffort ?? '默认推理'} · {
+              permissionPreset === 'ask' ? '询问审批' : permissionPreset === 'auto' ? '替我审批' : '完全访问'
+            }
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={openButlerConversation}
+          className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1.5 text-ink-2 hover:bg-fill-hover"
+        >
+          在 AI 管家中调整
+        </button>
+      </div>
       {error ? <div className="border-b border-line bg-danger/10 px-4 py-2 text-xs text-danger">{error}</div> : null}
       {!session || session.status === 'ended' ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
@@ -125,7 +177,7 @@ export default function AgentPanel() {
                   : '在当前话题开启 AI 托管'}
             </div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              AI 会从已有讨论继续理解上下文。只有明确的 @ai 指令才会回复；权限、审批和执行边界与 Codex 任务一致。
+              房间轻量对话使用临时会话；管家对话使用管家会话；AI 托管只使用专用工作项目。
             </div>
           </div>
           {!desktopRuntime ? (
@@ -134,31 +186,46 @@ export default function AgentPanel() {
             </div>
           ) : (
             <>
+              <div className="w-full max-w-sm">
+                <label className="block text-left text-xs text-ink-3">
+                  <span className="mb-1 block">托管项目</span>
+                  <select
+                    aria-label="AI 托管项目"
+                    value={selectedProject ?? ''}
+                    onChange={(event) => setProjectOverride(event.target.value)}
+                    className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
+                  >
+                    {!selectedProject ? <option value="">尚未添加项目</option> : null}
+                    {projectOptions.map((path) => (
+                      <option key={path} value={path}>
+                        {projectName(path)}
+                        {path === roomProject ? '（此群）' : path === currentProject ? '（当前）' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <button
-                onClick={() =>
-                  void open({ directory: true, multiple: false, title: '选择 Agent 工作区' }).then((path) => {
-                    if (typeof path === 'string') setWorkspaceRoot(path);
+                disabled={!selectedProject}
+                onClick={() => {
+                  if (!selectedProject) return;
+                  void start(rid, tmid, {
+                    workspaceRoot: selectedProject,
+                    replyTmid: tmid.startsWith('room:') ? undefined : tmid,
+                    environmentId: projectEnvironment?.id,
+                    environmentName: projectEnvironment?.name,
+                    workItem: binding ? { id: binding.workItemId, project: binding.adoProject, title: binding.workItemTitle } : undefined,
+                    proposedBranch: binding && projectEnvironment
+                      ? proposedAgentBranch(projectEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
+                      : undefined,
+                    baseBranch: projectEnvironment?.defaultBaseBranch,
                   })
-                }
-                className="flex max-w-full items-center gap-2 rounded-md border border-line px-3 py-2 text-xs text-ink-2 hover:bg-fill-hover"
-                title={workspaceRoot ?? selectedEnvironment?.path}
-              >
-                <FolderOpen size={14} />
-                <span className="truncate">{workspaceRoot ?? selectedEnvironment?.name ?? '选择项目目录（可选）'}</span>
-              </button>
-              <button
-                onClick={() => void start(rid, tmid, {
-                  workspaceRoot: workspaceRoot ?? selectedEnvironment?.path,
-                  replyTmid: tmid.startsWith('room:') ? undefined : tmid,
-                  environmentId: workspaceRoot ? undefined : selectedEnvironment?.id,
-                  environmentName: workspaceRoot ? undefined : selectedEnvironment?.name,
-                  workItem: binding ? { id: binding.workItemId, project: binding.adoProject, title: binding.workItemTitle } : undefined,
-                  proposedBranch: binding && selectedEnvironment
-                    ? proposedAgentBranch(selectedEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
-                    : undefined,
-                  baseBranch: selectedEnvironment?.defaultBaseBranch,
-                }).catch(() => undefined)}
-                className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover"
+                    .then(() => {
+                      if (tmid.startsWith('room:')) setRoomHostingWorkspace(rid, selectedProject);
+                    })
+                    .catch(() => undefined);
+                }}
+                className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Play size={14} /> 开启 AI 托管
               </button>

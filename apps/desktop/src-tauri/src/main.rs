@@ -12,7 +12,7 @@ mod ocr;
 mod proc;
 mod winauth;
 
-use std::{collections::HashSet, sync::Mutex};
+use std::{collections::HashSet, path::PathBuf, sync::Mutex};
 #[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
@@ -22,12 +22,41 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN_TRAY_ID: &str = "main";
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
+
+fn refresh_autostart_registration_with(
+    debug: bool,
+    is_enabled: impl FnOnce() -> Result<bool, String>,
+    enable: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if debug {
+        return Ok(());
+    }
+    if is_enabled()? {
+        enable()?;
+    }
+    Ok(())
+}
+
+fn refresh_autostart_registration<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+    // Debug EXE 依赖 Vite 开发服务器，不能成为可独立运行的系统启动项。
+    let manager = app.autolaunch();
+    refresh_autostart_registration_with(
+        cfg!(debug_assertions),
+        || manager.is_enabled().map_err(|error| error.to_string()),
+        || {
+            // 官方插件的 is_enabled 只检查注册表值是否存在，不检查其中的 EXE 路径。
+            // 每次正式版启动都覆盖一次，避免升级或安装目录变化后仍指向旧文件。
+            manager.enable().map_err(|error| error.to_string())
+        },
+    )
+}
 
 fn validate_external_url(url: &str) -> Result<&str, String> {
     let url = url.trim();
@@ -89,6 +118,39 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(validate_external_url(&url)?, None::<&str>)
         .map_err(|error| format!("failed to open external URL: {error}"))
+}
+
+fn resolve_download_history_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() || path.len() > 32_768 || path.chars().any(char::is_control) {
+        return Err("下载记录中的路径无效".to_string());
+    }
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("下载记录中的路径必须是绝对路径".to_string());
+    }
+    let resolved = path
+        .canonicalize()
+        .map_err(|_| "下载文件不存在或已被移动".to_string())?;
+    if !resolved.is_file() {
+        return Err("下载记录指向的不是文件".to_string());
+    }
+    Ok(resolved)
+}
+
+#[tauri::command]
+fn download_history_open(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let target = resolve_download_history_path(&path)?;
+    app.opener()
+        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| format!("无法使用系统应用打开文件：{error}"))
+}
+
+#[tauri::command]
+fn download_history_reveal(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let target = resolve_download_history_path(&path)?;
+    app.opener()
+        .reveal_item_in_dir(target)
+        .map_err(|error| format!("无法打开文件所在目录：{error}"))
 }
 
 fn normalize_http_origin(value: &str) -> Result<String, String> {
@@ -279,7 +341,11 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 
 #[cfg(test)]
 mod tray_icon_tests {
-    use super::{dim_tray_icon, normalize_http_origin, validate_external_url};
+    use super::{
+        dim_tray_icon, normalize_http_origin, refresh_autostart_registration_with,
+        resolve_download_history_path, validate_external_url,
+    };
+    use std::cell::Cell;
     use tauri::image::Image;
 
     #[test]
@@ -333,6 +399,53 @@ mod tray_icon_tests {
         assert!(validate_external_url("javascript:alert(1)").is_err());
         assert!(validate_external_url("https://example.com/\nheader").is_err());
     }
+
+    #[test]
+    fn autostart_refreshes_only_existing_release_registration() {
+        let checks = Cell::new(0);
+        let enables = Cell::new(0);
+        refresh_autostart_registration_with(
+            false,
+            || {
+                checks.set(checks.get() + 1);
+                Ok(true)
+            },
+            || {
+                enables.set(enables.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(checks.get(), 1);
+        assert_eq!(enables.get(), 1);
+
+        refresh_autostart_registration_with(
+            false,
+            || Ok(false),
+            || panic!("disabled registration must not be enabled"),
+        )
+        .unwrap();
+        refresh_autostart_registration_with(
+            true,
+            || panic!("debug build must not inspect the system registration"),
+            || panic!("debug build must not register itself"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn download_history_only_accepts_existing_absolute_files() {
+        let current_exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            resolve_download_history_path(current_exe.to_string_lossy().as_ref()).unwrap(),
+            current_exe.canonicalize().unwrap()
+        );
+        assert!(resolve_download_history_path("relative.txt").is_err());
+        assert!(resolve_download_history_path("missing\nfile.txt").is_err());
+        assert!(
+            resolve_download_history_path(std::env::temp_dir().to_string_lossy().as_ref()).is_err()
+        );
+    }
 }
 
 fn main() {
@@ -360,6 +473,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             allow_http_origin,
             open_external_url,
+            download_history_open,
+            download_history_reveal,
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,
             set_tray_icon_normal,
@@ -379,7 +494,15 @@ fn main() {
             proc::codex_app_server_start,
             proc::codex_app_server_write,
             proc::codex_app_server_stop,
+            proc::codex_artifact_read,
+            proc::codex_artifact_open,
+            proc::codex_artifact_reveal,
+            proc::codex_default_workspace,
+            proc::codex_butler_workspace,
             proc::codex_agent_workspace,
+            proc::codex_automation_list,
+            proc::codex_automation_write,
+            proc::codex_automation_delete,
             proc::butler_azure_devops_server_read,
             proc::check_signed_http_update,
             proc::read_update_manifest_dir,
@@ -454,6 +577,9 @@ fn main() {
             None,
         ))
         .setup(|app| {
+            if let Err(error) = refresh_autostart_registration(app) {
+                log::warn!("failed to refresh autostart registration: {error}");
+            }
             // 管家待办池 SQLite
             let data_dir = app
                 .path()

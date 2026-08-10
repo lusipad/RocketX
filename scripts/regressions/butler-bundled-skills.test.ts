@@ -42,6 +42,27 @@ test('message-action-extraction 是严格 JSON Skill，不允许自由文本输�
   assert.match(source, /"title":"简洁动作标题"/);
 });
 
+test('晨报只输出可扫读的行动清单，不复述分析过程', () => {
+  const source = coreSkill('morning-brief');
+  assert.match(source, /`## 早间简报 · 日期`/);
+  assert.match(source, /`\*\*今天最重要：\*\* 动作/);
+  assert.match(source, /总计不超过 7 条/);
+  assert.match(source, /不得复述工具名、调用过程、Skill 规则/);
+  assert.match(source, /没有已确认风险时省略/);
+  assert.match(source, /正文不超过 280 个汉字/);
+  assert.match(source, /一个来源失败时继续使用其余来源/);
+  assert.match(source, /没有会改变今天安排的事项时/);
+  assert.match(source, /禁止输出数据源排查、方法建议或优先级分析/);
+  assert.match(source, /称呼只允许出现一次/);
+  assert.match(source, /外部新闻、行业资讯和产品推荐默认不出现/);
+  assert.match(source, /未配置 ADO 项目不算数据缺失/);
+  assert.match(source, /不得仅凭 Codex Memory 中的历史项目名决定 ADO 范围/);
+  assert.match(source, /不得写“我将|以下是|祝你/);
+  assert.match(source, /未覆盖行不得附原因或解释/);
+  assert.doesNotMatch(source, /输出四段/);
+  assert.doesNotMatch(source, /可顺手处理/);
+});
+
 test('高风险 Skills 只绑定业务 MCP，不回退到旧 Butler 工具', () => {
   const roomDigest = coreSkill('room-digest');
   const commitments = coreSkill('commitment-extraction');

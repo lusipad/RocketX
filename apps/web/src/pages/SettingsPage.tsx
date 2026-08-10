@@ -24,6 +24,11 @@ import {
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
 import {
+  isPresenceStatus,
+  savePresencePreference,
+  type PresenceStatus,
+} from '../lib/presencePreference';
+import {
   checkSignedHttpSource,
   launchDirInstaller,
   loadUpdateSource,
@@ -36,7 +41,11 @@ import {
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash } from '../lib/taskbar';
-import { readAutostartEnabled, updateAutostartEnabled } from '../lib/autostart';
+import {
+  autostartAvailable,
+  readAutostartEnabled,
+  updateAutostartEnabled,
+} from '../lib/autostart';
 import { exportDiagnostics } from '../lib/diagnostics';
 import { loadWorkbenchConfig, loadWorkbenchConfigIssue, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
@@ -135,7 +144,9 @@ function AccountSection() {
   const refreshUser = useAuth((s) => s.refreshUser);
   const bumpAvatar = useAuth((s) => s.bumpAvatar);
 
-  const [status, setStatus] = useState(user?.status ?? 'online');
+  const [status, setStatus] = useState<PresenceStatus>(
+    isPresenceStatus(user?.status) ? user.status : 'online',
+  );
   const [statusText, setStatusText] = useState('');
   const [saved, setSaved] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -155,7 +166,7 @@ function AccountSection() {
 
   useEffect(() => setName(user?.name ?? ''), [user?.name]);
 
-  const applyStatus = async (next: string, text?: string) => {
+  const applyStatus = async (next: PresenceStatus, text?: string) => {
     const prev = status;
     setStatus(next);
     try {
@@ -163,6 +174,7 @@ function AccountSection() {
       // 服务器保留原有状态消息；之前用 `text ?? statusText` 会把空输入框的 '' 发出去，
       // 无声清掉用户写的「开会中」（P1-14）。只有点文案保存按钮才带上 message。
       await rest.setStatus(next, text);
+      if (user?._id) savePresencePreference(getServerBase(), user._id, next);
       await refreshUser();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -522,13 +534,13 @@ function ShortcutSection() {
 function DesktopSection() {
   const [mode, setMode] = useState<RuntimeMode>(getRuntimeMode);
   const [enabled, setEnabled] = useState(false);
-  const [loading, setLoading] = useState(isTauri);
+  const [loading, setLoading] = useState(autostartAvailable);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!autostartAvailable) return;
     let active = true;
     void readAutostartEnabled()
       .then((value) => {
@@ -577,6 +589,8 @@ function DesktopSection() {
 
   const statusText = !isTauri
     ? '仅桌面客户端支持，网页版不会修改系统设置'
+    : !autostartAvailable
+      ? 'Debug 版依赖开发服务器，请使用正式安装版验证开机启动'
     : loading
       ? '正在读取系统设置…'
       : error
@@ -615,7 +629,7 @@ function DesktopSection() {
     <>
       <Row
         label="运行模式"
-        hint="高性能模式会关闭 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面"
+        hint="精简模式不加载 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面"
       >
         <RadioGroup
           value={mode}
@@ -626,8 +640,12 @@ function DesktopSection() {
             window.location.reload();
           }}
           options={[
-            { key: 'standard', label: '标准', hint: '默认体验，保留全部能力' },
-            { key: 'performance', label: '高性能', hint: '仅保留常规 Rocket.Chat 功能' },
+            { key: 'standard', label: '标准模式', hint: '默认体验，保留全部能力' },
+            {
+              key: 'performance',
+              label: '精简模式',
+              hint: '不加载 AI，仅保留常规 Rocket.Chat 功能',
+            },
           ]}
         />
       </Row>
@@ -638,8 +656,8 @@ function DesktopSection() {
       >
         <div className="flex min-w-0 flex-col items-end gap-1.5">
           <Toggle
-            checked={isTauri && enabled}
-            disabled={!isTauri || loading}
+            checked={autostartAvailable && enabled}
+            disabled={!autostartAvailable || loading}
             onChange={(next) => void changeAutostart(next)}
           />
           <div

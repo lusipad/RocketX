@@ -94,15 +94,15 @@ test('桌面下载页可打开文件、定位目录并只清除记录（issue #1
   await revealButton.click();
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as { __desktopCalls: Array<{ command: string }> }).__desktopCalls
-      .filter((item) => item.command.startsWith('plugin:opener|')).length,
+      .filter((item) => item.command.startsWith('download_history_')).length,
   )).toBe(2);
   const openerCalls = await page.evaluate(() =>
     (window as unknown as { __desktopCalls: Array<{ command: string; args?: Record<string, unknown> }> })
-      .__desktopCalls.filter((item) => item.command.startsWith('plugin:opener|')),
+      .__desktopCalls.filter((item) => item.command.startsWith('download_history_')),
   );
   expect(openerCalls).toEqual([
-    { command: 'plugin:opener|open_path', args: { path: FILE_PATH, with: undefined } },
-    { command: 'plugin:opener|reveal_item_in_dir', args: { paths: [FILE_PATH] } },
+    { command: 'download_history_open', args: { path: FILE_PATH } },
+    { command: 'download_history_reveal', args: { path: FILE_PATH } },
   ]);
 
   await page.getByRole('button', { name: '清除记录' }).click();

@@ -69,12 +69,14 @@ test('工作项 Discussion 默认允许房间成员提问，但宿主仍掌握�
   assert.equal(commandAccess(session({ tmid: 'room:discussion-128', access: 'host-only' }), 'member'), 'denied');
 });
 
-test('共享 Agent 使用独立的 AI 托管 Codex 模型、推理强度和权限设置', () => {
+test('AI 托管使用独立模型与推理强度，并沿用 AI 管家的权限设置', () => {
   const source = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
-  assert.match(source, /getAgentHostingCodexSettings\(\)/);
-  assert.doesNotMatch(source, /getButlerCodexSettings/);
+  assert.match(source, /const workspace = useCodexWorkspace\.getState\(\)/);
+  assert.doesNotMatch(source, /getAgentHostingCodexSettings|agentHostingSettings/);
   assert.match(source, /function runtimeSelection\(catalog: CodexCatalog\): CodexRuntimeSelection/);
-  assert.match(source, /permissionPreset: saved\.permissionPreset/);
+  assert.match(source, /workspace\.hostingModel/);
+  assert.match(source, /workspace\.hostingEffort/);
+  assert.match(source, /permissionPreset: workspace\.permissionPreset/);
   assert.match(source, /\.startThread\(runtimeSelection\(catalog\)\)/);
   assert.match(source, /controller\.startTurn\(/);
   assert.doesNotMatch(source, /AppServerClient|TauriCodexTransport|sandboxPolicy/);
