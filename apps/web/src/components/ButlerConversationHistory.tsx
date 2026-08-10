@@ -5,24 +5,39 @@ import {
   ArrowUpRight,
   Blocks,
   CalendarClock,
+  ChevronRight,
+  FolderMinus,
   FolderOpen,
   GitPullRequest,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
+  Plus,
   Search,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { openCodexNewThread, openCodexSurface, openCodexThread } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import { useAuth } from '../stores/auth';
-import { useCodexWorkspace } from '../stores/codexWorkspace';
+import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
+import { ConfirmDialog } from './Dialog';
+
+const THREAD_PREVIEW_LIMIT = 5;
 
 function threadTitle(name: string | null, preview: string): string {
   return name?.trim() || preview.trim() || '新对话';
+}
+
+function workspaceName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function workspaceKey(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLocaleLowerCase('en-US') : normalized;
 }
 
 function ageLabel(timestamp: number): string {
@@ -40,16 +55,23 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const setModule = useUI((state) => state.setModule);
   const setWorkbenchTab = useUI((state) => state.setWorkbenchTab);
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const workspaceRoots = useCodexWorkspace((state) => state.workspaceRoots);
+  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const status = useCodexWorkspace((state) => state.status);
   const error = useCodexWorkspace((state) => state.error);
   const threads = useCodexWorkspace((state) => state.threads);
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
   const activeTurnId = useCodexWorkspace((state) => state.activeTurnId);
   const hydrate = useCodexWorkspace((state) => state.hydrate);
+  const ensureDefaultWorkspace = useCodexWorkspace((state) => state.ensureDefaultWorkspace);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
+  const removeWorkspaceRoot = useCodexWorkspace((state) => state.removeWorkspaceRoot);
   const connect = useCodexWorkspace((state) => state.connect);
   const startThread = useCodexWorkspace((state) => state.startThread);
   const resumeThread = useCodexWorkspace((state) => state.resumeThread);
+  const refreshFromCodex = useCodexWorkspace((state) => state.refreshFromCodex);
+  const handoffToCodex = useCodexWorkspace((state) => state.handoffToCodex);
   const renameThread = useCodexWorkspace((state) => state.renameThread);
   const archiveThread = useCodexWorkspace((state) => state.archiveThread);
   const [query, setQuery] = useState('');
@@ -58,6 +80,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [workspaceToRemove, setWorkspaceToRemove] = useState<string | null>(null);
+  const [collapsedWorkspace, setCollapsedWorkspace] = useState<string | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const desktopRuntime = isTauriRuntime();
 
   useEffect(() => {
@@ -69,6 +94,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     if (!desktopRuntime || !workspaceRoot || status !== 'idle') return;
     void connect().catch(() => undefined);
   }, [connect, desktopRuntime, status, workspaceRoot]);
+
+  useEffect(() => {
+    setHistoryExpanded(false);
+  }, [workspaceRoot]);
 
   useEffect(() => {
     if (!menuThreadId && !renamingThreadId) return;
@@ -86,13 +115,34 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     };
   }, [menuThreadId, renamingThreadId]);
 
+  const currentWorkspaceThreads = useMemo(
+    () => threads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(workspaceRoot)),
+    [threads, workspaceRoot],
+  );
+  const threadCounts = useMemo(() => new Map(workspaceRoots.map((path) => [
+    path,
+    threads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(path)).length,
+  ])), [threads, workspaceRoots]);
   const visibleThreads = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('zh-CN');
-    if (!normalized) return threads;
-    return threads.filter((thread) => (
+    if (!normalized) return currentWorkspaceThreads;
+    return currentWorkspaceThreads.filter((thread) => (
       `${thread.name ?? ''}\n${thread.preview}`.toLocaleLowerCase('zh-CN').includes(normalized)
     ));
-  }, [query, threads]);
+  }, [currentWorkspaceThreads, query]);
+  const displayedThreads = useMemo(() => {
+    if (query.trim() || historyExpanded || visibleThreads.length <= THREAD_PREVIEW_LIMIT) return visibleThreads;
+    const recent = visibleThreads.slice(0, THREAD_PREVIEW_LIMIT);
+    const active = visibleThreads.find((thread) => thread.id === activeThreadId);
+    return active && !recent.some((thread) => thread.id === active.id) ? [...recent, active] : recent;
+  }, [activeThreadId, historyExpanded, query, visibleThreads]);
+  const hiddenThreadCount = Math.max(0, visibleThreads.length - displayedThreads.length);
+  const hostingWorkspaceRoots = workspaceRoots.filter((path) => !isSystemCodexWorkspace(
+    path,
+    defaultWorkspaceRoot,
+    butlerWorkspaceRoot,
+  ));
+  const firstHostingWorkspace = hostingWorkspaceRoots[0];
 
   const chooseWorkspace = async (): Promise<boolean> => {
     if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
@@ -100,12 +150,31 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     if (typeof path !== 'string') return false;
     await setWorkspaceRoot(path);
     await connect();
+    setCollapsedWorkspace(null);
     return true;
+  };
+
+  const selectWorkspace = async (path: string): Promise<void> => {
+    if (path === workspaceRoot) {
+      setCollapsedWorkspace((current) => current === path ? null : path);
+      return;
+    }
+    setCollapsedWorkspace(null);
+    await setWorkspaceRoot(path);
+    await connect();
   };
 
   const createConversation = async (): Promise<void> => {
     try {
-      if (!workspaceRoot && !await chooseWorkspace()) return;
+      await ensureDefaultWorkspace();
+      const butlerRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
+      if (!butlerRoot) throw new Error('系统管家工作区尚未准备好');
+      if (useCodexWorkspace.getState().workspaceRoot !== butlerRoot) {
+        await setWorkspaceRoot(butlerRoot);
+        await connect();
+      } else if (useCodexWorkspace.getState().status === 'idle') {
+        await connect();
+      }
       setButlerView('conversation');
       await startThread();
       onNavigate?.();
@@ -117,15 +186,14 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const openCodex = async (): Promise<void> => {
     setOpeningCodex(true);
     try {
-      const result = activeView === 'routines'
-        ? await openCodexSurface('scheduled')
-        : activeView === 'plugins'
-          ? await openCodexSurface('plugins')
-          : activeThreadId
-            ? await openCodexThread(activeThreadId)
-            : workspaceRoot
-              ? await openCodexNewThread('', workspaceRoot)
-              : 'unavailable';
+      let result;
+      if (activeView === 'routines') result = await openCodexSurface('scheduled');
+      else if (activeView === 'plugins') result = await openCodexSurface('plugins');
+      else if (activeThreadId) {
+        await handoffToCodex();
+        result = await openCodexThread(activeThreadId);
+        if (result === 'unavailable') await refreshFromCodex().catch(() => undefined);
+      } else result = workspaceRoot ? await openCodexNewThread('', workspaceRoot) : 'unavailable';
       if (result === 'unavailable') throw new Error('Codex App 没有响应');
     } catch (reason) {
       toast.error(reason, '无法切换到 Codex App');
@@ -156,7 +224,14 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         >
           <Search size={16} aria-hidden="true" />
         </button>
-        <button type="button" aria-label="切换到 Codex App" disabled={!desktopRuntime || openingCodex} onClick={() => void openCodex()}>
+        <button
+          type="button"
+          aria-label="切换到 Codex App"
+          disabled={!desktopRuntime || openingCodex || (
+            activeView === 'conversation' && Boolean(activeThreadId) && (Boolean(activeTurnId) || status === 'external')
+          )}
+          onClick={() => void openCodex()}
+        >
           {openingCodex
             ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
             : <ArrowUpRight size={13} aria-hidden="true" />}
@@ -215,105 +290,194 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
       <div className="butler-codex-thread-heading">
         <span>项目</span>
-        <small>{threads.length}</small>
+        <button
+          type="button"
+          aria-label="添加托管项目"
+          title="添加托管项目"
+          disabled={!desktopRuntime}
+          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法添加项目目录'))}
+        >
+          <Plus size={13} aria-hidden="true" />
+        </button>
       </div>
 
-      <button
-        type="button"
-        className="butler-codex-workspace-picker"
-        disabled={!desktopRuntime}
-        onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法打开工作区'))}
-        title={workspaceRoot || '选择工作区'}
-      >
-        {status === 'connecting'
-          ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          : <FolderOpen size={14} aria-hidden="true" />}
-        <span>{workspaceRoot ? workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) : '选择工作区'}</span>
-      </button>
-
-      <nav aria-label="Codex 对话历史">
-        <ul>
-          {visibleThreads.map((thread) => {
-            const selected = thread.id === activeThreadId;
-            const running = thread.status.type === 'active' || (selected && Boolean(activeTurnId));
-            return (
-              <li key={thread.id} className="codex-native-thread-row">
-                {renamingThreadId === thread.id ? (
-                  <form
-                    className="codex-native-thread-rename"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void renameThread(thread.id, renameValue)
-                        .then(() => { setRenamingThreadId(null); setMenuThreadId(null); })
-                        .catch((reason) => toast.error(reason, '无法重命名对话'));
+      <div className="butler-codex-project-list !max-h-none !min-h-0 !flex-1" aria-label="项目目录">
+        {workspaceRoots.map((path) => {
+          const active = path === workspaceRoot;
+          const expanded = active && collapsedWorkspace !== path;
+          const systemDefault = path === defaultWorkspaceRoot;
+          const systemButler = path === butlerWorkspaceRoot;
+          const label = systemDefault ? '临时会话' : systemButler ? '管家会话' : workspaceName(path);
+          return (
+            <Fragment key={path}>
+              {path === firstHostingWorkspace ? (
+                <div className="butler-codex-project-kind" aria-label="托管项目">托管项目</div>
+              ) : null}
+            <section aria-label={`项目：${label}`} data-workspace-kind={systemDefault ? 'temporary' : systemButler ? 'butler' : 'hosting'}>
+              <div className="butler-codex-workspace-row">
+                <button
+                  type="button"
+                  className="butler-codex-workspace-picker"
+                  data-active={active || undefined}
+                  aria-expanded={expanded}
+                  onClick={() => void selectWorkspace(path).catch((reason) => toast.error(reason, '无法切换项目目录'))}
+                >
+                  <ChevronRight className={expanded ? 'is-expanded' : undefined} size={13} aria-hidden="true" />
+                  {active && status === 'connecting'
+                    ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                    : <FolderOpen size={14} aria-hidden="true" />}
+                  <span title={systemDefault ? path : undefined}>{label}</span>
+                  <small>{threadCounts.get(path) ?? 0}</small>
+                </button>
+                {!systemDefault && !systemButler ? <div className="butler-codex-workspace-actions">
+                  <button
+                    type="button"
+                    aria-label={`移除项目：${label}`}
+                    title="移除项目"
+                    onClick={() => {
+                      setMenuThreadId(null);
+                      setWorkspaceToRemove(path);
                     }}
                   >
-                    <input autoFocus aria-label="对话名称" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
-                    <button type="submit" disabled={!renameValue.trim()}>保存</button>
-                  </form>
-                ) : (
-                  <>
+                    <FolderMinus size={14} aria-hidden="true" />
+                  </button>
+                </div> : null}
+              </div>
+              {expanded ? (
+                <nav
+                  aria-label="Codex 对话历史"
+                  className="!min-h-0 !flex-none !overflow-visible !pt-0 !pr-0 !pb-1 !pl-5"
+                >
+                  <ul>
+                    {displayedThreads.map((thread) => {
+                      const selected = thread.id === activeThreadId;
+                      const running = thread.status.type === 'active' || (selected && Boolean(activeTurnId));
+                      return (
+                        <li key={thread.id} className="codex-native-thread-row">
+                          {renamingThreadId === thread.id ? (
+                            <form
+                              className="codex-native-thread-rename"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void renameThread(thread.id, renameValue)
+                                  .then(() => { setRenamingThreadId(null); setMenuThreadId(null); })
+                                  .catch((reason) => toast.error(reason, '无法重命名对话'));
+                              }}
+                            >
+                              <input autoFocus aria-label="对话名称" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
+                              <button type="submit" disabled={!renameValue.trim()}>保存</button>
+                            </form>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="codex-native-thread-main"
+                                onClick={() => {
+                                  setButlerView('conversation');
+                                  onNavigate?.();
+                                  if (!selected) void resumeThread(thread.id).catch((reason) => toast.error(reason, '无法打开对话'));
+                                }}
+                                aria-current={selected ? 'page' : undefined}
+                              >
+                                <span className={`butler-conversation-history-status ${running ? 'is-running' : ''}`} />
+                                <span className="butler-conversation-history-title">{threadTitle(thread.name, thread.preview)}</span>
+                                <time dateTime={new Date(thread.updatedAt * 1_000).toISOString()}>{ageLabel(thread.updatedAt)}</time>
+                              </button>
+                              <div className="codex-native-thread-actions">
+                                <button
+                                  type="button"
+                                  aria-label={`更多对话操作：${threadTitle(thread.name, thread.preview)}`}
+                                  aria-expanded={menuThreadId === thread.id}
+                                  onClick={() => setMenuThreadId((current) => current === thread.id ? null : thread.id)}
+                                >
+                                  <MoreHorizontal size={14} aria-hidden="true" />
+                                </button>
+                                {menuThreadId === thread.id ? (
+                                  <div role="menu" aria-label="对话操作">
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setRenameValue(threadTitle(thread.name, thread.preview));
+                                        setRenamingThreadId(thread.id);
+                                        setMenuThreadId(null);
+                                      }}
+                                    >
+                                      <Pencil size={13} aria-hidden="true" />重命名
+                                    </button>
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      onClick={() => void archiveThread(thread.id)
+                                        .then(() => setMenuThreadId(null))
+                                        .catch((reason) => toast.error(reason, '无法归档对话'))}
+                                    >
+                                      <Archive size={13} aria-hidden="true" />归档
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {!query.trim() && visibleThreads.length > THREAD_PREVIEW_LIMIT ? (
                     <button
                       type="button"
-                      className="codex-native-thread-main"
-                      onClick={() => {
-                        setButlerView('conversation');
-                        onNavigate?.();
-                        if (!selected) void resumeThread(thread.id).catch((reason) => toast.error(reason, '无法打开对话'));
-                      }}
-                      aria-current={selected ? 'page' : undefined}
+                      className="codex-native-thread-expand"
+                      aria-expanded={historyExpanded}
+                      onClick={() => setHistoryExpanded((current) => !current)}
                     >
-                      <span className={`butler-conversation-history-status ${running ? 'is-running' : ''}`} />
-                      <span className="butler-conversation-history-title">{threadTitle(thread.name, thread.preview)}</span>
-                      <time dateTime={new Date(thread.updatedAt * 1_000).toISOString()}>{ageLabel(thread.updatedAt)}</time>
+                      {historyExpanded ? '收起较早对话' : `展开其余 ${hiddenThreadCount} 个`}
                     </button>
-                    <div className="codex-native-thread-actions">
-                      <button
-                        type="button"
-                        aria-label={`更多对话操作：${threadTitle(thread.name, thread.preview)}`}
-                        aria-expanded={menuThreadId === thread.id}
-                        onClick={() => setMenuThreadId((current) => current === thread.id ? null : thread.id)}
-                      >
-                        <MoreHorizontal size={14} aria-hidden="true" />
-                      </button>
-                      {menuThreadId === thread.id ? (
-                        <div role="menu" aria-label="对话操作">
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setRenameValue(threadTitle(thread.name, thread.preview));
-                              setRenamingThreadId(thread.id);
-                              setMenuThreadId(null);
-                            }}
-                          >
-                            <Pencil size={13} aria-hidden="true" />重命名
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => void archiveThread(thread.id)
-                              .then(() => setMenuThreadId(null))
-                              .catch((reason) => toast.error(reason, '无法归档对话'))}
-                          >
-                            <Archive size={13} aria-hidden="true" />归档
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        {desktopRuntime && status === 'unavailable' ? <p className="butler-codex-task-empty">{error}</p> : null}
-        {(!desktopRuntime || status !== 'unavailable') && visibleThreads.length === 0 ? (
-          <p className="butler-codex-task-empty">
-            {!desktopRuntime ? '请使用 RocketX 桌面端运行 Codex 任务' : workspaceRoot ? '还没有对话' : '选择工作区后开始'}
-          </p>
+                  ) : null}
+                  {desktopRuntime && status === 'unavailable' ? <p className="butler-codex-task-empty">{error}</p> : null}
+                  {(!desktopRuntime || status !== 'unavailable') && visibleThreads.length === 0 ? (
+                    <p className="butler-codex-task-empty">
+                      {!desktopRuntime ? '请使用 RocketX 桌面端运行 Codex 任务' : '还没有对话'}
+                    </p>
+                  ) : null}
+                </nav>
+              ) : null}
+            </section>
+            </Fragment>
+          );
+        })}
+        {hostingWorkspaceRoots.length === 0 ? (
+          <>
+          <div className="butler-codex-project-kind" aria-label="托管项目">托管项目</div>
+          <button
+            type="button"
+            className="butler-codex-workspace-picker is-empty"
+            disabled={!desktopRuntime}
+            onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法添加项目目录'))}
+          >
+            <Plus size={13} aria-hidden="true" />
+            <span>添加托管项目</span>
+          </button>
+          </>
         ) : null}
-      </nav>
+      </div>
+
+      {workspaceToRemove ? (
+        <ConfirmDialog
+          title={`移除项目“${workspaceName(workspaceToRemove)}”？`}
+          message={`只会从 RocketX 的项目列表中移除 ${workspaceToRemove}，不会删除磁盘目录或 Codex 会话。若该项目正在运行任务，本机连接会停止。`}
+          confirmLabel="移除项目"
+          onConfirm={() => {
+            const target = workspaceToRemove;
+            void removeWorkspaceRoot(target)
+              .then(() => {
+                setCollapsedWorkspace(null);
+                toast.success(`已从项目列表移除 ${workspaceName(target)}`);
+              })
+              .catch((reason) => toast.error(reason, '无法移除项目'));
+          }}
+          onClose={() => setWorkspaceToRemove(null)}
+        />
+      ) : null}
     </aside>
   );
 }

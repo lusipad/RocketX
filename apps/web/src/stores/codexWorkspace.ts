@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import {
   AppServerController,
@@ -25,9 +26,16 @@ import {
 } from '../agent/safety';
 import {
   codexImageAttachments,
+  type CodexGeneratedImage,
   type CodexImageAttachment,
   type CodexImageInput,
 } from '../lib/codexImages';
+import {
+  extractButlerSources,
+  mergeButlerSources,
+  type ButlerSource,
+} from '../lib/butlerContext';
+import { isTauriRuntime } from '../lib/client';
 
 const STORAGE_PREFIX = 'rcx-codex-workspace-v1';
 const MAX_EVENT_DETAIL = 64 * 1024;
@@ -39,6 +47,7 @@ export type CodexWorkspaceStatus =
   | 'running'
   | 'waiting-input'
   | 'interrupted'
+  | 'external'
   | 'unavailable';
 export type CodexFollowUpMode = 'queue' | 'steer';
 
@@ -47,6 +56,8 @@ export interface CodexWorkspaceMessage {
   role: 'user' | 'assistant';
   text: string;
   attachments?: CodexImageAttachment[];
+  generatedImages?: CodexGeneratedImage[];
+  sources?: ButlerSource[];
   pending?: boolean;
 }
 
@@ -75,15 +86,21 @@ export interface CodexRequestResolution {
 
 interface PersistedWorkspace {
   workspaceRoot?: string;
+  workspaceRoots?: string[];
   selectedModel?: string;
   selectedEffort?: string | null;
+  hostingModel?: string;
+  hostingEffort?: string | null;
   permissionPreset?: CodexPermissionPreset;
   followUpMode?: CodexFollowUpMode;
 }
 
 interface CodexWorkspaceState {
   scope: string;
+  defaultWorkspaceRoot: string;
+  butlerWorkspaceRoot: string;
   workspaceRoot: string;
+  workspaceRoots: string[];
   status: CodexWorkspaceStatus;
   error: string | null;
   threads: Thread[];
@@ -104,16 +121,24 @@ interface CodexWorkspaceState {
   catalogErrors: { apps?: string; plugins?: string };
   selectedModel: string;
   selectedEffort: string | null;
+  hostingModel: string;
+  hostingEffort: string | null;
   permissionPreset: CodexPermissionPreset;
   followUpMode: CodexFollowUpMode;
   hydrate: (scope: string) => void;
-  setWorkspaceRoot: (workspaceRoot: string) => Promise<void>;
-  connect: () => Promise<void>;
+  ensureDefaultWorkspace: () => Promise<string>;
+  setWorkspaceRoot: (
+    workspaceRoot: string,
+    options?: { reuseRuntime?: boolean },
+  ) => Promise<void>;
+  removeWorkspaceRoot: (workspaceRoot: string) => Promise<void>;
+  connect: (options?: { refreshThreads?: boolean }) => Promise<void>;
   refreshCatalog: () => Promise<void>;
   refreshThreads: () => Promise<void>;
   startThread: (name?: string) => Promise<string>;
   resumeThread: (threadId: string) => Promise<void>;
   refreshFromCodex: () => Promise<number>;
+  handoffToCodex: () => Promise<void>;
   renameThread: (threadId: string, name: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;
   send: (
@@ -127,11 +152,16 @@ interface CodexWorkspaceState {
   resolveRequest: (requestId: string, resolution: CodexRequestResolution) => void;
   setModel: (model: string) => Promise<void>;
   setEffort: (effort: string | null) => Promise<void>;
+  setHostingModel: (model: string) => Promise<void>;
+  setHostingEffort: (effort: string | null) => Promise<void>;
   setPermissionPreset: (preset: CodexPermissionPreset) => Promise<void>;
   setFollowUpMode: (mode: CodexFollowUpMode) => void;
   installPlugin: (marketplace: string, pluginName: string) => Promise<void>;
   uninstallPlugin: (pluginId: string) => Promise<void>;
   readPlugin: (marketplace: string, pluginName: string) => Promise<PluginDetail>;
+  readFile: (path: string) => Promise<string>;
+  openArtifact: (path: string) => Promise<void>;
+  revealArtifact: (path: string) => Promise<void>;
   setSkillEnabled: (path: string, enabled: boolean) => Promise<void>;
   shutdown: () => Promise<void>;
 }
@@ -140,11 +170,15 @@ type ControllerFactory = (options: AppServerControllerOptions) => AppServerContr
 
 let controller: AppServerController | undefined;
 let controllerFactory: ControllerFactory = (options) => new AppServerController(options);
+let resumeThreadRequestId = 0;
+let defaultWorkspaceRequest: Promise<string> | undefined;
+let butlerWorkspaceRequest: Promise<string> | undefined;
 const requestWaiters = new Map<string, {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }>();
+const backgroundAutomationPermissions = new Map<string, CodexPermissionPreset>();
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -160,6 +194,19 @@ function message(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
 
+function isActiveWriterError(value: unknown): boolean {
+  return /already has an active writer/i.test(message(value));
+}
+
+function isRuntimeDisconnectedError(value: unknown): boolean {
+  return /Codex Runtime 尚未连接|Codex app-server process is not active/i.test(message(value));
+}
+
+function continuationName(thread: Thread): string {
+  const base = thread.name?.trim() || thread.preview.trim() || 'Codex 任务';
+  return base.endsWith('· RocketX 继续') ? base : `${base} · RocketX 继续`;
+}
+
 function storageKey(scope: string): string {
   return `${STORAGE_PREFIX}:${scope}`;
 }
@@ -168,8 +215,11 @@ function persist(state: CodexWorkspaceState): void {
   if (!state.scope || typeof localStorage === 'undefined') return;
   const value: PersistedWorkspace = {
     workspaceRoot: state.workspaceRoot || undefined,
+    workspaceRoots: state.workspaceRoots.length > 0 ? state.workspaceRoots : undefined,
     selectedModel: state.selectedModel || undefined,
     selectedEffort: state.selectedEffort,
+    hostingModel: state.hostingModel || undefined,
+    hostingEffort: state.hostingEffort,
     permissionPreset: state.permissionPreset,
     followUpMode: state.followUpMode,
   };
@@ -200,6 +250,41 @@ function defaultSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
   return { selectedModel: model.model, selectedEffort: effort };
 }
 
+function defaultHostingSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
+  hostingModel: string;
+  hostingEffort: string | null;
+} {
+  const model = catalog.models.find((item) => (
+    item.model === saved.hostingModel || item.id === saved.hostingModel
+  )) ?? catalog.models.find((item) => item.isDefault) ?? catalog.models[0];
+  if (!model) throw new Error('当前 Codex Runtime 没有可用模型，请升级或检查模型配置。');
+  const requestedEffort = saved.hostingEffort;
+  const hostingEffort = requestedEffort
+    && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
+    ? requestedEffort
+    : model.supportedReasoningEfforts.some((item) => item.reasoningEffort === 'high')
+      ? 'high'
+      : model.defaultReasoningEffort;
+  return { hostingModel: model.model, hostingEffort };
+}
+
+function workspacePathKey(path: string): string {
+  const normalized = path.trim().replaceAll('\\', '/').replace(/\/+$/u, '');
+  return /^[a-z]:\//iu.test(normalized) ? normalized.toLocaleLowerCase('en-US') : normalized;
+}
+
+export function isSystemCodexWorkspace(
+  path: string,
+  defaultWorkspaceRoot: string,
+  butlerWorkspaceRoot: string,
+): boolean {
+  const key = workspacePathKey(path);
+  return Boolean(key) && (
+    key === workspacePathKey(defaultWorkspaceRoot)
+    || key === workspacePathKey(butlerWorkspaceRoot)
+  );
+}
+
 function textFromUserInput(input: unknown): string {
   const value = record(input);
   return value.type === 'text' && typeof value.text === 'string' ? value.text : '';
@@ -215,6 +300,20 @@ function attachmentFromUserInput(input: unknown): CodexImageAttachment | null {
       : '';
   const name = source.split(/[\\/]/).filter(Boolean).at(-1) ?? '图片';
   return { name, type: 'image' };
+}
+
+function generatedImageFromItem(
+  item: Extract<ThreadItem, { type: 'imageGeneration' }>,
+): CodexGeneratedImage | null {
+  if (!item.result) return null;
+  const name = item.savedPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? `${item.id}.png`;
+  return {
+    id: item.id,
+    name,
+    dataUrl: item.result.startsWith('data:') ? item.result : `data:image/png;base64,${item.result}`,
+    savedPath: item.savedPath,
+    alt: item.revisedPrompt?.trim() || 'Codex 生成的图片',
+  };
 }
 
 function boundedDetail(value: string): string {
@@ -243,18 +342,77 @@ function completedStatus(
   return itemStatus === 'failed' || itemStatus === 'declined' ? 'failed' : fallback;
 }
 
+function sourceText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  const text = record(value).text;
+  if (typeof text === 'string') return text;
+  try {
+    return value === null ? null : JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function sourcesFromToolItem(item: ThreadItem): ButlerSource[] {
+  if (item.type !== 'dynamicToolCall' && item.type !== 'mcpToolCall') return [];
+  const contents = item.type === 'dynamicToolCall'
+    ? (item.contentItems ?? []).flatMap((content) => (
+      content.type === 'inputText' ? [content.text] : []
+    ))
+    : item.result
+      ? [item.result.structuredContent, ...item.result.content]
+        .map(sourceText)
+        .filter((content): content is string => content !== null)
+      : [];
+  const suffix = item.tool.split(/__|[./:]/).filter(Boolean).at(-1);
+  const toolNames = suffix && suffix !== item.tool ? [item.tool, suffix] : [item.tool];
+  return mergeButlerSources(...toolNames.flatMap((toolName) => (
+    contents.map((content) => extractButlerSources(toolName, content))
+  )));
+}
+
 function messagesFromTurns(turns: readonly Turn[]): CodexWorkspaceMessage[] {
-  return turns.flatMap((turn) => turn.items.flatMap((item): CodexWorkspaceMessage[] => {
-    if (item.type === 'userMessage') {
-      const text = item.content.map(textFromUserInput).filter(Boolean).join('\n');
-      const attachments = item.content.map(attachmentFromUserInput).filter((entry) => entry !== null);
-      return text || attachments.length > 0 ? [{ id: item.id, role: 'user', text, attachments }] : [];
+  return turns.flatMap((turn) => {
+    const messages: CodexWorkspaceMessage[] = [];
+    const generatedImages: CodexGeneratedImage[] = [];
+    let pendingSources: ButlerSource[] = [];
+    for (const item of turn.items) {
+      if (item.type === 'userMessage') {
+        const text = item.content.map(textFromUserInput).filter(Boolean).join('\n');
+        const attachments = item.content.map(attachmentFromUserInput).filter((entry) => entry !== null);
+        if (text || attachments.length > 0) messages.push({ id: item.id, role: 'user', text, attachments });
+      } else if (item.type === 'agentMessage' && item.text.trim()) {
+        const sources = item.phase === 'commentary' ? [] : pendingSources;
+        messages.push({
+          id: item.id,
+          role: 'assistant',
+          text: item.text,
+          ...(sources.length > 0 ? { sources } : {}),
+        });
+        if (item.phase !== 'commentary') pendingSources = [];
+      } else if (item.type === 'dynamicToolCall' || item.type === 'mcpToolCall') {
+        pendingSources = mergeButlerSources(pendingSources, sourcesFromToolItem(item));
+      } else if (item.type === 'imageGeneration') {
+        const image = generatedImageFromItem(item);
+        if (image) generatedImages.push(image);
+      }
     }
-    if (item.type === 'agentMessage' && item.text.trim()) {
-      return [{ id: item.id, role: 'assistant', text: item.text }];
+    if (generatedImages.length > 0) {
+      let assistantIndex = messages.length - 1;
+      while (assistantIndex >= 0 && messages[assistantIndex].role !== 'assistant') assistantIndex -= 1;
+      if (assistantIndex >= 0) {
+        messages[assistantIndex] = { ...messages[assistantIndex], generatedImages };
+      } else {
+        messages.push({
+          id: `generated-images-${turn.id}`,
+          role: 'assistant',
+          text: '',
+          generatedImages,
+        });
+      }
     }
-    return [];
-  }));
+    return messages;
+  });
 }
 
 function eventFromItem(item: ThreadItem, status: CodexWorkspaceEvent['status']): CodexWorkspaceEvent | null {
@@ -552,6 +710,25 @@ async function onServerRequest(request: {
   const params = record(request.params);
   const state = useCodexWorkspace.getState();
   const threadId = typeof params.threadId === 'string' ? params.threadId : '';
+  const backgroundPermission = backgroundAutomationPermissions.get(threadId);
+  if (backgroundPermission) {
+    if (request.policy === 'host-input') {
+      throw new Error('该已安排任务需要用户输入，请手动运行后回答');
+    }
+    if (request.method === 'item/permissions/requestApproval') {
+      if (backgroundPermission === 'ask') {
+        throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+      }
+      return { permissions: {}, scope: 'turn', strictAutoReview: true };
+    }
+    if (request.policy === 'host-approval') {
+      if (backgroundPermission === 'ask') {
+        throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+      }
+      return { decision: 'decline' };
+    }
+    throw new Error(`无人值守任务不能处理 ${request.method}`);
+  }
   if (!state.activeThreadId || threadId !== state.activeThreadId) {
     throw new Error('请求不属于当前 Codex 任务');
   }
@@ -582,10 +759,12 @@ async function onServerRequest(request: {
 }
 
 function makeController(): AppServerController {
-  return controllerFactory({
+  let managedController: AppServerController;
+  managedController = controllerFactory({
     onNotification,
     onServerRequest,
     onInterrupted: (error) => {
+      if (controller !== managedController) return;
       const current = useCodexWorkspace.getState();
       const interrupted = Boolean(current.activeThreadId && current.activeTurnId);
       const streamed = current.streamingText.trim();
@@ -611,11 +790,15 @@ function makeController(): AppServerController {
       }));
     },
   });
+  return managedController;
 }
 
 export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   scope: '',
+  defaultWorkspaceRoot: '',
+  butlerWorkspaceRoot: '',
   workspaceRoot: '',
+  workspaceRoots: [],
   status: 'idle',
   error: null,
   threads: [],
@@ -634,6 +817,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   catalogErrors: {},
   selectedModel: '',
   selectedEffort: null,
+  hostingModel: '',
+  hostingEffort: 'high',
   permissionPreset: 'auto',
   followUpMode: 'steer',
 
@@ -650,11 +835,21 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     } catch {
       saved = {};
     }
+    const workspaceRoot = typeof saved.workspaceRoot === 'string' ? saved.workspaceRoot : '';
+    const workspaceRoots = Array.isArray(saved.workspaceRoots)
+      ? saved.workspaceRoots.filter((root): root is string => typeof root === 'string' && Boolean(root.trim()))
+      : [];
+    if (workspaceRoot && !workspaceRoots.includes(workspaceRoot)) workspaceRoots.unshift(workspaceRoot);
     set({
       scope,
-      workspaceRoot: saved.workspaceRoot ?? '',
+      defaultWorkspaceRoot: '',
+      butlerWorkspaceRoot: '',
+      workspaceRoot,
+      workspaceRoots,
       selectedModel: saved.selectedModel ?? '',
       selectedEffort: saved.selectedEffort ?? null,
+      hostingModel: saved.hostingModel ?? '',
+      hostingEffort: saved.hostingEffort ?? 'high',
       permissionPreset: ['ask', 'auto', 'full'].includes(saved.permissionPreset ?? '')
         ? saved.permissionPreset as CodexPermissionPreset
         : 'auto',
@@ -678,19 +873,85 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       plugins: null,
       catalogErrors: {},
     });
+    void get().ensureDefaultWorkspace().catch(() => undefined);
   },
 
-  setWorkspaceRoot: async (workspaceRoot) => {
+  ensureDefaultWorkspace: async () => {
+    const current = get();
+    if (current.defaultWorkspaceRoot && current.butlerWorkspaceRoot) return current.defaultWorkspaceRoot;
+    if (!current.scope || !isTauriRuntime()) return '';
+    const scope = current.scope;
+    defaultWorkspaceRequest ??= invoke<string>('codex_default_workspace')
+      .then((value) => {
+        if (typeof value !== 'string' || !value.trim()) throw new Error('默认工作区路径不可用');
+        return value;
+      })
+      .catch((error) => {
+        defaultWorkspaceRequest = undefined;
+        throw error;
+      });
+    butlerWorkspaceRequest ??= invoke<string>('codex_butler_workspace')
+      .then((value) => {
+        if (typeof value !== 'string' || !value.trim()) throw new Error('管家工作区路径不可用');
+        return value;
+      })
+      .catch((error) => {
+        butlerWorkspaceRequest = undefined;
+        throw error;
+      });
+    const [defaultValue, butlerValue] = await Promise.all([
+      current.defaultWorkspaceRoot || defaultWorkspaceRequest,
+      current.butlerWorkspaceRoot || butlerWorkspaceRequest,
+    ]);
+    const defaultWorkspaceRoot = defaultValue.trim();
+    const butlerWorkspaceRoot = butlerValue.trim();
+    if (!defaultWorkspaceRoot || !butlerWorkspaceRoot || get().scope !== scope) return '';
+    const latest = get();
+    const workspaceRoots = [
+      defaultWorkspaceRoot,
+      butlerWorkspaceRoot,
+      ...latest.workspaceRoots.filter((root) => !isSystemCodexWorkspace(
+        root,
+        defaultWorkspaceRoot,
+        butlerWorkspaceRoot,
+      )),
+    ];
+    set({
+      defaultWorkspaceRoot,
+      butlerWorkspaceRoot,
+      workspaceRoot: !latest.workspaceRoot || workspacePathKey(latest.workspaceRoot) === workspacePathKey(defaultWorkspaceRoot)
+        ? butlerWorkspaceRoot
+        : latest.workspaceRoot,
+      workspaceRoots,
+    });
+    persist(get());
+    return defaultWorkspaceRoot;
+  },
+
+  setWorkspaceRoot: async (workspaceRoot, options) => {
     const normalized = workspaceRoot.trim();
-    if (normalized === get().workspaceRoot) return;
+    const current = get();
+    if (normalized === current.workspaceRoot) {
+      if (normalized && !current.workspaceRoots.includes(normalized)) {
+        set({ workspaceRoots: [...current.workspaceRoots, normalized] });
+        persist(get());
+      }
+      return;
+    }
     rejectPendingRequests('工作区已切换');
-    await controller?.stop();
-    controller = undefined;
+    const reusedRuntime = options?.reuseRuntime === true
+      && controller?.switchWorkspaceRoot(normalized) === true;
+    if (!reusedRuntime) {
+      await controller?.stop();
+      controller = undefined;
+    }
     set({
       workspaceRoot: normalized,
-      status: 'idle',
+      workspaceRoots: normalized && !current.workspaceRoots.includes(normalized)
+        ? [...current.workspaceRoots, normalized]
+        : current.workspaceRoots,
+      status: reusedRuntime ? 'ready' : 'idle',
       error: null,
-      threads: [],
       activeThreadId: undefined,
       activeTurnId: undefined,
       turns: [],
@@ -698,35 +959,55 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       events: [],
       pendingRequests: [],
       queuedMessages: [],
-      models: [],
-      permissionProfiles: [],
-      skills: [],
-      apps: [],
-      plugins: null,
-      catalogErrors: {},
+      ...(!reusedRuntime ? {
+        models: [],
+        permissionProfiles: [],
+        skills: [],
+        apps: [],
+        plugins: null,
+        catalogErrors: {},
+      } : {}),
     });
     persist(get());
   },
 
-  connect: async () => {
+  removeWorkspaceRoot: async (workspaceRoot) => {
+    const normalized = workspaceRoot.trim();
+    const current = get();
+    if (isSystemCodexWorkspace(normalized, current.defaultWorkspaceRoot, current.butlerWorkspaceRoot)) return;
+    if (!normalized || !current.workspaceRoots.includes(normalized)) return;
+
+    const remaining = current.workspaceRoots.filter((root) => root !== normalized);
+    if (normalized === current.workspaceRoot) {
+      await get().setWorkspaceRoot(
+        remaining.includes(current.butlerWorkspaceRoot) ? current.butlerWorkspaceRoot : remaining[0] ?? '',
+      );
+    }
+    set({ workspaceRoots: remaining });
+    persist(get());
+  },
+
+  connect: async (options) => {
     if (!get().workspaceRoot) throw new Error('请先选择工作区');
     if (get().status === 'connecting') return;
     set({ status: 'connecting', error: null });
-    controller ??= makeController();
+    const activeController = controller ??= makeController();
     try {
-      const catalog = await controller.connect(id('workspace'), get().workspaceRoot);
+      const catalog = await activeController.connect(id('workspace'), get().workspaceRoot);
       const defaults = defaultSelection(catalog, get());
+      const hostingDefaults = defaultHostingSelection(catalog, get());
       set({
         ...catalog,
         ...defaults,
+        ...hostingDefaults,
         status: 'ready',
         error: null,
       });
       persist(get());
-      await get().refreshThreads();
+      if (options?.refreshThreads !== false) await get().refreshThreads();
     } catch (error) {
-      await controller.stop().catch(() => undefined);
-      controller = undefined;
+      await activeController.stop().catch(() => undefined);
+      if (controller === activeController) controller = undefined;
       set({ status: 'unavailable', error: message(error) });
       throw error;
     }
@@ -740,7 +1021,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   refreshThreads: async () => {
     if (!controller) return;
-    set({ threads: await controller.listThreads() });
+    set({ threads: await controller.listThreads(get().workspaceRoots) });
   },
 
   startThread: async (name) => {
@@ -769,25 +1050,76 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   resumeThread: async (threadId) => {
+    const requestId = ++resumeThreadRequestId;
     if (!controller) await get().connect();
+    if (requestId !== resumeThreadRequestId) return;
+    let activeController = controller!;
     const current = get();
     if (current.activeTurnId && current.activeThreadId) {
-      await controller!.interruptTurn(current.activeThreadId, current.activeTurnId).catch(() => undefined);
+      await activeController.interruptTurn(current.activeThreadId, current.activeTurnId).catch(() => undefined);
     }
+    if (requestId !== resumeThreadRequestId) return;
     rejectPendingRequests('已切换任务');
     set({ status: 'connecting', activeThreadId: threadId, activeTurnId: undefined, error: null });
-    const thread = await controller!.resumeThread(threadId, selection());
-    const loaded = await controller!.readThread(thread.id);
-    set({
-      activeThreadId: thread.id,
-      turns: loaded.turns,
-      messages: messagesFromTurns(loaded.turns),
-      events: [],
-      streamingText: '',
-      pendingRequests: [],
-      queuedMessages: [],
-      status: 'ready',
-    });
+    try {
+      const loadThread = async () => {
+        const thread = await activeController.resumeThread(threadId, selection());
+        if (requestId !== resumeThreadRequestId) return undefined;
+        const loaded = await activeController.readThread(thread.id);
+        if (requestId !== resumeThreadRequestId) return undefined;
+        return { thread, loaded };
+      };
+      let result;
+      try {
+        result = await loadThread();
+      } catch (error) {
+        if (!isRuntimeDisconnectedError(error) || requestId !== resumeThreadRequestId) throw error;
+        await activeController.stop().catch(() => undefined);
+        if (controller === activeController) controller = undefined;
+        set({ status: 'idle', error: null });
+        await get().connect({ refreshThreads: false });
+        if (requestId !== resumeThreadRequestId) return;
+        if (!controller) throw new Error('Codex Runtime 重新连接失败');
+        activeController = controller;
+        result = await loadThread();
+      }
+      if (!result) return;
+      const { thread, loaded } = result;
+      set({
+        activeThreadId: thread.id,
+        turns: loaded.turns,
+        messages: messagesFromTurns(loaded.turns),
+        events: [],
+        streamingText: '',
+        pendingRequests: [],
+        queuedMessages: [],
+        status: 'ready',
+        error: null,
+      });
+    } catch (error) {
+      if (requestId !== resumeThreadRequestId) return;
+      if (!isActiveWriterError(error)) {
+        set({ status: controller ? 'ready' : 'unavailable', error: message(error) });
+        throw error;
+      }
+      const loaded = await activeController.readThread(threadId);
+      if (requestId !== resumeThreadRequestId) return;
+      await activeController.stop().catch(() => undefined);
+      if (requestId !== resumeThreadRequestId) return;
+      if (controller === activeController) controller = undefined;
+      set({
+        activeThreadId: threadId,
+        activeTurnId: undefined,
+        turns: loaded.turns,
+        messages: messagesFromTurns(loaded.turns),
+        events: [],
+        streamingText: '',
+        pendingRequests: [],
+        queuedMessages: [],
+        status: 'external',
+        error: null,
+      });
+    }
   },
 
   refreshFromCodex: async () => {
@@ -813,20 +1145,91 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       pendingRequests: [],
     });
 
+    let externalLoaded: Awaited<ReturnType<AppServerController['readThread']>> | undefined;
     try {
       await get().connect();
-      await get().resumeThread(threadId);
+      const activeController = controller!;
+      try {
+        const resumed = await activeController.resumeThread(threadId, selection());
+        const loaded = await activeController.readThread(resumed.id);
+        set({
+          activeThreadId: resumed.id,
+          turns: loaded.turns,
+          messages: messagesFromTurns(loaded.turns),
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+          status: 'ready',
+          error: null,
+        });
+      } catch (error) {
+        if (!isActiveWriterError(error)) throw error;
+        externalLoaded = await activeController.readThread(threadId);
+        const name = continuationName(externalLoaded.thread);
+        const forked = await activeController.forkThread(
+          threadId,
+          selection(),
+          name,
+        );
+        const loaded = await activeController.readThread(forked.id);
+        set((state) => ({
+          threads: [
+            { ...loaded.thread, name },
+            ...state.threads.filter((thread) => thread.id !== forked.id),
+          ],
+          activeThreadId: forked.id,
+          turns: loaded.turns,
+          messages: messagesFromTurns(loaded.turns),
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+          status: 'ready',
+          error: null,
+        }));
+      }
       return get().turns.filter((turn) => !knownTurnIds.has(turn.id)).length;
     } catch (error) {
       await (controller as AppServerController | undefined)?.stop().catch(() => undefined);
       controller = undefined;
-      set({
-        status: 'unavailable',
-        activeTurnId: undefined,
-        error: message(error),
-      });
+      if (externalLoaded) {
+        set({
+          status: 'external',
+          activeThreadId: threadId,
+          activeTurnId: undefined,
+          turns: externalLoaded.turns,
+          messages: messagesFromTurns(externalLoaded.turns),
+          error: message(error),
+        });
+      } else {
+        set({
+          status: 'unavailable',
+          activeTurnId: undefined,
+          error: message(error),
+        });
+      }
       throw error;
     }
+  },
+
+  handoffToCodex: async () => {
+    const current = get();
+    if (current.activeTurnId || current.status === 'running' || current.status === 'waiting-input') {
+      throw new Error('任务运行中，完成或停止后再切换到 Codex App');
+    }
+    rejectPendingRequests('会话已交给 Codex App');
+    await controller?.stop();
+    controller = undefined;
+    set({
+      status: 'external',
+      activeTurnId: undefined,
+      streamingText: '',
+      events: [],
+      pendingRequests: [],
+      queuedMessages: [],
+      error: null,
+    });
   },
 
   renameThread: async (threadId, name) => {
@@ -897,6 +1300,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       status: 'running',
       error: null,
       streamingText: '',
+      events: [],
       messages: [...current.messages, {
         id: id('user'),
         role: 'user',
@@ -1002,6 +1406,26 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (controller && get().activeThreadId) await controller.updateSettings(get().activeThreadId!, selection());
   },
 
+  setHostingModel: async (hostingModel) => {
+    const model = get().models.find((item) => item.model === hostingModel || item.id === hostingModel);
+    if (!model) throw new Error(`未知模型：${hostingModel}`);
+    const currentEffort = get().hostingEffort;
+    const hostingEffort = model.supportedReasoningEfforts.some(
+      (item) => item.reasoningEffort === currentEffort,
+    )
+      ? currentEffort
+      : model.supportedReasoningEfforts.some((item) => item.reasoningEffort === 'high')
+        ? 'high'
+        : model.defaultReasoningEffort;
+    set({ hostingModel: model.model, hostingEffort });
+    persist(get());
+  },
+
+  setHostingEffort: async (hostingEffort) => {
+    set({ hostingEffort });
+    persist(get());
+  },
+
   setPermissionPreset: async (permissionPreset) => {
     const profile = permissionSettings(permissionPreset).permissions;
     if (!get().permissionProfiles.some((item) => item.id === profile && item.allowed)) {
@@ -1034,6 +1458,24 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     return (await controller!.readPlugin(marketplace, pluginName)).plugin;
   },
 
+  readFile: async (path) => {
+    const workspaceRoot = get().workspaceRoot;
+    if (!workspaceRoot) throw new Error('请先选择工作区');
+    return invoke<string>('codex_artifact_read', { workspaceRoot, path });
+  },
+
+  openArtifact: async (path) => {
+    const workspaceRoot = get().workspaceRoot;
+    if (!workspaceRoot) throw new Error('请先选择工作区');
+    return invoke<void>('codex_artifact_open', { workspaceRoot, path });
+  },
+
+  revealArtifact: async (path) => {
+    const workspaceRoot = get().workspaceRoot;
+    if (!workspaceRoot) throw new Error('请先选择工作区');
+    return invoke<void>('codex_artifact_reveal', { workspaceRoot, path });
+  },
+
   setSkillEnabled: async (path, enabled) => {
     if (!controller) await get().connect();
     const effective = await controller!.setSkillEnabled(path, enabled);
@@ -1050,6 +1492,82 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 }));
 
+export interface ExistingThreadAutomationOptions {
+  threadId: string;
+  workspaceRoot: string;
+  text: string;
+  model?: string;
+  effort?: string | null;
+  permissionPreset?: CodexPermissionPreset;
+  signal?: AbortSignal;
+}
+
+/** 复用 RocketX 当前 app-server writer，让 heartbeat 真正回到既有会话。 */
+export async function runExistingThreadAutomation(
+  options: ExistingThreadAutomationOptions,
+): Promise<{ text: string; threadId: string }> {
+  const state = useCodexWorkspace.getState();
+  if (state.activeThreadId === options.threadId && state.activeTurnId) {
+    throw new Error('目标会话正在运行，请等待当前任务完成');
+  }
+  if (!controller) await state.connect();
+  if (!controller || controller.currentWorkspaceRoot !== options.workspaceRoot) {
+    throw new Error('目标会话不属于当前 Codex 工作区');
+  }
+  const catalog = controller.currentCatalog;
+  const model = catalog?.models.find((item) => item.model === options.model || item.id === options.model)
+    ?? catalog?.models.find((item) => item.isDefault)
+    ?? catalog?.models[0];
+  if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
+  const effort = options.effort
+    && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === options.effort)
+    ? options.effort
+    : model.defaultReasoningEffort;
+  const runtimeSelection: CodexRuntimeSelection = {
+    model: model.model,
+    effort,
+    permissionPreset: options.permissionPreset ?? state.permissionPreset,
+  };
+  const activeController = controller;
+  let turnId = '';
+  const interrupt = (): void => {
+    if (turnId) void activeController.interruptTurn(options.threadId, turnId).catch(() => undefined);
+  };
+  options.signal?.addEventListener('abort', interrupt, { once: true });
+  backgroundAutomationPermissions.set(options.threadId, runtimeSelection.permissionPreset);
+  try {
+    await activeController.resumeThread(options.threadId, runtimeSelection);
+    turnId = await activeController.startTurn(
+      options.threadId,
+      [{ type: 'text', text: options.text, text_elements: [] }],
+      runtimeSelection,
+    );
+    const deadline = Date.now() + 60 * 60_000;
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) {
+        throw options.signal.reason instanceof Error ? options.signal.reason : new Error('任务已取消');
+      }
+      const loaded = await activeController.readThread(options.threadId);
+      const turn = loaded.turns.find((item) => item.id === turnId);
+      if (turn?.status === 'failed') throw new Error(turn.error?.message ?? 'Codex 未完成该已安排任务');
+      if (turn?.status === 'interrupted') throw new Error('Codex 已中断该已安排任务');
+      if (turn?.status === 'completed') {
+        const output = [...messagesFromTurns([turn])]
+          .reverse()
+          .find((item) => item.role === 'assistant')
+          ?.text.trim();
+        if (!output) throw new Error('Codex 已完成，但没有返回可展示的结果');
+        return { text: output, threadId: options.threadId };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error('已安排任务运行超时');
+  } finally {
+    backgroundAutomationPermissions.delete(options.threadId);
+    options.signal?.removeEventListener('abort', interrupt);
+  }
+}
+
 export function setCodexWorkspaceControllerFactory(factory: ControllerFactory): () => void {
   const previous = controllerFactory;
   controllerFactory = factory;
@@ -1062,9 +1580,14 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
   rejectPendingRequests('测试重置');
   await controller?.stop();
   controller = undefined;
+  defaultWorkspaceRequest = undefined;
+  butlerWorkspaceRequest = undefined;
   useCodexWorkspace.setState({
     scope: '',
+    defaultWorkspaceRoot: '',
+    butlerWorkspaceRoot: '',
     workspaceRoot: '',
+    workspaceRoots: [],
     status: 'idle',
     error: null,
     threads: [],
@@ -1085,6 +1608,8 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
     catalogErrors: {},
     selectedModel: '',
     selectedEffort: null,
+    hostingModel: '',
+    hostingEffort: 'high',
     permissionPreset: 'auto',
     followUpMode: 'steer',
   });

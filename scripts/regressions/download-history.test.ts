@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   MAX_DOWNLOAD_HISTORY,
@@ -98,4 +99,18 @@ test('只接受绝对文件系统路径，拒绝 URL、file URI 和相对路径'
     records: [record('safe', 1), { ...record('unsafe', 2), path: 'https://example.com/file.pdf' }],
   }));
   assert.deepEqual(parsed.records.map((item) => item.id), ['safe']);
+});
+
+test('下载页通过桌面受控命令打开文件，不再触发 opener 空 scope 拒绝', async () => {
+  const [page, main] = await Promise.all([
+    readFile(new URL('../../apps/web/src/pages/DownloadsPage.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8'),
+  ]);
+
+  assert.doesNotMatch(page, /plugin-opener/);
+  assert.match(page, /download_history_reveal/);
+  assert.match(page, /download_history_open/);
+  assert.match(main, /fn resolve_download_history_path/);
+  assert.match(main, /\.canonicalize\(\)/);
+  assert.match(main, /resolved\.is_file\(\)/);
 });

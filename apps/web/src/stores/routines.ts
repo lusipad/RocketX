@@ -2,12 +2,32 @@ import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
 import { runCodexAutomation, type CodexAutomationOptions } from '../agent/codexAutomation';
 import {
+  registerScheduledTaskAdapter,
+  type ScheduledTaskInput,
+  type ScheduledTaskPatch,
+  type ScheduledTaskNotificationPolicy,
+} from '../agent/scheduledTaskBridge';
+import {
   findButlerAbilityTemplate,
   type ButlerAbilityTemplate,
   type ButlerAbilityTemplateId,
   type RoutinePrecheck,
 } from '../lib/butlerAbilityTemplates';
 import { shouldRunRoutine } from '../lib/routinePrecheck';
+import {
+  dailyTriggerToRrule,
+  describeRrule,
+  intervalTriggerToRrule,
+  isRruleDue,
+  normalizeRrule,
+} from '../lib/codexSchedule';
+import {
+  codexAutomationFilesAvailable,
+  deleteCodexAutomationFile,
+  readCodexAutomationFiles,
+  writeCodexAutomationFile,
+  type CodexAutomationDefinition,
+} from '../lib/codexAutomationFiles';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { useChat } from './chat';
 import { useCodexWorkspace } from './codexWorkspace';
@@ -30,15 +50,24 @@ export interface DailyRoutineTrigger {
 export interface IntervalRoutineTrigger {
   kind: 'interval';
   everyMinutes: number;
+  window?: {
+    start: string;
+    end: string;
+  };
 }
 
 export type RoutineTrigger = DailyRoutineTrigger | IntervalRoutineTrigger;
+export type RoutineKind = 'cron' | 'heartbeat';
 
 export interface RoutineRun {
   id: string;
   at: number;
   status: 'ok' | 'error';
   text: string;
+  threadId?: string;
+  triggerReason?: 'manual' | 'schedule';
+  readAt?: number;
+  archived?: boolean;
 }
 
 export interface RoutineVersion {
@@ -46,7 +75,8 @@ export interface RoutineVersion {
   at: number;
   reason: string;
   name: string;
-  trigger: RoutineTrigger;
+  trigger?: RoutineTrigger;
+  rrule?: string;
   skillName?: string;
   prompt?: string;
   params?: { rooms?: string[] };
@@ -55,12 +85,22 @@ export interface RoutineVersion {
 export interface Routine<TTrigger extends RoutineTrigger = RoutineTrigger> {
   id: string;
   name: string;
-  trigger: TTrigger;
+  trigger?: TTrigger;
+  rrule?: string;
+  kind?: RoutineKind;
   skillName?: string;
+  skillPath?: string;
+  pluginTemplateId?: string;
   prompt?: string;
   templateId?: ButlerAbilityTemplateId;
   precheck?: RoutinePrecheck;
   params?: { rooms?: string[] };
+  workspaceRoot?: string;
+  targetThreadId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  notificationPolicy?: ScheduledTaskNotificationPolicy;
+  nativeTarget?: string;
   enabled: boolean;
   createdAt: number;
   updatedAt?: number;
@@ -83,7 +123,12 @@ interface RoutineState {
   unloadedTemplateIds: ButlerAbilityTemplateId[];
   runningIds: string[];
   hydrated: boolean;
+  nativeStatus: 'idle' | 'loading' | 'ready' | 'error';
+  nativeError?: string;
   hydrate: () => void;
+  hydrateNative: () => Promise<void>;
+  syncNative: (id: string, rollback?: Routine | null) => Promise<void>;
+  deleteNative: (id: string) => Promise<void>;
   setEnabled: (id: string, enabled: boolean) => void;
   loadTemplate: (
     templateId: string,
@@ -93,11 +138,29 @@ interface RoutineState {
   addRoutine: (routine: Routine) => void;
   updateContract: (
     id: string,
-    patch: Partial<Pick<Routine, 'name' | 'trigger' | 'skillName' | 'prompt' | 'params'>>,
+    patch: Partial<Pick<Routine,
+      | 'name'
+      | 'trigger'
+      | 'rrule'
+      | 'kind'
+      | 'skillName'
+      | 'skillPath'
+      | 'pluginTemplateId'
+      | 'prompt'
+      | 'params'
+      | 'workspaceRoot'
+      | 'targetThreadId'
+      | 'model'
+      | 'reasoningEffort'
+      | 'notificationPolicy'
+    >>,
     reason?: string,
   ) => void;
   rollbackContract: (id: string, version: number) => void;
   removeRoutine: (id: string) => void;
+  markRunRead: (routineId: string, runId: string, read: boolean) => void;
+  setRunArchived: (routineId: string, runId: string, archived: boolean) => void;
+  archiveRuns: (routineId?: string) => void;
   dismissCard: (id: string) => void;
   runNow: (
     id: string,
@@ -123,7 +186,9 @@ const browserRoutineStorage: RoutineStorage = {
 };
 
 let routineStorage: RoutineStorage = browserRoutineStorage;
-let routineCodexRunner: (options: CodexAutomationOptions) => Promise<{ text: string }> = runCodexAutomation;
+let routineCodexRunner: (
+  options: CodexAutomationOptions,
+) => Promise<{ text: string; threadId?: string }> = runCodexAutomation;
 let routineNow = () => Date.now();
 let scheduler: ReturnType<typeof setInterval> | undefined;
 const routineAbortControllers = new Map<string, AbortController>();
@@ -136,7 +201,9 @@ export function setRoutineStorage(storage: RoutineStorage): () => void {
   };
 }
 
-export function setRoutineCodexRunner(runner: (options: CodexAutomationOptions) => Promise<{ text: string }>): () => void {
+export function setRoutineCodexRunner(
+  runner: (options: CodexAutomationOptions) => Promise<{ text: string; threadId?: string }>,
+): () => void {
   const previous = routineCodexRunner;
   routineCodexRunner = runner;
   return () => {
@@ -157,34 +224,17 @@ function localDate(now: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function triggerMinutes(time: string): number | undefined {
-  const match = /^(\d{2}):(\d{2})$/.exec(time);
-  if (!match) return undefined;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  return hours < 24 && minutes < 60 ? hours * 60 + minutes : undefined;
-}
-
 export function dueRoutines(
   routines: readonly Routine<RoutineTrigger>[],
   now: number,
 ): Routine<RoutineTrigger>[] {
-  const date = new Date(now);
-  const today = localDate(now);
-  const minutes = date.getHours() * 60 + date.getMinutes();
   return routines.filter((routine) => {
     if (!routine.enabled) return false;
-    if (routine.trigger.kind === 'interval') {
-      if (!validIntervalMinutes(routine.trigger.everyMinutes)) return false;
-      const lastRunAt = routine.runs.reduce((latest, run) => Math.max(latest, run.at), 0);
-      return lastRunAt === 0 ||
-        now - lastRunAt >= routine.trigger.everyMinutes * 60_000;
-    }
-    const at = triggerMinutes(routine.trigger.time);
-    return at !== undefined &&
-      minutes >= at &&
-      (!routine.trigger.days?.length || routine.trigger.days.includes(date.getDay())) &&
-      routine.lastFiredDate !== today;
+    if (routine.trigger?.kind === 'daily' && routine.lastFiredDate === localDate(now)) return false;
+    const rrule = routine.rrule ?? rruleFromTrigger(routine.trigger);
+    if (!rrule) return false;
+    const lastRunAt = routine.runs.reduce((latest, run) => Math.max(latest, run.at), 0);
+    return isRruleDue(rrule, now, lastRunAt || undefined);
   });
 }
 
@@ -199,6 +249,7 @@ function normalizeTrigger(value: unknown): RoutineTrigger | undefined {
     time?: unknown;
     days?: unknown;
     everyMinutes?: unknown;
+    window?: unknown;
   };
   if (trigger.kind === 'daily' && typeof trigger.time === 'string') {
     return {
@@ -210,19 +261,43 @@ function normalizeTrigger(value: unknown): RoutineTrigger | undefined {
     };
   }
   if (trigger.kind === 'interval' && validIntervalMinutes(trigger.everyMinutes)) {
-    return { kind: 'interval', everyMinutes: trigger.everyMinutes };
+    if (trigger.window == null) return { kind: 'interval', everyMinutes: trigger.everyMinutes };
+    if (typeof trigger.window !== 'object') return undefined;
+    const window = trigger.window as { start?: unknown; end?: unknown };
+    if (typeof window.start !== 'string' || typeof window.end !== 'string') return undefined;
+    try {
+      intervalTriggerToRrule(trigger.everyMinutes, { start: window.start, end: window.end });
+    } catch {
+      return undefined;
+    }
+    return {
+      kind: 'interval',
+      everyMinutes: trigger.everyMinutes,
+      window: { start: window.start, end: window.end },
+    };
   }
   return undefined;
+}
+
+function rruleFromTrigger(trigger: RoutineTrigger | undefined): string | undefined {
+  if (!trigger) return undefined;
+  return trigger.kind === 'daily'
+    ? dailyTriggerToRrule(trigger.time, trigger.days)
+    : intervalTriggerToRrule(trigger.everyMinutes, trigger.window);
 }
 
 function cloneTrigger(trigger: RoutineTrigger): RoutineTrigger {
   return trigger.kind === 'daily'
     ? { kind: 'daily', time: trigger.time, ...(trigger.days ? { days: [...trigger.days] } : {}) }
-    : { kind: 'interval', everyMinutes: trigger.everyMinutes };
+    : {
+        kind: 'interval',
+        everyMinutes: trigger.everyMinutes,
+        ...(trigger.window ? { window: { ...trigger.window } } : {}),
+      };
 }
 
 function routineVersion(
-  routine: Pick<Routine, 'name' | 'trigger' | 'skillName' | 'prompt' | 'params'>,
+  routine: Pick<Routine, 'name' | 'trigger' | 'rrule' | 'skillName' | 'prompt' | 'params'>,
   version: number,
   at: number,
   reason: string,
@@ -232,7 +307,8 @@ function routineVersion(
     at,
     reason,
     name: routine.name,
-    trigger: cloneTrigger(routine.trigger),
+    ...(routine.trigger ? { trigger: cloneTrigger(routine.trigger) } : {}),
+    ...(routine.rrule ? { rrule: routine.rrule } : {}),
     ...(routine.skillName ? { skillName: routine.skillName } : {}),
     ...(routine.prompt ? { prompt: routine.prompt } : {}),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
@@ -257,7 +333,10 @@ function routineFromTemplate(
     id: options?.id ?? `routine-${template.id}-${crypto.randomUUID()}`,
     name: template.title,
     trigger: cloneTrigger(template.defaultTrigger),
-    skillName: template.skillName,
+    rrule: rruleFromTrigger(template.defaultTrigger),
+    kind: 'cron',
+    ...(template.skillName ? { skillName: template.skillName } : {}),
+    ...(template.prompt ? { prompt: template.prompt } : {}),
     templateId: template.id,
     precheck: template.precheck,
     ...(rooms ? { params: { rooms: [...rooms] } } : {}),
@@ -276,10 +355,18 @@ function normalizeRoutine(value: unknown): Routine | undefined {
   const routine = { ...value } as Partial<Routine> & { delivery?: unknown };
   delete routine.delivery;
   const trigger = normalizeTrigger(routine.trigger);
+  let rrule: string | undefined;
+  try {
+    rrule = typeof routine.rrule === 'string'
+      ? normalizeRrule(routine.rrule)
+      : rruleFromTrigger(trigger);
+  } catch {
+    return undefined;
+  }
   if (
     typeof routine.id !== 'string' ||
     typeof routine.name !== 'string' ||
-    !trigger ||
+    !rrule ||
     (typeof routine.skillName !== 'string' && typeof routine.prompt !== 'string') ||
     typeof routine.enabled !== 'boolean' ||
     typeof routine.createdAt !== 'number' ||
@@ -287,7 +374,9 @@ function normalizeRoutine(value: unknown): Routine | undefined {
   ) return undefined;
   const normalized = {
     ...routine,
-    trigger,
+    ...(trigger ? { trigger } : {}),
+    rrule,
+    kind: routine.kind === 'heartbeat' ? 'heartbeat' : 'cron',
     runs: routine.runs.slice(0, RUN_LIMIT),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
   } as Routine;
@@ -301,10 +390,19 @@ function normalizeRoutine(value: unknown): Routine | undefined {
         || typeof version.name !== 'string'
       ) return [];
       const versionTrigger = normalizeTrigger(version.trigger);
-      if (!versionTrigger) return [];
+      let versionRrule: string | undefined;
+      try {
+        versionRrule = typeof version.rrule === 'string'
+          ? normalizeRrule(version.rrule)
+          : rruleFromTrigger(versionTrigger);
+      } catch {
+        return [];
+      }
+      if (!versionRrule) return [];
       return [{
         ...version,
-        trigger: versionTrigger,
+        ...(versionTrigger ? { trigger: versionTrigger } : {}),
+        rrule: versionRrule,
         ...(version.params?.rooms ? { params: { rooms: [...version.params.rooms] } } : {}),
       }];
     }).slice(-20)
@@ -330,21 +428,40 @@ function readJson(key: string): unknown {
   }
 }
 
-function ensureBuiltins(
-  routines: Routine[],
-  now: number,
-  unloadedTemplateIds: readonly ButlerAbilityTemplateId[],
-): Routine[] {
-  const saved = new Map(routines.map((routine) => [routine.id, routine]));
+function mergeBuiltinDuplicates(routines: Routine[]): Routine[] {
+  let merged = [...routines];
   for (const templateId of ['morning-brief', 'evening-review'] as const) {
-    if (unloadedTemplateIds.includes(templateId)) continue;
-    const template = findButlerAbilityTemplate(templateId);
-    const id = templateRoutineId(templateId);
-    if (!template || !id || saved.has(id)) continue;
-    const builtin = routineFromTemplate(template, now, undefined, { id, enabled: false });
-    if (builtin) saved.set(id, builtin);
+    const canonicalId = templateRoutineId(templateId)!;
+    const matches = merged.filter(
+      (routine) => routine.id === canonicalId || routine.templateId === templateId,
+    );
+    if (matches.length === 0) continue;
+    if (matches.length === 1 && matches[0].id === canonicalId) continue;
+
+    const preferred = [...matches].sort((left, right) => {
+      if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+      return (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt);
+    })[0];
+    const runsById = new Map<string, RoutineRun>();
+    for (const candidate of matches) {
+      for (const run of candidate.runs) {
+        const current = runsById.get(run.id);
+        if (!current || run.at > current.at) runsById.set(run.id, run);
+      }
+    }
+    const combined: Routine = {
+      ...preferred,
+      id: canonicalId,
+      templateId,
+      createdAt: Math.min(...matches.map((routine) => routine.createdAt)),
+      updatedAt: Math.max(...matches.map((routine) => routine.updatedAt ?? routine.createdAt)),
+      runs: [...runsById.values()].sort((left, right) => right.at - left.at).slice(0, RUN_LIMIT),
+    };
+    const firstIndex = merged.findIndex((routine) => matches.includes(routine));
+    merged = merged.filter((routine) => !matches.includes(routine));
+    merged.splice(firstIndex, 0, combined);
   }
-  return [...saved.values()];
+  return merged;
 }
 
 function persist(
@@ -359,6 +476,68 @@ function persist(
     unloadedTemplateIds,
   } satisfies PersistedRoutines));
   routineStorage.set(WATCHER_KEYS_KEY, JSON.stringify(seenKeys));
+}
+
+function automationTimestamp(value: number | string): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : routineNow();
+}
+
+function routineFromAutomation(
+  definition: CodexAutomationDefinition,
+  cached?: Routine,
+): Routine {
+  const createdAt = automationTimestamp(definition.createdAt);
+  return {
+    ...(cached ?? {}),
+    id: definition.id,
+    kind: definition.kind === 'heartbeat' ? 'heartbeat' : 'cron',
+    name: definition.name,
+    prompt: definition.prompt,
+    rrule: normalizeRrule(definition.rrule),
+    workspaceRoot: definition.cwds[0] ?? cached?.workspaceRoot,
+    targetThreadId: definition.targetThreadId ?? cached?.targetThreadId,
+    model: definition.model,
+    reasoningEffort: definition.reasoningEffort,
+    nativeTarget: definition.target,
+    enabled: definition.status === 'ACTIVE',
+    createdAt,
+    updatedAt: automationTimestamp(definition.updatedAt),
+    runs: cached?.runs ?? [],
+  };
+}
+
+function automationFromRoutine(routine: Routine): CodexAutomationDefinition {
+  const workspace = useCodexWorkspace.getState();
+  const workspaceRoot = routine.workspaceRoot === '~'
+    ? workspace.defaultWorkspaceRoot
+    : routine.workspaceRoot || workspace.workspaceRoot;
+  if (routine.kind !== 'heartbeat' && !workspaceRoot) {
+    throw new Error('已安排任务必须选择 Codex 工作区');
+  }
+  const prompt = routine.prompt?.trim()
+    || (routine.skillName ? `$${routine.skillName}\n执行已安排任务“${routine.name}”。` : '');
+  if (!prompt) throw new Error('已安排任务说明不能为空');
+  return {
+    version: 1,
+    id: routine.id,
+    kind: routine.kind ?? 'cron',
+    name: routine.name,
+    prompt,
+    status: routine.enabled ? 'ACTIVE' : 'PAUSED',
+    rrule: normalizeRrule(routine.rrule ?? rruleFromTrigger(routine.trigger) ?? ''),
+    cwds: workspaceRoot ? [workspaceRoot] : [],
+    executionEnvironment: 'local',
+    createdAt: routine.createdAt,
+    updatedAt: routine.updatedAt ?? routine.createdAt,
+    ...(routine.model ? { model: routine.model } : {}),
+    ...(routine.reasoningEffort ? { reasoningEffort: routine.reasoningEffort } : {}),
+    ...(routine.nativeTarget ? { target: routine.nativeTarget } : {}),
+    ...(routine.kind === 'heartbeat' && routine.targetThreadId
+      ? { targetThreadId: routine.targetThreadId }
+      : {}),
+  };
 }
 
 function watcherSnapshot(seenKeys: string[]): ButlerWatcherSnapshot {
@@ -395,6 +574,8 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   unloadedTemplateIds: [],
   runningIds: [],
   hydrated: false,
+  nativeStatus: 'idle',
+  nativeError: undefined,
 
   hydrate: () => {
     const saved = readJson(ROUTINES_KEY);
@@ -412,10 +593,8 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       )
       : [];
     const seen = readJson(WATCHER_KEYS_KEY);
-    const routines = ensureBuiltins(
+    const routines = mergeBuiltinDuplicates(
       stored.map(normalizeRoutine).filter((routine): routine is Routine => !!routine),
-      routineNow(),
-      unloadedTemplateIds,
     );
     const seenKeys = Array.isArray(seen) ? seen.filter((key): key is string => typeof key === 'string') : [];
     const activeCards = cards
@@ -423,6 +602,59 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       .slice(0, EVENT_CARD_LIMIT);
     set({ routines, eventCards: activeCards, seenKeys, unloadedTemplateIds, hydrated: true });
     persist(routines, activeCards, seenKeys, unloadedTemplateIds);
+  },
+
+  hydrateNative: async () => {
+    if (!codexAutomationFilesAvailable()) return;
+    set({ nativeStatus: 'loading', nativeError: undefined });
+    try {
+      const definitions = await readCodexAutomationFiles();
+      const cached = new Map(get().routines.map((routine) => [routine.id, routine]));
+      const routines = definitions.map((definition) => routineFromAutomation(definition, cached.get(definition.id)));
+      set({ routines, hydrated: true, nativeStatus: 'ready', nativeError: undefined });
+      persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+    } catch (error) {
+      const nativeError = error instanceof Error ? error.message : String(error);
+      set({ nativeStatus: 'error', nativeError });
+      throw error;
+    }
+  },
+
+  syncNative: async (id, rollback) => {
+    if (!codexAutomationFilesAvailable()) return;
+    const routine = get().routines.find((item) => item.id === id);
+    if (!routine) throw new Error(`没有找到已安排任务 ${id}`);
+    try {
+      await writeCodexAutomationFile(automationFromRoutine(routine));
+      set({ nativeStatus: 'ready', nativeError: undefined });
+    } catch (error) {
+      const nativeError = error instanceof Error ? error.message : String(error);
+      if (rollback !== undefined) {
+        const current = get().routines;
+        const routines = rollback === null
+          ? current.filter((item) => item.id !== id)
+          : current.some((item) => item.id === id)
+            ? current.map((item) => item.id === id ? rollback : item)
+            : [rollback, ...current];
+        set({ routines, nativeStatus: 'error', nativeError });
+        persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+      } else {
+        set({ nativeStatus: 'error', nativeError });
+      }
+      throw error;
+    }
+  },
+
+  deleteNative: async (id) => {
+    if (!codexAutomationFilesAvailable()) return;
+    try {
+      await deleteCodexAutomationFile(id);
+      set({ nativeStatus: 'ready', nativeError: undefined });
+    } catch (error) {
+      const nativeError = error instanceof Error ? error.message : String(error);
+      set({ nativeStatus: 'error', nativeError });
+      throw error;
+    }
   },
 
   setEnabled: (id, enabled) => {
@@ -439,7 +671,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (existing) return existing;
     const template = findButlerAbilityTemplate(templateId);
     if (!template) return undefined;
-    if (knownSkillDisabled(template.skillName)) return undefined;
+    if (template.skillName && knownSkillDisabled(template.skillName)) return undefined;
     const routine = routineFromTemplate(template, routineNow(), params);
     if (!routine) return undefined;
     const routines = [routine, ...get().routines];
@@ -462,11 +694,20 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   },
 
   addRoutine: (routine) => {
+    if (routine.trigger?.kind === 'interval' && !validIntervalMinutes(routine.trigger.everyMinutes)) {
+      throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
+    }
     const trigger = normalizeTrigger(routine.trigger);
-    if (!trigger) throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
+    if (routine.trigger && !trigger) throw new RangeError('运行计划无效');
+    const rrule = normalizeRrule(routine.rrule ?? rruleFromTrigger(trigger) ?? '');
+    if (routine.kind === 'heartbeat' && !routine.targetThreadId?.trim()) {
+      throw new Error('回到现有会话的任务必须选择目标会话');
+    }
     const base = {
       ...routine,
-      trigger,
+      ...(trigger ? { trigger } : {}),
+      rrule,
+      kind: routine.kind ?? 'cron',
       runs: routine.runs.slice(0, RUN_LIMIT),
       ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
     };
@@ -488,14 +729,26 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     const at = routineNow();
     const routines = get().routines.map((routine) => {
       if (routine.id !== id) return routine;
-      const trigger = patch.trigger ? normalizeTrigger(patch.trigger) : routine.trigger;
-      if (!trigger) throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
+      const hasTriggerPatch = Object.prototype.hasOwnProperty.call(patch, 'trigger');
+      const trigger = hasTriggerPatch ? normalizeTrigger(patch.trigger) : routine.trigger;
+      if (hasTriggerPatch && patch.trigger && !trigger) throw new RangeError('运行计划无效');
+      const rrule = normalizeRrule(
+        patch.rrule
+          ?? (hasTriggerPatch ? rruleFromTrigger(trigger) : undefined)
+          ?? routine.rrule
+          ?? rruleFromTrigger(trigger)
+          ?? '',
+      );
       const next: Routine = {
         ...routine,
         ...patch,
         trigger,
+        rrule,
         ...(patch.params?.rooms ? { params: { rooms: [...patch.params.rooms] } } : {}),
       };
+      if (next.kind === 'heartbeat' && !next.targetThreadId?.trim()) {
+        throw new Error('回到现有会话的任务必须选择目标会话');
+      }
       const version = (routine.contractVersion ?? routine.versions?.at(-1)?.version ?? 1) + 1;
       return {
         ...next,
@@ -518,6 +771,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     get().updateContract(id, {
       name: target.name,
       trigger: target.trigger,
+      rrule: target.rrule,
       skillName: target.skillName,
       prompt: target.prompt,
       params: target.params,
@@ -526,6 +780,44 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   removeRoutine: (id) => {
     get().unloadRoutine(id);
+  },
+
+  markRunRead: (routineId, runId, read) => {
+    const at = routineNow();
+    const routines = get().routines.map((routine) => routine.id === routineId
+      ? {
+          ...routine,
+          runs: routine.runs.map((run) => run.id === runId
+            ? { ...run, ...(read ? { readAt: at } : { readAt: undefined }) }
+            : run),
+        }
+      : routine);
+    set({ routines });
+    persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+  },
+
+  setRunArchived: (routineId, runId, archived) => {
+    const routines = get().routines.map((routine) => routine.id === routineId
+      ? {
+          ...routine,
+          runs: routine.runs.map((run) => run.id === runId ? { ...run, archived } : run),
+        }
+      : routine);
+    set({ routines });
+    persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+  },
+
+  archiveRuns: (routineId) => {
+    const routines = get().routines.map((routine) => (
+      routineId && routine.id !== routineId
+        ? routine
+        : {
+            ...routine,
+            runs: routine.runs.map((run) => run.archived ? run : { ...run, archived: true }),
+          }
+    ));
+    set({ routines });
+    persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
   },
 
   dismissCard: (id) => {
@@ -610,21 +902,31 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         ...(routine.prompt ? ['', '请按以下自定义要求执行：', routine.prompt] : []),
       ].join('\n');
       const result = await routineCodexRunner({
-        workspaceRoot: workspace.workspaceRoot,
+        workspaceRoot: routine.workspaceRoot || workspace.workspaceRoot,
         text: taskText,
         name: `自动化 · ${routine.name}`,
-        model: workspace.selectedModel || undefined,
-        effort: workspace.selectedEffort,
+        model: routine.model || workspace.selectedModel || undefined,
+        effort: routine.reasoningEffort ?? workspace.selectedEffort,
+        permissionPreset: workspace.permissionPreset,
         skillName: routine.skillName,
+        targetThreadId: routine.kind === 'heartbeat' ? routine.targetThreadId : undefined,
         signal: abortController.signal,
       });
-      run = { id: crypto.randomUUID(), at, status: 'ok', text: result.text };
+      run = {
+        id: crypto.randomUUID(),
+        at,
+        status: 'ok',
+        text: result.text,
+        ...(result.threadId ? { threadId: result.threadId } : {}),
+        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : 'manual',
+      };
     } catch (error) {
       run = {
         id: crypto.randomUUID(),
         at,
         status: 'error',
         text: error instanceof Error ? error.message : String(error),
+        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : 'manual',
       };
     } finally {
       routineAbortControllers.delete(id);
@@ -662,7 +964,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (firedIds.size > 0) {
       const today = localDate(now);
       const routines = get().routines.map((routine) => firedIds.has(routine.id)
-        ? routine.trigger.kind === 'daily'
+        ? routine.trigger?.kind === 'daily'
           ? { ...routine, lastFiredDate: today }
           : routine
         : routine);
@@ -672,10 +974,136 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   },
 }));
 
+function scheduledTaskSnapshot(routine: Routine): unknown {
+  return {
+    id: routine.id,
+    kind: routine.kind ?? 'cron',
+    name: routine.name,
+    prompt: routine.prompt ?? '',
+    status: routine.enabled ? 'ACTIVE' : 'PAUSED',
+    rrule: routine.rrule ?? rruleFromTrigger(routine.trigger),
+    schedule: routine.rrule ? describeRrule(routine.rrule) : undefined,
+    workspaceRoot: routine.workspaceRoot,
+    targetThreadId: routine.targetThreadId,
+    model: routine.model,
+    reasoningEffort: routine.reasoningEffort,
+    notificationPolicy: routine.notificationPolicy,
+    skillName: routine.skillName,
+    pluginTemplateId: routine.pluginTemplateId,
+    latestRun: routine.runs.find((run) => !run.archived),
+  };
+}
+
+function routinePatch(input: ScheduledTaskPatch): Parameters<RoutineState['updateContract']>[1] {
+  return {
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.name ? { name: input.name.trim() } : {}),
+    ...(input.prompt ? { prompt: input.prompt.trim() } : {}),
+    ...(input.rrule ? { rrule: normalizeRrule(input.rrule) } : {}),
+    ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot.trim() } : {}),
+    ...(input.targetThreadId ? { targetThreadId: input.targetThreadId.trim() } : {}),
+    ...(input.model ? { model: input.model.trim() } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort.trim() } : {}),
+    ...(input.notificationPolicy ? { notificationPolicy: input.notificationPolicy } : {}),
+    ...(input.skillName ? { skillName: input.skillName.trim() } : {}),
+    ...(input.pluginTemplateId ? { pluginTemplateId: input.pluginTemplateId.trim() } : {}),
+  };
+}
+
+registerScheduledTaskAdapter({
+  list: async () => {
+    const state = useRoutines.getState();
+    if (!state.hydrated) state.hydrate();
+    await useRoutines.getState().hydrateNative();
+    return { tasks: useRoutines.getState().routines.map(scheduledTaskSnapshot) };
+  },
+  create: async (input: ScheduledTaskInput) => {
+    let state = useRoutines.getState();
+    if (!state.hydrated) state.hydrate();
+    await useRoutines.getState().hydrateNative();
+    state = useRoutines.getState();
+    const now = routineNow();
+    const workspace = useCodexWorkspace.getState();
+    const kind = input.kind ?? (workspace.activeThreadId ? 'heartbeat' : 'cron');
+    const targetThreadId = input.targetThreadId?.trim() || (kind === 'heartbeat' ? workspace.activeThreadId : undefined);
+    const routine: Routine = {
+      id: crypto.randomUUID(),
+      kind,
+      name: input.name.trim(),
+      prompt: input.prompt.trim(),
+      rrule: normalizeRrule(input.rrule),
+      enabled: input.status !== 'PAUSED',
+      workspaceRoot: input.workspaceRoot?.trim() || workspace.workspaceRoot,
+      ...(targetThreadId ? { targetThreadId } : {}),
+      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+      ...(input.reasoningEffort?.trim() ? { reasoningEffort: input.reasoningEffort.trim() } : {}),
+      ...(input.notificationPolicy ? { notificationPolicy: input.notificationPolicy } : {}),
+      ...(input.skillName?.trim() ? { skillName: input.skillName.trim() } : {}),
+      ...(input.pluginTemplateId?.trim() ? { pluginTemplateId: input.pluginTemplateId.trim() } : {}),
+      createdAt: now,
+      updatedAt: now,
+      runs: [],
+    };
+    if (!routine.name || !routine.prompt) throw new Error('任务名称和说明不能为空');
+    state.addRoutine(routine);
+    await useRoutines.getState().syncNative(routine.id, null);
+    return { status: 'created', task: scheduledTaskSnapshot(routine) };
+  },
+  update: async (input: ScheduledTaskPatch) => {
+    let state = useRoutines.getState();
+    if (!state.hydrated) {
+      state.hydrate();
+      state = useRoutines.getState();
+    }
+    await state.hydrateNative();
+    state = useRoutines.getState();
+    const current = state.routines.find((routine) => routine.id === input.id);
+    if (!current) throw new Error(`没有找到已安排任务 ${input.id}`);
+    const patch = routinePatch(input);
+    if (Object.keys(patch).length > 0) state.updateContract(input.id, patch, '由 Codex 更新');
+    if (input.status) state.setEnabled(input.id, input.status === 'ACTIVE');
+    await useRoutines.getState().syncNative(input.id, current);
+    const updated = useRoutines.getState().routines.find((routine) => routine.id === input.id)!;
+    return { status: 'updated', task: scheduledTaskSnapshot(updated) };
+  },
+  remove: async (id) => {
+    let state = useRoutines.getState();
+    if (!state.hydrated) {
+      state.hydrate();
+      state = useRoutines.getState();
+    }
+    await state.hydrateNative();
+    state = useRoutines.getState();
+    const current = state.routines.find((routine) => routine.id === id);
+    if (!current) throw new Error(`没有找到已安排任务 ${id}`);
+    await state.deleteNative(id);
+    state.removeRoutine(id);
+    return { status: 'deleted', id };
+  },
+  run: async (id) => {
+    let state = useRoutines.getState();
+    if (!state.hydrated) {
+      state.hydrate();
+      state = useRoutines.getState();
+    }
+    if (!state.routines.some((routine) => routine.id === id)) {
+      throw new Error(`没有找到已安排任务 ${id}`);
+    }
+    const admitted = await state.runNow(id, { triggerReason: 'manual' });
+    const updated = useRoutines.getState().routines.find((routine) => routine.id === id)!;
+    return {
+      status: admitted ? 'completed' : 'not_started',
+      task: scheduledTaskSnapshot(updated),
+      run: updated.runs[0],
+    };
+  },
+});
+
 export function startRoutineScheduler(): void {
   if (scheduler) return;
-  useRoutines.getState().hydrate();
-  void useRoutines.getState().tick();
+  const state = useRoutines.getState();
+  state.hydrate();
+  void state.hydrateNative().catch(() => undefined).then(() => useRoutines.getState().tick());
   scheduler = setInterval(() => void useRoutines.getState().tick(), 60_000);
 }
 

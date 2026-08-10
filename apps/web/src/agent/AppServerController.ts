@@ -15,8 +15,16 @@ import type { SkillMetadata } from './protocol/generated/v2/SkillMetadata';
 import type { Thread } from './protocol/generated/v2/Thread';
 import type { Turn } from './protocol/generated/v2/Turn';
 import type { UserInput } from './protocol/generated/v2/UserInput';
+import { executeRocketxDynamicTool, ROCKETX_DYNAMIC_TOOLS } from './codexHostTools';
 
 export type CodexPermissionPreset = 'ask' | 'auto' | 'full';
+
+const SCHEDULE_MUTATION_TOOLS = new Set([
+  'create_scheduled_task',
+  'update_scheduled_task',
+  'delete_scheduled_task',
+  'run_scheduled_task',
+]);
 
 export interface CodexRuntimeSelection {
   model: string;
@@ -87,14 +95,16 @@ async function readCatalog(
   workspaceRoot: string,
   threadId: string | null,
 ): Promise<CodexCatalog> {
-  const [models, permissions, skills] = await Promise.all([
+  const optional = <T>(request: Promise<T>) => request.then(
+    (value) => ({ status: 'fulfilled' as const, value }),
+    (reason: unknown) => ({ status: 'rejected' as const, reason }),
+  );
+  const [models, permissions, skills, apps, plugins] = await Promise.all([
     client.request('model/list', { includeHidden: false }),
     client.request('permissionProfile/list', { cwd: workspaceRoot }),
     client.request('skills/list', { cwds: [workspaceRoot], forceReload: true }),
-  ]);
-  const [apps, plugins] = await Promise.allSettled([
-    client.request('app/list', { threadId, forceRefetch: true }),
-    client.request('plugin/list', { cwds: [workspaceRoot] }),
+    optional(client.request('app/list', { threadId, forceRefetch: true })),
+    optional(client.request('plugin/list', { cwds: [workspaceRoot] })),
   ]);
   return {
     models: models.data.filter((model) => !model.hidden),
@@ -112,8 +122,10 @@ async function readCatalog(
 export class AppServerController {
   private client?: AppServerClient;
   private sessionId?: string;
+  private requestedWorkspaceRoot?: string;
   private workspaceRoot?: string;
   private catalog?: CodexCatalog;
+  private approvedScheduleMutationThreads = new Set<string>();
   private readonly transportFactory: NonNullable<AppServerControllerOptions['transportFactory']>;
 
   constructor(private readonly options: AppServerControllerOptions = {}) {
@@ -133,14 +145,22 @@ export class AppServerController {
     return this.sessionId;
   }
 
+  switchWorkspaceRoot(workspaceRoot: string): boolean {
+    const normalized = workspaceRoot.trim();
+    if (!normalized || !this.client || !this.catalog) return false;
+    this.requestedWorkspaceRoot = normalized;
+    this.workspaceRoot = normalized;
+    return true;
+  }
+
   async connect(sessionId: string, workspaceRoot: string): Promise<CodexCatalog> {
-    if (this.client && this.sessionId === sessionId && this.workspaceRoot === workspaceRoot && this.catalog) {
+    if (this.client && this.sessionId === sessionId && this.requestedWorkspaceRoot === workspaceRoot && this.catalog) {
       return this.catalog;
     }
     await this.stop();
     const client = new AppServerClient(this.transportFactory(sessionId, workspaceRoot), {
       onNotification: this.options.onNotification,
-      onServerRequest: this.options.onServerRequest,
+      onServerRequest: (request) => this.handleServerRequest(request),
       onInterrupted: (error) => {
         this.client = undefined;
         this.catalog = undefined;
@@ -153,11 +173,16 @@ export class AppServerController {
         throw new Error('RocketX 没有提供 Codex Skill 根目录');
       }
       await client.request('skills/extraRoots/set', { extraRoots: process.managedSkillRoots });
-      const catalog = await readCatalog(client, workspaceRoot, null);
+      const projectless = !workspaceRoot.trim() || workspaceRoot.trim() === '~';
+      const runtimeWorkspaceRoot = projectless
+        ? process.runtimeWorkspaceRoot?.trim() || workspaceRoot
+        : workspaceRoot;
+      const catalog = await readCatalog(client, runtimeWorkspaceRoot, null);
       this.assertPermissionProfiles(catalog.permissionProfiles);
       this.client = client;
       this.sessionId = sessionId;
-      this.workspaceRoot = workspaceRoot;
+      this.requestedWorkspaceRoot = workspaceRoot;
+      this.workspaceRoot = runtimeWorkspaceRoot;
       this.catalog = catalog;
       return catalog;
     } catch (error) {
@@ -174,9 +199,14 @@ export class AppServerController {
     return this.catalog;
   }
 
-  async listThreads(): Promise<Thread[]> {
+  async listThreads(workspaceRoots?: readonly string[]): Promise<Thread[]> {
+    const roots = [...new Set(
+      (workspaceRoots?.length ? workspaceRoots : [this.requireWorkspaceRoot()])
+        .map((root) => root.trim())
+        .filter(Boolean),
+    )];
     const response = await this.requireClient().request('thread/list', {
-      cwd: this.requireWorkspaceRoot(),
+      cwd: roots.length === 1 ? roots[0] : roots,
       archived: false,
       sortKey: 'updated_at',
       sortDirection: 'desc',
@@ -224,6 +254,7 @@ export class AppServerController {
       runtimeWorkspaceRoots: [workspaceRoot],
       ...permissions,
       ...(config ? { config } : {}),
+      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -260,6 +291,34 @@ export class AppServerController {
       effort: selection.effort,
       ...permissions,
     });
+    return response.thread;
+  }
+
+  async forkThread(threadId: string, selection: CodexRuntimeSelection, name?: string): Promise<Thread> {
+    const client = this.requireClient();
+    const workspaceRoot = this.requireWorkspaceRoot();
+    this.assertSelection(selection);
+    const permissions = permissionSettings(selection.permissionPreset);
+    const config = await businessMcpThreadConfig({ features: { memories: true } });
+    const response = await client.request('thread/fork', {
+      threadId,
+      model: selection.model,
+      cwd: workspaceRoot,
+      runtimeWorkspaceRoots: [workspaceRoot],
+      ...permissions,
+      excludeTurns: true,
+      ...(config ? { config } : {}),
+    });
+    await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
+    await client.request('thread/settings/update', {
+      threadId: response.thread.id,
+      model: selection.model,
+      effort: selection.effort,
+      ...permissions,
+    });
+    if (name?.trim()) {
+      await client.request('thread/name/set', { threadId: response.thread.id, name: name.trim() });
+    }
     return response.thread;
   }
 
@@ -327,12 +386,54 @@ export class AppServerController {
     return response.effectiveEnabled;
   }
 
+  private async handleServerRequest(request: ServerRequestContext): Promise<unknown> {
+    if (request.policy !== 'dynamic-tool') {
+      if (this.options.onServerRequest) return this.options.onServerRequest(request);
+      throw new Error(`RocketX 未处理 ${request.method}`);
+    }
+
+    const params = typeof request.params === 'object' && request.params !== null && !Array.isArray(request.params)
+      ? request.params as Record<string, unknown>
+      : {};
+    const tool = typeof params.tool === 'string' ? params.tool : '';
+    const threadId = typeof params.threadId === 'string' ? params.threadId : '';
+    if (SCHEDULE_MUTATION_TOOLS.has(tool) && !this.approvedScheduleMutationThreads.has(threadId)) {
+      if (!this.options.onServerRequest) throw new Error('变更已安排任务必须由当前用户显式审批');
+      const action = tool === 'create_scheduled_task'
+        ? '创建'
+        : tool === 'update_scheduled_task'
+          ? '修改'
+          : tool === 'delete_scheduled_task'
+            ? '删除'
+            : '立即运行';
+      const approval = await this.options.onServerRequest({
+        method: 'item/rocketxScheduledTask/requestApproval',
+        policy: 'host-approval',
+        params: {
+          ...params,
+          reason: `${action}已安排任务\n${JSON.stringify(params.arguments ?? {}, null, 2)}`,
+        },
+      });
+      const decision = typeof approval === 'object' && approval !== null && !Array.isArray(approval)
+        ? (approval as Record<string, unknown>).decision
+        : undefined;
+      if (decision === 'acceptForSession' && threadId) {
+        this.approvedScheduleMutationThreads.add(threadId);
+      } else if (decision !== 'accept' && decision !== 'approved') {
+        throw new Error('用户未批准变更已安排任务');
+      }
+    }
+    return executeRocketxDynamicTool(request.params);
+  }
+
   async stop(): Promise<void> {
     const client = this.client;
     this.client = undefined;
     this.catalog = undefined;
     this.sessionId = undefined;
+    this.requestedWorkspaceRoot = undefined;
     this.workspaceRoot = undefined;
+    this.approvedScheduleMutationThreads.clear();
     if (client) await client.stop().catch(() => undefined);
   }
 

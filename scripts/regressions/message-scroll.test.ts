@@ -11,10 +11,22 @@ test('内容撑高但滚动位置未动时保持贴底', () => {
   assert.deepEqual(
     nextMessageScrollState({
       stickToBottom: true,
-      previousScrollHeight: 1000,
-      previousScrollTop: 400,
+      userInitiated: false,
       scrollHeight: 1300,
       scrollTop: 400,
+      clientHeight: 600,
+    }),
+    { nearBottom: false, stickToBottom: true },
+  );
+});
+
+test('浏览器滚动锚定同时改变高度和位置时仍保持用户的贴底意图', () => {
+  assert.deepEqual(
+    nextMessageScrollState({
+      stickToBottom: true,
+      userInitiated: false,
+      scrollHeight: 1300,
+      scrollTop: 520,
       clientHeight: 600,
     }),
     { nearBottom: false, stickToBottom: true },
@@ -25,8 +37,7 @@ test('滚动位置变化时按当前位置判定贴底', () => {
   assert.deepEqual(
     nextMessageScrollState({
       stickToBottom: true,
-      previousScrollHeight: 1000,
-      previousScrollTop: 400,
+      userInitiated: true,
       scrollHeight: 1300,
       scrollTop: 500,
       clientHeight: 600,
@@ -36,8 +47,7 @@ test('滚动位置变化时按当前位置判定贴底', () => {
   assert.deepEqual(
     nextMessageScrollState({
       stickToBottom: false,
-      previousScrollHeight: 1000,
-      previousScrollTop: 300,
+      userInitiated: true,
       scrollHeight: 1000,
       scrollTop: 400,
       clientHeight: 600,
@@ -50,8 +60,7 @@ test('已经离开底部时内容撑高不会恢复贴底', () => {
   assert.deepEqual(
     nextMessageScrollState({
       stickToBottom: false,
-      previousScrollHeight: 1000,
-      previousScrollTop: 200,
+      userInitiated: false,
       scrollHeight: 1300,
       scrollTop: 200,
       clientHeight: 600,

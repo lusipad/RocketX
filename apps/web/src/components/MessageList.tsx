@@ -57,26 +57,23 @@ export function initialMessageScrollTop({
 
 export function nextMessageScrollState({
   stickToBottom,
-  previousScrollHeight,
-  previousScrollTop,
+  userInitiated,
   scrollHeight,
   scrollTop,
   clientHeight,
 }: {
   stickToBottom: boolean;
-  previousScrollHeight: number;
-  previousScrollTop: number;
+  userInitiated: boolean;
   scrollHeight: number;
   scrollTop: number;
   clientHeight: number;
 }): { nearBottom: boolean; stickToBottom: boolean } {
   const nearBottom = scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX;
-  const grew = scrollHeight > previousScrollHeight;
-  const movedByUser = scrollTop !== previousScrollTop;
-  // 高度增长但滚动位置未动时，事件来自内容重排，不能覆盖用户此前的贴底意图。
   return {
     nearBottom,
-    stickToBottom: grew && !movedByUser ? stickToBottom : nearBottom,
+    // scroll 事件本身分不出用户滚动和布局补偿；只有明确的用户输入
+    // 才能让列表脱离底部。
+    stickToBottom: nearBottom || (stickToBottom && !userInitiated),
   };
 }
 
@@ -112,8 +109,7 @@ export default function MessageList({ rid }: { rid: string }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  const lastScrollHeight = useRef(0);
-  const lastScrollTop = useRef(0);
+  const userScrollIntent = useRef(false);
   const activeRidRef = useRef(rid);
   activeRidRef.current = rid;
   const settleScrollFrame = useRef<number | null>(null);
@@ -142,10 +138,9 @@ export default function MessageList({ rid }: { rid: string }) {
   const scrollToBottom = useCallback((smooth = false, settleNextFrame = false) => {
     const el = scrollRef.current;
     if (!el) return;
+    userScrollIntent.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
-    lastScrollHeight.current = el.scrollHeight;
-    lastScrollTop.current = el.scrollTop;
     setShowJump(false);
     setNewCount(0);
 
@@ -159,10 +154,9 @@ export default function MessageList({ rid }: { rid: string }) {
         if (activeRidRef.current !== targetRid) return;
         const current = scrollRef.current;
         if (!current) return;
+        userScrollIntent.current = false;
         current.scrollTop = current.scrollHeight;
         stickToBottom.current = true;
-        lastScrollHeight.current = current.scrollHeight;
-        lastScrollTop.current = current.scrollTop;
         setShowJump(false);
         setNewCount(0);
       });
@@ -174,17 +168,15 @@ export default function MessageList({ rid }: { rid: string }) {
     if (!el) return;
     const scrollState = nextMessageScrollState({
       stickToBottom: stickToBottom.current,
-      previousScrollHeight: lastScrollHeight.current,
-      previousScrollTop: lastScrollTop.current,
+      userInitiated: userScrollIntent.current,
       scrollHeight: el.scrollHeight,
       scrollTop: el.scrollTop,
       clientHeight: el.clientHeight,
     });
+    userScrollIntent.current = false;
     stickToBottom.current = scrollState.stickToBottom;
-    lastScrollHeight.current = el.scrollHeight;
-    lastScrollTop.current = el.scrollTop;
     const { nearBottom } = scrollState;
-    setShowJump(!nearBottom);
+    setShowJump(!scrollState.stickToBottom);
     if (nearBottom) setNewCount(0);
 
     if (el.scrollTop < 60 && hasMore && !loadingOlder) {
@@ -223,6 +215,7 @@ export default function MessageList({ rid }: { rid: string }) {
       settleScrollFrame.current = null;
     }
     stickToBottom.current = true;
+    userScrollIntent.current = false;
     didInitialScroll.current = false;
     setShowJump(false);
     setNewCount(0);
@@ -452,7 +445,30 @@ export default function MessageList({ rid }: { rid: string }) {
           浏览器原生锚定再插一脚就是双重补偿，表现为滚动时突然回跳 */}
       <div
         ref={scrollRef}
+        data-testid="message-scroll"
         onScroll={onScroll}
+        onWheel={() => {
+          userScrollIntent.current = true;
+        }}
+        onPointerDown={(event) => {
+          if (event.pointerType === 'touch' || event.target === event.currentTarget) {
+            userScrollIntent.current = true;
+          }
+        }}
+        onPointerUp={() => {
+          userScrollIntent.current = false;
+        }}
+        onPointerCancel={() => {
+          userScrollIntent.current = false;
+        }}
+        onKeyDown={(event) => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+            userScrollIntent.current = true;
+          }
+        }}
+        onKeyUp={() => {
+          userScrollIntent.current = false;
+        }}
         className="min-h-0 flex-1 overflow-y-auto px-6 py-4 [overflow-anchor:none]"
       >
         <div>

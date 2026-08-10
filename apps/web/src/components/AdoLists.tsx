@@ -324,50 +324,53 @@ function PrRow({
   const approved = isApproved(pr);
   const features = runtimeFeatures();
   return (
-    // 外层由 <a> 改为 div（照 WorkItemList 的写法）：整行是链接时，
-    // 行内按钮的点击会冒泡去开外链，加按钮前必须先拆开。
     <div className={`group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2 ${
       comparing ? 'bg-primary-light/20' : ''
     }`}>
-    <a
-      href={pr.webUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5"
-    >
-      <GitPullRequest
-        size={14}
-        className={`shrink-0 ${approved ? 'text-success' : 'text-[#7f3bf5]'}`}
-      />
-      <span className="w-12 shrink-0 text-xs text-ink-3">!{pr.id}</span>
+      <button
+        type="button"
+        onClick={() => onAsk(pr)}
+        disabled={!features.butler}
+        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 AI 审查'}
+        aria-label={`用 Codex 审查 PR !${pr.id}：${pr.title}`}
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left disabled:cursor-default"
+      >
+        <GitPullRequest
+          size={14}
+          className={`shrink-0 ${approved ? 'text-success' : 'text-[#7f3bf5]'}`}
+        />
+        <span className="w-12 shrink-0 text-xs text-ink-3">!{pr.id}</span>
 
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-ink">{pr.title}</span>
-        <span className="mt-0.5 block truncate text-xs text-ink-3">
-          {pr.repo} · {pr.sourceBranch} → {pr.targetBranch} · {pr.creator}
-        </span>
-      </span>
-
-      {/* 评审人投票：这是「这个 PR 现在卡在谁那儿」的唯一线索 */}
-      <span className="flex w-40 shrink-0 flex-wrap justify-end gap-1">
-        {pr.reviewers.slice(0, 3).map((r) => (
-          <span
-            key={r.unique || r.name}
-            className={`text-xs ${voteColor(r.vote)}`}
-            title={`${r.name}：${VOTE_LABELS[r.vote] ?? '未知'}`}
-          >
-            {r.name.slice(0, 4)}
-            {r.vote >= 5 ? ' ✓' : r.vote <= -5 ? ' ✕' : ' ·'}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-ink">{pr.title}</span>
+          <span className="mt-0.5 block truncate text-xs text-ink-3">
+            {pr.repo} · {pr.sourceBranch} → {pr.targetBranch} · {pr.creator}
           </span>
-        ))}
-        {pr.reviewers.length === 0 && <span className="text-xs text-ink-3">无评审人</span>}
-      </span>
+        </span>
 
-      <span className="w-16 shrink-0 text-right text-xs text-ink-3">
-        {relTime(pr.createdDate)}
-      </span>
-      <ExternalLink size={14} className="shrink-0 text-ink-3 opacity-0 group-hover:opacity-100" />
-    </a>
+        {/* 评审人投票：这是「这个 PR 现在卡在谁那儿」的唯一线索 */}
+        <span className="flex w-40 shrink-0 flex-wrap justify-end gap-1">
+          {pr.reviewers.slice(0, 3).map((r) => (
+            <span
+              key={r.unique || r.name}
+              className={`text-xs ${voteColor(r.vote)}`}
+              title={`${r.name}：${VOTE_LABELS[r.vote] ?? '未知'}`}
+            >
+              {r.name.slice(0, 4)}
+              {r.vote >= 5 ? ' ✓' : r.vote <= -5 ? ' ✕' : ' ·'}
+            </span>
+          ))}
+          {pr.reviewers.length === 0 && <span className="text-xs text-ink-3">无评审人</span>}
+        </span>
+
+        <span className="w-16 shrink-0 text-right text-xs text-ink-3">
+          {relTime(pr.createdDate)}
+        </span>
+        <span className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary">
+          <Bot size={13} aria-hidden="true" />
+          AI 审查
+        </span>
+      </button>
       <button
         type="button"
         onClick={() => onCompare(pr)}
@@ -382,26 +385,25 @@ function PrRow({
       >
         <GitCompare size={14} />
       </button>
-      {features.butler ? (
-        <button
-          type="button"
-          onClick={() => onAsk(pr)}
-          title="让管家看看这个 PR"
-          aria-label="让管家看看这个 PR"
-          className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
-        >
-          <Bot size={14} />
-        </button>
-      ) : null}
       <button
         type="button"
         onClick={() => onSchedule(pr)}
         title={`把 PR #${pr.id} 排进日历`}
         aria-label={`把 PR #${pr.id} 排进日历`}
-        className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
       >
         <CalendarPlus size={14} />
       </button>
+      <a
+        href={pr.webUrl}
+        target="_blank"
+        rel="noreferrer"
+        title={`在 Azure DevOps 中打开 PR !${pr.id}`}
+        aria-label={`在 Azure DevOps 中打开 PR !${pr.id}`}
+        className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-ink"
+      >
+        <ExternalLink size={14} aria-hidden="true" />
+      </a>
     </div>
   );
 }

@@ -15,21 +15,30 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openCodexNewThread, openCodexThread } from '../agent/codexTransfer';
+import {
+  codexArtifactFromLink,
+  codexArtifactsFromMarkdown,
+  type CodexArtifact,
+} from '../lib/codexArtifacts';
 import { isTauriRuntime } from '../lib/client';
-import { renderMarkdown } from '../lib/markdown';
+import { renderMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import type { CodexHostInput } from '../agent/codexHostInput';
 import type { CodexImageInput } from '../lib/codexImages';
 import {
+  isSystemCodexWorkspace,
   useCodexWorkspace,
   type CodexFollowUpMode,
   type CodexPendingRequest,
   type CodexWorkspaceEvent,
+  type CodexWorkspaceMessage,
 } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 import ButlerConversationHistory from './ButlerConversationHistory';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
+import CodexArtifactPanel, { CodexArtifactLink } from './CodexArtifactPanel';
 import CodexImagePicker, {
+  CodexGeneratedImages,
   CodexImageAttachments,
   CodexImagePreviews,
   pasteCodexImages,
@@ -204,6 +213,25 @@ function Activity({ event }: { event: CodexWorkspaceEvent }) {
   );
 }
 
+function ConversationMessage({
+  entry,
+  renderLink,
+}: {
+  entry: CodexWorkspaceMessage;
+  renderLink: MarkdownLinkRenderer;
+}) {
+  return (
+    <article data-speaker={entry.role} className="codex-native-message">
+      <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
+      <div className="butler-conversation-markdown">
+        {entry.text ? (entry.role === 'assistant' ? renderMarkdown(entry.text, undefined, renderLink) : entry.text) : null}
+        <CodexImageAttachments attachments={entry.attachments} />
+        <CodexGeneratedImages images={entry.generatedImages} />
+      </div>
+    </article>
+  );
+}
+
 const PERMISSION_CHOICES: readonly ComposerChoice[] = [
   {
     id: 'ask',
@@ -233,6 +261,9 @@ function effortLabel(effort: string): string {
 
 export default function ButlerConversation({ embedded = false }: { embedded?: boolean }) {
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const workspaceRoots = useCodexWorkspace((state) => state.workspaceRoots);
+  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const status = useCodexWorkspace((state) => state.status);
   const error = useCodexWorkspace((state) => state.error);
   const threads = useCodexWorkspace((state) => state.threads);
@@ -246,29 +277,42 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const models = useCodexWorkspace((state) => state.models);
   const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const selectedEffort = useCodexWorkspace((state) => state.selectedEffort);
+  const hostingModel = useCodexWorkspace((state) => state.hostingModel);
+  const hostingEffort = useCodexWorkspace((state) => state.hostingEffort);
   const permissionPreset = useCodexWorkspace((state) => state.permissionPreset);
   const followUpMode = useCodexWorkspace((state) => state.followUpMode);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
   const connect = useCodexWorkspace((state) => state.connect);
   const refreshFromCodex = useCodexWorkspace((state) => state.refreshFromCodex);
+  const handoffToCodex = useCodexWorkspace((state) => state.handoffToCodex);
   const send = useCodexWorkspace((state) => state.send);
   const interrupt = useCodexWorkspace((state) => state.interrupt);
   const setModel = useCodexWorkspace((state) => state.setModel);
   const setEffort = useCodexWorkspace((state) => state.setEffort);
+  const setHostingModel = useCodexWorkspace((state) => state.setHostingModel);
+  const setHostingEffort = useCodexWorkspace((state) => state.setHostingEffort);
   const setPermissionPreset = useCodexWorkspace((state) => state.setPermissionPreset);
   const setFollowUpMode = useCodexWorkspace((state) => state.setFollowUpMode);
   const clearComposerDraft = useCodexWorkspace((state) => state.clearComposerDraft);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<CodexImageInput[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<CodexArtifact | null>(null);
   const [refreshingFromCodex, setRefreshingFromCodex] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
   const historyPanelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autoOpenedArtifactMessageRef = useRef<string>();
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
+  const hostingActiveModel = models.find((model) => model.model === hostingModel || model.id === hostingModel);
   const running = status === 'running' || status === 'waiting-input';
+  const latestActivity = events.at(-1);
+  const completedMessage = !running && events.length > 0 && messages.at(-1)?.role === 'assistant'
+    ? messages.at(-1)
+    : undefined;
+  const visibleMessages = completedMessage ? messages.slice(0, -1) : messages;
   const activityStatus = running
     ? '正在工作'
     : status === 'interrupted' || error === 'Codex 本轮已中断'
@@ -279,7 +323,13 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const desktopRuntime = isTauriRuntime();
   const canCompose = desktopRuntime
     && Boolean(workspaceRoot)
-    && !['idle', 'connecting', 'interrupted', 'unavailable'].includes(status);
+    && !['idle', 'connecting', 'interrupted', 'external', 'unavailable'].includes(status);
+  const refreshLabel = status === 'external' ? '在 RocketX 继续' : '从 Codex 刷新';
+  const composerPlaceholder = status === 'external'
+    ? '点击上方“在 RocketX 继续”'
+    : running
+      ? (followUpMode === 'steer' ? '输入指令，立即调整当前任务' : '输入后续消息，将在当前任务后执行')
+      : '给 Codex 一个任务';
   const title = activeThread?.name?.trim() || activeThread?.preview.trim() || '新任务';
   const modelChoices = useMemo<ComposerChoice[]>(() => models.map((model) => ({
     id: model.model,
@@ -293,7 +343,28 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       description: effort.description,
     })) ?? []
   ), [activeModel]);
+  const hostingEffortChoices = useMemo<ComposerChoice[]>(() => (
+    hostingActiveModel?.supportedReasoningEfforts.map((effort) => ({
+      id: effort.reasoningEffort,
+      label: effortLabel(effort.reasoningEffort),
+      description: effort.description,
+    })) ?? []
+  ), [hostingActiveModel]);
+  const hostingProjectCount = workspaceRoots.filter((path) => !isSystemCodexWorkspace(
+    path,
+    defaultWorkspaceRoot,
+    butlerWorkspaceRoot,
+  )).length;
   const permissionLabel = PERMISSION_CHOICES.find((choice) => choice.id === permissionPreset)?.label ?? '权限';
+
+  const renderArtifactLink = useCallback<MarkdownLinkRenderer>((label, href) => {
+    const artifact = codexArtifactFromLink(label, href, workspaceRoot);
+    return artifact
+      ? <CodexArtifactLink artifact={artifact} label={label} onOpen={setSelectedArtifact} />
+      : undefined;
+  }, [workspaceRoot]);
+
+  const closeArtifact = useCallback((): void => setSelectedArtifact(null), []);
 
   const closeHistory = useCallback((): void => {
     setHistoryOpen(false);
@@ -337,6 +408,14 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   }, [clearComposerDraft, composerDraft]);
 
   useEffect(() => {
+    const latest = [...messages].reverse().find((entry) => entry.role === 'assistant' && entry.text);
+    if (!latest || autoOpenedArtifactMessageRef.current === latest.id) return;
+    autoOpenedArtifactMessageRef.current = latest.id;
+    const artifacts = codexArtifactsFromMarkdown(latest.text, workspaceRoot);
+    if (artifacts.length > 0) setSelectedArtifact(artifacts.at(-1) ?? null);
+  }, [messages, workspaceRoot]);
+
+  useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = '0px';
@@ -376,22 +455,43 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   };
 
   const openInCodex = async (): Promise<void> => {
-    const result = activeThreadId
-      ? await openCodexThread(activeThreadId)
-      : workspaceRoot
-        ? await openCodexNewThread('', workspaceRoot)
-        : 'unavailable';
-    if (result === 'unavailable') toast.error('无法打开 Codex App');
+    try {
+      if (activeThreadId) {
+        await handoffToCodex();
+        const result = await openCodexThread(activeThreadId);
+        if (result === 'unavailable') {
+          await refreshFromCodex().catch(() => undefined);
+          throw new Error('Codex App 没有响应');
+        }
+        return;
+      }
+      const result = workspaceRoot ? await openCodexNewThread('', workspaceRoot) : 'unavailable';
+      if (result === 'unavailable') throw new Error('Codex App 没有响应');
+    } catch (reason) {
+      toast.error(reason, '无法打开 Codex App');
+    }
   };
 
   const refreshCodexThread = async (): Promise<void> => {
     if (refreshingFromCodex) return;
     setRefreshingFromCodex(true);
     try {
+      const previousThreadId = activeThreadId;
       const added = await refreshFromCodex();
-      toast.success(added > 0
-        ? `已从 Codex 同步 ${added} 个新步骤`
-        : 'Codex 内容已是最新');
+      const current = useCodexWorkspace.getState();
+      if (current.status === 'external') {
+        toast.info('已同步最新内容，但当前 Codex Runtime 无法创建继续分支');
+      } else if (previousThreadId && current.activeThreadId !== previousThreadId) {
+        toast.success(added > 0
+          ? `已同步 ${added} 个新步骤，并创建 RocketX 继续分支`
+          : '已从最新内容创建 RocketX 继续分支');
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      } else {
+        toast.success(added > 0
+          ? `已从 Codex 同步 ${added} 个新步骤`
+          : '已同步并接回 RocketX');
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
     } catch (reason) {
       toast.error(reason, '无法从 Codex 刷新');
     } finally {
@@ -406,7 +506,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   ], []);
 
   return (
-    <div className={`butler-conversation-layout codex-native-workspace ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
+    <div className={`butler-conversation-layout codex-native-workspace${selectedArtifact ? ' has-artifact' : ''} ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
       <ButlerConversationHistory />
       {historyOpen ? (
         <div className="butler-conversation-mobile-drawer">
@@ -427,7 +527,13 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       <section className="butler-conversation-pane" aria-label="Codex 任务">
         <header className="butler-conversation-header">
           <div className="min-w-0">
-            <span>{workspaceRoot ? workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) : 'Codex'}</span>
+            <span>{workspaceRoot
+              ? workspaceRoot === defaultWorkspaceRoot
+                ? '临时会话'
+                : workspaceRoot === butlerWorkspaceRoot
+                  ? '管家会话'
+                  : workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)
+              : 'Codex'}</span>
             <h2>{title}</h2>
             {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot}</p> : null}
           </div>
@@ -446,8 +552,12 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
             {activeThreadId ? (
               <button
                 type="button"
-                aria-label="从 Codex 刷新"
-                title={running ? '任务运行中，完成后再刷新' : '重新连接并读取 Codex App 中的最新内容'}
+                aria-label={refreshLabel}
+                title={running
+                  ? '任务运行中，完成后再刷新'
+                  : status === 'external'
+                    ? '保留 Codex App 原任务，并从最新内容创建可编辑分支'
+                    : '同步 Codex App 的最新内容'}
                 disabled={!desktopRuntime || running || status === 'connecting' || refreshingFromCodex}
                 onClick={() => void refreshCodexThread()}
                 className="codex-native-refresh"
@@ -455,17 +565,17 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                 {refreshingFromCodex
                   ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                   : <RefreshCw size={14} aria-hidden="true" />}
-                {refreshingFromCodex ? '刷新中' : '从 Codex 刷新'}
+                {refreshingFromCodex ? '刷新中' : refreshLabel}
               </button>
             ) : null}
             <button
               type="button"
-              disabled={!desktopRuntime || running || status === 'connecting'}
+              disabled={!desktopRuntime || running || status === 'connecting' || status === 'external'}
               onClick={() => void openInCodex()}
               className="codex-native-open-app"
             >
               <ArrowUpRight size={14} aria-hidden="true" />
-              在 Codex 中打开
+              {status === 'external' ? '已交给 Codex' : '在 Codex 中打开'}
             </button>
           </div>
         </header>
@@ -530,40 +640,54 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                     {refreshingFromCodex
                       ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       : <RefreshCw size={14} aria-hidden="true" />}
-                    {refreshingFromCodex ? '刷新中' : '从 Codex 刷新'}
+                    {refreshingFromCodex ? '刷新中' : refreshLabel}
                   </button>
                 </section>
               ) : null}
-              {messages.map((entry) => (
-                <article key={entry.id} data-speaker={entry.role} className="codex-native-message">
-                  <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
-                  <div className="butler-conversation-markdown">
-                    {entry.text ? (entry.role === 'assistant' ? renderMarkdown(entry.text) : entry.text) : null}
-                    <CodexImageAttachments attachments={entry.attachments} />
+              {status === 'external' ? (
+                <section className="codex-native-interruption is-external" aria-label="会话已交给 Codex App">
+                  <div>
+                    <h2>会话已在 Codex App 中打开</h2>
+                    <p>可从最新内容创建 RocketX 继续分支，不需要退出 Codex App；之后两边独立继续。</p>
                   </div>
-                </article>
-              ))}
+                  <button
+                    type="button"
+                    disabled={refreshingFromCodex}
+                    onClick={() => void refreshCodexThread()}
+                  >
+                    {refreshingFromCodex
+                      ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                      : <RefreshCw size={14} aria-hidden="true" />}
+                    {refreshingFromCodex ? '刷新中' : refreshLabel}
+                  </button>
+                </section>
+              ) : null}
+              {visibleMessages.map((entry) => <ConversationMessage key={entry.id} entry={entry} renderLink={renderArtifactLink} />)}
 
               {events.length > 0 ? (
-                <section className="codex-native-activities" aria-label="任务过程">
-                  <header>
+                <details className="codex-native-activities" aria-label="任务过程">
+                  <summary>
                     <span>{activityStatus}</span>
-                    <small>{events.length} 项活动</small>
-                  </header>
+                    <small className="codex-native-activity-latest">{latestActivity?.title}</small>
+                    <small className="codex-native-activity-count">{events.length} 项活动</small>
+                    <ChevronDown size={13} aria-hidden="true" />
+                  </summary>
                   <div>
                     {events.map((event) => <Activity key={event.id} event={event} />)}
                   </div>
-                </section>
+                </details>
               ) : null}
 
               {requests.map((request) => request.kind === 'approval'
                 ? <ApprovalCard key={request.id} request={request} />
                 : <InputCard key={request.id} request={request} />)}
 
+              {completedMessage ? <ConversationMessage entry={completedMessage} renderLink={renderArtifactLink} /> : null}
+
               {streamingText ? (
                 <article data-speaker="assistant" className="codex-native-message is-streaming">
                   <span>Codex</span>
-                  <div className="butler-conversation-markdown">{renderMarkdown(streamingText)}</div>
+                  <div className="butler-conversation-markdown">{renderMarkdown(streamingText, undefined, renderArtifactLink)}</div>
                 </article>
               ) : null}
 
@@ -583,7 +707,44 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
         </main>
 
         <footer className="butler-conversation-footer codex-native-footer">
+          <section
+            aria-label="AI 托管设置"
+            className="mb-2 flex min-h-10 items-center justify-between gap-3 rounded-xl border border-line bg-fill-1 px-3 py-2 text-xs"
+          >
+            <div className="min-w-0">
+              <strong className="block truncate font-medium text-ink">AI 托管</strong>
+              <span className="block truncate text-ink-3">
+                {hostingProjectCount > 0 ? `${hostingProjectCount} 个托管项目` : '尚未添加托管项目'} · 独立重任务配置
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <ComposerMenu
+                ariaLabel="AI 托管模型"
+                label={hostingActiveModel?.displayName ?? '托管模型'}
+                value={hostingModel}
+                choices={modelChoices}
+                disabled={models.length === 0}
+                onChange={(model) => void setHostingModel(model).catch((reason) => toast.error(reason))}
+              />
+              {hostingActiveModel && hostingActiveModel.supportedReasoningEfforts.length > 1 ? (
+                <ComposerMenu
+                  ariaLabel="AI 托管推理强度"
+                  label={hostingEffort ? effortLabel(hostingEffort) : '推理'}
+                  value={hostingEffort ?? ''}
+                  choices={hostingEffortChoices}
+                  disabled={models.length === 0}
+                  onChange={(effort) => void setHostingEffort(effort || null).catch((reason) => toast.error(reason))}
+                />
+              ) : null}
+            </div>
+          </section>
           <div className="codex-native-composer">
+            {status === 'external' ? (
+              <div id="codex-external-composer-notice" className="codex-native-composer-notice" role="status">
+                <CircleAlert size={14} aria-hidden="true" />
+                <span>Codex App 保留原任务；点击上方“在 RocketX 继续”会创建可编辑分支。</span>
+              </div>
+            ) : null}
             <CodexImagePreviews images={images} onChange={setImages} />
             <textarea
               ref={textareaRef}
@@ -604,7 +765,8 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
               }}
               disabled={!canCompose}
               aria-label="给 Codex 的任务"
-              placeholder={running ? (followUpMode === 'steer' ? '输入指令，立即调整当前任务' : '输入后续消息，将在当前任务后执行') : '给 Codex 一个任务'}
+              aria-describedby={status === 'external' ? 'codex-external-composer-notice' : undefined}
+              placeholder={composerPlaceholder}
               rows={1}
             />
             <div className="codex-native-composer-bar">
@@ -666,6 +828,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
           </div>
         </footer>
       </section>
+      {selectedArtifact ? <CodexArtifactPanel artifact={selectedArtifact} onClose={closeArtifact} /> : null}
     </div>
   );
 }

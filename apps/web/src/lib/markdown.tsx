@@ -18,7 +18,7 @@ import { URL_CHARS } from './urlText';
 // URL 字符类见 lib/urlText.ts —— 与结论解析层共用同一份，避免口径漂移
 const INLINE_TEXT_RE = new RegExp(
   [
-    String.raw`(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))`, // 1 [文字](链接)
+    String.raw`(\[[^\]\n]+\]\((?:https?:\/\/|file:\/\/\/|\/?[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)[^)\n]+\))`, // 1 [文字](网页或本地文件)
     String.raw`(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*)`, // 2 粗体
     String.raw`(~~[^~\n]+~~|~[^~\s][^~\n]*~)`, // 3 删除线
     String.raw`(\b_[^_\n]+_\b|(?<=^|\s)_[^_\n]+_(?=$|\s))`, // 4 斜体
@@ -81,7 +81,7 @@ function renderInline(
   wi: WiVariant,
   renderLink?: MarkdownLinkRenderer,
 ): ReactNode[] {
-  const linkRe = /\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)/;
+  const linkRe = /\[[^\]\n]+\]\((?:https?:\/\/|file:\/\/\/|\/?[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)[^)\n]+\)/;
   const nodes: ReactNode[] = [];
   let last = 0;
   let i = 0;

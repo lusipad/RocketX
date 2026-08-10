@@ -16,10 +16,12 @@ use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES: u64 = 12 * 1024 * 1024;
 const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 const BUTLER_BUNDLED_SKILLS_DIR: &str = "codex-skills";
 const AZURE_DEVOPS_SERVER_HOST_ADAPTER: &str = "azure-devops-server-host-adapter.ps1";
@@ -758,6 +760,172 @@ fn canonical_directory(path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn codex_workspace_directory(
+    app: &tauri::AppHandle,
+    workspace_root: &str,
+) -> Result<PathBuf, String> {
+    if workspace_root.trim().is_empty() || workspace_root.trim() == "~" {
+        let path = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| format!("无法定位 RocketX 本地数据目录：{error}"))?
+            .join("codex-projectless");
+        std::fs::create_dir_all(&path)
+            .map_err(|error| format!("无法准备 Codex projectless 目录：{error}"))?;
+        return canonical_directory(&path.to_string_lossy());
+    }
+    canonical_directory(workspace_root)
+}
+
+#[tauri::command]
+pub fn codex_default_workspace(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(host_path(&codex_workspace_directory(&app, "")?))
+}
+
+#[tauri::command]
+pub fn codex_butler_workspace(app: tauri::AppHandle) -> Result<String, String> {
+    let path = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("无法定位 RocketX 本地数据目录：{error}"))?
+        .join("codex-butler");
+    std::fs::create_dir_all(&path).map_err(|error| format!("无法准备 Codex 管家目录：{error}"))?;
+    Ok(host_path(&canonical_directory(&path.to_string_lossy())?))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAutomationSource {
+    id: String,
+    content: String,
+}
+
+fn validate_automation_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 80
+        || !id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err("invalid Codex automation id".to_string());
+    }
+    Ok(())
+}
+
+fn codex_automations_root() -> Result<PathBuf, String> {
+    if let Some(configured) = std::env::var_os("CODEX_HOME") {
+        let configured = PathBuf::from(configured);
+        if configured.is_absolute() {
+            return Ok(configured.join("automations"));
+        }
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法定位 Codex 用户目录".to_string())?;
+    Ok(home.join(".codex").join("automations"))
+}
+
+fn list_codex_automation_files(root: &Path) -> Result<Vec<CodexAutomationSource>, String> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in
+        std::fs::read_dir(root).map_err(|error| format!("无法读取 Codex 已安排目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取 Codex 已安排目录项：{error}"))?;
+        if !entry
+            .file_type()
+            .map_err(|error| format!("无法读取 Codex 已安排目录项类型：{error}"))?
+            .is_dir()
+        {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if validate_automation_id(&id).is_err() {
+            continue;
+        }
+        let path = entry.path().join("automation.toml");
+        if !path.is_file() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("无法读取 Codex 已安排任务 {id}：{error}"))?;
+        files.push(CodexAutomationSource { id, content });
+    }
+    files.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(files)
+}
+
+fn write_codex_automation_file(root: &Path, id: &str, content: &str) -> Result<(), String> {
+    validate_automation_id(id)?;
+    if content.is_empty() || content.len() > MAX_MESSAGE_BYTES || content.contains('\0') {
+        return Err("Codex automation.toml 内容无效".to_string());
+    }
+    let directory = root.join(id);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("无法准备 Codex 已安排任务目录：{error}"))?;
+    std::fs::write(directory.join("automation.toml"), content)
+        .map_err(|error| format!("无法写入 Codex automation.toml：{error}"))
+}
+
+fn delete_codex_automation_file(root: &Path, id: &str) -> Result<(), String> {
+    validate_automation_id(id)?;
+    let directory = root.join(id);
+    if !directory.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&directory)
+        .map_err(|error| format!("无法删除 Codex 已安排任务：{error}"))
+}
+
+#[tauri::command]
+pub fn codex_automation_list() -> Result<Vec<CodexAutomationSource>, String> {
+    list_codex_automation_files(&codex_automations_root()?)
+}
+
+#[tauri::command]
+pub fn codex_automation_write(id: String, content: String) -> Result<(), String> {
+    write_codex_automation_file(&codex_automations_root()?, &id, &content)
+}
+
+#[tauri::command]
+pub fn codex_automation_delete(id: String) -> Result<(), String> {
+    delete_codex_automation_file(&codex_automations_root()?, &id)
+}
+
+#[cfg(test)]
+mod codex_automation_file_tests {
+    use super::{
+        delete_codex_automation_file, list_codex_automation_files, validate_automation_id,
+        write_codex_automation_file,
+    };
+
+    #[test]
+    fn automation_file_round_trip_stays_inside_automation_root() {
+        let root =
+            std::env::temp_dir().join(format!("rocketx-codex-automation-{}", uuid::Uuid::new_v4()));
+        let content = "id = \"test-task\"\nname = \"测试\"\n";
+
+        write_codex_automation_file(&root, "test-task", content).unwrap();
+        let files = list_codex_automation_files(&root).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].id, "test-task");
+        assert_eq!(files[0].content, content);
+
+        delete_codex_automation_file(&root, "test-task").unwrap();
+        assert!(list_codex_automation_files(&root).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn automation_id_rejects_parent_paths() {
+        assert!(validate_automation_id("../outside").is_err());
+        assert!(validate_automation_id("folder/task").is_err());
+    }
+}
+
 fn host_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     #[cfg(windows)]
@@ -1203,6 +1371,9 @@ fn run_butler_azure_devops_server_read_with_program_and_timeout(
     }
     let payload = serde_json::to_vec(&payload)
         .map_err(|error| format!("无法编码 Azure DevOps 请求：{error}"))?;
+    // Windows canonicalize 会产生 `\\?\` 设备路径；Windows PowerShell 用它执行
+    // `-File` 时不会设置 `$PSScriptRoot`，适配器便无法定位同目录下的 Skill 脚本。
+    let adapter_path = PathBuf::from(host_path(&adapter_path));
     let display_program = program.display().to_string();
     let mut command = hidden_command(&program);
     harden_azure_devops_runner_environment(&mut command);
@@ -1573,7 +1744,7 @@ pub fn codex_app_server_start(
     workspace_root: String,
 ) -> Result<CodexProcessInfo, String> {
     validate_session_id(&session_id)?;
-    let workspace_root = host_path(&canonical_directory(&workspace_root)?);
+    let workspace_root = host_path(&codex_workspace_directory(&app, &workspace_root)?);
     let managed_skill_roots = bundled_codex_skill_roots(&app)?
         .into_iter()
         .map(|path| host_path(&path))
@@ -1651,6 +1822,64 @@ pub fn codex_app_server_start(
         runtime_source: resolved.source,
         managed_skill_roots,
     })
+}
+
+#[tauri::command]
+pub fn codex_artifact_read(
+    app: tauri::AppHandle,
+    workspace_root: String,
+    path: String,
+) -> Result<String, String> {
+    let root = codex_workspace_directory(&app, &workspace_root)?;
+    read_codex_artifact(&root, Path::new(path.trim()))
+}
+
+#[tauri::command]
+pub fn codex_artifact_open(
+    app: tauri::AppHandle,
+    workspace_root: String,
+    path: String,
+) -> Result<(), String> {
+    let root = codex_workspace_directory(&app, &workspace_root)?;
+    let target = resolve_codex_artifact(&root, Path::new(path.trim()))?;
+    app.opener()
+        .open_path(host_path(&target), None::<&str>)
+        .map_err(|error| format!("无法使用系统应用打开 Artifact：{error}"))
+}
+
+#[tauri::command]
+pub fn codex_artifact_reveal(
+    app: tauri::AppHandle,
+    workspace_root: String,
+    path: String,
+) -> Result<(), String> {
+    let root = codex_workspace_directory(&app, &workspace_root)?;
+    let target = resolve_codex_artifact(&root, Path::new(path.trim()))?;
+    app.opener()
+        .reveal_item_in_dir(&target)
+        .map_err(|error| format!("无法定位 Artifact：{error}"))
+}
+
+fn resolve_codex_artifact(root: &Path, target: &Path) -> Result<PathBuf, String> {
+    if !target.is_absolute() {
+        return Err("Artifact 路径必须是绝对路径".to_string());
+    }
+    let target = contained_existing_path(root, target)?;
+    if !target.is_file() {
+        return Err("Artifact 路径不是文件".to_string());
+    }
+    Ok(target)
+}
+
+fn read_codex_artifact(root: &Path, target: &Path) -> Result<String, String> {
+    let target = resolve_codex_artifact(root, target)?;
+    let metadata =
+        std::fs::metadata(&target).map_err(|error| format!("无法读取 Artifact 元数据：{error}"))?;
+    if metadata.len() > MAX_ARTIFACT_BYTES {
+        return Err("Artifact 超过 12 MB，请使用系统应用打开".to_string());
+    }
+    let bytes = std::fs::read(&target).map_err(|error| format!("无法读取 Artifact：{error}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 fn safe_attachment_path(relative_path: &str) -> Result<PathBuf, String> {
@@ -2110,7 +2339,7 @@ mod tests {
     use super::{
         app_server_args_for_help, classify_codex_version, decode_attachment_request,
         encode_message, host_path, parse_codex_cli_version, parse_semantic_version,
-        probe_resolve_codex_from_candidates_with_probe, redact_json_secret,
+        probe_resolve_codex_from_candidates_with_probe, read_codex_artifact, redact_json_secret,
         resolve_codex_from_candidates_with_probe, resolve_update_package,
         run_business_azure_devops_server_read_with, run_butler_azure_devops_server_read,
         safe_attachment_path, standalone_azure_devops_server_adapter_path,
@@ -2125,6 +2354,7 @@ mod tests {
         first_existing_program, resolve_pwsh_program,
         run_butler_azure_devops_server_read_with_program,
     };
+    use base64::Engine as _;
     use serde_json::json;
     use std::ffi::OsStr;
     #[cfg(windows)]
@@ -2161,6 +2391,29 @@ mod tests {
         assert!(validate_session_id("session-019f6d30-797a-7f63").is_ok());
         assert!(validate_session_id("../escape").is_err());
         assert!(validate_session_id("with space").is_err());
+    }
+
+    #[test]
+    fn artifact_reader_reads_only_files_inside_the_selected_workspace() {
+        let root = unique_temp_dir("artifact-root");
+        let outside = unique_temp_dir("artifact-outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let inside_file = root.join("wbs.html");
+        let outside_file = outside.join("secret.txt");
+        fs::write(&inside_file, b"<h1>WBS</h1>").unwrap();
+        fs::write(&outside_file, b"outside").unwrap();
+
+        assert_eq!(
+            read_codex_artifact(&root, &inside_file).unwrap(),
+            base64::engine::general_purpose::STANDARD.encode(b"<h1>WBS</h1>")
+        );
+        assert!(read_codex_artifact(&root, &outside_file)
+            .unwrap_err()
+            .contains("资源路径越界"));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]
@@ -2791,12 +3044,9 @@ param(
             })
             .unwrap();
 
-        let result = run_butler_azure_devops_server_read_with_program(
-            program,
-            root.join(AZURE_DEVOPS_SERVER_HOST_ADAPTER),
-            request,
-        )
-        .unwrap();
+        let adapter = fs::canonicalize(root.join(AZURE_DEVOPS_SERVER_HOST_ADAPTER)).unwrap();
+        let result =
+            run_butler_azure_devops_server_read_with_program(program, adapter, request).unwrap();
         assert_eq!(result["method"], "POST");
         assert_eq!(result["resource"], "wiql");
         assert_eq!(

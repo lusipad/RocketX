@@ -50,9 +50,8 @@ import {
 } from '../agent/session';
 import { listAgentSessions, saveAgentSession } from '../agent/sessionStore';
 import { useWorkbench } from './workbench';
-import { useCodexWorkspace } from './codexWorkspace';
+import { isSystemCodexWorkspace, useCodexWorkspace } from './codexWorkspace';
 import { resolveAgentSessionKey, useAgentEnvironments } from './agentEnvironments';
-import { getAgentHostingCodexSettings } from '../lib/agentHostingSettings';
 import {
   assertAllowedWorkspacePath,
   commandRequestMentionsSensitivePath,
@@ -227,12 +226,14 @@ export function sharedAgentApprovalResult(
 }
 
 function runtimeSelection(catalog: CodexCatalog): CodexRuntimeSelection {
-  const saved = getAgentHostingCodexSettings();
-  const model = catalog.models.find((item) => item.model === saved.model || item.id === saved.model)
+  const workspace = useCodexWorkspace.getState();
+  const model = catalog.models.find(
+    (item) => item.model === workspace.hostingModel || item.id === workspace.hostingModel,
+  )
     ?? catalog.models.find((item) => item.isDefault)
     ?? catalog.models[0];
   if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
-  const requestedEffort = saved.effort === 'default' ? null : saved.effort;
+  const requestedEffort = workspace.hostingEffort;
   const effort = requestedEffort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
     ? requestedEffort
@@ -240,7 +241,7 @@ function runtimeSelection(catalog: CodexCatalog): CodexRuntimeSelection {
   return {
     model: model.model,
     effort,
-    permissionPreset: saved.permissionPreset,
+    permissionPreset: workspace.permissionPreset,
   };
 }
 
@@ -754,10 +755,17 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       const host = actor();
       const now = Date.now();
       const sessionId = id('session');
-      const root =
-        options.workspaceRoot ||
-        useCodexWorkspace.getState().workspaceRoot ||
-        (await invoke<string>('codex_agent_workspace', { sessionId }));
+      const workspaceScope = `${getServerBase() || 'same-origin'}:${host.userId}`;
+      if (useCodexWorkspace.getState().scope !== workspaceScope) {
+        useCodexWorkspace.getState().hydrate(workspaceScope);
+      }
+      const defaultWorkspaceRoot = useCodexWorkspace.getState().defaultWorkspaceRoot
+        || await useCodexWorkspace.getState().ensureDefaultWorkspace();
+      const butlerWorkspaceRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
+      const root = options.workspaceRoot?.trim();
+      if (!root || isSystemCodexWorkspace(root, defaultWorkspaceRoot, butlerWorkspaceRoot)) {
+        throw new Error('AI 托管必须选择在 AI 管家中添加的专用工作项目');
+      }
       assertAllowedWorkspacePath(root, [root]);
       let session: AgentSession = {
         sessionId,

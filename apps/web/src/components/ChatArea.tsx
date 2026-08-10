@@ -4,6 +4,7 @@ import {
   Bot,
   ChevronDown,
   Files,
+  FolderOpen,
   Info,
   MessageCircle,
   MoreHorizontal,
@@ -19,7 +20,12 @@ import { useAuth } from '../stores/auth';
 import { useSharedAgent } from '../stores/sharedAgent';
 import { agentRoomSessionKey } from '../stores/agentEnvironments';
 import { toast } from '../stores/toast';
-import { autoHostEnvironmentId, startRoomAgentHosting } from '../lib/agentHosting';
+import {
+  autoHostEnvironmentId,
+  roomHostingWorkspaceRoot,
+  setRoomHostingWorkspace,
+  startRoomAgentHosting,
+} from '../lib/agentHosting';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { displayName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
@@ -27,6 +33,11 @@ import MessageList from './MessageList';
 import Composer from './Composer';
 import ContextMenu from './ContextMenu';
 import { useKernelContributions } from '../kernel/registry';
+import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
+
+function projectName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
 
 function HeaderButton({
   icon: Icon,
@@ -80,6 +91,24 @@ export default function ChatArea({
     avatarUsername ? s.userStatus[avatarUsername] : undefined,
   );
   const agentSessionKey = activeRid ? agentRoomSessionKey(activeRid) : '';
+  const currentAgentProject = useCodexWorkspace((state) => state.workspaceRoot);
+  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
+  const agentProjects = useCodexWorkspace((state) => state.workspaceRoots);
+  const agentWorkspaces = agentProjects.filter((path) => !isSystemCodexWorkspace(
+    path,
+    defaultWorkspaceRoot,
+    butlerWorkspaceRoot,
+  ));
+  const boundAgentWorkspace = activeRid ? roomHostingWorkspaceRoot(activeRid) : undefined;
+  const preferredAgentWorkspace = (
+    boundAgentWorkspace && agentWorkspaces.includes(boundAgentWorkspace)
+      ? boundAgentWorkspace
+      : !isSystemCodexWorkspace(currentAgentProject, defaultWorkspaceRoot, butlerWorkspaceRoot)
+        && agentWorkspaces.includes(currentAgentProject)
+        ? currentAgentProject
+        : agentWorkspaces[0]
+  );
   const localAgent = useSharedAgent((s) => (agentSessionKey ? s.sessions[agentSessionKey] : undefined));
   const remoteAgent = useSharedAgent((s) => (agentSessionKey ? s.remoteCards[agentSessionKey] : undefined));
   const endAgentSession = useSharedAgent((s) => s.endSession);
@@ -103,6 +132,7 @@ export default function ChatArea({
   const [hosting, setHosting] = useState(false);
   const [stoppingHosting, setStoppingHosting] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const [agentProjectMenu, setAgentProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const butlerPanelOpen = rightPanel?.kind === 'butler';
   const ButlerPanel = registeredPanels.find((candidate) => candidate.id === 'butler')?.render;
   const ActivePanel = rightPanel && !butlerPanelOpen
@@ -126,7 +156,7 @@ export default function ChatArea({
     const currentRoom = chat.rooms[activeRid];
     const currentSubscription = chat.subscriptions[activeRid];
     const title = currentSubscription?.fname || currentSubscription?.name || currentRoom?.fname || currentRoom?.name || '会话';
-    void startRoomAgentHosting(activeRid, title, environmentId).catch((error) => {
+    void startRoomAgentHosting(activeRid, title, { preferredEnvironmentId: environmentId }).catch((error) => {
       toast.error(error, '自动开启 AI 托管失败');
     });
   }, [activeRid, features.sharedAgent]);
@@ -214,11 +244,18 @@ export default function ChatArea({
     if (files.length) requestUpload(files);
   };
 
-  const startHosting = async () => {
+  const startHosting = async (workspaceRoot = preferredAgentWorkspace) => {
     if (hosting) return;
+    if (!workspaceRoot) {
+      setPanel({ kind: 'agent', tmid: agentSessionKey });
+      toast.info('请先在 AI 管家左侧添加一个专用工作项目');
+      return;
+    }
     setHosting(true);
     try {
-      await startRoomAgentHosting(activeRid, rawName);
+      await startRoomAgentHosting(activeRid, rawName, { workspaceRoot });
+      setRoomHostingWorkspace(activeRid, workspaceRoot);
+      setPanel({ kind: 'agent', tmid: agentSessionKey });
     } catch (error) {
       toast.error(error, '开启 AI 托管失败');
     } finally {
@@ -293,16 +330,33 @@ export default function ChatArea({
                 </button>
               ) : null}
               {features.sharedAgent && !agentPresence ? (
-                <button
-                  aria-label="开启 AI 托管"
-                  title="让这台电脑上的 AI 接手这个会话：它会读历史消息，只有被 @ai 点名才回复，改文件要你批准"
-                  disabled={hosting}
-                  onClick={() => void startHosting()}
-                  className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-primary-light hover:text-primary"
-                >
-                  <Bot size={14} />
-                  {hosting ? '正在开启…' : 'AI 托管'}
-                </button>
+                <div className="flex h-7 shrink-0 overflow-hidden rounded-full border border-line bg-surface text-xs font-medium text-ink-2 transition hover:border-primary/40">
+                  <button
+                    aria-label="开启 AI 托管"
+                    title={preferredAgentWorkspace
+                      ? `使用专用工作项目 ${projectName(preferredAgentWorkspace)} 直接开启 AI 托管`
+                      : '先在 AI 管家中添加专用工作项目'}
+                    disabled={hosting}
+                    onClick={() => void startHosting()}
+                    className="flex items-center gap-1.5 px-2.5 transition hover:bg-primary-light hover:text-primary disabled:opacity-50"
+                  >
+                    <Bot size={14} />
+                    {hosting ? '正在开启…' : 'AI 托管'}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="选择 AI 托管项目"
+                    title="选择其他项目或打开托管设置"
+                    disabled={hosting}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setAgentProjectMenu({ x: rect.right - 180, y: rect.bottom + 4 });
+                    }}
+                    className="flex w-7 items-center justify-center border-l border-line transition hover:bg-primary-light hover:text-primary disabled:opacity-50"
+                  >
+                    <ChevronDown size={13} />
+                  </button>
+                </div>
               ) : null}
               {features.sharedAgent && agentPresence ? (
                 <button
@@ -412,6 +466,25 @@ export default function ChatArea({
               },
             ]}
             onClose={() => setMoreMenu(null)}
+          />
+        )}
+        {agentProjectMenu && (
+          <ContextMenu
+            x={agentProjectMenu.x}
+            y={agentProjectMenu.y}
+            items={[
+              ...agentWorkspaces.map((path) => ({
+                label: `${projectName(path)}${path === boundAgentWorkspace ? '（此群）' : path === preferredAgentWorkspace ? '（默认）' : ''} · ${path}`,
+                icon: FolderOpen,
+                onClick: () => void startHosting(path),
+              })),
+              {
+                label: '托管设置…',
+                icon: Bot,
+                onClick: () => togglePanel({ kind: 'agent', tmid: agentSessionKey }),
+              },
+            ]}
+            onClose={() => setAgentProjectMenu(null)}
           />
         )}
         <div className="relative flex min-h-0 flex-1 flex-col">

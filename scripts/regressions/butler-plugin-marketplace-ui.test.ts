@@ -11,6 +11,12 @@ test('插件页读取原生插件、Skill、App 目录，并通过 AppServerCont
   assert.match(page, /\['plugins', '插件'\]/);
   assert.match(page, /\['skills', 'Skills'\]/);
   assert.match(page, /\['apps', 'Apps'\]/);
+  assert.match(page, /type PluginDirectoryTab = 'public' \| 'workspace' \| 'personal'/);
+  assert.match(page, /\['public', '公开'\]/);
+  assert.match(page, /\['workspace', '工作区'\]/);
+  assert.match(page, /\['personal', '个人'\]/);
+  assert.match(page, /const installedPlugins =/);
+  assert.match(page, />已安装</);
   assert.match(page, /正在读取 Codex 目录/);
   assert.match(page, /真实的插件、Skills 和 Apps 目录/);
   assert.match(page, /Apps 目录暂不可用/);
@@ -22,7 +28,20 @@ test('插件页读取原生插件、Skill、App 目录，并通过 AppServerCont
   assert.match(page, /selectedItem\.kind === 'plugin'/);
   assert.match(page, /selectedItem\.kind === 'skill'/);
   assert.match(page, /kind: 'app', app/);
+  assert.match(page, /convertFileSrc/);
+  assert.match(page, /function CatalogIcon/);
+  assert.match(page, /plugin\.interface\?\.composerIcon/);
+  assert.match(page, /plugin\.interface\?\.composerIconUrl/);
+  assert.match(page, /plugin\.interface\?\.logoDark/);
+  assert.match(page, /plugin\.interface\?\.logoUrlDark/);
+  assert.match(page, /selectedItem\.detailError/);
+  assert.match(page, /更多详情暂不可用/);
+  assert.match(page, />\s*重试\s*</);
   assert.doesNotMatch(page, /只使用稳定的 skills\/list|插件市场协议已禁用|Memory 由 Codex 自动维护/);
+
+  const detailHandler = page.slice(page.indexOf('const openPluginDetail'), page.indexOf('\n\n  return ('));
+  assert.match(detailHandler, /detailError: true/);
+  assert.doesNotMatch(detailHandler, /toast\.error/);
 
   assert.match(workspace, /installPlugin: async \(marketplace, pluginName\) => \{/);
   assert.match(workspace, /uninstallPlugin: async \(pluginId\) => \{/);
@@ -30,7 +49,10 @@ test('插件页读取原生插件、Skill、App 目录，并通过 AppServerCont
   assert.match(workspace, /await get\(\)\.refreshCatalog\(\)/);
 
   assert.match(controller, /client\.request\('skills\/list', \{ cwds: \[workspaceRoot\], forceReload: true \}\)/);
-  assert.match(controller, /Promise\.allSettled/);
+  assert.match(controller, /const optional = <T>\(request: Promise<T>\)/);
+  assert.match(controller, /await Promise\.all\(\[/);
+  assert.match(controller, /optional\(client\.request\('app\/list'/);
+  assert.match(controller, /optional\(client\.request\('plugin\/list'/);
   assert.match(controller, /client\.request\('app\/list', \{ threadId, forceRefetch: true \}\)/);
   assert.match(controller, /client\.request\('plugin\/list', \{ cwds: \[workspaceRoot\] \}\)/);
   assert.match(controller, /catalogErrors/);

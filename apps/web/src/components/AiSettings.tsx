@@ -1,11 +1,4 @@
 import { useEffect, useState } from 'react';
-import {
-  AGENT_HOSTING_CODEX_EFFORTS,
-  AGENT_HOSTING_PERMISSION_PRESETS,
-  getAgentHostingCodexSettings,
-  setAgentHostingCodexSettings,
-  type AgentHostingCodexSettings,
-} from '../lib/agentHostingSettings';
 import { isTauri } from '../lib/http';
 import { openExternal } from '../lib/client';
 import {
@@ -26,7 +19,6 @@ const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
 
 export default function AiSettings() {
-  const [hostingCodex, setHostingCodexState] = useState<AgentHostingCodexSettings>(getAgentHostingCodexSettings);
   const [manualCodexPath, setManualCodexPathState] = useState(getCodexManualPath);
   const [ocrRuntime, setOcrRuntime] = useState<ImageOcrRuntimeProbe>();
   const codexRuntime = useCodexRuntime();
@@ -37,12 +29,6 @@ export default function AiSettings() {
       setOcrRuntime({ reason: error instanceof Error ? error.message : String(error) });
     });
   }, []);
-
-  const updateHostingCodex = (patch: Partial<AgentHostingCodexSettings>) => {
-    const next = { ...hostingCodex, ...patch };
-    setAgentHostingCodexSettings(next);
-    setHostingCodexState(next);
-  };
 
   const codexSourceLabel = codexRuntime.source === 'manual'
     ? '手动指定'
@@ -124,43 +110,6 @@ export default function AiSettings() {
                 </button>
               </div>
             </div>
-          </Row>
-          <Row label="聊天托管模型" hint="仅影响聊天中的共享 Agent；留空时使用 Codex 默认模型。">
-            <input
-              aria-label="AI 托管 Codex 模型"
-              value={hostingCodex.model}
-              onChange={(event) => updateHostingCodex({ model: event.target.value })}
-              placeholder="跟随 Codex 默认值"
-              className={`${inputCls} max-w-xs`}
-            />
-          </Row>
-          <Row label="聊天托管推理强度" hint="下一次共享 Agent 执行时生效。">
-            <select
-              aria-label="AI 托管 Codex 推理强度"
-              value={hostingCodex.effort}
-              onChange={(event) => updateHostingCodex({ effort: event.target.value as AgentHostingCodexSettings['effort'] })}
-              className={`${inputCls} max-w-xs`}
-            >
-              {AGENT_HOSTING_CODEX_EFFORTS.map((effort) => (
-                <option key={effort} value={effort}>{effort === 'default' ? '跟随 Codex 默认值' : effort}</option>
-              ))}
-            </select>
-          </Row>
-          <Row label="聊天托管权限" hint="下一次共享 Agent 执行时生效；默认由 Codex 替你审批低风险请求。">
-            <select
-              aria-label="AI 托管 Codex 权限"
-              value={hostingCodex.permissionPreset}
-              onChange={(event) => updateHostingCodex({
-                permissionPreset: event.target.value as AgentHostingCodexSettings['permissionPreset'],
-              })}
-              className={`${inputCls} max-w-xs`}
-            >
-              {AGENT_HOSTING_PERMISSION_PRESETS.map((preset) => (
-                <option key={preset} value={preset}>
-                  {preset === 'ask' ? '询问审批' : preset === 'auto' ? '替我审批' : '完全访问'}
-                </option>
-              ))}
-            </select>
           </Row>
           <Row label="图片文字识别" hint="增强资源存在时使用 PP-OCRv5，否则使用系统识别。">
             <div className="space-y-2 text-sm text-ink-2">
