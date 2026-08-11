@@ -305,18 +305,169 @@ export function planWorkspaceFields(
 }
 
 /** 应用记录：记住每个字段上次从配置写入的值，作为下次「用户是否自己改过」的判据 */
-export interface WorkspaceSource {
+export interface WorkspaceSourceAdoIdentity {
+  adoBase?: string;
+  auth?: 'pat' | 'ntlm' | 'bearer' | 'none';
+  webUrl?: string;
+  project: string;
+  repository: string;
+  ref: string;
+  path: string;
+  name?: string;
+}
+
+interface WorkspaceSourceBase {
+  kind: 'url' | 'file' | 'ado';
   url?: string;
   name?: string;
   importedAt: number;
   applied: Record<string, string>;
-  /** 跟随团队配置更新（URL 来源默认开;false = 用户显式关掉） */
+  /** 跟随团队配置更新（URL/ADO 来源默认开;false = 用户显式关掉） */
   follow?: boolean;
   /** 上次自动检查时间(节流用) */
   lastCheckedAt?: number;
 }
 
+export interface UrlWorkspaceSource extends WorkspaceSourceBase {
+  kind: 'url';
+  url: string;
+}
+
+export interface FileWorkspaceSource extends WorkspaceSourceBase {
+  kind: 'file';
+}
+
+export interface AdoWorkspaceSource extends WorkspaceSourceBase {
+  kind: 'ado';
+  ado: WorkspaceSourceAdoIdentity;
+}
+
+export type WorkspaceSource = UrlWorkspaceSource | FileWorkspaceSource | AdoWorkspaceSource;
+
 const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SECRET_APPLIED_KEY = /(authorization|password|passwd|pat|token|secret|auth)/i;
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function finiteTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function sanitizeAppliedFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object') return {};
+  const applied: Record<string, string> = {};
+  for (const [key, fieldValue] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof fieldValue === 'string' && !SECRET_APPLIED_KEY.test(key)) applied[key] = fieldValue;
+  }
+  return applied;
+}
+
+function sanitizeSourceUrl(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 必须是字符串`);
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error(`${label} 不是合法的 URL：${value}`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${label} 必须是 http/https 地址`);
+  }
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function sanitizeWorkspaceSourceAdo(value: unknown): WorkspaceSourceAdoIdentity | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const project = nonEmptyString(raw.project);
+  const repository = nonEmptyString(raw.repository);
+  const ref = nonEmptyString(raw.ref);
+  const path = nonEmptyString(raw.path);
+  if (!project || !repository || !ref || !path) return null;
+  const ado: WorkspaceSourceAdoIdentity = { project, repository, ref, path };
+  const name = nonEmptyString(raw.name);
+  if (name) ado.name = name;
+  if (raw.adoBase !== undefined) ado.adoBase = sanitizeSourceUrl(raw.adoBase, 'workspaceSource.ado.adoBase');
+  if (raw.auth !== undefined) {
+    ado.auth = oneOf(raw.auth, ['pat', 'ntlm', 'bearer', 'none'] as const, 'workspaceSource.ado.auth');
+  }
+  if (raw.webUrl !== undefined) ado.webUrl = sanitizeSourceUrl(raw.webUrl, 'workspaceSource.ado.webUrl');
+  return ado;
+}
+
+function workspaceSourceIdentity(source: WorkspaceSource): string {
+  if (source.kind === 'url') return `url|${source.url}`;
+  if (source.kind === 'ado') {
+    const ado = source.ado;
+    return [
+      'ado',
+      ado.adoBase ?? '',
+      ado.auth ?? '',
+      ado.webUrl ?? '',
+      ado.project,
+      ado.repository,
+      ado.ref,
+      ado.path,
+      ado.name ?? '',
+    ].join('|');
+  }
+  return 'file';
+}
+
+function sanitizeWorkspaceSource(raw: unknown): WorkspaceSource | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const source = raw as Record<string, unknown>;
+  const importedAt = finiteTimestamp(source.importedAt);
+  if (importedAt === undefined) return null;
+  const applied = sanitizeAppliedFields(source.applied);
+  const name = nonEmptyString(source.name);
+  const kind = nonEmptyString(source.kind) ?? (nonEmptyString(source.url) ? 'url' : null);
+  const follow = typeof source.follow === 'boolean' ? source.follow : undefined;
+  const lastCheckedAt = finiteTimestamp(source.lastCheckedAt);
+  try {
+    if (kind === 'url') {
+      const url = source.url !== undefined ? sanitizeSourceUrl(source.url, 'workspaceSource.url') : undefined;
+      if (!url) return null;
+      return {
+        kind: 'url',
+        url,
+        ...(name ? { name } : {}),
+        importedAt,
+        applied,
+        ...(follow !== undefined ? { follow } : {}),
+        ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
+      };
+    }
+    if (kind === 'ado') {
+      const ado = sanitizeWorkspaceSourceAdo(source.ado);
+      if (!ado) return null;
+      return {
+        kind: 'ado',
+        ado,
+        ...(name ? { name } : {}),
+        importedAt,
+        applied,
+        ...(follow !== undefined ? { follow } : {}),
+        ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
+      };
+    }
+    if (kind === 'file') {
+      return {
+        kind: 'file',
+        ...(name ? { name } : {}),
+        importedAt,
+        applied,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 /**
  * 该不该做一次自动同步检查:有 URL 来源、没被显式关掉、距上次检查满一天。
@@ -326,7 +477,7 @@ export function shouldCheckWorkspaceSync(
   source: WorkspaceSource | null,
   now = Date.now(),
 ): boolean {
-  if (!source?.url) return false;
+  if (!source || (source.kind !== 'url' && source.kind !== 'ado')) return false;
   if (source.follow === false) return false;
   return now - (source.lastCheckedAt ?? 0) >= SYNC_INTERVAL_MS;
 }
@@ -342,7 +493,7 @@ export const WORKSPACE_SOURCE_CHANGED_EVENT = 'rcx-workspace-source-changed';
 export function loadWorkspaceSource(): WorkspaceSource | null {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw ? (JSON.parse(raw) as WorkspaceSource) : null;
+    return raw ? sanitizeWorkspaceSource(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
@@ -350,7 +501,9 @@ export function loadWorkspaceSource(): WorkspaceSource | null {
 
 export function saveWorkspaceSource(source: WorkspaceSource): void {
   try {
-    localStorage.setItem(SOURCE_KEY, JSON.stringify(source));
+    const sanitized = sanitizeWorkspaceSource(source);
+    if (!sanitized) return;
+    localStorage.setItem(SOURCE_KEY, JSON.stringify(sanitized));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(WORKSPACE_SOURCE_CHANGED_EVENT));
     }
@@ -366,25 +519,69 @@ export function mergeAppliedFields(
     url?: string;
     name?: string;
     importedAt: number;
-    sourceKind?: 'url' | 'file';
+    sourceKind?: 'url' | 'file' | 'ado';
+    ado?: WorkspaceSourceAdoIdentity;
     checkedAt?: number;
   },
   appliedNow: Record<string, string>,
 ): WorkspaceSource {
-  const url = update.sourceKind === 'file' ? undefined : (update.url ?? previous?.url);
-  const sameUrl = !!url && url === previous?.url;
-  const lastCheckedAt = update.checkedAt ?? (sameUrl ? previous?.lastCheckedAt : undefined);
-  return {
-    ...(url ? { url } : {}),
-    name: update.name ?? previous?.name,
+  const kind = update.sourceKind
+    ?? (update.ado ? 'ado' : update.url ? 'url' : previous?.kind ?? 'file');
+  const nextName = update.name ?? previous?.name;
+  const nextApplied = { ...previous?.applied, ...appliedNow };
+  if (kind === 'file') {
+    return {
+      kind: 'file',
+      ...(nextName ? { name: nextName } : {}),
+      importedAt: update.importedAt,
+      applied: nextApplied,
+    };
+  }
+  if (kind === 'ado') {
+    const ado = update.ado ?? (previous?.kind === 'ado' ? previous.ado : undefined);
+    if (!ado) {
+      return {
+        kind: 'file',
+        ...(nextName ? { name: nextName } : {}),
+        importedAt: update.importedAt,
+        applied: nextApplied,
+      };
+    }
+    const next: AdoWorkspaceSource = {
+      kind: 'ado',
+      ado,
+      ...(nextName ? { name: nextName } : {}),
+      importedAt: update.importedAt,
+      applied: nextApplied,
+    };
+    const sameIdentity = previous ? workspaceSourceIdentity(previous) === workspaceSourceIdentity(next) : false;
+    return {
+      ...next,
+      follow: sameIdentity ? previous?.follow : true,
+      ...(update.checkedAt !== undefined
+        ? { lastCheckedAt: update.checkedAt }
+        : sameIdentity && previous?.lastCheckedAt !== undefined
+          ? { lastCheckedAt: previous.lastCheckedAt }
+          : {}),
+    };
+  }
+  const url = normalizeUrl(update.url ?? previous?.url, 'workspaceSource.url');
+  const next: UrlWorkspaceSource = {
+    kind: 'url',
+    url,
+    ...(nextName ? { name: nextName } : {}),
     importedAt: update.importedAt,
-    applied: { ...previous?.applied, ...appliedNow },
-    ...(url
-      ? {
-          follow: sameUrl ? previous?.follow : true,
-          ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
-        }
-      : {}),
+    applied: nextApplied,
+  };
+  const sameIdentity = previous ? workspaceSourceIdentity(previous) === workspaceSourceIdentity(next) : false;
+  return {
+    ...next,
+    follow: sameIdentity ? previous?.follow : true,
+    ...(update.checkedAt !== undefined
+      ? { lastCheckedAt: update.checkedAt }
+      : sameIdentity && previous?.lastCheckedAt !== undefined
+        ? { lastCheckedAt: previous.lastCheckedAt }
+        : {}),
   };
 }
 

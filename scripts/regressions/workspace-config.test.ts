@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   adoConnectionChanged,
+  loadWorkspaceSource,
   mergeAppliedFields,
   parseWorkspaceConfig,
   pendingWorkspaceFields,
   planWorkspaceFields,
+  saveWorkspaceSource,
   shouldCheckWorkspaceSync,
+  type WorkspaceSource,
+  type WorkspaceSourceAdoIdentity,
   updateSourceFingerprint,
 } from '../../apps/web/src/lib/workspaceConfig';
 
@@ -18,6 +22,49 @@ const FULL_CONFIG = JSON.stringify({
   ado: { url: 'http://ado.example.com/tfs/DefaultCollection', mode: 'direct', auth: 'pat' },
   workItemTemplates: { url: 'https://git.example.com/raw/templates.json' },
 });
+
+class MemoryStorage {
+  private readonly entries = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.entries.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.entries.set(key, value);
+  }
+}
+
+function withMockLocalStorage(callback: (storage: MemoryStorage) => void): void {
+  const previous = (globalThis as { localStorage?: Storage }).localStorage;
+  const storage = new MemoryStorage() as unknown as Storage;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+  try {
+    callback(storage as unknown as MemoryStorage);
+  } finally {
+    if (previous === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: previous,
+      });
+    }
+  }
+}
+
+const ADO_SOURCE: WorkspaceSourceAdoIdentity = {
+  adoBase: 'https://ado.example.com',
+  auth: 'bearer',
+  project: 'RocketX',
+  repository: 'desktop',
+  ref: 'refs/heads/main',
+  path: '/config/rcx.workspace.json',
+  name: '团队配置',
+};
 
 test('解析配置：URL 规范化去尾斜杠，枚举和版本严格校验（issue #67）', () => {
   const config = parseWorkspaceConfig(FULL_CONFIG);
@@ -238,17 +285,21 @@ test('新字段进字段计划:更新源与层级形态参与覆盖判定', () =
 
 test('跟随更新判定:URL 来源默认开、显式关掉不查、24 小时节流', () => {
   const day = 24 * 60 * 60 * 1000;
-  const base = { name: 'x', importedAt: 1, applied: {} };
+  const base = { kind: 'file' as const, name: 'x', importedAt: 1, applied: {} };
   assert.equal(shouldCheckWorkspaceSync(null, day), false);
   assert.equal(shouldCheckWorkspaceSync({ ...base }, day), false);
-  assert.equal(shouldCheckWorkspaceSync({ ...base, url: 'https://cfg' }, day), true);
-  assert.equal(shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', follow: false }, day), false);
+  assert.equal(shouldCheckWorkspaceSync({ ...base, kind: 'url', url: 'https://cfg' }, day), true);
+  assert.equal(shouldCheckWorkspaceSync({ ...base, kind: 'url', url: 'https://cfg', follow: false }, day), false);
   assert.equal(
-    shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', lastCheckedAt: day - 1000 }, day),
+    shouldCheckWorkspaceSync({ ...base, kind: 'url', url: 'https://cfg', lastCheckedAt: day - 1000 }, day),
     false,
   );
   assert.equal(
-    shouldCheckWorkspaceSync({ ...base, url: 'https://cfg', lastCheckedAt: 0 }, day),
+    shouldCheckWorkspaceSync({ ...base, kind: 'url', url: 'https://cfg', lastCheckedAt: 0 }, day),
+    true,
+  );
+  assert.equal(
+    shouldCheckWorkspaceSync({ ...base, kind: 'ado', ado: ADO_SOURCE, follow: true, lastCheckedAt: 0 }, day),
     true,
   );
 });
@@ -271,11 +322,18 @@ test('值得提醒的变化 = 会被默认勾选的字段', () => {
 
 test('应用记录合并：只记录本次应用的字段，未勾选字段保留旧记录', () => {
   const merged = mergeAppliedFields(
-    { url: 'https://old', name: '旧', importedAt: 1, applied: { 'server.url': 'a', 'ado.base': 'b' } },
+    {
+      kind: 'url',
+      url: 'https://old',
+      name: '旧',
+      importedAt: 1,
+      applied: { 'server.url': 'a', 'ado.base': 'b' },
+    },
     { url: 'https://new', importedAt: 2 },
     { 'server.url': 'a2' },
   );
   assert.deepEqual(merged, {
+    kind: 'url',
     url: 'https://new',
     name: '旧',
     importedAt: 2,
@@ -302,7 +360,8 @@ test('ADO 端点变化会触发 PAT 解绑', () => {
 });
 
 test('同一 URL 重新应用保留跟随偏好和检查时间，本地文件会清除旧 URL', () => {
-  const previous = {
+  const previous: WorkspaceSource = {
+    kind: 'url',
     url: 'https://git.example.com/raw/rcx.workspace.json',
     name: '团队',
     importedAt: 1,
@@ -328,11 +387,122 @@ test('同一 URL 重新应用保留跟随偏好和检查时间，本地文件会
   assert.deepEqual(
     mergeAppliedFields(previous, { sourceKind: 'file', name: '离线配置', importedAt: 3 }, {}),
     {
+      kind: 'file',
       name: '离线配置',
       importedAt: 3,
       applied: previous.applied,
     },
   );
+});
+
+test('loadWorkspaceSource 兼容旧版 url 结构并在读取时清洗脏记录', () => {
+  withMockLocalStorage((storage) => {
+    storage.setItem('rcx-workspace-source', JSON.stringify({
+      url: 'https://alice:pw@git.example.com/raw/rcx.workspace.json/',
+      name: ' 团队配置 ',
+      importedAt: 12,
+      applied: {
+        'server.url': 'https://chat.example.com',
+        authToken: 'should-not-stay',
+      },
+      follow: true,
+      lastCheckedAt: 24,
+      token: 'secret',
+      localPath: 'C:\\Users\\alice\\Desktop\\rcx.workspace.json',
+    }));
+    assert.deepEqual(loadWorkspaceSource(), {
+      kind: 'url',
+      url: 'https://git.example.com/raw/rcx.workspace.json',
+      name: '团队配置',
+      importedAt: 12,
+      applied: { 'server.url': 'https://chat.example.com' },
+      follow: true,
+      lastCheckedAt: 24,
+    });
+  });
+});
+
+test('saveWorkspaceSource 只按白名单持久化，file 来源不存本机绝对路径', () => {
+  withMockLocalStorage((storage) => {
+    saveWorkspaceSource({
+      kind: 'file',
+      name: '本地导入',
+      importedAt: 7,
+      applied: {
+        'server.url': 'https://chat.example.com',
+        authToken: 'should-not-stay',
+      },
+    });
+    assert.deepEqual(JSON.parse(storage.getItem('rcx-workspace-source') ?? 'null'), {
+      kind: 'file',
+      name: '本地导入',
+      importedAt: 7,
+      applied: { 'server.url': 'https://chat.example.com' },
+    });
+  });
+});
+
+test('ADO 来源会持久化结构化 identity，并在变化时重置节流', () => {
+  withMockLocalStorage((storage) => {
+    saveWorkspaceSource({
+      kind: 'ado',
+      name: 'ADO 团队配置',
+      importedAt: 8,
+      applied: { 'ado.base': 'https://ado.example.com' },
+      follow: true,
+      lastCheckedAt: 9,
+      ado: {
+        ...ADO_SOURCE,
+        adoBase: 'https://alice:pw@ado.example.com',
+        webUrl: 'https://alice:pw@ado.example.com/projects/rocketx',
+      },
+    });
+    assert.deepEqual(JSON.parse(storage.getItem('rcx-workspace-source') ?? 'null'), {
+      kind: 'ado',
+      name: 'ADO 团队配置',
+      importedAt: 8,
+      applied: { 'ado.base': 'https://ado.example.com' },
+      follow: true,
+      lastCheckedAt: 9,
+      ado: {
+        adoBase: 'https://ado.example.com',
+        auth: 'bearer',
+        webUrl: 'https://ado.example.com/projects/rocketx',
+        project: 'RocketX',
+        repository: 'desktop',
+        ref: 'refs/heads/main',
+        path: '/config/rcx.workspace.json',
+        name: '团队配置',
+      },
+    });
+  });
+
+  const previous = mergeAppliedFields(
+    null,
+    { sourceKind: 'ado', importedAt: 1, ado: ADO_SOURCE, checkedAt: 100 },
+    { 'server.url': 'https://chat.example.com' },
+  );
+  assert.equal(previous.kind, 'ado');
+  assert.equal(previous.follow, true);
+  assert.equal(previous.lastCheckedAt, 100);
+
+  const sameIdentity = mergeAppliedFields(
+    previous,
+    { sourceKind: 'ado', importedAt: 2, ado: { ...ADO_SOURCE, name: '团队配置' } },
+    { 'ado.base': 'https://ado.example.com' },
+  );
+  assert.equal(sameIdentity.kind, 'ado');
+  assert.equal(sameIdentity.follow, true);
+  assert.equal(sameIdentity.lastCheckedAt, 100);
+
+  const movedPath = mergeAppliedFields(
+    sameIdentity,
+    { sourceKind: 'ado', importedAt: 3, ado: { ...ADO_SOURCE, path: '/config/next.workspace.json' } },
+    {},
+  );
+  assert.equal(movedPath.kind, 'ado');
+  assert.equal(movedPath.follow, true);
+  assert.equal(movedPath.lastCheckedAt, undefined);
 });
 
 test('仓库自带的示例配置永远能过解析器(样例防腐锁)', () => {
