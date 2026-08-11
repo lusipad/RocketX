@@ -693,7 +693,7 @@ async function installAdoDirectMock(
         },
       });
     }
-    if (url.pathname.endsWith('/_apis/wit/wiql')) {
+    if (/\/_apis\/wit\/wiql(?:\/[^/]+)?$/.test(url.pathname)) {
       return fulfillJson(route, { workItems: [{ id: workItem.id }] });
     }
     if (url.pathname.endsWith('/_apis/wit/workitems')) {
@@ -1777,6 +1777,72 @@ test('工作项可创建绑定本地环境的原生讨论', async ({ page }, tes
   await dialog.getByRole('checkbox').first().uncheck();
   await dialog.getByRole('button', { name: '创建讨论', exact: true }).click();
   await expect.poll(() => sentMessages.some((message) => message.rid === 'discussion-128')).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）', async ({ page }, testInfo) => {
+  const workItem = {
+    id: 128,
+    title: 'Login failure',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+  };
+  const savedQueryId = '11111111-2222-4333-8444-555555555555';
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installAdoDirectMock(page, workItem);
+  await page.addInitScript(({ queryId }) => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+    localStorage.setItem('rcx-custom-queries', JSON.stringify([{
+      id: 'query-ai-board',
+      name: 'AI 托管看板',
+      url: `${location.origin}/ado/RocketChatX/_queries/query/${queryId}`,
+      queryId,
+      project: 'RocketChatX',
+    }]));
+    localStorage.setItem('rcx-query-views-v1', JSON.stringify({
+      'query-ai-board': 'board',
+    }));
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: ['RocketChatX'],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  }, { queryId: savedQueryId });
+
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 托管看板', exact: true }).click();
+  const card = page.getByText('Login failure', { exact: true }).locator('..').locator('..');
+  await expect(card).toBeVisible();
+  await card.hover();
+  const assignButton = card.getByRole('button', { name: '排给 AI：工作项 #128' });
+  await expect(assignButton).toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('workitem-board-ai-action.png') });
+
+  await assignButton.click();
+  const dialog = page.getByRole('dialog', { name: '为 #128 创建讨论' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('checkbox').nth(0)).toBeChecked();
+  await expect(dialog.getByRole('checkbox').nth(1)).not.toBeChecked();
+  await dialog.screenshot({ path: testInfo.outputPath('workitem-board-ai-dialog.png') });
   expect(pageErrors).toEqual([]);
 });
 

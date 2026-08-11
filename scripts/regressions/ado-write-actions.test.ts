@@ -581,3 +581,20 @@ test('PATCH 成功但回读 timeout 时返回 readback-timeout', async () => {
   assert.match((failure as Error).message, /回读超时/);
   assert.equal(calls.map((call) => call.method).join(','), 'GET,PATCH,GET');
 });
+
+test('工作项讨论默认启动本机 Agent，但默认不写回 ADO（issue #292）', () => {
+  const source = readFileSync('apps/web/src/components/CreateWorkItemDiscussionDialog.tsx', 'utf8');
+
+  assert.match(source, /const \[startAgent, setStartAgent\] = useState\(true\);/);
+  assert.match(source, /const \[writeBack, setWriteBack\] = useState\(false\);/);
+  assert.match(source, /创建后启动本机 Agent/);
+  assert.match(source, /将讨论链接写回 ADO 工作项/);
+});
+
+test('工作项讨论写回只走 commentWorkItem 评论，不触碰 AssignedTo（issue #292）', () => {
+  const source = readFileSync('apps/web/src/components/CreateWorkItemDiscussionDialog.tsx', 'utf8');
+
+  assert.match(source, /if \(writeBack\) \{/);
+  assert.match(source, /await commentWorkItem\(item\.id, `RocketX 已创建工作项讨论：<a href="\$\{escapeHtml\(href\)\}">\$\{escapeHtml\(resolvedName\)\}<\/a>`\)/);
+  assert.doesNotMatch(source, /System\.AssignedTo/);
+});

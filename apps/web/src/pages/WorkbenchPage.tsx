@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { myPrsOf, reviewPrsOf, useWorkbench, type WorkItem } from '../stores/workbench';
 import { BuildList, PullRequestList, WorkItemList } from '../components/AdoLists';
+import CreateWorkItemDiscussionDialog from '../components/CreateWorkItemDiscussionDialog';
 import { WorkItemBoard, WorkItemWbs } from '../components/QueryViews';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
@@ -50,6 +51,7 @@ import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { ConfirmDialog, useDialogBehavior } from '../components/Dialog';
 import { settleScopedResult } from '../lib/scopedResult';
+import { runtimeFeatures } from '../lib/runtimeMode';
 
 /** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
 type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
@@ -345,6 +347,7 @@ function FavoriteDialog({
 // ---------- Main ----------
 
 export default function WorkbenchPage() {
+  const features = runtimeFeatures();
   const setModule = useUI((s) => s.setModule);
   const tab = useUI((s) => s.workbenchTab);
   const setTab = useUI((s) => s.setWorkbenchTab);
@@ -376,6 +379,7 @@ export default function WorkbenchPage() {
   const removeQuery = useCustomQueries((s) => s.remove);
   const claimLegacyQueries = useCustomQueries((s) => s.claimLegacy);
   const [queryDialog, setQueryDialog] = useState(false);
+  const [discussionItem, setDiscussionItem] = useState<WorkItem | null>(null);
 
   // 每个查询记住自己的视图（列表/看板/WBS）——同一个查询通常固定一种看法（issue #82/#83）
   const [queryViews, setQueryViews] = useState<Record<string, QueryViewMode>>(() => {
@@ -797,6 +801,9 @@ export default function WorkbenchPage() {
                 onMove={(item, toState) =>
                   setPendingMove({ queryId: activeQuery.id, item, toState })
                 }
+                onAssignToAi={
+                  features.sharedAgent ? (item) => setDiscussionItem(item) : undefined
+                }
               />
             ) : (queryViews[activeQuery.id] ?? 'list') === 'wbs' ? (
               <WorkItemWbs items={visibleQueryState.cache[activeQuery.id] ?? []} />
@@ -1060,6 +1067,9 @@ export default function WorkbenchPage() {
             toast.success('查询已添加');
           }}
         />
+      )}
+      {discussionItem && (
+        <CreateWorkItemDiscussionDialog item={discussionItem} onClose={() => setDiscussionItem(null)} />
       )}
     </div>
   );
