@@ -163,9 +163,13 @@ export default function ProfileContributionsPage() {
 
   const filterKey = `${filters.project ?? ''}\0${filters.repository ?? ''}\0${filters.type ?? ''}`;
   useEffect(() => {
-    void load();
-  }, [configRevision, filterKey, load, range.from, range.to]);
-  useEffect(() => cancel, [cancel]);
+    // Debug 下 StrictMode 会先挂载再立即卸载；延后一个 task 可避免发出无法中止的重复 NTLM 请求。
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      cancel();
+    };
+  }, [cancel, configRevision, filterKey, load, range.from, range.to]);
 
   const visibleRepositories = useMemo(
     () => repositories.filter((repository) => !filters.project || repository.project === filters.project),

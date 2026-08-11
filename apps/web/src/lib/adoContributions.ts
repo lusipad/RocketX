@@ -86,6 +86,7 @@ const EVENT_TYPES: ContributionEventType[] = [
 const PAGE_SIZE = 100;
 const MAX_CONCURRENCY = 6;
 const MAX_PR_THREAD_SCAN = 2_000;
+const MAX_REVISION_PAGES = 1_000;
 const SNAPSHOT_CACHE = new TimedLruCache<ContributionSnapshot>(8, 5 * 60_000);
 
 export function localDayKey(value: string | number | Date, timezoneOffsetMinutes?: number): string {
@@ -546,7 +547,8 @@ async function fetchRevisionPages(
 ): Promise<Record<string, any>[]> {
   const values: Record<string, any>[] = [];
   let continuationToken: string | undefined;
-  for (let pageIndex = 0; pageIndex < 1_000; pageIndex += 1) {
+  const seenTokens = new Set<string>();
+  for (let pageIndex = 0; pageIndex < MAX_REVISION_PAGES; pageIndex += 1) {
     abortError(signal);
     const page = await directGetWorkItemRevisionPage(cfg, project, {
       fields: discussion
@@ -560,10 +562,16 @@ async function fetchRevisionPages(
       signal,
     });
     values.push(...page.values);
+    // continuationToken 同时也是服务端的最新水位；isLastBatch=true 时不代表还有下一页。
+    if (page.isLastBatch === true) return values;
     if (!page.continuationToken) {
       if (page.isLastBatch === false) throw new Error('reporting work item revisions 分页缺少 continuationToken');
       return values;
     }
+    if (seenTokens.has(page.continuationToken)) {
+      throw new Error('reporting work item revisions 返回了重复 continuationToken，已停止分页');
+    }
+    seenTokens.add(page.continuationToken);
     continuationToken = page.continuationToken;
   }
   throw new Error('reporting work item revisions 分页超过安全上限');

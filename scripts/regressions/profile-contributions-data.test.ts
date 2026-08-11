@@ -353,6 +353,124 @@ test('ADO 分页链接缺少 continuationToken 时明确失败，不静默截断
   );
 });
 
+test('reporting revisions 最后一批即使带水位 token 也必须立即停止', async () => {
+  let revisionCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/_apis/connectionData')) {
+      return adoJson({
+        authenticatedUser: {
+          id: 'user-1',
+          customDisplayName: 'Alice',
+          properties: { Account: { $value: 'corp\\alice' } },
+        },
+      });
+    }
+    if (url.includes('/_apis/projects')) return adoJson({ value: [{ name: 'Alpha' }] });
+    if (url.includes('/Alpha/_apis/git/repositories?')) return adoJson({ value: [] });
+    if (url.includes('/reporting/workItemRevisions?')) {
+      revisionCalls += 1;
+      return adoJson({
+        values: [{
+          id: 41,
+          rev: 1,
+          fields: {
+            'System.Title': 'Fix paging',
+            'System.WorkItemType': 'Task',
+            'System.TeamProject': 'Alpha',
+            'System.CreatedDate': '2026-08-08T02:00:00Z',
+            'System.CreatedBy': { id: 'user-1', displayName: 'Alice' },
+          },
+        }],
+        continuationToken: '20;19;1;Discussion',
+        isLastBatch: true,
+        nextLink: 'http://ado/last-batch/Alpha/_apis/wit/reporting/workItemRevisions?continuationToken=20%3B19%3B1%3BDiscussion',
+      });
+    }
+    throw new Error(`未处理请求: ${url}`);
+  }) as typeof fetch;
+
+  const snapshot = await loadAdoContributions(cfg('last-batch'), {
+    range: { from: '2026-08-08', to: '2026-08-11' },
+    filters: { type: 'work-item' },
+  });
+
+  assert.equal(revisionCalls, 1);
+  assert.equal(snapshot.events.filter((event) => event.type === 'work-item').length, 1);
+  assert.equal(statusOf(snapshot, 'work-item').state, 'complete');
+});
+
+test('reporting revisions 正常推进超过 20 页时仍可完整结束', async () => {
+  let revisionCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/_apis/connectionData')) {
+      return adoJson({
+        authenticatedUser: {
+          id: 'user-1',
+          customDisplayName: 'Alice',
+          properties: { Account: { $value: 'corp\\alice' } },
+        },
+      });
+    }
+    if (url.includes('/_apis/projects')) return adoJson({ value: [{ name: 'Alpha' }] });
+    if (url.includes('/Alpha/_apis/git/repositories?')) return adoJson({ value: [] });
+    if (url.includes('/reporting/workItemRevisions?')) {
+      revisionCalls += 1;
+      return adoJson({
+        values: [],
+        continuationToken: `token-${revisionCalls}`,
+        isLastBatch: revisionCalls === 21,
+      });
+    }
+    throw new Error(`未处理请求: ${url}`);
+  }) as typeof fetch;
+
+  const snapshot = await loadAdoContributions(cfg('long-revisions'), {
+    range: { from: '2026-08-08', to: '2026-08-11' },
+    filters: { type: 'work-item' },
+  });
+
+  assert.equal(revisionCalls, 21);
+  assert.equal(statusOf(snapshot, 'work-item').state, 'complete');
+});
+
+test('reporting revisions 重复水位 token 时立即停止', async () => {
+  let revisionCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/_apis/connectionData')) {
+      return adoJson({
+        authenticatedUser: {
+          id: 'user-1',
+          customDisplayName: 'Alice',
+          properties: { Account: { $value: 'corp\\alice' } },
+        },
+      });
+    }
+    if (url.includes('/_apis/projects')) return adoJson({ value: [{ name: 'Alpha' }] });
+    if (url.includes('/Alpha/_apis/git/repositories?')) return adoJson({ value: [] });
+    if (url.includes('/reporting/workItemRevisions?')) {
+      revisionCalls += 1;
+      return adoJson({
+        values: [],
+        continuationToken: 'same-token',
+        isLastBatch: false,
+      });
+    }
+    throw new Error(`未处理请求: ${url}`);
+  }) as typeof fetch;
+
+  const snapshot = await loadAdoContributions(cfg('repeated-revision-token'), {
+    range: { from: '2026-08-08', to: '2026-08-11' },
+    filters: { type: 'work-item' },
+  });
+
+  assert.equal(revisionCalls, 2);
+  assert.equal(statusOf(snapshot, 'work-item').state, 'unavailable');
+  assert.match(statusOf(snapshot, 'work-item').warnings.join('\n'), /重复 continuationToken/);
+});
+
 test('取消后停止后续批次并保持并发不超过 6', async () => {
   let active = 0;
   let maxActive = 0;
