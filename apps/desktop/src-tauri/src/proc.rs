@@ -22,6 +22,7 @@ use tauri_plugin_updater::UpdaterExt;
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 12 * 1024 * 1024;
+const MAX_WORKSPACE_CONFIG_BYTES: u64 = 1024 * 1024;
 const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 const BUTLER_BUNDLED_SKILLS_DIR: &str = "codex-skills";
 const AZURE_DEVOPS_SERVER_HOST_ADAPTER: &str = "azure-devops-server-host-adapter.ps1";
@@ -2817,6 +2818,72 @@ pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, 
     })
 }
 
+fn normalize_unc_workspace_config_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.len() > 32_768 || trimmed.chars().any(char::is_control) {
+        return Err("UNC 配置路径无效".to_string());
+    }
+    if !trimmed.starts_with(r"\\") || trimmed.starts_with(r"\\?\") || trimmed.starts_with(r"\\.\") {
+        return Err("团队配置 UNC 路径必须是 \\\\server\\share\\... 形式".to_string());
+    }
+    if trimmed.contains('/') {
+        return Err("团队配置 UNC 路径只能使用反斜杠".to_string());
+    }
+    let parts = trimmed
+        .strip_prefix(r"\\")
+        .unwrap_or_default()
+        .split('\\')
+        .collect::<Vec<_>>();
+    if parts.len() < 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || part.contains(':')
+                || part.ends_with('.')
+                || part.ends_with(' ')
+        })
+    {
+        return Err("团队配置 UNC 路径不允许设备路径、盘符、空路径段或 . / .. 路径段".to_string());
+    }
+    let target = PathBuf::from(trimmed);
+    if !target
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("json"))
+    {
+        return Err("团队配置 UNC 路径必须指向 .json 文件".to_string());
+    }
+    Ok(target)
+}
+
+fn read_unc_workspace_config_text(path: &str) -> Result<String, String> {
+    let target = normalize_unc_workspace_config_path(path)?;
+    let file =
+        std::fs::File::open(&target).map_err(|error| format!("读取团队配置失败：{error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("读取团队配置失败：{error}"))?;
+    if !metadata.is_file() {
+        return Err("团队配置 UNC 路径必须指向文件".to_string());
+    }
+    let mut bytes = Vec::with_capacity(8 * 1024);
+    file.take(MAX_WORKSPACE_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("读取团队配置失败：{error}"))?;
+    if bytes.len() as u64 > MAX_WORKSPACE_CONFIG_BYTES {
+        return Err("团队配置文件不能超过 1 MiB".to_string());
+    }
+    String::from_utf8(bytes).map_err(|_| "团队配置文件必须是 UTF-8 文本".to_string())
+}
+
+#[tauri::command]
+pub async fn read_workspace_config_unc(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_unc_workspace_config_text(&path))
+        .await
+        .map_err(|error| format!("团队配置读取任务失败：{error}"))?
+}
+
 fn matching_installer_paths(
     candidates: impl IntoIterator<Item = PathBuf>,
     installer_kind: WindowsInstallerKind,
@@ -3545,7 +3612,8 @@ mod tests {
     use super::{
         app_server_args_for_help, classify_codex_version, codex_runtime_probe_from_candidates_with,
         decode_attachment_request, encode_message, host_path, installer_exit_code_is_success,
-        installer_kind_from_bundle_type, matching_installer_paths, normalize_update_version,
+        installer_kind_from_bundle_type, matching_installer_paths,
+        normalize_unc_workspace_config_path, normalize_update_version,
         normalize_update_version_text, parse_codex_cli_version, parse_semantic_version,
         parse_update_helper_args, probe_resolve_codex_from_candidates_with_probe,
         read_codex_artifact, redact_json_secret, resolve_codex_from_candidates_with_probe,
@@ -3647,6 +3715,31 @@ mod tests {
         assert_eq!(decoded.relative_path, "message/build.log");
         assert_eq!(bytes, &[0, 1, 2, 255]);
         assert!(decode_attachment_request(&[0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn workspace_config_unc_path_only_accepts_shared_json_files() {
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.json").is_ok()
+        );
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.JSON").is_ok()
+        );
+        assert!(normalize_unc_workspace_config_path(r"D:\team\rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"..\rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"\\.\D:\team\rcx.workspace.json").is_err());
+        assert!(
+            normalize_unc_workspace_config_path(r"\\?\UNC\server\share\rcx.workspace.json")
+                .is_err()
+        );
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\..\rcx.workspace.json").is_err()
+        );
+        assert!(normalize_unc_workspace_config_path(r"\\server/share/rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"\\server\share").is_err());
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.txt").is_err()
+        );
     }
 
     #[test]

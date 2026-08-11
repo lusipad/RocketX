@@ -553,6 +553,7 @@ fn main() {
             proc::butler_azure_devops_server_read,
             proc::check_signed_http_update,
             proc::read_update_manifest_dir,
+            proc::read_workspace_config_unc,
             proc::launch_update_installer,
             proc::take_update_result,
             proc::codex_agent_attachment_write,

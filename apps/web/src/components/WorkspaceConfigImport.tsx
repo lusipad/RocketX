@@ -11,6 +11,7 @@ import { loadHierarchyLayout, saveHierarchyLayout } from '../stores/wiTemplates'
 import { useAuth } from '../stores/auth';
 import {
   fetchWorkspaceConfigFromSource,
+  parseWorkspaceConfigRemoteInput,
   remoteWorkspaceConfigSource,
   type WorkspaceConfigRemoteSource,
 } from '../lib/workspaceConfigSource';
@@ -132,6 +133,7 @@ async function applySelectedFields(
       {
         ...(source?.kind === 'url' ? { url: source.url, sourceKind: 'url' as const, checkedAt: importedAt } : {}),
         ...(source?.kind === 'ado' ? { sourceKind: 'ado' as const, ado: source.ado, checkedAt: importedAt } : {}),
+        ...(source?.kind === 'unc' ? { sourceKind: 'unc' as const, uncPath: source.path, checkedAt: importedAt } : {}),
         ...(source ? {} : { sourceKind: 'file' as const }),
         name: config.name,
         importedAt,
@@ -292,7 +294,9 @@ export function ImportPreviewDialog({
 /** 设置页「团队配置」分区：从 URL / 文件导入配置，之后可一键重新同步 */
 export function WorkspaceConfigSection() {
   const [source, setSource] = useState(() => loadWorkspaceSource());
-  const [url, setUrl] = useState(source?.kind === 'url' ? source.url : '');
+  const [sourceInput, setSourceInput] = useState(
+    source?.kind === 'url' ? source.url : source?.kind === 'unc' ? source.path : '',
+  );
   const [adoProject, setAdoProject] = useState(source?.kind === 'ado' ? source.ado.project : '');
   const [adoRepository, setAdoRepository] = useState(source?.kind === 'ado' ? source.ado.repository : '');
   const [adoRef, setAdoRef] = useState(source?.kind === 'ado' ? source.ado.ref : 'refs/heads/main');
@@ -320,6 +324,12 @@ export function WorkspaceConfigSection() {
   };
 
   const fetchFromRemoteSource = async (remoteSource: WorkspaceConfigRemoteSource) => {
+    if (remoteSource.kind === 'ado') {
+      setAdoProject(remoteSource.ado.project);
+      setAdoRepository(remoteSource.ado.repository);
+      setAdoRef(remoteSource.ado.ref);
+      setAdoPath(remoteSource.ado.path);
+    }
     setLoading(true);
     try {
       const result = await fetchWorkspaceConfigFromSource(remoteSource);
@@ -331,8 +341,13 @@ export function WorkspaceConfigSection() {
     }
   };
 
-  const fetchFromUrl = async (target: string) => {
-    await fetchFromRemoteSource({ kind: 'url', url: target.trim() });
+  const fetchFromSourceInput = async (target: string) => {
+    try {
+      const remoteSource = parseWorkspaceConfigRemoteInput(target, workbenchConfig ?? null);
+      await fetchFromRemoteSource(remoteSource);
+    } catch (err) {
+      toast.error(err, '配置来源无效');
+    }
   };
 
   const onFile = async (file: File | undefined) => {
@@ -366,7 +381,10 @@ export function WorkspaceConfigSection() {
               <div className="mt-0.5 truncate font-mono text-xs text-ink-3">{source.ado.path}</div>
             </>
           )}
-          {(source.kind === 'url' || source.kind === 'ado') && (
+          {source.kind === 'unc' && (
+            <div className="mt-0.5 truncate font-mono text-xs text-ink-3">{source.path}</div>
+          )}
+          {(source.kind === 'url' || source.kind === 'ado' || source.kind === 'unc') && (
             <label className="mt-2 flex cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
@@ -381,7 +399,7 @@ export function WorkspaceConfigSection() {
               <span>每天自动检查团队配置更新,有变化时提醒(不会静默改你的配置)</span>
             </label>
           )}
-          {(source.kind === 'url' || source.kind === 'ado') && (
+          {(source.kind === 'url' || source.kind === 'ado' || source.kind === 'unc') && (
             <button
               onClick={() => {
                 const remoteSource = remoteWorkspaceConfigSource(source);
@@ -399,18 +417,19 @@ export function WorkspaceConfigSection() {
 
       <div className="mt-3 flex max-w-2xl gap-2">
         <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="无需登录即可访问的配置 URL（可使用 Git Raw 地址）"
+          aria-label="团队配置来源"
+          value={sourceInput}
+          onChange={(e) => setSourceInput(e.target.value)}
+          placeholder="配置 URL、ADO 文件链接或 UNC 共享 JSON 路径"
           className="h-9 flex-1 rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
         />
         <button
-          onClick={() => url.trim() && void fetchFromUrl(url.trim())}
-          disabled={loading || !url.trim()}
+          onClick={() => sourceInput.trim() && void fetchFromSourceInput(sourceInput.trim())}
+          disabled={loading || !sourceInput.trim()}
           className="flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
-          拉取
+          读取
         </button>
         <button
           onClick={() => fileRef.current?.click()}
@@ -435,7 +454,7 @@ export function WorkspaceConfigSection() {
         <div className="text-sm font-medium text-ink">从当前 Azure DevOps 仓库读取</div>
         <p className="mt-1 text-xs leading-relaxed text-ink-3">
           复用“工作台”里已配置的 ADO 地址和认证，从指定项目/仓库/ref/path 读取单个
-          `rcx.workspace.json` 文件。
+          `rcx.workspace.json` 文件。也可以直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填。
         </p>
         <div className="mt-1 text-xs text-ink-3">{adoConnectionLabel}</div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">

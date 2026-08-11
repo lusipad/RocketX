@@ -40,6 +40,10 @@ export default function WorkspaceSyncBridge() {
       saveWorkspaceSource({ ...source, ado: remoteSource.ado, lastCheckedAt: checkedAt });
       return;
     }
+    if (source.kind === 'unc' && remoteSource.kind === 'unc') {
+      saveWorkspaceSource({ ...source, path: remoteSource.path, lastCheckedAt: checkedAt });
+      return;
+    }
     saveWorkspaceSource({ ...source, lastCheckedAt: checkedAt });
   };
 

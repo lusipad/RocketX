@@ -302,6 +302,10 @@ test('跟随更新判定:URL 来源默认开、显式关掉不查、24 小时节
     shouldCheckWorkspaceSync({ ...base, kind: 'ado', ado: ADO_SOURCE, follow: true, lastCheckedAt: 0 }, day),
     true,
   );
+  assert.equal(
+    shouldCheckWorkspaceSync({ ...base, kind: 'unc', path: '\\\\server\\share\\team\\rcx.workspace.json', lastCheckedAt: 0 }, day),
+    true,
+  );
 });
 
 test('值得提醒的变化 = 会被默认勾选的字段', () => {
@@ -454,6 +458,45 @@ test('saveWorkspaceSource 只按白名单持久化，file 来源不存本机绝�
   });
 });
 
+test('UNC 来源只接受共享 JSON 文件，并参与结构化持久化', () => {
+  withMockLocalStorage((storage) => {
+    saveWorkspaceSource({
+      kind: 'unc',
+      name: '共享配置',
+      importedAt: 11,
+      follow: true,
+      lastCheckedAt: 12,
+      path: '\\\\server\\share\\team\\rcx.workspace.json',
+      applied: { 'server.url': 'https://chat.example.com' },
+    });
+    assert.deepEqual(JSON.parse(storage.getItem('rcx-workspace-source') ?? 'null'), {
+      kind: 'unc',
+      name: '共享配置',
+      importedAt: 11,
+      follow: true,
+      lastCheckedAt: 12,
+      path: '\\\\server\\share\\team\\rcx.workspace.json',
+      applied: { 'server.url': 'https://chat.example.com' },
+    });
+    saveWorkspaceSource({
+      kind: 'unc',
+      name: '坏路径',
+      importedAt: 1,
+      path: 'D:\\temp\\rcx.workspace.json',
+      applied: {},
+    } as WorkspaceSource);
+    assert.deepEqual(JSON.parse(storage.getItem('rcx-workspace-source') ?? 'null'), {
+      kind: 'unc',
+      name: '共享配置',
+      importedAt: 11,
+      follow: true,
+      lastCheckedAt: 12,
+      path: '\\\\server\\share\\team\\rcx.workspace.json',
+      applied: { 'server.url': 'https://chat.example.com' },
+    });
+  });
+});
+
 test('ADO 来源会持久化结构化 identity，并在变化时重置节流', () => {
   withMockLocalStorage((storage) => {
     saveWorkspaceSource({
@@ -545,4 +588,8 @@ test('设置页团队配置分区保留内部 key，但只展示团队配置入�
   assert.doesNotMatch(settings, /LocalAgentEnvironmentsSettings/);
   assert.match(section, /title=\{config\.name \? `导入「\$\{config\.name\}」` : '导入团队配置'\}/);
   assert.match(section, /<h2 className="text-base font-semibold text-ink">配置来源<\/h2>/);
+  assert.match(section, /配置 URL、ADO 文件链接或 UNC 共享 JSON 路径/);
+  assert.match(section, /aria-label="团队配置来源"/);
+  assert.match(section, /toast\.error\(err, '配置来源无效'\)/);
+  assert.match(section, /直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填/);
 });

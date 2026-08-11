@@ -317,7 +317,7 @@ export interface WorkspaceSourceAdoIdentity {
 }
 
 interface WorkspaceSourceBase {
-  kind: 'url' | 'file' | 'ado';
+  kind: 'url' | 'file' | 'ado' | 'unc';
   name?: string;
   importedAt: number;
   applied: Record<string, string>;
@@ -341,7 +341,12 @@ export interface AdoWorkspaceSource extends WorkspaceSourceBase {
   ado: WorkspaceSourceAdoIdentity;
 }
 
-export type WorkspaceSource = UrlWorkspaceSource | FileWorkspaceSource | AdoWorkspaceSource;
+export interface UncWorkspaceSource extends WorkspaceSourceBase {
+  kind: 'unc';
+  path: string;
+}
+
+export type WorkspaceSource = UrlWorkspaceSource | FileWorkspaceSource | AdoWorkspaceSource | UncWorkspaceSource;
 
 const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SECRET_APPLIED_KEY = /(authorization|password|passwd|pat|token|secret|auth)/i;
@@ -379,6 +384,38 @@ function sanitizeSourceUrl(value: unknown, label: string): string {
   return parsed.toString().replace(/\/+$/, '');
 }
 
+export function normalizeUncWorkspacePath(value: unknown, label = 'UNC 路径'): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 必须是字符串`);
+  const trimmed = value.trim();
+  if (trimmed.length > 32_768 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+    throw new Error(`${label} 包含非法字符`);
+  }
+  if (!trimmed.startsWith('\\\\') || trimmed.startsWith('\\\\?\\') || trimmed.startsWith('\\\\.\\')) {
+    throw new Error(`${label} 必须是 \\\\server\\share\\... 形式的 UNC 文件路径`);
+  }
+  if (trimmed.includes('/')) {
+    throw new Error(`${label} 只能使用反斜杠`);
+  }
+  const parts = trimmed.slice(2).split('\\');
+  if (
+    parts.length < 3
+    || parts.some((part) => (
+      !part
+      || part === '.'
+      || part === '..'
+      || part.includes(':')
+      || part.endsWith('.')
+      || part.endsWith(' ')
+    ))
+  ) {
+    throw new Error(`${label} 不允许设备路径、盘符、空路径段或 . / .. 路径段`);
+  }
+  if (!parts.at(-1)?.toLowerCase().endsWith('.json')) {
+    throw new Error(`${label} 必须指向 .json 文件`);
+  }
+  return trimmed;
+}
+
 function sanitizeWorkspaceSourceAdo(value: unknown): WorkspaceSourceAdoIdentity | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -400,6 +437,7 @@ function sanitizeWorkspaceSourceAdo(value: unknown): WorkspaceSourceAdoIdentity 
 
 export function workspaceSourceIdentity(source: WorkspaceSource): string {
   if (source.kind === 'url') return JSON.stringify(['url', source.url]);
+  if (source.kind === 'unc') return JSON.stringify(['unc', source.path.toLowerCase()]);
   if (source.kind === 'ado') {
     const ado = source.ado;
     return JSON.stringify([
@@ -459,6 +497,18 @@ function sanitizeWorkspaceSource(raw: unknown): WorkspaceSource | null {
         ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
       };
     }
+    if (kind === 'unc') {
+      const path = normalizeUncWorkspacePath(source.path, 'workspaceSource.path');
+      return {
+        kind: 'unc',
+        path,
+        ...(name ? { name } : {}),
+        importedAt,
+        applied,
+        ...(follow !== undefined ? { follow } : {}),
+        ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
+      };
+    }
     if (kind === 'file') {
       return {
         kind: 'file',
@@ -481,7 +531,7 @@ export function shouldCheckWorkspaceSync(
   source: WorkspaceSource | null,
   now = Date.now(),
 ): boolean {
-  if (!source || (source.kind !== 'url' && source.kind !== 'ado')) return false;
+  if (!source || (source.kind !== 'url' && source.kind !== 'ado' && source.kind !== 'unc')) return false;
   if (source.follow === false) return false;
   return now - (source.lastCheckedAt ?? 0) >= SYNC_INTERVAL_MS;
 }
@@ -521,16 +571,17 @@ export function mergeAppliedFields(
   previous: WorkspaceSource | null,
   update: {
     url?: string;
+    uncPath?: string;
     name?: string;
     importedAt: number;
-    sourceKind?: 'url' | 'file' | 'ado';
+    sourceKind?: 'url' | 'file' | 'ado' | 'unc';
     ado?: WorkspaceSourceAdoIdentity;
     checkedAt?: number;
   },
   appliedNow: Record<string, string>,
 ): WorkspaceSource {
   const kind = update.sourceKind
-    ?? (update.ado ? 'ado' : update.url ? 'url' : previous?.kind ?? 'file');
+    ?? (update.ado ? 'ado' : update.uncPath ? 'unc' : update.url ? 'url' : previous?.kind ?? 'file');
   const nextName = update.name ?? previous?.name;
   const nextApplied = { ...previous?.applied, ...appliedNow };
   if (kind === 'file') {
@@ -554,6 +605,29 @@ export function mergeAppliedFields(
     const next: AdoWorkspaceSource = {
       kind: 'ado',
       ado,
+      ...(nextName ? { name: nextName } : {}),
+      importedAt: update.importedAt,
+      applied: nextApplied,
+    };
+    const sameIdentity = previous ? workspaceSourceIdentity(previous) === workspaceSourceIdentity(next) : false;
+    return {
+      ...next,
+      follow: sameIdentity ? previous?.follow : true,
+      ...(update.checkedAt !== undefined
+        ? { lastCheckedAt: update.checkedAt }
+        : sameIdentity && previous?.lastCheckedAt !== undefined
+          ? { lastCheckedAt: previous.lastCheckedAt }
+          : {}),
+    };
+  }
+  if (kind === 'unc') {
+    const path = normalizeUncWorkspacePath(
+      update.uncPath ?? (previous?.kind === 'unc' ? previous.path : undefined),
+      'workspaceSource.path',
+    );
+    const next: UncWorkspaceSource = {
+      kind: 'unc',
+      path,
       ...(nextName ? { name: nextName } : {}),
       importedAt: update.importedAt,
       applied: nextApplied,
