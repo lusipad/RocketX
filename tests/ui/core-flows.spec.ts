@@ -1383,11 +1383,16 @@ test('文字和图片确认后作为同一条上传消息发送（issue #155）'
   });
 
   const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
-  await expect(dialog.getByText('图文说明', { exact: true })).toBeVisible();
+  const caption = dialog.getByRole('textbox', { name: '图片说明' });
+  await expect(caption).toBeFocused();
+  await expect(caption).toHaveValue('图文说明');
+  await caption.fill('在确认弹窗补充的说明');
+  await caption.press('Shift+Enter');
+  await caption.type('第二行');
   await dialog.getByRole('button', { name: '发送（1）' }).click();
 
   await expect.poll(() => uploadedMessages.length).toBe(1);
-  expect(uploadedMessages[0]?.msg).toBe('图文说明');
+  expect(uploadedMessages[0]?.msg).toBe('在确认弹窗补充的说明\n第二行');
   await expect(composer).toHaveValue('');
   expect(pageErrors).toEqual([]);
 });

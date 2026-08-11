@@ -2423,7 +2423,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   confirmUpload: async (message) => {
     const files = get().pendingFiles;
-    const uploadMessage = get().pendingUploadMessage ?? message;
+    const uploadMessage = message ?? get().pendingUploadMessage ?? undefined;
     set({ pendingFiles: null, pendingUploadMessage: null });
     return files ? get().uploadFiles(files, undefined, uploadMessage) : false;
   },

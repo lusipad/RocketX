@@ -38,3 +38,20 @@ test('文字与图片一起发送时，正文跟随第一张图片且只发送�
     { name: 'second.png', msg: undefined },
   ]);
 });
+
+test('发送确认弹窗编辑后的说明覆盖打开弹窗时的正文（issue #283）', async () => {
+  const uploaded: Array<{ name: string; msg?: string }> = [];
+  rest.uploadMedia = (async (_rid: string, file: Blob, opts?: { msg?: string }) => {
+    uploaded.push({ name: (file as File).name, msg: opts?.msg });
+  }) as typeof rest.uploadMedia;
+  useChat.setState({
+    activeRid: 'room-1',
+    uploading: 0,
+    replyTo: null,
+    pendingFiles: [new File(['image'], 'diagram.png', { type: 'image/png' })],
+    pendingUploadMessage: '打开弹窗时的正文',
+  });
+
+  assert.equal(await useChat.getState().confirmUpload('用户编辑后的说明'), true);
+  assert.deepEqual(uploaded, [{ name: 'diagram.png', msg: '用户编辑后的说明' }]);
+});
