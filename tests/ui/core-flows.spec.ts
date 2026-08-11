@@ -866,6 +866,124 @@ async function installAdoDirectMock(
   });
 }
 
+async function installContributionAdoMock(page: Page) {
+  await page.route('**/ado/**', (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname.toLowerCase();
+    if (path.endsWith('/_apis/connectiondata')) {
+      return fulfillJson(route, {
+        authenticatedUser: {
+          id: 'ado-user',
+          customDisplayName: 'Test User',
+          properties: { Account: { $value: 'tester' } },
+        },
+      });
+    }
+    if (path.endsWith('/_apis/projects')) {
+      return fulfillJson(route, { value: [{ id: 'project-alpha', name: 'Alpha' }] });
+    }
+    if (path.endsWith('/_apis/git/repositories')) {
+      return fulfillJson(route, {
+        value: [{ id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } }],
+      });
+    }
+    if (path.endsWith('/repositories/repo-a/commits')) {
+      return fulfillJson(route, {
+        value: [{
+          commitId: 'commit-a',
+          comment: '完成贡献日历',
+          author: { name: 'Test User', email: 'tester@example.com', date: '2026-08-10T02:00:00Z' },
+          remoteUrl: `${url.origin}/ado/Alpha/_git/RocketX/commit/commit-a`,
+        }],
+      });
+    }
+    if (path.endsWith('/_apis/git/pullrequests')) {
+      return fulfillJson(route, {
+        value: [{
+          pullRequestId: 101,
+          title: 'Improve contribution profile',
+          creationDate: '2026-08-10T03:00:00Z',
+          createdBy: { id: 'ado-user', displayName: 'Test User' },
+          repository: { id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } },
+        }],
+      });
+    }
+    if (path.endsWith('/pullrequests/101/threads')) {
+      return fulfillJson(route, [
+        {
+          id: 11,
+          publishedDate: '2026-08-10T04:00:00Z',
+          threadContext: { filePath: '/src/profile.ts' },
+          comments: [{
+            id: 1,
+            author: { id: 'ado-user', displayName: 'Test User' },
+            commentType: 'text',
+            content: '这里需要保留本地日期。',
+            isDeleted: false,
+            publishedDate: '2026-08-10T04:00:00Z',
+          }],
+        },
+        {
+          id: 12,
+          publishedDate: '2026-08-10T05:00:00Z',
+          comments: [{
+            id: 1,
+            author: { id: 'build-service', displayName: 'Build Service', isContainer: true },
+            commentType: 'system',
+            content: 'vote',
+            isDeleted: false,
+            publishedDate: '2026-08-10T05:00:00Z',
+          }],
+          properties: {
+            CodeReviewThreadType: { $value: 'VoteUpdate' },
+            CodeReviewVotedByTfId: { $value: 'ado-user' },
+            CodeReviewVoteResult: { $value: '10' },
+          },
+        },
+      ]);
+    }
+    if (path.endsWith('/_apis/wit/reporting/workitemrevisions')) {
+      if (url.searchParams.get('includeDiscussionChangesOnly') === 'true') {
+        return fulfillJson(route, {
+          values: [{
+            id: 41,
+            rev: 2,
+            fields: {
+              'System.TeamProject': 'Alpha',
+              'System.ChangedDate': '2026-08-10T07:00:00Z',
+            },
+          }],
+        });
+      }
+      return fulfillJson(route, {
+        values: [{
+          id: 41,
+          rev: 1,
+          fields: {
+            'System.Title': 'Add personal contribution page',
+            'System.WorkItemType': 'Task',
+            'System.TeamProject': 'Alpha',
+            'System.CreatedDate': '2026-08-10T06:00:00Z',
+            'System.CreatedBy': { id: 'ado-user', displayName: 'Test User' },
+          },
+        }],
+      });
+    }
+    if (path.endsWith('/_apis/wit/workitems/41/comments')) {
+      return fulfillJson(route, {
+        comments: [{
+          commentId: 7,
+          text: '补上键盘操作与明细链接。',
+          createdDate: '2026-08-10T07:00:00Z',
+          isDeleted: false,
+          createdBy: { id: 'ado-user', displayName: 'Test User' },
+        }],
+      });
+    }
+    return fulfillJson(route, { value: [] });
+  });
+}
+
 async function installRocketChatMock(
   page: Page,
   options: {
@@ -1972,6 +2090,52 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   await page.getByTitle('查看群信息').first().click();
   const card = title.locator('xpath=ancestor::span[contains(@class,"inline-block")]');
   await expect.poll(() => card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('ADO 个人贡献页通过正式导航展示热力图、键盘日期明细与筛选（issue #291）', async ({ page }, testInfo) => {
+  await installContributionAdoMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  const personal = page.getByRole('navigation').getByRole('region', { name: '个人事务' });
+
+  await personal.getByRole('button', { name: '贡献', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Test User' })).toBeVisible();
+  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
+  await expect(page.getByLabel('各类活动总数')).toContainText('工作项评论');
+  await expect(page.getByLabel('各类活动总数').getByText('≥1', { exact: true })).toHaveCount(1);
+  await expect(page.locator('main header')).toContainText('已读取的活动');
+  await expect(page.locator('main header').getByText('6', { exact: true })).toBeVisible();
+
+  const day = page.getByRole('button', { name: /2026年8月10日，6 项贡献/ });
+  await expect(day).toBeVisible();
+  await day.focus();
+  await expect(day).toBeFocused();
+  await day.press('Enter');
+  const details = page.getByRole('region', { name: /2026年8月10日.*贡献明细/ });
+  await expect(details).toBeVisible();
+  await expect(details.getByRole('link')).toHaveCount(6);
+  await expect(details).toContainText('完成贡献日历');
+  await expect(details).toContainText('Improve contribution profile');
+  await expect(details).toContainText('Add personal contribution page');
+
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await testInfo.attach('issue-291-contribution-profile', {
+    body: await page.screenshot(),
+    contentType: 'image/png',
+  });
+
+  await page.getByLabel('活动类型').selectOption('commit');
+  await expect(page.locator('main header').getByText('1', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
+  await expect(page.getByLabel('各类活动总数')).not.toContainText('创建 PR');
+
   expect(pageErrors).toEqual([]);
 });
 

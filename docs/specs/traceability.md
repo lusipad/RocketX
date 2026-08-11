@@ -47,6 +47,8 @@
 | `WB-AC-01`、`WB-AC-02`、`WB-AC-03` | `pages/WorkbenchPage.tsx`、`stores/workbench.ts`、`components/AdoLists.tsx` | `workbench-refresh.test.ts`、`custom-query.test.ts`、`ado-open-issues.test.ts` | 真实 ADO INT |
 | `WB-AC-04`、`WB-AC-05` | `lib/adoDirect.ts`、工作项写动作 | `ado-write-actions.test.ts` | 写超时/并发冲突 INT |
 | `WB-AC-06` | ADO 受管 Skill 与业务 MCP | `ado-skill-cli.test.ts`、`app-server-controller.test.ts` | 自然语言真实任务 INT |
+| `WB-AC-07`、`WB-AC-08` | `pages/ProfileContributionsPage.tsx`、`components/ContributionHeatmap.tsx`、`stores/profileContributions.ts` | `profile-contributions-ui.test.ts`、`tests/ui/core-flows.spec.ts` | 真实 ADO 身份、时区和链接 INT |
+| `WB-AC-09`、`WB-AC-10` | `lib/adoContributions.ts`、`lib/adoDirect.ts` | `profile-contributions-data.test.ts` | ADO Server 2022 大实例分页、权限局部失败与 NTLM 取消边界 INT |
 | `PERS-AC-01` | `stores/todos.ts` | `manual-todo.test.ts` | 桌面 DB 失败注入 |
 | `PERS-AC-02` | 各本地 Store 的账号作用域 | `manual-todo.test.ts`、`download-history.test.ts` | 真实切换账号 |
 | `PERS-AC-03` | `stores/calendar.ts` | 日历相关 regression / UI | 多来源失效组合 |

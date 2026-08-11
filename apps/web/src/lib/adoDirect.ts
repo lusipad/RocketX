@@ -26,11 +26,22 @@ export const canUseNtlm = isTauri;
 const ADO_REQUEST_TIMEOUT_MS = 15_000;
 const CONTROLLED_WRITE_READBACK_RESERVE_MS = 1_000;
 
-type AdoRequestMethod = 'GET' | 'POST' | 'PATCH';
+export type AdoRequestMethod = 'GET' | 'POST' | 'PATCH';
 
-interface AdoRequestOptions {
+export interface DirectRequestOptions {
   deadlineAt?: number;
   signal?: AbortSignal;
+}
+
+export interface AdoProjectRef {
+  id: string;
+  name: string;
+}
+
+export interface AdoRepositoryRef {
+  id: string;
+  name: string;
+  project: AdoProjectRef;
 }
 
 export class AdoRequestTimeoutError extends Error {
@@ -173,9 +184,14 @@ async function adoRequestRaw(
   path: string,
   body?: unknown,
   contentType = 'application/json',
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ): Promise<AdoRawResponse> {
   const url = `${base(cfg)}${path}`;
+  if (options?.signal?.aborted) {
+    throw options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new DOMException('请求已取消', 'AbortError');
+  }
   const deadlineAt = options?.deadlineAt ?? createAdoDeadline();
   const timeoutMs = remainingMsUntil(deadlineAt);
   if (timeoutMs <= 0) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
@@ -192,6 +208,11 @@ async function adoRequestRaw(
         );
       }
       ({ status, text } = await ntlmRequest(url, method, payload, contentType, timeoutMs));
+      if (options?.signal?.aborted) {
+        throw options.signal.reason instanceof Error
+          ? options.signal.reason
+          : new DOMException('请求已取消', 'AbortError');
+      }
     } else {
       await ensureHttpOrigin(url);
       const requestSignal = withDeadlineSignal(deadlineAt, options?.signal);
@@ -237,7 +258,7 @@ async function adoRequest<T>(
   path: string,
   body?: unknown,
   contentType = 'application/json',
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ): Promise<T> {
   const { status, text, url } = await adoRequestRaw(cfg, method, path, body, contentType, options);
 
@@ -536,6 +557,7 @@ function mapWorkItem(cfg: DirectConfig, w: RawWorkItem) {
  */
 export async function directGetIdentity(
   cfg: DirectConfig,
+  options?: DirectRequestOptions,
 ): Promise<{ id: string; displayName: string; account: string }> {
   const res = await adoRequest<{
     authenticatedUser?: {
@@ -544,7 +566,7 @@ export async function directGetIdentity(
       customDisplayName?: string;
       properties?: { Account?: { $value?: string } };
     };
-  }>(cfg, 'GET', '/_apis/connectionData?api-version=7.0-preview');
+  }>(cfg, 'GET', '/_apis/connectionData?api-version=7.0-preview', undefined, 'application/json', options);
   const u = res.authenticatedUser ?? {};
   const displayName = u.customDisplayName || u.providerDisplayName || '';
   return {
@@ -615,20 +637,55 @@ export async function directComment(
   );
 }
 
-export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
+export async function directGetProjectRefs(
+  cfg: DirectConfig,
+  options?: DirectRequestOptions,
+): Promise<AdoProjectRef[]> {
   const pageSize = 100;
-  const projects: string[] = [];
+  const projects: AdoProjectRef[] = [];
   for (let skip = 0; ; skip += pageSize) {
-    const res = await adoRequest<{ value: { name: string }[] }>(
+    const res = await adoRequest<{ value: { id?: string; name: string }[] }>(
       cfg,
       'GET',
       `/_apis/projects?api-version=7.0&$top=${pageSize}&$skip=${skip}`,
+      undefined,
+      'application/json',
+      options,
     );
     const page = res.value ?? [];
-    projects.push(...page.map((project) => project.name));
+    projects.push(...page.map((project) => ({ id: project.id ?? '', name: project.name })));
     if (page.length < pageSize) break;
   }
-  return projects.sort();
+  return projects.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
+  return (await directGetProjectRefs(cfg)).map((project) => project.name);
+}
+
+export async function directGetRepositoriesForProject(
+  cfg: DirectConfig,
+  project: Pick<AdoProjectRef, 'id' | 'name'> | string,
+  options?: DirectRequestOptions,
+): Promise<AdoRepositoryRef[]> {
+  const projectRef = typeof project === 'string' ? { id: '', name: project } : project;
+  const key = projectRef.id || projectRef.name;
+  const res = await adoRequest<{ value: { id?: string; name: string; project?: { id?: string; name?: string } }[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(key)}/_apis/git/repositories?includeHidden=true&api-version=7.0`,
+    undefined,
+    'application/json',
+    options,
+  );
+  return (res.value ?? []).map((repository) => ({
+    id: repository.id ?? '',
+    name: repository.name,
+    project: {
+      id: repository.project?.id ?? projectRef.id,
+      name: repository.project?.name ?? projectRef.name,
+    },
+  }));
 }
 
 /** 当前项目实际启用的工作项类型；不同过程模板（Basic/Agile/Scrum/CMMI）并不相同。 */
@@ -824,7 +881,7 @@ function describeWorkItemStateConflict(
 async function directGetWorkItemWithOptions(
   cfg: DirectConfig,
   id: number,
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ) {
   const detail = await adoRequest<{ value: RawWorkItem[] }>(
     cfg,
@@ -841,7 +898,7 @@ async function directGetWorkItemWithOptions(
 async function mustGetWorkItemWithOptions(
   cfg: DirectConfig,
   id: number,
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ): Promise<DirectWorkItem> {
   const item = await directGetWorkItemWithOptions(cfg, id, options);
   if (!item) throw new Error(`工作项 #${id} 不存在或当前账号无权访问`);
@@ -1087,6 +1144,199 @@ export async function directGetPullRequest(
     `/_apis/git/pullrequests/${id}?api-version=7.0`,
   );
   return mapPullRequest(cfg, pr);
+}
+
+export async function directGetCommitPage(
+  cfg: DirectConfig,
+  project: string,
+  repositoryId: string,
+  options: {
+    author: string;
+    fromDate: string;
+    toDate: string;
+    top: number;
+    skip: number;
+    signal?: AbortSignal;
+  },
+): Promise<any[]> {
+  const params = new URLSearchParams({
+    'searchCriteria.author': options.author,
+    'searchCriteria.fromDate': options.fromDate,
+    'searchCriteria.toDate': options.toDate,
+    'searchCriteria.$top': String(options.top),
+    'searchCriteria.$skip': String(options.skip),
+    'api-version': '7.0',
+  });
+  const response = await adoRequest<{ value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  return response.value ?? [];
+}
+
+export async function directGetPullRequestPage(
+  cfg: DirectConfig,
+  options: {
+    project: string;
+    repositoryId?: string;
+    creatorId?: string;
+    reviewerId?: string;
+    status?: string;
+    minTime?: string;
+    maxTime?: string;
+    queryTimeRangeType?: 'created' | 'closed';
+    top: number;
+    skip: number;
+    signal?: AbortSignal;
+  },
+): Promise<any[]> {
+  const params = new URLSearchParams({
+    '$top': String(options.top),
+    '$skip': String(options.skip),
+    'api-version': '7.0',
+  });
+  if (options.repositoryId) params.set('searchCriteria.repositoryId', options.repositoryId);
+  if (options.creatorId) params.set('searchCriteria.creatorId', options.creatorId);
+  if (options.reviewerId) params.set('searchCriteria.reviewerId', options.reviewerId);
+  if (options.status) params.set('searchCriteria.status', options.status);
+  if (options.minTime) params.set('searchCriteria.minTime', options.minTime);
+  if (options.maxTime) params.set('searchCriteria.maxTime', options.maxTime);
+  if (options.queryTimeRangeType) {
+    params.set('searchCriteria.queryTimeRangeType', options.queryTimeRangeType);
+  }
+  const response = await adoRequest<{ value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(options.project)}/_apis/git/pullrequests?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  return response.value ?? [];
+}
+
+export async function directGetPullRequestThreads(
+  cfg: DirectConfig,
+  project: string,
+  repositoryId: string,
+  pullRequestId: number,
+  options?: DirectRequestOptions,
+): Promise<any[]> {
+  const response = await adoRequest<any[] | { value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads?api-version=7.0`,
+    undefined,
+    'application/json',
+    options,
+  );
+  return Array.isArray(response) ? response : (response.value ?? []);
+}
+
+export async function directGetWorkItemRevisionPage(
+  cfg: DirectConfig,
+  project: string,
+  options: {
+    fields: string[];
+    startDateTime?: string;
+    continuationToken?: string;
+    includeDiscussionChangesOnly?: boolean;
+    includeIdentityRef?: boolean;
+    pageSize?: number;
+    signal?: AbortSignal;
+  },
+): Promise<{ values: any[]; continuationToken?: string; isLastBatch?: boolean }> {
+  const params = new URLSearchParams({ 'api-version': '7.0' });
+  if (options.fields.length > 0) params.set('fields', options.fields.join(','));
+  if (options.startDateTime) params.set('startDateTime', options.startDateTime);
+  if (options.continuationToken) params.set('continuationToken', options.continuationToken);
+  if (options.includeDiscussionChangesOnly) params.set('includeDiscussionChangesOnly', 'true');
+  if (options.includeIdentityRef) params.set('includeIdentityRef', 'true');
+  if (options.pageSize) params.set('$maxPageSize', String(options.pageSize));
+  const response = await adoRequest<{
+    values?: any[];
+    value?: any[];
+    continuationToken?: string;
+    nextLink?: string;
+    isLastBatch?: boolean;
+  }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/wit/reporting/workItemRevisions?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  let continuationToken = response.continuationToken;
+  if (!continuationToken && response.nextLink) {
+    try {
+      const next = new URL(response.nextLink, base(cfg));
+      if (next.origin !== new URL(base(cfg)).origin) {
+        throw new Error('reporting work item revisions 返回了跨源 nextLink');
+      }
+      continuationToken = next.searchParams.get('continuationToken') ?? undefined;
+    } catch (err) {
+      throw new Error(`reporting work item revisions 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!continuationToken) throw new Error('reporting work item revisions 分页链接缺少 continuationToken');
+  }
+  return {
+    values: response.values ?? response.value ?? [],
+    continuationToken,
+    isLastBatch: response.isLastBatch,
+  };
+}
+
+export async function directGetWorkItemCommentsPage(
+  cfg: DirectConfig,
+  project: string,
+  workItemId: number,
+  options: {
+    continuationToken?: string;
+    top?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ comments: any[]; continuationToken?: string }> {
+  const params = new URLSearchParams({
+    'api-version': '7.0-preview.3',
+    order: 'asc',
+    includeDeleted: 'false',
+  });
+  if (options.top) params.set('$top', String(options.top));
+  if (options.continuationToken) params.set('continuationToken', options.continuationToken);
+  const response = await adoRequest<{
+    comments?: any[];
+    continuationToken?: string;
+    nextPage?: string;
+  }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/wit/workItems/${workItemId}/comments?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  let continuationToken = response.continuationToken;
+  if (!continuationToken && response.nextPage) {
+    try {
+      const next = new URL(response.nextPage, base(cfg));
+      if (next.origin !== new URL(base(cfg)).origin) {
+        throw new Error('Work Item Comments API 返回了跨源 nextPage');
+      }
+      continuationToken = next.searchParams.get('continuationToken') ?? undefined;
+    } catch (err) {
+      throw new Error(`Work Item Comments API 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!continuationToken) throw new Error('Work Item Comments API 分页链接缺少 continuationToken');
+  }
+  return {
+    comments: response.comments ?? [],
+    continuationToken,
+  };
 }
 
 export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {

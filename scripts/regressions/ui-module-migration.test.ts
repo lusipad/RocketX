@@ -26,6 +26,7 @@ test('退役的 today / ai-assistant / codex 持久化值不再迁移到新页�
   assert.equal(migratePersistedModule('ai-assistant'), 'messages');
   assert.equal(migratePersistedModule('codex'), 'messages');
   assert.equal(migratePersistedModule('butler-view'), 'butler-view');
+  assert.equal(migratePersistedModule('contributions'), 'contributions');
   assert.equal(migratePersistedModule('downloads'), 'downloads');
   assert.equal(migratePersistedModule('unknown'), 'messages');
 

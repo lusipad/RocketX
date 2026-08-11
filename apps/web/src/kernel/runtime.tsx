@@ -1,6 +1,6 @@
 import { lazy, Suspense, type ComponentType } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
-import { Bell, Blocks, Download } from 'lucide-react';
+import { Bell, Blocks, Download, SquareActivity } from 'lucide-react';
 import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -64,6 +64,7 @@ function lazyComponent(
 }
 
 const ButlerPage = lazyComponent(() => import('../pages/ButlerPage'));
+const ProfileContributionsPage = lazyComponent(() => import('../pages/ProfileContributionsPage'));
 const SummaryPanel = lazyComponent(() => import('../components/SummaryPanel'));
 const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
 const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
@@ -494,9 +495,16 @@ function WorkbenchModule() {
   return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
 }
 
+function ProfileContributionsModule() {
+  const config = useWorkbench((state) => state.config);
+  const connected = !!config?.adoBase;
+  return connected ? <ProfileContributionsPage /> : <SettingsPage initialSection="workbench" />;
+}
+
 function registerBuiltins(): void {
   const features = runtimeFeatures();
   const modules = [
+    ['contributions', '贡献', ProfileContributionsModule, SquareActivity],
     ['workbench', '工作台', WorkbenchModule, undefined],
     ['butler-view', '管家', ButlerPage, Bell],
     ['todos', '待办', TodosPage, undefined],

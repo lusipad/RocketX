@@ -13,11 +13,12 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   ]);
 
   assert.match(runtime, /\['workbench', '工作台', WorkbenchModule, undefined\]/);
+  assert.match(runtime, /\['contributions', '贡献', ProfileContributionsModule, SquareActivity\]/);
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
   assert.doesNotMatch(runtime, /\['codex', 'Codex'/);
   assert.doesNotMatch(runtime, /CodexPage/);
 
-  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'todos', 'calendar', 'downloads'\]\);/);
+  assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'contributions', 'todos', 'calendar', 'downloads'\]\);/);
   assert.match(navRail, /const WORK_MODULE_IDS = new Set\(\['workbench', 'contacts'\]\);/);
   assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
   assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: '管家'/);
@@ -45,6 +46,7 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
 
   assert.deepEqual(MODULE_ORDER, [
     'messages',
+    'contributions',
     'workbench',
     'butler-view',
     'todos',
