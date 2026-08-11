@@ -94,7 +94,7 @@ export default function ContributionHeatmap({
   return (
     <section
       aria-label="贡献日历"
-      className="mx-auto w-fit max-w-full rounded-xl border border-line bg-surface-3 p-4"
+      className="w-full rounded-xl border border-line bg-surface-3 p-4"
     >
       <div className="max-w-full overflow-x-auto pb-2">
         <div className="mx-auto w-max">
