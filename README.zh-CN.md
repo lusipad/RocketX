@@ -57,15 +57,15 @@ pnpm dev
 接入 Azure DevOps Server 2022 通知见 [`services/ado-bridge/README.md`](services/ado-bridge/README.md)。
 
 桌面端全新安装会先用 GTD 流程说明 RocketX 如何可靠捕获、理清下一步并保护注意力，再进入
-团队或个人设置。选择「加入团队」时，可从本地文件或无需登录的 HTTP(S) / Git Raw URL 导入
-不含凭据的 `rcx.workspace.json`，确认 Rocket.Chat、ADO、工作项模板、层级布局和更新源等默认值后，再在本机
-填写密码与 PAT。URL 团队配置每 24 小时检查一次，有变化时先展示差异，不会静默
+团队或个人设置。选择「加入团队」时，可从本地文件、UNC 共享、无需登录的 HTTP(S) / Git Raw URL，
+或复用当前凭据的 Azure DevOps Git 文件链接导入不含凭据的 `rcx.workspace.json`；确认 Rocket.Chat、ADO、
+工作项模板、层级布局和更新源等默认值后，再在本机填写密码与 PAT。URL 与 ADO 团队配置每 24 小时检查一次，有变化时先展示差异，不会静默
 覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
 登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。「管家」复用 Codex 原生
 Thread、模型、权限、Skills、Plugins、Apps 和本地 Memory，并通过 `app-server` 真实执行；运行中
-需要补充输入或审批时，请求只回到所属任务。管家任务可与 Codex App 顺序接续并显式刷新，群聊
+需要补充输入或审批时，请求只回到所属任务。不同任务线程可在共享 Runtime 中并行运行；同一线程可与 Codex App 顺序接续并显式刷新，群聊
 AI 托管也可把记录交给 Codex App 形成新任务草稿。已安排任务保存在当前设备，只有 RocketX 进程
 仍在运行且本地 Codex 可用时才会执行。当前桌面安装包不捆绑 Codex；网页版可正常使用消息和
 确定性工作界面，但没有本地 Codex 执行通道。具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
@@ -110,7 +110,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.40.1`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.40.2`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
@@ -123,8 +123,8 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
 - **本地开发**：`pnpm --filter @rcx/desktop dev`（需要 [Rust 工具链](https://tauri.app/start/prerequisites/)）。
 
-共享 Agent 需要已安装并登录的兼容本地 Codex Runtime。它直接使用用户选择的本地工作目录与 Codex
-原生沙箱、审批和会话能力，不再构建或运行 Agent Runner Docker 镜像。
+共享 Agent 需要已安装并登录的兼容本地 Codex Runtime。它使用在管家中配置的本机 AI 项目目录与 Codex
+原生沙箱、审批和会话能力；不同任务按线程隔离，不再构建或运行 Agent Runner Docker 镜像。
 
 桌面端在登录页填写 Rocket.Chat 服务器地址直连。服务器需开启 CORS：
 `API_Enable_CORS = true`、`API_CORS_Origin = *`（本仓库 docker-compose 已内置）。
