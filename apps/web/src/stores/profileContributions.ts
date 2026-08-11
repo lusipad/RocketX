@@ -34,6 +34,7 @@ interface ProfileContributionsState {
 
 let loadRevision = 0;
 let activeController: AbortController | null = null;
+let activeLoad: { key: string; promise: Promise<void> } | null = null;
 
 function directConfig() {
   const { config, configRevision } = useWorkbench.getState();
@@ -61,7 +62,7 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
   repositories: [],
   selectedDay: null,
 
-  load: async ({ force = false } = {}) => {
+  load: ({ force = false } = {}) => {
     const connection = directConfig();
     if (!connection) {
       set({
@@ -74,8 +75,23 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
         repositories: [],
         lastUpdated: null,
       });
-      return;
+      return Promise.resolve();
     }
+
+    const state = get();
+    const requestKey = JSON.stringify({
+      adoBase: connection.config.adoBase.trim().replace(/\/+$/, '').toLowerCase(),
+      auth: connection.config.auth ?? 'pat',
+      connectionRevision: connection.connectionRevision,
+      range: state.range,
+      filters: {
+        project: state.filters.project ?? '',
+        repository: state.filters.repository ?? '',
+        type: state.filters.type ?? '',
+      },
+      force,
+    });
+    if (activeLoad?.key === requestKey) return activeLoad.promise;
 
     activeController?.abort();
     const controller = new AbortController();
@@ -84,32 +100,38 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
     const current = () => revision === loadRevision && !controller.signal.aborted;
     set({ loading: true, error: null });
 
-    try {
-      const snapshot = await loadAdoContributions(connection.config, {
-        range: get().range,
-        filters: get().filters,
-        signal: controller.signal,
-        force,
-        connectionRevision: connection.connectionRevision,
-      });
-      if (!current()) return;
-      set({
-        identity: snapshot.identity,
-        events: snapshot.events,
-        statuses: snapshot.statuses,
-        projects: snapshot.projects,
-        repositories: snapshot.repositories,
-        lastUpdated: snapshot.fetchedAt,
-      });
-    } catch (err) {
-      if (!current()) return;
-      set({ error: err instanceof Error ? err.message : String(err ?? '加载贡献数据失败') });
-    } finally {
-      if (current()) {
-        activeController = null;
-        set({ loading: false });
+    const request = { key: requestKey, promise: Promise.resolve() };
+    request.promise = (async () => {
+      try {
+        const snapshot = await loadAdoContributions(connection.config, {
+          range: state.range,
+          filters: state.filters,
+          signal: controller.signal,
+          force,
+          connectionRevision: connection.connectionRevision,
+        });
+        if (!current()) return;
+        set({
+          identity: snapshot.identity,
+          events: snapshot.events,
+          statuses: snapshot.statuses,
+          projects: snapshot.projects,
+          repositories: snapshot.repositories,
+          lastUpdated: snapshot.fetchedAt,
+        });
+      } catch (err) {
+        if (!current()) return;
+        set({ error: err instanceof Error ? err.message : String(err ?? '加载贡献数据失败') });
+      } finally {
+        if (activeLoad === request) activeLoad = null;
+        if (current()) {
+          activeController = null;
+          set({ loading: false });
+        }
       }
-    }
+    })();
+    activeLoad = request;
+    return request.promise;
   },
 
   setRange: (range) => set({ range, selectedDay: null }),
@@ -130,6 +152,7 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
     loadRevision += 1;
     activeController?.abort();
     activeController = null;
+    activeLoad = null;
     set({ loading: false });
   },
 }));

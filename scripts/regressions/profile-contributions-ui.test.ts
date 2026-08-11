@@ -79,5 +79,7 @@ test('个人贡献页保留正式导航、键盘格子、覆盖警告与中性�
   assert.match(page, /hasIncompleteCoverage \? '已读取的活动'/);
   assert.match(page, /取消加载/);
   assert.match(page, /load\(\{ force: true \}\)/);
+  assert.match(page, /const AUTO_LOAD_DELAY_MS = 200/);
+  assert.match(page, /setTimeout\(\(\) => void load\(\), AUTO_LOAD_DELAY_MS\)/);
   assert.doesNotMatch(page, /排名|绩效|排行榜/);
 });

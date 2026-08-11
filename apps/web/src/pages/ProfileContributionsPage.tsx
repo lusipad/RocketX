@@ -20,6 +20,8 @@ import {
 import { useProfileContributions } from '../stores/profileContributions';
 import { useWorkbench } from '../stores/workbench';
 
+const AUTO_LOAD_DELAY_MS = 200;
+
 const EVENT_META: Record<
   ContributionEventType,
   { label: string; icon: typeof SquareActivity }
@@ -163,8 +165,8 @@ export default function ProfileContributionsPage() {
 
   const filterKey = `${filters.project ?? ''}\0${filters.repository ?? ''}\0${filters.type ?? ''}`;
   useEffect(() => {
-    // Debug 下 StrictMode 会先挂载再立即卸载；延后一个 task 可避免发出无法中止的重复 NTLM 请求。
-    const timer = window.setTimeout(() => void load(), 0);
+    // 合并 Debug StrictMode 双挂载与连续筛选，避免发出无法中止的重复 NTLM 请求。
+    const timer = window.setTimeout(() => void load(), AUTO_LOAD_DELAY_MS);
     return () => {
       window.clearTimeout(timer);
       cancel();
