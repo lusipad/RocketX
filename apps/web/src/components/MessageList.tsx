@@ -116,6 +116,7 @@ export default function MessageList({
   const userScrollIntent = useRef(false);
   const openPhase = useRef<'waiting' | 'settling' | 'complete' | 'cancelled'>('waiting');
   const settleScrollFrame = useRef<number | null>(null);
+  const locateSettled = useRef(false);
   /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
   const anchor = useRef<{
     height: number;
@@ -304,6 +305,7 @@ export default function MessageList({
     userScrollIntent.current = false;
     openPhase.current = 'waiting';
     observedInitialList.current = false;
+    locateSettled.current = false;
     setShowJump(false);
     setNewCount(0);
     anchor.current = null;
@@ -341,8 +343,26 @@ export default function MessageList({
       return;
     }
 
-    // 2) 显式消息定位由 MessageItem 的 scrollIntoView 完成，不能被普通贴底覆盖。
-    if (command === 'locate') return;
+    // 2) 显式消息定位在列表完成布局后执行一次，不能被普通贴底覆盖。
+    // 列表级定位与 transaction 和 DOM 布局同步，避免跨房间切换时遗漏子项 effect。
+    if (command === 'locate') {
+      const messageId = transaction?.messageId;
+      if (!locateSettled.current && messageId && transactionIsCurrent()) {
+        const target = [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+          (node) => node.dataset.messageId === messageId,
+        );
+        if (target) {
+          const viewportRect = el.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const targetTop = el.scrollTop + targetRect.top - viewportRect.top;
+          el.scrollTop = Math.max(0, targetTop - (el.clientHeight - targetRect.height) / 2);
+          locateSettled.current = true;
+          openPhase.current = 'complete';
+          stickToBottom.current = false;
+        }
+      }
+      return;
+    }
 
     // 3) 普通打开只有在历史与容器都就绪后才进入有界的贴底复核。
     if (command === 'latest' && historyLoaded) {
@@ -354,7 +374,16 @@ export default function MessageList({
     if (command === 'follow') {
       el.scrollTop = el.scrollHeight;
     }
-  }, [list, historyLoaded, anchorTick, recordScrollPhase, settleLatestOpen, transactionEntry]);
+  }, [
+    list,
+    historyLoaded,
+    anchorTick,
+    recordScrollPhase,
+    settleLatestOpen,
+    transaction,
+    transactionEntry,
+    transactionIsCurrent,
+  ]);
 
   // 不在底部时来了新消息 → 计数（用于「N 条新消息」浮条）
   const prevLen = useRef(0);

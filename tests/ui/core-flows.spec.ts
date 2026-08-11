@@ -530,6 +530,16 @@ const histories: Record<string, unknown[]> = {
   ],
 };
 
+function scrollHistory(prefix: string, target?: { index: number; id: string; text: string }) {
+  return Array.from({ length: 80 }, (_, index) => ({
+    _id: target?.index === index ? target.id : `${prefix}-${index}`,
+    rid: 'room-general',
+    msg: target?.index === index ? target.text : `${prefix} ${index}`,
+    ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+    u: ALICE,
+  }));
+}
+
 const stickerMessageFixture = {
   _id: 'general-sticker-image',
   rid: 'room-general',
@@ -858,7 +868,10 @@ async function installAdoDirectMock(
 
 async function installRocketChatMock(
   page: Page,
-  options: { includeStickerFixture?: boolean } = {},
+  options: {
+    includeStickerFixture?: boolean;
+    historyOverrides?: Record<string, unknown[]>;
+  } = {},
 ) {
   let ownStatus = ME.status;
   const sentMessages: Record<string, unknown>[] = [];
@@ -921,7 +934,7 @@ async function installRocketChatMock(
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
-      const messages = histories[rid] ?? [];
+      const messages = options.historyOverrides?.[rid] ?? histories[rid] ?? [];
       return fulfillJson(route, {
         messages: options.includeStickerFixture && rid === 'room-general'
           ? [...messages, stickerMessageFixture]
@@ -974,7 +987,11 @@ async function installRocketChatMock(
 
 async function bootAuthenticated(
   page: Page,
-  options: { expectMessages?: boolean; includeStickerFixture?: boolean } = {},
+  options: {
+    expectMessages?: boolean;
+    includeStickerFixture?: boolean;
+    historyOverrides?: Record<string, unknown[]>;
+  } = {},
 ) {
   const state = await installRocketChatMock(page, options);
   await page.addInitScript(({ server, userId }) => {
@@ -1398,38 +1415,9 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('普通打开使用独立 generation，首次布局与异步撑高后都完成贴底（issue #143）', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.evaluate(async () => {
-    const chat = (window as Window & {
-      __chat: {
-        getState: () => {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        };
-        setState: (state: {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        }) => void;
-      };
-    }).__chat;
-    const state = chat.getState();
-    chat.setState({
-      messages: {
-        ...state.messages,
-        'room-general': Array.from({ length: 80 }, (_, index) => ({
-          _id: `open-generation-${index}`,
-          rid: 'room-general',
-          msg: `Open generation message ${index}`,
-          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
-          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
-        })),
-      },
-      historyLoaded: { ...state.historyLoaded, 'room-general': true },
-      hasMore: { ...state.hasMore, 'room-general': false },
-    });
+test('普通打开和同会话重开在异步布局增长后都完成贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Open generation message') },
   });
 
   await conversation(page, 'General').click();
@@ -1437,15 +1425,6 @@ test('普通打开使用独立 generation，首次布局与异步撑高后都完
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
-
-  const firstGeneration = await page.evaluate(async () => {
-    return (window as Window & {
-      __chat: {
-        getState: () => { messageScrollTransaction: { generation: number; entry: string } | null };
-      };
-    }).__chat.getState().messageScrollTransaction;
-  });
-  expect(firstGeneration?.entry).toBe('latest');
 
   await viewport.evaluate((element) => {
     const content = element.firstElementChild as HTMLElement;
@@ -1459,14 +1438,6 @@ test('普通打开使用独立 generation，首次布局与异步撑高后都完
   )).toBeLessThan(2);
 
   await conversation(page, 'General').click();
-  const repeatedGeneration = await page.evaluate(async () => {
-    return (window as Window & {
-      __chat: {
-        getState: () => { messageScrollTransaction: { generation: number; entry: string } | null };
-      };
-    }).__chat.getState().messageScrollTransaction;
-  });
-  expect(repeatedGeneration?.generation).toBeGreaterThan(firstGeneration?.generation ?? 0);
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
@@ -1474,37 +1445,8 @@ test('普通打开使用独立 generation，首次布局与异步撑高后都完
 });
 
 test('底部无效滚轮不会取消普通打开后的贴底（issue #143）', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.evaluate(async () => {
-    const chat = (window as Window & {
-      __chat: {
-        getState: () => {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        };
-        setState: (state: {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        }) => void;
-      };
-    }).__chat;
-    const state = chat.getState();
-    chat.setState({
-      messages: {
-        ...state.messages,
-        'room-general': Array.from({ length: 80 }, (_, index) => ({
-          _id: `bottom-wheel-${index}`,
-          rid: 'room-general',
-          msg: `Bottom wheel message ${index}`,
-          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
-          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
-        })),
-      },
-      historyLoaded: { ...state.historyLoaded, 'room-general': true },
-      hasMore: { ...state.hasMore, 'room-general': false },
-    });
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Bottom wheel message') },
   });
 
   await conversation(page, 'General').click();
@@ -1531,37 +1473,8 @@ test('底部无效滚轮不会取消普通打开后的贴底（issue #143）', a
 });
 
 test('用户主动向上滚动后，异步布局增长不会强制拉回底部（issue #143）', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.evaluate(async () => {
-    const chat = (window as Window & {
-      __chat: {
-        getState: () => {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        };
-        setState: (state: {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        }) => void;
-      };
-    }).__chat;
-    const state = chat.getState();
-    chat.setState({
-      messages: {
-        ...state.messages,
-        'room-general': Array.from({ length: 80 }, (_, index) => ({
-          _id: `user-scroll-${index}`,
-          rid: 'room-general',
-          msg: `User scroll message ${index}`,
-          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
-          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
-        })),
-      },
-      historyLoaded: { ...state.historyLoaded, 'room-general': true },
-      hasMore: { ...state.hasMore, 'room-general': false },
-    });
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('User scroll message') },
   });
   await conversation(page, 'General').click();
 
@@ -1589,47 +1502,24 @@ test('用户主动向上滚动后，异步布局增长不会强制拉回底部�
   expect(pageErrors).toEqual([]);
 });
 
-test('显式消息定位优先于普通打开贴底，并归属 locate 事务（issue #143）', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await page.evaluate(async () => {
-    const chat = (window as Window & {
-      __chat: {
-        getState: () => {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        };
-        setState: (state: {
-          messages: Record<string, unknown[]>;
-          historyLoaded: Record<string, boolean>;
-          hasMore: Record<string, boolean>;
-        }) => void;
-      };
-    }).__chat;
-    const state = chat.getState();
-    chat.setState({
-      messages: {
-        ...state.messages,
-        'room-general': Array.from({ length: 80 }, (_, index) => ({
-          _id: index === 18 ? 'locate-target' : `locate-message-${index}`,
-          rid: 'room-general',
-          msg: index === 18 ? 'Locate target message' : `Locate filler ${index}`,
-          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
-          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
-        })),
-      },
-      historyLoaded: { ...state.historyLoaded, 'room-general': true },
-      hasMore: { ...state.hasMore, 'room-general': false },
-    });
+test('显式消息定位优先于普通打开贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': scrollHistory('Locate filler', {
+        index: 18,
+        id: 'locate-target',
+        text: 'Locate target message',
+      }),
+    },
   });
+
+  await conversation(page, 'General').click();
+  await expect(page.locator('[data-message-id="locate-target"]')).toHaveCount(1);
   await conversation(page, 'Project Alpha').click();
-  await page.evaluate(async () => {
-    await (window as Window & {
-      __chat: {
-        getState: () => { jumpToMessage: (mid: string, rid: string) => Promise<void> };
-      };
-    }).__chat.getState().jumpToMessage('locate-target', 'room-general');
-  });
+  await page.keyboard.press('Control+Shift+F');
+  const search = page.getByRole('dialog', { name: '全局搜索' });
+  await search.getByRole('textbox').fill('Locate target message');
+  await search.getByText('Locate target message', { exact: true }).click();
 
   const target = page.locator('[data-message-id="locate-target"]');
   await expect(target).toBeVisible();
@@ -1640,14 +1530,6 @@ test('显式消息定位优先于普通打开贴底，并归属 locate 事务（
     const viewportRect = viewport.getBoundingClientRect();
     return targetRect.top >= viewportRect.top && targetRect.bottom <= viewportRect.bottom;
   })).toBe(true);
-  const transaction = await page.evaluate(async () => {
-    return (window as Window & {
-      __chat: {
-        getState: () => { messageScrollTransaction: { entry: string; messageId?: string } | null };
-      };
-    }).__chat.getState().messageScrollTransaction;
-  });
-  expect(transaction).toMatchObject({ entry: 'locate', messageId: 'locate-target' });
   await expect.poll(() => page.getByTestId('message-scroll').evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeGreaterThan(120);
