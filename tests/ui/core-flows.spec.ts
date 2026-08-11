@@ -409,6 +409,23 @@ const rooms = [
 const histories: Record<string, unknown[]> = {
   'room-general': [
     {
+      _id: 'general-nested-quote',
+      rid: 'room-general',
+      msg: `[ ](${SERVER}/channel/general?msg=quoted-card) 请处理`,
+      ts: '2026-07-17T08:03:00.000Z',
+      u: ALICE,
+      attachments: [{
+        message_link: `${SERVER}/channel/general?msg=quoted-card`,
+        author_name: 'Build Bot',
+        text: '',
+        attachments: [{
+          title: '构建失败',
+          text: 'main · #128',
+          fields: [{ title: '状态', value: '失败' }],
+        }],
+      }],
+    },
+    {
       _id: 'general-ocr-image',
       rid: 'room-general',
       msg: '',
@@ -1511,6 +1528,17 @@ test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126
   expect(sentMessages[0]?.msg).toBe(
     `[ ](${SERVER}/channel/general?msg=general-welcome) Reply from UI`,
   );
+  expect(pageErrors).toEqual([]);
+});
+
+test('引用正文为空时显示 Rocket.Chat 嵌套附件内容（issue #289）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+
+  const quote = page.getByTitle('点击跳转到原消息');
+  await expect(quote).toContainText('Build Bot');
+  await expect(quote).toContainText('构建失败');
+  await expect(quote).toContainText('main · #128');
   expect(pageErrors).toEqual([]);
 });
 
