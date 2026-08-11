@@ -11,7 +11,8 @@ test('AI 托管使用账号级独立模型配置，但不在管家会话常驻�
   assert.match(sharedAgent, /const workspace = useCodexWorkspace\.getState\(\)/);
   assert.match(sharedAgent, /workspace\.hostingModel/);
   assert.match(sharedAgent, /workspace\.hostingEffort/);
-  assert.match(sharedAgent, /permissionPreset: workspace\.permissionPreset/);
+  assert.match(sharedAgent, /runtimePermissionPreset: workspace\.permissionPreset/);
+  assert.match(sharedAgent, /permissionPreset: session\?\.runtimePermissionPreset \?\? workspace\.permissionPreset/);
   assert.match(workspace, /hostingModel/);
   assert.match(workspace, /hostingEffort/);
   assert.match(workspace, /setHostingModel/);

@@ -69,15 +69,31 @@ test('工作项 Discussion 默认允许房间成员提问，但宿主仍掌握�
   assert.equal(commandAccess(session({ tmid: 'room:discussion-128', access: 'host-only' }), 'member'), 'denied');
 });
 
-test('AI 托管使用独立模型与推理强度，并沿用 AI 管家的权限设置', () => {
+test('AI 托管把运行时选择快照到会话，并沿用 AI 管家的权限设置', () => {
   const source = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
   assert.match(source, /const workspace = useCodexWorkspace\.getState\(\)/);
   assert.doesNotMatch(source, /getAgentHostingCodexSettings|agentHostingSettings/);
-  assert.match(source, /function runtimeSelection\(catalog: CodexCatalog\): CodexRuntimeSelection/);
+  assert.match(
+    source,
+    /function sessionRuntimeSnapshot\(\s*session: AgentSession,\s*\): Pick<AgentSession, 'runtimeModel' \| 'runtimeEffort' \| 'runtimePermissionPreset'>/,
+  );
+  assert.match(
+    source,
+    /function runtimeSelection\(\s*catalog: CodexCatalog,\s*session\?: Pick<AgentSession, 'runtimeModel' \| 'runtimeEffort' \| 'runtimePermissionPreset'>/,
+  );
+  assert.match(
+    source,
+    /function resolveSessionRuntime\([\s\S]*runtimeModel: selection\.model,[\s\S]*runtimeEffort: selection\.effort,[\s\S]*runtimePermissionPreset: selection\.permissionPreset/,
+  );
   assert.match(source, /workspace\.hostingModel/);
   assert.match(source, /workspace\.hostingEffort/);
-  assert.match(source, /permissionPreset: workspace\.permissionPreset/);
-  assert.match(source, /\.startThread\(runtimeSelection\(catalog\)\)/);
+  assert.match(source, /runtimePermissionPreset: workspace\.permissionPreset/);
+  assert.match(source, /permissionPreset: session\?\.runtimePermissionPreset \?\? workspace\.permissionPreset/);
+  assert.match(source, /const resolvedRuntime = resolveSessionRuntime\(session, catalog\)/);
+  assert.match(source, /\.startThread\(resolvedRuntime\.selection\)/);
+  assert.match(source, /const resolvedRuntime = resolveSessionRuntime\(resuming, catalog\)/);
+  assert.match(source, /resumeThread\(resuming\.codexThreadId!, resolvedRuntime\.selection\)/);
+  assert.match(source, /const resolvedRuntime = resolveSessionRuntime\(current, catalog\)/);
   assert.match(source, /controller\.startTurn\(/);
   assert.doesNotMatch(source, /AppServerClient|TauriCodexTransport|sandboxPolicy/);
 });

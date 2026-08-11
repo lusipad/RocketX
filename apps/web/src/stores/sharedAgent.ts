@@ -130,7 +130,7 @@ interface SharedAgentState {
 
 const queues = new Map<string, SerialCommandQueue>();
 const turnBuffers = new Map<string, string>();
-const fileChangePaths = new Map<string, { threadId: string; paths: string[] }>();
+const fileChangePaths = new Map<string, { tmid: string; paths: string[] }>();
 const turnWaiters = new Map<
   string,
   { tmid: string; resolve: () => void; reject: (error: Error) => void }
@@ -149,6 +149,26 @@ const controllers = new Map<string, SharedAgentController>();
 const controllerStarts = new Map<string, Promise<{ controller: SharedAgentController; catalog: CodexCatalog }>>();
 let restoredScope = '';
 let restoreGeneration = 0;
+
+function scopedRuntimeKey(tmid: string, id: string): string {
+  return `${tmid}\u0000${id}`;
+}
+
+function scopedTurnKey(tmid: string, turnId: string): string {
+  return scopedRuntimeKey(tmid, turnId);
+}
+
+function scopedApprovalKey(tmid: string, approvalId: string): string {
+  return scopedRuntimeKey(tmid, approvalId);
+}
+
+function scopedInputKey(tmid: string, inputId: string): string {
+  return scopedRuntimeKey(tmid, inputId);
+}
+
+function scopedFileChangeKey(tmid: string, itemId: string): string {
+  return scopedRuntimeKey(tmid, itemId);
+}
 
 type SharedAgentController = {
   currentCatalog?: CodexCatalog;
@@ -225,15 +245,48 @@ export function sharedAgentApprovalResult(
   return { decision: accepted ? 'approved' : 'denied' };
 }
 
-function runtimeSelection(catalog: CodexCatalog): CodexRuntimeSelection {
+function sessionRuntimeSnapshot(
+  session: AgentSession,
+): Pick<AgentSession, 'runtimeModel' | 'runtimeEffort' | 'runtimePermissionPreset'> {
+  if (
+    session.runtimeModel !== undefined
+    || session.runtimeEffort !== undefined
+    || session.runtimePermissionPreset !== undefined
+  ) {
+    return {
+      runtimeModel: session.runtimeModel,
+      runtimeEffort: session.runtimeEffort,
+      runtimePermissionPreset: session.runtimePermissionPreset,
+    };
+  }
   const workspace = useCodexWorkspace.getState();
+  return {
+    runtimeModel: workspace.hostingModel || undefined,
+    runtimeEffort: workspace.hostingEffort,
+    runtimePermissionPreset: workspace.permissionPreset,
+  };
+}
+
+function withSessionRuntimeSnapshot(session: AgentSession): AgentSession {
+  return {
+    ...session,
+    ...sessionRuntimeSnapshot(session),
+  };
+}
+
+function runtimeSelection(
+  catalog: CodexCatalog,
+  session?: Pick<AgentSession, 'runtimeModel' | 'runtimeEffort' | 'runtimePermissionPreset'>,
+): CodexRuntimeSelection {
+  const workspace = useCodexWorkspace.getState();
+  const requestedModel = session?.runtimeModel;
   const model = catalog.models.find(
-    (item) => item.model === workspace.hostingModel || item.id === workspace.hostingModel,
+    (item) => item.model === requestedModel || item.id === requestedModel,
   )
     ?? catalog.models.find((item) => item.isDefault)
     ?? catalog.models[0];
   if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
-  const requestedEffort = workspace.hostingEffort;
+  const requestedEffort = session?.runtimeEffort;
   const effort = requestedEffort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
     ? requestedEffort
@@ -241,7 +294,23 @@ function runtimeSelection(catalog: CodexCatalog): CodexRuntimeSelection {
   return {
     model: model.model,
     effort,
-    permissionPreset: workspace.permissionPreset,
+    permissionPreset: session?.runtimePermissionPreset ?? workspace.permissionPreset,
+  };
+}
+
+function resolveSessionRuntime(
+  session: AgentSession,
+  catalog: CodexCatalog,
+): { session: AgentSession; selection: CodexRuntimeSelection } {
+  const selection = runtimeSelection(catalog, session);
+  return {
+    session: {
+      ...session,
+      runtimeModel: selection.model,
+      runtimeEffort: selection.effort,
+      runtimePermissionPreset: selection.permissionPreset,
+    },
+    selection,
   };
 }
 
@@ -324,27 +393,20 @@ function nameCodexThread(appServer: SharedAgentController, session: AgentSession
     .catch(() => undefined);
 }
 
-function sessionForThread(threadId: string): AgentSession | undefined {
-  return Object.values(useSharedAgent.getState().sessions).find(
-    (session) => session.codexThreadId === threadId,
-  );
-}
-
 function recordParams(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
 }
 
-async function onServerRequest(request: {
+async function onServerRequest(tmid: string, request: {
   method: string;
   params: unknown;
   policy: ServerRequestPolicy | 'unknown';
 }): Promise<unknown> {
-  const params = recordParams(request.params);
-  const threadId = typeof params.threadId === 'string' ? params.threadId : '';
-  const session = sessionForThread(threadId);
+  const session = useSharedAgent.getState().sessions[tmid];
   if (!session) throw new Error('请求不属于活跃的 RocketX Agent 会话');
+  const params = recordParams(request.params);
   if (request.policy === 'unknown') throw new Error('未知服务端请求已被安全拒绝');
   if (request.policy === 'safe-reject' || request.policy === 'dynamic-tool') {
     throw new Error('该服务端请求在 RocketX 共享会话中默认禁用');
@@ -363,7 +425,7 @@ async function onServerRequest(request: {
     updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
     trace(session.tmid, 'tool', `等待宿主输入：${request.method}`);
     return new Promise((resolve, reject) => {
-      inputWaiters.set(inputId, { tmid: session.tmid, resolve, reject });
+      inputWaiters.set(scopedInputKey(session.tmid, inputId), { tmid: session.tmid, resolve, reject });
     });
   }
   const actionable = new Set([
@@ -377,7 +439,7 @@ async function onServerRequest(request: {
   const approvalId = id('approval');
   const trackedFileChanges =
     request.method === 'item/fileChange/requestApproval' && typeof params.itemId === 'string'
-      ? fileChangePaths.get(params.itemId)?.paths
+      ? fileChangePaths.get(scopedFileChangeKey(tmid, params.itemId))?.paths
       : undefined;
   const fileChanges = trackedFileChanges?.length
     ? Object.fromEntries(trackedFileChanges.map((path) => [path, true]))
@@ -400,19 +462,19 @@ async function onServerRequest(request: {
   updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
   trace(session.tmid, 'tool', `等待宿主审批：${request.method}`);
   return new Promise((resolve, reject) =>
-    approvalWaiters.set(approvalId, { tmid: session.tmid, resolve, reject }),
+    approvalWaiters.set(scopedApprovalKey(session.tmid, approvalId), { tmid: session.tmid, resolve, reject }),
   );
 }
 
-function onNotification(method: string, paramsValue: unknown): void {
-  const params = recordParams(paramsValue);
-  const threadId = typeof params.threadId === 'string' ? params.threadId : '';
-  const session = sessionForThread(threadId);
+function onNotification(tmid: string, method: string, paramsValue: unknown): void {
+  const session = useSharedAgent.getState().sessions[tmid];
   if (!session) return;
+  const params = recordParams(paramsValue);
   if (method === 'item/agentMessage/delta') {
     const turnId = typeof params.turnId === 'string' ? params.turnId : '';
     const delta = typeof params.delta === 'string' ? params.delta : '';
-    turnBuffers.set(turnId, `${turnBuffers.get(turnId) ?? ''}${delta}`);
+    const turnKey = scopedTurnKey(tmid, turnId);
+    turnBuffers.set(turnKey, `${turnBuffers.get(turnKey) ?? ''}${delta}`);
   } else if (method === 'turn/started') {
     const turn = recordParams(params.turn);
     const turnId = typeof turn.id === 'string' ? turn.id : undefined;
@@ -427,14 +489,14 @@ function onNotification(method: string, paramsValue: unknown): void {
     const type = typeof item.type === 'string' ? item.type : 'tool';
     if (type === 'fileChange' && typeof item.id === 'string') {
       if (method === 'item/started' && Array.isArray(item.changes)) {
-        fileChangePaths.set(item.id, {
-          threadId,
+        fileChangePaths.set(scopedFileChangeKey(tmid, item.id), {
+          tmid,
           paths: item.changes
             .map((change) => recordParams(change).path)
             .filter((path): path is string => typeof path === 'string'),
         });
       } else {
-        fileChangePaths.delete(item.id);
+        fileChangePaths.delete(scopedFileChangeKey(tmid, item.id));
       }
     }
     trace(session.tmid, 'tool', `${method === 'item/started' ? '开始' : '完成'}：${type}`);
@@ -444,8 +506,9 @@ function onNotification(method: string, paramsValue: unknown): void {
 }
 
 async function completeTurn(session: AgentSession, turnId: string, status: string): Promise<void> {
-  const text = turnBuffers.get(turnId)?.trim() ?? '';
-  turnBuffers.delete(turnId);
+  const turnKey = scopedTurnKey(session.tmid, turnId);
+  const text = turnBuffers.get(turnKey)?.trim() ?? '';
+  turnBuffers.delete(turnKey);
   try {
     if (text) {
       const output = redactAgentOutput(text);
@@ -459,12 +522,45 @@ async function completeTurn(session: AgentSession, turnId: string, status: strin
       updateSession({ ...current, status: 'ready', activeTurnId: undefined, updatedAt: Date.now() });
     }
     trace(session.tmid, 'status', `本轮结束：${status}`);
-    turnWaiters.get(turnId)?.resolve();
+    turnWaiters.get(turnKey)?.resolve();
   } catch (error) {
-    turnWaiters.get(turnId)?.reject(error instanceof Error ? error : new Error(String(error)));
+    turnWaiters.get(turnKey)?.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
-    turnWaiters.delete(turnId);
+    turnWaiters.delete(turnKey);
   }
+}
+
+function clearTrackedFileChanges(tmid: string): void {
+  for (const [itemId, tracked] of fileChangePaths) {
+    if (tracked.tmid === tmid) fileChangePaths.delete(itemId);
+  }
+}
+
+function clearSessionTransientState(tmid: string): void {
+  const keyPrefix = scopedRuntimeKey(tmid, '');
+  for (const turnKey of turnBuffers.keys()) {
+    if (turnKey.startsWith(keyPrefix)) turnBuffers.delete(turnKey);
+  }
+  clearTrackedFileChanges(tmid);
+}
+
+function rejectSessionWaiters<T extends { tmid: string; reject: (error: Error) => void }>(
+  tmid: string,
+  waiters: Map<string, T>,
+  error: Error,
+): void {
+  for (const [id, waiter] of waiters) {
+    if (waiter.tmid !== tmid) continue;
+    waiter.reject(error);
+    waiters.delete(id);
+  }
+}
+
+function clearPendingSessionRequests(tmid: string): void {
+  useSharedAgent.setState((state) => ({
+    approvals: state.approvals.filter((approval) => approval.tmid !== tmid),
+    inputs: state.inputs.filter((input) => input.tmid !== tmid),
+  }));
 }
 
 function onInterrupted(tmid: string, error: Error): void {
@@ -478,28 +574,11 @@ function onInterrupted(tmid: string, error: Error): void {
     void updateLeaseCard(interrupted).catch(() => undefined);
     trace(tmid, 'error', detail);
   }
-  for (const [itemId, tracked] of fileChangePaths) {
-    if (tracked.threadId === session?.codexThreadId) fileChangePaths.delete(itemId);
-  }
-  for (const [turnId, waiter] of turnWaiters) {
-    if (waiter.tmid !== tmid) continue;
-    waiter.reject(error);
-    turnWaiters.delete(turnId);
-  }
-  for (const [approvalId, waiter] of approvalWaiters) {
-    if (waiter.tmid !== tmid) continue;
-    waiter.reject(error);
-    approvalWaiters.delete(approvalId);
-  }
-  for (const [inputId, waiter] of inputWaiters) {
-    if (waiter.tmid !== tmid) continue;
-    waiter.reject(error);
-    inputWaiters.delete(inputId);
-  }
-  useSharedAgent.setState((state) => ({
-    approvals: state.approvals.filter((approval) => approval.tmid !== tmid),
-    inputs: state.inputs.filter((input) => input.tmid !== tmid),
-  }));
+  clearSessionTransientState(tmid);
+  rejectSessionWaiters(tmid, turnWaiters, error);
+  rejectSessionWaiters(tmid, approvalWaiters, error);
+  rejectSessionWaiters(tmid, inputWaiters, error);
+  clearPendingSessionRequests(tmid);
 }
 
 async function ensureController(
@@ -515,8 +594,8 @@ async function ensureController(
   if (pending) return pending;
   const start = (async () => {
     const next = sharedAgentControllerFactory({
-      onNotification,
-      onServerRequest,
+      onNotification: (method, params) => onNotification(session.tmid, method, params),
+      onServerRequest: (request) => onServerRequest(session.tmid, request),
       onInterrupted: (error) => onInterrupted(session.tmid, error),
     });
     try {
@@ -615,8 +694,12 @@ export async function loadSharedAgentConversationMessages(tmid: string): Promise
 }
 
 async function executeCommand(session: AgentSession, message: RcMessage): Promise<void> {
-  const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
+  let current = withSessionRuntimeSnapshot(useSharedAgent.getState().sessions[session.tmid] ?? session);
+  updateSession(current);
   const { controller, catalog } = await ensureController(current);
+  const resolvedRuntime = resolveSessionRuntime(current, catalog);
+  current = resolvedRuntime.session;
+  updateSession(current);
   const messages = await loadContextMessages(current, message);
   const selectedMessages = replyTmid(current)
     ? selectAgentContextMessages(message, messages)
@@ -639,12 +722,12 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
   const turnId = await controller.startTurn(
     current.codexThreadId!,
     agentTurnInput(prompt, attachments.imagePaths),
-    runtimeSelection(catalog),
+    resolvedRuntime.selection,
     { runtimeWorkspaceRoots: attachments.roots },
   );
   updateSession({ ...current, status: 'running', activeTurnId: turnId, updatedAt: Date.now() });
   await new Promise<void>((resolve, reject) =>
-    turnWaiters.set(turnId, { tmid: current.tmid, resolve, reject }),
+    turnWaiters.set(scopedTurnKey(current.tmid, turnId), { tmid: current.tmid, resolve, reject }),
   );
 }
 
@@ -661,6 +744,7 @@ async function queueCommand(session: AgentSession, message: RcMessage): Promise<
       const detail = error instanceof Error ? error.message : String(error);
       trace(session.tmid, 'error', detail);
       const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
+      if (current.status === 'ended' || current.status === 'interrupted') return;
       updateSession({
         ...current,
         status: 'ready',
@@ -770,7 +854,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         throw new Error('AI 托管必须选择在 AI 管家中添加的专用工作项目');
       }
       assertAllowedWorkspacePath(root, [root]);
-      let session: AgentSession = {
+      let session: AgentSession = withSessionRuntimeSnapshot({
         sessionId,
         serverId: getServerBase() || 'same-origin',
         ownerUserId: host.userId,
@@ -788,10 +872,13 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         proposedBranch: options.proposedBranch,
         baseBranch: options.baseBranch,
         updatedAt: now,
-      };
+      });
       updateSession(session);
       const { controller: appServer, catalog } = await ensureController(session);
-      const response = await appServer.startThread(runtimeSelection(catalog));
+      const resolvedRuntime = resolveSessionRuntime(session, catalog);
+      session = resolvedRuntime.session;
+      updateSession(session);
+      const response = await appServer.startThread(resolvedRuntime.selection);
       session = {
         ...session,
         codexThreadId: response.id,
@@ -951,8 +1038,8 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       safeApproval ? resolution : 'decline',
       permissions,
     );
-    approvalWaiters.get(approvalId)?.resolve(decision);
-    approvalWaiters.delete(approvalId);
+    approvalWaiters.get(scopedApprovalKey(session.tmid, approvalId))?.resolve(decision);
+    approvalWaiters.delete(scopedApprovalKey(session.tmid, approvalId));
     set((state) => ({ approvals: state.approvals.filter((item) => item.id !== approvalId) }));
     updateSession({ ...session, status: 'running', updatedAt: Date.now() });
     trace(session.tmid, 'status', safeApproval ? '宿主已允许请求' : '宿主已拒绝请求');
@@ -965,8 +1052,8 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     if (!session) return;
     assertHost(session, actor());
     const validated = validateButlerErrandInputResponse(input.method, input.params, response);
-    inputWaiters.get(inputId)?.resolve(validated);
-    inputWaiters.delete(inputId);
+    inputWaiters.get(scopedInputKey(session.tmid, inputId))?.resolve(validated);
+    inputWaiters.delete(scopedInputKey(session.tmid, inputId));
     set((state) => ({ inputs: state.inputs.filter((item) => item.id !== inputId) }));
     updateSession({ ...session, status: 'running', updatedAt: Date.now() });
     trace(session.tmid, 'status', '宿主已提交所需输入');
@@ -991,11 +1078,14 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const host = actor();
     const now = Date.now();
     const leased = takeHostLease(existing, host, now, LEASE_MS);
-    const resuming = { ...enterResumeState(leased, host, now), lastError: undefined };
+    let resuming = withSessionRuntimeSnapshot({ ...enterResumeState(leased, host, now), lastError: undefined });
     updateSession(resuming);
     try {
       const { controller: appServer, catalog } = await ensureController(resuming);
-      const response = await appServer.resumeThread(resuming.codexThreadId!, runtimeSelection(catalog));
+      const resolvedRuntime = resolveSessionRuntime(resuming, catalog);
+      resuming = resolvedRuntime.session;
+      updateSession(resuming);
+      const response = await appServer.resumeThread(resuming.codexThreadId!, resolvedRuntime.selection);
       const resumed: AgentSession = {
         ...resuming,
         codexThreadId: response.id,
@@ -1068,20 +1158,11 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     }
     await stopController(tmid).catch(() => undefined);
     const endedError = new Error('Agent 会话已结束');
-    for (const [approvalId, waiter] of approvalWaiters) {
-      if (waiter.tmid !== tmid) continue;
-      waiter.reject(endedError);
-      approvalWaiters.delete(approvalId);
-    }
-    for (const [inputId, waiter] of inputWaiters) {
-      if (waiter.tmid !== tmid) continue;
-      waiter.reject(endedError);
-      inputWaiters.delete(inputId);
-    }
-    set((state) => ({
-      approvals: state.approvals.filter((item) => item.tmid !== tmid),
-      inputs: state.inputs.filter((item) => item.tmid !== tmid),
-    }));
+    clearSessionTransientState(tmid);
+    rejectSessionWaiters(tmid, turnWaiters, endedError);
+    rejectSessionWaiters(tmid, approvalWaiters, endedError);
+    rejectSessionWaiters(tmid, inputWaiters, endedError);
+    clearPendingSessionRequests(tmid);
     const ended = { ...session, status: 'ended' as const, activeTurnId: undefined, updatedAt: Date.now() };
     updateSession(ended);
     trace(tmid, 'status', 'Agent 会话已结束');
