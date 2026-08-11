@@ -9,9 +9,10 @@ test('项目行直接提供移除入口，不产生下拉层滚动条，并明�
 
   assert.match(history, /const removeWorkspaceRoot = useCodexWorkspace\(\(state\) => state\.removeWorkspaceRoot\)/);
   assert.match(history, /className="butler-codex-workspace-actions"/);
-  assert.match(history, /!systemDefault && !systemButler \? <div className="butler-codex-workspace-actions">/);
-  assert.match(history, /aria-label=\{`移除项目：\$\{label\}`\}/);
-  assert.match(history, /title="移除项目"/);
+  assert.match(history, /const projectEntries = useMemo/);
+  assert.match(history, /entry\.configurable \? \(/);
+  assert.match(history, /aria-label=\{`移除项目：\$\{entry\.label\}`\}/);
+  assert.match(history, /title=\{entry\.busy \? '活动讨论结束后才能移除项目' : '移除项目'\}/);
   assert.match(history, /<FolderMinus size=\{14\} aria-hidden="true" \/>/);
   assert.doesNotMatch(history, /title=\{path\}/);
   assert.doesNotMatch(history, /role="menu" aria-label="项目操作"/);

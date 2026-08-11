@@ -74,7 +74,7 @@ import { serverRequestPolicy } from './serverRequests';
 export interface CodexProcessInfo {
   processId: string;
   version: string;
-  runtimeSource: 'manual' | 'bundled' | 'system';
+  runtimeSource: 'manual' | 'bundled' | 'standard' | 'system';
   managedSkillRoots: string[];
   runtimeWorkspaceRoot?: string;
 }

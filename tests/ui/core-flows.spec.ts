@@ -6,14 +6,32 @@ const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'onl
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
+const RELEASE_DESKTOP_E2E = process.env.PLAYWRIGHT_RELEASE_MODE === '1';
 
 async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
   await page.addInitScript(({ config }) => {
     let responseUrl = '';
     let responseBodySent = false;
+    let autostartEnabled = false;
+    let notificationPermission: NotificationPermission = 'default';
+    Object.defineProperty(window.Notification, 'permission', {
+      configurable: true,
+      get: () => notificationPermission,
+    });
+    Object.defineProperty(window.Notification, 'requestPermission', {
+      configurable: true,
+      value: async () => {
+        notificationPermission = 'granted';
+        return notificationPermission;
+      },
+    });
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
+        metadata: {
+          currentWindow: { label: 'main' },
+          currentWebview: { label: 'main' },
+        },
         invoke: async (command: string, args?: Record<string, any>) => {
           if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
           if (command === 'plugin:http|fetch') {
@@ -53,6 +71,18 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
           if (command === 'mcp_config_status' || command === 'agent_bot_config_status') {
             return { enabled: false };
           }
+          if (command === 'plugin:notification|is_permission_granted') {
+            return notificationPermission === 'granted';
+          }
+          if (command === 'plugin:autostart|enable') {
+            autostartEnabled = true;
+            return null;
+          }
+          if (command === 'plugin:autostart|disable') {
+            autostartEnabled = false;
+            return null;
+          }
+          if (command === 'plugin:autostart|is_enabled') return autostartEnabled;
           if (command === 'plugin:updater|check') return null;
           return null;
         },
@@ -133,11 +163,21 @@ async function installFullTauriMock(page: Page) {
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
+        metadata: {
+          currentWindow: { label: 'main' },
+          currentWebview: { label: 'main' },
+        },
         invoke: async (command: string, args?: unknown, options?: Record<string, any>) => {
           calls.push({ command, args, options });
           const invokeArgs = (args && typeof args === 'object' && !ArrayBuffer.isView(args) && !Array.isArray(args))
             ? (args as Record<string, any>)
             : undefined;
+          if (
+            command === 'plugin:webview|set_webview_zoom' &&
+            (window as unknown as { __failUiScale?: boolean }).__failUiScale
+          ) {
+            throw new Error('mock zoom failed');
+          }
           if (command === 'allow_http_origin') return new URL(String(invokeArgs?.origin)).origin;
           if (command === 'codex_default_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-projectless';
           if (command === 'codex_butler_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-butler';
@@ -269,6 +309,8 @@ async function installFullTauriMock(page: Page) {
             };
           }
           if (command === 'codex_runtime_probe') {
+            const probeWindow = window as Window & { __codexProbeCount?: number };
+            probeWindow.__codexProbeCount = (probeWindow.__codexProbeCount ?? 0) + 1;
             return {
               ready: true,
               version: '0.145.0',
@@ -278,6 +320,21 @@ async function installFullTauriMock(page: Page) {
               minimumCandidate: '0.140.0',
               verifiedVersions: ['0.144.4'],
               compatibilityStatus: 'untested-newer',
+              candidates: [
+                {
+                  source: 'standard',
+                  path: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex-old.cmd',
+                  version: '0.144.1',
+                  outcome: 'rejected',
+                  reasonCode: 'outdated',
+                },
+                {
+                  source: 'system',
+                  path: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
+                  version: '0.145.0',
+                  outcome: 'selected',
+                },
+              ],
             };
           }
           if (command === 'image_ocr_runtime_probe') {
@@ -473,6 +530,16 @@ const histories: Record<string, unknown[]> = {
   ],
 };
 
+function scrollHistory(prefix: string, target?: { index: number; id: string; text: string }) {
+  return Array.from({ length: 80 }, (_, index) => ({
+    _id: target?.index === index ? target.id : `${prefix}-${index}`,
+    rid: 'room-general',
+    msg: target?.index === index ? target.text : `${prefix} ${index}`,
+    ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+    u: ALICE,
+  }));
+}
+
 const stickerMessageFixture = {
   _id: 'general-sticker-image',
   rid: 'room-general',
@@ -637,6 +704,96 @@ test('禅模式默认关闭并可显式开启通知聚合（issue #208）', asyn
   expect(pageErrors).toEqual([]);
 });
 
+test('桌面界面缩放恢复本机偏好，并支持固定档位与快捷键（issue #135）', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-ui-prefs', JSON.stringify({ uiScale: 125 }));
+  });
+  const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
+
+  const zoomValues = () => page.evaluate(() => (
+    window as unknown as {
+      __tauriCalls: Array<{ command: string; args?: { value?: number } }>;
+    }
+  ).__tauriCalls
+    .filter((call) => call.command === 'plugin:webview|set_webview_zoom')
+    .map((call) => call.args?.value));
+
+  await expect.poll(zoomValues).toContain(1.25);
+
+  const zoomOutCancelled = await page.evaluate(() => !document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '-',
+    code: 'Minus',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  expect(zoomOutCancelled).toBe(true);
+  await expect.poll(zoomValues).toContain(1.1);
+  await expect.poll(() => page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(110);
+
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '0',
+    code: 'Digit0',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  await expect.poll(zoomValues).toContain(1);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '桌面端', exact: true }).click();
+  const scale150 = page.getByRole('radio', { name: '150%', exact: true });
+  await scale150.click();
+  await expect.poll(zoomValues).toContain(1.5);
+  await expect(scale150).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: '100%', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await expect.poll(() => page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(150);
+  await page.screenshot({ path: testInfo.outputPath('desktop-ui-scale-1080p.png'), fullPage: true });
+
+  await page.evaluate(() => {
+    (window as unknown as { __failUiScale?: boolean }).__failUiScale = true;
+  });
+  await page.getByRole('radio', { name: '125%', exact: true }).click();
+  await expect(page.getByText('mock zoom failed', { exact: true })).toBeVisible();
+  await expect(scale150).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(150);
+
+  const callsBeforeRetry = (await zoomValues()).length;
+  await page.evaluate(() => {
+    (window as unknown as { __failUiScale?: boolean }).__failUiScale = false;
+  });
+  await scale150.click();
+  await expect.poll(async () => (await zoomValues()).length).toBeGreaterThan(callsBeforeRetry);
+  await expect(page.getByText('界面缩放已设为 150%', { exact: true }).last()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('Web 保留浏览器原生缩放，不显示也不拦截桌面缩放入口（issue #135）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+
+  const cancelled = await page.evaluate(() => !document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '+',
+    code: 'Equal',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  expect(cancelled).toBe(false);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '桌面端', exact: true }).click();
+  await expect(page.getByText('界面缩放', { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('头像卡片可编辑本人资料，切换离开后立即显示状态（issue #271）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   const navigation = page.getByRole('navigation');
@@ -693,7 +850,7 @@ async function installAdoDirectMock(
         },
       });
     }
-    if (url.pathname.endsWith('/_apis/wit/wiql')) {
+    if (/\/_apis\/wit\/wiql(?:\/[^/]+)?$/.test(url.pathname)) {
       return fulfillJson(route, { workItems: [{ id: workItem.id }] });
     }
     if (url.pathname.endsWith('/_apis/wit/workitems')) {
@@ -709,9 +866,130 @@ async function installAdoDirectMock(
   });
 }
 
+async function installContributionAdoMock(page: Page) {
+  await page.route('**/ado/**', (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname.toLowerCase();
+    if (path.endsWith('/_apis/connectiondata')) {
+      return fulfillJson(route, {
+        authenticatedUser: {
+          id: 'ado-user',
+          customDisplayName: 'Test User',
+          properties: { Account: { $value: 'tester' } },
+        },
+      });
+    }
+    if (path.endsWith('/_apis/projects')) {
+      return fulfillJson(route, { value: [{ id: 'project-alpha', name: 'Alpha' }] });
+    }
+    if (path.endsWith('/_apis/git/repositories')) {
+      return fulfillJson(route, {
+        value: [{ id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } }],
+      });
+    }
+    if (path.endsWith('/repositories/repo-a/commits')) {
+      return fulfillJson(route, {
+        value: [{
+          commitId: 'commit-a',
+          comment: '完成贡献日历',
+          author: { name: 'Test User', email: 'tester@example.com', date: '2026-08-10T02:00:00Z' },
+          remoteUrl: `${url.origin}/ado/Alpha/_git/RocketX/commit/commit-a`,
+        }],
+      });
+    }
+    if (path.endsWith('/_apis/git/pullrequests')) {
+      return fulfillJson(route, {
+        value: [{
+          pullRequestId: 101,
+          title: 'Improve contribution profile',
+          creationDate: '2026-08-10T03:00:00Z',
+          createdBy: { id: 'ado-user', displayName: 'Test User' },
+          repository: { id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } },
+        }],
+      });
+    }
+    if (path.endsWith('/pullrequests/101/threads')) {
+      return fulfillJson(route, [
+        {
+          id: 11,
+          publishedDate: '2026-08-10T04:00:00Z',
+          threadContext: { filePath: '/src/profile.ts' },
+          comments: [{
+            id: 1,
+            author: { id: 'ado-user', displayName: 'Test User' },
+            commentType: 'text',
+            content: '这里需要保留本地日期。',
+            isDeleted: false,
+            publishedDate: '2026-08-10T04:00:00Z',
+          }],
+        },
+        {
+          id: 12,
+          publishedDate: '2026-08-10T05:00:00Z',
+          comments: [{
+            id: 1,
+            author: { id: 'build-service', displayName: 'Build Service', isContainer: true },
+            commentType: 'system',
+            content: 'vote',
+            isDeleted: false,
+            publishedDate: '2026-08-10T05:00:00Z',
+          }],
+          properties: {
+            CodeReviewThreadType: { $value: 'VoteUpdate' },
+            CodeReviewVotedByTfId: { $value: 'ado-user' },
+            CodeReviewVoteResult: { $value: '10' },
+          },
+        },
+      ]);
+    }
+    if (path.endsWith('/_apis/wit/reporting/workitemrevisions')) {
+      if (url.searchParams.get('includeDiscussionChangesOnly') === 'true') {
+        return fulfillJson(route, {
+          values: [{
+            id: 41,
+            rev: 2,
+            fields: {
+              'System.TeamProject': 'Alpha',
+              'System.ChangedDate': '2026-08-10T07:00:00Z',
+            },
+          }],
+        });
+      }
+      return fulfillJson(route, {
+        values: [{
+          id: 41,
+          rev: 1,
+          fields: {
+            'System.Title': 'Add personal contribution page',
+            'System.WorkItemType': 'Task',
+            'System.TeamProject': 'Alpha',
+            'System.CreatedDate': '2026-08-10T06:00:00Z',
+            'System.CreatedBy': { id: 'ado-user', displayName: 'Test User' },
+          },
+        }],
+      });
+    }
+    if (path.endsWith('/_apis/wit/workitems/41/comments')) {
+      return fulfillJson(route, {
+        comments: [{
+          commentId: 7,
+          text: '补上键盘操作与明细链接。',
+          createdDate: '2026-08-10T07:00:00Z',
+          isDeleted: false,
+          createdBy: { id: 'ado-user', displayName: 'Test User' },
+        }],
+      });
+    }
+    return fulfillJson(route, { value: [] });
+  });
+}
+
 async function installRocketChatMock(
   page: Page,
-  options: { includeStickerFixture?: boolean } = {},
+  options: {
+    includeStickerFixture?: boolean;
+    historyOverrides?: Record<string, unknown[]>;
+  } = {},
 ) {
   let ownStatus = ME.status;
   const sentMessages: Record<string, unknown>[] = [];
@@ -774,7 +1052,7 @@ async function installRocketChatMock(
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
-      const messages = histories[rid] ?? [];
+      const messages = options.historyOverrides?.[rid] ?? histories[rid] ?? [];
       return fulfillJson(route, {
         messages: options.includeStickerFixture && rid === 'room-general'
           ? [...messages, stickerMessageFixture]
@@ -827,7 +1105,11 @@ async function installRocketChatMock(
 
 async function bootAuthenticated(
   page: Page,
-  options: { expectMessages?: boolean; includeStickerFixture?: boolean } = {},
+  options: {
+    expectMessages?: boolean;
+    includeStickerFixture?: boolean;
+    historyOverrides?: Record<string, unknown[]>;
+  } = {},
 ) {
   const state = await installRocketChatMock(page, options);
   await page.addInitScript(({ server, userId }) => {
@@ -875,7 +1157,7 @@ test('登录后进入主界面', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', async ({ page }, testInfo) => {
+test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -896,7 +1178,26 @@ test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', 
   );
   expect(hasHorizontalOverflow).toBe(false);
 
-  await page.getByRole('button', { name: '继续：选择如何加入' }).click();
+  await page.getByRole('button', {
+    name: RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入',
+  }).click();
+  if (RELEASE_DESKTOP_E2E) {
+    await expect(page.getByRole('heading', { name: '桌面默认设置' })).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: /允许系统通知/ })).toBeChecked();
+    await expect(page.getByRole('checkbox', { name: /登录系统后启动 RocketX/ })).toBeChecked();
+    await page.screenshot({ path: testInfo.outputPath('desktop-defaults.png'), fullPage: true });
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await expect(page.getByText('已开启', { exact: true })).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => JSON.parse(
+      localStorage.getItem('rcx-desktop-defaults-v1') ?? '{}',
+    ))).toEqual({
+      version: 1,
+      status: 'applied',
+      notifications: 'enabled',
+      autostart: 'enabled',
+    });
+    await page.getByRole('button', { name: '继续加入团队' }).click();
+  }
   await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles({
@@ -935,7 +1236,7 @@ test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', 
   expect(pageErrors).toEqual([]);
 });
 
-test('首次引导在 390px 下保持单列且关键操作可达', async ({ page }, testInfo) => {
+test('首次引导在 390px 下保持单列且关键操作可达', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 390, height: 844 });
@@ -943,17 +1244,27 @@ test('首次引导在 390px 下保持单列且关键操作可达', async ({ page
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /把大脑从“记住所有事”里解放出来/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '继续：选择如何加入' })).toBeVisible();
+  const expectedContinue = RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入';
+  await expect(page.getByRole('button', { name: expectedContinue })).toBeVisible();
   expect(await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )).toBe(false);
   await page.screenshot({ path: testInfo.outputPath('gtd-attention-onboarding-mobile.png'), fullPage: true });
 
-  const continueButton = page.getByRole('button', { name: '继续：选择如何加入' });
+  const continueButton = page.getByRole('button', { name: expectedContinue });
   await continueButton.scrollIntoViewIfNeeded();
   await expect(continueButton).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath('gtd-attention-onboarding-mobile-action.png') });
   await continueButton.click();
+  if (RELEASE_DESKTOP_E2E) {
+    await expect(page.getByRole('heading', { name: '桌面默认设置' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    await expect.poll(() => page.locator('#root').evaluate((element) => element.scrollTop)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath('desktop-defaults-mobile.png'), fullPage: true });
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await expect(page.getByText('已开启', { exact: true })).toHaveCount(2);
+    await page.getByRole('button', { name: '继续加入团队' }).click();
+  }
   await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
   expect(await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -961,7 +1272,7 @@ test('首次引导在 390px 下保持单列且关键操作可达', async ({ page
   expect(pageErrors).toEqual([]);
 });
 
-test('桌面重启后会重新授权并检查团队配置 URL', async ({ page }) => {
+test('桌面重启后会重新授权并检查团队配置 URL', { tag: '@release-desktop' }, async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await installTauriMock(page, {
@@ -989,6 +1300,92 @@ test('桌面重启后会重新授权并检查团队配置 URL', async ({ page })
 
   await page.goto('/');
   await expect(page.getByText(/团队配置有更新：1 项变化/)).toBeVisible();
+  const desktopDefaults = await page.evaluate(() => localStorage.getItem('rcx-desktop-defaults-v1'));
+  if (RELEASE_DESKTOP_E2E) {
+    expect(JSON.parse(desktopDefaults ?? '{}')).toEqual({
+      version: 1,
+      status: 'legacy-migrated',
+      notifications: 'preserved',
+      autostart: 'preserved',
+    });
+  } else {
+    expect(desktopDefaults).toBeNull();
+  }
+  expect(pageErrors).toEqual([]);
+});
+
+test('团队配置可从当前 ADO 仓库读取、预览并应用', async ({ page }, testInfo) => {
+  const adoRequests: Array<{ url: string; authorization?: string }> = [];
+  await page.route('https://ado.example.com/**', async (route) => {
+    const request = route.request();
+    adoRequests.push({
+      url: request.url(),
+      authorization: await request.headerValue('authorization') ?? undefined,
+    });
+    const url = new URL(request.url());
+    if (url.pathname.includes('/_apis/git/repositories/')) {
+      return fulfillJson(route, {
+        content: JSON.stringify({
+          version: 1,
+          name: 'ADO 团队',
+          update: { source: 'dir', location: '\\\\fileserver\\software\\rocketx' },
+        }),
+      });
+    }
+    return fulfillJson(route, { id: 'project-road-map', name: 'Road Map' });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      mode: 'direct',
+      adoBase: 'https://ado.example.com/tfs/DefaultCollection',
+      auth: 'pat',
+      pat: 'workspace-pat',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '团队配置', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '配置来源', exact: true, level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '本地工作区' })).toHaveCount(0);
+  await expect(page.getByText('从当前 Azure DevOps 仓库读取', { exact: true })).toBeVisible();
+  await expect(page.getByText('读取前请填写：项目、仓库', { exact: true })).toBeVisible();
+  await page.getByLabel('ADO 项目').fill('Road Map');
+  await page.getByLabel('ADO 仓库').fill('Rocket X');
+  await page.screenshot({ path: testInfo.outputPath('ado-team-config.png'), fullPage: true });
+  await page.getByRole('button', { name: '从 ADO 读取', exact: true }).click();
+
+  await expect(page.getByRole('dialog', { name: '导入「ADO 团队」' })).toBeVisible();
+  const updateSource = page.getByRole('checkbox', { name: /更新源/ });
+  await expect(updateSource).not.toBeChecked();
+  await updateSource.check();
+  await page.getByRole('button', { name: '应用 1 项', exact: true }).click();
+  await expect(page.getByText('上次导入：ADO 团队')).toBeVisible();
+
+  const stored = await page.evaluate(() => ({
+    source: JSON.parse(localStorage.getItem('rcx-workspace-source') ?? '{}'),
+    update: JSON.parse(localStorage.getItem('rcx-update-source') ?? '{}'),
+  }));
+  expect(stored.source).toMatchObject({
+    kind: 'ado',
+    follow: true,
+    ado: {
+      adoBase: 'https://ado.example.com/tfs/DefaultCollection',
+      auth: 'pat',
+      project: 'Road Map',
+      repository: 'Rocket X',
+      ref: 'refs/heads/main',
+      path: '/config/rcx.workspace.json',
+    },
+  });
+  expect(JSON.stringify(stored.source)).not.toContain('workspace-pat');
+  expect(stored.update).toEqual({ kind: 'dir', location: '\\\\fileserver\\software\\rocketx' });
+  expect(adoRequests).toHaveLength(2);
+  expect(adoRequests.every((request) => request.authorization?.startsWith('Basic '))).toBe(true);
+  expect(adoRequests[1]?.url).toContain('versionDescriptor.version=main');
+  expect(adoRequests[1]?.url).toContain('versionDescriptor.versionType=branch');
   expect(pageErrors).toEqual([]);
 });
 
@@ -1030,7 +1427,7 @@ test('团队 ADO 端点变化会解绑 PAT，并保持旧 AI 设置不被工作�
   });
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
   await page.locator('input[accept=".json,application/json"]').setInputFiles({
     name: 'rcx.workspace.json',
     mimeType: 'application/json',
@@ -1091,7 +1488,7 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
   await page.goto('/');
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
   await page.locator('input[accept=".json,application/json"]').setInputFiles({
     name: 'rcx.workspace.json',
     mimeType: 'application/json',
@@ -1139,32 +1536,12 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('内容异步撑高并触发浏览器滚动锚定后仍保持贴底', async ({ page }) => {
-  const { pageErrors } = await bootAuthenticated(page);
-  await conversation(page, 'General').click();
-  await page.evaluate(async () => {
-    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
-      useChat: {
-        getState: () => { messages: Record<string, unknown[]> };
-        setState: (state: { messages: Record<string, unknown[]> }) => void;
-      };
-    }>;
-    const { useChat } = await load();
-    const state = useChat.getState();
-    useChat.setState({
-      messages: {
-        ...state.messages,
-        'room-general': Array.from({ length: 40 }, (_, index) => ({
-          _id: `scroll-regression-${index}`,
-          rid: 'room-general',
-          msg: `Scroll regression message ${index}`,
-          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
-          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
-        })),
-      },
-    });
+test('普通打开和同会话重开在异步布局增长后都完成贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Open generation message') },
   });
 
+  await conversation(page, 'General').click();
   const viewport = page.getByTestId('message-scroll');
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
@@ -1172,17 +1549,111 @@ test('内容异步撑高并触发浏览器滚动锚定后仍保持贴底', async
 
   await viewport.evaluate((element) => {
     const content = element.firstElementChild as HTMLElement;
-    const oldTop = element.scrollTop;
     const spacer = document.createElement('div');
     spacer.style.height = '600px';
     content.append(spacer);
-    element.scrollTop = oldTop + 120;
-    element.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
 
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
+
+  await conversation(page, 'General').click();
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('底部无效滚轮不会取消普通打开后的贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Bottom wheel message') },
+  });
+
+  await conversation(page, 'General').click();
+  const viewport = page.getByTestId('message-scroll');
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+
+  await viewport.hover();
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+
+  await viewport.evaluate((element) => {
+    const spacer = document.createElement('div');
+    spacer.style.height = '600px';
+    element.firstElementChild?.append(spacer);
+  });
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('用户主动向上滚动后，异步布局增长不会强制拉回底部（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('User scroll message') },
+  });
+  await conversation(page, 'General').click();
+
+  const viewport = page.getByTestId('message-scroll');
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  await viewport.hover();
+  await page.mouse.wheel(0, -900);
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(120);
+  const userScrollTop = await viewport.evaluate((element) => element.scrollTop);
+
+  await viewport.evaluate((element) => {
+    const spacer = document.createElement('div');
+    spacer.style.height = '600px';
+    element.firstElementChild?.append(spacer);
+  });
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(600);
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBeCloseTo(userScrollTop, 0);
+  await expect(page.getByTitle('回到底部')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('显式消息定位优先于普通打开贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': scrollHistory('Locate filler', {
+        index: 18,
+        id: 'locate-target',
+        text: 'Locate target message',
+      }),
+    },
+  });
+
+  await conversation(page, 'General').click();
+  await expect(page.locator('[data-message-id="locate-target"]')).toHaveCount(1);
+  await conversation(page, 'Project Alpha').click();
+  await page.keyboard.press('Control+Shift+F');
+  const search = page.getByRole('dialog', { name: '全局搜索' });
+  await search.getByRole('textbox').fill('Locate target message');
+  await search.getByText('Locate target message', { exact: true }).click();
+
+  const target = page.locator('[data-message-id="locate-target"]');
+  await expect(target).toBeVisible();
+  await expect.poll(() => target.evaluate((element) => {
+    const viewport = element.closest('[data-testid="message-scroll"]');
+    if (!viewport) return false;
+    const targetRect = element.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    return targetRect.top >= viewportRect.top && targetRect.bottom <= viewportRect.bottom;
+  })).toBe(true);
+  await expect.poll(() => page.getByTestId('message-scroll').evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(120);
   expect(pageErrors).toEqual([]);
 });
 
@@ -1625,6 +2096,56 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
+test('ADO 我的贡献通过工作台展示热力图、键盘日期明细与筛选（issue #291）', async ({ page }, testInfo) => {
+  const adoRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/ado/')) adoRequests.push(request.url());
+  });
+  await installContributionAdoMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-ui', JSON.stringify({ module: 'contributions' }));
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
+  await expect(page.getByRole('button', { name: '我的贡献', exact: true })).toHaveClass(/bg-primary-light/);
+  await expect(page.getByRole('heading', { name: 'Test User' })).toBeVisible();
+  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
+  await expect(page.getByLabel('各类活动总数')).toContainText('工作项评论');
+  await expect(page.getByLabel('各类活动总数').getByText('≥1', { exact: true })).toHaveCount(1);
+  await expect(page.locator('main header')).toContainText('已读取的活动');
+  await expect(page.locator('main header').getByText('6', { exact: true })).toBeVisible();
+
+  const day = page.getByRole('button', { name: /2026年8月10日，6 项贡献/ });
+  await expect(day).toBeVisible();
+  await day.focus();
+  await expect(day).toBeFocused();
+  await day.press('Enter');
+  const details = page.getByRole('region', { name: /2026年8月10日.*贡献明细/ });
+  await expect(details).toBeVisible();
+  await expect(details.getByRole('link')).toHaveCount(6);
+  await expect(details).toContainText('完成贡献日历');
+  await expect(details).toContainText('Improve contribution profile');
+  await expect(details).toContainText('Add personal contribution page');
+
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await testInfo.attach('issue-291-contribution-profile', {
+    body: await page.screenshot(),
+    contentType: 'image/png',
+  });
+
+  await page.getByLabel('活动类型').selectOption('commit');
+  await expect(page.locator('main header').getByText('1', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
+  await expect(page.getByLabel('各类活动总数')).not.toContainText('创建 PR');
+
+  expect(adoRequests.filter((url) => /\/_apis\/wit\/wiql|\/_apis\/build\/builds/i.test(url))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('我的工作项默认隐藏搁置状态，并记住用户改过的筛选', async ({ page }) => {
   const workItem = {
     id: 128,
@@ -1780,6 +2301,72 @@ test('工作项可创建绑定本地环境的原生讨论', async ({ page }, tes
   expect(pageErrors).toEqual([]);
 });
 
+test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）', async ({ page }, testInfo) => {
+  const workItem = {
+    id: 128,
+    title: 'Login failure',
+    type: 'Bug',
+    state: 'Active',
+    priority: 1,
+    project: 'RocketChatX',
+    assignedTo: 'Test User',
+  };
+  const savedQueryId = '11111111-2222-4333-8444-555555555555';
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installAdoDirectMock(page, workItem);
+  await page.addInitScript(({ queryId }) => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+    localStorage.setItem('rcx-custom-queries', JSON.stringify([{
+      id: 'query-ai-board',
+      name: 'AI 托管看板',
+      url: `${location.origin}/ado/RocketChatX/_queries/query/${queryId}`,
+      queryId,
+      project: 'RocketChatX',
+    }]));
+    localStorage.setItem('rcx-query-views-v1', JSON.stringify({
+      'query-ai-board': 'board',
+    }));
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: ['RocketChatX'],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  }, { queryId: savedQueryId });
+
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 托管看板', exact: true }).click();
+  const card = page.getByText('Login failure', { exact: true }).locator('..').locator('..');
+  await expect(card).toBeVisible();
+  await card.hover();
+  const assignButton = card.getByRole('button', { name: '排给 AI：工作项 #128' });
+  await expect(assignButton).toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('workitem-board-ai-action.png') });
+
+  await assignButton.click();
+  const dialog = page.getByRole('dialog', { name: '为 #128 创建讨论' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('checkbox').nth(0)).toBeChecked();
+  await expect(dialog.getByRole('checkbox').nth(1)).not.toBeChecked();
+  await dialog.screenshot({ path: testInfo.outputPath('workitem-board-ai-dialog.png') });
+  expect(pageErrors).toEqual([]);
+});
+
 test('工作项 Discussion 在会话头部显著标明由谁的 AI 托管', async ({ page }, testInfo) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, '#128 Login failure').click();
@@ -1814,19 +2401,21 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   const { pageErrors } = await bootAuthenticated(page);
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
+    const { useAgentEnvironments } = await import('/src/stores/agentEnvironments.ts');
+    useAgentEnvironments.getState().ensureEnvironment({ path: 'D:\\Repos\\another-project' });
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\another-project');
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\rocketchatx');
   });
   await conversation(page, 'General').click();
   await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 rocketchatx/);
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 RocketChat X - 主目录/);
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
-  await expect(page.getByRole('button', { name: /rocketchatx（默认）/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /RocketChat X - 主目录（默认）/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
-  await page.getByRole('button', { name: '托管设置…' }).click();
-  await expect(page.getByText('AI 托管独立配置', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '在 AI 管家中调整' })).toBeVisible();
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
+  await page.getByRole('button', { name: '在 AI 管家中管理项目…' }).click();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：another-project' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -1908,9 +2497,17 @@ test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局
   expect(pageErrors).toEqual([]);
 });
 
-test('本地工作区归入工作区设置，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
+test('托管项目归入管家，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as Window & { __copiedText?: string }).__copiedText = value;
+        },
+      },
+    });
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
       environments: [{
@@ -1936,23 +2533,47 @@ test('本地工作区归入工作区设置，AI 设置只保留模型运行配�
   await expect(page.getByLabel('AI 托管 Codex 模型')).toHaveCount(0);
   await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveCount(0);
   await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveCount(0);
-  await expect(page.getByText(/系统 Codex · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
+  await expect(page.getByText('系统 Codex · 0.145.0 · 新版待验证', { exact: true })).toBeVisible();
+  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd', { exact: true })).toBeVisible();
   await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
+  await expect(page.getByText('查看 1 个被跳过的候选')).toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
+  await page.getByText('查看 1 个被跳过的候选').click();
+  await expect(page.getByText('标准安装 · 版本过旧')).toBeVisible();
+  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex-old.cmd', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '复制诊断摘要' }).click();
+  const copiedSummary = await page.evaluate(() => (
+    window as Window & { __copiedText?: string }
+  ).__copiedText ?? '');
+  expect(copiedSummary).toContain('protocolBaseline: 0.144.4');
+  expect(copiedSummary).toContain('candidate[0]: source=standard outcome=rejected');
+  expect(copiedSummary).toContain('reasonCode=outdated');
+  expect(copiedSummary).not.toContain('tester');
+  expect(copiedSummary).not.toContain('0.140.0');
+
+  const probeCountBeforeRetry = await page.evaluate(() => (
+    window as Window & { __codexProbeCount?: number }
+  ).__codexProbeCount ?? 0);
+  await page.getByRole('button', { name: '重新检测' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __codexProbeCount?: number }
+  ).__codexProbeCount ?? 0)).toBeGreaterThan(probeCountBeforeRetry);
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '本地工作区' })).not.toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
-  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
 
-  await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '本地工作区' })).toBeVisible();
-  await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '工作区配置' })).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  const projects = page.getByLabel('项目目录');
+  await expect(projects.getByLabel('托管项目')).toBeVisible();
+  await expect(projects.getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '项目配置：RocketChat X - 主目录' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-test('工作区设置通过系统目录选择器添加并持久化管家派活白名单', async ({ page }) => {
+test('管家通过系统目录选择器添加并持久化托管项目', async ({ page }) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
     (window as Window & { __dialogOpenResponses?: Array<string | string[] | null> })
@@ -1960,10 +2581,9 @@ test('工作区设置通过系统目录选择器添加并持久化管家派活�
   });
   const { pageErrors } = await bootAuthenticated(page);
 
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
-  await expect(page.getByText('还没有本地工作区。添加一个代码目录后，管家就能把独立工作派到这里。')).toBeVisible();
-  await page.getByRole('button', { name: '添加本地工作区', exact: true }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByLabel('项目目录').getByText('添加托管项目', { exact: true })).toBeVisible();
+  await page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' }).first().click();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
 
   expect(await page.evaluate(() => {

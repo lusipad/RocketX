@@ -26,14 +26,25 @@ export const canUseNtlm = isTauri;
 const ADO_REQUEST_TIMEOUT_MS = 15_000;
 const CONTROLLED_WRITE_READBACK_RESERVE_MS = 1_000;
 
-type AdoRequestMethod = 'GET' | 'POST' | 'PATCH';
+export type AdoRequestMethod = 'GET' | 'POST' | 'PATCH';
 
-interface AdoRequestOptions {
+export interface DirectRequestOptions {
   deadlineAt?: number;
   signal?: AbortSignal;
 }
 
-class AdoRequestTimeoutError extends Error {
+export interface AdoProjectRef {
+  id: string;
+  name: string;
+}
+
+export interface AdoRepositoryRef {
+  id: string;
+  name: string;
+  project: AdoProjectRef;
+}
+
+export class AdoRequestTimeoutError extends Error {
   readonly reason = 'ado-request-timeout';
 
   constructor(
@@ -152,21 +163,42 @@ async function ntlmRequest(
   return { status: res.status, text: res.body };
 }
 
-async function adoRequest<T>(
+interface AdoRawResponse {
+  status: number;
+  text: string;
+  url: string;
+  contentType: string | null;
+}
+
+function authFailureMessage(cfg: DirectConfig): string {
+  return cfg.auth === 'ntlm'
+    ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
+    : cfg.auth === 'none' || !cfg.pat?.trim()
+      ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
+      : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）';
+}
+
+async function adoRequestRaw(
   cfg: DirectConfig,
   method: AdoRequestMethod,
   path: string,
   body?: unknown,
   contentType = 'application/json',
-  options?: AdoRequestOptions,
-): Promise<T> {
+  options?: DirectRequestOptions,
+): Promise<AdoRawResponse> {
   const url = `${base(cfg)}${path}`;
+  if (options?.signal?.aborted) {
+    throw options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new DOMException('请求已取消', 'AbortError');
+  }
   const deadlineAt = options?.deadlineAt ?? createAdoDeadline();
   const timeoutMs = remainingMsUntil(deadlineAt);
   if (timeoutMs <= 0) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
   const payload = body === undefined ? undefined : JSON.stringify(body);
   let status: number;
   let text: string;
+  let responseContentType: string | null = null;
 
   try {
     if (cfg.auth === 'ntlm') {
@@ -176,6 +208,11 @@ async function adoRequest<T>(
         );
       }
       ({ status, text } = await ntlmRequest(url, method, payload, contentType, timeoutMs));
+      if (options?.signal?.aborted) {
+        throw options.signal.reason instanceof Error
+          ? options.signal.reason
+          : new DOMException('请求已取消', 'AbortError');
+      }
     } else {
       await ensureHttpOrigin(url);
       const requestSignal = withDeadlineSignal(deadlineAt, options?.signal);
@@ -192,6 +229,7 @@ async function adoRequest<T>(
           signal: requestSignal.signal,
         });
         status = res.status;
+        responseContentType = res.headers.get('Content-Type');
         text = await res.text();
       } catch (err) {
         if (requestSignal.timedOut()) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
@@ -211,15 +249,21 @@ async function adoRequest<T>(
     );
   }
 
+  return { status, text, url, contentType: responseContentType };
+}
+
+async function adoRequest<T>(
+  cfg: DirectConfig,
+  method: AdoRequestMethod,
+  path: string,
+  body?: unknown,
+  contentType = 'application/json',
+  options?: DirectRequestOptions,
+): Promise<T> {
+  const { status, text, url } = await adoRequestRaw(cfg, method, path, body, contentType, options);
+
   if (status === 401 || status === 203) {
-    // 三种情况的处理方向完全不同，提示必须分开说，否则用户会一直去改 PAT
-    throw new Error(
-      cfg.auth === 'ntlm'
-        ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
-        : cfg.auth === 'none' || !cfg.pat?.trim()
-          ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
-          : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）',
-    );
+    throw new Error(authFailureMessage(cfg));
   }
   if (status === 404) {
     throw new Error(`地址不对：${url} 返回 404`);
@@ -236,6 +280,103 @@ async function adoRequest<T>(
         : '响应解析失败',
     );
   }
+}
+
+export interface AdoRepositoryFileLocation {
+  project: string;
+  repository: string;
+  ref: string;
+  path: string;
+}
+
+function requiredTrimmed(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${label}不能为空`);
+  return trimmed;
+}
+
+function normalizeRepositoryFilePath(path: string): string {
+  const trimmed = requiredTrimmed(path, '仓库文件路径');
+  const normalized = trimmed.replace(/\\/g, '/');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function gitVersionDescriptor(ref: string): { version: string; versionType: 'branch' | 'tag' | 'commit' } {
+  const value = requiredTrimmed(ref, 'Git 引用');
+  if (/^refs\/heads\//i.test(value)) {
+    return { version: requiredTrimmed(value.slice('refs/heads/'.length), '分支名'), versionType: 'branch' };
+  }
+  if (/^refs\/tags\//i.test(value)) {
+    return { version: requiredTrimmed(value.slice('refs/tags/'.length), '标签名'), versionType: 'tag' };
+  }
+  if (/^refs\//i.test(value)) throw new Error('Git 引用只支持分支、标签或提交 SHA');
+  if (/^[0-9a-f]{7,40}$/i.test(value)) return { version: value, versionType: 'commit' };
+  return { version: value, versionType: 'branch' };
+}
+
+async function ensureAdoProjectAccess(cfg: DirectConfig, project: string): Promise<void> {
+  const response = await adoRequestRaw(
+    cfg,
+    'GET',
+    `/_apis/projects/${encodeURIComponent(project)}?api-version=7.0`,
+  );
+  if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
+  if (response.status === 403) {
+    throw new Error(`当前账号没有权限访问 ADO 项目「${project}」`);
+  }
+  if (response.status === 404) {
+    throw new Error(`ADO 项目「${project}」不存在，或当前账号无权访问`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`ADO 项目校验失败（HTTP ${response.status}）`);
+  }
+}
+
+export async function directReadRepositoryFile(
+  cfg: DirectConfig,
+  source: AdoRepositoryFileLocation,
+): Promise<string> {
+  const project = requiredTrimmed(source.project, '项目');
+  const repository = requiredTrimmed(source.repository, '仓库');
+  const path = normalizeRepositoryFilePath(source.path);
+  const version = gitVersionDescriptor(source.ref);
+  await ensureAdoProjectAccess(cfg, project);
+  const response = await adoRequestRaw(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}/items`
+    + `?path=${encodeURIComponent(path)}`
+    + `&versionDescriptor.version=${encodeURIComponent(version.version)}`
+    + `&versionDescriptor.versionType=${version.versionType}`
+    + '&includeContent=true&resolveLfs=true&api-version=7.0',
+  );
+
+  if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
+  if (response.status === 403) {
+    throw new Error(`没有权限读取 ADO 仓库文件：项目「${project}」/ 仓库「${repository}」`);
+  }
+  if (response.status === 404) {
+    throw new Error(
+      `找不到 ADO 仓库、Git 引用或文件：${project}/${repository} · ${source.ref} · ${path}`,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`读取 ADO 仓库文件失败（HTTP ${response.status}）`);
+  }
+
+  let parsed: { isFolder?: boolean; content?: unknown };
+  try {
+    parsed = JSON.parse(response.text) as { isFolder?: boolean; content?: unknown };
+  } catch {
+    throw new Error(
+      response.text.trimStart().startsWith('<')
+        ? 'ADO 仓库文件请求被重定向到登录页，请检查当前认证方式'
+        : 'ADO 仓库文件响应解析失败',
+    );
+  }
+  if (parsed.isFolder) throw new Error(`ADO 路径「${path}」指向的是文件夹，不是单个配置文件`);
+  if (typeof parsed.content !== 'string') throw new Error('ADO 仓库文件不是可直接读取的文本文件');
+  return parsed.content;
 }
 
 /** 连接测试：返回可用的项目数量 */
@@ -416,6 +557,7 @@ function mapWorkItem(cfg: DirectConfig, w: RawWorkItem) {
  */
 export async function directGetIdentity(
   cfg: DirectConfig,
+  options?: DirectRequestOptions,
 ): Promise<{ id: string; displayName: string; account: string }> {
   const res = await adoRequest<{
     authenticatedUser?: {
@@ -424,7 +566,7 @@ export async function directGetIdentity(
       customDisplayName?: string;
       properties?: { Account?: { $value?: string } };
     };
-  }>(cfg, 'GET', '/_apis/connectionData?api-version=7.0-preview');
+  }>(cfg, 'GET', '/_apis/connectionData?api-version=7.0-preview', undefined, 'application/json', options);
   const u = res.authenticatedUser ?? {};
   const displayName = u.customDisplayName || u.providerDisplayName || '';
   return {
@@ -495,20 +637,55 @@ export async function directComment(
   );
 }
 
-export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
+export async function directGetProjectRefs(
+  cfg: DirectConfig,
+  options?: DirectRequestOptions,
+): Promise<AdoProjectRef[]> {
   const pageSize = 100;
-  const projects: string[] = [];
+  const projects: AdoProjectRef[] = [];
   for (let skip = 0; ; skip += pageSize) {
-    const res = await adoRequest<{ value: { name: string }[] }>(
+    const res = await adoRequest<{ value: { id?: string; name: string }[] }>(
       cfg,
       'GET',
       `/_apis/projects?api-version=7.0&$top=${pageSize}&$skip=${skip}`,
+      undefined,
+      'application/json',
+      options,
     );
     const page = res.value ?? [];
-    projects.push(...page.map((project) => project.name));
+    projects.push(...page.map((project) => ({ id: project.id ?? '', name: project.name })));
     if (page.length < pageSize) break;
   }
-  return projects.sort();
+  return projects.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
+  return (await directGetProjectRefs(cfg)).map((project) => project.name);
+}
+
+export async function directGetRepositoriesForProject(
+  cfg: DirectConfig,
+  project: Pick<AdoProjectRef, 'id' | 'name'> | string,
+  options?: DirectRequestOptions,
+): Promise<AdoRepositoryRef[]> {
+  const projectRef = typeof project === 'string' ? { id: '', name: project } : project;
+  const key = projectRef.id || projectRef.name;
+  const res = await adoRequest<{ value: { id?: string; name: string; project?: { id?: string; name?: string } }[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(key)}/_apis/git/repositories?includeHidden=true&api-version=7.0`,
+    undefined,
+    'application/json',
+    options,
+  );
+  return (res.value ?? []).map((repository) => ({
+    id: repository.id ?? '',
+    name: repository.name,
+    project: {
+      id: repository.project?.id ?? projectRef.id,
+      name: repository.project?.name ?? projectRef.name,
+    },
+  }));
 }
 
 /** 当前项目实际启用的工作项类型；不同过程模板（Basic/Agile/Scrum/CMMI）并不相同。 */
@@ -704,7 +881,7 @@ function describeWorkItemStateConflict(
 async function directGetWorkItemWithOptions(
   cfg: DirectConfig,
   id: number,
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ) {
   const detail = await adoRequest<{ value: RawWorkItem[] }>(
     cfg,
@@ -721,7 +898,7 @@ async function directGetWorkItemWithOptions(
 async function mustGetWorkItemWithOptions(
   cfg: DirectConfig,
   id: number,
-  options?: AdoRequestOptions,
+  options?: DirectRequestOptions,
 ): Promise<DirectWorkItem> {
   const item = await directGetWorkItemWithOptions(cfg, id, options);
   if (!item) throw new Error(`工作项 #${id} 不存在或当前账号无权访问`);
@@ -967,6 +1144,199 @@ export async function directGetPullRequest(
     `/_apis/git/pullrequests/${id}?api-version=7.0`,
   );
   return mapPullRequest(cfg, pr);
+}
+
+export async function directGetCommitPage(
+  cfg: DirectConfig,
+  project: string,
+  repositoryId: string,
+  options: {
+    author: string;
+    fromDate: string;
+    toDate: string;
+    top: number;
+    skip: number;
+    signal?: AbortSignal;
+  },
+): Promise<any[]> {
+  const params = new URLSearchParams({
+    'searchCriteria.author': options.author,
+    'searchCriteria.fromDate': options.fromDate,
+    'searchCriteria.toDate': options.toDate,
+    'searchCriteria.$top': String(options.top),
+    'searchCriteria.$skip': String(options.skip),
+    'api-version': '7.0',
+  });
+  const response = await adoRequest<{ value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  return response.value ?? [];
+}
+
+export async function directGetPullRequestPage(
+  cfg: DirectConfig,
+  options: {
+    project: string;
+    repositoryId?: string;
+    creatorId?: string;
+    reviewerId?: string;
+    status?: string;
+    minTime?: string;
+    maxTime?: string;
+    queryTimeRangeType?: 'created' | 'closed';
+    top: number;
+    skip: number;
+    signal?: AbortSignal;
+  },
+): Promise<any[]> {
+  const params = new URLSearchParams({
+    '$top': String(options.top),
+    '$skip': String(options.skip),
+    'api-version': '7.0',
+  });
+  if (options.repositoryId) params.set('searchCriteria.repositoryId', options.repositoryId);
+  if (options.creatorId) params.set('searchCriteria.creatorId', options.creatorId);
+  if (options.reviewerId) params.set('searchCriteria.reviewerId', options.reviewerId);
+  if (options.status) params.set('searchCriteria.status', options.status);
+  if (options.minTime) params.set('searchCriteria.minTime', options.minTime);
+  if (options.maxTime) params.set('searchCriteria.maxTime', options.maxTime);
+  if (options.queryTimeRangeType) {
+    params.set('searchCriteria.queryTimeRangeType', options.queryTimeRangeType);
+  }
+  const response = await adoRequest<{ value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(options.project)}/_apis/git/pullrequests?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  return response.value ?? [];
+}
+
+export async function directGetPullRequestThreads(
+  cfg: DirectConfig,
+  project: string,
+  repositoryId: string,
+  pullRequestId: number,
+  options?: DirectRequestOptions,
+): Promise<any[]> {
+  const response = await adoRequest<any[] | { value?: any[] }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads?api-version=7.0`,
+    undefined,
+    'application/json',
+    options,
+  );
+  return Array.isArray(response) ? response : (response.value ?? []);
+}
+
+export async function directGetWorkItemRevisionPage(
+  cfg: DirectConfig,
+  project: string,
+  options: {
+    fields: string[];
+    startDateTime?: string;
+    continuationToken?: string;
+    includeDiscussionChangesOnly?: boolean;
+    includeIdentityRef?: boolean;
+    pageSize?: number;
+    signal?: AbortSignal;
+  },
+): Promise<{ values: any[]; continuationToken?: string; isLastBatch?: boolean }> {
+  const params = new URLSearchParams({ 'api-version': '7.0' });
+  if (options.fields.length > 0) params.set('fields', options.fields.join(','));
+  if (options.startDateTime) params.set('startDateTime', options.startDateTime);
+  if (options.continuationToken) params.set('continuationToken', options.continuationToken);
+  if (options.includeDiscussionChangesOnly) params.set('includeDiscussionChangesOnly', 'true');
+  if (options.includeIdentityRef) params.set('includeIdentityRef', 'true');
+  if (options.pageSize) params.set('$maxPageSize', String(options.pageSize));
+  const response = await adoRequest<{
+    values?: any[];
+    value?: any[];
+    continuationToken?: string;
+    nextLink?: string;
+    isLastBatch?: boolean;
+  }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/wit/reporting/workItemRevisions?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  let continuationToken = response.continuationToken;
+  if (!continuationToken && response.nextLink) {
+    try {
+      const next = new URL(response.nextLink, base(cfg));
+      if (next.origin !== new URL(base(cfg)).origin) {
+        throw new Error('reporting work item revisions 返回了跨源 nextLink');
+      }
+      continuationToken = next.searchParams.get('continuationToken') ?? undefined;
+    } catch (err) {
+      throw new Error(`reporting work item revisions 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!continuationToken) throw new Error('reporting work item revisions 分页链接缺少 continuationToken');
+  }
+  return {
+    values: response.values ?? response.value ?? [],
+    continuationToken,
+    isLastBatch: response.isLastBatch,
+  };
+}
+
+export async function directGetWorkItemCommentsPage(
+  cfg: DirectConfig,
+  project: string,
+  workItemId: number,
+  options: {
+    continuationToken?: string;
+    top?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ comments: any[]; continuationToken?: string }> {
+  const params = new URLSearchParams({
+    'api-version': '7.0-preview.3',
+    order: 'asc',
+    includeDeleted: 'false',
+  });
+  if (options.top) params.set('$top', String(options.top));
+  if (options.continuationToken) params.set('continuationToken', options.continuationToken);
+  const response = await adoRequest<{
+    comments?: any[];
+    continuationToken?: string;
+    nextPage?: string;
+  }>(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/wit/workItems/${workItemId}/comments?${params.toString()}`,
+    undefined,
+    'application/json',
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  let continuationToken = response.continuationToken;
+  if (!continuationToken && response.nextPage) {
+    try {
+      const next = new URL(response.nextPage, base(cfg));
+      if (next.origin !== new URL(base(cfg)).origin) {
+        throw new Error('Work Item Comments API 返回了跨源 nextPage');
+      }
+      continuationToken = next.searchParams.get('continuationToken') ?? undefined;
+    } catch (err) {
+      throw new Error(`Work Item Comments API 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!continuationToken) throw new Error('Work Item Comments API 分页链接缺少 continuationToken');
+  }
+  return {
+    comments: response.comments ?? [],
+    continuationToken,
+  };
 }
 
 export async function directGetPullRequests(cfg: DirectConfig, pageSize = 100) {

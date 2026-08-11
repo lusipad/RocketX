@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { bootAuthenticated } from './support/rocket-chat-mock';
+import { bootAuthenticated, TEST_SERVER } from './support/rocket-chat-mock';
 
 async function installCodexRuntime(page: Page): Promise<void> {
   await page.evaluate(async () => {
@@ -23,6 +23,8 @@ async function installCodexRuntime(page: Page): Promise<void> {
       __codexInterruptCount?: number;
       __codexListRoots?: string[][];
       __tauriInvocations?: Array<{ command: string; args?: Record<string, unknown> }>;
+      __dialogOpenResponses?: Array<string | string[] | null>;
+      __codexAdditionalThreadRoots?: string[];
       __codexAutomationFiles?: Record<string, string>;
       __appendExternalCodexTurn?: (threadId: string, text: string) => void;
     };
@@ -46,6 +48,10 @@ async function installCodexRuntime(page: Page): Promise<void> {
           }
           if (command === 'codex_butler_workspace') {
             return butlerWorkspaceRoot;
+          }
+          if (command === 'plugin:dialog|open') {
+            const queue = testWindow.__dialogOpenResponses ?? [];
+            return queue.length > 0 ? queue.shift() ?? null : null;
           }
           if (command === 'codex_agent_attachment_write') {
             return { path: 'D:/runtime/composer/image.png', root: 'D:/runtime' };
@@ -100,6 +106,9 @@ async function installCodexRuntime(page: Page): Promise<void> {
     let threads = [
       makeThread('thread-release', '候选版本准备', '检查候选版本发布条件'),
       makeThread('thread-plan', '迭代计划', '梳理当前迭代计划'),
+      ...(testWindow.__codexAdditionalThreadRoots ?? []).map((cwd, index) => (
+        makeThread(`thread-environment-${index}`, '环境项目历史', '来自托管项目的历史任务', cwd)
+      )),
     ];
     const turns = new Map<string, any[]>();
     turns.set('thread-release', [{
@@ -530,6 +539,110 @@ test('项目树按三类工作区嵌套会话，普通新对话固定进入管�
   });
 });
 
+test('旧 workspaceRoots 会在 Butler 中导入为托管项目，并保留为 environment 真源', async ({ page }) => {
+  await page.addInitScript(({ server }) => {
+    localStorage.setItem(`rcx-codex-workspace-v1:${server}:user-me`, JSON.stringify({
+      workspaceRoot: 'D:/Repos/rocketchatx',
+      workspaceRoots: ['D:/Repos/legacy-root', 'D:/Repos/rocketchatx'],
+    }));
+  }, { server: TEST_SERVER });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await openWorkspace(page);
+
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：legacy-root' })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const stored = JSON.parse(localStorage.getItem('rcx-agent-environments') ?? '{}');
+    return {
+      environmentPaths: stored.environments?.map((environment: { path: string }) => environment.path) ?? [],
+      runtimeRoots: useCodexWorkspace.getState().workspaceRoots,
+    };
+  })).toEqual({
+    environmentPaths: expect.arrayContaining(['D:/Repos/legacy-root', 'D:/Repos/rocketchatx']),
+    runtimeRoots: [
+      'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless',
+      'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler',
+    ],
+  });
+});
+
+test('environment-only 项目会显示在 Butler 中，并可通过项目配置更新元数据', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as Window & { __codexAdditionalThreadRoots?: string[] }).__codexAdditionalThreadRoots = ['D:/Repos/env-only'];
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-only',
+        name: 'Env Only',
+        path: 'D:/Repos/env-only',
+        adoProjects: ['Alpha'],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await openWorkspace(page);
+
+  const project = page.getByLabel('项目目录').getByRole('region', { name: '项目：Env Only' });
+  await expect(project).toBeVisible();
+  await expect(project.getByRole('button', { name: 'Env Only 1', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (
+    (window as Window & { __codexListRoots?: string[][] }).__codexListRoots?.at(-1)
+  ))).toContain('D:/Repos/env-only');
+  await project.getByRole('button', { name: 'Env Only 1', exact: true }).click();
+  await expect(project.getByRole('navigation', { name: 'Codex 对话历史' })).toContainText('环境项目历史');
+  await page.getByRole('button', { name: '项目配置：Env Only' }).click();
+  const dialog = page.getByRole('dialog', { name: '项目配置' });
+  await dialog.getByLabel('项目名称').fill('Env Only Renamed');
+  await dialog.getByLabel('ADO 项目').fill('Alpha, Beta');
+  await dialog.getByLabel('基础分支').fill('release/2026.08');
+  await dialog.getByLabel('任务分支前缀').fill('feature/');
+  await dialog.getByLabel('启用').uncheck();
+  await dialog.getByRole('button', { name: '保存' }).click();
+
+  await expect(page.getByRole('button', { name: /项目配置：Env Only Renamed/ })).toBeVisible();
+  expect(await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem('rcx-agent-environments') ?? '{}');
+    return stored.environments?.find((environment: { id: string }) => environment.id === 'environment-only');
+  })).toMatchObject({
+    name: 'Env Only Renamed',
+    enabled: false,
+    adoProjects: ['Alpha', 'Beta'],
+    defaultBaseBranch: 'release/2026.08',
+    branchPrefix: 'feature/',
+  });
+});
+
+test('Butler 添加托管项目时会同时注册 environment 并选中运行目录', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as Window & { __dialogOpenResponses?: Array<string | string[] | null> }).__dialogOpenResponses = ['D:/Repos/added-project'];
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await openWorkspace(page);
+
+  await page.getByRole('button', { name: '添加托管项目' }).click();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：added-project' })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const stored = JSON.parse(localStorage.getItem('rcx-agent-environments') ?? '{}');
+    return {
+      workspaceRoot: useCodexWorkspace.getState().workspaceRoot,
+      environmentPaths: stored.environments?.map((environment: { path: string }) => environment.path) ?? [],
+    };
+  })).toEqual({
+    workspaceRoot: 'D:/Repos/added-project',
+    environmentPaths: expect.arrayContaining(['D:/Repos/added-project']),
+  });
+});
+
 test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显式新建会话', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1200, height: 700 });
   await bootAuthenticated(page);
@@ -596,6 +709,9 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
     return useChat.getState().highlightMid;
   })).toBe('general-release');
 
+  await expect(panel).toHaveCount(0);
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await panel.getByRole('button', { name: '新建房间会话' }).click();
   await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
   await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
@@ -686,7 +802,7 @@ test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目�
   await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
 });
 
-test('从 Codex 刷新会硬重连同一线程并加载外部新增 Turn', async ({ page }) => {
+test('从 Codex 刷新会复用 Runtime 并加载外部新增 Turn', async ({ page }) => {
   await openWorkspace(page);
   await page.getByRole('navigation', { name: 'Codex 对话历史' })
     .getByRole('button', { name: /^候选版本准备/ })
@@ -712,7 +828,7 @@ test('从 Codex 刷新会硬重连同一线程并加载外部新增 Turn', async
       controllers: testWindow.__codexControllerCount,
       stops: testWindow.__codexStopCount,
     };
-  })).toEqual({ controllers: 2, stops: 1 });
+  })).toEqual({ controllers: 1, stops: 0 });
 });
 
 test('app-server 运行中退出会保留部分输出，并从原线程显式刷新恢复', async ({ page }) => {
@@ -964,6 +1080,42 @@ test('输出 Codex 工作区视觉门禁截图', async ({ page }) => {
   await page.getByLabel('给 Codex 的任务').fill('检查候选版本发布条件');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toContainText('530 tests passed');
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      messages: [{
+        id: 'markdown-visual-answer',
+        role: 'assistant',
+        text: [
+          '# 发布检查结论',
+          '',
+          '**可以继续，但需要先处理一个风险。** 当前测试与类型检查已经通过，发布门禁保持完整。',
+          '',
+          '## 验证结果',
+          '',
+          '- [x] 530 tests passed',
+          '- [x] TypeScript 类型检查通过',
+          '- [ ] 确认正式包签名',
+          '',
+          '> 建议先完成签名验证，再生成最终发布产物。',
+          '',
+          '| 检查项 | 状态 | 说明 |',
+          '| --- | --- | --- |',
+          '| 自动化测试 | 通过 | 无失败用例 |',
+          '| 版本一致性 | 待确认 | 核对 `package.json` 与 tag |',
+          '',
+          '```ts',
+          'const releaseReady = testsPassed && signatureVerified;',
+          '```',
+          '',
+          '详情见 [发布检查文档](https://example.test/release-checklist)。',
+        ].join('\n'),
+      }],
+      streamingText: '',
+    });
+  });
+  await expect(page.getByRole('heading', { name: '发布检查结论' })).toBeVisible();
   await page.getByLabel('权限', { exact: true }).click();
   await page.screenshot({ path: desktopPath, animations: 'disabled' });
 

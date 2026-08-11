@@ -1,4 +1,5 @@
 import type { CodexProcessInfo } from './protocol/client';
+import type { CodexPermissionPreset } from './AppServerController';
 
 export type AgentSessionStatus =
   | 'starting'
@@ -43,6 +44,9 @@ export interface AgentSession {
   lastResumedWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
   leaseMessageId?: string;
   activeTurnId?: string;
+  runtimeModel?: string;
+  runtimeEffort?: string | null;
+  runtimePermissionPreset?: CodexPermissionPreset;
   workspaceRoots: string[];
   environmentId?: string;
   environmentName?: string;

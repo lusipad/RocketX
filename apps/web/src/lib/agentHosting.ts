@@ -5,6 +5,7 @@ import { useAuth } from '../stores/auth';
 import {
   agentRoomSessionKey,
   environmentIsBusy,
+  findEnvironmentByPath,
   proposedAgentBranch,
   selectEnvironmentForProject,
   useAgentEnvironments,
@@ -62,13 +63,16 @@ export async function startRoomAgentHosting(
   roomTitle: string,
   options: { preferredEnvironmentId?: string; workspaceRoot?: string } = {},
 ): Promise<void> {
-  const environmentState = useAgentEnvironments.getState();
   const workspaceState = useCodexWorkspace.getState();
   const defaultWorkspaceRoot = workspaceState.defaultWorkspaceRoot
     || await workspaceState.ensureDefaultWorkspace();
   const butlerWorkspaceRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
+  const environmentState = useAgentEnvironments.getState();
   const workItemId = workItemIdFromRoomTitle(roomTitle);
   const fetchedWorkItem = workItemId ? await fetchWorkItem(workItemId) : null;
+  const workspaceEnvironment = options.workspaceRoot
+    ? findEnvironmentByPath(environmentState.environments, options.workspaceRoot)
+    : undefined;
   const preferredEnvironment = options.preferredEnvironmentId
     ? environmentState.environments.find(
         (environment) =>
@@ -81,12 +85,9 @@ export async function startRoomAgentHosting(
     throw new Error('这个 AI 托管工作区不可用，请在 AI 管家中重新选择');
   }
   const environment = preferredEnvironment
-    ?? environmentState.environments.find(
-      (candidate) =>
-        candidate.path === options.workspaceRoot &&
-        candidate.enabled &&
-        !environmentIsBusy(candidate.id, environmentState.bindings),
-    )
+    ?? (workspaceEnvironment?.enabled && !environmentIsBusy(workspaceEnvironment.id, environmentState.bindings)
+      ? workspaceEnvironment
+      : undefined)
     ?? (!options.workspaceRoot
       ? selectEnvironmentForProject(
         environmentState.environments,
@@ -96,13 +97,10 @@ export async function startRoomAgentHosting(
       )
       : undefined);
   const workspaceRoot = options.workspaceRoot ?? environment?.path;
-  const configuredWorkspaces = useCodexWorkspace.getState().workspaceRoots;
-  const configured = workspaceRoot && (
-    configuredWorkspaces.includes(workspaceRoot) ||
-    environmentState.environments.some((candidate) => candidate.enabled && candidate.path === workspaceRoot)
-  );
+  const configured = Boolean(workspaceRoot && environment && findEnvironmentByPath([environment], workspaceRoot));
   if (
     !workspaceRoot
+    || !environment
     || isSystemCodexWorkspace(workspaceRoot, defaultWorkspaceRoot, butlerWorkspaceRoot)
     || !configured
   ) {
@@ -118,12 +116,12 @@ export async function startRoomAgentHosting(
 
   await useSharedAgent.getState().startSession(rid, agentRoomSessionKey(rid), {
     workspaceRoot,
-    environmentId: environment?.id,
-    environmentName: environment?.name,
+    environmentId: environment.id,
+    environmentName: environment.name,
     workItem,
-    proposedBranch: workItem && environment
+    proposedBranch: workItem
       ? proposedAgentBranch(environment.branchPrefix, workItem.id, workItem.title)
       : undefined,
-    baseBranch: environment?.defaultBaseBranch,
+    baseBranch: environment.defaultBaseBranch,
   });
 }

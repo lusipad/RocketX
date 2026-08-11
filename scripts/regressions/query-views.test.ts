@@ -118,3 +118,21 @@ test('脏数据里的父子环不会死循环', () => {
   assert.ok(stats.get(1));
   assert.ok(stats.get(2));
 });
+
+test('看板卡片暴露排给 AI 动作并阻断默认导航/拖拽（issue #292）', () => {
+  const source = readFileSync('apps/web/src/components/QueryViews.tsx', 'utf8');
+
+  assert.match(source, /onAssignToAi\?: \(item: WorkItem\) => void;/);
+  assert.match(source, /type="button"/);
+  assert.match(source, /aria-label=\{`排给 AI：工作项 #\$\{w\.id\}`\}/);
+  assert.match(source, /e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onAssignToAi\(w\);/s);
+  assert.match(source, /onMouseDown=\{\(e\) => e\.stopPropagation\(\)\}/);
+});
+
+test('工作台把看板卡片接到现有工作项讨论 dialog（issue #292）', () => {
+  const source = readFileSync('apps/web/src/pages/WorkbenchPage.tsx', 'utf8');
+
+  assert.match(source, /const \[discussionItem, setDiscussionItem\] = useState<WorkItem \| null>\(null\);/);
+  assert.match(source, /onAssignToAi=\{\s*features\.sharedAgent \? \(item\) => setDiscussionItem\(item\) : undefined\s*\}/s);
+  assert.match(source, /<CreateWorkItemDiscussionDialog item=\{discussionItem\} onClose=\{\(\) => setDiscussionItem\(null\)\} \/>/);
+});

@@ -1,9 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { Building2, Rocket } from 'lucide-react';
 import { useAuth } from '../stores/auth';
+import { autostartAvailable } from '../lib/autostart';
 import { getServerBase, isTauri, setServerBase } from '../lib/client';
 import { loginFailureMessage, probeRocketChat } from '../lib/loginDiagnostic';
-import { loadFirstRunState, shouldShowFirstRun } from '../lib/firstRun';
+import {
+  hasExistingRocketXUserState,
+  loadFirstRunState,
+  prepareDesktopDefaultsRecord,
+  shouldShowFirstRun,
+} from '../lib/firstRun';
 import { loadWorkspaceSource } from '../lib/workspaceConfig';
 import FirstRunPage from './FirstRunPage';
 
@@ -19,14 +25,22 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const [firstRun, setFirstRun] = useState(() =>
-    shouldShowFirstRun({
+  const [firstRun, setFirstRun] = useState(() => {
+    const storage = typeof localStorage === 'undefined' ? undefined : localStorage;
+    const firstRunState = loadFirstRunState(storage);
+    const workspaceSource = loadWorkspaceSource();
+    prepareDesktopDefaultsRecord({
+      storage,
+      releaseDesktop: autostartAvailable,
+      hasExistingUserState: hasExistingRocketXUserState(storage),
+    });
+    return shouldShowFirstRun({
       desktop: isTauri,
       serverUrl: getServerBase(),
-      hasWorkspaceSource: !!loadWorkspaceSource(),
-      state: loadFirstRunState(typeof localStorage === 'undefined' ? undefined : localStorage),
-    }),
-  );
+      hasWorkspaceSource: !!workspaceSource,
+      state: firstRunState,
+    });
+  });
   const [editServer, setEditServer] = useState(false);
   const busy = checking || status === 'authing';
 

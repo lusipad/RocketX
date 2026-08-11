@@ -20,6 +20,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  UsersRound,
   XCircle,
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
@@ -41,6 +42,8 @@ import {
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash } from '../lib/taskbar';
+import { applyDesktopUiScale } from '../lib/desktopUiScale';
+import { UI_SCALE_OPTIONS, normalizeUiScale, type UiScale } from '../lib/uiScale';
 import {
   autostartAvailable,
   readAutostartEnabled,
@@ -67,7 +70,6 @@ import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
-import LocalAgentEnvironmentsSettings from '../components/LocalAgentEnvironmentsSettings';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -114,7 +116,7 @@ type Section =
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与状态', icon: Server },
-  { key: 'workspace', label: '工作区', icon: FolderOpen },
+  { key: 'workspace', label: '团队配置', icon: UsersRound },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
@@ -538,6 +540,9 @@ function DesktopSection() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
+  const [scaleChanging, setScaleChanging] = useState(false);
+  const uiScale = useUiPrefs((s) => s.uiScale);
+  const setUiScale = useUiPrefs((s) => s.setUiScale);
 
   useEffect(() => {
     if (!autostartAvailable) return;
@@ -596,8 +601,22 @@ function DesktopSection() {
       : error
         ? `读取或保存失败：${error}`
         : enabled
-          ? '已开启，登录系统后会自动启动 RocketX'
+          ? '已开启，登录系统后会静默启动到托盘'
           : '已关闭';
+
+  const changeUiScale = async (value: `${UiScale}`) => {
+    const next = normalizeUiScale(Number(value));
+    setScaleChanging(true);
+    try {
+      await applyDesktopUiScale(next);
+      setUiScale(next);
+      toast.success(`界面缩放已设为 ${next}%`);
+    } catch (err) {
+      toast.error(err, '界面缩放设置失败');
+    } finally {
+      setScaleChanging(false);
+    }
+  };
 
   const exportLogs = async () => {
     setExporting(true);
@@ -668,6 +687,35 @@ function DesktopSection() {
           </div>
         </div>
       </Row>
+      {isTauri && (
+        <Row
+          label="界面缩放"
+          hint="默认 100%，保存在本机；也可使用 Ctrl/Cmd +、Ctrl/Cmd - 与 Ctrl/Cmd 0 快速调整"
+        >
+          <div role="radiogroup" aria-label="界面缩放" className="flex flex-wrap gap-3">
+            {UI_SCALE_OPTIONS.map((scale) => {
+              const selected = scale === uiScale;
+              return (
+                <button
+                  key={scale}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={scaleChanging}
+                  onClick={() => void changeUiScale(String(scale) as `${UiScale}`)}
+                  className={`min-w-24 rounded-lg border px-3 py-2.5 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    selected
+                      ? 'border-primary/70 bg-primary-light/60 font-medium text-primary'
+                      : 'border-line text-ink hover:border-ink-3 hover:bg-fill-hover'
+                  }`}
+                >
+                  {scale}%
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+      )}
       <Row
         label="断网时走局域网，联网后补回服务器"
         hint="广播只用于发现；设备必须先通过 Rocket.Chat 认证通道固定公钥"
@@ -1828,6 +1876,7 @@ const UPDATE_SOURCE_OPTIONS: { value: UpdateSourceKind; label: string }[] = [
 function UpdateSourceRow() {
   const [config, setConfig] = useState(() => loadUpdateSource());
   const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [probe, setProbe] = useState<UpdateProbe | null>(null);
   const [signedUpdate, setSignedUpdate] = useState<Awaited<ReturnType<typeof checkSignedHttpSource>>>(null);
@@ -1876,7 +1925,8 @@ function UpdateSourceRow() {
   }
 
   async function applyUpdate(): Promise<void> {
-    if (!probe) return;
+    if (!probe || updating) return;
+    setUpdating(true);
     try {
       if (config.kind === 'github' || config.kind === 'http') {
         const found = signedUpdate ?? (config.kind === 'github'
@@ -1890,11 +1940,24 @@ function UpdateSourceRow() {
         await relaunch();
       } else if (probe.installerPath) {
         if (!probe.signature) throw new Error('更新包缺少签名');
-        await launchDirInstaller(config.location, probe.installerPath, probe.signature);
-        toast.info('安装包已启动，请按安装向导完成更新');
+        if (!probe.installerType) throw new Error('无法确认当前安装类型');
+        const toastId = toast.loading(`正在退出并安装 RocketX ${probe.version}…`);
+        try {
+          await launchDirInstaller({
+            dir: config.location,
+            path: probe.installerPath,
+            signature: probe.signature,
+            expectedVersion: probe.version,
+            installerType: probe.installerType,
+          });
+        } catch (error) {
+          toast.update(toastId, { kind: 'error', message: String(error) });
+        }
       }
     } catch (error) {
       toast.error(error, '更新失败');
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -1923,7 +1986,7 @@ function UpdateSourceRow() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => void checkNow()}
-            disabled={checking}
+            disabled={checking || updating}
             className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
           >
             {checking ? '检查中…' : '检查更新'}
@@ -1931,12 +1994,15 @@ function UpdateSourceRow() {
           {probe?.hasUpdate && (
             <button
               onClick={() => void applyUpdate()}
-              className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover"
+              disabled={updating}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
             >
-              {config.kind === 'github' || config.kind === 'http'
+              {updating
+                ? '正在更新…'
+                : config.kind === 'github' || config.kind === 'http'
                 ? `更新到 v${probe.version} 并重启`
                 : probe.installerPath
-                  ? `安装 v${probe.version}`
+                  ? `更新到 v${probe.version} 并重启`
                   : `下载 v${probe.version}`}
             </button>
           )}
@@ -2058,10 +2124,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
             <>
               {section === 'account' && <AccountSection />}
               {section === 'workspace' && (
-                <div className="space-y-8">
-                  <LocalAgentEnvironmentsSettings />
-                  <WorkspaceConfigSection />
-                </div>
+                <WorkspaceConfigSection />
               )}
               {section === 'appearance' && <AppearanceSection />}
               {section === 'sidebar' && <SidebarSection />}

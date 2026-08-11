@@ -39,6 +39,13 @@ import {
 } from '../lib/chatMemory';
 import { useUiPrefs } from './uiPrefs';
 import { createActiveRoomStreams } from '../lib/roomStreams';
+import {
+  messageScrollTransactionMatches,
+  nextMessageScrollTransaction,
+  type MessageScrollEntry,
+  type MessageScrollTransaction,
+} from '../lib/messageScrollTransaction';
+import { recordMessageScrollDiagnostic } from '../lib/messageScrollDiagnostics';
 import { useAuth } from './auth';
 import { usePrefs } from './prefs';
 import { useOnboarding } from './onboarding';
@@ -176,6 +183,9 @@ interface ChatState {
   rightPanel: RightPanel;
   /** 自己发送消息后递增，MessageList 据此强制滚到底部 */
   scrollNonce: number;
+  /** 每次普通打开或消息定位都会生成新的滚动事务，同一房间也不复用。 */
+  messageScrollGeneration: number;
+  messageScrollTransaction: MessageScrollTransaction | null;
   uploading: number;
   /** 每个会话的输入草稿（持久化） */
   drafts: Record<string, string>;
@@ -207,7 +217,10 @@ interface ChatState {
   seedUserStatus: (users: { username: string; status?: string }[]) => void;
   /** 滚到当前会话最新消息。再点一次已打开的会话时用（跳看历史后想回底部） */
   scrollToLatest: () => void;
-  openRoom: (rid: string) => Promise<void>;
+  openRoom: (
+    rid: string,
+    options?: { entry?: MessageScrollEntry; messageId?: string },
+  ) => Promise<void>;
   openThread: (mid: string) => Promise<void>;
   toggleThreadFollow: (mid: string, follow: boolean) => Promise<boolean>;
   setPanel: (panel: RightPanel) => void;
@@ -1002,6 +1015,8 @@ export const useChat = create<ChatState>((set, get) => ({
   activeRid: null,
   rightPanel: null,
   scrollNonce: 0,
+  messageScrollGeneration: 0,
+  messageScrollTransaction: null,
   uploading: 0,
   drafts: loadDrafts(),
   unreadMarkTs: {},
@@ -1017,7 +1032,31 @@ export const useChat = create<ChatState>((set, get) => ({
   selectMode: false,
   selectedMids: new Set(),
 
-  scrollToLatest: () => set({ scrollNonce: get().scrollNonce + 1 }),
+  scrollToLatest: () => {
+    const rid = get().activeRid;
+    if (!rid) return;
+    const transaction = nextMessageScrollTransaction(
+      get().messageScrollGeneration,
+      rid,
+      'latest',
+    );
+    set({
+      messageScrollGeneration: transaction.generation,
+      messageScrollTransaction: transaction,
+      highlightMid: null,
+    });
+    recordMessageScrollDiagnostic({
+      rid,
+      generation: transaction.generation,
+      entry: 'latest',
+      phase: 'history',
+      historyLoaded: get().historyLoaded[rid] ?? false,
+      messageCount: get().messages[rid]?.length ?? 0,
+      stickToBottom: true,
+      userIntent: false,
+      jumpVisible: false,
+    });
+  },
 
   seedUserStatus: (users) => {
     const cur = get().userStatus;
@@ -1298,8 +1337,14 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
-  openRoom: async (rid) => {
+  openRoom: async (rid, options) => {
     const requestGeneration = retainedRoomGeneration;
+    const transaction = nextMessageScrollTransaction(
+      get().messageScrollGeneration,
+      rid,
+      options?.entry ?? 'latest',
+      options?.messageId,
+    );
     const sub = get().subscriptions[rid];
     // 打开有未读的会话时记录「以下为新消息」位置（取上次已读时间）。
     // RC 对频道默认只有 @ 才累计 unread，普通新消息只置 alert，两者都算未读
@@ -1326,8 +1371,19 @@ export const useChat = create<ChatState>((set, get) => ({
       // 切会话退出多选态
       selectMode: false,
       selectedMids: new Set(),
-      // 即使重复点击当前会话，也回到最新消息，而不是停留在之前浏览的历史位置。
-      scrollNonce: get().scrollNonce + 1,
+      messageScrollGeneration: transaction.generation,
+      messageScrollTransaction: transaction,
+    });
+    recordMessageScrollDiagnostic({
+      rid,
+      generation: transaction.generation,
+      entry: transaction.entry,
+      phase: 'history',
+      historyLoaded: get().historyLoaded[rid] ?? false,
+      messageCount: get().messages[rid]?.length ?? 0,
+      stickToBottom: transaction.entry === 'latest',
+      userIntent: false,
+      jumpVisible: false,
     });
 
     const { historyLoaded, subscriptions, rooms } = get();
@@ -1368,6 +1424,17 @@ export const useChat = create<ChatState>((set, get) => ({
         messages: { ...get().messages, [rid]: merged },
         historyLoaded: { ...get().historyLoaded, [rid]: true },
         hasMore: { ...get().hasMore, [rid]: history.length >= HISTORY_PAGE },
+      });
+      recordMessageScrollDiagnostic({
+        rid,
+        generation: transaction.generation,
+        entry: transaction.entry,
+        phase: 'history',
+        historyLoaded: true,
+        messageCount: merged.length,
+        stickToBottom: transaction.entry === 'latest',
+        userIntent: false,
+        jumpVisible: false,
       });
     }
     if (get().subscriptions[rid]) scheduleMarkRead(rid);
@@ -1749,17 +1816,31 @@ export const useChat = create<ChatState>((set, get) => ({
     const targetRid = rid ?? get().activeRid;
     if (!targetRid) return;
 
-    // 目标不在当前会话 → 先切过去
-    if (targetRid !== get().activeRid) {
-      await get().openRoom(targetRid);
+    // 消息定位是独立事务，优先级高于普通打开后的贴底；同一房间也要生成新 generation。
+    const opening = get().openRoom(targetRid, { entry: 'locate', messageId: mid });
+    const generation = get().messageScrollTransaction?.generation;
+    if (generation === undefined) {
+      await opening;
+      return;
     }
+    const isCurrent = () => messageScrollTransactionMatches(
+      get().messageScrollTransaction,
+      generation,
+      targetRid,
+      'locate',
+      mid,
+    );
+    await opening;
+    if (!isCurrent()) return;
 
     // 消息不在已加载的范围内 → 向上翻页找（最多 5 页，避免无限拉）
     for (let i = 0; i < 5; i++) {
+      if (!isCurrent()) return;
       const list = get().messages[targetRid] ?? [];
       if (list.some((m) => m._id === mid)) break;
       if (get().hasMore[targetRid] === false) break;
       const loaded = await get().loadOlder();
+      if (!isCurrent()) return;
       if (loaded === 0) break;
     }
 
@@ -1769,10 +1850,11 @@ export const useChat = create<ChatState>((set, get) => ({
       return;
     }
 
+    if (!isCurrent()) return;
     set({ highlightMid: mid });
     // 滚动由 MessageItem 侧的 effect 执行（拿到 DOM 节点）
     setTimeout(() => {
-      if (get().highlightMid === mid) set({ highlightMid: null });
+      if (isCurrent() && get().highlightMid === mid) set({ highlightMid: null });
     }, 2600);
   },
 

@@ -24,8 +24,7 @@ export async function handoffToCodexTask(
     if (workspace.status === 'idle' || workspace.status === 'unavailable') {
       await workspace.connect();
     }
-    await useCodexWorkspace.getState().startThread(title.trim().slice(0, 80));
-    await useCodexWorkspace.getState().send(prompt);
+    await useCodexWorkspace.getState().startTask(prompt, title.trim().slice(0, 80));
     return 'started';
   } catch (error) {
     useCodexWorkspace.getState().setComposerDraft(prompt);

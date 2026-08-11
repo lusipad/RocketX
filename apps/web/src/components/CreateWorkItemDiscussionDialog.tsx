@@ -66,7 +66,7 @@ export default function CreateWorkItemDiscussionDialog({
   const [environmentId, setEnvironmentId] = useState(defaultEnvironment?.id ?? '');
   const [discussionName, setDiscussionName] = useState(`#${item.id} ${item.title}`.slice(0, 100));
   const [startAgent, setStartAgent] = useState(true);
-  const [writeBack, setWriteBack] = useState(true);
+  const [writeBack, setWriteBack] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const openExisting = async () => {
@@ -209,11 +209,11 @@ export default function CreateWorkItemDiscussionDialog({
               <FolderOpen size={12} /> {environments.find((environment) => environment.id === environmentId)?.path}
             </span>
           ) : null}
-          {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“设置 → AI”添加本地环境</span> : null}
+          {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“管家 → 托管项目”添加专用工作项目</span> : null}
         </label>
         <label className="flex items-start gap-2 text-xs text-ink-2">
           <input type="checkbox" checked={startAgent} onChange={(event) => setStartAgent(event.target.checked)} className="mt-0.5" />
-          <span><span className="flex items-center gap-1 font-medium text-ink"><Bot size={12} /> 创建后启动只读 Agent</span>其他成员可以在原版 Rocket.Chat 中使用 @ai，写入仍由本机审批。</span>
+          <span><span className="flex items-center gap-1 font-medium text-ink"><Bot size={12} /> 创建后启动本机 Agent</span>其他成员可以在原版 Rocket.Chat 中使用 @ai，写入仍由本机审批。</span>
         </label>
         <label className="flex items-start gap-2 text-xs text-ink-2">
           <input type="checkbox" checked={writeBack} onChange={(event) => setWriteBack(event.target.checked)} className="mt-0.5" />

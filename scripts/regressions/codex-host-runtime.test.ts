@@ -32,8 +32,9 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
   assert.match(proc, /resource_dir\(\)/);
   assert.match(proc, /\["codex\.cmd", "codex\.exe"\]/);
   assert.match(proc, /standard_codex_paths\(\)/);
-  assert.match(proc, /codex_command_succeeds\(&resolved, &\["app-server", "--help"\]\)/);
-  assert.match(proc, /codex_command_succeeds\(&resolved, &\["login", "status"\]\)/);
+  assert.match(proc, /codex_runtime_scan_from_candidates_with/);
+  assert.match(proc, /codex_command_succeeds\(resolved, &\["app-server", "--help"\]\)/);
+  assert.match(proc, /codex_command_succeeds\(resolved, &\["login", "status"\]\)/);
   assert.doesNotMatch(proc, /codex_runtime_login/);
   assert.match(proc, /\.args\(&launch_args\)/);
   assert.match(proc, /current_dir\(&workspace_root\)/);

@@ -546,7 +546,7 @@ export default function QuickSwitcher({
       const { rid, mid } = result.item;
       if (rid && mid) {
         setModule('messages');
-        void openRoom(rid).then(() => jumpToMessage(mid, rid));
+        void jumpToMessage(mid, rid);
       } else {
         // 手动新建的待办没有来源消息，直接去待办模块
         setModule('todos');

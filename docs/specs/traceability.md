@@ -1,6 +1,6 @@
 # 功能规格追踪索引
 
-> 基线：工作树 `2026-08-09`
+> 基线：工作树 `2026-08-11`
 > 用途：从验收 ID 定位当前实现、自动化证据和仍需真实验证的部分。
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
@@ -25,6 +25,7 @@
 | `ONB-AC-02`、`ONB-AC-03`、`ONB-AC-04` | `components/WorkspaceConfigImport.tsx`、`lib/workspaceConfig.ts` | `workspace-config.test.ts`、`workspace-config-source.test.ts` | 真实远程 Raw URL |
 | `ONB-AC-05` | `WorkspaceConfigImport.tsx`、`stores/auth.ts` | `workspace-config.test.ts`、`onboarding.test.ts` | 切换真实服务器 |
 | `ONB-AC-06` | `pages/LoginPage.tsx`、`lib/loginDiagnostic.ts` | `tests/ui/core-flows.spec.ts` | 真实错误分类 |
+| `ONB-AC-07`、`ONB-AC-08` | `pages/FirstRunPage.tsx`、`lib/firstRun.ts`、`lib/notify.ts`、`lib/autostart.ts` | `first-run.test.ts`、`autostart.test.ts`、`pnpm test:ui:release` | Windows/macOS/Linux 正式包首次安装与覆盖升级 MAN |
 
 ## 3. 消息与会话
 
@@ -37,6 +38,7 @@
 | `MSG-AC-05` | 搜索页面与筛选模型 | `quick-search.test.ts`、`search-filters.test.ts` | 服务端正则设置 |
 | `MSG-AC-06` | 文件索引、下载与桌面桥接 | `file-index.test.ts`、`download-history.test.ts`、`tests/ui/download-history.spec.ts` | 发布产物文件对话框 |
 | `MSG-AC-07` | `stores/chat.ts`、实时客户端 | `tests/ui/core-flows.spec.ts` | 真实断网/恢复 INT |
+| `MSG-AC-08` | `stores/chat.ts`、`components/MessageList.tsx`、`lib/messageScrollDiagnostics.ts` | `message-scroll.test.ts`、`diagnostics.test.ts`、`tests/ui/core-flows.spec.ts` | Windows WebView2 连续切房与三平台正式包 MAN |
 
 ## 4. 工作台与个人效率
 
@@ -45,6 +47,8 @@
 | `WB-AC-01`、`WB-AC-02`、`WB-AC-03` | `pages/WorkbenchPage.tsx`、`stores/workbench.ts`、`components/AdoLists.tsx` | `workbench-refresh.test.ts`、`custom-query.test.ts`、`ado-open-issues.test.ts` | 真实 ADO INT |
 | `WB-AC-04`、`WB-AC-05` | `lib/adoDirect.ts`、工作项写动作 | `ado-write-actions.test.ts` | 写超时/并发冲突 INT |
 | `WB-AC-06` | ADO 受管 Skill 与业务 MCP | `ado-skill-cli.test.ts`、`app-server-controller.test.ts` | 自然语言真实任务 INT |
+| `WB-AC-07`、`WB-AC-08` | `pages/ProfileContributionsPage.tsx`、`components/ContributionHeatmap.tsx`、`stores/profileContributions.ts` | `profile-contributions-ui.test.ts`、`tests/ui/core-flows.spec.ts` | 真实 ADO 身份、时区和链接 INT |
+| `WB-AC-09`、`WB-AC-10` | `lib/adoContributions.ts`、`lib/adoDirect.ts` | `profile-contributions-data.test.ts` | ADO Server 2022 大实例分页、权限局部失败与 NTLM 取消边界 INT |
 | `PERS-AC-01` | `stores/todos.ts` | `manual-todo.test.ts` | 桌面 DB 失败注入 |
 | `PERS-AC-02` | 各本地 Store 的账号作用域 | `manual-todo.test.ts`、`download-history.test.ts` | 真实切换账号 |
 | `PERS-AC-03` | `stores/calendar.ts` | 日历相关 regression / UI | 多来源失效组合 |
@@ -103,6 +107,7 @@
 | `PLAT-AC-06` | Tauri bundle/OCR 配置 | `image-ocr.test.ts`、`codex-bundled-resource.test.ts` | 精简/全量产物审计 |
 | `PLAT-AC-07` | `lib/runtimeMode.ts` | `issue-264-performance-mode.test.ts` | 长时间资源观察 |
 | `PLAT-AC-08` | `lib/unread.ts`、`lib/tray.ts` | `tray-flash.test.ts`、`taskbar-badge.test.ts`、通知聚合 tests | 三平台 MAN |
+| `PLAT-AC-10` | `lib/uiScale.ts`、`components/DesktopUiScaleBridge.tsx`、`stores/uiPrefs.ts`、Tauri capability | `ui-scale.test.ts`、`tests/ui/core-flows.spec.ts` | 三平台 1080p 发布产物清晰度与快捷键 MAN |
 
 ## 8. 发布候选门禁
 

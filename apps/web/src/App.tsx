@@ -6,6 +6,7 @@ import { useOnboarding } from './stores/onboarding';
 import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
 import { useDownloadHistory } from './stores/downloadHistory';
+import DesktopUiScaleBridge from './components/DesktopUiScaleBridge';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
 import DiagnosticBridge from './components/DiagnosticBridge';
@@ -72,6 +73,7 @@ export default function App() {
       <DiagnosticBridge />
       <UpdaterBridge />
       <WorkspaceSyncBridge />
+      <DesktopUiScaleBridge />
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />
       {content}

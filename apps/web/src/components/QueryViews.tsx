@@ -1,5 +1,5 @@
 import { useMemo, useState, type DragEvent } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   adoDateToLocal,
   isWorkItemDone,
@@ -37,9 +37,11 @@ function Empty() {
 export function WorkItemBoard({
   items,
   onMove,
+  onAssignToAi,
 }: {
   items: WorkItem[];
   onMove?: (item: WorkItem, toState: string) => void;
+  onAssignToAi?: (item: WorkItem) => void;
 }) {
   const today = todayKey();
   const columns = useMemo(() => boardColumns(items, today), [items, today]);
@@ -86,37 +88,60 @@ export function WorkItemBoard({
               const due = adoDateToLocal(w.dueDate);
               const overdue = !!due && due < today && !isWorkItemDone(w.state);
               return (
-                <a
+                <div
                   key={w.id}
-                  href={w.webUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  draggable={!!onMove}
-                  onDragStart={(e) => e.dataTransfer.setData('text/plain', String(w.id))}
-                  className={`block rounded-md border border-line bg-surface-4 px-3 py-2.5 transition hover:border-primary/50 hover:shadow-sm ${
+                  className={`group relative rounded-md border border-line bg-surface-4 px-3 py-2.5 transition hover:border-primary/50 hover:shadow-sm ${
                     onMove ? 'cursor-grab active:cursor-grabbing' : ''
                   }`}
                 >
-                  <div className="line-clamp-2 text-sm break-words text-ink">{w.title}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
-                    <TypeDot type={w.type} />
-                    <span>#{w.id}</span>
-                    {w.priority !== undefined && (
-                      <span className={w.priority === 1 ? 'font-medium text-danger' : w.priority === 2 ? 'text-warning' : ''}>
-                        P{w.priority}
+                  <a
+                    href={w.webUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    draggable={!!onMove}
+                    onDragStart={(e) => e.dataTransfer.setData('text/plain', String(w.id))}
+                    className="block"
+                  >
+                    <div className={`line-clamp-2 text-sm break-words text-ink ${onAssignToAi ? 'pr-20' : ''}`}>
+                      {w.title}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+                      <TypeDot type={w.type} />
+                      <span>#{w.id}</span>
+                      {w.priority !== undefined && (
+                        <span className={w.priority === 1 ? 'font-medium text-danger' : w.priority === 2 ? 'text-warning' : ''}>
+                          P{w.priority}
+                        </span>
+                      )}
+                      {due && (
+                        <span className={overdue ? 'font-medium text-danger' : ''}>
+                          {overdue ? '逾期 ' : ''}
+                          {due.slice(5).replace('-', '/')}
+                        </span>
+                      )}
+                      <span className="ml-auto max-w-[40%] truncate" title={w.assignedTo}>
+                        {w.assignedTo ?? '未分配'}
                       </span>
-                    )}
-                    {due && (
-                      <span className={overdue ? 'font-medium text-danger' : ''}>
-                        {overdue ? '逾期 ' : ''}
-                        {due.slice(5).replace('-', '/')}
-                      </span>
-                    )}
-                    <span className="ml-auto max-w-[40%] truncate" title={w.assignedTo}>
-                      {w.assignedTo ?? '未分配'}
-                    </span>
-                  </div>
-                </a>
+                    </div>
+                  </a>
+                  {onAssignToAi ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onAssignToAi(w);
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className="absolute right-2 top-2 flex h-7 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary opacity-100 transition hover:bg-primary/15 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+                      title={`排给 AI：工作项 #${w.id}`}
+                      aria-label={`排给 AI：工作项 #${w.id}`}
+                    >
+                      <Bot size={13} aria-hidden="true" />
+                      排给 AI
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
           </div>

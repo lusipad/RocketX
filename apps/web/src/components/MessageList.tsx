@@ -19,9 +19,19 @@ import { messagesToMarkdown } from '../lib/messageOutput';
 import { saveTextFile } from '../lib/exportText';
 import { useKernelContributions } from '../kernel/registry';
 import { runtimeFeatures } from '../lib/runtimeMode';
+import {
+  messageScrollCommand,
+  messageScrollTransactionMatches,
+  type MessageScrollTransaction,
+} from '../lib/messageScrollTransaction';
+import {
+  recordMessageScrollDiagnostic,
+  type MessageScrollDiagnosticPhase,
+} from '../lib/messageScrollDiagnostics';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const NEAR_BOTTOM_PX = 120;
+const OPEN_SETTLE_FRAME_LIMIT = 4;
 
 function messageTime(message: RcMessage): number {
   return message.rocketxOriginalTs ?? tsMs(message.ts);
@@ -41,18 +51,6 @@ export function shouldShowUnreadDivider({
   if (!unreadMark || messageTs <= unreadMark) return false;
   // 还有更早分页时，当前页首条之前的消息未知，不能把它冒充成精确未读边界。
   return previousMessageTs !== undefined ? previousMessageTs <= unreadMark : !hasMore;
-}
-
-export function initialMessageScrollTop({
-  historyLoaded,
-  didInitialScroll,
-  scrollHeight,
-}: {
-  historyLoaded: boolean;
-  didInitialScroll: boolean;
-  scrollHeight: number;
-}): number | undefined {
-  return historyLoaded && !didInitialScroll ? scrollHeight : undefined;
 }
 
 export function nextMessageScrollState({
@@ -86,7 +84,13 @@ export function messagesInMain(
   );
 }
 
-export default function MessageList({ rid }: { rid: string }) {
+export default function MessageList({
+  rid,
+  transaction,
+}: {
+  rid: string;
+  transaction: MessageScrollTransaction | null;
+}) {
   const features = runtimeFeatures();
   const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
@@ -108,11 +112,11 @@ export default function MessageList({ rid }: { rid: string }) {
   const [forwardOpen, setForwardOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
+  const stickToBottom = useRef(transaction?.entry !== 'locate');
   const userScrollIntent = useRef(false);
-  const activeRidRef = useRef(rid);
-  activeRidRef.current = rid;
+  const openPhase = useRef<'waiting' | 'settling' | 'complete' | 'cancelled'>('waiting');
   const settleScrollFrame = useRef<number | null>(null);
+  const locateSettled = useRef(false);
   /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
   const anchor = useRef<{
     height: number;
@@ -121,8 +125,8 @@ export default function MessageList({ rid }: { rid: string }) {
     settled: boolean;
   } | null>(null);
   const [anchorTick, setAnchorTick] = useState(0);
-  /** 已经为本会话执行过首次贴底（只做一次，之后正常跟随） */
-  const didInitialScroll = useRef(false);
+  const initialScrollNonce = useRef(scrollNonce);
+  const observedInitialList = useRef(false);
 
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showJump, setShowJump] = useState(false);
@@ -135,40 +139,116 @@ export default function MessageList({ rid }: { rid: string }) {
     [all, showThreadsInMain],
   );
 
+  const recordScrollPhase = useCallback((
+    phase: MessageScrollDiagnosticPhase,
+    options: { userIntent?: boolean; jumpVisible?: boolean } = {},
+  ) => {
+    const el = scrollRef.current;
+    const scrollTop = el?.scrollTop;
+    const scrollHeight = el?.scrollHeight;
+    const clientHeight = el?.clientHeight;
+    recordMessageScrollDiagnostic({
+      rid,
+      generation: transaction?.generation ?? 0,
+      entry: transaction?.entry ?? 'latest',
+      phase,
+      historyLoaded,
+      messageCount: list.length,
+      ...(scrollTop === undefined ? {} : { scrollTop }),
+      ...(scrollHeight === undefined ? {} : { scrollHeight }),
+      ...(clientHeight === undefined ? {} : { clientHeight }),
+      ...(scrollTop === undefined || scrollHeight === undefined || clientHeight === undefined
+        ? {}
+        : { bottomGap: scrollHeight - scrollTop - clientHeight }),
+      stickToBottom: stickToBottom.current,
+      userIntent: options.userIntent ?? userScrollIntent.current,
+      jumpVisible: options.jumpVisible ?? showJump,
+    });
+  }, [historyLoaded, list.length, rid, showJump, transaction]);
+
+  const transactionEntry = transaction?.entry ?? 'latest';
+  const transactionGeneration = transaction?.generation ?? 0;
+  const transactionIsCurrent = useCallback(() => {
+    const state = useChat.getState();
+    if (!transaction) return state.activeRid === rid && !state.messageScrollTransaction;
+    return messageScrollTransactionMatches(
+      state.messageScrollTransaction,
+      transactionGeneration,
+      rid,
+    );
+  }, [rid, transaction, transactionGeneration]);
+
+  const cancelSettleFrame = useCallback(() => {
+    if (settleScrollFrame.current === null) return;
+    cancelAnimationFrame(settleScrollFrame.current);
+    settleScrollFrame.current = null;
+  }, []);
+
+  const scheduleBottomVerification = useCallback((completeOpen: boolean) => {
+    cancelSettleFrame();
+    const verify = (remaining: number) => {
+      settleScrollFrame.current = requestAnimationFrame(() => {
+        settleScrollFrame.current = null;
+        if (!transactionIsCurrent() || openPhase.current === 'cancelled') return;
+        const current = scrollRef.current;
+        if (!current) return;
+        const gap = current.scrollHeight - current.scrollTop - current.clientHeight;
+        recordScrollPhase('frame');
+        if (gap <= 2) {
+          if (completeOpen) openPhase.current = 'complete';
+          return;
+        }
+        current.scrollTop = current.scrollHeight;
+        stickToBottom.current = true;
+        if (remaining > 1) verify(remaining - 1);
+      });
+    };
+    verify(OPEN_SETTLE_FRAME_LIMIT);
+  }, [cancelSettleFrame, recordScrollPhase, transactionIsCurrent]);
+
   const scrollToBottom = useCallback((smooth = false, settleNextFrame = false) => {
     const el = scrollRef.current;
     if (!el) return;
+    cancelSettleFrame();
+    openPhase.current = 'complete';
     userScrollIntent.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
     setShowJump(false);
     setNewCount(0);
+    if (!smooth && settleNextFrame) scheduleBottomVerification(false);
+  }, [cancelSettleFrame, scheduleBottomVerification]);
 
-    if (!smooth && settleNextFrame) {
-      if (settleScrollFrame.current !== null) {
-        cancelAnimationFrame(settleScrollFrame.current);
-      }
-      const targetRid = activeRidRef.current;
-      settleScrollFrame.current = requestAnimationFrame(() => {
-        settleScrollFrame.current = null;
-        if (activeRidRef.current !== targetRid) return;
-        const current = scrollRef.current;
-        if (!current) return;
-        userScrollIntent.current = false;
-        current.scrollTop = current.scrollHeight;
-        stickToBottom.current = true;
-        setShowJump(false);
-        setNewCount(0);
-      });
+  const settleLatestOpen = useCallback(() => {
+    if (
+      transactionEntry !== 'latest' ||
+      openPhase.current === 'cancelled' ||
+      !transactionIsCurrent()
+    ) {
+      return;
     }
+    const el = scrollRef.current;
+    if (!el) return;
+    openPhase.current = 'settling';
+    userScrollIntent.current = false;
+    el.scrollTop = el.scrollHeight;
+    stickToBottom.current = true;
+    setShowJump(false);
+    setNewCount(0);
+    scheduleBottomVerification(true);
+  }, [scheduleBottomVerification, transactionEntry, transactionIsCurrent]);
+
+  const markUserScrollIntent = useCallback(() => {
+    userScrollIntent.current = true;
   }, []);
 
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    const userInitiated = userScrollIntent.current;
     const scrollState = nextMessageScrollState({
       stickToBottom: stickToBottom.current,
-      userInitiated: userScrollIntent.current,
+      userInitiated,
       scrollHeight: el.scrollHeight,
       scrollTop: el.scrollTop,
       clientHeight: el.clientHeight,
@@ -176,8 +256,18 @@ export default function MessageList({ rid }: { rid: string }) {
     userScrollIntent.current = false;
     stickToBottom.current = scrollState.stickToBottom;
     const { nearBottom } = scrollState;
+    if (userInitiated && !nearBottom) {
+      openPhase.current = 'cancelled';
+      cancelSettleFrame();
+    } else if (userInitiated && nearBottom) {
+      openPhase.current = 'complete';
+    }
     setShowJump(!scrollState.stickToBottom);
     if (nearBottom) setNewCount(0);
+    recordScrollPhase('scroll', {
+      userIntent: userInitiated,
+      jumpVisible: !scrollState.stickToBottom,
+    });
 
     if (el.scrollTop < 60 && hasMore && !loadingOlder) {
       setLoadingOlder(true);
@@ -208,29 +298,35 @@ export default function MessageList({ rid }: { rid: string }) {
     }
   };
 
-  // 切换会话：重置状态
+  // 每个 generation 都是新的打开事务；同一房间重复打开也必须清空旧的本地滚动状态。
   useLayoutEffect(() => {
-    if (settleScrollFrame.current !== null) {
-      cancelAnimationFrame(settleScrollFrame.current);
-      settleScrollFrame.current = null;
-    }
-    stickToBottom.current = true;
+    cancelSettleFrame();
+    stickToBottom.current = transactionEntry === 'latest';
     userScrollIntent.current = false;
-    didInitialScroll.current = false;
+    openPhase.current = 'waiting';
+    observedInitialList.current = false;
+    locateSettled.current = false;
     setShowJump(false);
     setNewCount(0);
     anchor.current = null;
-  }, [rid]);
+  }, [cancelSettleFrame, rid, transactionEntry, transactionGeneration]);
 
   // 列表变化：翻页还原锚点 / 未读定位 / 跟随底部
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || list.length === 0) return;
+    if (!el) return;
+    recordScrollPhase('layout');
 
-    // 1) 向上翻页：基于当前 scrollTop 增加新内容高度，避免加载期间用户继续
-    //    滚动后又被旧的绝对位置拉回去（issue #19-3）。
     const pendingAnchor = anchor.current;
-    if (pendingAnchor?.settled) {
+    const command = messageScrollCommand({
+      anchorSettled: pendingAnchor?.settled === true,
+      entry: transactionEntry,
+      openPending: openPhase.current === 'waiting' || openPhase.current === 'settling',
+      stickToBottom: stickToBottom.current,
+    });
+
+    // 1) 向上翻页锚点优先于消息定位和普通贴底（issue #19-3）。
+    if (command === 'anchor' && pendingAnchor) {
       const sameMessage = pendingAnchor.messageId
         ? [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
             (node) => node.dataset.messageId === pendingAnchor.messageId,
@@ -247,37 +343,68 @@ export default function MessageList({ rid }: { rid: string }) {
       return;
     }
 
-    // 2) 首次打开会话默认贴底；未读分割线只作视觉提示，不改变初始位置（issue #26）。
-    const initialScrollTop = initialMessageScrollTop({
-      historyLoaded,
-      didInitialScroll: didInitialScroll.current,
-      scrollHeight: el.scrollHeight,
-    });
-    if (initialScrollTop !== undefined) {
-      didInitialScroll.current = true;
-      scrollToBottom(false, true);
+    // 2) 显式消息定位在列表完成布局后执行一次，不能被普通贴底覆盖。
+    // 列表级定位与 transaction 和 DOM 布局同步，避免跨房间切换时遗漏子项 effect。
+    if (command === 'locate') {
+      const messageId = transaction?.messageId;
+      if (!locateSettled.current && messageId && transactionIsCurrent()) {
+        const target = [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+          (node) => node.dataset.messageId === messageId,
+        );
+        if (target) {
+          const viewportRect = el.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const targetTop = el.scrollTop + targetRect.top - viewportRect.top;
+          el.scrollTop = Math.max(0, targetTop - (el.clientHeight - targetRect.height) / 2);
+          locateSettled.current = true;
+          openPhase.current = 'complete';
+          stickToBottom.current = false;
+        }
+      }
       return;
     }
 
-    // 3) 常规：在底部附近则跟随
-    if (stickToBottom.current) {
+    // 3) 普通打开只有在历史与容器都就绪后才进入有界的贴底复核。
+    if (command === 'latest' && historyLoaded) {
+      settleLatestOpen();
+      return;
+    }
+
+    // 4) 打开事务完成后的新消息或布局变化继续遵循贴底意图。
+    if (command === 'follow') {
       el.scrollTop = el.scrollHeight;
     }
-  }, [list, historyLoaded, anchorTick, scrollToBottom]);
+  }, [
+    list,
+    historyLoaded,
+    anchorTick,
+    recordScrollPhase,
+    settleLatestOpen,
+    transaction,
+    transactionEntry,
+    transactionIsCurrent,
+  ]);
 
   // 不在底部时来了新消息 → 计数（用于「N 条新消息」浮条）
   const prevLen = useRef(0);
   useEffect(() => {
+    if (!observedInitialList.current) {
+      observedInitialList.current = true;
+      prevLen.current = list.length;
+      return;
+    }
     const added = list.length - prevLen.current;
     prevLen.current = list.length;
-    if (added > 0 && !stickToBottom.current && didInitialScroll.current) {
+    if (added > 0 && !stickToBottom.current) {
       setNewCount((n) => n + added);
     }
   }, [list.length]);
 
   // 自己发消息后强制到底
   useEffect(() => {
-    if (scrollNonce > 0) scrollToBottom(false, true);
+    if (scrollNonce === initialScrollNonce.current) return;
+    initialScrollNonce.current = scrollNonce;
+    scrollToBottom(false, true);
   }, [scrollNonce, scrollToBottom]);
 
   /**
@@ -292,22 +419,28 @@ export default function MessageList({ rid }: { rid: string }) {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+      if (!transactionIsCurrent() || anchor.current) return;
+      recordScrollPhase('resize');
+      if (openPhase.current === 'cancelled') return;
+      if (
+        transactionEntry === 'latest' &&
+        (openPhase.current === 'waiting' || openPhase.current === 'settling')
+      ) {
+        settleLatestOpen();
+      } else if (stickToBottom.current) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
     // 内容异步撑高、输入区/窗口改变导致视口缩放，都要保持贴底。
     ro.observe(el);
     const content = el.firstElementChild;
     if (content) ro.observe(content);
     return () => ro.disconnect();
-  }, [rid, historyLoaded]);
+  }, [historyLoaded, recordScrollPhase, rid, settleLatestOpen, transactionEntry, transactionIsCurrent]);
 
   useEffect(
-    () => () => {
-      if (settleScrollFrame.current !== null) {
-        cancelAnimationFrame(settleScrollFrame.current);
-      }
-    },
-    [],
+    () => () => cancelSettleFrame(),
+    [cancelSettleFrame],
   );
 
   useEffect(() => {
@@ -447,12 +580,10 @@ export default function MessageList({ rid }: { rid: string }) {
         ref={scrollRef}
         data-testid="message-scroll"
         onScroll={onScroll}
-        onWheel={() => {
-          userScrollIntent.current = true;
-        }}
+        onWheel={markUserScrollIntent}
         onPointerDown={(event) => {
           if (event.pointerType === 'touch' || event.target === event.currentTarget) {
-            userScrollIntent.current = true;
+            markUserScrollIntent();
           }
         }}
         onPointerUp={() => {
@@ -463,7 +594,7 @@ export default function MessageList({ rid }: { rid: string }) {
         }}
         onKeyDown={(event) => {
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
-            userScrollIntent.current = true;
+            markUserScrollIntent();
           }
         }}
         onKeyUp={() => {

@@ -19,19 +19,25 @@ export interface DesktopNotifyOptions {
   mid?: string;
 }
 
-/** 申请通知权限,返回是否已授权。桌面端和浏览器端各走各的通道 */
-export async function requestNotifyPermission(): Promise<boolean> {
+export type NotifyPermissionStatus = 'granted' | 'denied' | 'unavailable';
+
+/** 申请通知权限并保留 denied/unavailable 等真实结果，供首次设置逐项展示。 */
+export async function requestNotifyPermissionStatus(): Promise<NotifyPermissionStatus> {
   if (isTauri) {
     const { isPermissionGranted, requestPermission } = await import(
       '@tauri-apps/plugin-notification'
     );
-    if (await isPermissionGranted()) return true;
-    return (await requestPermission()) === 'granted';
+    if (await isPermissionGranted()) return 'granted';
+    return (await requestPermission()) === 'granted' ? 'granted' : 'denied';
   }
-  if (typeof Notification === 'undefined') return false;
-  if (Notification.permission === 'granted') return true;
-  if (Notification.permission === 'denied') return false;
-  return (await Notification.requestPermission()) === 'granted';
+  if (typeof Notification === 'undefined') return 'unavailable';
+  if (Notification.permission !== 'default') return Notification.permission;
+  return (await Notification.requestPermission()) === 'granted' ? 'granted' : 'denied';
+}
+
+/** 申请通知权限,返回是否已授权。桌面端和浏览器端各走各的通道 */
+export async function requestNotifyPermission(): Promise<boolean> {
+  return (await requestNotifyPermissionStatus()) === 'granted';
 }
 
 /** 当前是否已授权(设置页展示用) */

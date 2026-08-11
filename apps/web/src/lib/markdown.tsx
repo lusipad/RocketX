@@ -347,7 +347,7 @@ function renderBlocks(
         j++;
       }
       push(
-        <div key={key} className="my-1.5 overflow-x-auto">
+        <div key={key} className="markdown-table-wrap my-1.5 overflow-x-auto">
           <table className="min-w-full border-collapse text-left text-xs">
             <thead>
               <tr>
@@ -405,7 +405,7 @@ function renderBlocks(
       push(
         <div
           key={key}
-          className="flex items-start gap-2 py-0.5"
+          className="markdown-list-item markdown-task-item flex items-start gap-2 py-0.5"
           style={{ paddingLeft: indentOf(task[1]) }}
         >
           <input type="checkbox" checked={done} readOnly className="mt-1 accent-primary" />
@@ -421,7 +421,7 @@ function renderBlocks(
     const ordered = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
     if (ordered) {
       push(
-        <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(ordered[1]) }}>
+        <div key={key} className="markdown-list-item flex gap-2 py-0.5" style={{ paddingLeft: indentOf(ordered[1]) }}>
           <span className="shrink-0 text-ink-3">{ordered[2]}.</span>
           <span className="min-w-0">{renderInline(ordered[3], me, key, wi, renderLink)}</span>
         </div>,
@@ -433,7 +433,7 @@ function renderBlocks(
     const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(line);
     if (bullet) {
       push(
-        <div key={key} className="flex gap-2 py-0.5" style={{ paddingLeft: indentOf(bullet[1]) }}>
+        <div key={key} className="markdown-list-item flex gap-2 py-0.5" style={{ paddingLeft: indentOf(bullet[1]) }}>
           <span className="shrink-0 text-ink-3">•</span>
           <span className="min-w-0">{renderInline(bullet[2], me, key, wi, renderLink)}</span>
         </div>,
@@ -503,7 +503,7 @@ function renderWithCodeFences(
         i % 2 === 1 ? (
           <pre
             key={i}
-            className={`overflow-x-auto rounded-md bg-code-bg font-mono leading-relaxed text-code-ink ${
+            className={`markdown-code-block overflow-x-auto rounded-md bg-code-bg font-mono leading-relaxed text-code-ink ${
               chat ? 'my-1 p-2.5 text-xs' : 'my-3 p-3 text-xs'
             }`}
           >

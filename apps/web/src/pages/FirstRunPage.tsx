@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
+  BellRing,
   BrainCircuit,
   Check,
   FileUp,
@@ -8,14 +9,32 @@ import {
   ListChecks,
   Loader2,
   MessageSquareText,
+  Rocket,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import { applyWorkspaceConfigDefaults } from '../components/WorkspaceConfigImport';
-import { completeFirstRun } from '../lib/firstRun';
+import { autostartAvailable, updateAutostartEnabled } from '../lib/autostart';
+import {
+  applyDesktopDefaults,
+  completeFirstRun,
+  loadDesktopDefaultsRecord,
+  saveAppliedDesktopDefaults,
+  type DesktopDefaultsAppliedResult,
+  type DesktopDefaultsEffectResult,
+  type DesktopDefaultsStep,
+} from '../lib/firstRun';
 import { probeRocketChat } from '../lib/loginDiagnostic';
+import { requestNotifyPermissionStatus } from '../lib/notify';
 import { loadWorkspaceSource, parseWorkspaceConfig, type WorkspaceConfig } from '../lib/workspaceConfig';
 import { fetchWorkspaceConfig } from '../lib/workspaceConfigSource';
+
+type FirstRunStep = 'principles' | 'desktop' | 'setup';
+type DesktopExitTarget = 'setup' | 'personal';
+type DesktopResults = {
+  notifications: DesktopDefaultsEffectResult;
+  autostart: DesktopDefaultsEffectResult;
+};
 
 function configSummary(config: WorkspaceConfig): { label: string; value: string }[] {
   const items: { label: string; value: string }[] = [];
@@ -36,15 +55,92 @@ function configSummary(config: WorkspaceConfig): { label: string; value: string 
   return items;
 }
 
+function toAppliedResult(result: DesktopDefaultsEffectResult): DesktopDefaultsAppliedResult {
+  if (
+    result === 'enabled' ||
+    result === 'skipped' ||
+    result === 'denied' ||
+    result === 'unavailable' ||
+    result === 'failed'
+  ) {
+    return result;
+  }
+  return 'skipped';
+}
+
+function statusLabel(result: DesktopDefaultsEffectResult): string {
+  switch (result) {
+    case 'pending':
+      return '正在设置…';
+    case 'enabled':
+      return '已开启';
+    case 'skipped':
+      return '已跳过';
+    case 'denied':
+      return '未授权';
+    case 'unavailable':
+      return '当前平台不可用';
+    case 'failed':
+      return '设置失败';
+    default:
+      return '待选择';
+  }
+}
+
+function statusTone(result: DesktopDefaultsEffectResult): string {
+  switch (result) {
+    case 'enabled':
+      return 'bg-success/15 text-success';
+    case 'denied':
+    case 'failed':
+      return 'bg-danger/10 text-danger';
+    case 'unavailable':
+    case 'skipped':
+      return 'bg-fill-1 text-ink-2';
+    case 'pending':
+      return 'bg-primary-light text-primary';
+    default:
+      return 'bg-fill-1 text-ink-3';
+  }
+}
+
+function canRetry(result: DesktopDefaultsEffectResult): boolean {
+  return result === 'denied' || result === 'unavailable' || result === 'failed';
+}
+
 export default function FirstRunPage({ onContinue }: { onContinue: () => void }) {
   const existingSource = loadWorkspaceSource();
-  const [step, setStep] = useState<'principles' | 'setup'>('principles');
-  const [url, setUrl] = useState(existingSource?.url ?? '');
+  const [desktopDefaultsRecord] = useState(() =>
+    loadDesktopDefaultsRecord(typeof localStorage === 'undefined' ? undefined : localStorage),
+  );
+  const showDesktopStep = autostartAvailable && desktopDefaultsRecord?.status === 'fresh';
+  const [step, setStep] = useState<FirstRunStep>('principles');
+  const [url, setUrl] = useState(existingSource?.kind === 'url' ? existingSource.url : '');
   const [config, setConfig] = useState<WorkspaceConfig | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [desktopExitTarget, setDesktopExitTarget] = useState<DesktopExitTarget>('setup');
+  const [notifyChecked, setNotifyChecked] = useState(true);
+  const [autostartChecked, setAutostartChecked] = useState(true);
+  const [desktopBusy, setDesktopBusy] = useState(false);
+  const [desktopApplied, setDesktopApplied] = useState(false);
+  const [desktopSaveFailed, setDesktopSaveFailed] = useState(false);
+  const [desktopResults, setDesktopResults] = useState<DesktopResults>({
+    notifications: showDesktopStep ? desktopDefaultsRecord?.notifications ?? 'pending' : 'pending',
+    autostart: showDesktopStep ? desktopDefaultsRecord?.autostart ?? 'pending' : 'pending',
+  });
+  const pageRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const totalSteps = showDesktopStep ? 3 : 2;
+  const currentStep = step === 'principles' ? 1 : step === 'desktop' ? 2 : totalSteps;
+  const currentStepLabel = step === 'principles' ? '为什么这样设计' : step === 'desktop' ? '桌面默认设置' : '连接你的工作';
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0 });
+    pageRef.current?.parentElement?.scrollTo({ top: 0, left: 0 });
+    pageRef.current?.scrollTo({ top: 0 });
+  }, [step]);
 
   const acceptText = (text: string, nextSourceUrl?: string) => {
     const parsed = parseWorkspaceConfig(text);
@@ -86,6 +182,82 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
     onContinue();
   };
 
+  const openDesktopStep = (target: DesktopExitTarget) => {
+    setDesktopExitTarget(target);
+    if (!showDesktopStep) {
+      if (target === 'setup') setStep('setup');
+      else continuePersonal();
+      return;
+    }
+    setStep('desktop');
+  };
+
+  const persistDesktopResults = (result: { notifications: DesktopDefaultsAppliedResult; autostart: DesktopDefaultsAppliedResult }) => {
+    const saved = saveAppliedDesktopDefaults(localStorage, result);
+    setDesktopResults(result);
+    setDesktopApplied(true);
+    setDesktopSaveFailed(!saved);
+  };
+
+  const retryDesktopResultSave = () => {
+    const saved = saveAppliedDesktopDefaults(localStorage, {
+      notifications: toAppliedResult(desktopResults.notifications),
+      autostart: toAppliedResult(desktopResults.autostart),
+    });
+    setDesktopSaveFailed(!saved);
+  };
+
+  const applyDesktopPreferences = async () => {
+    if (!showDesktopStep || desktopBusy) return;
+    setDesktopBusy(true);
+    setDesktopResults({
+      notifications: notifyChecked ? 'pending' : 'skipped',
+      autostart: autostartChecked ? 'pending' : 'skipped',
+    });
+    try {
+      const result = await applyDesktopDefaults({
+        releaseDesktop: autostartAvailable,
+        notificationsChecked: notifyChecked,
+        autostartChecked,
+        requestNotifications: requestNotifyPermissionStatus,
+        enableAutostart: () => updateAutostartEnabled(true),
+        onProgress: (desktopStep, resultItem) => {
+          setDesktopResults((current) => ({ ...current, [desktopStep]: resultItem }));
+        },
+      });
+      persistDesktopResults(result);
+    } finally {
+      setDesktopBusy(false);
+    }
+  };
+
+  const retryDesktopPreference = async (desktopStep: DesktopDefaultsStep) => {
+    if (!showDesktopStep || desktopBusy) return;
+    const current = desktopResults;
+    setDesktopBusy(true);
+    setDesktopResults((previous) => ({ ...previous, [desktopStep]: 'pending' }));
+    try {
+      const retried = await applyDesktopDefaults({
+        releaseDesktop: autostartAvailable,
+        notificationsChecked: desktopStep === 'notifications',
+        autostartChecked: desktopStep === 'autostart',
+        requestNotifications: requestNotifyPermissionStatus,
+        enableAutostart: () => updateAutostartEnabled(true),
+        onProgress: (stepName, resultItem) => {
+          if (stepName === desktopStep) {
+            setDesktopResults((previous) => ({ ...previous, [stepName]: resultItem }));
+          }
+        },
+      });
+      persistDesktopResults({
+        notifications: desktopStep === 'notifications' ? retried.notifications : toAppliedResult(current.notifications),
+        autostart: desktopStep === 'autostart' ? retried.autostart : toAppliedResult(current.autostart),
+      });
+    } finally {
+      setDesktopBusy(false);
+    }
+  };
+
   const joinTeam = async () => {
     if (!config) return;
     setBusy(true);
@@ -108,7 +280,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
   const summary = config ? configSummary(config) : [];
 
   return (
-    <main className="min-h-full overflow-y-auto bg-fill-2 px-3 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">
+    <main ref={pageRef} className="min-h-full overflow-y-auto bg-fill-2 px-3 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">
       <div className="mx-auto min-h-[calc(100vh-1.5rem)] max-w-[1200px] overflow-hidden rounded-xl border border-line bg-surface-4 shadow-[0_22px_70px_rgba(31,35,41,0.12)] sm:min-h-[calc(100vh-3rem)] sm:rounded-2xl lg:min-h-[calc(100vh-4rem)]">
         <header className="flex h-[68px] items-center justify-between border-b border-line px-5 sm:px-8">
           <div className="flex items-center gap-3 text-sm font-semibold text-ink">
@@ -116,8 +288,8 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
             RocketX
           </div>
           <div className="flex items-center gap-2 text-xs text-ink-3">
-            <span className="font-medium text-primary">{step === 'principles' ? '1 / 2' : '2 / 2'}</span>
-            <span className="hidden sm:inline">{step === 'principles' ? '为什么这样设计' : '连接你的工作'}</span>
+            <span className="font-medium text-primary">{currentStep} / {totalSteps}</span>
+            <span className="hidden sm:inline">{currentStepLabel}</span>
           </div>
         </header>
 
@@ -200,15 +372,173 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                   管家的价值不在于说了多少，而在于替你判断了多少事情此刻不值得打扰。
                 </div>
                 <button
-                  onClick={() => setStep('setup')}
+                  onClick={() => openDesktopStep('setup')}
                   className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light"
                 >
-                  继续：选择如何加入 <ArrowRight size={15} />
+                  {showDesktopStep ? '继续：设置桌面体验' : '继续：选择如何加入'} <ArrowRight size={15} />
                 </button>
-                <button onClick={continuePersonal} className="mt-1 h-8 w-full text-xs text-white/45 hover:text-white/75">
+                <button onClick={() => openDesktopStep('personal')} className="mt-1 h-8 w-full text-xs text-white/45 hover:text-white/75">
                   稍后连接，先进入个人设置
                 </button>
               </div>
+            </section>
+          </div>
+        ) : step === 'desktop' ? (
+          <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[0.92fr_1.08fr]">
+            <section className="flex flex-col justify-between bg-ink px-6 py-9 text-white sm:px-10 lg:px-12 lg:py-12">
+              <div>
+                <p className="text-xs font-semibold text-primary-light">桌面端默认体验</p>
+                <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight">
+                  第一次启动时，<br />把该交给系统的事交给系统。
+                </h1>
+                <p className="mt-4 max-w-md text-sm leading-6 text-white/60">
+                  RocketX 会把桌面通知偏好默认设为全部消息，并按你的勾选申请系统通知、开启登录后自动启动。
+                </p>
+
+                <div className="mt-8 space-y-3">
+                  <div className="rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
+                    <strong className="text-sm font-medium">通知偏好默认全部消息</strong>
+                    <p className="mt-1 text-xs leading-5 text-white/50">
+                      这一步只决定是否向操作系统申请通知权限；权限结果由操作系统保存，之后可在“设置 → 通知”关闭。
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
+                    <strong className="text-sm font-medium">登录启动遵循静默托盘</strong>
+                    <p className="mt-1 text-xs leading-5 text-white/50">
+                      启动项由操作系统保存，之后可在“设置 → 桌面”关闭；登录后自动启动时仍按静默托盘方式运行。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 border-t border-white/10 pt-5">
+                <div className="flex items-center gap-2 text-xs text-white/50">
+                  <ShieldCheck size={15} className="text-primary-light" /> 只在你明确点击“应用并继续”后才写入系统级默认
+                </div>
+                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/45 hover:text-white/75">← 返回设计理念</button>
+              </div>
+            </section>
+
+            <section className="flex flex-col justify-center px-6 py-9 sm:px-10 lg:px-12 lg:py-12">
+              <div className="mb-7 flex items-center gap-2 text-xs text-ink-3">
+                <span className="font-medium text-primary">1 申请系统权限</span>
+                <span>·</span>
+                <span>2 保留结果</span>
+                <span>·</span>
+                <span>3 再决定下一步</span>
+              </div>
+
+              <BellRing size={28} className="text-primary" />
+              <h2 className="mt-4 text-xl font-semibold text-ink">桌面默认设置</h2>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-ink-3">
+                这一步只会处理桌面通知和登录启动。两项彼此独立，任何一项失败、未授权或当前平台不可用，都不会阻断你继续进入下一步。
+              </p>
+
+              <div className="mt-6 space-y-3">
+                <label className="flex items-start gap-3 rounded-xl border border-line px-4 py-3.5">
+                  <input
+                    type="checkbox"
+                    checked={notifyChecked}
+                    disabled={desktopApplied || desktopBusy}
+                    onChange={(event) => setNotifyChecked(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-line text-primary focus:ring-primary-light disabled:cursor-not-allowed"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong className="text-sm font-medium text-ink">允许系统通知</strong>
+                      {(desktopApplied || desktopBusy) && (
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusTone(desktopResults.notifications)}`}>
+                          {statusLabel(desktopResults.notifications)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-ink-3">
+                      应用内通知偏好默认是全部消息；如果操作系统拒绝授权，你之后仍可在系统设置和 RocketX 设置里调整。
+                    </p>
+                    {desktopApplied && canRetry(desktopResults.notifications) && (
+                      <button
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void retryDesktopPreference('notifications');
+                        }}
+                        disabled={desktopBusy}
+                        className="mt-2 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+                      >
+                        重试通知权限
+                      </button>
+                    )}
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-xl border border-line px-4 py-3.5">
+                  <input
+                    type="checkbox"
+                    checked={autostartChecked}
+                    disabled={desktopApplied || desktopBusy}
+                    onChange={(event) => setAutostartChecked(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-line text-primary focus:ring-primary-light disabled:cursor-not-allowed"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong className="text-sm font-medium text-ink">登录系统后启动 RocketX</strong>
+                      {(desktopApplied || desktopBusy) && (
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusTone(desktopResults.autostart)}`}>
+                          {statusLabel(desktopResults.autostart)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-ink-3">
+                      正式桌面版会把开机启动交给操作系统保存；启动后仍按静默托盘运行，不会抢占当前窗口。
+                    </p>
+                    {desktopApplied && canRetry(desktopResults.autostart) && (
+                      <button
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void retryDesktopPreference('autostart');
+                        }}
+                        disabled={desktopBusy}
+                        className="mt-2 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+                      >
+                        重试开机启动
+                      </button>
+                    )}
+                  </div>
+                </label>
+              </div>
+
+              <div className="mt-6 rounded-xl bg-fill-1 px-4 py-3 text-xs leading-5 text-ink-3">
+                首次应用后，结果会保留在当前页供你确认；确认无误后，再继续加入团队或进入个人设置。
+              </div>
+
+              {desktopSaveFailed && (
+                <div role="alert" className="mt-3 rounded-xl bg-danger/10 px-4 py-3 text-xs leading-5 text-danger">
+                  系统设置已经执行，但结果尚未保存在此设备。
+                  <button onClick={retryDesktopResultSave} className="ml-1 font-medium underline">重试保存结果</button>
+                </div>
+              )}
+
+              {!desktopApplied ? (
+                <button
+                  onClick={() => void applyDesktopPreferences()}
+                  disabled={desktopBusy}
+                  className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {desktopBusy ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
+                  {desktopBusy ? '正在应用桌面默认…' : '应用并继续'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (desktopExitTarget === 'setup') setStep('setup');
+                    else continuePersonal();
+                  }}
+                  disabled={desktopBusy}
+                  className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {desktopExitTarget === 'setup' ? '继续加入团队' : '进入个人设置'}
+                  <ArrowRight size={14} />
+                </button>
+              )}
             </section>
           </div>
         ) : (
@@ -243,7 +573,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 <div className="flex items-center gap-2 text-xs text-white/50">
                   <ShieldCheck size={15} className="text-primary-light" /> 来源可看 · 步骤可停 · 按既定权限执行
                 </div>
-                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/45 hover:text-white/75">← 返回设计理念</button>
+                <button onClick={() => setStep(showDesktopStep ? 'desktop' : 'principles')} className="mt-4 text-xs text-white/45 hover:text-white/75">
+                  ← 返回{showDesktopStep ? '桌面默认' : '设计理念'}
+                </button>
               </div>
             </section>
 

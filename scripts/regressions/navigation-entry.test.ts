@@ -4,26 +4,32 @@ import test from 'node:test';
 import { MODULE_ORDER } from '../../apps/web/src/stores/ui';
 
 test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载，不再暴露独立 codex 模块', async () => {
-  const [runtime, navRail, page, history, conversation] = await Promise.all([
+  const [runtime, navRail, workbench, page, history, conversation] = await Promise.all([
     readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/NavRail.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/pages/WorkbenchPage.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/pages/ButlerPage.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerConversationHistory.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerConversation.tsx', import.meta.url), 'utf8'),
   ]);
 
   assert.match(runtime, /\['workbench', '工作台', WorkbenchModule, undefined\]/);
+  assert.doesNotMatch(runtime, /ProfileContributionsModule|\['contributions'/);
   assert.match(runtime, /\['butler-view', '管家', ButlerPage, Bell\]/);
   assert.doesNotMatch(runtime, /\['codex', 'Codex'/);
   assert.doesNotMatch(runtime, /CodexPage/);
 
   assert.match(navRail, /const PRIMARY_MODULE_IDS = new Set\(\['messages', 'todos', 'calendar', 'downloads'\]\);/);
+  assert.doesNotMatch(navRail, /contributions: \{ label:/);
   assert.match(navRail, /const WORK_MODULE_IDS = new Set\(\['workbench', 'contacts'\]\);/);
   assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
   assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: '管家'/);
   assert.doesNotMatch(navRail, /['"]codex['"]/);
   assert.doesNotMatch(navRail, /['"]today['"]/);
   assert.doesNotMatch(navRail, /['"]ai-assistant['"]/);
+
+  assert.match(workbench, /label: '我的贡献'/);
+  assert.match(workbench, /tab === 'contributions'[\s\S]*<ProfileContributionsPage \/>/);
 
   assert.match(page, /className="butler-workspace"/);
   assert.match(page, /<ButlerConversation embedded \/>/);

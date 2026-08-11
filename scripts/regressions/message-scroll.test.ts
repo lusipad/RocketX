@@ -2,10 +2,85 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
-  initialMessageScrollTop,
   nextMessageScrollState,
   shouldShowUnreadDivider,
 } from '../../apps/web/src/components/MessageList';
+import {
+  messageScrollCommand,
+  messageScrollTransactionMatches,
+  nextMessageScrollTransaction,
+} from '../../apps/web/src/lib/messageScrollTransaction';
+
+test('每次打开都会创建新的滚动事务，同一房间也不复用 generation', () => {
+  const first = nextMessageScrollTransaction(0, 'room-a', 'latest');
+  const repeated = nextMessageScrollTransaction(first.generation, 'room-a', 'latest');
+  const located = nextMessageScrollTransaction(repeated.generation, 'room-b', 'locate', 'message-1');
+
+  assert.equal(first.generation, 1);
+  assert.equal(repeated.generation, 2);
+  assert.deepEqual(located, {
+    generation: 3,
+    rid: 'room-b',
+    entry: 'locate',
+    messageId: 'message-1',
+  });
+});
+
+test('旧 generation 与旧房间都不能推进当前滚动事务', () => {
+  const current = nextMessageScrollTransaction(7, 'room-c', 'latest');
+
+  assert.equal(messageScrollTransactionMatches(current, 8, 'room-c'), true);
+  assert.equal(messageScrollTransactionMatches(current, 7, 'room-c'), false);
+  assert.equal(messageScrollTransactionMatches(current, 8, 'room-b'), false);
+  const located = nextMessageScrollTransaction(8, 'room-c', 'locate', 'message-2');
+  assert.equal(messageScrollTransactionMatches(
+    located,
+    located.generation,
+    'room-c',
+    'locate',
+    'message-2',
+  ), true);
+  assert.equal(messageScrollTransactionMatches(
+    located,
+    located.generation,
+    'room-c',
+    'locate',
+    'message-1',
+  ), false);
+});
+
+test('滚动命令优先级固定为翻页锚点、消息定位、普通贴底、后续跟随', () => {
+  assert.equal(messageScrollCommand({
+    anchorSettled: true,
+    entry: 'latest',
+    openPending: true,
+    stickToBottom: true,
+  }), 'anchor');
+  assert.equal(messageScrollCommand({
+    anchorSettled: false,
+    entry: 'locate',
+    openPending: true,
+    stickToBottom: true,
+  }), 'locate');
+  assert.equal(messageScrollCommand({
+    anchorSettled: false,
+    entry: 'latest',
+    openPending: true,
+    stickToBottom: false,
+  }), 'latest');
+  assert.equal(messageScrollCommand({
+    anchorSettled: false,
+    entry: 'latest',
+    openPending: false,
+    stickToBottom: true,
+  }), 'follow');
+  assert.equal(messageScrollCommand({
+    anchorSettled: false,
+    entry: 'latest',
+    openPending: false,
+    stickToBottom: false,
+  }), 'none');
+});
 
 test('内容撑高但滚动位置未动时保持贴底', () => {
   assert.deepEqual(
@@ -69,44 +144,62 @@ test('已经离开底部时内容撑高不会恢复贴底', () => {
   );
 });
 
-test('首次打开会话始终以列表底部为初始位置', () => {
-  assert.equal(
-    initialMessageScrollTop({
-      historyLoaded: true,
-      didInitialScroll: false,
-      scrollHeight: 2400,
-    }),
-    2400,
-  );
-  assert.equal(
-    initialMessageScrollTop({
-      historyLoaded: true,
-      didInitialScroll: true,
-      scrollHeight: 2400,
-    }),
-    undefined,
-  );
-});
-
-test('首次贴底会在下一帧复核，并同时观察内容与视口尺寸', () => {
+test('普通打开会做有界帧复核，并同时观察内容与视口尺寸', () => {
   const source = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
-  assert.match(source, /scrollToBottom\(false, true\)/);
+  assert.match(source, /const OPEN_SETTLE_FRAME_LIMIT = 4/);
+  assert.match(source, /if \(!transactionIsCurrent\(\) \|\| openPhase\.current === 'cancelled'\) return/);
   assert.match(source, /settleScrollFrame\.current = requestAnimationFrame/);
+  assert.match(source, /if \(remaining > 1\) verify\(remaining - 1\)/);
   assert.match(source, /ro\.observe\(el\)/);
   assert.match(source, /ro\.observe\(content\)/);
 });
 
+test('只有真正离开底部的用户滚动才会取消打开事务', () => {
+  const source = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
+  const markStart = source.indexOf('const markUserScrollIntent = useCallback');
+  const onScrollStart = source.indexOf('const onScroll = () =>', markStart);
+  const mark = source.slice(markStart, onScrollStart);
+  const onScroll = source.slice(onScrollStart, source.indexOf('// 每个 generation 都是新的打开事务', onScrollStart));
+
+  assert.equal(mark.includes("openPhase.current = 'cancelled'"), false);
+  assert.match(onScroll, /if \(userInitiated && !nearBottom\) \{\s*openPhase\.current = 'cancelled';\s*cancelSettleFrame\(\);/);
+});
+
 test('普通打开会话会清除旧消息定位，避免贴底后又平滑回弹', () => {
   const source = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
-  const openRoom = source.slice(source.indexOf('openRoom: async (rid) => {'), source.indexOf('openThread: async'));
+  const openRoom = source.slice(
+    source.indexOf('openRoom: async (rid, options) => {'),
+    source.indexOf('openThread: async'),
+  );
 
   assert.match(openRoom, /highlightMid: null/);
-  assert.match(openRoom, /scrollNonce: get\(\)\.scrollNonce \+ 1/);
+  assert.match(openRoom, /messageScrollTransaction: transaction/);
+  assert.match(openRoom, /messageScrollGeneration: transaction\.generation/);
+});
+
+test('并发消息定位会在等待历史前锁定 generation 与目标消息', () => {
+  const source = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
+  const jumpStart = source.indexOf('jumpToMessage: async');
+  const jump = source.slice(jumpStart, source.indexOf('emitTyping: () =>', jumpStart));
+  const start = jump.indexOf('const opening = get().openRoom');
+  const capture = jump.indexOf('const generation = get().messageScrollTransaction?.generation');
+  const wait = jump.indexOf('await opening');
+
+  assert.ok(start >= 0 && start < capture && capture < wait);
+  assert.match(jump, /'locate',\s*mid/);
+  assert.match(jump, /if \(isCurrent\(\) && get\(\)\.highlightMid === mid\)/);
 });
 
 test('切换房间会重建消息列表，避免复用上一会话的滚动位置（issue #115）', () => {
   const source = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
-  assert.match(source, /<MessageList key=\{activeRid\} rid=\{activeRid\} \/>/);
+  assert.match(
+    source,
+    /key=\{`\$\{activeRid\}:\$\{messageScrollTransaction\?\.rid === activeRid \? messageScrollTransaction\.generation : 0\}`\}/,
+  );
+  assert.match(
+    source,
+    /transaction=\{messageScrollTransaction\?\.rid === activeRid \? messageScrollTransaction : null\}/,
+  );
 });
 
 test('有更早消息时，当前页首条不能伪装成真实未读分界', () => {

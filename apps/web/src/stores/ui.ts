@@ -19,6 +19,9 @@ export const MODULE_ORDER: ModuleKey[] = [
 export const UI_MODULE_STORAGE_KEY = 'rcx-ui';
 export const DEFAULT_WORK_ITEM_STATE_FILTER = '__default_hide_shelved__';
 
+/** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
+export type WorkbenchTab = 'overview' | 'workitems' | 'contributions' | 'prs' | 'builds' | `query:${string}`;
+
 interface ModuleStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -44,22 +47,35 @@ function readPersistedUIValue(storage: ModuleStorage | undefined = browserStorag
 }
 
 export function migratePersistedModule(value: unknown): ModuleKey {
+  if (value === 'contributions') return 'workbench';
   return typeof value === 'string' && MODULE_ORDER.includes(value) ? value : 'messages';
+}
+
+function persistedModuleValue(parsed: unknown): unknown {
+  const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined;
+  const state = record?.state && typeof record.state === 'object'
+    ? record.state as Record<string, unknown>
+    : undefined;
+  return record?.module ?? state?.module ?? parsed;
 }
 
 export function readPersistedModule(storage: ModuleStorage | undefined = browserStorage()): ModuleKey {
   if (!storage) return 'messages';
   try {
     const parsed = readPersistedUIValue(storage);
-    const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined;
-    const state = record?.state && typeof record.state === 'object'
-      ? record.state as Record<string, unknown>
-      : undefined;
-    const module = migratePersistedModule(record?.module ?? state?.module ?? parsed);
+    const module = migratePersistedModule(persistedModuleValue(parsed));
     return !runtimeFeatures().ai && module === 'butler-view' ? 'messages' : module;
   } catch {
     return 'messages';
   }
+}
+
+export function readPersistedWorkbenchTab(
+  storage: ModuleStorage | undefined = browserStorage(),
+): WorkbenchTab {
+  return persistedModuleValue(readPersistedUIValue(storage)) === 'contributions'
+    ? 'contributions'
+    : 'overview';
 }
 
 export function readPersistedWorkItemStateFilter(
@@ -97,9 +113,6 @@ let moduleValidator = (module: ModuleKey) => MODULE_ORDER.includes(module);
 export function installModuleValidator(validator: (module: ModuleKey) => boolean): void {
   moduleValidator = validator;
 }
-
-/** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
-export type WorkbenchTab = 'overview' | 'workitems' | 'prs' | 'builds' | `query:${string}`;
 
 /** 会话列表分组过滤（飞书「分组」栏） */
 export type ConvFilter =
@@ -156,7 +169,7 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   butlerView: 'conversation',
-  workbenchTab: 'overview',
+  workbenchTab: readPersistedWorkbenchTab(),
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
   buildsFailedOnly: false,

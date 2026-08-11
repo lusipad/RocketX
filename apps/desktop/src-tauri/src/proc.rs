@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -22,6 +22,7 @@ use tauri_plugin_updater::UpdaterExt;
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 12 * 1024 * 1024;
+const MAX_WORKSPACE_CONFIG_BYTES: u64 = 1024 * 1024;
 const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 const BUTLER_BUNDLED_SKILLS_DIR: &str = "codex-skills";
 const AZURE_DEVOPS_SERVER_HOST_ADAPTER: &str = "azure-devops-server-host-adapter.ps1";
@@ -55,7 +56,7 @@ struct ManagedCodex {
 #[derive(Default)]
 pub struct CodexAppServerState {
     processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
-    next_id: AtomicU64,
+    next_id: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -78,6 +79,7 @@ pub struct CodexProcessInfo {
 pub enum CodexRuntimeSource {
     Manual,
     Bundled,
+    Standard,
     System,
 }
 
@@ -87,6 +89,34 @@ pub enum CodexCompatibilityStatus {
     Verified,
     UntestedNewer,
     Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexRuntimeReasonCode {
+    NotFound,
+    Outdated,
+    ManualPath,
+    MissingAppServer,
+    NotLoggedIn,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexRuntimeCandidateOutcome {
+    Selected,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeCandidate {
+    source: CodexRuntimeSource,
+    path: String,
+    version: Option<String>,
+    outcome: CodexRuntimeCandidateOutcome,
+    reason_code: Option<CodexRuntimeReasonCode>,
 }
 
 #[derive(Serialize)]
@@ -100,8 +130,9 @@ pub struct CodexRuntimeProbe {
     minimum_candidate: &'static str,
     verified_versions: &'static [&'static str],
     compatibility_status: CodexCompatibilityStatus,
-    reason_code: Option<String>,
+    reason_code: Option<CodexRuntimeReasonCode>,
     reason: Option<String>,
+    candidates: Vec<CodexRuntimeCandidate>,
 }
 
 impl CodexRuntimeProbe {
@@ -111,8 +142,9 @@ impl CodexRuntimeProbe {
         executable_path: Option<String>,
         source: Option<CodexRuntimeSource>,
         compatibility_status: CodexCompatibilityStatus,
-        reason_code: Option<String>,
+        reason_code: Option<CodexRuntimeReasonCode>,
         reason: Option<String>,
+        candidates: Vec<CodexRuntimeCandidate>,
     ) -> Self {
         Self {
             ready,
@@ -125,6 +157,7 @@ impl CodexRuntimeProbe {
             compatibility_status,
             reason_code,
             reason,
+            candidates,
         }
     }
 }
@@ -363,11 +396,403 @@ fn classify_codex_version(version: &str) -> Result<CodexCompatibilityStatus, Str
 
 fn unsupported_codex_version_message(version: &str) -> String {
     format!(
-        "找到 Codex {version}；{CODEX_MINIMUM_CANDIDATE} 仍是候选下限，\
-         当前最低已验证版本为 {CODEX_PROTOCOL_BASELINE}，请升级 Codex"
+        "找到 Codex {version}，但低于 RocketX 所需的协议基线 \
+         {CODEX_PROTOCOL_BASELINE}；请升级后重新检测"
     )
 }
 
+fn probe_display_path(path: &Path) -> String {
+    path.canonicalize()
+        .map(|canonical| host_path(&canonical))
+        .unwrap_or_else(|_| host_path(path))
+}
+
+fn codex_runtime_candidate(
+    source: CodexRuntimeSource,
+    path: String,
+    version: Option<String>,
+    outcome: CodexRuntimeCandidateOutcome,
+    reason_code: Option<CodexRuntimeReasonCode>,
+) -> CodexRuntimeCandidate {
+    CodexRuntimeCandidate {
+        source,
+        path,
+        version,
+        outcome,
+        reason_code,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CodexRuntimeProbeFailure {
+    source: Option<CodexRuntimeSource>,
+    executable_path: Option<String>,
+    version: Option<String>,
+    compatibility_status: CodexCompatibilityStatus,
+    reason_code: CodexRuntimeReasonCode,
+    reason: String,
+}
+
+struct CodexRuntimeScan {
+    resolved: Option<ResolvedCodex>,
+    compatibility_status: CodexCompatibilityStatus,
+    reason_code: Option<CodexRuntimeReasonCode>,
+    reason: Option<String>,
+    candidates: Vec<CodexRuntimeCandidate>,
+}
+
+fn codex_runtime_failure_rank(reason_code: CodexRuntimeReasonCode) -> usize {
+    match reason_code {
+        CodexRuntimeReasonCode::NotLoggedIn => 0,
+        CodexRuntimeReasonCode::MissingAppServer => 1,
+        CodexRuntimeReasonCode::Outdated => 2,
+        CodexRuntimeReasonCode::Unavailable => 3,
+        CodexRuntimeReasonCode::NotFound => 4,
+        CodexRuntimeReasonCode::ManualPath => 5,
+    }
+}
+
+fn replace_probe_failure(
+    current: &Option<CodexRuntimeProbeFailure>,
+    next: &CodexRuntimeProbeFailure,
+) -> bool {
+    current.as_ref().is_none_or(|existing| {
+        codex_runtime_failure_rank(next.reason_code)
+            < codex_runtime_failure_rank(existing.reason_code)
+    })
+}
+
+fn codex_runtime_scan_from_candidates_with<VersionProbe, CapabilityProbe, LoginProbe>(
+    manual_path: Option<&Path>,
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+    bundled_paths: &[PathBuf],
+    mut version_probe: VersionProbe,
+    mut capability_probe: CapabilityProbe,
+    mut login_probe: LoginProbe,
+) -> CodexRuntimeScan
+where
+    VersionProbe: FnMut(&ResolvedCodex) -> Result<String, String>,
+    CapabilityProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+    LoginProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+{
+    let manual_mode = manual_path.is_some();
+    let mut candidates = Vec::new();
+    let mut best_failure = None;
+    let manual_paths = manual_path.map(|path| vec![path.to_path_buf()]);
+    let candidate_groups: Vec<(&[PathBuf], CodexRuntimeSource)> =
+        if let Some(paths) = manual_paths.as_ref() {
+            vec![(paths.as_slice(), CodexRuntimeSource::Manual)]
+        } else {
+            vec![
+                (system_paths, CodexRuntimeSource::System),
+                (standard_paths, CodexRuntimeSource::Standard),
+                (bundled_paths, CodexRuntimeSource::Bundled),
+            ]
+        };
+
+    for (paths, source) in candidate_groups {
+        for path in paths {
+            let display_path = probe_display_path(path);
+            if !path.is_file() {
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    display_path.clone(),
+                    None,
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::NotFound),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(display_path),
+                    version: None,
+                    compatibility_status: CodexCompatibilityStatus::Blocked,
+                    reason_code: CodexRuntimeReasonCode::NotFound,
+                    reason: "未检测到可用的 Codex".to_string(),
+                };
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            let mut resolved = match resolved_codex_path(path, source) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        display_path.clone(),
+                        None,
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(display_path),
+                        version: None,
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+
+            let version = match version_probe(&resolved) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        resolved.display_path.clone(),
+                        None,
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(resolved.display_path.clone()),
+                        version: None,
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+            resolved.version = version.clone();
+
+            let compatibility_status = match classify_codex_version(&version) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        resolved.display_path.clone(),
+                        Some(version.clone()),
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(resolved.display_path.clone()),
+                        version: Some(version),
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+
+            if compatibility_status == CodexCompatibilityStatus::Blocked {
+                let reason = unsupported_codex_version_message(&resolved.version);
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::Outdated),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status: CodexCompatibilityStatus::Blocked,
+                    reason_code: CodexRuntimeReasonCode::Outdated,
+                    reason,
+                };
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                if manual_mode {
+                    let reason = format!(
+                        "手动指定的 Codex 不可用：{}",
+                        unsupported_codex_version_message(&resolved.version)
+                    );
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(reason),
+                        candidates,
+                    };
+                }
+                continue;
+            }
+
+            if let Err(reason) = capability_probe(&resolved) {
+                let reason = format!("Codex 缺少 app-server 能力：{reason}");
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::MissingAppServer),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status,
+                    reason_code: CodexRuntimeReasonCode::MissingAppServer,
+                    reason: reason.clone(),
+                };
+                if manual_mode {
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(format!("手动指定的 Codex 不可用：{reason}")),
+                        candidates,
+                    };
+                }
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            if let Err(reason) = login_probe(&resolved) {
+                let reason = format!("Codex 尚未登录：{reason}");
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::NotLoggedIn),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status,
+                    reason_code: CodexRuntimeReasonCode::NotLoggedIn,
+                    reason: reason.clone(),
+                };
+                if manual_mode {
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(format!("手动指定的 Codex 不可用：{reason}")),
+                        candidates,
+                    };
+                }
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            candidates.push(codex_runtime_candidate(
+                source,
+                resolved.display_path.clone(),
+                Some(resolved.version.clone()),
+                CodexRuntimeCandidateOutcome::Selected,
+                None,
+            ));
+            return CodexRuntimeScan {
+                resolved: Some(resolved),
+                compatibility_status,
+                reason_code: None,
+                reason: None,
+                candidates,
+            };
+        }
+    }
+
+    let failure = best_failure.unwrap_or(CodexRuntimeProbeFailure {
+        source: None,
+        executable_path: None,
+        version: None,
+        compatibility_status: CodexCompatibilityStatus::Blocked,
+        reason_code: CodexRuntimeReasonCode::NotFound,
+        reason: "未检测到可用的 Codex".to_string(),
+    });
+    let reason_code = if manual_mode {
+        CodexRuntimeReasonCode::ManualPath
+    } else {
+        failure.reason_code
+    };
+    let reason = if manual_mode {
+        format!("手动指定的 Codex 不可用：{}", failure.reason)
+    } else {
+        failure.reason
+    };
+    let failure_path = failure.executable_path.clone();
+    let failure_source = failure.source;
+    let failure_version = failure.version.clone();
+    CodexRuntimeScan {
+        resolved: failure_path
+            .clone()
+            .zip(failure_source)
+            .map(|(display_path, source)| ResolvedCodex {
+                program: PathBuf::new(),
+                prefix_args: Vec::new(),
+                display_path,
+                source,
+                version: failure_version.clone().unwrap_or_default(),
+            }),
+        compatibility_status: failure.compatibility_status,
+        reason_code: Some(reason_code),
+        reason: Some(reason),
+        candidates,
+    }
+}
+
+fn codex_runtime_probe_from_candidates_with<VersionProbe, CapabilityProbe, LoginProbe>(
+    manual_path: Option<&Path>,
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+    bundled_paths: &[PathBuf],
+    version_probe: VersionProbe,
+    capability_probe: CapabilityProbe,
+    login_probe: LoginProbe,
+) -> CodexRuntimeProbe
+where
+    VersionProbe: FnMut(&ResolvedCodex) -> Result<String, String>,
+    CapabilityProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+    LoginProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+{
+    let scan = codex_runtime_scan_from_candidates_with(
+        manual_path,
+        system_paths,
+        standard_paths,
+        bundled_paths,
+        version_probe,
+        capability_probe,
+        login_probe,
+    );
+    let (version, executable_path, source) = if let Some(resolved) = scan.resolved.as_ref() {
+        (
+            Some(resolved.version.clone()),
+            Some(resolved.display_path.clone()),
+            Some(resolved.source),
+        )
+    } else {
+        (None, None, None)
+    };
+    CodexRuntimeProbe::new(
+        scan.reason_code.is_none(),
+        version,
+        executable_path,
+        source,
+        scan.compatibility_status,
+        scan.reason_code,
+        scan.reason,
+        scan.candidates,
+    )
+}
+
+#[cfg(test)]
 fn probe_codex_candidate<F>(
     path: &Path,
     source: CodexRuntimeSource,
@@ -383,6 +808,7 @@ where
     Ok((resolved, status))
 }
 
+#[cfg(test)]
 fn probe_resolve_codex_from_candidates_with_probe<F>(
     manual_path: Option<&Path>,
     system_paths: &[PathBuf],
@@ -402,7 +828,7 @@ where
     let mut rejected = Vec::new();
     for (paths, source) in [
         (system_paths, CodexRuntimeSource::System),
-        (standard_paths, CodexRuntimeSource::System),
+        (standard_paths, CodexRuntimeSource::Standard),
         (bundled_paths, CodexRuntimeSource::Bundled),
     ] {
         for path in paths {
@@ -434,6 +860,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn resolve_codex_from_candidates_with_probe<F>(
     manual_path: Option<&Path>,
     system_paths: &[PathBuf],
@@ -468,13 +895,23 @@ fn resolve_codex_from_candidates(
     standard_paths: &[PathBuf],
     bundled_paths: &[PathBuf],
 ) -> Result<ResolvedCodex, String> {
-    resolve_codex_from_candidates_with_probe(
+    let scan = codex_runtime_scan_from_candidates_with(
         manual_path,
         system_paths,
         standard_paths,
         bundled_paths,
         codex_cli_version,
-    )
+        |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
+        |resolved| codex_command_succeeds(resolved, &["login", "status"]),
+    );
+    if scan.reason_code.is_none() {
+        return scan
+            .resolved
+            .ok_or_else(|| "未检测到可用的 Codex".to_string());
+    }
+    Err(scan
+        .reason
+        .unwrap_or_else(|| "未检测到可用的 Codex".to_string()))
 }
 
 fn configured_manual_codex_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -662,80 +1099,19 @@ pub fn codex_runtime_probe(
             None,
             None,
             CodexCompatibilityStatus::Blocked,
-            Some("manual-path".to_string()),
+            Some(CodexRuntimeReasonCode::ManualPath),
             Some(reason),
+            Vec::new(),
         );
     }
-    let (resolved, compatibility_status) = match probe_resolve_codex_from_candidates_with_probe(
+    codex_runtime_probe_from_candidates_with(
         configured_manual_codex_path(&app).as_deref(),
         &system_codex_paths(),
         &standard_codex_paths(),
         &bundled_codex_paths(&app),
         codex_cli_version,
-    ) {
-        Ok(value) => value,
-        Err(reason) => {
-            let reason_code = if reason.contains("未检测到可用的 Codex") {
-                "not-found"
-            } else if reason.contains(CODEX_PROTOCOL_BASELINE) {
-                "outdated"
-            } else if reason.starts_with("手动指定的 Codex") {
-                "manual-path"
-            } else {
-                "unavailable"
-            };
-            return CodexRuntimeProbe::new(
-                false,
-                None,
-                None,
-                None,
-                CodexCompatibilityStatus::Blocked,
-                Some(reason_code.to_string()),
-                Some(reason),
-            );
-        }
-    };
-    if compatibility_status == CodexCompatibilityStatus::Blocked {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version.clone()),
-            Some(resolved.display_path.clone()),
-            Some(resolved.source),
-            CodexCompatibilityStatus::Blocked,
-            Some("outdated".to_string()),
-            Some(unsupported_codex_version_message(&resolved.version)),
-        );
-    }
-    if let Err(reason) = codex_command_succeeds(&resolved, &["app-server", "--help"]) {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version),
-            Some(resolved.display_path),
-            Some(resolved.source),
-            CodexCompatibilityStatus::Blocked,
-            Some("missing-app-server".to_string()),
-            Some(format!("Codex 缺少 app-server 能力：{reason}")),
-        );
-    }
-    if let Err(reason) = codex_command_succeeds(&resolved, &["login", "status"]) {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version),
-            Some(resolved.display_path),
-            Some(resolved.source),
-            compatibility_status,
-            Some("not-logged-in".to_string()),
-            Some(format!("Codex 尚未登录：{reason}")),
-        );
-    }
-    CodexRuntimeProbe::new(
-        true,
-        Some(resolved.version),
-        Some(resolved.display_path),
-        Some(resolved.source),
-        compatibility_status,
-        None,
-        None,
+        |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
+        |resolved| codex_command_succeeds(resolved, &["login", "status"]),
     )
 }
 
@@ -1736,13 +2112,26 @@ fn encode_message(message: serde_json::Value) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-#[tauri::command]
-pub fn codex_app_server_start(
+struct StartedCodexProcess {
+    info: CodexProcessInfo,
+    process_id: String,
+    child: Arc<Mutex<Child>>,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+}
+
+enum CodexAppServerStartResult {
+    Existing(CodexProcessInfo),
+    Started(StartedCodexProcess),
+}
+
+fn start_codex_app_server_blocking(
     app: tauri::AppHandle,
-    state: tauri::State<'_, CodexAppServerState>,
+    processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
+    next_id: Arc<AtomicU64>,
     session_id: String,
     workspace_root: String,
-) -> Result<CodexProcessInfo, String> {
+) -> Result<CodexAppServerStartResult, String> {
     validate_session_id(&session_id)?;
     let workspace_root = host_path(&codex_workspace_directory(&app, &workspace_root)?);
     let managed_skill_roots = bundled_codex_skill_roots(&app)?
@@ -1753,21 +2142,20 @@ pub fn codex_app_server_start(
     let version = resolved.version.clone();
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
-    let mut processes = state
-        .processes
+    let mut processes = processes
         .lock()
         .map_err(|_| "Codex process registry is unavailable".to_string())?;
     if let Some(process) = processes
         .values()
         .find(|process| process.session_id == session_id)
     {
-        return Ok(CodexProcessInfo {
+        return Ok(CodexAppServerStartResult::Existing(CodexProcessInfo {
             process_id: process.process_id.clone(),
             version: process.version.clone(),
             runtime_workspace_root: process.workspace_root.clone(),
             runtime_source: process.runtime_source,
             managed_skill_roots,
-        });
+        }));
     }
 
     let launch_args = app_server_launch_args(&resolved)?;
@@ -1796,7 +2184,7 @@ pub fn codex_app_server_start(
     let process_id = format!(
         "codex-{}-{}",
         child.id(),
-        state.next_id.fetch_add(1, Ordering::Relaxed)
+        next_id.fetch_add(1, Ordering::Relaxed)
     );
     let child = Arc::new(Mutex::new(child));
     let managed = ManagedCodex {
@@ -1810,18 +2198,66 @@ pub fn codex_app_server_start(
         runtime_source: resolved.source,
     };
     processes.insert(process_id.clone(), managed);
-    drop(processes);
-
-    spawn_reader(app.clone(), process_id.clone(), "stdout", stdout);
-    spawn_reader(app.clone(), process_id.clone(), "stderr", stderr);
-    monitor_child(app, Arc::clone(&state.processes), process_id.clone(), child);
-    Ok(CodexProcessInfo {
+    Ok(CodexAppServerStartResult::Started(StartedCodexProcess {
+        info: CodexProcessInfo {
+            process_id: process_id.clone(),
+            version,
+            runtime_workspace_root: workspace_root,
+            runtime_source: resolved.source,
+            managed_skill_roots,
+        },
         process_id,
-        version,
-        runtime_workspace_root: workspace_root,
-        runtime_source: resolved.source,
-        managed_skill_roots,
+        child,
+        stdout,
+        stderr,
+    }))
+}
+
+#[tauri::command]
+pub async fn codex_app_server_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, CodexAppServerState>,
+    session_id: String,
+    workspace_root: String,
+) -> Result<CodexProcessInfo, String> {
+    let processes = Arc::clone(&state.processes);
+    let next_id = Arc::clone(&state.next_id);
+    let blocking_app = app.clone();
+    let start_result = tauri::async_runtime::spawn_blocking(move || {
+        start_codex_app_server_blocking(
+            blocking_app,
+            processes,
+            next_id,
+            session_id,
+            workspace_root,
+        )
     })
+    .await
+    .map_err(|error| format!("Codex app-server 启动任务失败：{error}"))??;
+    match start_result {
+        CodexAppServerStartResult::Existing(info) => Ok(info),
+        CodexAppServerStartResult::Started(started) => {
+            spawn_reader(
+                app.clone(),
+                started.process_id.clone(),
+                "stdout",
+                started.stdout,
+            );
+            spawn_reader(
+                app.clone(),
+                started.process_id.clone(),
+                "stderr",
+                started.stderr,
+            );
+            monitor_child(
+                app,
+                Arc::clone(&state.processes),
+                started.process_id.clone(),
+                started.child,
+            );
+            Ok(started.info)
+        }
+    }
 }
 
 #[tauri::command]
@@ -2072,6 +2508,8 @@ pub struct UpdateDirManifest {
     manifest: String,
     installer_path: Option<String>,
     signature: Option<String>,
+    version: String,
+    installer_type: String,
 }
 
 #[derive(Serialize)]
@@ -2083,6 +2521,125 @@ pub struct SignedHttpUpdateMetadata {
     date: Option<String>,
     body: Option<String>,
     raw_json: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsInstallerKind {
+    Nsis,
+    Msi,
+}
+
+impl WindowsInstallerKind {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Nsis => "exe",
+            Self::Msi => "msi",
+        }
+    }
+
+    fn platform_key(self) -> &'static str {
+        match self {
+            Self::Nsis => "windows-x86_64",
+            Self::Msi => "windows-x86_64-msi",
+        }
+    }
+
+    fn alternate_platform_key(self) -> &'static str {
+        match self {
+            Self::Nsis => "windows-x86_64-msi",
+            Self::Msi => "windows-x86_64",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nsis => "NSIS",
+            Self::Msi => "MSI",
+        }
+    }
+
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::Nsis => "nsis",
+            Self::Msi => "msi",
+        }
+    }
+
+    fn from_cli(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "nsis" => Some(Self::Nsis),
+            "msi" => Some(Self::Msi),
+            _ => None,
+        }
+    }
+}
+
+fn installer_kind_from_bundle_type(
+    bundle_type: Option<tauri::utils::config::BundleType>,
+) -> Result<WindowsInstallerKind, String> {
+    match bundle_type {
+        Some(tauri::utils::config::BundleType::Nsis) => Ok(WindowsInstallerKind::Nsis),
+        Some(tauri::utils::config::BundleType::Msi) => Ok(WindowsInstallerKind::Msi),
+        Some(other) => Err(format!(
+            "当前安装类型是 {other}，仅支持 NSIS / MSI 安装包自动更新"
+        )),
+        None => Err("无法判断当前安装类型（bundle_type 未知）；拒绝静默切换安装器".to_string()),
+    }
+}
+
+fn detect_current_install_kind() -> Result<WindowsInstallerKind, String> {
+    installer_kind_from_bundle_type(tauri::utils::platform::bundle_type())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedUpdatePackage {
+    package_path: PathBuf,
+    signature: String,
+    version: String,
+    installer_kind: WindowsInstallerKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UpdateHelperArgs {
+    wait_pid: u32,
+    base_dir: PathBuf,
+    package_path: PathBuf,
+    signature: String,
+    target_version: String,
+    relaunch_path: PathBuf,
+    installer_kind: WindowsInstallerKind,
+    lock_path: PathBuf,
+    result_path: PathBuf,
+}
+
+struct PreparedInstaller {
+    path: PathBuf,
+    cleanup_dir: Option<PathBuf>,
+}
+
+struct UpdateFlowLock {
+    path: PathBuf,
+}
+
+impl Drop for UpdateFlowLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateResultStatus {
+    Success,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateResult {
+    status: UpdateResultStatus,
+    version: String,
+    message: String,
 }
 
 fn decode_updater_text(value: &str, label: &str) -> Result<String, String> {
@@ -2117,18 +2674,46 @@ fn verify_update_package(path: &Path, signature: &str) -> Result<(), String> {
         .map_err(|error| format!("更新包签名校验失败：{error}"))
 }
 
+fn normalize_update_version_text(version: &str) -> Option<String> {
+    let value = version.trim().trim_start_matches(['v', 'V']);
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 fn resolve_update_package(
     base: &Path,
     manifest: &serde_json::Value,
-) -> Result<(PathBuf, String), String> {
+) -> Result<ResolvedUpdatePackage, String> {
+    let installer_kind = detect_current_install_kind()?;
+    resolve_update_package_with_kind(base, manifest, installer_kind)
+}
+
+fn resolve_update_package_with_kind(
+    base: &Path,
+    manifest: &serde_json::Value,
+    installer_kind: WindowsInstallerKind,
+) -> Result<ResolvedUpdatePackage, String> {
+    let version = manifest
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalize_update_version_text)
+        .ok_or_else(|| "latest.json 缺少有效的 version".to_string())?;
     let platform = manifest
         .get("platforms")
-        .and_then(|platforms| {
-            platforms
-                .get("windows-x86_64")
-                .or_else(|| platforms.get("windows-x86_64-msi"))
-        })
-        .ok_or_else(|| "latest.json 缺少 Windows x86_64 平台条目".to_string())?;
+        .ok_or_else(|| "latest.json 缺少 platforms".to_string())?;
+    let preferred_key = installer_kind.platform_key();
+    let Some(platform) = platform.get(preferred_key) else {
+        if platform
+            .get(installer_kind.alternate_platform_key())
+            .is_some()
+        {
+            return Err(format!(
+                "当前安装类型是 {}，但 latest.json 没有对应的 {} 安装包；拒绝静默切换安装类型",
+                installer_kind.label(),
+                installer_kind.label()
+            ));
+        }
+        return Err(format!("latest.json 缺少 {preferred_key} 平台条目"));
+    };
     let url = platform
         .get("url")
         .and_then(serde_json::Value::as_str)
@@ -2148,7 +2733,25 @@ fn resolve_update_package(
     if !path.is_file() {
         return Err(format!("更新包不存在：{}", path.display()));
     }
-    Ok((path, signature))
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if extension != "zip" && extension != installer_kind.extension() {
+        return Err(format!(
+            "{} 更新条目必须指向 .zip 或 .{} 文件，实际是 .{}",
+            installer_kind.label(),
+            installer_kind.extension(),
+            extension
+        ));
+    }
+    Ok(ResolvedUpdatePackage {
+        package_path: path,
+        signature,
+        version,
+        installer_kind,
+    })
 }
 
 #[tauri::command]
@@ -2203,36 +2806,184 @@ pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, 
 
     let value = serde_json::from_str::<serde_json::Value>(&manifest)
         .map_err(|error| format!("latest.json 无效：{error}"))?;
-    let (package_path, signature) = resolve_update_package(&base, &value)?;
-    verify_update_package(&package_path, &signature)?;
+    let resolved = resolve_update_package(&base, &value)?;
+    verify_update_package(&resolved.package_path, &resolved.signature)?;
 
     Ok(UpdateDirManifest {
         manifest,
-        installer_path: Some(package_path.to_string_lossy().into_owned()),
-        signature: Some(signature),
+        installer_path: Some(resolved.package_path.to_string_lossy().into_owned()),
+        signature: Some(resolved.signature),
+        version: resolved.version,
+        installer_type: resolved.installer_kind.cli_value().to_string(),
     })
 }
 
-fn extract_signed_installer(package: &Path) -> Result<PathBuf, String> {
+fn normalize_unc_workspace_config_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.len() > 32_768 || trimmed.chars().any(char::is_control) {
+        return Err("UNC 配置路径无效".to_string());
+    }
+    if !trimmed.starts_with(r"\\") || trimmed.starts_with(r"\\?\") || trimmed.starts_with(r"\\.\") {
+        return Err("团队配置 UNC 路径必须是 \\\\server\\share\\... 形式".to_string());
+    }
+    if trimmed.contains('/') {
+        return Err("团队配置 UNC 路径只能使用反斜杠".to_string());
+    }
+    let parts = trimmed
+        .strip_prefix(r"\\")
+        .unwrap_or_default()
+        .split('\\')
+        .collect::<Vec<_>>();
+    if parts.len() < 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || part.contains(':')
+                || part.ends_with('.')
+                || part.ends_with(' ')
+        })
+    {
+        return Err("团队配置 UNC 路径不允许设备路径、盘符、空路径段或 . / .. 路径段".to_string());
+    }
+    let target = PathBuf::from(trimmed);
+    if !target
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("json"))
+    {
+        return Err("团队配置 UNC 路径必须指向 .json 文件".to_string());
+    }
+    Ok(target)
+}
+
+fn read_unc_workspace_config_text(path: &str) -> Result<String, String> {
+    let target = normalize_unc_workspace_config_path(path)?;
+    let file =
+        std::fs::File::open(&target).map_err(|error| format!("读取团队配置失败：{error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("读取团队配置失败：{error}"))?;
+    if !metadata.is_file() {
+        return Err("团队配置 UNC 路径必须指向文件".to_string());
+    }
+    let mut bytes = Vec::with_capacity(8 * 1024);
+    file.take(MAX_WORKSPACE_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("读取团队配置失败：{error}"))?;
+    if bytes.len() as u64 > MAX_WORKSPACE_CONFIG_BYTES {
+        return Err("团队配置文件不能超过 1 MiB".to_string());
+    }
+    String::from_utf8(bytes).map_err(|_| "团队配置文件必须是 UTF-8 文本".to_string())
+}
+
+#[tauri::command]
+pub async fn read_workspace_config_unc(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_unc_workspace_config_text(&path))
+        .await
+        .map_err(|error| format!("团队配置读取任务失败：{error}"))?
+}
+
+fn matching_installer_paths(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    installer_kind: WindowsInstallerKind,
+) -> Result<PathBuf, String> {
+    let all_installers = candidates
+        .into_iter()
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| {
+                        value.eq_ignore_ascii_case("exe") || value.eq_ignore_ascii_case("msi")
+                    })
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    match all_installers.len() {
+        1 => {
+            let installer = all_installers.into_iter().next().unwrap();
+            let extension = installer
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if extension == installer_kind.extension() {
+                Ok(installer)
+            } else {
+                Err(format!(
+                    "签名更新压缩包中的唯一安装器是 .{}，与当前 {} 类型不一致",
+                    extension,
+                    installer_kind.label()
+                ))
+            }
+        }
+        0 => Err("签名更新压缩包中没有安装器".to_string()),
+        _ => Err("签名更新压缩包中发现多个安装器；请只保留一个正式安装器".to_string()),
+    }
+}
+
+fn list_files_recursive(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|error| format!("读取更新临时目录失败：{error}"))?
+        {
+            let path = entry
+                .map_err(|error| format!("读取更新临时目录失败：{error}"))?
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn create_unique_temp_dir(label: &str) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!(
+        "rocketx-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("创建临时目录 {} 失败：{error}", dir.display()))?;
+    Ok(dir)
+}
+
+fn extract_signed_installer(
+    package: &Path,
+    installer_kind: WindowsInstallerKind,
+) -> Result<PreparedInstaller, String> {
     let extension = package
         .extension()
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
+    if extension == installer_kind.extension() {
+        return Ok(PreparedInstaller {
+            path: package.to_path_buf(),
+            cleanup_dir: None,
+        });
+    }
     if extension == "exe" || extension == "msi" {
-        return Ok(package.to_path_buf());
+        return Err(format!(
+            "当前安装类型需要 {}，但更新包实际提供的是 .{}",
+            installer_kind.label(),
+            extension
+        ));
     }
     if extension != "zip" {
         return Err("签名更新包只支持 .zip / .exe / .msi".to_string());
     }
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let target_dir =
-        std::env::temp_dir().join(format!("rocketx-update-{}-{stamp}", std::process::id()));
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|error| format!("创建更新临时目录失败：{error}"))?;
+    let target_dir = create_unique_temp_dir("update-extract")?;
     let mut command = Command::new("powershell");
     command
         .args([
@@ -2252,64 +3003,586 @@ fn extract_signed_installer(package: &Path) -> Result<PathBuf, String> {
         .status()
         .map_err(|error| format!("无法启动更新解压程序：{error}"))?;
     if !status.success() {
+        let _ = std::fs::remove_dir_all(&target_dir);
         return Err(format!("更新压缩包解压失败，退出码：{status}"));
     }
-    for entry in
-        std::fs::read_dir(&target_dir).map_err(|error| format!("读取更新临时目录失败：{error}"))?
+    match list_files_recursive(&target_dir)
+        .and_then(|paths| matching_installer_paths(paths, installer_kind))
     {
-        let path = entry
-            .map_err(|error| format!("读取更新临时目录失败：{error}"))?
-            .path();
-        let ext = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
-        if path.is_file() && (ext == "exe" || ext == "msi") {
-            return Ok(path);
+        Ok(installer) => Ok(PreparedInstaller {
+            path: installer,
+            cleanup_dir: Some(target_dir),
+        }),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&target_dir);
+            Err(error)
         }
     }
-    Err("签名更新压缩包中没有 .exe / .msi 安装器".to_string())
+}
+
+fn app_update_state_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录：{error}"))?
+        .join("update-flow");
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("无法创建更新状态目录 {}：{error}", dir.display()))?;
+    Ok(dir)
+}
+
+fn helper_lock_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_update_state_dir(app)?.join("apply-update-helper.lock"))
+}
+
+fn update_result_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_update_state_dir(app)?.join("update-result.json"))
+}
+
+fn parse_update_helper_args(args: &[String]) -> Result<UpdateHelperArgs, String> {
+    let mut wait_pid = None;
+    let mut base_dir = None;
+    let mut package_path = None;
+    let mut signature = None;
+    let mut target_version = None;
+    let mut relaunch_path = None;
+    let mut installer_kind = None;
+    let mut lock_path = None;
+    let mut result_path = None;
+    let mut index = 0;
+    while index < args.len() {
+        let key = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("更新 helper 参数缺少 {key} 的值"))?;
+        match key {
+            "--wait-pid" => {
+                wait_pid = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| "更新 helper 的 wait-pid 无效".to_string())?,
+                )
+            }
+            "--base" => base_dir = Some(PathBuf::from(value)),
+            "--package" => package_path = Some(PathBuf::from(value)),
+            "--signature" => signature = Some(value.clone()),
+            "--target-version" => target_version = Some(value.clone()),
+            "--relaunch" => relaunch_path = Some(PathBuf::from(value)),
+            "--installer-kind" => installer_kind = WindowsInstallerKind::from_cli(value),
+            "--helper-lock" => lock_path = Some(PathBuf::from(value)),
+            "--result-path" => result_path = Some(PathBuf::from(value)),
+            _ => return Err(format!("未知的更新 helper 参数：{key}")),
+        }
+        index += 2;
+    }
+    Ok(UpdateHelperArgs {
+        wait_pid: wait_pid.ok_or_else(|| "更新 helper 缺少 wait-pid".to_string())?,
+        base_dir: base_dir.ok_or_else(|| "更新 helper 缺少 base".to_string())?,
+        package_path: package_path.ok_or_else(|| "更新 helper 缺少 package".to_string())?,
+        signature: signature.ok_or_else(|| "更新 helper 缺少 signature".to_string())?,
+        target_version: target_version
+            .ok_or_else(|| "更新 helper 缺少 target-version".to_string())?,
+        relaunch_path: relaunch_path.ok_or_else(|| "更新 helper 缺少 relaunch".to_string())?,
+        installer_kind: installer_kind
+            .ok_or_else(|| "更新 helper 缺少 installer-kind".to_string())?,
+        lock_path: lock_path.ok_or_else(|| "更新 helper 缺少 helper-lock".to_string())?,
+        result_path: result_path.ok_or_else(|| "更新 helper 缺少 result-path".to_string())?,
+    })
+}
+
+fn acquire_update_flow_lock(path: &Path) -> Result<UpdateFlowLock, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建更新锁目录 {}：{error}", parent.display()))?;
+    }
+    loop {
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                file.write_all(std::process::id().to_string().as_bytes())
+                    .map_err(|error| format!("无法写入更新锁文件：{error}"))?;
+                return Ok(UpdateFlowLock {
+                    path: path.to_path_buf(),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale_pid = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok());
+                if stale_pid.is_some_and(is_process_running) {
+                    return Err("已有更新流程正在运行，请等待它完成".to_string());
+                }
+                std::fs::remove_file(path).map_err(|remove_error| {
+                    format!(
+                        "无法清理过期的更新锁文件 {}：{remove_error}",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(format!("无法创建更新锁文件 {}：{error}", path.display()));
+            }
+        }
+    }
+}
+
+fn copy_update_helper_binary() -> Result<PathBuf, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|error| format!("无法定位当前 RocketX 可执行文件：{error}"))?;
+    let helper_dir = create_unique_temp_dir("update-helper")?;
+    let helper = helper_dir.join(
+        current_exe
+            .file_name()
+            .ok_or_else(|| "当前 RocketX 可执行文件缺少文件名".to_string())?,
+    );
+    if let Err(error) = std::fs::copy(&current_exe, &helper) {
+        let _ = std::fs::remove_dir_all(&helper_dir);
+        return Err(format!(
+            "无法复制更新 helper 到 {}：{error}",
+            helper.display()
+        ));
+    }
+    Ok(helper)
+}
+
+fn is_process_running(pid: u32) -> bool {
+    let output = match Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$process = Get-Process -Id $args[0] -ErrorAction SilentlyContinue; if ($process) { 'running' }",
+        ])
+        .arg(pid.to_string())
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    String::from_utf8_lossy(&output.stdout).contains("running")
+}
+
+fn take_over_update_flow_lock(path: &Path) -> Result<UpdateFlowLock, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建更新锁目录 {}：{error}", parent.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("无法接管更新锁文件 {}：{error}", path.display()))?;
+    file.write_all(std::process::id().to_string().as_bytes())
+        .map_err(|error| format!("无法写入更新锁文件：{error}"))?;
+    Ok(UpdateFlowLock {
+        path: path.to_path_buf(),
+    })
+}
+
+fn wait_for_process_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+    let mut command = Command::new("powershell");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$process = Get-Process -Id $args[0] -ErrorAction SilentlyContinue; if ($process) { Wait-Process -Id $args[0] -Timeout $args[1] -ErrorAction Stop }",
+        ])
+        .arg(pid.to_string())
+        .arg(timeout.as_secs().to_string());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("无法等待 RocketX 主进程退出：{error}"))?;
+    if status.success() {
+        Ok(())
+    } else if !is_process_running(pid) {
+        Ok(())
+    } else {
+        Err(format!("等待 RocketX 主进程 {pid} 退出超时"))
+    }
+}
+
+fn silent_install_invocation(
+    installer: &Path,
+    installer_kind: WindowsInstallerKind,
+) -> (String, Vec<String>) {
+    if installer_kind == WindowsInstallerKind::Msi {
+        (
+            "msiexec".to_string(),
+            vec![
+                "/i".to_string(),
+                format!("\"{}\"", installer.to_string_lossy()),
+                "/qn".to_string(),
+                "/norestart".to_string(),
+            ],
+        )
+    } else {
+        (
+            installer.to_string_lossy().into_owned(),
+            vec!["/S".to_string(), "/UPDATE".to_string()],
+        )
+    }
+}
+
+fn installer_exit_code_is_success(installer_kind: WindowsInstallerKind, code: Option<i32>) -> bool {
+    match installer_kind {
+        WindowsInstallerKind::Nsis => code == Some(0),
+        WindowsInstallerKind::Msi => matches!(code, Some(0 | 1641 | 3010)),
+    }
+}
+
+fn run_silent_installer(
+    installer: &Path,
+    installer_kind: WindowsInstallerKind,
+) -> Result<(), String> {
+    let (program, args) = silent_install_invocation(installer, installer_kind);
+    let mut command = Command::new("powershell");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$process = Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length-1)] -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $process.ExitCode",
+        ])
+        .arg(program)
+        .args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("无法启动安装包：{error}"))?;
+    let code = status.code();
+    if installer_exit_code_is_success(installer_kind, code) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} 安装器退出码异常：{}",
+            installer_kind.label(),
+            code.unwrap_or_default()
+        ))
+    }
+}
+
+fn normalize_update_version(version: &str) -> Option<(u64, u64, u64)> {
+    normalize_update_version_text(version).and_then(|value| parse_semantic_version(&value))
+}
+
+fn query_cli_version(path: &Path) -> Result<Option<String>, String> {
+    let output = Command::new(path)
+        .arg("--rocketx-version")
+        .output()
+        .map_err(|error| format!("无法读取安装后版本：{error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    Ok(normalize_update_version_text(&version))
+}
+
+fn wait_for_installed_version(path: &Path, target_version: &str) -> Result<(), String> {
+    let expected = normalize_update_version(target_version)
+        .ok_or_else(|| format!("目标版本号无效：{target_version}"))?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if let Some(actual) =
+            query_cli_version(path)?.and_then(|value| normalize_update_version(&value))
+        {
+            if actual == expected {
+                return Ok(());
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "安装完成后仍未观察到 {} 升级到 {}",
+        path.display(),
+        target_version
+    ))
+}
+
+fn validate_manifest_package(
+    base_dir: &Path,
+    package_path: &Path,
+    signature: &str,
+    expected_version: &str,
+    installer_kind: WindowsInstallerKind,
+) -> Result<ResolvedUpdatePackage, String> {
+    let base =
+        std::fs::canonicalize(base_dir).map_err(|error| format!("更新目录不可访问：{error}"))?;
+    let package =
+        std::fs::canonicalize(package_path).map_err(|error| format!("更新包不可访问：{error}"))?;
+    if !package.starts_with(&base) {
+        return Err("更新包不在配置的共享目录中".to_string());
+    }
+    let manifest_path = base.join("latest.json");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", manifest_path.display()))?;
+    let value = serde_json::from_str::<serde_json::Value>(&manifest)
+        .map_err(|error| format!("latest.json 无效：{error}"))?;
+    let resolved = resolve_update_package_with_kind(&base, &value, installer_kind)?;
+    let resolved_package = std::fs::canonicalize(&resolved.package_path)
+        .map_err(|error| format!("更新包不可访问：{error}"))?;
+    if resolved_package != package {
+        return Err("latest.json 指向的更新包已变化，拒绝继续安装".to_string());
+    }
+    if resolved.signature != signature {
+        return Err("latest.json 中的更新签名已变化，拒绝继续安装".to_string());
+    }
+    let expected_version = normalize_update_version_text(expected_version)
+        .ok_or_else(|| format!("目标版本号无效：{expected_version}"))?;
+    if resolved.version != expected_version {
+        return Err("latest.json 中的更新版本已变化，拒绝继续安装".to_string());
+    }
+    verify_update_package(&resolved_package, &resolved.signature)?;
+    Ok(ResolvedUpdatePackage {
+        package_path: resolved_package,
+        ..resolved
+    })
+}
+
+fn atomic_write_update_result(path: &Path, result: &UpdateResult) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建更新结果目录 {}：{error}", parent.display()))?;
+    }
+    let temp_path = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+    let content =
+        serde_json::to_vec(result).map_err(|error| format!("无法序列化更新结果：{error}"))?;
+    std::fs::write(&temp_path, content).map_err(|error| format!("无法写入更新结果：{error}"))?;
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|error| format!("无法替换旧更新结果：{error}"))?;
+    }
+    std::fs::rename(&temp_path, path).map_err(|error| format!("无法提交更新结果：{error}"))
+}
+
+fn restart_rocketx(path: &Path) -> Result<(), String> {
+    Command::new(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法重新启动 RocketX：{error}"))
+}
+
+fn stage_verified_package(package: &Path, signature: &str) -> Result<(PathBuf, PathBuf), String> {
+    let staging_dir = create_unique_temp_dir("update-stage")?;
+    let staged_package = staging_dir.join(
+        package
+            .file_name()
+            .ok_or_else(|| "更新包路径缺少文件名".to_string())?,
+    );
+    let result = std::fs::copy(package, &staged_package)
+        .map_err(|error| {
+            format!(
+                "无法复制更新包到本地暂存目录 {}：{error}",
+                staged_package.display()
+            )
+        })
+        .and_then(|_| verify_update_package(&staged_package, signature));
+    match result {
+        Ok(()) => Ok((staged_package, staging_dir)),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            Err(error)
+        }
+    }
+}
+
+fn run_update_helper_inner(args: &UpdateHelperArgs) -> Result<(), String> {
+    wait_for_process_exit(args.wait_pid, Duration::from_secs(60))?;
+    let resolved = validate_manifest_package(
+        &args.base_dir,
+        &args.package_path,
+        &args.signature,
+        &args.target_version,
+        args.installer_kind,
+    )?;
+    let (staged_package, staging_dir) =
+        stage_verified_package(&resolved.package_path, &resolved.signature)?;
+    let install_result =
+        extract_signed_installer(&staged_package, args.installer_kind).and_then(|prepared| {
+            let result = run_silent_installer(&prepared.path, args.installer_kind);
+            if let Some(cleanup_dir) = prepared.cleanup_dir.as_ref() {
+                let _ = std::fs::remove_dir_all(cleanup_dir);
+            }
+            result
+        });
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    install_result?;
+    wait_for_installed_version(&args.relaunch_path, &args.target_version)
+}
+
+fn run_update_helper(args: UpdateHelperArgs) -> Result<(), String> {
+    let _lock = take_over_update_flow_lock(&args.lock_path)?;
+    let mut result = match run_update_helper_inner(&args) {
+        Ok(()) => UpdateResult {
+            status: UpdateResultStatus::Success,
+            version: args.target_version.clone(),
+            message: format!("已完成 RocketX {} 更新", args.target_version),
+        },
+        Err(error) => UpdateResult {
+            status: UpdateResultStatus::Error,
+            version: args.target_version.clone(),
+            message: error,
+        },
+    };
+    let mut errors = Vec::new();
+    if let Err(error) = atomic_write_update_result(&args.result_path, &result) {
+        errors.push(error);
+    }
+    if let Err(error) = restart_rocketx(&args.relaunch_path) {
+        if result.status == UpdateResultStatus::Success {
+            result = UpdateResult {
+                status: UpdateResultStatus::Error,
+                version: args.target_version.clone(),
+                message: error.clone(),
+            };
+            if let Err(rewrite_error) = atomic_write_update_result(&args.result_path, &result) {
+                errors.push(rewrite_error);
+            }
+        }
+        errors.push(error);
+    }
+    if result.status == UpdateResultStatus::Error {
+        errors.insert(0, result.message.clone());
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
+pub fn maybe_run_update_helper(args: &[String]) -> Result<bool, String> {
+    let Some(flag_index) = args
+        .iter()
+        .position(|argument| argument == "--apply-update-helper")
+    else {
+        return Ok(false);
+    };
+    let helper_args = parse_update_helper_args(&args[(flag_index + 1)..])?;
+    run_update_helper(helper_args)?;
+    Ok(true)
+}
+
+fn spawn_update_helper(
+    helper: &Path,
+    base: &Path,
+    package: &Path,
+    signature: &str,
+    target_version: &str,
+    installer_kind: WindowsInstallerKind,
+    lock_path: &Path,
+    result_path: &Path,
+) -> Result<(), String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|error| format!("无法定位当前 RocketX 可执行文件：{error}"))?;
+    let mut command = Command::new(&helper);
+    command
+        .arg("--apply-update-helper")
+        .args(["--wait-pid", &std::process::id().to_string()])
+        .args(["--base", &base.to_string_lossy()])
+        .args(["--package", &package.to_string_lossy()])
+        .args(["--signature", signature])
+        .args(["--target-version", target_version])
+        .args(["--relaunch", &current_exe.to_string_lossy()])
+        .args(["--installer-kind", installer_kind.cli_value()])
+        .args(["--helper-lock", &lock_path.to_string_lossy()])
+        .args(["--result-path", &result_path.to_string_lossy()]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法启动更新 helper：{error}"))
 }
 
 /// 只启动配置目录里的签名更新包；启动前再次验签，避免检查与执行之间被替换。
 #[tauri::command]
 pub async fn launch_update_installer(
+    app: tauri::AppHandle,
     dir: String,
     path: String,
     signature: String,
+    expected_version: String,
+    installer_type: String,
 ) -> Result<(), String> {
+    let installer_kind = WindowsInstallerKind::from_cli(&installer_type)
+        .ok_or_else(|| format!("未知的 installerType：{installer_type}"))?;
+    let current_kind = detect_current_install_kind()?;
+    if installer_kind != current_kind {
+        return Err("前端传入的 installerType 与当前安装类型不一致".to_string());
+    }
     let base = std::fs::canonicalize(PathBuf::from(dir.trim()))
         .map_err(|error| format!("更新目录不可访问：{error}"))?;
-    let package = std::fs::canonicalize(PathBuf::from(path.trim()))
-        .map_err(|error| format!("更新包不可访问：{error}"))?;
-    if !package.starts_with(&base) {
-        return Err("更新包不在配置的共享目录中".to_string());
+    let resolved = validate_manifest_package(
+        &base,
+        Path::new(path.trim()),
+        &signature,
+        &expected_version,
+        installer_kind,
+    )?;
+    let lock_path = helper_lock_path(&app)?;
+    let result_path = update_result_path(&app)?;
+    let lock = acquire_update_flow_lock(&lock_path)?;
+    let _ = std::fs::remove_file(&result_path);
+    let helper = copy_update_helper_binary()?;
+    let spawn_result = spawn_update_helper(
+        &helper,
+        &base,
+        &resolved.package_path,
+        &resolved.signature,
+        &resolved.version,
+        installer_kind,
+        &lock_path,
+        &result_path,
+    );
+    if spawn_result.is_ok() {
+        std::mem::forget(lock);
     }
-    verify_update_package(&package, &signature)?;
-    let target = extract_signed_installer(&package)?;
-    let extension = target
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_default();
-    if extension != "exe" && extension != "msi" {
-        return Err("只支持运行 .exe / .msi 安装包".to_string());
+    spawn_result?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn take_update_result(app: tauri::AppHandle) -> Result<Option<UpdateResult>, String> {
+    let path = update_result_path(&app)?;
+    if !path.is_file() {
+        return Ok(None);
     }
-    if !target.is_file() {
-        return Err(format!("安装包不存在：{}", target.display()));
+    let content = std::fs::read(&path).map_err(|error| format!("读取更新结果失败：{error}"))?;
+    let result = serde_json::from_slice::<UpdateResult>(&content)
+        .map_err(|error| format!("更新结果 JSON 无效：{error}"));
+    std::fs::remove_file(&path).map_err(|error| format!("删除更新结果失败：{error}"))?;
+    result.map(Some)
+}
+
+pub fn maybe_print_version(args: &[String]) -> bool {
+    if !args.iter().any(|argument| argument == "--rocketx-version") {
+        return false;
     }
-    let result = if extension == "msi" {
-        std::process::Command::new("msiexec")
-            .arg("/i")
-            .arg(&target)
-            .spawn()
-    } else {
-        std::process::Command::new(&target).spawn()
-    };
-    result
-        .map(|_| ())
-        .map_err(|error| format!("无法启动安装包：{error}"))
+    println!("{}", env!("CARGO_PKG_VERSION"));
+    true
 }
 
 pub fn shutdown(app: &tauri::AppHandle) {
@@ -2337,17 +3610,23 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        app_server_args_for_help, classify_codex_version, decode_attachment_request,
-        encode_message, host_path, parse_codex_cli_version, parse_semantic_version,
-        probe_resolve_codex_from_candidates_with_probe, read_codex_artifact, redact_json_secret,
-        resolve_codex_from_candidates_with_probe, resolve_update_package,
-        run_business_azure_devops_server_read_with, run_butler_azure_devops_server_read,
-        safe_attachment_path, standalone_azure_devops_server_adapter_path,
+        app_server_args_for_help, classify_codex_version, codex_runtime_probe_from_candidates_with,
+        decode_attachment_request, encode_message, host_path, installer_exit_code_is_success,
+        installer_kind_from_bundle_type, matching_installer_paths,
+        normalize_unc_workspace_config_path, normalize_update_version,
+        normalize_update_version_text, parse_codex_cli_version, parse_semantic_version,
+        parse_update_helper_args, probe_resolve_codex_from_candidates_with_probe,
+        read_codex_artifact, redact_json_secret, resolve_codex_from_candidates_with_probe,
+        resolve_update_package_with_kind, run_business_azure_devops_server_read_with,
+        run_butler_azure_devops_server_read, safe_attachment_path, silent_install_invocation,
+        standalone_azure_devops_server_adapter_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus,
-        CodexProcessInfo, CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
-        AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
-        CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
+        CodexProcessInfo, CodexRuntimeCandidate, CodexRuntimeCandidateOutcome, CodexRuntimeProbe,
+        CodexRuntimeReasonCode, CodexRuntimeSource, UpdateResult, UpdateResultStatus,
+        WindowsInstallerKind, AZURE_DEVOPS_SERVER_BODY_LIMIT, AZURE_DEVOPS_SERVER_HOST_ADAPTER,
+        CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS,
+        UPDATER_PUBLIC_KEY,
     };
     #[cfg(windows)]
     use super::{
@@ -2439,16 +3718,245 @@ mod tests {
     }
 
     #[test]
+    fn workspace_config_unc_path_only_accepts_shared_json_files() {
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.json").is_ok()
+        );
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.JSON").is_ok()
+        );
+        assert!(normalize_unc_workspace_config_path(r"D:\team\rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"..\rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"\\.\D:\team\rcx.workspace.json").is_err());
+        assert!(
+            normalize_unc_workspace_config_path(r"\\?\UNC\server\share\rcx.workspace.json")
+                .is_err()
+        );
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\..\rcx.workspace.json").is_err()
+        );
+        assert!(normalize_unc_workspace_config_path(r"\\server/share/rcx.workspace.json").is_err());
+        assert!(normalize_unc_workspace_config_path(r"\\server\share").is_err());
+        assert!(
+            normalize_unc_workspace_config_path(r"\\server\share\team\rcx.workspace.txt").is_err()
+        );
+    }
+
+    #[test]
     fn shared_directory_update_rejects_unsigned_packages() {
+        let root = unique_temp_dir("unsigned-update");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("RocketX-update.zip"), b"zip").unwrap();
         let manifest = json!({
+            "version": "0.40.2",
             "platforms": {
                 "windows-x86_64": {
                     "url": "RocketX-update.zip"
                 }
             }
         });
-        let error = resolve_update_package(Path::new("."), &manifest).unwrap_err();
+        let error = resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis)
+            .unwrap_err();
         assert!(error.contains("缺少 signature"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_directory_update_prefers_matching_installer_type() {
+        let root = unique_temp_dir("matching-installer");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("RocketX_0.40.2_x64-setup.exe"), b"exe").unwrap();
+        fs::write(root.join("RocketX_0.40.2_x64.msi"), b"msi").unwrap();
+        let manifest = json!({
+            "version": "v0.40.2",
+            "platforms": {
+                "windows-x86_64": {
+                    "url": "RocketX_0.40.2_x64-setup.exe",
+                    "signature": "sig-a"
+                },
+                "windows-x86_64-msi": {
+                    "url": "RocketX_0.40.2_x64.msi",
+                    "signature": "sig-b"
+                }
+            }
+        });
+        let nsis =
+            resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis).unwrap();
+        assert!(nsis.package_path.ends_with("RocketX_0.40.2_x64-setup.exe"));
+        assert_eq!(nsis.signature, "sig-a");
+        assert_eq!(nsis.version, "0.40.2");
+        let msi =
+            resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Msi).unwrap();
+        assert!(msi.package_path.ends_with("RocketX_0.40.2_x64.msi"));
+        assert_eq!(msi.signature, "sig-b");
+        assert_eq!(msi.installer_kind, WindowsInstallerKind::Msi);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_directory_update_refuses_silent_installer_switch() {
+        let root = unique_temp_dir("silent-switch");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("RocketX_0.40.2_x64.msi"), b"msi").unwrap();
+        let manifest = json!({
+            "version": "0.40.2",
+            "platforms": {
+                "windows-x86_64-msi": {
+                    "url": "RocketX_0.40.2_x64.msi",
+                    "signature": "sig-b"
+                }
+            }
+        });
+        let error = resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis)
+            .unwrap_err();
+        assert!(error.contains("拒绝静默切换安装类型"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundle_type_only_accepts_nsis_and_msi() {
+        assert_eq!(
+            installer_kind_from_bundle_type(Some(tauri::utils::config::BundleType::Nsis)).unwrap(),
+            WindowsInstallerKind::Nsis
+        );
+        assert_eq!(
+            installer_kind_from_bundle_type(Some(tauri::utils::config::BundleType::Msi)).unwrap(),
+            WindowsInstallerKind::Msi
+        );
+        assert!(installer_kind_from_bundle_type(None).is_err());
+        assert!(
+            installer_kind_from_bundle_type(Some(tauri::utils::config::BundleType::AppImage))
+                .unwrap_err()
+                .contains("仅支持 NSIS / MSI")
+        );
+    }
+
+    #[test]
+    fn zip_installer_selection_requires_exactly_one_installer_total() {
+        let root = unique_temp_dir("zip-installer-selection");
+        fs::create_dir_all(&root).unwrap();
+        let exe = root.join("RocketX Setup.exe");
+        let msi = root.join("RocketX.msi");
+        fs::write(&exe, b"exe").unwrap();
+        fs::write(&msi, b"msi").unwrap();
+
+        assert!(
+            matching_installer_paths(Vec::<PathBuf>::new(), WindowsInstallerKind::Nsis)
+                .unwrap_err()
+                .contains("没有安装器")
+        );
+        assert_eq!(
+            matching_installer_paths(vec![exe.clone()], WindowsInstallerKind::Nsis).unwrap(),
+            exe
+        );
+        assert!(matching_installer_paths(
+            vec![exe.clone(), msi.clone()],
+            WindowsInstallerKind::Nsis
+        )
+        .unwrap_err()
+        .contains("多个安装器"));
+        assert!(
+            matching_installer_paths(vec![exe.clone()], WindowsInstallerKind::Msi)
+                .unwrap_err()
+                .contains("类型不一致")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn silent_install_invocation_matches_windows_contract() {
+        let nsis = silent_install_invocation(
+            Path::new(r"C:\RocketX\RocketX Setup.exe"),
+            WindowsInstallerKind::Nsis,
+        );
+        assert_eq!(nsis.0, r"C:\RocketX\RocketX Setup.exe");
+        assert_eq!(nsis.1, vec!["/S", "/UPDATE"]);
+
+        let msi = silent_install_invocation(
+            Path::new(r"C:\RocketX\RocketX.msi"),
+            WindowsInstallerKind::Msi,
+        );
+        assert_eq!(msi.0, "msiexec");
+        assert_eq!(
+            msi.1,
+            vec!["/i", "\"C:\\RocketX\\RocketX.msi\"", "/qn", "/norestart"]
+        );
+    }
+
+    #[test]
+    fn installer_exit_codes_follow_nsis_and_msi_rules() {
+        assert!(installer_exit_code_is_success(
+            WindowsInstallerKind::Nsis,
+            Some(0)
+        ));
+        assert!(!installer_exit_code_is_success(
+            WindowsInstallerKind::Nsis,
+            Some(3010)
+        ));
+        assert!(installer_exit_code_is_success(
+            WindowsInstallerKind::Msi,
+            Some(1641)
+        ));
+        assert!(installer_exit_code_is_success(
+            WindowsInstallerKind::Msi,
+            Some(3010)
+        ));
+        assert!(!installer_exit_code_is_success(
+            WindowsInstallerKind::Msi,
+            Some(5)
+        ));
+    }
+
+    #[test]
+    fn version_normalization_and_update_result_contract_are_stable() {
+        assert_eq!(
+            normalize_update_version_text(" v0.40.2 ").as_deref(),
+            Some("0.40.2")
+        );
+        assert_eq!(normalize_update_version("V0.40.2"), Some((0, 40, 2)));
+        assert_eq!(normalize_update_version(""), None);
+
+        let result = serde_json::to_value(UpdateResult {
+            status: UpdateResultStatus::Error,
+            version: "0.40.2".to_string(),
+            message: "安装失败".to_string(),
+        })
+        .unwrap();
+        assert_eq!(result["status"], "error");
+        assert_eq!(result["version"], "0.40.2");
+        assert_eq!(result["message"], "安装失败");
+    }
+
+    #[test]
+    fn update_helper_args_require_everything_needed_for_takeover() {
+        let parsed = parse_update_helper_args(&[
+            "--wait-pid".to_string(),
+            "42".to_string(),
+            "--base".to_string(),
+            r"\\server\share\rocketx".to_string(),
+            "--package".to_string(),
+            r"\\server\share\rocketx\RocketX_0.40.2_x64-setup.exe".to_string(),
+            "--signature".to_string(),
+            "sig".to_string(),
+            "--target-version".to_string(),
+            "0.40.2".to_string(),
+            "--relaunch".to_string(),
+            r"C:\Program Files\RocketX\RocketX.exe".to_string(),
+            "--installer-kind".to_string(),
+            "nsis".to_string(),
+            "--helper-lock".to_string(),
+            r"C:\Temp\rocketx-update-helper.lock".to_string(),
+            "--result-path".to_string(),
+            r"C:\Temp\update-result.json".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.wait_pid, 42);
+        assert_eq!(parsed.installer_kind, WindowsInstallerKind::Nsis);
+        assert_eq!(parsed.target_version, "0.40.2");
+        assert_eq!(
+            parsed.result_path,
+            PathBuf::from(r"C:\Temp\update-result.json")
+        );
     }
 
     #[test]
@@ -3150,7 +4658,7 @@ param(
             |_| Ok("0.145.0".to_string()),
         )
         .unwrap();
-        assert_eq!(fallback.source, CodexRuntimeSource::System);
+        assert_eq!(fallback.source, CodexRuntimeSource::Standard);
         assert_eq!(
             PathBuf::from(fallback.display_path),
             PathBuf::from(host_path(&standard.canonicalize().unwrap()))
@@ -3198,7 +4706,7 @@ param(
             },
         )
         .unwrap();
-        assert_eq!(fallback.source, CodexRuntimeSource::System);
+        assert_eq!(fallback.source, CodexRuntimeSource::Standard);
         assert_eq!(
             PathBuf::from(fallback.display_path),
             PathBuf::from(host_path(&standard.canonicalize().unwrap()))
@@ -3256,6 +4764,195 @@ param(
     }
 
     #[test]
+    fn runtime_probe_reports_rejected_candidate_before_selected_fallback() {
+        let root = unique_temp_dir("runtime-probe-candidates");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.1".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.source, Some(CodexRuntimeSource::Standard));
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.reason_code, None);
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].outcome,
+            CodexRuntimeCandidateOutcome::Rejected
+        );
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Outdated)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        assert_eq!(probe.candidates[1].version.as_deref(), Some("0.144.4"));
+
+        let manual = codex_runtime_probe_from_candidates_with(
+            Some(&system),
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |_| Ok("0.144.1".to_string()),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+        assert!(!manual.ready);
+        assert_eq!(manual.reason_code, Some(CodexRuntimeReasonCode::ManualPath));
+        assert_eq!(manual.candidates.len(), 1);
+        assert_eq!(
+            manual.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Outdated)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_skips_candidate_without_app_server() {
+        let root = unique_temp_dir("runtime-probe-missing-app-server");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.5".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Err("app-server missing".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::MissingAppServer)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_skips_candidate_with_unparseable_version() {
+        let root = unique_temp_dir("runtime-probe-invalid-version");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("nightly".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Unavailable)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_prefers_deeper_failure_when_no_candidate_succeeds() {
+        let root = unique_temp_dir("runtime-probe-failure-priority");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.1".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |candidate| {
+                if candidate.display_path.contains("standard") {
+                    Err("not logged in".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(!probe.ready);
+        assert_eq!(probe.reason_code, Some(CodexRuntimeReasonCode::NotLoggedIn));
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn codex_version_contract_classifies_candidate_baseline_and_newer_versions() {
         assert_eq!(parse_semantic_version("0.140.0"), Some((0, 140, 0)));
         assert_eq!(parse_semantic_version("0.145.0-beta.1"), Some((0, 145, 0)));
@@ -3291,6 +4988,13 @@ param(
     }
 
     #[test]
+    fn unsupported_version_message_only_names_protocol_baseline() {
+        let message = super::unsupported_codex_version_message("0.144.1");
+        assert!(message.contains("0.144.4"));
+        assert!(!message.contains("0.140.0"));
+    }
+
+    #[test]
     fn codex_runtime_contract_and_sources_serialize() {
         let probe = serde_json::to_value(CodexRuntimeProbe {
             ready: true,
@@ -3303,6 +5007,13 @@ param(
             compatibility_status: CodexCompatibilityStatus::Verified,
             reason_code: None,
             reason: None,
+            candidates: vec![CodexRuntimeCandidate {
+                source: CodexRuntimeSource::Manual,
+                path: "C:\\Tools\\codex.exe".to_string(),
+                version: Some("0.144.4".to_string()),
+                outcome: CodexRuntimeCandidateOutcome::Selected,
+                reason_code: None,
+            }],
         })
         .unwrap();
         assert_eq!(probe["source"], "manual");
@@ -3311,15 +5022,20 @@ param(
         assert_eq!(probe["verifiedVersions"], json!(["0.144.4"]));
         assert_eq!(probe["compatibilityStatus"], "verified");
         assert!(probe["reasonCode"].is_null());
+        assert_eq!(probe["candidates"][0]["source"], "manual");
+        assert_eq!(probe["candidates"][0]["outcome"], "selected");
+        assert_eq!(probe["candidates"][0]["path"], "C:\\Tools\\codex.exe");
+        let standard_source = serde_json::to_value(CodexRuntimeSource::Standard).unwrap();
+        assert_eq!(standard_source, json!("standard"));
         let process = serde_json::to_value(CodexProcessInfo {
             process_id: "test-process".to_string(),
             version: "0.144.4".to_string(),
             runtime_workspace_root: "C:\\workspace".to_string(),
-            runtime_source: CodexRuntimeSource::Bundled,
+            runtime_source: CodexRuntimeSource::Standard,
             managed_skill_roots: vec!["C:\\RocketX\\skills".to_string()],
         })
         .unwrap();
-        assert_eq!(process["runtimeSource"], "bundled");
+        assert_eq!(process["runtimeSource"], "standard");
         assert_eq!(process["managedSkillRoots"], json!(["C:\\RocketX\\skills"]));
     }
 

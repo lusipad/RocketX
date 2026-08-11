@@ -27,8 +27,26 @@ use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN_TRAY_ID: &str = "main";
+const AUTOSTART_ARG: &str = "--autostart";
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
+
+fn is_autostart_launch<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .any(|argument| argument.as_ref() == AUTOSTART_ARG)
+}
+
+fn launch_opens_main_window<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    !is_autostart_launch(args)
+}
 
 fn refresh_autostart_registration_with(
     debug: bool,
@@ -342,8 +360,8 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 #[cfg(test)]
 mod tray_icon_tests {
     use super::{
-        dim_tray_icon, normalize_http_origin, refresh_autostart_registration_with,
-        resolve_download_history_path, validate_external_url,
+        dim_tray_icon, is_autostart_launch, launch_opens_main_window, normalize_http_origin,
+        refresh_autostart_registration_with, resolve_download_history_path, validate_external_url,
     };
     use std::cell::Cell;
     use tauri::image::Image;
@@ -434,6 +452,14 @@ mod tray_icon_tests {
     }
 
     #[test]
+    fn autostart_marker_hides_only_system_login_launches() {
+        assert!(is_autostart_launch(["RocketX.exe", "--autostart"]));
+        assert!(!is_autostart_launch(["RocketX.exe", "--autostart=true"]));
+        assert!(!launch_opens_main_window(["RocketX.exe", "--autostart"]));
+        assert!(launch_opens_main_window(["RocketX.exe"]));
+    }
+
+    #[test]
     fn download_history_only_accepts_existing_absolute_files() {
         let current_exe = std::env::current_exe().unwrap();
         assert_eq!(
@@ -449,24 +475,45 @@ mod tray_icon_tests {
 }
 
 fn main() {
-    if std::env::args().any(|argument| argument == "--business-mcp") {
+    let launch_args = std::env::args().collect::<Vec<_>>();
+    if proc::maybe_print_version(&launch_args) {
+        return;
+    }
+    if launch_args
+        .iter()
+        .any(|argument| argument == "--apply-update-helper")
+    {
+        if let Err(error) = proc::maybe_run_update_helper(&launch_args) {
+            eprintln!("rocketx-update-helper: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if launch_args
+        .iter()
+        .any(|argument| argument == "--business-mcp")
+    {
         if let Err(error) = business_mcp::run_stdio() {
             eprintln!("rocketx-business-mcp: {error}");
             std::process::exit(1);
         }
         return;
     }
-    if std::env::args().any(|argument| argument == "--mcp") {
+    if launch_args.iter().any(|argument| argument == "--mcp") {
         if let Err(error) = mcp::run_stdio() {
             eprintln!("rcx-mcp: {error}");
             std::process::exit(1);
         }
         return;
     }
+    let show_main_on_launch = launch_opens_main_window(&launch_args);
     tauri::Builder::default()
-        // 必须最先注册：第二次启动立即退出，并把已存在的主窗口带回前台。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app);
+        // 必须最先注册：第二实例立即退出；只有用户手动启动才把已有窗口带回前台。
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 登录项若迟到且已有实例，不能把用户主动隐藏的窗口重新弹出来。
+            if launch_opens_main_window(&args) {
+                show_main(app);
+            }
         }))
         // Windows 集成认证（NTLM/Negotiate）：域内 ADO Server 的默认认证方式，
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
@@ -506,7 +553,9 @@ fn main() {
             proc::butler_azure_devops_server_read,
             proc::check_signed_http_update,
             proc::read_update_manifest_dir,
+            proc::read_workspace_config_unc,
             proc::launch_update_installer,
+            proc::take_update_result,
             proc::codex_agent_attachment_write,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
@@ -574,9 +623,12 @@ fn main() {
         // 开机自启由系统登记，设置页只负责读取和切换，不自行修改注册表。
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![AUTOSTART_ARG]),
         ))
-        .setup(|app| {
+        .setup(move |app| {
+            if show_main_on_launch {
+                show_main(app.handle());
+            }
             if let Err(error) = refresh_autostart_registration(app) {
                 log::warn!("failed to refresh autostart registration: {error}");
             }

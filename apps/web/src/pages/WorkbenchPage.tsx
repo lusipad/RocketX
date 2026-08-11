@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark,
   Calendar,
@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SquareActivity,
   SquareKanban,
   Trash2,
   Wrench,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { myPrsOf, reviewPrsOf, useWorkbench, type WorkItem } from '../stores/workbench';
 import { BuildList, PullRequestList, WorkItemList } from '../components/AdoLists';
+import CreateWorkItemDiscussionDialog from '../components/CreateWorkItemDiscussionDialog';
 import { WorkItemBoard, WorkItemWbs } from '../components/QueryViews';
 import { useUI } from '../stores/ui';
 import { useAuth } from '../stores/auth';
@@ -50,9 +52,12 @@ import { toast } from '../stores/toast';
 import { SkeletonRows } from '../components/Skeleton';
 import { ConfirmDialog, useDialogBehavior } from '../components/Dialog';
 import { settleScopedResult } from '../lib/scopedResult';
+import { runtimeFeatures } from '../lib/runtimeMode';
 
-/** 工作台内部视图：概览（仪表盘）+ 三个 ADO 完整列表 */
-type AdoTab = 'overview' | 'workitems' | 'prs' | 'builds';
+/** 工作台内部视图：概览（仪表盘）+ ADO 个人工作视图 */
+type AdoTab = 'overview' | 'workitems' | 'contributions' | 'prs' | 'builds';
+
+const ProfileContributionsPage = lazy(() => import('./ProfileContributionsPage'));
 
 /** 自定义查询结果的展示方式（issue #82/#83）：查询定范围，视图定看法 */
 type QueryViewMode = 'list' | 'board' | 'wbs';
@@ -345,6 +350,7 @@ function FavoriteDialog({
 // ---------- Main ----------
 
 export default function WorkbenchPage() {
+  const features = runtimeFeatures();
   const setModule = useUI((s) => s.setModule);
   const tab = useUI((s) => s.workbenchTab);
   const setTab = useUI((s) => s.setWorkbenchTab);
@@ -376,6 +382,7 @@ export default function WorkbenchPage() {
   const removeQuery = useCustomQueries((s) => s.remove);
   const claimLegacyQueries = useCustomQueries((s) => s.claimLegacy);
   const [queryDialog, setQueryDialog] = useState(false);
+  const [discussionItem, setDiscussionItem] = useState<WorkItem | null>(null);
 
   // 每个查询记住自己的视图（列表/看板/WBS）——同一个查询通常固定一种看法（issue #82/#83）
   const [queryViews, setQueryViews] = useState<Record<string, QueryViewMode>>(() => {
@@ -567,11 +574,12 @@ export default function WorkbenchPage() {
       triedRef.current = false;
       return;
     }
+    if (tab === 'contributions') return;
     if (!lastRefresh && !triedRef.current) {
       triedRef.current = true;
       void refresh();
     }
-  }, [connected, lastRefresh, refresh]);
+  }, [connected, lastRefresh, refresh, tab]);
 
   const reviewPrs = useMemo(() => reviewPrsOf(prs, account), [prs, account]);
   const myPrs = useMemo(() => myPrsOf(prs, account), [prs, account]);
@@ -594,7 +602,7 @@ export default function WorkbenchPage() {
     await jumpToMessage(todo.mid, todo.rid);
   };
 
-  // ADO 未配置时不显示工作项/PR/构建这些 tab——点进去只有空页，没意义
+  // ADO 未配置时不显示个人工作视图——点进去只有空页，没意义
   const tabs: {
     key: AdoTab;
     label: string;
@@ -606,6 +614,7 @@ export default function WorkbenchPage() {
       ...(connected
         ? [
             { key: 'workitems' as const, label: '我的工作项', icon: CircleDot, badge: workItems.length },
+            { key: 'contributions' as const, label: '我的贡献', icon: SquareActivity },
             { key: 'prs' as const, label: '拉取请求', icon: GitPullRequest, badge: reviewPrs.length },
             {
               key: 'builds' as const,
@@ -712,7 +721,17 @@ export default function WorkbenchPage() {
         </button>
       </aside>
 
-      {connected && tab !== 'overview' ? (
+      {connected && tab === 'contributions' ? (
+        <Suspense
+          fallback={(
+            <main className="min-w-0 flex-1 bg-surface-2 p-5">
+              <SkeletonRows rows={8} />
+            </main>
+          )}
+        >
+          <ProfileContributionsPage />
+        </Suspense>
+      ) : connected && tab !== 'overview' ? (
         <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
           <div className="flex items-center justify-between pb-3">
             <span className="text-[15px] font-semibold text-ink">
@@ -796,6 +815,9 @@ export default function WorkbenchPage() {
                 items={visibleQueryState.cache[activeQuery.id] ?? []}
                 onMove={(item, toState) =>
                   setPendingMove({ queryId: activeQuery.id, item, toState })
+                }
+                onAssignToAi={
+                  features.sharedAgent ? (item) => setDiscussionItem(item) : undefined
                 }
               />
             ) : (queryViews[activeQuery.id] ?? 'list') === 'wbs' ? (
@@ -1060,6 +1082,9 @@ export default function WorkbenchPage() {
             toast.success('查询已添加');
           }}
         />
+      )}
+      {discussionItem && (
+        <CreateWorkItemDiscussionDialog item={discussionItem} onClose={() => setDiscussionItem(null)} />
       )}
     </div>
   );

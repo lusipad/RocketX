@@ -401,7 +401,7 @@ export default function ButlerRoutines() {
                         <time>{runTime(run.at)}</time>
                         {!run.readAt ? <i aria-label="未读" /> : null}
                       </summary>
-                      <div className="butler-routine-result">{renderMarkdown(run.text)}</div>
+                      <div className="butler-routine-result butler-conversation-markdown">{renderMarkdown(run.text)}</div>
                     </details>
                   ))}
                 </section>
