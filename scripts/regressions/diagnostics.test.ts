@@ -9,14 +9,20 @@ import {
 test('诊断文本会遮蔽常见凭据并移除换行注入', () => {
   const input =
     'Authorization: Bearer secret X-Auth-Token=abc password=hunter2 ' +
-    'PAT: pat-value https://user:pass@example.com/path?token=query-secret\nforged';
+    'PAT: pat-value https://user:pass@example.com/path?token=query-secret ' +
+    'C:\\Users\\alice\\AppData\\Local\\Programs\\Codex\\codex.exe ' +
+    '/Users/alice/Library/Codex/bin/codex ' +
+    '/home/alice/.config/codex/auth.json\nforged';
   const safe = sanitizeDiagnosticText(input);
 
-  for (const secret of ['secret', 'abc', 'hunter2', 'pat-value', 'user:pass', 'query-secret']) {
+  for (const secret of ['secret', 'abc', 'hunter2', 'pat-value', 'user:pass', 'query-secret', 'alice']) {
     assert.equal(safe.includes(secret), false);
   }
   assert.equal(safe.includes('\n'), false);
   assert.match(safe, /\[REDACTED\]/);
+  assert.match(safe, /Programs\\Codex\\codex\.exe/);
+  assert.match(safe, /Codex\/bin\/codex/);
+  assert.match(safe, /\.config\/codex\/auth\.json/);
 });
 
 test('诊断报告保留多行日志但再次脱敏', () => {

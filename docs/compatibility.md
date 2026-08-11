@@ -36,7 +36,7 @@ RocketX installers do not bundle Codex. Desktop AI features require a compatible
 | --- | --- |
 | Version `0.144.4` | Current verified protocol baseline |
 | Newer than `0.144.4` | Allowed only after binary, `app-server --help`, and login probes pass; shown as untested newer |
-| Older than `0.144.4` | Blocked; the lower `0.140.0` candidate constant is diagnostic metadata, not a compatibility promise |
+| Older than `0.144.4` | Blocked; user-facing diagnostics only promise the `0.144.4` protocol baseline |
 | Missing or signed out | Messaging and deterministic work surfaces remain usable; local AI features are unavailable |
 | Web client | No local Codex transport; messaging and deterministic work surfaces remain usable |
 

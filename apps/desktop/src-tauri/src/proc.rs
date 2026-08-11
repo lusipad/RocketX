@@ -89,6 +89,34 @@ pub enum CodexCompatibilityStatus {
     Blocked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexRuntimeReasonCode {
+    NotFound,
+    Outdated,
+    ManualPath,
+    MissingAppServer,
+    NotLoggedIn,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexRuntimeCandidateOutcome {
+    Selected,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeCandidate {
+    source: CodexRuntimeSource,
+    path: String,
+    version: Option<String>,
+    outcome: CodexRuntimeCandidateOutcome,
+    reason_code: Option<CodexRuntimeReasonCode>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexRuntimeProbe {
@@ -100,8 +128,9 @@ pub struct CodexRuntimeProbe {
     minimum_candidate: &'static str,
     verified_versions: &'static [&'static str],
     compatibility_status: CodexCompatibilityStatus,
-    reason_code: Option<String>,
+    reason_code: Option<CodexRuntimeReasonCode>,
     reason: Option<String>,
+    candidates: Vec<CodexRuntimeCandidate>,
 }
 
 impl CodexRuntimeProbe {
@@ -111,8 +140,9 @@ impl CodexRuntimeProbe {
         executable_path: Option<String>,
         source: Option<CodexRuntimeSource>,
         compatibility_status: CodexCompatibilityStatus,
-        reason_code: Option<String>,
+        reason_code: Option<CodexRuntimeReasonCode>,
         reason: Option<String>,
+        candidates: Vec<CodexRuntimeCandidate>,
     ) -> Self {
         Self {
             ready,
@@ -125,6 +155,7 @@ impl CodexRuntimeProbe {
             compatibility_status,
             reason_code,
             reason,
+            candidates,
         }
     }
 }
@@ -363,11 +394,403 @@ fn classify_codex_version(version: &str) -> Result<CodexCompatibilityStatus, Str
 
 fn unsupported_codex_version_message(version: &str) -> String {
     format!(
-        "找到 Codex {version}；{CODEX_MINIMUM_CANDIDATE} 仍是候选下限，\
-         当前最低已验证版本为 {CODEX_PROTOCOL_BASELINE}，请升级 Codex"
+        "找到 Codex {version}，但低于 RocketX 所需的协议基线 \
+         {CODEX_PROTOCOL_BASELINE}；请升级后重新检测"
     )
 }
 
+fn probe_display_path(path: &Path) -> String {
+    path.canonicalize()
+        .map(|canonical| host_path(&canonical))
+        .unwrap_or_else(|_| host_path(path))
+}
+
+fn codex_runtime_candidate(
+    source: CodexRuntimeSource,
+    path: String,
+    version: Option<String>,
+    outcome: CodexRuntimeCandidateOutcome,
+    reason_code: Option<CodexRuntimeReasonCode>,
+) -> CodexRuntimeCandidate {
+    CodexRuntimeCandidate {
+        source,
+        path,
+        version,
+        outcome,
+        reason_code,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CodexRuntimeProbeFailure {
+    source: Option<CodexRuntimeSource>,
+    executable_path: Option<String>,
+    version: Option<String>,
+    compatibility_status: CodexCompatibilityStatus,
+    reason_code: CodexRuntimeReasonCode,
+    reason: String,
+}
+
+struct CodexRuntimeScan {
+    resolved: Option<ResolvedCodex>,
+    compatibility_status: CodexCompatibilityStatus,
+    reason_code: Option<CodexRuntimeReasonCode>,
+    reason: Option<String>,
+    candidates: Vec<CodexRuntimeCandidate>,
+}
+
+fn codex_runtime_failure_rank(reason_code: CodexRuntimeReasonCode) -> usize {
+    match reason_code {
+        CodexRuntimeReasonCode::NotLoggedIn => 0,
+        CodexRuntimeReasonCode::MissingAppServer => 1,
+        CodexRuntimeReasonCode::Outdated => 2,
+        CodexRuntimeReasonCode::Unavailable => 3,
+        CodexRuntimeReasonCode::NotFound => 4,
+        CodexRuntimeReasonCode::ManualPath => 5,
+    }
+}
+
+fn replace_probe_failure(
+    current: &Option<CodexRuntimeProbeFailure>,
+    next: &CodexRuntimeProbeFailure,
+) -> bool {
+    current.as_ref().is_none_or(|existing| {
+        codex_runtime_failure_rank(next.reason_code)
+            < codex_runtime_failure_rank(existing.reason_code)
+    })
+}
+
+fn codex_runtime_scan_from_candidates_with<VersionProbe, CapabilityProbe, LoginProbe>(
+    manual_path: Option<&Path>,
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+    bundled_paths: &[PathBuf],
+    mut version_probe: VersionProbe,
+    mut capability_probe: CapabilityProbe,
+    mut login_probe: LoginProbe,
+) -> CodexRuntimeScan
+where
+    VersionProbe: FnMut(&ResolvedCodex) -> Result<String, String>,
+    CapabilityProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+    LoginProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+{
+    let manual_mode = manual_path.is_some();
+    let mut candidates = Vec::new();
+    let mut best_failure = None;
+    let manual_paths = manual_path.map(|path| vec![path.to_path_buf()]);
+    let candidate_groups: Vec<(&[PathBuf], CodexRuntimeSource)> =
+        if let Some(paths) = manual_paths.as_ref() {
+            vec![(paths.as_slice(), CodexRuntimeSource::Manual)]
+        } else {
+            vec![
+                (system_paths, CodexRuntimeSource::System),
+                (standard_paths, CodexRuntimeSource::System),
+                (bundled_paths, CodexRuntimeSource::Bundled),
+            ]
+        };
+
+    for (paths, source) in candidate_groups {
+        for path in paths {
+            let display_path = probe_display_path(path);
+            if !path.is_file() {
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    display_path.clone(),
+                    None,
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::NotFound),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(display_path),
+                    version: None,
+                    compatibility_status: CodexCompatibilityStatus::Blocked,
+                    reason_code: CodexRuntimeReasonCode::NotFound,
+                    reason: "未检测到可用的 Codex".to_string(),
+                };
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            let mut resolved = match resolved_codex_path(path, source) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        display_path.clone(),
+                        None,
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(display_path),
+                        version: None,
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+
+            let version = match version_probe(&resolved) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        resolved.display_path.clone(),
+                        None,
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(resolved.display_path.clone()),
+                        version: None,
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+            resolved.version = version.clone();
+
+            let compatibility_status = match classify_codex_version(&version) {
+                Ok(value) => value,
+                Err(reason) => {
+                    candidates.push(codex_runtime_candidate(
+                        source,
+                        resolved.display_path.clone(),
+                        Some(version.clone()),
+                        CodexRuntimeCandidateOutcome::Rejected,
+                        Some(CodexRuntimeReasonCode::Unavailable),
+                    ));
+                    let failure = CodexRuntimeProbeFailure {
+                        source: Some(source),
+                        executable_path: Some(resolved.display_path.clone()),
+                        version: Some(version),
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: CodexRuntimeReasonCode::Unavailable,
+                        reason,
+                    };
+                    if replace_probe_failure(&best_failure, &failure) {
+                        best_failure = Some(failure);
+                    }
+                    continue;
+                }
+            };
+
+            if compatibility_status == CodexCompatibilityStatus::Blocked {
+                let reason = unsupported_codex_version_message(&resolved.version);
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::Outdated),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status: CodexCompatibilityStatus::Blocked,
+                    reason_code: CodexRuntimeReasonCode::Outdated,
+                    reason,
+                };
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                if manual_mode {
+                    let reason = format!(
+                        "手动指定的 Codex 不可用：{}",
+                        unsupported_codex_version_message(&resolved.version)
+                    );
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status: CodexCompatibilityStatus::Blocked,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(reason),
+                        candidates,
+                    };
+                }
+                continue;
+            }
+
+            if let Err(reason) = capability_probe(&resolved) {
+                let reason = format!("Codex 缺少 app-server 能力：{reason}");
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::MissingAppServer),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status,
+                    reason_code: CodexRuntimeReasonCode::MissingAppServer,
+                    reason: reason.clone(),
+                };
+                if manual_mode {
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(format!("手动指定的 Codex 不可用：{reason}")),
+                        candidates,
+                    };
+                }
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            if let Err(reason) = login_probe(&resolved) {
+                let reason = format!("Codex 尚未登录：{reason}");
+                candidates.push(codex_runtime_candidate(
+                    source,
+                    resolved.display_path.clone(),
+                    Some(resolved.version.clone()),
+                    CodexRuntimeCandidateOutcome::Rejected,
+                    Some(CodexRuntimeReasonCode::NotLoggedIn),
+                ));
+                let failure = CodexRuntimeProbeFailure {
+                    source: Some(source),
+                    executable_path: Some(resolved.display_path.clone()),
+                    version: Some(resolved.version.clone()),
+                    compatibility_status,
+                    reason_code: CodexRuntimeReasonCode::NotLoggedIn,
+                    reason: reason.clone(),
+                };
+                if manual_mode {
+                    return CodexRuntimeScan {
+                        resolved: Some(resolved),
+                        compatibility_status,
+                        reason_code: Some(CodexRuntimeReasonCode::ManualPath),
+                        reason: Some(format!("手动指定的 Codex 不可用：{reason}")),
+                        candidates,
+                    };
+                }
+                if replace_probe_failure(&best_failure, &failure) {
+                    best_failure = Some(failure);
+                }
+                continue;
+            }
+
+            candidates.push(codex_runtime_candidate(
+                source,
+                resolved.display_path.clone(),
+                Some(resolved.version.clone()),
+                CodexRuntimeCandidateOutcome::Selected,
+                None,
+            ));
+            return CodexRuntimeScan {
+                resolved: Some(resolved),
+                compatibility_status,
+                reason_code: None,
+                reason: None,
+                candidates,
+            };
+        }
+    }
+
+    let failure = best_failure.unwrap_or(CodexRuntimeProbeFailure {
+        source: None,
+        executable_path: None,
+        version: None,
+        compatibility_status: CodexCompatibilityStatus::Blocked,
+        reason_code: CodexRuntimeReasonCode::NotFound,
+        reason: "未检测到可用的 Codex".to_string(),
+    });
+    let reason_code = if manual_mode {
+        CodexRuntimeReasonCode::ManualPath
+    } else {
+        failure.reason_code
+    };
+    let reason = if manual_mode {
+        format!("手动指定的 Codex 不可用：{}", failure.reason)
+    } else {
+        failure.reason
+    };
+    let failure_path = failure.executable_path.clone();
+    let failure_source = failure.source;
+    let failure_version = failure.version.clone();
+    CodexRuntimeScan {
+        resolved: failure_path
+            .clone()
+            .zip(failure_source)
+            .map(|(display_path, source)| ResolvedCodex {
+                program: PathBuf::new(),
+                prefix_args: Vec::new(),
+                display_path,
+                source,
+                version: failure_version.clone().unwrap_or_default(),
+            }),
+        compatibility_status: failure.compatibility_status,
+        reason_code: Some(reason_code),
+        reason: Some(reason),
+        candidates,
+    }
+}
+
+fn codex_runtime_probe_from_candidates_with<VersionProbe, CapabilityProbe, LoginProbe>(
+    manual_path: Option<&Path>,
+    system_paths: &[PathBuf],
+    standard_paths: &[PathBuf],
+    bundled_paths: &[PathBuf],
+    version_probe: VersionProbe,
+    capability_probe: CapabilityProbe,
+    login_probe: LoginProbe,
+) -> CodexRuntimeProbe
+where
+    VersionProbe: FnMut(&ResolvedCodex) -> Result<String, String>,
+    CapabilityProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+    LoginProbe: FnMut(&ResolvedCodex) -> Result<(), String>,
+{
+    let scan = codex_runtime_scan_from_candidates_with(
+        manual_path,
+        system_paths,
+        standard_paths,
+        bundled_paths,
+        version_probe,
+        capability_probe,
+        login_probe,
+    );
+    let (version, executable_path, source) = if let Some(resolved) = scan.resolved.as_ref() {
+        (
+            Some(resolved.version.clone()),
+            Some(resolved.display_path.clone()),
+            Some(resolved.source),
+        )
+    } else {
+        (None, None, None)
+    };
+    CodexRuntimeProbe::new(
+        scan.reason_code.is_none(),
+        version,
+        executable_path,
+        source,
+        scan.compatibility_status,
+        scan.reason_code,
+        scan.reason,
+        scan.candidates,
+    )
+}
+
+#[cfg(test)]
 fn probe_codex_candidate<F>(
     path: &Path,
     source: CodexRuntimeSource,
@@ -383,6 +806,7 @@ where
     Ok((resolved, status))
 }
 
+#[cfg(test)]
 fn probe_resolve_codex_from_candidates_with_probe<F>(
     manual_path: Option<&Path>,
     system_paths: &[PathBuf],
@@ -434,6 +858,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn resolve_codex_from_candidates_with_probe<F>(
     manual_path: Option<&Path>,
     system_paths: &[PathBuf],
@@ -468,13 +893,23 @@ fn resolve_codex_from_candidates(
     standard_paths: &[PathBuf],
     bundled_paths: &[PathBuf],
 ) -> Result<ResolvedCodex, String> {
-    resolve_codex_from_candidates_with_probe(
+    let scan = codex_runtime_scan_from_candidates_with(
         manual_path,
         system_paths,
         standard_paths,
         bundled_paths,
         codex_cli_version,
-    )
+        |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
+        |resolved| codex_command_succeeds(resolved, &["login", "status"]),
+    );
+    if scan.reason_code.is_none() {
+        return scan
+            .resolved
+            .ok_or_else(|| "未检测到可用的 Codex".to_string());
+    }
+    Err(scan
+        .reason
+        .unwrap_or_else(|| "未检测到可用的 Codex".to_string()))
 }
 
 fn configured_manual_codex_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -662,80 +1097,19 @@ pub fn codex_runtime_probe(
             None,
             None,
             CodexCompatibilityStatus::Blocked,
-            Some("manual-path".to_string()),
+            Some(CodexRuntimeReasonCode::ManualPath),
             Some(reason),
+            Vec::new(),
         );
     }
-    let (resolved, compatibility_status) = match probe_resolve_codex_from_candidates_with_probe(
+    codex_runtime_probe_from_candidates_with(
         configured_manual_codex_path(&app).as_deref(),
         &system_codex_paths(),
         &standard_codex_paths(),
         &bundled_codex_paths(&app),
         codex_cli_version,
-    ) {
-        Ok(value) => value,
-        Err(reason) => {
-            let reason_code = if reason.contains("未检测到可用的 Codex") {
-                "not-found"
-            } else if reason.contains(CODEX_PROTOCOL_BASELINE) {
-                "outdated"
-            } else if reason.starts_with("手动指定的 Codex") {
-                "manual-path"
-            } else {
-                "unavailable"
-            };
-            return CodexRuntimeProbe::new(
-                false,
-                None,
-                None,
-                None,
-                CodexCompatibilityStatus::Blocked,
-                Some(reason_code.to_string()),
-                Some(reason),
-            );
-        }
-    };
-    if compatibility_status == CodexCompatibilityStatus::Blocked {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version.clone()),
-            Some(resolved.display_path.clone()),
-            Some(resolved.source),
-            CodexCompatibilityStatus::Blocked,
-            Some("outdated".to_string()),
-            Some(unsupported_codex_version_message(&resolved.version)),
-        );
-    }
-    if let Err(reason) = codex_command_succeeds(&resolved, &["app-server", "--help"]) {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version),
-            Some(resolved.display_path),
-            Some(resolved.source),
-            CodexCompatibilityStatus::Blocked,
-            Some("missing-app-server".to_string()),
-            Some(format!("Codex 缺少 app-server 能力：{reason}")),
-        );
-    }
-    if let Err(reason) = codex_command_succeeds(&resolved, &["login", "status"]) {
-        return CodexRuntimeProbe::new(
-            false,
-            Some(resolved.version),
-            Some(resolved.display_path),
-            Some(resolved.source),
-            compatibility_status,
-            Some("not-logged-in".to_string()),
-            Some(format!("Codex 尚未登录：{reason}")),
-        );
-    }
-    CodexRuntimeProbe::new(
-        true,
-        Some(resolved.version),
-        Some(resolved.display_path),
-        Some(resolved.source),
-        compatibility_status,
-        None,
-        None,
+        |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
+        |resolved| codex_command_succeeds(resolved, &["login", "status"]),
     )
 }
 
@@ -2397,15 +2771,17 @@ mod tests {
     #[cfg(windows)]
     use super::ResolvedCodex;
     use super::{
-        app_server_args_for_help, classify_codex_version, decode_attachment_request,
-        encode_message, host_path, parse_codex_cli_version, parse_semantic_version,
-        probe_resolve_codex_from_candidates_with_probe, read_codex_artifact, redact_json_secret,
-        resolve_codex_from_candidates_with_probe, resolve_update_package,
-        run_business_azure_devops_server_read_with, run_butler_azure_devops_server_read,
-        safe_attachment_path, standalone_azure_devops_server_adapter_path,
+        app_server_args_for_help, classify_codex_version, codex_runtime_probe_from_candidates_with,
+        decode_attachment_request, encode_message, host_path, parse_codex_cli_version,
+        parse_semantic_version, probe_resolve_codex_from_candidates_with_probe,
+        read_codex_artifact, redact_json_secret, resolve_codex_from_candidates_with_probe,
+        resolve_update_package, run_business_azure_devops_server_read_with,
+        run_butler_azure_devops_server_read, safe_attachment_path,
+        standalone_azure_devops_server_adapter_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus,
-        CodexProcessInfo, CodexRuntimeProbe, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
+        CodexProcessInfo, CodexRuntimeCandidate, CodexRuntimeCandidateOutcome, CodexRuntimeProbe,
+        CodexRuntimeReasonCode, CodexRuntimeSource, AZURE_DEVOPS_SERVER_BODY_LIMIT,
         AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE,
         CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
     };
@@ -3316,6 +3692,195 @@ param(
     }
 
     #[test]
+    fn runtime_probe_reports_rejected_candidate_before_selected_fallback() {
+        let root = unique_temp_dir("runtime-probe-candidates");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.1".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.source, Some(CodexRuntimeSource::System));
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.reason_code, None);
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].outcome,
+            CodexRuntimeCandidateOutcome::Rejected
+        );
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Outdated)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        assert_eq!(probe.candidates[1].version.as_deref(), Some("0.144.4"));
+
+        let manual = codex_runtime_probe_from_candidates_with(
+            Some(&system),
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |_| Ok("0.144.1".to_string()),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+        assert!(!manual.ready);
+        assert_eq!(manual.reason_code, Some(CodexRuntimeReasonCode::ManualPath));
+        assert_eq!(manual.candidates.len(), 1);
+        assert_eq!(
+            manual.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Outdated)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_skips_candidate_without_app_server() {
+        let root = unique_temp_dir("runtime-probe-missing-app-server");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.5".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Err("app-server missing".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::MissingAppServer)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_skips_candidate_with_unparseable_version() {
+        let root = unique_temp_dir("runtime-probe-invalid-version");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("nightly".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert!(probe.ready);
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        assert_eq!(
+            probe.candidates[0].reason_code,
+            Some(CodexRuntimeReasonCode::Unavailable)
+        );
+        assert_eq!(
+            probe.candidates[1].outcome,
+            CodexRuntimeCandidateOutcome::Selected
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_probe_prefers_deeper_failure_when_no_candidate_succeeds() {
+        let root = unique_temp_dir("runtime-probe-failure-priority");
+        let system = root.join("system").join("codex.exe");
+        let standard = root.join("standard").join("codex.exe");
+        for path in [&system, &standard] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"test").unwrap();
+        }
+
+        let probe = codex_runtime_probe_from_candidates_with(
+            None,
+            std::slice::from_ref(&system),
+            std::slice::from_ref(&standard),
+            &[],
+            |candidate| {
+                if candidate.display_path.contains("system") {
+                    Ok("0.144.1".to_string())
+                } else {
+                    Ok("0.144.4".to_string())
+                }
+            },
+            |_| Ok(()),
+            |candidate| {
+                if candidate.display_path.contains("standard") {
+                    Err("not logged in".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(!probe.ready);
+        assert_eq!(probe.reason_code, Some(CodexRuntimeReasonCode::NotLoggedIn));
+        assert_eq!(probe.version.as_deref(), Some("0.144.4"));
+        assert_eq!(probe.candidates.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn codex_version_contract_classifies_candidate_baseline_and_newer_versions() {
         assert_eq!(parse_semantic_version("0.140.0"), Some((0, 140, 0)));
         assert_eq!(parse_semantic_version("0.145.0-beta.1"), Some((0, 145, 0)));
@@ -3351,6 +3916,13 @@ param(
     }
 
     #[test]
+    fn unsupported_version_message_only_names_protocol_baseline() {
+        let message = super::unsupported_codex_version_message("0.144.1");
+        assert!(message.contains("0.144.4"));
+        assert!(!message.contains("0.140.0"));
+    }
+
+    #[test]
     fn codex_runtime_contract_and_sources_serialize() {
         let probe = serde_json::to_value(CodexRuntimeProbe {
             ready: true,
@@ -3363,6 +3935,13 @@ param(
             compatibility_status: CodexCompatibilityStatus::Verified,
             reason_code: None,
             reason: None,
+            candidates: vec![CodexRuntimeCandidate {
+                source: CodexRuntimeSource::Manual,
+                path: "C:\\Tools\\codex.exe".to_string(),
+                version: Some("0.144.4".to_string()),
+                outcome: CodexRuntimeCandidateOutcome::Selected,
+                reason_code: None,
+            }],
         })
         .unwrap();
         assert_eq!(probe["source"], "manual");
@@ -3371,6 +3950,8 @@ param(
         assert_eq!(probe["verifiedVersions"], json!(["0.144.4"]));
         assert_eq!(probe["compatibilityStatus"], "verified");
         assert!(probe["reasonCode"].is_null());
+        assert_eq!(probe["candidates"][0]["outcome"], "selected");
+        assert_eq!(probe["candidates"][0]["path"], "C:\\Tools\\codex.exe");
         let process = serde_json::to_value(CodexProcessInfo {
             process_id: "test-process".to_string(),
             version: "0.144.4".to_string(),
