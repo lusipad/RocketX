@@ -55,7 +55,7 @@
 5. 主窗口默认不抢先显示：普通启动在 setup 中显式显示；系统登录启动保持隐藏并驻留托盘；第二个手动实例只唤起已有窗口，不创建新进程。
 6. 全新正式桌面安装在首次设置中默认勾选系统通知与登录启动；只有用户明确继续后才逐项写入并回读，旧安装升级只迁移设备记录而不改变现状。
 7. 用户可选择 `80% / 90% / 100% / 110% / 125% / 150%` 六档界面缩放；桌面端通过原生 WebView 缩放应用并按设备保存，`Ctrl/Cmd +`、`Ctrl/Cmd -`、`Ctrl/Cmd 0` 可快速调整或复位。
-8. 更新检查按配置源获取清单，并使用内置公钥/签名机制安装。
+8. 更新检查按配置源获取清单，并使用内置公钥/签名机制安装；共享目录源在启动与手动检查时都按当前 NSIS/MSI 安装类型选包，一键交给临时 helper 静默安装、校验新版本并重启。
 9. 图片 OCR 优先使用随全量包提供的增强本地资源；支持的平台可按实现回退系统 OCR。
 
 ### 4.3 性能模式
@@ -71,7 +71,7 @@
 - `桌面默认 fresh/applied/legacy-migrated`：设备级版本记录决定是否展示一次性系统能力选择，与登录账号无关。
 - `桌面缩放`：只允许六个固定档位；原生调用成功后才更新设备偏好，失败时保留原档位并提示。
 - `真正退出`：停止调度器、受管 Codex 和其他本机后台任务。
-- `更新可用/下载中/待重启/失败`：每阶段有明确动作和错误。
+- `更新可用/交接中/安装中/已重启/失败`：同一时刻只允许一条更新流，每阶段有明确动作和错误。
 - `OCR 可用/降级/不可用`：展示实际引擎或资源缺失原因。
 - `性能模式`：界面和副作用同时关闭，不只是隐藏导航。
 
@@ -99,7 +99,7 @@
 ## 8. 权限与安全
 
 - Web 环境不得调用 Tauri invoke/listen；平台检测必须在动作前完成。
-- 外部 URL、更新清单和本地文件路径均需验证；更新产物必须通过签名/哈希门禁。
+- 外部 URL、更新清单和本地文件路径均需验证；共享目录产物在主进程与 helper 中都要重新确认目录边界、版本、安装类型和签名，阻止 TOCTOU 替换。
 - 开机启动只通过 Tauri autostart 插件读取和切换。
 - OCR 全程本地处理；输入大小和像素受限，避免资源耗尽。
 - 退出应用必须停止受管进程，避免用户以为已退出而任务仍在执行；关闭到托盘则需让用户看得见驻留语义。
@@ -114,6 +114,8 @@
 | 首次桌面默认部分失败 | 两项分别显示真实结果 | 另一项继续；可单项重试，仍允许进入应用 |
 | 原生界面缩放失败 | 保留原档位并显示错误 | 不写入失败档位；可从设置或快捷键重试 |
 | 更新源不可达/签名失败 | 显示自定义源错误或安静跳过默认离线检查 | 不安装不可信产物 |
+| 当前安装类型未知或缺少同类型产物 | 明确说明无法选择 NSIS/MSI 包 | 不静默切换安装类型 |
+| 静默安装退出码异常或版本复核失败 | 下次启动显示 helper 保存的失败原因 | 保留当前可启动版本并允许修复更新源后重试 |
 | OCR 资源缺失 | 显示降级引擎或不可用原因 | 可安装全量包；不上传图片到外部服务 |
 | 性能模式启用 | AI/OCR/例行入口关闭 | 切回标准模式后重新初始化，不保留半运行任务 |
 
@@ -123,7 +125,7 @@
 - `PLAT-AC-02`：Web 端不读取或修改开机启动、不启动本地 Codex、不调用原生文件路径动作。
 - `PLAT-AC-03`：关闭桌面窗口只隐藏到托盘；托盘恢复有效；真正退出终止进程。
 - `PLAT-AC-04`：开机启动开关从操作系统实际状态初始化，切换失败不显示假成功；系统登录启动只驻留托盘且不弹窗，重复启动不产生第二个进程。
-- `PLAT-AC-05`：更新安装必须经过签名/来源门禁，失败时不覆盖当前版本。
+- `PLAT-AC-05`：共享目录更新必须选择与当前安装类型一致且签名有效的 NSIS/MSI（含仅含一个安装器的签名 ZIP）；主进程退出后由临时 helper 非交互安装，退出码与新版本校验成功才重启并报告成功，失败不得假报完成。
 - `PLAT-AC-06`：全量包与精简包的 OCR 差异明确；两者都不包含 Codex。
 - `PLAT-AC-07`：性能模式同时关闭 AI、管家、共享 Agent、例行任务、Runtime 探测、OCR 和轮询，并减少动画。
 - `PLAT-AC-08`：未读状态在侧栏、标题、任务栏和托盘之间使用同一汇总口径。
@@ -135,7 +137,7 @@
 - 实现：`apps/web/src/lib/runtimeMode.ts`、`apps/web/src/lib/autostart.ts`、`apps/web/src/lib/firstRun.ts`
 - 实现：`apps/web/src/lib/uiScale.ts`、`apps/web/src/components/DesktopUiScaleBridge.tsx`、`apps/web/src/stores/uiPrefs.ts`
 - 实现：`apps/web/src/lib/tray.ts`、`apps/web/src/lib/unread.ts`
-- 实现：`apps/web/src/components/UpdaterBridge.tsx`、`apps/web/src/lib/updateSource.ts`
+- 实现：`apps/web/src/components/UpdaterBridge.tsx`、`apps/web/src/lib/updateSource.ts`、`apps/desktop/src-tauri/src/proc.rs`
 - 实现：`apps/web/src/lib/imageOcr.ts`、`apps/desktop/src-tauri/src/ocr.rs`
 - 实现：`apps/desktop/src-tauri/src/main.rs`、Tauri capabilities/config
 - 自动化：`scripts/regressions/autostart.test.ts`、`scripts/regressions/issue-264-performance-mode.test.ts`、`scripts/regressions/ui-scale.test.ts`
@@ -146,5 +148,5 @@
 ## 12. 已知差距与目标
 
 - Web 当前没有管家远端执行架构；它是消息与确定性工作界面的可用平台，不是完整桌面替代。
-- 操作系统通知、托盘、开机启动和更新仍需在 Windows/macOS/Linux 发布产物上分别做候选版人工验证。
+- 操作系统通知、托盘和开机启动仍需在 Windows/macOS/Linux 发布产物上分别做候选版人工验证；共享目录更新还必须在 Windows 候选版覆盖真实 UNC、UAC、NSIS、MSI、签名 ZIP、TOCTOU 与安装后版本复核矩阵，浏览器/Rust mock 不能替代该门禁。
 - 原生 WebView 缩放仍需在 Windows/macOS/Linux 发布产物上分别确认清晰度和快捷键行为；浏览器 mock 不能替代该门禁。

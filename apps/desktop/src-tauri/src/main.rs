@@ -476,6 +476,19 @@ mod tray_icon_tests {
 
 fn main() {
     let launch_args = std::env::args().collect::<Vec<_>>();
+    if proc::maybe_print_version(&launch_args) {
+        return;
+    }
+    if launch_args
+        .iter()
+        .any(|argument| argument == "--apply-update-helper")
+    {
+        if let Err(error) = proc::maybe_run_update_helper(&launch_args) {
+            eprintln!("rocketx-update-helper: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if launch_args
         .iter()
         .any(|argument| argument == "--business-mcp")
@@ -541,6 +554,7 @@ fn main() {
             proc::check_signed_http_update,
             proc::read_update_manifest_dir,
             proc::launch_update_installer,
+            proc::take_update_result,
             proc::codex_agent_attachment_write,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,

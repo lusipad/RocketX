@@ -8,7 +8,7 @@ import { ensureHttpOrigin, httpFetch } from './http';
  * 更新语义，内网诉求由后两者覆盖。
  */
 export type UpdateSourceKind = 'github' | 'http' | 'dir';
-
+export type UpdateInstallerType = 'nsis' | 'msi';
 export interface UpdateSourceConfig {
   kind: UpdateSourceKind;
   /** http：托管目录或 latest.json 的 URL；dir：共享目录路径；github 忽略 */
@@ -28,8 +28,24 @@ export interface UpdateProbe {
   installerPath?: string;
   /** dir 源：Tauri Minisign 签名，启动前再次验证以阻止 TOCTOU 替换 */
   signature?: string;
+  /** dir 源：必须与当前 RocketX 安装类型一致，禁止 NSIS/MSI 静默切换 */
+  installerType?: UpdateInstallerType;
   /** http 源：Windows 安装包的下载地址 */
   downloadUrl?: string;
+}
+
+export interface UpdateInstallResult {
+  status: 'success' | 'error';
+  version: string;
+  message: string;
+}
+
+interface DirUpdateInstallRequest {
+  dir: string;
+  path: string;
+  signature: string;
+  expectedVersion: string;
+  installerType: UpdateInstallerType;
 }
 
 const KEY = 'rcx-update-source';
@@ -124,21 +140,49 @@ export async function probeHttpSource(location: string, currentVersion: string):
 
 export async function probeDirSource(location: string, currentVersion: string): Promise<UpdateProbe> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const result = await invoke<{ manifest: string; installerPath: string | null; signature: string | null }>(
-    'read_update_manifest_dir',
-    { dir: location.trim() },
-  );
+  const result = await invoke<{
+    manifest: string;
+    installerPath: string | null;
+    signature: string | null;
+    version: string;
+    installerType: UpdateInstallerType | null;
+  }>('read_update_manifest_dir', { dir: location.trim() });
   const probe = parseUpdateManifest(result.manifest, currentVersion);
+  if (result.version.replace(/^v/i, '') !== probe.version) {
+    throw new Error('更新清单版本与已验证安装包不一致');
+  }
+  if (result.installerPath && (!result.signature || !result.installerType)) {
+    throw new Error('更新包缺少签名或安装类型');
+  }
   return {
     ...probe,
     installerPath: result.installerPath ?? undefined,
     signature: result.signature ?? undefined,
+    installerType: result.installerType ?? undefined,
   };
 }
 
-export async function launchDirInstaller(dir: string, path: string, signature: string): Promise<void> {
+let dirInstallInFlight: Promise<void> | null = null;
+
+/** helper 接管成功后真正退出主进程；失败时释放 singleflight 以允许重试。 */
+export function launchDirInstaller(request: DirUpdateInstallRequest): Promise<void> {
+  if (dirInstallInFlight) return dirInstallInFlight;
+  dirInstallInFlight = (async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('launch_update_installer', { ...request });
+    const { exit } = await import('@tauri-apps/plugin-process');
+    await exit(0);
+  })().catch((error) => {
+    dirInstallInFlight = null;
+    throw error;
+  });
+  return dirInstallInFlight;
+}
+
+/** helper 的安装结果跨进程保存；读取后由 Rust 原子消费。 */
+export async function takeUpdateResult(): Promise<UpdateInstallResult | null> {
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('launch_update_installer', { dir, path, signature });
+  return invoke<UpdateInstallResult | null>('take_update_result');
 }
 
 /** HTTP 更新源走 Tauri 原生 updater：运行时端点仍使用内置公钥验签。 */

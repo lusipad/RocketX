@@ -5,6 +5,7 @@ import {
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
+  takeUpdateResult,
 } from '../lib/updateSource';
 import { toast } from '../stores/toast';
 
@@ -71,13 +72,20 @@ async function checkCustomSource(): Promise<void> {
   const probe = await probeConfiguredSource(config, __APP_VERSION__);
   if (!probe.hasUpdate) return;
 
-  const action = probe.installerPath
+  const action = probe.installerPath && probe.signature && probe.installerType
     ? {
-        label: '安装更新',
+        label: `更新到 v${probe.version} 并重启`,
         onClick: () => {
-          void launchDirInstaller(config.location, probe.installerPath!, probe.signature!)
-            .then(() => toast.info('安装包已启动，请按安装向导完成更新'))
-            .catch((error) => toast.error(error, '启动安装包失败'));
+          const toastId = toast.loading(`正在退出并安装 RocketX ${probe.version}…`);
+          void launchDirInstaller({
+            dir: config.location,
+            path: probe.installerPath!,
+            signature: probe.signature!,
+            expectedVersion: probe.version,
+            installerType: probe.installerType!,
+          }).catch((error) => {
+            toast.update(toastId, { kind: 'error', message: String(error) });
+          });
         },
       }
     : undefined;
@@ -94,6 +102,17 @@ export default function UpdaterBridge() {
   useEffect(() => {
     if (!isTauri || checked) return;
     checked = true;
+
+    void takeUpdateResult()
+      .then((result) => {
+        if (!result) return;
+        if (result.status === 'success') {
+          toast.success(result.message || `RocketX ${result.version} 已更新`);
+        } else {
+          toast.error(result.message || '安装未完成', '自动更新失败');
+        }
+      })
+      .catch(() => undefined);
 
     const config = loadUpdateSource();
     void (config.kind === 'github' ? checkGithubSource() : checkCustomSource()).catch((error) => {
