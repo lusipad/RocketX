@@ -41,6 +41,8 @@ import {
 import { loadTheme, saveTheme, type ThemeMode } from '../lib/theme';
 import { notifyPermissionGranted, requestNotifyPermission } from '../lib/notify';
 import { clearTaskbarFlash } from '../lib/taskbar';
+import { applyDesktopUiScale } from '../lib/desktopUiScale';
+import { UI_SCALE_OPTIONS, normalizeUiScale, type UiScale } from '../lib/uiScale';
 import {
   autostartAvailable,
   readAutostartEnabled,
@@ -538,6 +540,9 @@ function DesktopSection() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
+  const [scaleChanging, setScaleChanging] = useState(false);
+  const uiScale = useUiPrefs((s) => s.uiScale);
+  const setUiScale = useUiPrefs((s) => s.setUiScale);
 
   useEffect(() => {
     if (!autostartAvailable) return;
@@ -598,6 +603,20 @@ function DesktopSection() {
         : enabled
           ? '已开启，登录系统后会静默启动到托盘'
           : '已关闭';
+
+  const changeUiScale = async (value: `${UiScale}`) => {
+    const next = normalizeUiScale(Number(value));
+    setScaleChanging(true);
+    try {
+      await applyDesktopUiScale(next);
+      setUiScale(next);
+      toast.success(`界面缩放已设为 ${next}%`);
+    } catch (err) {
+      toast.error(err, '界面缩放设置失败');
+    } finally {
+      setScaleChanging(false);
+    }
+  };
 
   const exportLogs = async () => {
     setExporting(true);
@@ -668,6 +687,35 @@ function DesktopSection() {
           </div>
         </div>
       </Row>
+      {isTauri && (
+        <Row
+          label="界面缩放"
+          hint="默认 100%，保存在本机；也可使用 Ctrl/Cmd +、Ctrl/Cmd - 与 Ctrl/Cmd 0 快速调整"
+        >
+          <div role="radiogroup" aria-label="界面缩放" className="flex flex-wrap gap-3">
+            {UI_SCALE_OPTIONS.map((scale) => {
+              const selected = scale === uiScale;
+              return (
+                <button
+                  key={scale}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={scaleChanging}
+                  onClick={() => void changeUiScale(String(scale) as `${UiScale}`)}
+                  className={`min-w-24 rounded-lg border px-3 py-2.5 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    selected
+                      ? 'border-primary/70 bg-primary-light/60 font-medium text-primary'
+                      : 'border-line text-ink hover:border-ink-3 hover:bg-fill-hover'
+                  }`}
+                >
+                  {scale}%
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+      )}
       <Row
         label="断网时走局域网，联网后补回服务器"
         hint="广播只用于发现；设备必须先通过 Rocket.Chat 认证通道固定公钥"

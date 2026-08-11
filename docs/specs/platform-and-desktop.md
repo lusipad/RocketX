@@ -20,6 +20,7 @@
 - 原生文件对话框、保存、打开和定位；
 - 本地图片 OCR 与精简/全量包差异；
 - 标准/性能运行模式；
+- 原生 WebView 界面缩放与本机缩放偏好；
 - 桌面全局快捷键等本地桥接能力。
 
 ### 不包含
@@ -53,8 +54,9 @@
 4. 用户可在设置中读取/切换开机启动，由系统插件登记带 `--autostart` 来源标记的登录项，不直接手写注册表。
 5. 主窗口默认不抢先显示：普通启动在 setup 中显式显示；系统登录启动保持隐藏并驻留托盘；第二个手动实例只唤起已有窗口，不创建新进程。
 6. 全新正式桌面安装在首次设置中默认勾选系统通知与登录启动；只有用户明确继续后才逐项写入并回读，旧安装升级只迁移设备记录而不改变现状。
-7. 更新检查按配置源获取清单，并使用内置公钥/签名机制安装。
-8. 图片 OCR 优先使用随全量包提供的增强本地资源；支持的平台可按实现回退系统 OCR。
+7. 用户可选择 `80% / 90% / 100% / 110% / 125% / 150%` 六档界面缩放；桌面端通过原生 WebView 缩放应用并按设备保存，`Ctrl/Cmd +`、`Ctrl/Cmd -`、`Ctrl/Cmd 0` 可快速调整或复位。
+8. 更新检查按配置源获取清单，并使用内置公钥/签名机制安装。
+9. 图片 OCR 优先使用随全量包提供的增强本地资源；支持的平台可按实现回退系统 OCR。
 
 ### 4.3 性能模式
 
@@ -67,6 +69,7 @@
 - `Web`：不显示开机启动、托盘和本地文件成功态。
 - `桌面运行`：窗口可见或驻留托盘；两者都属于进程存活。
 - `桌面默认 fresh/applied/legacy-migrated`：设备级版本记录决定是否展示一次性系统能力选择，与登录账号无关。
+- `桌面缩放`：只允许六个固定档位；原生调用成功后才更新设备偏好，失败时保留原档位并提示。
 - `真正退出`：停止调度器、受管 Codex 和其他本机后台任务。
 - `更新可用/下载中/待重启/失败`：每阶段有明确动作和错误。
 - `OCR 可用/降级/不可用`：展示实际引擎或资源缺失原因。
@@ -80,6 +83,7 @@
 | 浏览器上传/下载 | 已实现 | 已实现 |
 | 选择本地目录、保存、打开、定位 | 已实现 | 不适用 |
 | 系统通知、托盘、任务栏、开机启动 | 已实现 | 不适用 |
+| 界面缩放 | 原生 WebView 六档缩放 | 使用浏览器原生缩放，不模拟 |
 | 签名自动更新 | 已实现 | 不适用；由 Web 部署方更新 |
 | 本地 OCR | 受限可用 | 不适用 |
 | 本地 Codex `app-server` | 受限可用 | 不可用 |
@@ -87,7 +91,7 @@
 
 ## 7. 数据与同步
 
-- 外观、运行模式、开机启动偏好、更新源和桌面布局保存在本机；开机启动实际状态以操作系统为准。
+- 外观、运行模式、界面缩放、开机启动偏好、更新源和桌面布局保存在本机；开机启动实际状态以操作系统为准。
 - 未读和消息内容以 Rocket.Chat 为真源，本地只汇总展示。
 - 下载路径、OCR 临时数据和 Codex 工作区不上传到 Rocket.Chat。
 - Web 与桌面共用账号时不会自动同步所有本地 UI 偏好和本机数据。
@@ -108,6 +112,7 @@
 | 系统拒绝通知 | 消息仍在应用内可见 | 引导系统设置，不重复轰炸 |
 | 开机启动读取/切换失败 | 保持最后已知 UI 并显示错误 | 重新读取系统状态，不能假报开启 |
 | 首次桌面默认部分失败 | 两项分别显示真实结果 | 另一项继续；可单项重试，仍允许进入应用 |
+| 原生界面缩放失败 | 保留原档位并显示错误 | 不写入失败档位；可从设置或快捷键重试 |
 | 更新源不可达/签名失败 | 显示自定义源错误或安静跳过默认离线检查 | 不安装不可信产物 |
 | OCR 资源缺失 | 显示降级引擎或不可用原因 | 可安装全量包；不上传图片到外部服务 |
 | 性能模式启用 | AI/OCR/例行入口关闭 | 切回标准模式后重新初始化，不保留半运行任务 |
@@ -123,15 +128,18 @@
 - `PLAT-AC-07`：性能模式同时关闭 AI、管家、共享 Agent、例行任务、Runtime 探测、OCR 和轮询，并减少动画。
 - `PLAT-AC-08`：未读状态在侧栏、标题、任务栏和托盘之间使用同一汇总口径。
 - `PLAT-AC-09`：全新正式桌面安装只在用户手势后应用通知与登录启动默认；升级、重跑引导和换账号不重新开启，Web/Debug 不触碰系统启动项。
+- `PLAT-AC-10`：桌面端只使用原生 WebView 在六个固定档位缩放，设置与快捷键共用同一设备偏好并在重启后恢复；Web 不显示入口、不拦截浏览器缩放快捷键。
 
 ## 11. 实现与测试证据
 
 - 实现：`apps/web/src/lib/runtimeMode.ts`、`apps/web/src/lib/autostart.ts`、`apps/web/src/lib/firstRun.ts`
+- 实现：`apps/web/src/lib/uiScale.ts`、`apps/web/src/components/DesktopUiScaleBridge.tsx`、`apps/web/src/stores/uiPrefs.ts`
 - 实现：`apps/web/src/lib/tray.ts`、`apps/web/src/lib/unread.ts`
 - 实现：`apps/web/src/components/UpdaterBridge.tsx`、`apps/web/src/lib/updateSource.ts`
 - 实现：`apps/web/src/lib/imageOcr.ts`、`apps/desktop/src-tauri/src/ocr.rs`
 - 实现：`apps/desktop/src-tauri/src/main.rs`、Tauri capabilities/config
-- 自动化：`scripts/regressions/autostart.test.ts`、`scripts/regressions/issue-264-performance-mode.test.ts`
+- 自动化：`scripts/regressions/autostart.test.ts`、`scripts/regressions/issue-264-performance-mode.test.ts`、`scripts/regressions/ui-scale.test.ts`
+- 自动化：`tests/ui/core-flows.spec.ts` 的桌面缩放/Web 隔离场景
 - 自动化：`scripts/regressions/update-source.test.ts`、`scripts/regressions/image-ocr.test.ts`
 - 自动化：托盘/任务栏相关回归与桌面 Rust tests
 
@@ -139,3 +147,4 @@
 
 - Web 当前没有管家远端执行架构；它是消息与确定性工作界面的可用平台，不是完整桌面替代。
 - 操作系统通知、托盘、开机启动和更新仍需在 Windows/macOS/Linux 发布产物上分别做候选版人工验证。
+- 原生 WebView 缩放仍需在 Windows/macOS/Linux 发布产物上分别确认清晰度和快捷键行为；浏览器 mock 不能替代该门禁。

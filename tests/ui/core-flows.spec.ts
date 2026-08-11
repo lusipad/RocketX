@@ -28,6 +28,10 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
+        metadata: {
+          currentWindow: { label: 'main' },
+          currentWebview: { label: 'main' },
+        },
         invoke: async (command: string, args?: Record<string, any>) => {
           if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
           if (command === 'plugin:http|fetch') {
@@ -159,11 +163,21 @@ async function installFullTauriMock(page: Page) {
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
+        metadata: {
+          currentWindow: { label: 'main' },
+          currentWebview: { label: 'main' },
+        },
         invoke: async (command: string, args?: unknown, options?: Record<string, any>) => {
           calls.push({ command, args, options });
           const invokeArgs = (args && typeof args === 'object' && !ArrayBuffer.isView(args) && !Array.isArray(args))
             ? (args as Record<string, any>)
             : undefined;
+          if (
+            command === 'plugin:webview|set_webview_zoom' &&
+            (window as unknown as { __failUiScale?: boolean }).__failUiScale
+          ) {
+            throw new Error('mock zoom failed');
+          }
           if (command === 'allow_http_origin') return new URL(String(invokeArgs?.origin)).origin;
           if (command === 'codex_default_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-projectless';
           if (command === 'codex_butler_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-butler';
@@ -677,6 +691,96 @@ test('禅模式默认关闭并可显式开启通知聚合（issue #208）', asyn
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  expect(pageErrors).toEqual([]);
+});
+
+test('桌面界面缩放恢复本机偏好，并支持固定档位与快捷键（issue #135）', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-ui-prefs', JSON.stringify({ uiScale: 125 }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  const zoomValues = () => page.evaluate(() => (
+    window as unknown as {
+      __tauriCalls: Array<{ command: string; args?: { value?: number } }>;
+    }
+  ).__tauriCalls
+    .filter((call) => call.command === 'plugin:webview|set_webview_zoom')
+    .map((call) => call.args?.value));
+
+  await expect.poll(zoomValues).toContain(1.25);
+
+  const zoomOutCancelled = await page.evaluate(() => !document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '-',
+    code: 'Minus',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  expect(zoomOutCancelled).toBe(true);
+  await expect.poll(zoomValues).toContain(1.1);
+  await expect.poll(() => page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(110);
+
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '0',
+    code: 'Digit0',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  await expect.poll(zoomValues).toContain(1);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '桌面端', exact: true }).click();
+  const scale150 = page.getByRole('radio', { name: '150%', exact: true });
+  await scale150.click();
+  await expect.poll(zoomValues).toContain(1.5);
+  await expect(scale150).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: '100%', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await expect.poll(() => page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(150);
+  await page.screenshot({ path: testInfo.outputPath('desktop-ui-scale-1080p.png'), fullPage: true });
+
+  await page.evaluate(() => {
+    (window as unknown as { __failUiScale?: boolean }).__failUiScale = true;
+  });
+  await page.getByRole('radio', { name: '125%', exact: true }).click();
+  await expect(page.getByText('mock zoom failed', { exact: true })).toBeVisible();
+  await expect(scale150).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => JSON.parse(
+    localStorage.getItem('rcx-ui-prefs') ?? '{}',
+  ).uiScale)).toBe(150);
+
+  const callsBeforeRetry = (await zoomValues()).length;
+  await page.evaluate(() => {
+    (window as unknown as { __failUiScale?: boolean }).__failUiScale = false;
+  });
+  await scale150.click();
+  await expect.poll(async () => (await zoomValues()).length).toBeGreaterThan(callsBeforeRetry);
+  await expect(page.getByText('界面缩放已设为 150%', { exact: true }).last()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('Web 保留浏览器原生缩放，不显示也不拦截桌面缩放入口（issue #135）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+
+  const cancelled = await page.evaluate(() => !document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '+',
+    code: 'Equal',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  expect(cancelled).toBe(false);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '桌面端', exact: true }).click();
+  await expect(page.getByText('界面缩放', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 

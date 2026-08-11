@@ -1,8 +1,9 @@
 import { create } from 'zustand';
+import { normalizeUiScale, type UiScale } from '../lib/uiScale';
 
 /**
  * 本机界面偏好（不走 RC 服务端 prefs——那是固定 schema，塞不进自定义键）。
- * 目前只有悬浮工具栏的触发延迟；以后本地性质的界面偏好都放这。
+ * 只保存设备本地的界面偏好，不跟随账号同步。
  */
 const KEY = 'rcx-ui-prefs';
 
@@ -13,11 +14,15 @@ interface UiPrefsState {
   /** Windows 任务栏是否持续闪烁；与托盘图标闪烁分开控制。 */
   taskbarFlash: boolean;
   setTaskbarFlash: (enabled: boolean) => void;
+  /** 桌面端原生界面缩放；只允许固定六档，设备本地保存。 */
+  uiScale: UiScale;
+  setUiScale: (scale: UiScale) => void;
 }
 
 interface StoredUiPrefs {
   hoverDelayMs?: number;
   taskbarFlash?: boolean;
+  uiScale?: unknown;
 }
 
 function load(): StoredUiPrefs {
@@ -28,23 +33,30 @@ function load(): StoredUiPrefs {
   }
 }
 
+function save(next: StoredUiPrefs): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next));
+  } catch {
+    /* 存储满/无痕 */
+  }
+}
+
+const initial = load();
+
 export const useUiPrefs = create<UiPrefsState>((set) => ({
-  hoverDelayMs: load().hoverDelayMs ?? 2000,
-  taskbarFlash: load().taskbarFlash ?? true,
+  hoverDelayMs: initial.hoverDelayMs ?? 2000,
+  taskbarFlash: initial.taskbarFlash ?? true,
+  uiScale: normalizeUiScale(initial.uiScale),
   setHoverDelayMs: (ms) => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify({ ...load(), hoverDelayMs: ms }));
-    } catch {
-      /* 存储满/无痕 */
-    }
+    save({ ...load(), hoverDelayMs: ms });
     set({ hoverDelayMs: ms });
   },
   setTaskbarFlash: (enabled) => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify({ ...load(), taskbarFlash: enabled }));
-    } catch {
-      /* 存储满/无痕 */
-    }
+    save({ ...load(), taskbarFlash: enabled });
     set({ taskbarFlash: enabled });
+  },
+  setUiScale: (scale) => {
+    save({ ...load(), uiScale: normalizeUiScale(scale) });
+    set({ uiScale: normalizeUiScale(scale) });
   },
 }));

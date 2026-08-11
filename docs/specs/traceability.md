@@ -104,6 +104,7 @@
 | `PLAT-AC-06` | Tauri bundle/OCR 配置 | `image-ocr.test.ts`、`codex-bundled-resource.test.ts` | 精简/全量产物审计 |
 | `PLAT-AC-07` | `lib/runtimeMode.ts` | `issue-264-performance-mode.test.ts` | 长时间资源观察 |
 | `PLAT-AC-08` | `lib/unread.ts`、`lib/tray.ts` | `tray-flash.test.ts`、`taskbar-badge.test.ts`、通知聚合 tests | 三平台 MAN |
+| `PLAT-AC-10` | `lib/uiScale.ts`、`components/DesktopUiScaleBridge.tsx`、`stores/uiPrefs.ts`、Tauri capability | `ui-scale.test.ts`、`tests/ui/core-flows.spec.ts` | 三平台 1080p 发布产物清晰度与快捷键 MAN |
 
 ## 8. 发布候选门禁
 
