@@ -1,6 +1,6 @@
 # 功能规格追踪索引
 
-> 基线：工作树 `2026-08-09`
+> 基线：工作树 `2026-08-11`
 > 用途：从验收 ID 定位当前实现、自动化证据和仍需真实验证的部分。
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
@@ -25,6 +25,7 @@
 | `ONB-AC-02`、`ONB-AC-03`、`ONB-AC-04` | `components/WorkspaceConfigImport.tsx`、`lib/workspaceConfig.ts` | `workspace-config.test.ts`、`workspace-config-source.test.ts` | 真实远程 Raw URL |
 | `ONB-AC-05` | `WorkspaceConfigImport.tsx`、`stores/auth.ts` | `workspace-config.test.ts`、`onboarding.test.ts` | 切换真实服务器 |
 | `ONB-AC-06` | `pages/LoginPage.tsx`、`lib/loginDiagnostic.ts` | `tests/ui/core-flows.spec.ts` | 真实错误分类 |
+| `ONB-AC-07`、`ONB-AC-08` | `pages/FirstRunPage.tsx`、`lib/firstRun.ts`、`lib/notify.ts`、`lib/autostart.ts` | `first-run.test.ts`、`autostart.test.ts`、`pnpm test:ui:release` | Windows/macOS/Linux 正式包首次安装与覆盖升级 MAN |
 
 ## 3. 消息与会话
 

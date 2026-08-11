@@ -6,11 +6,25 @@ const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'onl
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
+const RELEASE_DESKTOP_E2E = process.env.PLAYWRIGHT_RELEASE_MODE === '1';
 
 async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
   await page.addInitScript(({ config }) => {
     let responseUrl = '';
     let responseBodySent = false;
+    let autostartEnabled = false;
+    let notificationPermission: NotificationPermission = 'default';
+    Object.defineProperty(window.Notification, 'permission', {
+      configurable: true,
+      get: () => notificationPermission,
+    });
+    Object.defineProperty(window.Notification, 'requestPermission', {
+      configurable: true,
+      value: async () => {
+        notificationPermission = 'granted';
+        return notificationPermission;
+      },
+    });
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -53,6 +67,18 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
           if (command === 'mcp_config_status' || command === 'agent_bot_config_status') {
             return { enabled: false };
           }
+          if (command === 'plugin:notification|is_permission_granted') {
+            return notificationPermission === 'granted';
+          }
+          if (command === 'plugin:autostart|enable') {
+            autostartEnabled = true;
+            return null;
+          }
+          if (command === 'plugin:autostart|disable') {
+            autostartEnabled = false;
+            return null;
+          }
+          if (command === 'plugin:autostart|is_enabled') return autostartEnabled;
           if (command === 'plugin:updater|check') return null;
           return null;
         },
@@ -892,7 +918,7 @@ test('登录后进入主界面', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', async ({ page }, testInfo) => {
+test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -913,7 +939,26 @@ test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', 
   );
   expect(hasHorizontalOverflow).toBe(false);
 
-  await page.getByRole('button', { name: '继续：选择如何加入' }).click();
+  await page.getByRole('button', {
+    name: RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入',
+  }).click();
+  if (RELEASE_DESKTOP_E2E) {
+    await expect(page.getByRole('heading', { name: '桌面默认设置' })).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: /允许系统通知/ })).toBeChecked();
+    await expect(page.getByRole('checkbox', { name: /登录系统后启动 RocketX/ })).toBeChecked();
+    await page.screenshot({ path: testInfo.outputPath('desktop-defaults.png'), fullPage: true });
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await expect(page.getByText('已开启', { exact: true })).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => JSON.parse(
+      localStorage.getItem('rcx-desktop-defaults-v1') ?? '{}',
+    ))).toEqual({
+      version: 1,
+      status: 'applied',
+      notifications: 'enabled',
+      autostart: 'enabled',
+    });
+    await page.getByRole('button', { name: '继续加入团队' }).click();
+  }
   await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles({
@@ -952,7 +997,7 @@ test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', 
   expect(pageErrors).toEqual([]);
 });
 
-test('首次引导在 390px 下保持单列且关键操作可达', async ({ page }, testInfo) => {
+test('首次引导在 390px 下保持单列且关键操作可达', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 390, height: 844 });
@@ -960,17 +1005,27 @@ test('首次引导在 390px 下保持单列且关键操作可达', async ({ page
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /把大脑从“记住所有事”里解放出来/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '继续：选择如何加入' })).toBeVisible();
+  const expectedContinue = RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入';
+  await expect(page.getByRole('button', { name: expectedContinue })).toBeVisible();
   expect(await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )).toBe(false);
   await page.screenshot({ path: testInfo.outputPath('gtd-attention-onboarding-mobile.png'), fullPage: true });
 
-  const continueButton = page.getByRole('button', { name: '继续：选择如何加入' });
+  const continueButton = page.getByRole('button', { name: expectedContinue });
   await continueButton.scrollIntoViewIfNeeded();
   await expect(continueButton).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath('gtd-attention-onboarding-mobile-action.png') });
   await continueButton.click();
+  if (RELEASE_DESKTOP_E2E) {
+    await expect(page.getByRole('heading', { name: '桌面默认设置' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    await expect.poll(() => page.locator('#root').evaluate((element) => element.scrollTop)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath('desktop-defaults-mobile.png'), fullPage: true });
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await expect(page.getByText('已开启', { exact: true })).toHaveCount(2);
+    await page.getByRole('button', { name: '继续加入团队' }).click();
+  }
   await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
   expect(await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -978,7 +1033,7 @@ test('首次引导在 390px 下保持单列且关键操作可达', async ({ page
   expect(pageErrors).toEqual([]);
 });
 
-test('桌面重启后会重新授权并检查团队配置 URL', async ({ page }) => {
+test('桌面重启后会重新授权并检查团队配置 URL', { tag: '@release-desktop' }, async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await installTauriMock(page, {
@@ -1006,6 +1061,17 @@ test('桌面重启后会重新授权并检查团队配置 URL', async ({ page })
 
   await page.goto('/');
   await expect(page.getByText(/团队配置有更新：1 项变化/)).toBeVisible();
+  const desktopDefaults = await page.evaluate(() => localStorage.getItem('rcx-desktop-defaults-v1'));
+  if (RELEASE_DESKTOP_E2E) {
+    expect(JSON.parse(desktopDefaults ?? '{}')).toEqual({
+      version: 1,
+      status: 'legacy-migrated',
+      notifications: 'preserved',
+      autostart: 'preserved',
+    });
+  } else {
+    expect(desktopDefaults).toBeNull();
+  }
   expect(pageErrors).toEqual([]);
 });
 

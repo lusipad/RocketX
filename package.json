@@ -13,6 +13,7 @@
     "test:pure": "tsx scripts/test-pure.ts",
     "test:regression": "pnpm --filter @lusipad/rocketx build && tsx --test scripts/regressions/*.test.ts",
     "test:ui": "playwright test",
+    "test:ui:release": "playwright test --config playwright.release.config.ts --grep @release-desktop",
     "test:ecosystem": "node scripts/test-app-ecosystem.mjs",
     "codex:protocol:generate": "node scripts/codex-protocol.mjs --write",
     "codex:protocol:check": "node scripts/codex-protocol.mjs --check",
