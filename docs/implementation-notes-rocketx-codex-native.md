@@ -10,7 +10,7 @@
 - App Server 是唯一智能运行时；RocketX 业务能力通过 Skill、App/MCP 或确定性 Host adapter 接入。
 - 默认权限“替我审批”采用工作区权限边界内的 `guardian_subagent`，不再使用只读沙箱伪装可执行能力。
 - 运行中后续输入默认 Steer，可显式切换 Queue，与当前 Codex App 行为一致。
-- RocketX 与 Codex App 按顺序使用同一原生 Thread；标题栏的“从 Codex 刷新”会停止旧 Controller、重新连接并 `thread/resume` 同一 `threadId`，再加载外部新增 Turns。运行中或等待确认时禁止刷新。
+- RocketX 与 Codex App 按顺序使用同一原生 Thread；标题栏的“从 Codex 刷新”只取消目标 Thread 的订阅，在共享 Runtime 中重新 `thread/resume` 同一 `threadId`，再加载外部新增 Turns，不中断其他并行任务。运行中或等待确认时禁止刷新。
 - 直接以当前 Codex Runtime 为协议基线，插件管理、Skills 与 Apps/MCP 全部按 Codex App 语义实现；不兼容旧 Runtime。
 - Scheduled 暂由 RocketX 本地宿主保存，并显式标注来源。
 - 旧 Butler/Codex 双轨 Store、页面和回归契约直接退出，不做状态迁移或兼容桥。

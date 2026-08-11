@@ -2401,19 +2401,21 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   const { pageErrors } = await bootAuthenticated(page);
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
+    const { useAgentEnvironments } = await import('/src/stores/agentEnvironments.ts');
+    useAgentEnvironments.getState().ensureEnvironment({ path: 'D:\\Repos\\another-project' });
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\another-project');
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\rocketchatx');
   });
   await conversation(page, 'General').click();
   await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 rocketchatx/);
+  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 RocketChat X - 主目录/);
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
-  await expect(page.getByRole('button', { name: /rocketchatx（默认）/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /RocketChat X - 主目录（默认）/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
-  await page.getByRole('button', { name: '托管设置…' }).click();
-  await expect(page.getByText('AI 托管独立配置', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '在 AI 管家中调整' })).toBeVisible();
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
+  await page.getByRole('button', { name: '在 AI 管家中管理项目…' }).click();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：another-project' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

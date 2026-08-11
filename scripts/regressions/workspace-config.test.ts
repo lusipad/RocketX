@@ -72,6 +72,9 @@ test('解析配置：URL 规范化去尾斜杠，枚举和版本严格校验（i
   assert.equal('mode' in (config.ado ?? {}), false);
   assert.equal('ai' in config, false);
 
+  const bearerConfig = parseWorkspaceConfig('{"version":1,"ado":{"auth":"bearer"}}');
+  assert.equal(bearerConfig.ado?.auth, 'bearer');
+
   assert.throws(() => parseWorkspaceConfig('not json'), /JSON/);
   assert.throws(() => parseWorkspaceConfig('{"version":2}'), /版本/);
   assert.throws(

@@ -266,9 +266,7 @@ export default function ButlerRoutineCreateDialog({
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
-  const projectRoots = useAgentEnvironments((state) => state.environments
-    .filter((environment) => environment.enabled)
-    .map((environment) => environment.path));
+  const environments = useAgentEnvironments((state) => state.environments);
   const models = useCodexWorkspace((state) => state.models);
   const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const selectedEffort = useCodexWorkspace((state) => state.selectedEffort);
@@ -307,6 +305,9 @@ export default function ButlerRoutineCreateDialog({
   const [preserveCustomRrule, setPreserveCustomRrule] = useState(schedule.customUnsupported);
 
   const activeModel = models.find((item) => item.model === model || item.id === model);
+  const projectRoots = environments
+    .filter((environment) => environment.enabled)
+    .map((environment) => environment.path);
   const projectOptions = [...new Set([taskWorkspace, workspaceRoot, ...projectRoots]
     .filter((root): root is string => Boolean(root) && root !== '~' && root !== defaultWorkspaceRoot))];
   const selectedTaskWorkspace = taskWorkspace === defaultWorkspaceRoot ? '~' : taskWorkspace;

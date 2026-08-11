@@ -709,6 +709,9 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
     return useChat.getState().highlightMid;
   })).toBe('general-release');
 
+  await expect(panel).toHaveCount(0);
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await panel.getByRole('button', { name: '新建房间会话' }).click();
   await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
   await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
@@ -799,7 +802,7 @@ test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目�
   await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
 });
 
-test('从 Codex 刷新会硬重连同一线程并加载外部新增 Turn', async ({ page }) => {
+test('从 Codex 刷新会复用 Runtime 并加载外部新增 Turn', async ({ page }) => {
   await openWorkspace(page);
   await page.getByRole('navigation', { name: 'Codex 对话历史' })
     .getByRole('button', { name: /^候选版本准备/ })
@@ -825,7 +828,7 @@ test('从 Codex 刷新会硬重连同一线程并加载外部新增 Turn', async
       controllers: testWindow.__codexControllerCount,
       stops: testWindow.__codexStopCount,
     };
-  })).toEqual({ controllers: 2, stops: 1 });
+  })).toEqual({ controllers: 1, stops: 0 });
 });
 
 test('app-server 运行中退出会保留部分输出，并从原线程显式刷新恢复', async ({ page }) => {

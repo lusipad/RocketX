@@ -42,7 +42,7 @@
 4. 运行中需要审批或补充信息时，请求卡片出现在当前 Thread；用户处理后继续。
 5. 运行中用户可停止，或选择“立即调整”把后续消息 Steer 到当前 Turn，或“排队”在当前 Turn 完成后发送。
 6. 用户可以重命名、归档 Thread，或在 Codex App 中打开它。
-7. 若已在 Codex App 顺序继续，回到 RocketX 后点击“从 Codex 刷新”；RocketX 断开自己的进程、重新连接并恢复同一 Thread，读取新增 Turns。
+7. 若已在 Codex App 顺序继续，回到 RocketX 后点击“从 Codex 刷新”；RocketX 取消目标 Thread 的订阅，在共享 Runtime 中恢复同一 Thread 并读取新增 Turns，不中断其他并行任务。
 
 ## 5. 状态与交互
 

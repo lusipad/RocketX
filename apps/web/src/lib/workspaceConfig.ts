@@ -13,7 +13,7 @@ export interface WorkspaceConfig {
   rocketChat?: { url: string };
   ado?: {
     url?: string;
-    auth?: 'pat' | 'ntlm' | 'none';
+    auth?: 'pat' | 'ntlm' | 'bearer' | 'none';
     /** 消息里 #123 链接用的 Web 地址；不填时复用 url */
     webUrl?: string;
   };
@@ -138,7 +138,7 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
       }
     }
     if (raw.ado.auth !== undefined) {
-      ado.auth = oneOf(raw.ado.auth, ['pat', 'ntlm', 'none'] as const, 'ado.auth');
+      ado.auth = oneOf(raw.ado.auth, ['pat', 'ntlm', 'bearer', 'none'] as const, 'ado.auth');
     }
     if (raw.ado.webUrl !== undefined) ado.webUrl = normalizeUrl(raw.ado.webUrl, 'ado.webUrl');
     config.ado = ado;

@@ -904,6 +904,9 @@ async function onServerRequest(request: {
     }
     throw new Error(`无人值守任务不能处理 ${request.method}`);
   }
+  if (!threadId || !useCodexWorkspace.getState().threadStates[threadId]) {
+    throw new Error('请求不属于当前 Codex 任务');
+  }
   if (request.policy !== 'host-approval' && request.policy !== 'host-input') {
     throw new Error(`当前 Codex 工作区不接受 ${request.method}`);
   }
