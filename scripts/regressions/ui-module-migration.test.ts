@@ -4,6 +4,7 @@ import {
   DEFAULT_WORK_ITEM_STATE_FILTER,
   migratePersistedModule,
   readPersistedModule,
+  readPersistedWorkbenchTab,
   readPersistedWorkItemStateFilter,
   UI_MODULE_STORAGE_KEY,
   useUI,
@@ -26,7 +27,7 @@ test('退役的 today / ai-assistant / codex 持久化值不再迁移到新页�
   assert.equal(migratePersistedModule('ai-assistant'), 'messages');
   assert.equal(migratePersistedModule('codex'), 'messages');
   assert.equal(migratePersistedModule('butler-view'), 'butler-view');
-  assert.equal(migratePersistedModule('contributions'), 'contributions');
+  assert.equal(migratePersistedModule('contributions'), 'workbench');
   assert.equal(migratePersistedModule('downloads'), 'downloads');
   assert.equal(migratePersistedModule('unknown'), 'messages');
 
@@ -37,6 +38,17 @@ test('退役的 today / ai-assistant / codex 持久化值不再迁移到新页�
   assert.equal(readPersistedModule(storage), 'messages');
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'codex' } }));
   assert.equal(readPersistedModule(storage), 'messages');
+
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ module: 'contributions' }));
+  assert.equal(readPersistedModule(storage), 'workbench');
+  assert.equal(readPersistedWorkbenchTab(storage), 'contributions');
+
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { module: 'contributions' } }));
+  assert.equal(readPersistedModule(storage), 'workbench');
+  assert.equal(readPersistedWorkbenchTab(storage), 'contributions');
+
+  storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ module: 'workbench' }));
+  assert.equal(readPersistedWorkbenchTab(storage), 'overview');
 });
 
 test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () => {

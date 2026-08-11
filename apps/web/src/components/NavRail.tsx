@@ -12,7 +12,6 @@ import {
   Plus,
   Search,
   Settings,
-  SquareActivity,
   Users,
   UsersRound,
 } from 'lucide-react';
@@ -37,10 +36,9 @@ const MODULE_META: Record<string, {
   calendar: { label: '日历', icon: Calendar },
   contacts: { label: '通讯录', icon: BookUser },
   workbench: { label: '工作台', icon: LayoutGrid },
-  contributions: { label: '贡献', icon: SquareActivity },
 };
 
-const PRIMARY_MODULE_IDS = new Set(['messages', 'contributions', 'todos', 'calendar', 'downloads']);
+const PRIMARY_MODULE_IDS = new Set(['messages', 'todos', 'calendar', 'downloads']);
 const BUTLER_MODULE_IDS = new Set(['butler-view']);
 const WORK_MODULE_IDS = new Set(['workbench', 'contacts']);
 const HIDDEN_MODULE_IDS = new Set<string>();

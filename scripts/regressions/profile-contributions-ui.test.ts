@@ -61,16 +61,21 @@ test('切换或清除项目时同步清除仓库筛选', () => {
   });
 });
 
-test('个人贡献页保留正式导航、键盘格子、覆盖警告与中性文案合同', async () => {
-  const [runtime, nav, heatmap, page] = await Promise.all([
+test('我的贡献归入工作台，并保留键盘格子、覆盖警告与中性文案合同', async () => {
+  const [runtime, nav, workbench, heatmap, page] = await Promise.all([
     readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/NavRail.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/pages/WorkbenchPage.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ContributionHeatmap.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/pages/ProfileContributionsPage.tsx', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(runtime, /\['contributions', '贡献', ProfileContributionsModule, SquareActivity\]/);
-  assert.match(nav, /contributions: \{ label: '贡献', icon: SquareActivity \}/);
+  assert.doesNotMatch(runtime, /ProfileContributionsModule|\['contributions'/);
+  assert.doesNotMatch(nav, /contributions: \{ label:/);
+  assert.match(workbench, /label: '我的贡献'/);
+  assert.match(workbench, /tab === 'contributions'[\s\S]*<ProfileContributionsPage \/>/);
+  assert.match(workbench, /tab === 'contributions'\) return;[\s\S]*void refresh\(\)/);
+  assert.match(page, /aria-label="我的贡献"/);
   assert.match(heatmap, /<button[\s\S]*aria-label=\{label\}[\s\S]*aria-pressed=\{selectedDay === day\.day\}[\s\S]*title=\{label\}/);
   assert.match(heatmap, /className="w-full rounded-xl/);
   assert.doesNotMatch(heatmap, /w-fit/);

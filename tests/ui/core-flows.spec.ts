@@ -710,7 +710,7 @@ test('桌面界面缩放恢复本机偏好，并支持固定档位与快捷键�
   await page.addInitScript(() => {
     localStorage.setItem('rcx-ui-prefs', JSON.stringify({ uiScale: 125 }));
   });
-  const { pageErrors } = await bootAuthenticated(page);
+  const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
 
   const zoomValues = () => page.evaluate(() => (
     window as unknown as {
@@ -2093,19 +2093,22 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
-test('ADO 个人贡献页通过正式导航展示热力图、键盘日期明细与筛选（issue #291）', async ({ page }, testInfo) => {
+test('ADO 我的贡献通过工作台展示热力图、键盘日期明细与筛选（issue #291）', async ({ page }, testInfo) => {
+  const adoRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/ado/')) adoRequests.push(request.url());
+  });
   await installContributionAdoMock(page);
   await page.addInitScript(() => {
+    localStorage.setItem('rcx-ui', JSON.stringify({ module: 'contributions' }));
     localStorage.setItem('rcx-workbench', JSON.stringify({
       adoBase: `${location.origin}/ado`,
       auth: 'none',
       account: 'tester',
     }));
   });
-  const { pageErrors } = await bootAuthenticated(page);
-  const personal = page.getByRole('navigation').getByRole('region', { name: '个人事务' });
-
-  await personal.getByRole('button', { name: '贡献', exact: true }).click();
+  const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
+  await expect(page.getByRole('button', { name: '我的贡献', exact: true })).toHaveClass(/bg-primary-light/);
   await expect(page.getByRole('heading', { name: 'Test User' })).toBeVisible();
   await expect(page.getByLabel('各类活动总数')).toContainText('提交');
   await expect(page.getByLabel('各类活动总数')).toContainText('工作项评论');
@@ -2136,6 +2139,7 @@ test('ADO 个人贡献页通过正式导航展示热力图、键盘日期明细�
   await expect(page.getByLabel('各类活动总数')).toContainText('提交');
   await expect(page.getByLabel('各类活动总数')).not.toContainText('创建 PR');
 
+  expect(adoRequests.filter((url) => /\/_apis\/wit\/wiql|\/_apis\/build\/builds/i.test(url))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 
