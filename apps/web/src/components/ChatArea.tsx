@@ -76,6 +76,7 @@ export default function ChatArea({
 }) {
   const features = runtimeFeatures();
   const activeRid = useChat((s) => s.activeRid);
+  const messageScrollTransaction = useChat((s) => s.messageScrollTransaction);
   const rightPanel = useChat((s) => s.rightPanel);
   const registeredPanels = useKernelContributions('panel.right');
   const setPanel = useChat((s) => s.setPanel);
@@ -488,7 +489,11 @@ export default function ChatArea({
           />
         )}
         <div className="relative flex min-h-0 flex-1 flex-col">
-          <MessageList key={activeRid} rid={activeRid} />
+          <MessageList
+            key={`${activeRid}:${messageScrollTransaction?.rid === activeRid ? messageScrollTransaction.generation : 0}`}
+            rid={activeRid}
+            transaction={messageScrollTransaction?.rid === activeRid ? messageScrollTransaction : null}
+          />
           {features.butler && butlerPanelOpen ? (
             <button
               type="button"

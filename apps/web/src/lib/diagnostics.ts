@@ -1,4 +1,5 @@
 import { isTauri } from './http';
+import { formatMessageScrollDiagnostics } from './messageScrollDiagnostics';
 
 export type DiagnosticLevel = 'info' | 'warn' | 'error';
 
@@ -76,11 +77,15 @@ export function buildDiagnosticReport(snapshot: DiagnosticSnapshot, logs: string
   const header = fields
     .map(([key, value]) => `${key}: ${sanitizeDiagnosticText(value)}`)
     .join('\n');
+  const safeMessageScrollDiagnostics = formatMessageScrollDiagnostics()
+    .split(/\r?\n/)
+    .map((line) => sanitizeDiagnosticText(line))
+    .join('\n');
   const safeLogs = logs
     .split(/\r?\n/)
     .map((line) => sanitizeDiagnosticText(line))
     .join('\n');
-  return `${header}\n\n--- recent logs ---\n${safeLogs || '(none)'}\n`;
+  return `${header}\n\n--- message scroll diagnostics ---\n${safeMessageScrollDiagnostics}\n\n--- recent logs ---\n${safeLogs || '(none)'}\n`;
 }
 
 export async function exportDiagnostics(snapshot: DiagnosticSnapshot): Promise<boolean> {

@@ -38,6 +38,7 @@
 | `MSG-AC-05` | 搜索页面与筛选模型 | `quick-search.test.ts`、`search-filters.test.ts` | 服务端正则设置 |
 | `MSG-AC-06` | 文件索引、下载与桌面桥接 | `file-index.test.ts`、`download-history.test.ts`、`tests/ui/download-history.spec.ts` | 发布产物文件对话框 |
 | `MSG-AC-07` | `stores/chat.ts`、实时客户端 | `tests/ui/core-flows.spec.ts` | 真实断网/恢复 INT |
+| `MSG-AC-08` | `stores/chat.ts`、`components/MessageList.tsx`、`lib/messageScrollDiagnostics.ts` | `message-scroll.test.ts`、`diagnostics.test.ts`、`tests/ui/core-flows.spec.ts` | Windows WebView2 连续切房与三平台正式包 MAN |
 
 ## 4. 工作台与个人效率
 

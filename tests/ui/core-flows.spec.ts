@@ -1398,50 +1398,259 @@ test('切换会话会渲染对应历史消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('内容异步撑高并触发浏览器滚动锚定后仍保持贴底', async ({ page }) => {
+test('普通打开使用独立 generation，首次布局与异步撑高后都完成贴底（issue #143）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
-  await conversation(page, 'General').click();
   await page.evaluate(async () => {
-    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
-      useChat: {
-        getState: () => { messages: Record<string, unknown[]> };
-        setState: (state: { messages: Record<string, unknown[]> }) => void;
+    const chat = (window as Window & {
+      __chat: {
+        getState: () => {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        };
+        setState: (state: {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        }) => void;
       };
-    }>;
-    const { useChat } = await load();
-    const state = useChat.getState();
-    useChat.setState({
+    }).__chat;
+    const state = chat.getState();
+    chat.setState({
       messages: {
         ...state.messages,
-        'room-general': Array.from({ length: 40 }, (_, index) => ({
-          _id: `scroll-regression-${index}`,
+        'room-general': Array.from({ length: 80 }, (_, index) => ({
+          _id: `open-generation-${index}`,
           rid: 'room-general',
-          msg: `Scroll regression message ${index}`,
+          msg: `Open generation message ${index}`,
           ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
           u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
         })),
       },
+      historyLoaded: { ...state.historyLoaded, 'room-general': true },
+      hasMore: { ...state.hasMore, 'room-general': false },
     });
   });
 
+  await conversation(page, 'General').click();
   const viewport = page.getByTestId('message-scroll');
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
 
+  const firstGeneration = await page.evaluate(async () => {
+    return (window as Window & {
+      __chat: {
+        getState: () => { messageScrollTransaction: { generation: number; entry: string } | null };
+      };
+    }).__chat.getState().messageScrollTransaction;
+  });
+  expect(firstGeneration?.entry).toBe('latest');
+
   await viewport.evaluate((element) => {
     const content = element.firstElementChild as HTMLElement;
-    const oldTop = element.scrollTop;
     const spacer = document.createElement('div');
     spacer.style.height = '600px';
     content.append(spacer);
-    element.scrollTop = oldTop + 120;
-    element.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
 
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
+
+  await conversation(page, 'General').click();
+  const repeatedGeneration = await page.evaluate(async () => {
+    return (window as Window & {
+      __chat: {
+        getState: () => { messageScrollTransaction: { generation: number; entry: string } | null };
+      };
+    }).__chat.getState().messageScrollTransaction;
+  });
+  expect(repeatedGeneration?.generation).toBeGreaterThan(firstGeneration?.generation ?? 0);
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('底部无效滚轮不会取消普通打开后的贴底（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const chat = (window as Window & {
+      __chat: {
+        getState: () => {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        };
+        setState: (state: {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        }) => void;
+      };
+    }).__chat;
+    const state = chat.getState();
+    chat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': Array.from({ length: 80 }, (_, index) => ({
+          _id: `bottom-wheel-${index}`,
+          rid: 'room-general',
+          msg: `Bottom wheel message ${index}`,
+          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+        })),
+      },
+      historyLoaded: { ...state.historyLoaded, 'room-general': true },
+      hasMore: { ...state.hasMore, 'room-general': false },
+    });
+  });
+
+  await conversation(page, 'General').click();
+  const viewport = page.getByTestId('message-scroll');
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+
+  await viewport.hover();
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+
+  await viewport.evaluate((element) => {
+    const spacer = document.createElement('div');
+    spacer.style.height = '600px';
+    element.firstElementChild?.append(spacer);
+  });
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('用户主动向上滚动后，异步布局增长不会强制拉回底部（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const chat = (window as Window & {
+      __chat: {
+        getState: () => {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        };
+        setState: (state: {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        }) => void;
+      };
+    }).__chat;
+    const state = chat.getState();
+    chat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': Array.from({ length: 80 }, (_, index) => ({
+          _id: `user-scroll-${index}`,
+          rid: 'room-general',
+          msg: `User scroll message ${index}`,
+          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+        })),
+      },
+      historyLoaded: { ...state.historyLoaded, 'room-general': true },
+      hasMore: { ...state.hasMore, 'room-general': false },
+    });
+  });
+  await conversation(page, 'General').click();
+
+  const viewport = page.getByTestId('message-scroll');
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  await viewport.hover();
+  await page.mouse.wheel(0, -900);
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(120);
+  const userScrollTop = await viewport.evaluate((element) => element.scrollTop);
+
+  await viewport.evaluate((element) => {
+    const spacer = document.createElement('div');
+    spacer.style.height = '600px';
+    element.firstElementChild?.append(spacer);
+  });
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(600);
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBeCloseTo(userScrollTop, 0);
+  await expect(page.getByTitle('回到底部')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('显式消息定位优先于普通打开贴底，并归属 locate 事务（issue #143）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const chat = (window as Window & {
+      __chat: {
+        getState: () => {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        };
+        setState: (state: {
+          messages: Record<string, unknown[]>;
+          historyLoaded: Record<string, boolean>;
+          hasMore: Record<string, boolean>;
+        }) => void;
+      };
+    }).__chat;
+    const state = chat.getState();
+    chat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': Array.from({ length: 80 }, (_, index) => ({
+          _id: index === 18 ? 'locate-target' : `locate-message-${index}`,
+          rid: 'room-general',
+          msg: index === 18 ? 'Locate target message' : `Locate filler ${index}`,
+          ts: new Date(Date.parse('2026-07-17T08:00:00.000Z') + index * 1000).toISOString(),
+          u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+        })),
+      },
+      historyLoaded: { ...state.historyLoaded, 'room-general': true },
+      hasMore: { ...state.hasMore, 'room-general': false },
+    });
+  });
+  await conversation(page, 'Project Alpha').click();
+  await page.evaluate(async () => {
+    await (window as Window & {
+      __chat: {
+        getState: () => { jumpToMessage: (mid: string, rid: string) => Promise<void> };
+      };
+    }).__chat.getState().jumpToMessage('locate-target', 'room-general');
+  });
+
+  const target = page.locator('[data-message-id="locate-target"]');
+  await expect(target).toBeVisible();
+  await expect.poll(() => target.evaluate((element) => {
+    const viewport = element.closest('[data-testid="message-scroll"]');
+    if (!viewport) return false;
+    const targetRect = element.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    return targetRect.top >= viewportRect.top && targetRect.bottom <= viewportRect.bottom;
+  })).toBe(true);
+  const transaction = await page.evaluate(async () => {
+    return (window as Window & {
+      __chat: {
+        getState: () => { messageScrollTransaction: { entry: string; messageId?: string } | null };
+      };
+    }).__chat.getState().messageScrollTransaction;
+  });
+  expect(transaction).toMatchObject({ entry: 'locate', messageId: 'locate-target' });
+  await expect.poll(() => page.getByTestId('message-scroll').evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeGreaterThan(120);
   expect(pageErrors).toEqual([]);
 });
 
