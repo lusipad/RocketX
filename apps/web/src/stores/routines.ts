@@ -122,6 +122,8 @@ interface RoutineState {
   seenKeys: string[];
   unloadedTemplateIds: ButlerAbilityTemplateId[];
   runningIds: string[];
+  scheduledActiveId?: string;
+  scheduledQueuedIds: string[];
   hydrated: boolean;
   nativeStatus: 'idle' | 'loading' | 'ready' | 'error';
   nativeError?: string;
@@ -191,7 +193,10 @@ let routineCodexRunner: (
 ) => Promise<{ text: string; threadId?: string }> = runCodexAutomation;
 let routineNow = () => Date.now();
 let scheduler: ReturnType<typeof setInterval> | undefined;
+let schedulerStartupTimer: ReturnType<typeof setTimeout> | undefined;
+let scheduledDrainPromise: Promise<void> | undefined;
 const routineAbortControllers = new Map<string, AbortController>();
+const scheduledDailyCursors = new Map<string, string>();
 
 export function setRoutineStorage(storage: RoutineStorage): () => void {
   const previous = routineStorage;
@@ -217,6 +222,16 @@ export function setRoutineNowProvider(provider: () => number): () => void {
   return () => {
     routineNow = previous;
   };
+}
+
+export function resetRoutineSchedulerForTests(): void {
+  if (schedulerStartupTimer) clearTimeout(schedulerStartupTimer);
+  if (scheduler) clearInterval(scheduler);
+  schedulerStartupTimer = undefined;
+  scheduler = undefined;
+  scheduledDrainPromise = undefined;
+  scheduledDailyCursors.clear();
+  useRoutines.setState({ scheduledActiveId: undefined, scheduledQueuedIds: [] });
 }
 
 function localDate(now: number): string {
@@ -567,12 +582,86 @@ function knownSkillDisabled(skillName: string): boolean {
   return skill?.enabled === false;
 }
 
+function pruneScheduledRoutine(id: string): void {
+  scheduledDailyCursors.delete(id);
+  useRoutines.setState((state) => ({
+    scheduledActiveId: state.scheduledActiveId === id ? undefined : state.scheduledActiveId,
+    scheduledQueuedIds: state.scheduledQueuedIds.filter((queuedId) => queuedId !== id),
+  }));
+}
+
+function markScheduledRoutineFired(id: string): void {
+  const cursor = scheduledDailyCursors.get(id);
+  scheduledDailyCursors.delete(id);
+  if (!cursor) return;
+  const state = useRoutines.getState();
+  const routine = state.routines.find((item) => item.id === id);
+  if (!routine || routine.trigger?.kind !== 'daily' || routine.lastFiredDate === cursor) return;
+  const routines = state.routines.map((item) => item.id === id ? { ...item, lastFiredDate: cursor } : item);
+  useRoutines.setState({ routines });
+  persist(routines, state.eventCards, state.seenKeys, state.unloadedTemplateIds);
+}
+
+function enqueueScheduledRoutines(routines: readonly Routine[], now: number): boolean {
+  if (routines.length === 0) return false;
+  const state = useRoutines.getState();
+  const knownIds = new Set([
+    ...state.runningIds,
+    ...state.scheduledQueuedIds,
+    ...(state.scheduledActiveId ? [state.scheduledActiveId] : []),
+  ]);
+  const dueDate = localDate(now);
+  const queuedIds = [...state.scheduledQueuedIds];
+  let accepted = false;
+  for (const routine of routines) {
+    if (knownIds.has(routine.id)) continue;
+    knownIds.add(routine.id);
+    queuedIds.push(routine.id);
+    scheduledDailyCursors.set(routine.id, dueDate);
+    accepted = true;
+  }
+  if (!accepted) return false;
+  useRoutines.setState({ scheduledQueuedIds: queuedIds });
+  return true;
+}
+
+async function drainScheduledRoutines(): Promise<void> {
+  if (scheduledDrainPromise) return scheduledDrainPromise;
+  scheduledDrainPromise = (async () => {
+    while (true) {
+      const state = useRoutines.getState();
+      if (state.scheduledActiveId || state.scheduledQueuedIds.length === 0) return;
+      const [nextId, ...rest] = state.scheduledQueuedIds;
+      useRoutines.setState({ scheduledActiveId: nextId, scheduledQueuedIds: rest });
+      let admitted = false;
+      try {
+        admitted = await useRoutines.getState().runNow(nextId, { triggerReason: 'schedule' });
+      } catch {
+        admitted = false;
+      } finally {
+        if (admitted) markScheduledRoutineFired(nextId);
+        else scheduledDailyCursors.delete(nextId);
+        useRoutines.setState((current) => ({
+          scheduledActiveId: current.scheduledActiveId === nextId ? undefined : current.scheduledActiveId,
+        }));
+      }
+    }
+  })().finally(() => {
+    scheduledDrainPromise = undefined;
+    const state = useRoutines.getState();
+    if (!state.scheduledActiveId && state.scheduledQueuedIds.length > 0) void drainScheduledRoutines();
+  });
+  return scheduledDrainPromise;
+}
+
 export const useRoutines = create<RoutineState>((set, get) => ({
   routines: [],
   eventCards: [],
   seenKeys: [],
   unloadedTemplateIds: [],
   runningIds: [],
+  scheduledActiveId: undefined,
+  scheduledQueuedIds: [],
   hydrated: false,
   nativeStatus: 'idle',
   nativeError: undefined,
@@ -663,7 +752,10 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     const routines = get().routines.map((routine) => routine.id === id ? { ...routine, enabled } : routine);
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
-    if (!enabled) routineAbortControllers.get(id)?.abort(new Error('用户停用已安排任务'));
+    if (!enabled) {
+      pruneScheduledRoutine(id);
+      routineAbortControllers.get(id)?.abort(new Error('用户停用已安排任务'));
+    }
   },
 
   loadTemplate: (templateId, params) => {
@@ -690,6 +782,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       : get().unloadedTemplateIds;
     set({ routines, unloadedTemplateIds });
     persist(routines, get().eventCards, get().seenKeys, unloadedTemplateIds);
+    pruneScheduledRoutine(id);
     routineAbortControllers.get(id)?.abort(new Error('用户删除已安排任务'));
   },
 
@@ -957,19 +1050,9 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       persist(get().routines, eventCards, seenKeys, get().unloadedTemplateIds);
     }
     const due = dueRoutines(get().routines, now);
-    const firedIds = new Set<string>();
-    await Promise.all(due.map(async (routine) => {
-      if (await get().runNow(routine.id, { triggerReason: 'schedule' })) firedIds.add(routine.id);
-    }));
-    if (firedIds.size > 0) {
-      const today = localDate(now);
-      const routines = get().routines.map((routine) => firedIds.has(routine.id)
-        ? routine.trigger?.kind === 'daily'
-          ? { ...routine, lastFiredDate: today }
-          : routine
-        : routine);
-      set({ routines });
-      persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
+    enqueueScheduledRoutines(due, now);
+    if (scheduledDrainPromise || useRoutines.getState().scheduledQueuedIds.length > 0) {
+      await drainScheduledRoutines();
     }
   },
 }));
@@ -1100,10 +1183,13 @@ registerScheduledTaskAdapter({
 });
 
 export function startRoutineScheduler(): void {
-  if (scheduler) return;
+  if (scheduler || schedulerStartupTimer) return;
   const state = useRoutines.getState();
   state.hydrate();
-  void state.hydrateNative().catch(() => undefined).then(() => useRoutines.getState().tick());
+  schedulerStartupTimer = setTimeout(() => {
+    schedulerStartupTimer = undefined;
+    void state.hydrateNative().catch(() => undefined).then(() => useRoutines.getState().tick());
+  }, 0);
   scheduler = setInterval(() => void useRoutines.getState().tick(), 60_000);
 }
 

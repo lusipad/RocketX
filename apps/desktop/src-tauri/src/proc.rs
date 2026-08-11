@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -55,7 +55,7 @@ struct ManagedCodex {
 #[derive(Default)]
 pub struct CodexAppServerState {
     processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
-    next_id: AtomicU64,
+    next_id: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -1736,13 +1736,26 @@ fn encode_message(message: serde_json::Value) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-#[tauri::command]
-pub fn codex_app_server_start(
+struct StartedCodexProcess {
+    info: CodexProcessInfo,
+    process_id: String,
+    child: Arc<Mutex<Child>>,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+}
+
+enum CodexAppServerStartResult {
+    Existing(CodexProcessInfo),
+    Started(StartedCodexProcess),
+}
+
+fn start_codex_app_server_blocking(
     app: tauri::AppHandle,
-    state: tauri::State<'_, CodexAppServerState>,
+    processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
+    next_id: Arc<AtomicU64>,
     session_id: String,
     workspace_root: String,
-) -> Result<CodexProcessInfo, String> {
+) -> Result<CodexAppServerStartResult, String> {
     validate_session_id(&session_id)?;
     let workspace_root = host_path(&codex_workspace_directory(&app, &workspace_root)?);
     let managed_skill_roots = bundled_codex_skill_roots(&app)?
@@ -1753,21 +1766,20 @@ pub fn codex_app_server_start(
     let version = resolved.version.clone();
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
-    let mut processes = state
-        .processes
+    let mut processes = processes
         .lock()
         .map_err(|_| "Codex process registry is unavailable".to_string())?;
     if let Some(process) = processes
         .values()
         .find(|process| process.session_id == session_id)
     {
-        return Ok(CodexProcessInfo {
+        return Ok(CodexAppServerStartResult::Existing(CodexProcessInfo {
             process_id: process.process_id.clone(),
             version: process.version.clone(),
             runtime_workspace_root: process.workspace_root.clone(),
             runtime_source: process.runtime_source,
             managed_skill_roots,
-        });
+        }));
     }
 
     let launch_args = app_server_launch_args(&resolved)?;
@@ -1796,7 +1808,7 @@ pub fn codex_app_server_start(
     let process_id = format!(
         "codex-{}-{}",
         child.id(),
-        state.next_id.fetch_add(1, Ordering::Relaxed)
+        next_id.fetch_add(1, Ordering::Relaxed)
     );
     let child = Arc::new(Mutex::new(child));
     let managed = ManagedCodex {
@@ -1810,18 +1822,66 @@ pub fn codex_app_server_start(
         runtime_source: resolved.source,
     };
     processes.insert(process_id.clone(), managed);
-    drop(processes);
-
-    spawn_reader(app.clone(), process_id.clone(), "stdout", stdout);
-    spawn_reader(app.clone(), process_id.clone(), "stderr", stderr);
-    monitor_child(app, Arc::clone(&state.processes), process_id.clone(), child);
-    Ok(CodexProcessInfo {
+    Ok(CodexAppServerStartResult::Started(StartedCodexProcess {
+        info: CodexProcessInfo {
+            process_id: process_id.clone(),
+            version,
+            runtime_workspace_root: workspace_root,
+            runtime_source: resolved.source,
+            managed_skill_roots,
+        },
         process_id,
-        version,
-        runtime_workspace_root: workspace_root,
-        runtime_source: resolved.source,
-        managed_skill_roots,
+        child,
+        stdout,
+        stderr,
+    }))
+}
+
+#[tauri::command]
+pub async fn codex_app_server_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, CodexAppServerState>,
+    session_id: String,
+    workspace_root: String,
+) -> Result<CodexProcessInfo, String> {
+    let processes = Arc::clone(&state.processes);
+    let next_id = Arc::clone(&state.next_id);
+    let blocking_app = app.clone();
+    let start_result = tauri::async_runtime::spawn_blocking(move || {
+        start_codex_app_server_blocking(
+            blocking_app,
+            processes,
+            next_id,
+            session_id,
+            workspace_root,
+        )
     })
+    .await
+    .map_err(|error| format!("Codex app-server 启动任务失败：{error}"))??;
+    match start_result {
+        CodexAppServerStartResult::Existing(info) => Ok(info),
+        CodexAppServerStartResult::Started(started) => {
+            spawn_reader(
+                app.clone(),
+                started.process_id.clone(),
+                "stdout",
+                started.stdout,
+            );
+            spawn_reader(
+                app.clone(),
+                started.process_id.clone(),
+                "stderr",
+                started.stderr,
+            );
+            monitor_child(
+                app,
+                Arc::clone(&state.processes),
+                started.process_id.clone(),
+                started.child,
+            );
+            Ok(started.info)
+        }
+    }
 }
 
 #[tauri::command]

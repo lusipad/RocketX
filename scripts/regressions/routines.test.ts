@@ -3,9 +3,11 @@ import test from 'node:test';
 import {
   dueRoutines,
   MIN_INTERVAL_MINUTES,
+  resetRoutineSchedulerForTests,
   setRoutineCodexRunner,
   setRoutineNowProvider,
   setRoutineStorage,
+  startRoutineScheduler,
   useRoutines,
   type Routine,
 } from '../../apps/web/src/stores/routines';
@@ -49,12 +51,15 @@ function routine(overrides: Partial<Routine> = {}): Routine {
 }
 
 function reset(routines: Routine[] = []): void {
+  resetRoutineSchedulerForTests();
   useRoutines.setState({
     routines,
     eventCards: [],
     seenKeys: [],
     unloadedTemplateIds: [],
     runningIds: [],
+    scheduledActiveId: undefined,
+    scheduledQueuedIds: [],
     hydrated: false,
     nativeStatus: 'idle',
     nativeError: undefined,
@@ -368,6 +373,161 @@ test('定时 tick 在执行结果落盘后写入每日触发游标', async () =>
     await useRoutines.getState().tick(MONDAY_0830 + 60_000);
     assert.equal(calls, 1);
   } finally {
+    restoreRunner();
+    restoreStorage();
+    reset();
+  }
+});
+
+test('启动调度器会让出首屏路径，并把首个到期 AI 任务放到后台队列', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  const restoreNow = setRoutineNowProvider(() => MONDAY_0830);
+  storage.set('rcx-codex-automations-v1:routines', JSON.stringify({
+    routines: [routine()],
+    eventCards: [],
+  }));
+  reset();
+  useAuth.setState({ user: { _id: 'user-1' } as never });
+  useCodexWorkspace.setState({ workspaceRoot: 'D:/Repos/example' });
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  let startup: (() => void) | undefined;
+  let calls = 0;
+  let release: (() => void) | undefined;
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    calls += 1;
+    options.onAdmitted?.();
+    await new Promise<void>((resolve) => { release = resolve; });
+    return { text: '后台结果' };
+  });
+  const originalHydrateNative = useRoutines.getState().hydrateNative;
+  try {
+    globalThis.setTimeout = ((handler: (...args: any[]) => void) => {
+      startup = () => {
+        if (typeof handler === 'function') handler();
+      };
+      return 1 as never;
+    }) as typeof globalThis.setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof globalThis.clearTimeout;
+    globalThis.setInterval = (() => 1 as never) as typeof globalThis.setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof globalThis.clearInterval;
+    useRoutines.setState({
+      hydrateNative: async () => undefined,
+    } as never);
+
+    startRoutineScheduler();
+    assert.equal(typeof startup, 'function');
+    assert.equal(calls, 0);
+    assert.equal(useRoutines.getState().scheduledActiveId, undefined);
+
+    startup?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(calls, 1);
+    assert.equal(useRoutines.getState().scheduledActiveId, 'routine-1');
+    assert.equal(useRoutines.getState().scheduledQueuedIds.length, 0);
+    assert.deepEqual(useRoutines.getState().runningIds, ['routine-1']);
+    release?.();
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    useRoutines.setState({ hydrateNative: originalHydrateNative } as never);
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    restoreRunner();
+    restoreNow();
+    restoreStorage();
+    reset();
+  }
+});
+
+test('重复 tick 不会重入调度，同一批到期任务保持单活跃单队列', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  reset([
+    routine({ id: 'routine-1', name: '任务 1' }),
+    routine({ id: 'routine-2', name: '任务 2' }),
+    routine({ id: 'routine-3', name: '任务 3' }),
+    routine({ id: 'routine-4', name: '任务 4' }),
+    routine({ id: 'routine-5', name: '任务 5' }),
+  ]);
+  useAuth.setState({ user: { _id: 'user-1' } as never });
+  useCodexWorkspace.setState({ workspaceRoot: 'D:/Repos/example' });
+  const started: string[] = [];
+  const releases: Array<() => void> = [];
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    started.push(String(options.name));
+    options.onAdmitted?.();
+    await new Promise<void>((resolve) => { releases.push(resolve); });
+    return { text: `完成 ${options.name}` };
+  });
+  try {
+    const first = useRoutines.getState().tick(MONDAY_0830);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(useRoutines.getState().scheduledActiveId, 'routine-1');
+    assert.deepEqual(useRoutines.getState().scheduledQueuedIds, ['routine-2', 'routine-3', 'routine-4', 'routine-5']);
+    assert.equal(started.length, 1);
+
+    const second = useRoutines.getState().tick(MONDAY_0830);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(started.length, 1);
+    assert.deepEqual(useRoutines.getState().scheduledQueuedIds, ['routine-2', 'routine-3', 'routine-4', 'routine-5']);
+
+    while (started.length < 5) {
+      releases.shift()?.();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    releases.shift()?.();
+    await Promise.all([first, second]);
+
+    assert.equal(started.length, 5);
+    assert.equal(new Set(started).size, 5);
+    assert.equal(useRoutines.getState().scheduledActiveId, undefined);
+    assert.deepEqual(useRoutines.getState().scheduledQueuedIds, []);
+  } finally {
+    restoreRunner();
+    restoreStorage();
+    reset();
+  }
+});
+
+test('单个调度任务异常不会卡住队列，后续任务仍继续执行', async () => {
+  const storage = new MemoryStorage();
+  const restoreStorage = setRoutineStorage(storage);
+  reset([
+    routine({ id: 'routine-1', name: '任务 1' }),
+    routine({ id: 'routine-2', name: '任务 2' }),
+  ]);
+  useAuth.setState({ user: { _id: 'user-1' } as never });
+  useCodexWorkspace.setState({ workspaceRoot: 'D:/Repos/example' });
+  const originalRunNow = useRoutines.getState().runNow;
+  const started: string[] = [];
+  const restoreRunner = setRoutineCodexRunner(async (options) => {
+    return { text: `完成 ${options.name}` };
+  });
+  try {
+    useRoutines.setState({
+      runNow: async (id, options) => {
+        started.push(id);
+        if (id === 'routine-1') throw new Error('queue exploded');
+        return originalRunNow(id, options);
+      },
+    } as never);
+
+    await useRoutines.getState().tick(MONDAY_0830);
+
+    assert.deepEqual(started, ['routine-1', 'routine-2']);
+    assert.equal(useRoutines.getState().routines.find((item) => item.id === 'routine-2')?.runs[0]?.text, '完成 自动化 · 任务 2');
+    assert.equal(useRoutines.getState().scheduledActiveId, undefined);
+    assert.deepEqual(useRoutines.getState().scheduledQueuedIds, []);
+  } finally {
+    useRoutines.setState({ runNow: originalRunNow } as never);
     restoreRunner();
     restoreStorage();
     reset();
