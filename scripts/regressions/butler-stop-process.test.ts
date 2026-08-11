@@ -34,8 +34,8 @@ test('Codex 任务过程、审批与停止入口都由 codexWorkspace 原生事�
   assert.match(workspace, /const kind = request\.method === 'item\/tool\/requestUserInput'/);
   assert.match(workspace, /status: 'waiting-input'/);
   assert.match(workspace, /interrupt: async \(\) => \{/);
-  assert.match(workspace, /rejectPendingRequests\('用户已停止当前任务'\)/);
-  assert.match(workspace, /set\(\{ status: 'ready', activeTurnId: undefined, streamingText: '', queuedMessages: \[] \}\)/);
+  assert.match(workspace, /rejectPendingRequests\('用户已停止当前任务', state\.activeThreadId\)/);
+  assert.match(workspace, /setThreadState\(state\.activeThreadId,[\s\S]*?status: 'ready',[\s\S]*?activeTurnId: undefined,[\s\S]*?streamingText: '',[\s\S]*?queuedMessages: \[],/);
 
   assert.match(controller, /async interruptTurn\(threadId: string, turnId: string\): Promise<void> \{/);
   assert.match(controller, /request\('turn\/interrupt', \{ threadId, turnId \}\)/);
