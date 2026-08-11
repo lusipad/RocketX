@@ -335,14 +335,18 @@ test('PR 卡片摘要保留批准进度和必审组', () => {
   });
 });
 
-test('PR 列表默认交给 Codex 审查，外部打开是独立次要动作', () => {
+test('PR 列表默认跳转 Azure DevOps，Codex 审查是独立次要动作', () => {
   const source = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
   const row = source.slice(source.indexOf('function PrRow('), source.indexOf('/** 拉取请求：'));
+  const primaryLink = row.slice(row.indexOf('<a'), row.indexOf('</a>') + '</a>'.length);
 
+  assert.match(primaryLink, /href=\{pr\.webUrl\}/);
+  assert.match(primaryLink, /className="flex min-w-0 flex-1/);
+  assert.match(primaryLink, /aria-label=\{`在 Azure DevOps 中打开 PR !\$\{pr\.id\}`\}/);
+  assert.doesNotMatch(primaryLink, /onAsk\(pr\)/);
   assert.match(row, /onClick=\{\(\) => onAsk\(pr\)\}/);
+  assert.match(row, /aria-label=\{`用 Codex 审查 PR !\$\{pr\.id\}：\$\{pr\.title\}`\}/);
   assert.match(row, /AI 审查/);
-  assert.match(row, /aria-label=\{`在 Azure DevOps 中打开 PR !\$\{pr\.id\}`\}/);
-  assert.doesNotMatch(row, /<a\s+href=\{pr\.webUrl\}[\s\S]*className="flex min-w-0 flex-1/);
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

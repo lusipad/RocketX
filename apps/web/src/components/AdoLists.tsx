@@ -327,13 +327,13 @@ function PrRow({
     <div className={`group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2 ${
       comparing ? 'bg-primary-light/20' : ''
     }`}>
-      <button
-        type="button"
-        onClick={() => onAsk(pr)}
-        disabled={!features.butler}
-        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 AI 审查'}
-        aria-label={`用 Codex 审查 PR !${pr.id}：${pr.title}`}
-        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left disabled:cursor-default"
+      <a
+        href={pr.webUrl}
+        target="_blank"
+        rel="noreferrer"
+        title={`在 Azure DevOps 中打开 PR !${pr.id}`}
+        aria-label={`在 Azure DevOps 中打开 PR !${pr.id}`}
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left"
       >
         <GitPullRequest
           size={14}
@@ -366,10 +366,22 @@ function PrRow({
         <span className="w-16 shrink-0 text-right text-xs text-ink-3">
           {relTime(pr.createdDate)}
         </span>
-        <span className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary">
-          <Bot size={13} aria-hidden="true" />
-          AI 审查
-        </span>
+        <ExternalLink
+          size={14}
+          className="shrink-0 text-ink-3 opacity-0 transition group-hover:opacity-100"
+          aria-hidden="true"
+        />
+      </a>
+      <button
+        type="button"
+        onClick={() => onAsk(pr)}
+        disabled={!features.butler}
+        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 AI 审查'}
+        aria-label={`用 Codex 审查 PR !${pr.id}：${pr.title}`}
+        className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Bot size={13} aria-hidden="true" />
+        AI 审查
       </button>
       <button
         type="button"
@@ -390,20 +402,10 @@ function PrRow({
         onClick={() => onSchedule(pr)}
         title={`把 PR #${pr.id} 排进日历`}
         aria-label={`把 PR #${pr.id} 排进日历`}
-        className="shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
       >
         <CalendarPlus size={14} />
       </button>
-      <a
-        href={pr.webUrl}
-        target="_blank"
-        rel="noreferrer"
-        title={`在 Azure DevOps 中打开 PR !${pr.id}`}
-        aria-label={`在 Azure DevOps 中打开 PR !${pr.id}`}
-        className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-ink"
-      >
-        <ExternalLink size={14} aria-hidden="true" />
-      </a>
     </div>
   );
 }
