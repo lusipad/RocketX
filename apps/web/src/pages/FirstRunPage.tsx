@@ -39,7 +39,7 @@ function configSummary(config: WorkspaceConfig): { label: string; value: string 
 export default function FirstRunPage({ onContinue }: { onContinue: () => void }) {
   const existingSource = loadWorkspaceSource();
   const [step, setStep] = useState<'principles' | 'setup'>('principles');
-  const [url, setUrl] = useState(existingSource?.url ?? '');
+  const [url, setUrl] = useState(existingSource?.kind === 'url' ? existingSource.url : '');
   const [config, setConfig] = useState<WorkspaceConfig | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);

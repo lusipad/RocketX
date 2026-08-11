@@ -33,7 +33,7 @@ interface AdoRequestOptions {
   signal?: AbortSignal;
 }
 
-class AdoRequestTimeoutError extends Error {
+export class AdoRequestTimeoutError extends Error {
   readonly reason = 'ado-request-timeout';
 
   constructor(
@@ -152,14 +152,29 @@ async function ntlmRequest(
   return { status: res.status, text: res.body };
 }
 
-async function adoRequest<T>(
+interface AdoRawResponse {
+  status: number;
+  text: string;
+  url: string;
+  contentType: string | null;
+}
+
+function authFailureMessage(cfg: DirectConfig): string {
+  return cfg.auth === 'ntlm'
+    ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
+    : cfg.auth === 'none' || !cfg.pat?.trim()
+      ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
+      : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）';
+}
+
+async function adoRequestRaw(
   cfg: DirectConfig,
   method: AdoRequestMethod,
   path: string,
   body?: unknown,
   contentType = 'application/json',
   options?: AdoRequestOptions,
-): Promise<T> {
+): Promise<AdoRawResponse> {
   const url = `${base(cfg)}${path}`;
   const deadlineAt = options?.deadlineAt ?? createAdoDeadline();
   const timeoutMs = remainingMsUntil(deadlineAt);
@@ -167,6 +182,7 @@ async function adoRequest<T>(
   const payload = body === undefined ? undefined : JSON.stringify(body);
   let status: number;
   let text: string;
+  let responseContentType: string | null = null;
 
   try {
     if (cfg.auth === 'ntlm') {
@@ -192,6 +208,7 @@ async function adoRequest<T>(
           signal: requestSignal.signal,
         });
         status = res.status;
+        responseContentType = res.headers.get('Content-Type');
         text = await res.text();
       } catch (err) {
         if (requestSignal.timedOut()) deadlineTimeoutError(method, url, ADO_REQUEST_TIMEOUT_MS);
@@ -211,15 +228,21 @@ async function adoRequest<T>(
     );
   }
 
+  return { status, text, url, contentType: responseContentType };
+}
+
+async function adoRequest<T>(
+  cfg: DirectConfig,
+  method: AdoRequestMethod,
+  path: string,
+  body?: unknown,
+  contentType = 'application/json',
+  options?: AdoRequestOptions,
+): Promise<T> {
+  const { status, text, url } = await adoRequestRaw(cfg, method, path, body, contentType, options);
+
   if (status === 401 || status === 203) {
-    // 三种情况的处理方向完全不同，提示必须分开说，否则用户会一直去改 PAT
-    throw new Error(
-      cfg.auth === 'ntlm'
-        ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
-        : cfg.auth === 'none' || !cfg.pat?.trim()
-          ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
-          : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）',
-    );
+    throw new Error(authFailureMessage(cfg));
   }
   if (status === 404) {
     throw new Error(`地址不对：${url} 返回 404`);
@@ -236,6 +259,103 @@ async function adoRequest<T>(
         : '响应解析失败',
     );
   }
+}
+
+export interface AdoRepositoryFileLocation {
+  project: string;
+  repository: string;
+  ref: string;
+  path: string;
+}
+
+function requiredTrimmed(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${label}不能为空`);
+  return trimmed;
+}
+
+function normalizeRepositoryFilePath(path: string): string {
+  const trimmed = requiredTrimmed(path, '仓库文件路径');
+  const normalized = trimmed.replace(/\\/g, '/');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function gitVersionDescriptor(ref: string): { version: string; versionType: 'branch' | 'tag' | 'commit' } {
+  const value = requiredTrimmed(ref, 'Git 引用');
+  if (/^refs\/heads\//i.test(value)) {
+    return { version: requiredTrimmed(value.slice('refs/heads/'.length), '分支名'), versionType: 'branch' };
+  }
+  if (/^refs\/tags\//i.test(value)) {
+    return { version: requiredTrimmed(value.slice('refs/tags/'.length), '标签名'), versionType: 'tag' };
+  }
+  if (/^refs\//i.test(value)) throw new Error('Git 引用只支持分支、标签或提交 SHA');
+  if (/^[0-9a-f]{7,40}$/i.test(value)) return { version: value, versionType: 'commit' };
+  return { version: value, versionType: 'branch' };
+}
+
+async function ensureAdoProjectAccess(cfg: DirectConfig, project: string): Promise<void> {
+  const response = await adoRequestRaw(
+    cfg,
+    'GET',
+    `/_apis/projects/${encodeURIComponent(project)}?api-version=7.0`,
+  );
+  if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
+  if (response.status === 403) {
+    throw new Error(`当前账号没有权限访问 ADO 项目「${project}」`);
+  }
+  if (response.status === 404) {
+    throw new Error(`ADO 项目「${project}」不存在，或当前账号无权访问`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`ADO 项目校验失败（HTTP ${response.status}）`);
+  }
+}
+
+export async function directReadRepositoryFile(
+  cfg: DirectConfig,
+  source: AdoRepositoryFileLocation,
+): Promise<string> {
+  const project = requiredTrimmed(source.project, '项目');
+  const repository = requiredTrimmed(source.repository, '仓库');
+  const path = normalizeRepositoryFilePath(source.path);
+  const version = gitVersionDescriptor(source.ref);
+  await ensureAdoProjectAccess(cfg, project);
+  const response = await adoRequestRaw(
+    cfg,
+    'GET',
+    `/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}/items`
+    + `?path=${encodeURIComponent(path)}`
+    + `&versionDescriptor.version=${encodeURIComponent(version.version)}`
+    + `&versionDescriptor.versionType=${version.versionType}`
+    + '&includeContent=true&resolveLfs=true&api-version=7.0',
+  );
+
+  if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
+  if (response.status === 403) {
+    throw new Error(`没有权限读取 ADO 仓库文件：项目「${project}」/ 仓库「${repository}」`);
+  }
+  if (response.status === 404) {
+    throw new Error(
+      `找不到 ADO 仓库、Git 引用或文件：${project}/${repository} · ${source.ref} · ${path}`,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`读取 ADO 仓库文件失败（HTTP ${response.status}）`);
+  }
+
+  let parsed: { isFolder?: boolean; content?: unknown };
+  try {
+    parsed = JSON.parse(response.text) as { isFolder?: boolean; content?: unknown };
+  } catch {
+    throw new Error(
+      response.text.trimStart().startsWith('<')
+        ? 'ADO 仓库文件请求被重定向到登录页，请检查当前认证方式'
+        : 'ADO 仓库文件响应解析失败',
+    );
+  }
+  if (parsed.isFolder) throw new Error(`ADO 路径「${path}」指向的是文件夹，不是单个配置文件`);
+  if (typeof parsed.content !== 'string') throw new Error('ADO 仓库文件不是可直接读取的文本文件');
+  return parsed.content;
 }
 
 /** 连接测试：返回可用的项目数量 */

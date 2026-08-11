@@ -318,7 +318,6 @@ export interface WorkspaceSourceAdoIdentity {
 
 interface WorkspaceSourceBase {
   kind: 'url' | 'file' | 'ado';
-  url?: string;
   name?: string;
   importedAt: number;
   applied: Record<string, string>;
@@ -399,11 +398,11 @@ function sanitizeWorkspaceSourceAdo(value: unknown): WorkspaceSourceAdoIdentity 
   return ado;
 }
 
-function workspaceSourceIdentity(source: WorkspaceSource): string {
-  if (source.kind === 'url') return `url|${source.url}`;
+export function workspaceSourceIdentity(source: WorkspaceSource): string {
+  if (source.kind === 'url') return JSON.stringify(['url', source.url]);
   if (source.kind === 'ado') {
     const ado = source.ado;
-    return [
+    return JSON.stringify([
       'ado',
       ado.adoBase ?? '',
       ado.auth ?? '',
@@ -413,9 +412,13 @@ function workspaceSourceIdentity(source: WorkspaceSource): string {
       ado.ref,
       ado.path,
       ado.name ?? '',
-    ].join('|');
+    ]);
   }
   return 'file';
+}
+
+export function workspaceSourceSnapshotKey(source: WorkspaceSource): string {
+  return `${workspaceSourceIdentity(source)}|${source.importedAt}`;
 }
 
 function sanitizeWorkspaceSource(raw: unknown): WorkspaceSource | null {
@@ -425,7 +428,8 @@ function sanitizeWorkspaceSource(raw: unknown): WorkspaceSource | null {
   if (importedAt === undefined) return null;
   const applied = sanitizeAppliedFields(source.applied);
   const name = nonEmptyString(source.name);
-  const kind = nonEmptyString(source.kind) ?? (nonEmptyString(source.url) ? 'url' : null);
+  // 旧版文件导入只记录 name/importedAt/applied，没有 kind；无 URL 时按 file 迁移。
+  const kind = nonEmptyString(source.kind) ?? (nonEmptyString(source.url) ? 'url' : 'file');
   const follow = typeof source.follow === 'boolean' ? source.follow : undefined;
   const lastCheckedAt = finiteTimestamp(source.lastCheckedAt);
   try {
@@ -565,7 +569,8 @@ export function mergeAppliedFields(
           : {}),
     };
   }
-  const url = normalizeUrl(update.url ?? previous?.url, 'workspaceSource.url');
+  const previousUrl = previous?.kind === 'url' ? previous.url : undefined;
+  const url = normalizeUrl(update.url ?? previousUrl, 'workspaceSource.url');
   const next: UrlWorkspaceSource = {
     kind: 'url',
     url,

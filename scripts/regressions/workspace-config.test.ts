@@ -395,7 +395,7 @@ test('同一 URL 重新应用保留跟随偏好和检查时间，本地文件会
   );
 });
 
-test('loadWorkspaceSource 兼容旧版 url 结构并在读取时清洗脏记录', () => {
+test('loadWorkspaceSource 兼容旧版 URL / 文件结构并在读取时清洗脏记录', () => {
   withMockLocalStorage((storage) => {
     storage.setItem('rcx-workspace-source', JSON.stringify({
       url: 'https://alice:pw@git.example.com/raw/rcx.workspace.json/',
@@ -418,6 +418,18 @@ test('loadWorkspaceSource 兼容旧版 url 结构并在读取时清洗脏记录'
       applied: { 'server.url': 'https://chat.example.com' },
       follow: true,
       lastCheckedAt: 24,
+    });
+
+    storage.setItem('rcx-workspace-source', JSON.stringify({
+      name: '旧版文件导入',
+      importedAt: 30,
+      applied: { 'server.url': 'https://chat.example.com' },
+    }));
+    assert.deepEqual(loadWorkspaceSource(), {
+      kind: 'file',
+      name: '旧版文件导入',
+      importedAt: 30,
+      applied: { 'server.url': 'https://chat.example.com' },
     });
   });
 });

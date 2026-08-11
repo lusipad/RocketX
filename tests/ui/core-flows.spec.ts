@@ -1009,6 +1009,78 @@ test('桌面重启后会重新授权并检查团队配置 URL', async ({ page })
   expect(pageErrors).toEqual([]);
 });
 
+test('工作区设置可从当前 ADO 仓库读取、预览并应用团队配置', async ({ page }, testInfo) => {
+  const adoRequests: Array<{ url: string; authorization?: string }> = [];
+  await page.route('https://ado.example.com/**', async (route) => {
+    const request = route.request();
+    adoRequests.push({
+      url: request.url(),
+      authorization: await request.headerValue('authorization') ?? undefined,
+    });
+    const url = new URL(request.url());
+    if (url.pathname.includes('/_apis/git/repositories/')) {
+      return fulfillJson(route, {
+        content: JSON.stringify({
+          version: 1,
+          name: 'ADO 团队',
+          update: { source: 'dir', location: '\\\\fileserver\\software\\rocketx' },
+        }),
+      });
+    }
+    return fulfillJson(route, { id: 'project-road-map', name: 'Road Map' });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      mode: 'direct',
+      adoBase: 'https://ado.example.com/tfs/DefaultCollection',
+      auth: 'pat',
+      pat: 'workspace-pat',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await expect(page.getByText('从当前 Azure DevOps 仓库读取', { exact: true })).toBeVisible();
+  await expect(page.getByText('读取前请填写：项目、仓库', { exact: true })).toBeVisible();
+  await page.getByLabel('ADO 项目').fill('Road Map');
+  await page.getByLabel('ADO 仓库').fill('Rocket X');
+  await page.screenshot({ path: testInfo.outputPath('ado-workspace-config.png'), fullPage: true });
+  await page.getByRole('button', { name: '从 ADO 读取', exact: true }).click();
+
+  await expect(page.getByRole('dialog', { name: '导入「ADO 团队」' })).toBeVisible();
+  const updateSource = page.getByRole('checkbox', { name: /更新源/ });
+  await expect(updateSource).not.toBeChecked();
+  await updateSource.check();
+  await page.getByRole('button', { name: '应用 1 项', exact: true }).click();
+  await expect(page.getByText('上次导入：ADO 团队')).toBeVisible();
+
+  const stored = await page.evaluate(() => ({
+    source: JSON.parse(localStorage.getItem('rcx-workspace-source') ?? '{}'),
+    update: JSON.parse(localStorage.getItem('rcx-update-source') ?? '{}'),
+  }));
+  expect(stored.source).toMatchObject({
+    kind: 'ado',
+    follow: true,
+    ado: {
+      adoBase: 'https://ado.example.com/tfs/DefaultCollection',
+      auth: 'pat',
+      project: 'Road Map',
+      repository: 'Rocket X',
+      ref: 'refs/heads/main',
+      path: '/config/rcx.workspace.json',
+    },
+  });
+  expect(JSON.stringify(stored.source)).not.toContain('workspace-pat');
+  expect(stored.update).toEqual({ kind: 'dir', location: '\\\\fileserver\\software\\rocketx' });
+  expect(adoRequests).toHaveLength(2);
+  expect(adoRequests.every((request) => request.authorization?.startsWith('Basic '))).toBe(true);
+  expect(adoRequests[1]?.url).toContain('versionDescriptor.version=main');
+  expect(adoRequests[1]?.url).toContain('versionDescriptor.versionType=branch');
+  expect(pageErrors).toEqual([]);
+});
+
 test('团队 ADO 端点变化会解绑 PAT，并保持旧 AI 设置不被工作区导入接管', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rcx-workbench', JSON.stringify({
