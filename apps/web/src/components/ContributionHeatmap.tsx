@@ -92,9 +92,12 @@ export default function ContributionHeatmap({
   const maximum = Math.max(0, ...weeks.flat().map((day) => day.count));
 
   return (
-    <section aria-label="贡献日历" className="rounded-xl border border-line bg-surface-3 p-4">
-      <div className="overflow-x-auto pb-2">
-        <div className="min-w-max">
+    <section
+      aria-label="贡献日历"
+      className="mx-auto w-fit max-w-full rounded-xl border border-line bg-surface-3 p-4"
+    >
+      <div className="max-w-full overflow-x-auto pb-2">
+        <div className="mx-auto w-max">
           <div className="mb-1 ml-8 flex gap-1" aria-hidden="true">
             {labels.map((label, index) => (
               <span key={`${index}-${label ?? ''}`} className="w-3 whitespace-nowrap text-[10px] text-ink-3">
@@ -142,19 +145,22 @@ export default function ContributionHeatmap({
               ))}
             </div>
           </div>
+          <div
+            aria-label="贡献强度图例"
+            className="mt-3 flex items-center justify-end gap-1 text-[11px] text-ink-3"
+          >
+            <span className="mr-1">较少</span>
+            {LEVEL_COLORS.map((color, index) => (
+              <span
+                key={color}
+                aria-label={`贡献强度 ${index}`}
+                className="h-3 w-3 rounded-[3px] border border-line/60"
+                style={{ background: color }}
+              />
+            ))}
+            <span className="ml-1">较多</span>
+          </div>
         </div>
-      </div>
-      <div className="mt-3 flex items-center justify-end gap-1 text-[11px] text-ink-3">
-        <span className="mr-1">较少</span>
-        {LEVEL_COLORS.map((color, index) => (
-          <span
-            key={color}
-            aria-label={`贡献强度 ${index}`}
-            className="h-3 w-3 rounded-[3px] border border-line/60"
-            style={{ background: color }}
-          />
-        ))}
-        <span className="ml-1">较多</span>
       </div>
     </section>
   );

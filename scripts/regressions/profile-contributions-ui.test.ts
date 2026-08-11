@@ -72,6 +72,8 @@ test('个人贡献页保留正式导航、键盘格子、覆盖警告与中性�
   assert.match(runtime, /\['contributions', '贡献', ProfileContributionsModule, SquareActivity\]/);
   assert.match(nav, /contributions: \{ label: '贡献', icon: SquareActivity \}/);
   assert.match(heatmap, /<button[\s\S]*aria-label=\{label\}[\s\S]*aria-pressed=\{selectedDay === day\.day\}[\s\S]*title=\{label\}/);
+  assert.match(heatmap, /mx-auto w-fit max-w-full rounded-xl/);
+  assert.match(heatmap, /mx-auto w-max[\s\S]*aria-label="贡献强度图例"/);
   assert.match(page, /数据覆盖说明/);
   assert.match(page, /仅部分覆盖/);
   assert.match(page, /status\.state === 'partial' && status\.count > 0/);
