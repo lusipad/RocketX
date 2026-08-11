@@ -72,6 +72,7 @@ const baseView = {
 test('模块快捷键顺序不再包含独立 Codex 页面，全局入口只保留管家工作区', () => {
   assert.deepEqual(MODULE_ORDER, [
     'messages',
+    'contributions',
     'workbench',
     'butler-view',
     'todos',
