@@ -6,12 +6,13 @@ import { toast } from './toast';
 
 export type CodexRuntimePhase = 'idle' | 'checking' | 'ready' | 'unavailable' | 'web';
 export type CodexCompatibilityStatus = 'verified' | 'untested-newer' | 'blocked';
+export type CodexRuntimeSource = 'manual' | 'bundled' | 'standard' | 'system';
 export type CodexRuntimeReasonCode =
   'not-found' | 'outdated' | 'manual-path' | 'missing-app-server' | 'not-logged-in' | 'unavailable';
 export type CodexRuntimeCandidateOutcome = 'selected' | 'rejected';
 
 export interface CodexRuntimeCandidate {
-  source: 'manual' | 'bundled' | 'system';
+  source: CodexRuntimeSource;
   path: string;
   version?: string;
   outcome: CodexRuntimeCandidateOutcome;
@@ -22,7 +23,7 @@ export interface CodexRuntimeProbe {
   ready: boolean;
   version?: string;
   executablePath?: string;
-  source?: 'manual' | 'bundled' | 'system';
+  source?: CodexRuntimeSource;
   protocolBaseline: string;
   minimumCandidate: string;
   verifiedVersions: string[];
@@ -175,6 +176,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
       if (revision !== probeRevision) return;
       const candidates = normalizedCandidates(result.candidates);
       await logProbeCandidates(candidates);
+      if (revision !== probeRevision) return;
       if (result.ready && result.compatibilityStatus !== 'blocked') {
         clearUnavailableSignature();
         set({
@@ -192,7 +194,7 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
         });
         return;
       }
-      const reason = result.reason || 'Codex 暂不可用';
+      const reason = sanitizeDiagnosticText(result.reason || 'Codex 暂不可用');
       activateUnavailable(reason, result.reasonCode);
       set({
         phase: 'unavailable',
@@ -209,7 +211,9 @@ export const useCodexRuntime = create<CodexRuntimeState>((set) => ({
       });
     } catch (error) {
       if (revision !== probeRevision) return;
-      const reason = `Codex 检测失败：${error instanceof Error ? error.message : String(error)}`;
+      const reason = sanitizeDiagnosticText(
+        `Codex 检测失败：${error instanceof Error ? error.message : String(error)}`,
+      );
       activateUnavailable(reason, 'unavailable');
       set({
         phase: 'unavailable',

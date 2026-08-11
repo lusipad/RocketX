@@ -11,11 +11,12 @@ test('诊断文本会遮蔽常见凭据并移除换行注入', () => {
     'Authorization: Bearer secret X-Auth-Token=abc password=hunter2 ' +
     'PAT: pat-value https://user:pass@example.com/path?token=query-secret ' +
     'C:\\Users\\alice\\AppData\\Local\\Programs\\Codex\\codex.exe ' +
+    'D:\\users\\bob\\AppData\\Roaming\\Codex\\auth.json ' +
     '/Users/alice/Library/Codex/bin/codex ' +
     '/home/alice/.config/codex/auth.json\nforged';
   const safe = sanitizeDiagnosticText(input);
 
-  for (const secret of ['secret', 'abc', 'hunter2', 'pat-value', 'user:pass', 'query-secret', 'alice']) {
+  for (const secret of ['secret', 'abc', 'hunter2', 'pat-value', 'user:pass', 'query-secret', 'alice', 'bob']) {
     assert.equal(safe.includes(secret), false);
   }
   assert.equal(safe.includes('\n'), false);

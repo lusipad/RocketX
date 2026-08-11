@@ -41,6 +41,18 @@ function codexReasonLabel(reasonCode: ReturnType<typeof useCodexRuntime.getState
   }
 }
 
+function codexSourceName(source: ReturnType<typeof useCodexRuntime.getState>['source']): string {
+  return source === 'manual'
+    ? '手动'
+    : source === 'system'
+      ? '系统'
+      : source === 'standard'
+        ? '标准安装'
+        : source === 'bundled'
+          ? '内置'
+          : '未知';
+}
+
 export default function AiSettings() {
   const [manualCodexPath, setManualCodexPathState] = useState(getCodexManualPath);
   const [ocrRuntime, setOcrRuntime] = useState<ImageOcrRuntimeProbe>();
@@ -57,9 +69,11 @@ export default function AiSettings() {
     ? '手动指定'
     : codexRuntime.source === 'system'
       ? '系统 Codex'
-      : codexRuntime.source === 'bundled'
-        ? 'RocketX 内置 Codex'
-        : '未检测到';
+      : codexRuntime.source === 'standard'
+        ? '标准位置 Codex'
+        : codexRuntime.source === 'bundled'
+          ? 'RocketX 内置 Codex'
+          : '未检测到';
   const codexCompatibilityLabel = codexRuntime.compatibilityStatus === 'verified'
     ? '已验证'
     : codexRuntime.compatibilityStatus === 'untested-newer'
@@ -102,7 +116,9 @@ export default function AiSettings() {
                   <p>判定：{codexReasonLabel(codexRuntime.reasonCode)}</p>
                   {codexRuntime.version ? <p>版本：{codexRuntime.version}</p> : null}
                   {codexRuntime.source ? <p>来源：{codexSourceLabel}</p> : null}
-                  {codexRuntime.executablePath ? <p>路径：{codexRuntime.executablePath}</p> : null}
+                  {codexRuntime.executablePath ? (
+                    <p>路径：<span className="break-all font-mono">{codexRuntime.executablePath}</span></p>
+                  ) : null}
                   {codexRuntime.protocolBaseline ? <p>协议基线：{codexRuntime.protocolBaseline}</p> : null}
                 </div>
                 {codexRuntime.reasonCode === 'not-found' ? (
@@ -170,14 +186,16 @@ export default function AiSettings() {
               </div>
             </Row>
           ) : null}
-          <Row label="运行时" hint="默认使用系统 Codex；只有需要固定另一份安装时才填写手动路径。">
+          <Row label="运行时" hint="默认自动检测系统和标准安装位置；只有需要固定另一份安装时才填写手动路径。">
             <div className="space-y-2">
               <p className="text-sm text-ink-2">
                 {codexSourceLabel}
                 {codexRuntime.version ? ` · ${codexRuntime.version}` : ''}
                 {codexCompatibilityLabel ? ` · ${codexCompatibilityLabel}` : ''}
-                {codexRuntime.executablePath ? ` · ${codexRuntime.executablePath}` : ''}
               </p>
+              {codexRuntime.executablePath ? (
+                <p className="break-all font-mono text-xs leading-5 text-ink-3">{codexRuntime.executablePath}</p>
+              ) : null}
               <div className="flex max-w-2xl items-center gap-2">
                 <input
                   aria-label="手动 Codex 路径"
@@ -220,8 +238,8 @@ export default function AiSettings() {
                   <div className="mt-2 space-y-2 text-xs leading-5 text-ink-2">
                     {rejectedCandidates.map((candidate, index) => (
                       <div key={`${candidate.source}:${candidate.path}:${index}`} className="rounded-md bg-fill px-2 py-1">
-                        <p>{candidate.source} · {candidate.reasonCode ? codexReasonLabel(candidate.reasonCode) : '已跳过'}</p>
-                        <p>{candidate.path}</p>
+                        <p>{codexSourceName(candidate.source)} · {candidate.reasonCode ? codexReasonLabel(candidate.reasonCode) : '已跳过'}</p>
+                        <p className="break-all font-mono">{candidate.path}</p>
                         {candidate.version ? <p>版本：{candidate.version}</p> : null}
                       </div>
                     ))}

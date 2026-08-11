@@ -269,6 +269,8 @@ async function installFullTauriMock(page: Page) {
             };
           }
           if (command === 'codex_runtime_probe') {
+            const probeWindow = window as Window & { __codexProbeCount?: number };
+            probeWindow.__codexProbeCount = (probeWindow.__codexProbeCount ?? 0) + 1;
             return {
               ready: true,
               version: '0.145.0',
@@ -278,6 +280,21 @@ async function installFullTauriMock(page: Page) {
               minimumCandidate: '0.140.0',
               verifiedVersions: ['0.144.4'],
               compatibilityStatus: 'untested-newer',
+              candidates: [
+                {
+                  source: 'standard',
+                  path: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex-old.cmd',
+                  version: '0.144.1',
+                  outcome: 'rejected',
+                  reasonCode: 'outdated',
+                },
+                {
+                  source: 'system',
+                  path: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
+                  version: '0.145.0',
+                  outcome: 'selected',
+                },
+              ],
             };
           }
           if (command === 'image_ocr_runtime_probe') {
@@ -1977,6 +1994,14 @@ test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局
 test('本地工作区归入工作区设置，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as Window & { __copiedText?: string }).__copiedText = value;
+        },
+      },
+    });
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
       environments: [{
@@ -2002,14 +2027,37 @@ test('本地工作区归入工作区设置，AI 设置只保留模型运行配�
   await expect(page.getByLabel('AI 托管 Codex 模型')).toHaveCount(0);
   await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveCount(0);
   await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveCount(0);
-  await expect(page.getByText(/系统 Codex · 0\.145\.0 · 新版待验证 · .*codex\.cmd/)).toBeVisible();
+  await expect(page.getByText('系统 Codex · 0.145.0 · 新版待验证', { exact: true })).toBeVisible();
+  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd', { exact: true })).toBeVisible();
   await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
+  await expect(page.getByText('查看 1 个被跳过的候选')).toBeVisible();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
+  await page.getByText('查看 1 个被跳过的候选').click();
+  await expect(page.getByText('标准安装 · 版本过旧')).toBeVisible();
+  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex-old.cmd', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '复制诊断摘要' }).click();
+  const copiedSummary = await page.evaluate(() => (
+    window as Window & { __copiedText?: string }
+  ).__copiedText ?? '');
+  expect(copiedSummary).toContain('protocolBaseline: 0.144.4');
+  expect(copiedSummary).toContain('candidate[0]: source=standard outcome=rejected');
+  expect(copiedSummary).toContain('reasonCode=outdated');
+  expect(copiedSummary).not.toContain('tester');
+  expect(copiedSummary).not.toContain('0.140.0');
+
+  const probeCountBeforeRetry = await page.evaluate(() => (
+    window as Window & { __codexProbeCount?: number }
+  ).__codexProbeCount ?? 0);
+  await page.getByRole('button', { name: '重新检测' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __codexProbeCount?: number }
+  ).__codexProbeCount ?? 0)).toBeGreaterThan(probeCountBeforeRetry);
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '本地工作区' })).not.toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
-  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
 
   await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
   await expect(page.getByRole('heading', { name: '本地工作区' })).toBeVisible();

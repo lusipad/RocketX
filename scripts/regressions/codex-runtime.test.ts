@@ -148,7 +148,7 @@ test('桌面启动时 Codex probe 只保留路径/版本门禁，不再耦合旧
       verifiedVersions: ['0.144.4'],
       compatibilityStatus: 'blocked',
       reasonCode: 'manual-path',
-      reason: '手动指定的 Codex 不可用：找到 Codex 0.144.1，但低于 RocketX 所需的协议基线 0.144.4；请升级后重新检测 token=manual-secret',
+      reason: '手动指定的 Codex 不可用：找到 Codex 0.144.1，但低于 RocketX 所需的协议基线 0.144.4；详情 C:\\Users\\alice\\AppData\\Local\\Codex\\auth.json token=manual-secret',
       candidates: [{
         source: 'manual',
         path: 'C:\\Users\\alice\\AppData\\Local\\Programs\\Codex\\codex.exe',
@@ -163,6 +163,9 @@ test('桌面启动时 Codex probe 只保留路径/版本门禁，不再耦合旧
     assert.equal(useCodexRuntime.getState().reasonCode, 'manual-path');
     assert.equal(useToast.getState().toasts.length, 1);
     assert.match(useToast.getState().toasts[0]?.message ?? '', /手动指定的 Codex 不可用/);
+    assert.equal(useCodexRuntime.getState().reason?.includes('alice'), false);
+    assert.equal(useCodexRuntime.getState().reason?.includes('manual-secret'), false);
+    assert.equal(useToast.getState().toasts[0]?.message.includes('manual-secret'), false);
 
     const summary = buildCodexDiagnosticSummary(useCodexRuntime.getState());
     assert.match(summary, /protocolBaseline: 0\.144\.4/);
@@ -173,6 +176,69 @@ test('桌面启动时 Codex probe 只保留路径/版本门禁，不再耦合旧
 
     await useCodexRuntime.getState().probe();
     assert.equal(useToast.getState().toasts.length, 1);
+
+    let releaseFirstDiagnostic = () => {};
+    let markFirstDiagnosticStarted = () => {};
+    const firstDiagnosticStarted = new Promise<void>((resolve) => {
+      markFirstDiagnosticStarted = resolve;
+    });
+    const firstDiagnosticRelease = new Promise<void>((resolve) => {
+      releaseFirstDiagnostic = resolve;
+    });
+    let raceDiagnosticCalls = 0;
+    const restoreRaceWriter = setCodexRuntimeDiagnosticWriter(async () => {
+      raceDiagnosticCalls += 1;
+      if (raceDiagnosticCalls !== 1) return;
+      markFirstDiagnosticStarted();
+      await firstDiagnosticRelease;
+    });
+    try {
+      result = {
+        ready: true,
+        version: '0.144.4',
+        executablePath: 'C:\\Old\\codex.exe',
+        source: 'standard',
+        protocolBaseline: '0.144.4',
+        minimumCandidate: '0.140.0',
+        verifiedVersions: ['0.144.4'],
+        compatibilityStatus: 'verified',
+        candidates: [{
+          source: 'standard',
+          path: 'C:\\Old\\codex.exe',
+          version: '0.144.4',
+          outcome: 'selected',
+        }],
+      };
+      const staleProbe = useCodexRuntime.getState().probe();
+      await firstDiagnosticStarted;
+
+      result = {
+        ready: true,
+        version: '0.145.0',
+        executablePath: 'C:\\New\\codex.exe',
+        source: 'system',
+        protocolBaseline: '0.144.4',
+        minimumCandidate: '0.140.0',
+        verifiedVersions: ['0.144.4'],
+        compatibilityStatus: 'untested-newer',
+        candidates: [{
+          source: 'system',
+          path: 'C:\\New\\codex.exe',
+          version: '0.145.0',
+          outcome: 'selected',
+        }],
+      };
+      await useCodexRuntime.getState().probe();
+      releaseFirstDiagnostic();
+      await staleProbe;
+
+      assert.equal(useCodexRuntime.getState().version, '0.145.0');
+      assert.equal(useCodexRuntime.getState().executablePath, 'C:\\New\\codex.exe');
+      assert.equal(useCodexRuntime.getState().source, 'system');
+    } finally {
+      releaseFirstDiagnostic();
+      restoreRaceWriter();
+    }
   } finally {
     resetCodexRuntimeForTests();
     useToast.setState({ toasts: [] });

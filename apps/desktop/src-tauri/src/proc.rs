@@ -78,6 +78,7 @@ pub struct CodexProcessInfo {
 pub enum CodexRuntimeSource {
     Manual,
     Bundled,
+    Standard,
     System,
 }
 
@@ -484,7 +485,7 @@ where
         } else {
             vec![
                 (system_paths, CodexRuntimeSource::System),
-                (standard_paths, CodexRuntimeSource::System),
+                (standard_paths, CodexRuntimeSource::Standard),
                 (bundled_paths, CodexRuntimeSource::Bundled),
             ]
         };
@@ -826,7 +827,7 @@ where
     let mut rejected = Vec::new();
     for (paths, source) in [
         (system_paths, CodexRuntimeSource::System),
-        (standard_paths, CodexRuntimeSource::System),
+        (standard_paths, CodexRuntimeSource::Standard),
         (bundled_paths, CodexRuntimeSource::Bundled),
     ] {
         for path in paths {
@@ -3586,7 +3587,7 @@ param(
             |_| Ok("0.145.0".to_string()),
         )
         .unwrap();
-        assert_eq!(fallback.source, CodexRuntimeSource::System);
+        assert_eq!(fallback.source, CodexRuntimeSource::Standard);
         assert_eq!(
             PathBuf::from(fallback.display_path),
             PathBuf::from(host_path(&standard.canonicalize().unwrap()))
@@ -3634,7 +3635,7 @@ param(
             },
         )
         .unwrap();
-        assert_eq!(fallback.source, CodexRuntimeSource::System);
+        assert_eq!(fallback.source, CodexRuntimeSource::Standard);
         assert_eq!(
             PathBuf::from(fallback.display_path),
             PathBuf::from(host_path(&standard.canonicalize().unwrap()))
@@ -3718,7 +3719,7 @@ param(
         );
 
         assert!(probe.ready);
-        assert_eq!(probe.source, Some(CodexRuntimeSource::System));
+        assert_eq!(probe.source, Some(CodexRuntimeSource::Standard));
         assert_eq!(probe.version.as_deref(), Some("0.144.4"));
         assert_eq!(probe.reason_code, None);
         assert_eq!(probe.candidates.len(), 2);
@@ -3950,17 +3951,20 @@ param(
         assert_eq!(probe["verifiedVersions"], json!(["0.144.4"]));
         assert_eq!(probe["compatibilityStatus"], "verified");
         assert!(probe["reasonCode"].is_null());
+        assert_eq!(probe["candidates"][0]["source"], "manual");
         assert_eq!(probe["candidates"][0]["outcome"], "selected");
         assert_eq!(probe["candidates"][0]["path"], "C:\\Tools\\codex.exe");
+        let standard_source = serde_json::to_value(CodexRuntimeSource::Standard).unwrap();
+        assert_eq!(standard_source, json!("standard"));
         let process = serde_json::to_value(CodexProcessInfo {
             process_id: "test-process".to_string(),
             version: "0.144.4".to_string(),
             runtime_workspace_root: "C:\\workspace".to_string(),
-            runtime_source: CodexRuntimeSource::Bundled,
+            runtime_source: CodexRuntimeSource::Standard,
             managed_skill_roots: vec!["C:\\RocketX\\skills".to_string()],
         })
         .unwrap();
-        assert_eq!(process["runtimeSource"], "bundled");
+        assert_eq!(process["runtimeSource"], "standard");
         assert_eq!(process["managedSkillRoots"], json!(["C:\\RocketX\\skills"]));
     }
 

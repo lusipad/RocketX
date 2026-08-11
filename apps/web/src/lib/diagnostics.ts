@@ -5,8 +5,8 @@ export type DiagnosticLevel = 'info' | 'warn' | 'error';
 const SECRET_VALUE = /(["']?(?:authorization|x-auth-token|x-user-id|password|passwd|pat|token|authToken)["']?\s*[:=]\s*)(?:Bearer\s+|Basic\s+)?["']?([^\s,;&"']+)["']?/gi;
 const SECRET_QUERY = /([?&](?:password|passwd|pat|token|authToken|access_token)=)[^&#\s]*/gi;
 const URL_CREDENTIALS = /(https?:\/\/)[^\s/:@]+:[^\s/@]+@/gi;
-const WINDOWS_HOME_PATH = /([A-Za-z]:\\Users\\)([^\\\r\n"' ]+)((?:\\[^\\\r\n"']+)*)/g;
-const UNIX_HOME_PATH = /(\/(?:Users|home)\/)([^/\r\n"' ]+)((?:\/[^\s/\r\n"']+)*)/g;
+const WINDOWS_HOME_PATH = /([A-Za-z]:\\Users\\)([^\\\r\n"' ]+)((?:\\[^\s\\\r\n"']+)*)/gi;
+const UNIX_HOME_PATH = /(\/(?:Users|home)\/)([^/\r\n"' ]+)((?:\/[^\s/\r\n"']+)*)/gi;
 
 function redactHomePathTail(prefix: string, rest: string, separator: '\\' | '/'): string {
   const parts = rest
