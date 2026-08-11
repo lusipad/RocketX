@@ -7,6 +7,7 @@ import type {
   CodexRuntimeSelection,
 } from '../../apps/web/src/agent/AppServerController';
 import type { AgentSession } from '../../apps/web/src/agent/session';
+import type { RcMessage } from '@rcx/rc-client';
 
 const values = new Map<string, string>();
 let restoreAgentSessionAppData: (() => void) | undefined;
@@ -75,6 +76,17 @@ function interruptedSession(tmid: string, overrides: Partial<AgentSession> = {})
     sandboxMode: 'read-only',
     updatedAt: now,
     ...overrides,
+  };
+}
+
+function commandMessage(tmid: string, userId: string, username: string): RcMessage {
+  return {
+    _id: `message-${tmid}-${userId}`,
+    rid: `room-${tmid}`,
+    tmid,
+    msg: '@ai 请检查当前进度',
+    ts: new Date().toISOString(),
+    u: { _id: userId, username, name: username },
   };
 }
 
@@ -274,6 +286,79 @@ test('AI 托管恢复会话时使用独立模型与推理强度，权限仍跟�
       effort: 'high',
       permissionPreset: 'auto',
     });
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('仅宿主模式静默忽略非宿主指令，不向房间冒出权限拒绝', { concurrency: false }, async () => {
+  const target = interruptedSession('host-only-silent', {
+    status: 'ready',
+    activeTurnId: undefined,
+    access: 'host-only',
+  });
+  const { useSharedAgent } = await loadModules();
+  await prepareStore([target]);
+  const chat = await import('../../apps/web/src/stores/chat');
+  const sends: string[] = [];
+  const originalSend = chat.useChat.getState().send;
+  chat.useChat.setState({
+    send: (async (text: string) => {
+      sends.push(text);
+      return { id: 'unexpected', delivery: 'server' as const };
+    }) as typeof originalSend,
+  });
+
+  try {
+    await useSharedAgent.getState().handleMessage(commandMessage(target.tmid, 'member-user', 'member'));
+    assert.deepEqual(sends, []);
+  } finally {
+    chat.useChat.setState({ send: originalSend });
+  }
+});
+
+test('AI 托管在执行期间先向房间发送持续可见的思考反馈', { concurrency: false }, async () => {
+  const target = interruptedSession('thinking-feedback', {
+    status: 'ready',
+    activeTurnId: undefined,
+  });
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  const invocations: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {
+      invoke: async (command: string, args?: Record<string, unknown>) => {
+        invocations.push({ command, args });
+        return [];
+      },
+    },
+  });
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'startTurn') return 'turn-thinking-feedback';
+      return { id: target.codexThreadId! };
+    });
+    fake = built.state;
+    return built.controller as never;
+  });
+
+  try {
+    const handling = useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(
+      invocations.some((entry) => entry.command === 'agent_bot_send'
+        && entry.args?.text === '🤖 Codex 已收到，正在思考…'),
+      true,
+    );
+    fake.options.onNotification?.('turn/completed', {
+      threadId: target.codexThreadId,
+      turn: { id: 'turn-thinking-feedback', status: 'completed' },
+    });
+    await handling;
   } finally {
     restoreFactory();
   }

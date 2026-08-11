@@ -601,7 +601,7 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
 });
 
-test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务', async ({ page }) => {
+test('管家任务运行时打开房间 Codex 会给出准确状态且不会抢占任务', async ({ page }) => {
   await bootAuthenticated(page);
   await installCodexRuntime(page);
   await page.evaluate(async () => {
@@ -609,6 +609,7 @@ test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务'
     const { useCodexWorkspace } = await loadWorkspace();
     useCodexWorkspace.setState({
       status: 'running',
+      workspaceRoot: useCodexWorkspace.getState().butlerWorkspaceRoot,
       activeThreadId: 'thread-release',
       activeTurnId: 'turn-running-elsewhere',
     });
@@ -617,12 +618,31 @@ test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务'
   await page.getByText('General', { exact: true }).first().click();
   await page.getByRole('button', { name: '打开房间管家' }).click();
   const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByRole('alert')).toContainText('另一个 Codex 任务正在运行');
+  await expect(panel.getByRole('alert')).toContainText('AI 管家正在处理任务');
+  await expect(panel.getByRole('alert')).not.toContainText('另一个 Codex');
   await expect(panel.getByPlaceholder(/在这个会话里继续提问|输入后续要求/)).toBeDisabled();
   expect(await page.evaluate(() => ({
     interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
     stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
   }))).toEqual({ interrupts: 0, stops: 0 });
+});
+
+test('房间 Codex 在首段回复到达前持续显示思考反馈', async ({ page }) => {
+  await bootAuthenticated(page);
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({ status: 'running', activeTurnId: 'turn-thinking', streamingText: '' });
+  });
+
+  await expect(panel.getByRole('status')).toContainText('Codex 正在思考');
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toHaveCount(0);
 });
 
 test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目栏并支持右键浏览器打开', async ({ page }) => {
