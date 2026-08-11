@@ -20,6 +20,21 @@ test('正式版启动时会把已有启动项刷新到当前可执行文件', ()
   assert.match(source, /cfg!\(debug_assertions\)/);
 });
 
+test('系统登录自启动带来源标记且主窗口默认保持隐藏', () => {
+  const source = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+  const config = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8')) as {
+    app: { windows: Array<{ visible?: boolean }> };
+  };
+  assert.match(source, /const AUTOSTART_ARG: &str = "--autostart"/);
+  assert.match(source, /Some\(vec!\[AUTOSTART_ARG\]\)/);
+  assert.match(source, /is_autostart_launch/);
+  assert.match(source, /let show_main_on_launch = launch_opens_main_window\(&launch_args\)/);
+  assert.match(source, /if show_main_on_launch \{\s*show_main\(app\.handle\(\)\);\s*\}/);
+  assert.match(settings, /登录系统后会静默启动到托盘/);
+  assert.equal(config.app.windows[0]?.visible, false);
+});
+
 test('Debug 版不会允许登记依赖开发服务器的启动项', () => {
   const source = readFileSync('apps/web/src/lib/autostart.ts', 'utf8');
   assert.match(source, /import\.meta\.env\?\.DEV/);

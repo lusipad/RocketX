@@ -596,7 +596,7 @@ function DesktopSection() {
       : error
         ? `读取或保存失败：${error}`
         : enabled
-          ? '已开启，登录系统后会自动启动 RocketX'
+          ? '已开启，登录系统后会静默启动到托盘'
           : '已关闭';
 
   const exportLogs = async () => {

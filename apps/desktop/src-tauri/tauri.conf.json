@@ -18,6 +18,7 @@
         "minWidth": 940,
         "minHeight": 640,
         "center": true,
+        "visible": false,
         "dragDropEnabled": false
       }
     ],
