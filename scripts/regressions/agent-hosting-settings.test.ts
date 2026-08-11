@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('AI 托管使用账号级独立模型配置，审批权限仍由 AI 管家统一管理', () => {
+test('AI 托管使用账号级独立模型配置，但不在管家会话常驻配置横幅', () => {
   const sharedAgent = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
   const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
@@ -16,9 +16,9 @@ test('AI 托管使用账号级独立模型配置，审批权限仍由 AI 管家�
   assert.match(workspace, /hostingEffort/);
   assert.match(workspace, /setHostingModel/);
   assert.match(workspace, /setHostingEffort/);
-  assert.match(conversation, /aria-label="AI 托管设置"/);
-  assert.match(conversation, /ariaLabel="AI 托管模型"/);
-  assert.match(conversation, /ariaLabel="AI 托管推理强度"/);
+  assert.doesNotMatch(conversation, /aria-label="AI 托管设置"/);
+  assert.doesNotMatch(conversation, /ariaLabel="AI 托管模型"/);
+  assert.doesNotMatch(conversation, /ariaLabel="AI 托管推理强度"/);
   assert.doesNotMatch(sharedAgent, /agentHostingSettings|getAgentHostingCodexSettings/);
   assert.doesNotMatch(settings, /AI 托管 Codex 模型|AI 托管 Codex 推理强度|AI 托管 Codex 权限/);
 });

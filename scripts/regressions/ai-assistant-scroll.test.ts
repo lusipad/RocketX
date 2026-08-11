@@ -15,6 +15,11 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   );
   assert.match(conversation, /<main ref=\{scrollRef\} onScroll=\{onScroll\} className="codex-native-transcript">/);
   assert.match(conversation, /stickToBottom\.current = true/);
+  assert.match(conversation, /\{streamingText\}/);
+  assert.doesNotMatch(conversation, /renderMarkdown\(streamingText/);
+
+  const styles = readFileSync('apps/web/src/styles.css', 'utf8');
+  assert.match(styles, /\.codex-native-transcript\s*\{[^}]*overflow-anchor:\s*none/s);
 
   const agentPanel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
   assert.match(agentPanel, /useStickToBottom\(\[sessionTraces\]\)/);

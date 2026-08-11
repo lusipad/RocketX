@@ -440,6 +440,34 @@ test('桌面壳锁住根视口，只允许内容面板自己滚动', async ({ pa
   }))).toEqual({ html: 'hidden', body: 'hidden', root: 'hidden', scrollY: 0 });
 });
 
+test('管家输出保持稳定文本流且输入区不常驻 AI 托管横幅（issue #282）', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'running',
+      messages: Array.from({ length: 24 }, (_, index) => ({
+        id: `issue-282-history-${index}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        text: `历史消息 ${index} `.repeat(8),
+      })),
+      streamingText: '## 尚未完成的标题\n\n- 正在输出的条目',
+    });
+  });
+
+  const transcript = page.locator('.codex-native-transcript');
+  const streaming = transcript.locator('.codex-native-message.is-streaming');
+  await expect(streaming).toContainText('## 尚未完成的标题');
+  await expect(streaming.getByRole('heading')).toHaveCount(0);
+  await expect.poll(() => transcript.evaluate((element) => getComputedStyle(element).overflowAnchor)).toBe('none');
+  await expect(page.getByRole('region', { name: 'AI 托管设置' })).toHaveCount(0);
+  await expect.poll(() => transcript.evaluate((element) => (
+    element.scrollHeight - element.scrollTop - element.clientHeight
+  ))).toBeLessThan(2);
+});
+
 test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请求、已安排、插件和项目结构', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await openWorkspace(page);
