@@ -63,7 +63,7 @@ import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import { useDialogBehavior } from './Dialog';
-import { findQuoteImage } from '../lib/messageQuote';
+import { findQuoteImage, quoteAttachmentText } from '../lib/messageQuote';
 import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
@@ -247,6 +247,7 @@ function FileAttachment({
 function QuoteCard({ att }: { att: RcMessageAttachment }) {
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const image = findQuoteImage(att);
+  const text = quoteAttachmentText(att);
   // message_link 形如 .../channel/xx?msg=<id>
   const mid = att.message_link?.match(/[?&]msg=([^&]+)/)?.[1];
 
@@ -261,7 +262,11 @@ function QuoteCard({ att }: { att: RcMessageAttachment }) {
       title={mid ? '点击跳转到原消息' : undefined}
     >
       <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
-      <div className="line-clamp-2 text-xs break-words text-ink-3">{att.text}</div>
+      {text && (
+        <div className="line-clamp-2 text-xs break-words whitespace-pre-wrap text-ink-3">
+          {text}
+        </div>
+      )}
       {image?.image_url && (
         <AuthImage
           path={image.image_url}

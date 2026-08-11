@@ -440,6 +440,34 @@ test('桌面壳锁住根视口，只允许内容面板自己滚动', async ({ pa
   }))).toEqual({ html: 'hidden', body: 'hidden', root: 'hidden', scrollY: 0 });
 });
 
+test('管家输出保持稳定文本流且输入区不常驻 AI 托管横幅（issue #282）', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'running',
+      messages: Array.from({ length: 24 }, (_, index) => ({
+        id: `issue-282-history-${index}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        text: `历史消息 ${index} `.repeat(8),
+      })),
+      streamingText: '## 尚未完成的标题\n\n- 正在输出的条目',
+    });
+  });
+
+  const transcript = page.locator('.codex-native-transcript');
+  const streaming = transcript.locator('.codex-native-message.is-streaming');
+  await expect(streaming).toContainText('## 尚未完成的标题');
+  await expect(streaming.getByRole('heading')).toHaveCount(0);
+  await expect.poll(() => transcript.evaluate((element) => getComputedStyle(element).overflowAnchor)).toBe('none');
+  await expect(page.getByRole('region', { name: 'AI 托管设置' })).toHaveCount(0);
+  await expect.poll(() => transcript.evaluate((element) => (
+    element.scrollHeight - element.scrollTop - element.clientHeight
+  ))).toBeLessThan(2);
+});
+
 test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请求、已安排、插件和项目结构', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await openWorkspace(page);
@@ -573,7 +601,7 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
 });
 
-test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务', async ({ page }) => {
+test('管家任务运行时打开房间 Codex 会给出准确状态且不会抢占任务', async ({ page }) => {
   await bootAuthenticated(page);
   await installCodexRuntime(page);
   await page.evaluate(async () => {
@@ -581,6 +609,7 @@ test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务'
     const { useCodexWorkspace } = await loadWorkspace();
     useCodexWorkspace.setState({
       status: 'running',
+      workspaceRoot: useCodexWorkspace.getState().butlerWorkspaceRoot,
       activeThreadId: 'thread-release',
       activeTurnId: 'turn-running-elsewhere',
     });
@@ -589,12 +618,31 @@ test('打开房间 Codex 浮层不会抢占其他工作区正在运行的任务'
   await page.getByText('General', { exact: true }).first().click();
   await page.getByRole('button', { name: '打开房间管家' }).click();
   const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByRole('alert')).toContainText('另一个 Codex 任务正在运行');
+  await expect(panel.getByRole('alert')).toContainText('AI 管家正在处理任务');
+  await expect(panel.getByRole('alert')).not.toContainText('另一个 Codex');
   await expect(panel.getByPlaceholder(/在这个会话里继续提问|输入后续要求/)).toBeDisabled();
   expect(await page.evaluate(() => ({
     interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
     stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
   }))).toEqual({ interrupts: 0, stops: 0 });
+});
+
+test('房间 Codex 在首段回复到达前持续显示思考反馈', async ({ page }) => {
+  await bootAuthenticated(page);
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间管家' }).click();
+  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({ status: 'running', activeTurnId: 'turn-thinking', streamingText: '' });
+  });
+
+  await expect(panel.getByRole('status')).toContainText('Codex 正在思考');
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toHaveCount(0);
 });
 
 test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目栏并支持右键浏览器打开', async ({ page }) => {

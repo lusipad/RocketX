@@ -653,6 +653,9 @@ async function queueCommand(session: AgentSession, message: RcMessage): Promise<
   queues.set(session.tmid, queue);
   await queue.enqueue(async () => {
     try {
+      await sendAgentReply(session, '🤖 Codex 已收到，正在思考…').catch((error) => {
+        trace(session.tmid, 'warning', `思考反馈发送失败：${error instanceof Error ? error.message : String(error)}`);
+      });
       await executeCommand(useSharedAgent.getState().sessions[session.tmid] ?? session, message);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -860,12 +863,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       }
       const access = commandAccess(session, message.u._id);
       if (access === 'denied') {
-        if (message.u._id !== me._id) {
-          await useChat.getState().send(`🤖 @${message.u.username}，当前 Agent 会话仅宿主可指挥。`, {
-            rid: message.rid,
-            tmid: message.tmid,
-          });
-        }
         return;
       }
       if (access === 'requires-host-approval') {

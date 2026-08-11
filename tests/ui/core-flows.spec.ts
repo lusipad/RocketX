@@ -409,6 +409,23 @@ const rooms = [
 const histories: Record<string, unknown[]> = {
   'room-general': [
     {
+      _id: 'general-nested-quote',
+      rid: 'room-general',
+      msg: `[ ](${SERVER}/channel/general?msg=quoted-card) 请处理`,
+      ts: '2026-07-17T08:03:00.000Z',
+      u: ALICE,
+      attachments: [{
+        message_link: `${SERVER}/channel/general?msg=quoted-card`,
+        author_name: 'Build Bot',
+        text: '',
+        attachments: [{
+          title: '构建失败',
+          text: 'main · #128',
+          fields: [{ title: '状态', value: '失败' }],
+        }],
+      }],
+    },
+    {
       _id: 'general-ocr-image',
       rid: 'room-general',
       msg: '',
@@ -1383,11 +1400,16 @@ test('文字和图片确认后作为同一条上传消息发送（issue #155）'
   });
 
   const dialog = page.getByRole('dialog', { name: '发送文件给 General' });
-  await expect(dialog.getByText('图文说明', { exact: true })).toBeVisible();
+  const caption = dialog.getByRole('textbox', { name: '图片说明' });
+  await expect(caption).toBeFocused();
+  await expect(caption).toHaveValue('图文说明');
+  await caption.fill('在确认弹窗补充的说明');
+  await caption.press('Shift+Enter');
+  await caption.type('第二行');
   await dialog.getByRole('button', { name: '发送（1）' }).click();
 
   await expect.poll(() => uploadedMessages.length).toBe(1);
-  expect(uploadedMessages[0]?.msg).toBe('图文说明');
+  expect(uploadedMessages[0]?.msg).toBe('在确认弹窗补充的说明\n第二行');
   await expect(composer).toHaveValue('');
   expect(pageErrors).toEqual([]);
 });
@@ -1506,6 +1528,17 @@ test('右键回复提交 Rocket.Chat 可展开的官方引用格式（issue #126
   expect(sentMessages[0]?.msg).toBe(
     `[ ](${SERVER}/channel/general?msg=general-welcome) Reply from UI`,
   );
+  expect(pageErrors).toEqual([]);
+});
+
+test('引用正文为空时显示 Rocket.Chat 嵌套附件内容（issue #289）', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+
+  const quote = page.getByTitle('点击跳转到原消息');
+  await expect(quote).toContainText('Build Bot');
+  await expect(quote).toContainText('构建失败');
+  await expect(quote).toContainText('main · #128');
   expect(pageErrors).toEqual([]);
 });
 

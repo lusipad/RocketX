@@ -3237,6 +3237,7 @@ body {
 .codex-native-transcript {
   min-height: 0;
   flex: 1;
+  overflow-anchor: none;
   overflow-y: auto;
   padding: 28px 28px 18px;
 }
@@ -3579,6 +3580,10 @@ body {
   background: var(--color-primary);
   content: '';
   animation: codex-caret 800ms steps(1) infinite;
+}
+
+.codex-native-message.is-streaming > div {
+  white-space: pre-wrap;
 }
 
 @keyframes codex-caret {

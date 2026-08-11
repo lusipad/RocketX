@@ -78,6 +78,9 @@ async function prepareRoomWorkspace(targetThreadId?: string): Promise<boolean> {
     || latest.status === 'running'
     || latest.status === 'waiting-input';
   if (busy && (latest.workspaceRoot !== defaultRoot || latest.activeThreadId !== targetThreadId)) {
+    if (latest.workspaceRoot === latest.butlerWorkspaceRoot) {
+      throw new Error('AI 管家正在处理任务；完成后即可打开房间会话');
+    }
     throw new Error('另一个 Codex 任务正在运行；它完成后再打开这个房间会话');
   }
   if (latest.workspaceRoot !== defaultRoot) {
@@ -373,7 +376,7 @@ export default function ButlerPanel() {
           <div className="rounded-xl border border-line bg-fill-1 p-4 text-sm leading-6 text-ink-2">
             网页版可以继续使用聊天，但本地 Codex 会话需要 RocketX 桌面端。
           </div>
-        ) : messages.length === 0 && !streamingText ? (
+        ) : messages.length === 0 && !streamingText && !running ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-light text-primary">
               <Bot size={21} aria-hidden="true" />
@@ -407,6 +410,14 @@ export default function ButlerPanel() {
               <article data-speaker="assistant" className="codex-native-message is-streaming">
                 <span>Codex</span>
                 <div className="butler-conversation-markdown">{renderMarkdown(streamingText)}</div>
+              </article>
+            ) : running ? (
+              <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
+                <span>Codex</span>
+                <div className="flex items-center gap-2 text-ink-3">
+                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  Codex 正在思考…
+                </div>
               </article>
             ) : null}
           </div>

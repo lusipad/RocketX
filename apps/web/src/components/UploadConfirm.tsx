@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FileText, Reply, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { stripAgentSessionMarker } from '../agent/card';
 import { stripQuotePrefix } from '../lib/messageText';
+import { shouldSendMessage } from '../lib/sendKeys';
+import { usePrefs } from '../stores/prefs';
 import { useDialogBehavior } from './Dialog';
 
 function fmtSize(bytes: number): string {
@@ -19,10 +21,16 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
   const cancelUpload = useChat((s) => s.cancelUpload);
   const replyTo = useChat((s) => s.replyTo);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
+  const prefsLoaded = usePrefs((s) => s.loaded);
+  const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
   const name = sub?.fname || sub?.name || '当前会话';
   const dialogRef = useDialogBehavior(cancelUpload, !!pendingFiles);
-  const message = pendingUploadMessage ?? caption;
+
+  useEffect(() => {
+    if (pendingFiles) setMessage(pendingUploadMessage ?? caption ?? '');
+  }, [pendingFiles, pendingUploadMessage, caption]);
 
   const previews = useMemo(
     () =>
@@ -51,14 +59,18 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
     const onKey = (e: KeyboardEvent) => {
       if (!pendingFiles) return;
       if (e.key === 'Escape') cancelUpload();
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        void sendPending();
-      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [pendingFiles, cancelUpload, confirmUpload]);
+
+  const onMessageKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+    if (shouldSendMessage(prefsLoaded ? sendOnEnter : 'normal', event)) {
+      event.preventDefault();
+      void sendPending();
+    }
+  };
 
   if (!pendingFiles) return null;
 
@@ -92,11 +104,6 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
             </span>
           </div>
         )}
-        {message?.trim() && (
-          <div className="mx-5 mb-1 max-h-24 overflow-y-auto whitespace-pre-wrap rounded bg-fill-1 px-2.5 py-2 text-sm text-ink">
-            {message.trim()}
-          </div>
-        )}
         <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-5 py-2">
           {previews.map(({ file, url }, i) => (
             <div
@@ -117,6 +124,17 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
             </div>
           ))}
         </div>
+
+        <textarea
+          autoFocus
+          aria-label="图片说明"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={onMessageKeyDown}
+          rows={3}
+          placeholder="添加说明（可选）"
+          className="mx-5 mb-3 block w-[calc(100%-2.5rem)] resize-none rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-3 focus:border-primary"
+        />
 
         <footer className="flex items-center justify-end gap-2 px-5 pb-4 pt-2">
           <button

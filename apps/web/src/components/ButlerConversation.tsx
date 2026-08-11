@@ -26,7 +26,6 @@ import { useStickToBottom } from '../lib/stickToBottom';
 import type { CodexHostInput } from '../agent/codexHostInput';
 import type { CodexImageInput } from '../lib/codexImages';
 import {
-  isSystemCodexWorkspace,
   useCodexWorkspace,
   type CodexFollowUpMode,
   type CodexPendingRequest,
@@ -261,7 +260,6 @@ function effortLabel(effort: string): string {
 
 export default function ButlerConversation({ embedded = false }: { embedded?: boolean }) {
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
-  const workspaceRoots = useCodexWorkspace((state) => state.workspaceRoots);
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const status = useCodexWorkspace((state) => state.status);
@@ -277,8 +275,6 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const models = useCodexWorkspace((state) => state.models);
   const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const selectedEffort = useCodexWorkspace((state) => state.selectedEffort);
-  const hostingModel = useCodexWorkspace((state) => state.hostingModel);
-  const hostingEffort = useCodexWorkspace((state) => state.hostingEffort);
   const permissionPreset = useCodexWorkspace((state) => state.permissionPreset);
   const followUpMode = useCodexWorkspace((state) => state.followUpMode);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
@@ -289,8 +285,6 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const interrupt = useCodexWorkspace((state) => state.interrupt);
   const setModel = useCodexWorkspace((state) => state.setModel);
   const setEffort = useCodexWorkspace((state) => state.setEffort);
-  const setHostingModel = useCodexWorkspace((state) => state.setHostingModel);
-  const setHostingEffort = useCodexWorkspace((state) => state.setHostingEffort);
   const setPermissionPreset = useCodexWorkspace((state) => state.setPermissionPreset);
   const setFollowUpMode = useCodexWorkspace((state) => state.setFollowUpMode);
   const clearComposerDraft = useCodexWorkspace((state) => state.clearComposerDraft);
@@ -306,7 +300,6 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const autoOpenedArtifactMessageRef = useRef<string>();
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
-  const hostingActiveModel = models.find((model) => model.model === hostingModel || model.id === hostingModel);
   const running = status === 'running' || status === 'waiting-input';
   const latestActivity = events.at(-1);
   const completedMessage = !running && events.length > 0 && messages.at(-1)?.role === 'assistant'
@@ -343,18 +336,6 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       description: effort.description,
     })) ?? []
   ), [activeModel]);
-  const hostingEffortChoices = useMemo<ComposerChoice[]>(() => (
-    hostingActiveModel?.supportedReasoningEfforts.map((effort) => ({
-      id: effort.reasoningEffort,
-      label: effortLabel(effort.reasoningEffort),
-      description: effort.description,
-    })) ?? []
-  ), [hostingActiveModel]);
-  const hostingProjectCount = workspaceRoots.filter((path) => !isSystemCodexWorkspace(
-    path,
-    defaultWorkspaceRoot,
-    butlerWorkspaceRoot,
-  )).length;
   const permissionLabel = PERMISSION_CHOICES.find((choice) => choice.id === permissionPreset)?.label ?? '权限';
 
   const renderArtifactLink = useCallback<MarkdownLinkRenderer>((label, href) => {
@@ -687,7 +668,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
               {streamingText ? (
                 <article data-speaker="assistant" className="codex-native-message is-streaming">
                   <span>Codex</span>
-                  <div className="butler-conversation-markdown">{renderMarkdown(streamingText, undefined, renderArtifactLink)}</div>
+                  <div className="butler-conversation-markdown">{streamingText}</div>
                 </article>
               ) : null}
 
@@ -707,37 +688,6 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
         </main>
 
         <footer className="butler-conversation-footer codex-native-footer">
-          <section
-            aria-label="AI 托管设置"
-            className="mb-2 flex min-h-10 items-center justify-between gap-3 rounded-xl border border-line bg-fill-1 px-3 py-2 text-xs"
-          >
-            <div className="min-w-0">
-              <strong className="block truncate font-medium text-ink">AI 托管</strong>
-              <span className="block truncate text-ink-3">
-                {hostingProjectCount > 0 ? `${hostingProjectCount} 个托管项目` : '尚未添加托管项目'} · 独立重任务配置
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <ComposerMenu
-                ariaLabel="AI 托管模型"
-                label={hostingActiveModel?.displayName ?? '托管模型'}
-                value={hostingModel}
-                choices={modelChoices}
-                disabled={models.length === 0}
-                onChange={(model) => void setHostingModel(model).catch((reason) => toast.error(reason))}
-              />
-              {hostingActiveModel && hostingActiveModel.supportedReasoningEfforts.length > 1 ? (
-                <ComposerMenu
-                  ariaLabel="AI 托管推理强度"
-                  label={hostingEffort ? effortLabel(hostingEffort) : '推理'}
-                  value={hostingEffort ?? ''}
-                  choices={hostingEffortChoices}
-                  disabled={models.length === 0}
-                  onChange={(effort) => void setHostingEffort(effort || null).catch((reason) => toast.error(reason))}
-                />
-              ) : null}
-            </div>
-          </section>
           <div className="codex-native-composer">
             {status === 'external' ? (
               <div id="codex-external-composer-notice" className="codex-native-composer-notice" role="status">
