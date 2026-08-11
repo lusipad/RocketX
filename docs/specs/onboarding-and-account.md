@@ -30,7 +30,7 @@
 - 正式桌面端没有任何 RocketX 本机状态时，登录页建立 `rcx-desktop-defaults-v1` 的 `fresh` 记录并进入首次引导。
 - 已有用户升级且没有新记录时只迁移为 `legacy-migrated`，不读取或改写现有通知权限与启动项。
 - 已有配置或完成首次引导后直接进入登录页。
-- 设置页“工作区”可随时从 URL 拉取、选择本地 `rcx.workspace.json`，或在 ADO 已配置后从受保护的 ADO Git 仓库读取同一配置文件。
+- 设置页“团队配置”可随时从 URL 拉取、选择本地 `rcx.workspace.json`，或在 ADO 已配置后从受保护的 ADO Git 仓库读取同一配置文件。
 - URL 配置必须无需交互登录即可读取；加入团队前配置必须包含 Rocket.Chat 地址。
 
 ## 4. 主流程

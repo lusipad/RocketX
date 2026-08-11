@@ -5,6 +5,7 @@ import test from 'node:test';
 test('Codex 工作区入口使用新对话、拉取请求、已安排、插件和项目历史', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
   const history = readFileSync('apps/web/src/components/ButlerConversationHistory.tsx', 'utf8');
+  const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
   const ui = readFileSync('apps/web/src/stores/ui.ts', 'utf8');
 
   assert.match(page, /<ButlerConversationHistory \/>/);
@@ -22,8 +23,14 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(history, /拉取请求/);
   assert.match(history, /已安排/);
   assert.match(history, /插件/);
+  assert.match(history, /const projectEntries = useMemo/);
+  assert.match(history, /aria-label=\{`项目配置：\$\{entry\.label\}`\}/);
+  assert.match(history, /title="项目配置"/);
   assert.doesNotMatch(history, /aria-label="任务"/);
   assert.doesNotMatch(history, /ButlerSessionSwitcher|today|memory|paper|manage/);
+
+  assert.match(workspace, /importLegacyWorkspaceRoots\(legacyWorkspaceRoots\)/);
+  assert.match(workspace, /controller\.listThreads\(threadWorkspaceRoots\(get\(\)\)\)/);
 
   assert.match(ui, /openButlerConversation: \(\) => \{/);
   assert.match(ui, /module: 'butler-view',[\s\S]*butlerView: 'conversation'/);

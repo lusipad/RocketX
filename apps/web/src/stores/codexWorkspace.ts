@@ -36,6 +36,7 @@ import {
   type ButlerSource,
 } from '../lib/butlerContext';
 import { isTauriRuntime } from '../lib/client';
+import { useAgentEnvironments } from './agentEnvironments';
 
 const STORAGE_PREFIX = 'rcx-codex-workspace-v1';
 const MAX_EVENT_DETAIL = 64 * 1024;
@@ -301,6 +302,23 @@ export function isSystemCodexWorkspace(
     key === workspacePathKey(defaultWorkspaceRoot)
     || key === workspacePathKey(butlerWorkspaceRoot)
   );
+}
+
+function threadWorkspaceRoots(state: CodexWorkspaceState): string[] {
+  const roots = [
+    state.defaultWorkspaceRoot,
+    state.butlerWorkspaceRoot,
+    ...useAgentEnvironments.getState().environments.map((environment) => environment.path),
+    ...state.workspaceRoots,
+    state.workspaceRoot,
+  ];
+  const seen = new Set<string>();
+  return roots.filter((root) => {
+    const key = workspacePathKey(root);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function textFromUserInput(input: unknown): string {
@@ -1157,22 +1175,30 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const butlerWorkspaceRoot = butlerValue.trim();
     if (!defaultWorkspaceRoot || !butlerWorkspaceRoot || get().scope !== scope) return '';
     const latest = get();
+    const legacyWorkspaceRoots = latest.workspaceRoots.filter((root) => !isSystemCodexWorkspace(
+      root,
+      defaultWorkspaceRoot,
+      butlerWorkspaceRoot,
+    ));
+    const migration = legacyWorkspaceRoots.length > 0
+      ? useAgentEnvironments.getState().importLegacyWorkspaceRoots(legacyWorkspaceRoots)
+      : { environments: [], persisted: true };
+    const currentWorkspaceRoot = latest.workspaceRoot.trim();
+    const retainedLegacyRoots = migration.persisted
+      ? []
+      : legacyWorkspaceRoots;
     const workspaceRoots = [
       defaultWorkspaceRoot,
       butlerWorkspaceRoot,
-      ...latest.workspaceRoots.filter((root) => !isSystemCodexWorkspace(
-        root,
-        defaultWorkspaceRoot,
-        butlerWorkspaceRoot,
-      )),
+      ...retainedLegacyRoots,
     ];
     set({
       defaultWorkspaceRoot,
       butlerWorkspaceRoot,
-      workspaceRoot: !latest.workspaceRoot || workspacePathKey(latest.workspaceRoot) === workspacePathKey(defaultWorkspaceRoot)
+      workspaceRoot: !currentWorkspaceRoot || workspacePathKey(currentWorkspaceRoot) === workspacePathKey(defaultWorkspaceRoot)
         ? butlerWorkspaceRoot
-        : latest.workspaceRoot,
-      workspaceRoots,
+        : currentWorkspaceRoot,
+      workspaceRoots: [...new Set(workspaceRoots)],
     });
     persist(get());
     return defaultWorkspaceRoot;
@@ -1181,8 +1207,16 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   setWorkspaceRoot: async (workspaceRoot) => {
     const normalized = workspaceRoot.trim();
     const current = get();
+    const systemRootsReady = Boolean(current.defaultWorkspaceRoot && current.butlerWorkspaceRoot);
+    if (
+      normalized
+      && systemRootsReady
+      && !isSystemCodexWorkspace(normalized, current.defaultWorkspaceRoot, current.butlerWorkspaceRoot)
+    ) {
+      useAgentEnvironments.getState().ensureEnvironment({ path: normalized });
+    }
     if (normalized === current.workspaceRoot) {
-      if (normalized && !current.workspaceRoots.includes(normalized)) {
+      if (!systemRootsReady && normalized && !current.workspaceRoots.includes(normalized)) {
         set({ workspaceRoots: [...current.workspaceRoots, normalized] });
         persist(get());
       }
@@ -1195,7 +1229,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     }
     set({
       workspaceRoot: normalized,
-      workspaceRoots: normalized && !current.workspaceRoots.includes(normalized)
+      workspaceRoots: !systemRootsReady && normalized && !current.workspaceRoots.includes(normalized)
         ? [...current.workspaceRoots, normalized]
         : current.workspaceRoots,
       status: reusedRuntime ? 'ready' : 'idle',
@@ -1223,7 +1257,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const normalized = workspaceRoot.trim();
     const current = get();
     if (isSystemCodexWorkspace(normalized, current.defaultWorkspaceRoot, current.butlerWorkspaceRoot)) return;
-    if (!normalized || !current.workspaceRoots.includes(normalized)) return;
+    if (!normalized || (!current.workspaceRoots.includes(normalized) && normalized !== current.workspaceRoot)) return;
 
     const remaining = current.workspaceRoots.filter((root) => root !== normalized);
     if (normalized === current.workspaceRoot) {
@@ -1278,7 +1312,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   refreshThreads: async () => {
     if (!controller) return;
-    set({ threads: await controller.listThreads(get().workspaceRoots) });
+    set({ threads: await controller.listThreads(threadWorkspaceRoots(get())) });
   },
 
   startThread: async (name) => {

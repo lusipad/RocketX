@@ -12,8 +12,13 @@ import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
 import { useSharedAgent } from '../stores/sharedAgent';
-import { proposedAgentBranch, useAgentEnvironments } from '../stores/agentEnvironments';
-import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
+import {
+  environmentIsBusy,
+  findEnvironmentByPath,
+  proposedAgentBranch,
+  useAgentEnvironments,
+} from '../stores/agentEnvironments';
+import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
 import PanelShell from './PanelShell';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
@@ -44,31 +49,25 @@ export default function AgentPanel() {
   const setPanel = useChat((state) => state.setPanel);
   const rid = useChat((state) => state.activeRid);
   const session = useSharedAgent((state) => (tmid ? state.sessions[tmid] : undefined));
-  const binding = useAgentEnvironments((state) => state.bindings.find((item) => item.sessionKey === tmid && item.status === 'active'));
+  const bindings = useAgentEnvironments((state) => state.bindings);
+  const binding = bindings.find((item) => item.sessionKey === tmid && item.status === 'active');
   const environments = useAgentEnvironments((state) => state.environments);
   const currentProject = useCodexWorkspace((state) => state.workspaceRoot);
-  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
-  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
-  const projects = useCodexWorkspace((state) => state.workspaceRoots);
   const boundEnvironment = environments.find((item) => item.id === binding?.environmentId);
-  const dedicatedProjects = projects.filter((path) => !isSystemCodexWorkspace(
-    path,
-    defaultWorkspaceRoot,
-    butlerWorkspaceRoot,
+  const availableProjects = environments.filter((environment) => (
+    environment.enabled
+    && (
+      environment.id === binding?.environmentId
+      || !environmentIsBusy(environment.id, bindings)
+    )
   ));
   const roomProject = rid ? roomHostingWorkspaceRoot(rid) : undefined;
-  const selectedProject = projectOverride
-    || boundEnvironment?.path
-    || (roomProject && dedicatedProjects.includes(roomProject) ? roomProject : undefined)
-    || (!isSystemCodexWorkspace(currentProject, defaultWorkspaceRoot, butlerWorkspaceRoot)
-      && dedicatedProjects.includes(currentProject) ? currentProject : undefined)
-    || dedicatedProjects[0];
-  const projectEnvironment = environments.find(
-    (environment) => environment.enabled && environment.path === selectedProject,
-  );
-  const projectOptions = selectedProject && !dedicatedProjects.includes(selectedProject)
-    ? [selectedProject, ...dedicatedProjects]
-    : dedicatedProjects;
+  const projectEnvironment = findEnvironmentByPath(availableProjects, projectOverride ?? '')
+    ?? (boundEnvironment?.enabled ? findEnvironmentByPath(availableProjects, boundEnvironment.path) : undefined)
+    ?? findEnvironmentByPath(availableProjects, roomProject ?? '')
+    ?? findEnvironmentByPath(availableProjects, currentProject)
+    ?? availableProjects[0];
+  const selectedProject = projectEnvironment?.path;
   const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
   const allApprovals = useSharedAgent((state) => state.approvals);
   const allInputs = useSharedAgent((state) => state.inputs);
@@ -196,10 +195,10 @@ export default function AgentPanel() {
                     className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
                   >
                     {!selectedProject ? <option value="">尚未添加项目</option> : null}
-                    {projectOptions.map((path) => (
-                      <option key={path} value={path}>
-                        {projectName(path)}
-                        {path === roomProject ? '（此群）' : path === currentProject ? '（当前）' : ''}
+                    {availableProjects.map((environment) => (
+                      <option key={environment.id} value={environment.path}>
+                        {environment.name || projectName(environment.path)}
+                        {environment.path === roomProject ? '（此群）' : environment.path === currentProject ? '（当前）' : ''}
                       </option>
                     ))}
                   </select>

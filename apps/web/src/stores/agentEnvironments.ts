@@ -43,6 +43,14 @@ interface PersistedAgentEnvironments {
 
 interface AgentEnvironmentState extends PersistedAgentEnvironments {
   addEnvironment: (input: Pick<LocalAgentEnvironment, 'name' | 'path' | 'adoProjects' | 'defaultBaseBranch' | 'branchPrefix'>) => LocalAgentEnvironment;
+  ensureEnvironment: (
+    input: Pick<LocalAgentEnvironment, 'path'>
+      & Partial<Pick<LocalAgentEnvironment, 'name' | 'adoProjects' | 'defaultBaseBranch' | 'branchPrefix'>>,
+  ) => LocalAgentEnvironment;
+  importLegacyWorkspaceRoots: (paths: readonly string[]) => {
+    environments: LocalAgentEnvironment[];
+    persisted: boolean;
+  };
   updateEnvironment: (id: string, patch: Partial<Omit<LocalAgentEnvironment, 'id' | 'createdAt'>>) => void;
   removeEnvironment: (id: string) => void;
   bindDiscussion: (input: Omit<WorkItemDiscussionBinding, 'id' | 'serverId' | 'hostDeviceId' | 'status' | 'createdAt' | 'updatedAt'>) => WorkItemDiscussionBinding;
@@ -60,6 +68,27 @@ function id(prefix: string): string {
 
 function normalizeProject(value: string): string {
   return value.trim().toLocaleLowerCase();
+}
+
+export function normalizeEnvironmentPath(value: string): string {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+  return /^(?:[a-z]:\/|\/\/)/i.test(normalized)
+    ? normalized.toLocaleLowerCase('en-US')
+    : normalized;
+}
+
+export function environmentNameFromPath(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || '本地环境';
+}
+
+export function findEnvironmentByPath(
+  environments: readonly LocalAgentEnvironment[],
+  path: string,
+): LocalAgentEnvironment | undefined {
+  const normalized = normalizeEnvironmentPath(path);
+  return normalized
+    ? environments.find((environment) => normalizeEnvironmentPath(environment.path) === normalized)
+    : undefined;
 }
 
 function normalizePrefix(value: string): string {
@@ -91,7 +120,7 @@ function load(): PersistedAgentEnvironments {
   }
 }
 
-function persist(state: PersistedAgentEnvironments): void {
+function persist(state: PersistedAgentEnvironments): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       version: 1,
@@ -102,8 +131,10 @@ function persist(state: PersistedAgentEnvironments): void {
         ? { lastDispatchEnvironmentId: state.lastDispatchEnvironmentId }
         : {}),
     } satisfies PersistedAgentEnvironments));
+    return true;
   } catch {
     // 浏览器禁用存储时保留内存状态，不阻断聊天。
+    return false;
   }
 }
 
@@ -175,13 +206,13 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
   addEnvironment: (input) => {
     const path = input.path.trim();
     if (!path) throw new Error('请选择本地目录');
-    if (get().environments.some((environment) => environment.path.toLocaleLowerCase() === path.toLocaleLowerCase())) {
+    if (findEnvironmentByPath(get().environments, path)) {
       throw new Error('这个本地目录已经配置过了');
     }
     const now = Date.now();
     const environment: LocalAgentEnvironment = {
       id: id('environment'),
-      name: input.name.trim() || path.split(/[\\/]/).filter(Boolean).at(-1) || '本地环境',
+      name: input.name.trim() || environmentNameFromPath(path),
       path,
       adoProjects: input.adoProjects.map((item) => item.trim()).filter(Boolean),
       defaultBaseBranch: input.defaultBaseBranch.trim() || 'main',
@@ -196,7 +227,77 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
     return environment;
   },
 
+  ensureEnvironment: (input) => {
+    const path = input.path.trim();
+    if (!path) throw new Error('请选择本地目录');
+    const existing = findEnvironmentByPath(get().environments, path);
+    if (existing) return existing;
+    return get().addEnvironment({
+      name: input.name?.trim() || environmentNameFromPath(path),
+      path,
+      adoProjects: input.adoProjects ?? [],
+      defaultBaseBranch: input.defaultBaseBranch ?? 'main',
+      branchPrefix: input.branchPrefix ?? 'ai/',
+    });
+  },
+
+  importLegacyWorkspaceRoots: (paths) => {
+    const current = get();
+    const imported: LocalAgentEnvironment[] = [];
+    const nextEnvironments = [...current.environments];
+    for (const path of [...new Set(paths.map((item) => item.trim()).filter(Boolean))]) {
+      const existing = findEnvironmentByPath(nextEnvironments, path);
+      if (existing) {
+        imported.push(existing);
+        continue;
+      }
+      const now = Date.now();
+      const environment: LocalAgentEnvironment = {
+        id: id('environment'),
+        name: environmentNameFromPath(path),
+        path,
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      nextEnvironments.push(environment);
+      imported.push(environment);
+    }
+    if (nextEnvironments.length === current.environments.length) {
+      return { environments: imported, persisted: true };
+    }
+    const next = { ...current, environments: nextEnvironments };
+    const persisted = persist(next);
+    set({ environments: nextEnvironments });
+    return { environments: imported, persisted };
+  },
+
   updateEnvironment: (environmentId, patch) => {
+    const environment = get().environments.find((item) => item.id === environmentId);
+    if (!environment) return;
+    const busy = environmentIsBusy(environmentId, get().bindings);
+    const nextPath = patch.path?.trim();
+    if (
+      busy
+      && (
+        (nextPath !== undefined && normalizeEnvironmentPath(nextPath) !== normalizeEnvironmentPath(environment.path))
+        || (patch.enabled !== undefined && patch.enabled !== environment.enabled)
+      )
+    ) {
+      throw new Error('该项目正在被活动讨论使用，不能修改目录或启停状态');
+    }
+    if (
+      nextPath
+      && get().environments.some((item) => (
+        item.id !== environmentId
+        && normalizeEnvironmentPath(item.path) === normalizeEnvironmentPath(nextPath)
+      ))
+    ) {
+      throw new Error('这个本地目录已经配置过了');
+    }
     const nextEnvironments = get().environments.map((environment) =>
       environment.id === environmentId
         ? {

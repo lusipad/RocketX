@@ -36,7 +36,7 @@ const ADO_AUTH_LABELS: Record<'ntlm' | 'pat' | 'bearer' | 'none', string> = {
 };
 
 /**
- * 工作区配置导入（issue #67）。
+ * 团队配置导入（issue #67）。
  * 配置文件提供默认值；用户自己改过的字段默认保留本地值（仍可勾选强制覆盖），
  * 其余字段跟随配置。凭据不在配置文件里。
  */
@@ -248,7 +248,7 @@ export function ImportPreviewDialog({
 
   return (
     <Dialog
-      title={config.name ? `导入「${config.name}」` : '导入工作区配置'}
+      title={config.name ? `导入「${config.name}」` : '导入团队配置'}
       hint="勾选字段会写入本地配置；本地修改默认保留。ADO 端点变化时会清除对应 PAT，Rocket.Chat 变化时需要重新登录。"
       onClose={onClose}
       footer={
@@ -289,7 +289,7 @@ export function ImportPreviewDialog({
   );
 }
 
-/** 设置页「工作区」分区：从 URL / 文件导入配置，之后可一键重新同步 */
+/** 设置页「团队配置」分区：从 URL / 文件导入配置，之后可一键重新同步 */
 export function WorkspaceConfigSection() {
   const [source, setSource] = useState(() => loadWorkspaceSource());
   const [url, setUrl] = useState(source?.kind === 'url' ? source.url : '');
@@ -342,7 +342,7 @@ export function WorkspaceConfigSection() {
 
   return (
     <>
-      <h2 className="text-base font-semibold text-ink">工作区配置</h2>
+      <h2 className="text-base font-semibold text-ink">配置来源</h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-3">
         从团队共享的 rcx.workspace.json 一次性配好服务器、ADO、模板和更新地址。
         配置提供默认值：你自己改过的字段会保留本地值，其余跟随配置。

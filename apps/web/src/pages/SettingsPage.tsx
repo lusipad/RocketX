@@ -20,6 +20,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  UsersRound,
   XCircle,
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
@@ -69,7 +70,6 @@ import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
-import LocalAgentEnvironmentsSettings from '../components/LocalAgentEnvironmentsSettings';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -116,7 +116,7 @@ type Section =
 
 const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'account', label: '账号与状态', icon: Server },
-  { key: 'workspace', label: '工作区', icon: FolderOpen },
+  { key: 'workspace', label: '团队配置', icon: UsersRound },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'sidebar', label: '侧栏', icon: PanelLeft },
   { key: 'message', label: '消息', icon: MessageSquare },
@@ -2124,10 +2124,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
             <>
               {section === 'account' && <AccountSection />}
               {section === 'workspace' && (
-                <div className="space-y-8">
-                  <LocalAgentEnvironmentsSettings />
-                  <WorkspaceConfigSection />
-                </div>
+                <WorkspaceConfigSection />
               )}
               {section === 'appearance' && <AppearanceSection />}
               {section === 'sidebar' && <SidebarSection />}

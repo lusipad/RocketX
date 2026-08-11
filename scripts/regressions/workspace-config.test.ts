@@ -536,3 +536,13 @@ test('仓库自带的示例配置永远能过解析器(样例防腐锁)', () => 
     assert.ok(Array.isArray(template.items) && template.items.length > 0);
   }
 });
+
+test('设置页团队配置分区保留内部 key，但只展示团队配置入口与导入', () => {
+  const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+  const section = readFileSync('apps/web/src/components/WorkspaceConfigImport.tsx', 'utf8');
+
+  assert.match(settings, /\{ key: 'workspace', label: '团队配置', icon: UsersRound \}/);
+  assert.doesNotMatch(settings, /LocalAgentEnvironmentsSettings/);
+  assert.match(section, /title=\{config\.name \? `导入「\$\{config\.name\}」` : '导入团队配置'\}/);
+  assert.match(section, /<h2 className="text-base font-semibold text-ink">配置来源<\/h2>/);
+});

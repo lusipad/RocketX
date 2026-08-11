@@ -209,7 +209,7 @@ export default function CreateWorkItemDiscussionDialog({
               <FolderOpen size={12} /> {environments.find((environment) => environment.id === environmentId)?.path}
             </span>
           ) : null}
-          {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“设置 → AI”添加本地环境</span> : null}
+          {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“管家 → 托管项目”添加专用工作项目</span> : null}
         </label>
         <label className="flex items-start gap-2 text-xs text-ink-2">
           <input type="checkbox" checked={startAgent} onChange={(event) => setStartAgent(event.target.checked)} className="mt-0.5" />

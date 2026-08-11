@@ -1314,7 +1314,7 @@ test('桌面重启后会重新授权并检查团队配置 URL', { tag: '@release
   expect(pageErrors).toEqual([]);
 });
 
-test('工作区设置可从当前 ADO 仓库读取、预览并应用团队配置', async ({ page }, testInfo) => {
+test('团队配置可从当前 ADO 仓库读取、预览并应用', async ({ page }, testInfo) => {
   const adoRequests: Array<{ url: string; authorization?: string }> = [];
   await page.route('https://ado.example.com/**', async (route) => {
     const request = route.request();
@@ -1346,12 +1346,15 @@ test('工作区设置可从当前 ADO 仓库读取、预览并应用团队配置
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '团队配置', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '配置来源', exact: true, level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '本地工作区' })).toHaveCount(0);
   await expect(page.getByText('从当前 Azure DevOps 仓库读取', { exact: true })).toBeVisible();
   await expect(page.getByText('读取前请填写：项目、仓库', { exact: true })).toBeVisible();
   await page.getByLabel('ADO 项目').fill('Road Map');
   await page.getByLabel('ADO 仓库').fill('Rocket X');
-  await page.screenshot({ path: testInfo.outputPath('ado-workspace-config.png'), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('ado-team-config.png'), fullPage: true });
   await page.getByRole('button', { name: '从 ADO 读取', exact: true }).click();
 
   await expect(page.getByRole('dialog', { name: '导入「ADO 团队」' })).toBeVisible();
@@ -1424,7 +1427,7 @@ test('团队 ADO 端点变化会解绑 PAT，并保持旧 AI 设置不被工作�
   });
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
   await page.locator('input[accept=".json,application/json"]').setInputFiles({
     name: 'rcx.workspace.json',
     mimeType: 'application/json',
@@ -1485,7 +1488,7 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
   await page.goto('/');
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('button', { name: '团队配置', exact: true }).click();
   await page.locator('input[accept=".json,application/json"]').setInputFiles({
     name: 'rcx.workspace.json',
     mimeType: 'application/json',
@@ -2492,7 +2495,7 @@ test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局
   expect(pageErrors).toEqual([]);
 });
 
-test('本地工作区归入工作区设置，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
+test('托管项目归入管家，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -2560,14 +2563,15 @@ test('本地工作区归入工作区设置，AI 设置只保留模型运行配�
   await expect(page.getByRole('heading', { name: '模型 Provider' })).not.toBeVisible();
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
 
-  await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '本地工作区' })).toBeVisible();
-  await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '工作区配置' })).toBeVisible();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  const projects = page.getByLabel('项目目录');
+  await expect(projects.getByLabel('托管项目')).toBeVisible();
+  await expect(projects.getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '项目配置：RocketChat X - 主目录' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-test('工作区设置通过系统目录选择器添加并持久化管家派活白名单', async ({ page }) => {
+test('管家通过系统目录选择器添加并持久化托管项目', async ({ page }) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
     (window as Window & { __dialogOpenResponses?: Array<string | string[] | null> })
@@ -2575,10 +2579,9 @@ test('工作区设置通过系统目录选择器添加并持久化管家派活�
   });
   const { pageErrors } = await bootAuthenticated(page);
 
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('complementary').getByRole('button', { name: '工作区', exact: true }).click();
-  await expect(page.getByText('还没有本地工作区。添加一个代码目录后，管家就能把独立工作派到这里。')).toBeVisible();
-  await page.getByRole('button', { name: '添加本地工作区', exact: true }).click();
+  await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByLabel('项目目录').getByText('添加托管项目', { exact: true })).toBeVisible();
+  await page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' }).first().click();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
 
   expect(await page.evaluate(() => {

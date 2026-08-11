@@ -26,7 +26,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(history, /const workspaceRoots = useCodexWorkspace\(\(state\) => state\.workspaceRoots\)/);
   assert.match(history, /aria-label="添加托管项目"/);
   assert.match(history, /const butlerWorkspaceRoot = useCodexWorkspace/);
-  assert.match(history, /const label = systemDefault \? '临时会话' : systemButler \? '管家会话'/);
+  assert.match(history, /label: systemDefault \? '临时会话' : systemButler \? '管家会话'/);
   assert.match(history, /aria-label="托管项目"/);
   assert.match(history, /const butlerRoot = useCodexWorkspace\.getState\(\)\.butlerWorkspaceRoot/);
   assert.match(history, /await setWorkspaceRoot\(butlerRoot\)/);

@@ -3132,10 +3132,16 @@ body {
   padding-right: 42px;
 }
 
+.butler-codex-workspace-row[data-actions='2'] .butler-codex-workspace-picker {
+  padding-right: 76px;
+}
+
 .butler-codex-workspace-actions {
   position: absolute;
   top: 3px;
   right: 4px;
+  display: flex;
+  gap: 2px;
 }
 
 .butler-codex-workspace-actions > button {

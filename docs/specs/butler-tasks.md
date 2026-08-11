@@ -6,13 +6,13 @@
 
 ## 1. 目标
 
-把管家做成 RocketX 内的 Codex 任务面：用户用自然语言交代目标，Codex 通过 Skills、Apps 和受控工具执行；RocketX 保留消息、工作台和个人效率等确定性界面，不再维护一套独立 AI 运行时。
+把管家做成 RocketX 内的 Codex 任务面：用户用自然语言交代目标，Codex 通过 Skills、Apps 和受控工具执行；管家里的“托管项目”统一负责新增、编辑、删除，本地目录只是托管项目的落点。RocketX 保留消息、工作台和个人效率等确定性界面，不再维护一套独立 AI 运行时。
 
 ## 2. 范围
 
 ### 包含
 
-- 选择本地工作区并连接 Codex `app-server`；
+- 在管家里的“托管项目”中新增、编辑、删除项目，并连接 Codex `app-server`；
 - 创建、恢复、重命名和归档原生 Codex Thread；
 - 发送文本与图片，流式展示回答、活动和工具过程；
 - 选择模型、推理强度与权限档；
@@ -30,13 +30,13 @@
 ## 3. 入口与前置条件
 
 - 顶部/左侧 RocketX 导航中的“管家”进入任务面；RocketX 全局导航不能因进入管家而消失。
-- 用户必须选择一个真实本地目录作为工作区。
+- 用户必须先在管家里配置一个真实本地目录作为托管项目。
 - 桌面端必须发现通过门禁的 Codex，且 Codex 已登录。
 - 性能模式关闭时才提供 AI 任务执行。
 
 ## 4. 主流程
 
-1. 用户进入管家并选择工作区，RocketX 探测 Runtime、启动 `app-server`，加载模型、权限、Skills、Apps、Plugins 和 Thread 列表。
+1. 用户进入管家并选择或新建托管项目，RocketX 探测 Runtime、启动 `app-server`，加载模型、权限、Skills、Apps、Plugins 和 Thread 列表。
 2. 用户新建或恢复一个 Thread，输入目标，可附加图片。
 3. RocketX 使用当前模型、推理强度和权限档启动 Turn，并流式展示回答和过程。
 4. 运行中需要审批或补充信息时，请求卡片出现在当前 Thread；用户处理后继续。
@@ -46,7 +46,7 @@
 
 ## 5. 状态与交互
 
-- `idle`：尚未选择工作区或尚未连接。
+- `idle`：尚未选择托管项目或尚未连接。
 - `connecting`：Runtime/目录/Thread 正在加载，禁用重复连接。
 - `ready`：可以创建/恢复 Thread 和发送。
 - `running`：流式执行；显示停止与后续消息模式。
@@ -66,14 +66,14 @@
 ## 7. 数据与同步
 
 - Thread、Turn 和 Codex Memory 由 Codex Home 会话库管理；RocketX 读取原生对象，不复制为独立真源。
-- 工作区、模型、推理强度、权限档和后续消息模式按 Rocket.Chat 服务器/用户作用域保存在本机。
+- 托管项目、模型、推理强度、权限档和后续消息模式按 Rocket.Chat 服务器/用户作用域保存在本机。`agentEnvironments` 是托管项目真源；`codexWorkspace` 只保留系统/current/runtime 工作区与 Runtime 生命周期，不再混放项目元数据。
 - 输入图片先物化为受管本地附件，再交给当前 Runtime；不能把浏览器临时 URL 当持久来源。
 - “从 Codex 刷新”是显式重新读取，不是实时双向协同编辑。
 
 ## 8. 权限与安全
 
 - 权限行为以 [权限、审批与用户输入](approvals-and-permissions.md) 为准。
-- 工作区是默认文件作用域；额外目录或网络能力必须由权限档和 Runtime 沙箱决定。
+- 托管项目是默认文件作用域；额外目录或网络能力必须由权限档和 Runtime 沙箱决定。
 - 来自工具、仓库、消息和网页的内容均是不可信输入，不能改变系统级权限规则。
 - 所有请求按 Thread 隔离，不能在另一个任务中批准。
 
@@ -81,7 +81,7 @@
 
 | 场景 | 用户可见结果 | 副作用与恢复 |
 | --- | --- | --- |
-| 工作区未选择/不存在 | 提示选择有效目录 | 不启动进程；重新选择 |
+| 托管项目未选择/不存在 | 提示选择有效目录 | 不启动进程；重新选择 |
 | Runtime 不可用 | 显示探测原因 | Rocket.Chat/工作台仍可用；安装、登录或改路径后重连 |
 | `app-server` 退出 | 当前任务标为中断 | 重连并恢复 Thread；不伪造完成 |
 | Codex App 与 RocketX 同时写 | 产品不支持并提示顺序使用 | 先结束一端执行，再显式刷新 |
@@ -90,7 +90,7 @@
 
 ## 10. 验收标准
 
-- `BUT-AC-01`：只有工作区和 Runtime 就绪后才能创建或恢复 Thread。
+- `BUT-AC-01`：只有托管项目和 Runtime 就绪后才能创建或恢复 Thread。
 - `BUT-AC-02`：Thread 列表来自 Codex；新建、重命名、归档后重新连接仍保持一致。
 - `BUT-AC-03`：文本、图片、模型、推理强度和权限选择被传给实际 Turn，而非只改变 UI。
 - `BUT-AC-04`：运行中可停止；Steer 与 Queue 产生不同、可验证的后续消息顺序。
@@ -103,6 +103,7 @@
 - 实现：`apps/web/src/agent/AppServerController.ts`、`apps/web/src/stores/codexWorkspace.ts`
 - 实现：`apps/web/src/components/ButlerConversation.tsx`、`apps/web/src/components/ButlerConversationHistory.tsx`
 - 实现：`apps/web/src/agent/codexTransfer.ts`、`apps/web/src/agent/attachments.ts`
+- 实现：`apps/web/src/components/ButlerProjectConfigDialog.tsx`、`apps/web/src/stores/agentEnvironments.ts`
 - 自动化：`scripts/regressions/app-server-controller.test.ts`、`scripts/regressions/codex-workspace.test.ts`
 - 自动化：`scripts/regressions/codex-transfer.test.ts`、`scripts/regressions/butler-stop-process.test.ts`
 - UI：`tests/ui/butler-workspace.spec.ts`、`tests/ui/butler-host-input.regression-1.spec.ts`
