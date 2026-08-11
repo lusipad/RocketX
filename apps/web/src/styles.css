@@ -853,19 +853,182 @@ body {
   text-align: right;
 }
 
-.butler-conversation-markdown > p + p,
-.butler-conversation-markdown > p + div,
-.butler-conversation-markdown > div + p,
-.butler-conversation-markdown > div + div {
-  margin-top: 6px;
+.butler-conversation-markdown {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--color-ink);
+  font-size: 14px;
+  letter-spacing: 0.002em;
+  line-height: 1.75;
+}
+
+.butler-conversation-markdown > :first-child {
+  margin-top: 0;
+}
+
+.butler-conversation-markdown > :last-child {
+  margin-bottom: 0;
 }
 
 .butler-conversation-markdown > p {
-  line-height: 1.75;
+  margin: 0;
+  line-height: 1.8;
 }
 
-.butler-conversation-markdown > div {
-  line-height: 1.75;
+.butler-conversation-markdown > p + p {
+  margin-top: 13px;
+}
+
+.butler-conversation-markdown > p + :is(div, pre, blockquote, hr, h1, h2, h3, h4, h5, h6),
+.butler-conversation-markdown > :is(div, pre, blockquote, hr, h1, h2, h3, h4, h5, h6) + p,
+.butler-conversation-markdown > div + div {
+  margin-top: 15px;
+}
+
+.butler-conversation-markdown > .markdown-list-item + .markdown-list-item {
+  margin-top: 4px;
+}
+
+.butler-conversation-markdown > :is(h1, h2, h3, h4, h5, h6) {
+  margin: 21px 0 9px;
+  color: var(--color-ink);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+}
+
+.butler-conversation-markdown > h1 {
+  font-size: 19px;
+}
+
+.butler-conversation-markdown > h2 {
+  font-size: 17px;
+}
+
+.butler-conversation-markdown > h3 {
+  font-size: 15px;
+}
+
+.butler-conversation-markdown > :is(h4, h5, h6) {
+  font-size: 14px;
+}
+
+.butler-conversation-markdown strong {
+  font-weight: 650;
+}
+
+.butler-conversation-markdown a {
+  color: var(--color-primary);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.butler-conversation-markdown a:hover {
+  text-decoration-color: currentcolor;
+}
+
+.butler-conversation-markdown code {
+  border: 1px solid color-mix(in srgb, var(--color-line-strong) 75%, transparent);
+  border-radius: 5px;
+  background: var(--color-fill-active);
+  padding: 1px 5px;
+  color: var(--color-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.butler-conversation-markdown > pre {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 16px 0;
+  border: 1px solid var(--color-line);
+  border-radius: 9px;
+  background: var(--color-code-bg);
+  padding: 12px 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+  color: var(--color-code-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.butler-conversation-markdown blockquote {
+  margin: 14px 0;
+  border-left: 3px solid color-mix(in srgb, var(--color-primary) 62%, var(--color-line));
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--color-primary-light) 30%, transparent);
+  padding: 8px 12px;
+  color: var(--color-ink-2);
+}
+
+.butler-conversation-markdown blockquote > :first-child {
+  margin-top: 0;
+}
+
+.butler-conversation-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.butler-conversation-markdown > div:has(> table) {
+  margin: 18px 0;
+  overflow: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 9px;
+  background: var(--color-surface-2);
+}
+
+.butler-conversation-markdown table {
+  width: 100%;
+  min-width: 420px;
+  border: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.butler-conversation-markdown :is(th, td) {
+  border-width: 0 0 1px;
+  border-color: var(--color-line);
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+.butler-conversation-markdown th {
+  background: var(--color-fill-active);
+  color: var(--color-ink);
+  font-weight: 700;
+}
+
+.butler-conversation-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.butler-conversation-markdown tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-fill-1) 50%, transparent);
+}
+
+.butler-conversation-markdown > .markdown-list-item {
+  min-height: 27px;
+  align-items: flex-start;
+  line-height: 1.7;
+}
+
+.butler-conversation-markdown input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-top: 5px;
+}
+
+.butler-conversation-markdown > hr {
+  margin: 16px 0;
+  border-color: var(--color-line);
 }
 
 .butler-conversation-pane article[data-speaker='assistant'] > div > div:nth-child(2) {
@@ -4139,6 +4302,13 @@ details.codex-native-activity {
 
   .codex-native-generated-images {
     grid-template-columns: 1fr;
+  }
+
+  .butler-conversation-markdown > pre {
+    overflow-x: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 }
 

@@ -1077,6 +1077,42 @@ test('输出 Codex 工作区视觉门禁截图', async ({ page }) => {
   await page.getByLabel('给 Codex 的任务').fill('检查候选版本发布条件');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toContainText('530 tests passed');
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      messages: [{
+        id: 'markdown-visual-answer',
+        role: 'assistant',
+        text: [
+          '# 发布检查结论',
+          '',
+          '**可以继续，但需要先处理一个风险。** 当前测试与类型检查已经通过，发布门禁保持完整。',
+          '',
+          '## 验证结果',
+          '',
+          '- [x] 530 tests passed',
+          '- [x] TypeScript 类型检查通过',
+          '- [ ] 确认正式包签名',
+          '',
+          '> 建议先完成签名验证，再生成最终发布产物。',
+          '',
+          '| 检查项 | 状态 | 说明 |',
+          '| --- | --- | --- |',
+          '| 自动化测试 | 通过 | 无失败用例 |',
+          '| 版本一致性 | 待确认 | 核对 `package.json` 与 tag |',
+          '',
+          '```ts',
+          'const releaseReady = testsPassed && signatureVerified;',
+          '```',
+          '',
+          '详情见 [发布检查文档](https://example.test/release-checklist)。',
+        ].join('\n'),
+      }],
+      streamingText: '',
+    });
+  });
+  await expect(page.getByRole('heading', { name: '发布检查结论' })).toBeVisible();
   await page.getByLabel('权限', { exact: true }).click();
   await page.screenshot({ path: desktopPath, animations: 'disabled' });
 
