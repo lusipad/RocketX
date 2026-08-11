@@ -84,6 +84,20 @@ export interface CodexRequestResolution {
   values?: Record<string, unknown>;
 }
 
+export interface CodexThreadState {
+  workspaceRoot: string;
+  runtimeSelection?: CodexRuntimeSelection;
+  status: CodexWorkspaceStatus;
+  error: string | null;
+  activeTurnId?: string;
+  turns: Turn[];
+  messages: CodexWorkspaceMessage[];
+  events: CodexWorkspaceEvent[];
+  streamingText: string;
+  pendingRequests: CodexPendingRequest[];
+  queuedMessages: Array<{ id: string; text: string; images: CodexImageInput[] }>;
+}
+
 interface PersistedWorkspace {
   workspaceRoot?: string;
   workspaceRoots?: string[];
@@ -104,6 +118,7 @@ interface CodexWorkspaceState {
   status: CodexWorkspaceStatus;
   error: string | null;
   threads: Thread[];
+  threadStates: Record<string, CodexThreadState>;
   activeThreadId?: string;
   activeTurnId?: string;
   turns: Turn[];
@@ -136,6 +151,7 @@ interface CodexWorkspaceState {
   refreshCatalog: () => Promise<void>;
   refreshThreads: () => Promise<void>;
   startThread: (name?: string) => Promise<string>;
+  startTask: (text: string, name?: string) => Promise<string>;
   resumeThread: (threadId: string) => Promise<void>;
   refreshFromCodex: () => Promise<number>;
   handoffToCodex: () => Promise<void>;
@@ -171,9 +187,11 @@ type ControllerFactory = (options: AppServerControllerOptions) => AppServerContr
 let controller: AppServerController | undefined;
 let controllerFactory: ControllerFactory = (options) => new AppServerController(options);
 let resumeThreadRequestId = 0;
+let connectRequest: Promise<void> | undefined;
 let defaultWorkspaceRequest: Promise<string> | undefined;
 let butlerWorkspaceRequest: Promise<string> | undefined;
 const requestWaiters = new Map<string, {
+  threadId: string;
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -506,83 +524,201 @@ function eventFromItem(item: ThreadItem, status: CodexWorkspaceEvent['status']):
   return null;
 }
 
-function rejectPendingRequests(reason: string): void {
-  for (const waiter of requestWaiters.values()) waiter.reject(new Error(reason));
-  requestWaiters.clear();
-  useCodexWorkspace.setState({ pendingRequests: [] });
+function emptyThreadState(status: CodexWorkspaceStatus = 'ready'): CodexThreadState {
+  return {
+    workspaceRoot: '',
+    runtimeSelection: undefined,
+    status,
+    error: null,
+    activeTurnId: undefined,
+    turns: [],
+    messages: [],
+    events: [],
+    streamingText: '',
+    pendingRequests: [],
+    queuedMessages: [],
+  };
 }
 
-function upsertEvent(event: CodexWorkspaceEvent): void {
+function threadSelection(thread: CodexThreadState, state = useCodexWorkspace.getState()): CodexRuntimeSelection {
+  return thread.runtimeSelection ?? selection(state);
+}
+
+async function ensureControllerWorkspace(workspaceRoot: string): Promise<void> {
+  if (!workspaceRoot.trim()) return;
+  if (connectRequest) await connectRequest;
+  if (!controller) await useCodexWorkspace.getState().connect();
+  const activeController = controller;
+  if (!activeController) return;
+  if (
+    activeController.currentWorkspaceRoot !== workspaceRoot
+    && typeof (activeController as Partial<AppServerController>).switchWorkspaceRoot === 'function'
+  ) {
+    activeController.switchWorkspaceRoot(workspaceRoot);
+  }
+}
+
+async function unsubscribeThreadIfSupported(target: unknown, threadId: string): Promise<void> {
+  const candidate = target as { unsubscribeThread?: (value: string) => Promise<void> } | undefined;
+  if (typeof candidate?.unsubscribeThread !== 'function') return;
+  await candidate.unsubscribeThread(threadId);
+}
+
+function currentThreadState(
+  state: Pick<CodexWorkspaceState, 'threadStates'>,
+  threadId: string | undefined,
+  fallbackStatus: CodexWorkspaceStatus = 'ready',
+): CodexThreadState {
+  if (!threadId) return emptyThreadState(fallbackStatus);
+  return state.threadStates[threadId] ?? emptyThreadState(fallbackStatus);
+}
+
+function projectedThreadState(thread: CodexThreadState): Pick<
+  CodexWorkspaceState,
+  'status' | 'error' | 'activeTurnId' | 'turns' | 'messages' | 'events' | 'streamingText' | 'pendingRequests' | 'queuedMessages'
+> {
+  return {
+    status: thread.status,
+    error: thread.error,
+    activeTurnId: thread.activeTurnId,
+    turns: thread.turns,
+    messages: thread.messages,
+    events: thread.events,
+    streamingText: thread.streamingText,
+    pendingRequests: thread.pendingRequests,
+    queuedMessages: thread.queuedMessages,
+  };
+}
+
+function setThreadState(
+  threadId: string,
+  updater: (thread: CodexThreadState) => CodexThreadState,
+): void {
+  useCodexWorkspace.setState((state) => {
+    const nextThread = updater(currentThreadState(state, threadId, state.activeThreadId ? state.status : 'ready'));
+    return {
+      threadStates: { ...state.threadStates, [threadId]: nextThread },
+      ...(state.activeThreadId === threadId ? projectedThreadState(nextThread) : {}),
+    };
+  });
+}
+
+function setActiveThread(threadId: string | undefined, fallbackStatus: CodexWorkspaceStatus = 'ready'): void {
   useCodexWorkspace.setState((state) => ({
-    events: state.events.some((item) => item.id === event.id)
-      ? state.events.map((item) => item.id === event.id ? event : item)
-      : [...state.events, event],
+    activeThreadId: threadId,
+    ...(threadId
+      ? projectedThreadState(currentThreadState(state, threadId, fallbackStatus))
+      : {
+          status: fallbackStatus,
+          error: null,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+        }),
+  }));
+}
+
+function rejectPendingRequests(reason: string, threadId?: string): void {
+  for (const [requestId, waiter] of requestWaiters.entries()) {
+    if (threadId && waiter.threadId !== threadId) continue;
+    waiter.reject(new Error(reason));
+    requestWaiters.delete(requestId);
+  }
+  if (threadId) {
+    setThreadState(threadId, (thread) => ({ ...thread, pendingRequests: [] }));
+    return;
+  }
+  useCodexWorkspace.setState((state) => ({
+    threadStates: Object.fromEntries(Object.entries(state.threadStates).map(([id, thread]) => [
+      id,
+      { ...thread, pendingRequests: [] },
+    ])),
+    pendingRequests: [],
+  }));
+}
+
+function upsertEvent(threadId: string, event: CodexWorkspaceEvent): void {
+  setThreadState(threadId, (thread) => ({
+    ...thread,
+    events: thread.events.some((item) => item.id === event.id)
+      ? thread.events.map((item) => item.id === event.id ? event : item)
+      : [...thread.events, event],
   }));
 }
 
 function appendEventDetail(
+  threadId: string,
   eventId: string,
   delta: string,
   fallback: Omit<CodexWorkspaceEvent, 'id' | 'detail'>,
 ): void {
   if (!delta) return;
-  useCodexWorkspace.setState((state) => {
-    const existing = state.events.find((event) => event.id === eventId);
+  setThreadState(threadId, (thread) => {
+    const existing = thread.events.find((event) => event.id === eventId);
     const next: CodexWorkspaceEvent = existing
       ? { ...existing, detail: boundedDetail(`${existing.detail ?? ''}${delta}`) }
       : { id: eventId, ...fallback, detail: boundedDetail(delta) };
     return {
+      ...thread,
       events: existing
-        ? state.events.map((event) => event.id === eventId ? next : event)
-        : [...state.events, next],
+        ? thread.events.map((event) => event.id === eventId ? next : event)
+        : [...thread.events, next],
     };
   });
 }
 
-async function reloadActiveThread(): Promise<void> {
-  const state = useCodexWorkspace.getState();
-  if (!controller || !state.activeThreadId) return;
-  const loaded = await controller.readThread(state.activeThreadId);
-  useCodexWorkspace.setState({
+async function reloadThread(threadId: string): Promise<void> {
+  if (!controller) return;
+  const loaded = await controller.readThread(threadId);
+  setThreadState(threadId, (thread) => ({
+    ...thread,
     turns: loaded.turns,
     messages: messagesFromTurns(loaded.turns),
-  });
+  }));
 }
 
-async function drainQueue(): Promise<void> {
+async function drainQueue(threadId: string): Promise<void> {
   const state = useCodexWorkspace.getState();
-  if (state.status !== 'ready' || state.queuedMessages.length === 0) return;
-  const [next, ...rest] = state.queuedMessages;
-  useCodexWorkspace.setState({ queuedMessages: rest });
-  await useCodexWorkspace.getState().send(next.text, next.images);
+  const thread = currentThreadState(state, threadId);
+  if (thread.status !== 'ready' || thread.queuedMessages.length === 0) return;
+  const [next, ...rest] = thread.queuedMessages;
+  setThreadState(threadId, (current) => ({ ...current, queuedMessages: rest }));
+  await sendThreadMessage(threadId, next.text, next.images);
 }
 
 function onNotification(method: string, value: unknown): void {
   const params = record(value);
-  const state = useCodexWorkspace.getState();
-  if (typeof params.threadId === 'string' && params.threadId !== state.activeThreadId) return;
+  const threadId = typeof params.threadId === 'string'
+    ? params.threadId
+    : useCodexWorkspace.getState().activeThreadId;
+  if (!threadId) return;
   if (method === 'turn/started') {
     const turn = record(params.turn);
-    useCodexWorkspace.setState({
+    setThreadState(threadId, (thread) => ({
+      ...thread,
       status: 'running',
-      activeTurnId: typeof turn.id === 'string' ? turn.id : state.activeTurnId,
-    });
+      activeTurnId: typeof turn.id === 'string' ? turn.id : thread.activeTurnId,
+    }));
     return;
   }
   if (method === 'item/agentMessage/delta') {
     const delta = typeof params.delta === 'string' ? params.delta : '';
-    if (delta) useCodexWorkspace.setState((current) => ({ streamingText: current.streamingText + delta }));
+    if (delta) setThreadState(threadId, (thread) => ({ ...thread, streamingText: thread.streamingText + delta }));
     return;
   }
   if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
     const delta = typeof params.delta === 'string' ? params.delta : '';
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-reasoning';
-    appendEventDetail(itemId, delta, { type: 'reasoning', title: '思考', status: 'running' });
+    appendEventDetail(threadId, itemId, delta, { type: 'reasoning', title: '思考', status: 'running' });
     return;
   }
   if (method === 'item/plan/delta') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-plan';
-    appendEventDetail(itemId, typeof params.delta === 'string' ? params.delta : '', {
+    appendEventDetail(threadId, itemId, typeof params.delta === 'string' ? params.delta : '', {
       type: 'plan',
       title: '更新计划',
       status: 'running',
@@ -591,7 +727,7 @@ function onNotification(method: string, value: unknown): void {
   }
   if (method === 'item/commandExecution/outputDelta') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-command';
-    appendEventDetail(itemId, typeof params.delta === 'string' ? params.delta : '', {
+    appendEventDetail(threadId, itemId, typeof params.delta === 'string' ? params.delta : '', {
       type: 'commandExecution',
       title: '运行命令',
       status: 'running',
@@ -601,12 +737,27 @@ function onNotification(method: string, value: unknown): void {
   if (method === 'turn/diff/updated') {
     const turnId = typeof params.turnId === 'string' ? params.turnId : 'active';
     const diff = typeof params.diff === 'string' ? boundedDetail(params.diff) : '';
-    if (diff) upsertEvent({ id: `turn-diff-${turnId}`, type: 'turnDiff', title: '代码改动', detail: diff, status: 'running' });
+    if (diff) {
+      setThreadState(threadId, (thread) => ({
+        ...thread,
+        events: thread.events.some((event) => event.id === `turn-diff-${turnId}`)
+          ? thread.events.map((event) => event.id === `turn-diff-${turnId}`
+            ? { ...event, detail: diff, status: 'running' as const }
+            : event)
+          : [...thread.events, {
+              id: `turn-diff-${turnId}`,
+              type: 'turnDiff',
+              title: '代码改动',
+              detail: diff,
+              status: 'running',
+            }],
+      }));
+    }
     return;
   }
   if (method === 'item/commandExecution/terminalInteraction') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-terminal';
-    upsertEvent({
+    upsertEvent(threadId, {
       id: `terminal-${itemId}`,
       type: 'terminal',
       title: '终端交互',
@@ -618,7 +769,7 @@ function onNotification(method: string, value: unknown): void {
   }
   if (method === 'item/mcpToolCall/progress') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-mcp';
-    appendEventDetail(itemId, typeof params.message === 'string' ? `${params.message}\n` : '', {
+    appendEventDetail(threadId, itemId, typeof params.message === 'string' ? `${params.message}\n` : '', {
       type: 'mcpToolCall',
       title: '调用工具',
       status: 'running',
@@ -629,7 +780,13 @@ function onNotification(method: string, value: unknown): void {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-file-change';
     const changes = Array.isArray(params.changes) ? params.changes : [];
     const paths = changes.map((change) => record(change).path).filter((path): path is string => typeof path === 'string');
-    upsertEvent({ id: itemId, type: 'fileChange', title: '修改文件', summary: paths.join('、'), status: 'running' });
+    upsertEvent(threadId, {
+      id: itemId,
+      type: 'fileChange',
+      title: '修改文件',
+      summary: paths.join('、'),
+      status: 'running',
+    });
     return;
   }
   if (method === 'turn/plan/updated') {
@@ -640,7 +797,7 @@ function onNotification(method: string, value: unknown): void {
       const label = typeof value.step === 'string' ? value.step : typeof value.description === 'string' ? value.description : '';
       return label ? `${value.status === 'completed' ? '✓' : value.status === 'in_progress' ? '→' : '·'} ${label}` : '';
     }).filter(Boolean);
-    upsertEvent({
+    upsertEvent(threadId, {
       id: `turn-plan-${turnId}`,
       type: 'plan',
       title: '计划',
@@ -654,13 +811,13 @@ function onNotification(method: string, value: unknown): void {
     const item = params.item as ThreadItem | undefined;
     if (item && typeof item === 'object' && 'type' in item) {
       const event = eventFromItem(item, method === 'item/started' ? 'running' : 'completed');
-      if (event) upsertEvent(event);
+      if (event) upsertEvent(threadId, event);
     }
     return;
   }
   if (method === 'item/autoApprovalReview/started' || method === 'item/autoApprovalReview/completed') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active';
-    upsertEvent({
+    upsertEvent(threadId, {
       id: `auto-review-${itemId}`,
       type: 'autoReview',
       title: '替我审批',
@@ -669,7 +826,7 @@ function onNotification(method: string, value: unknown): void {
     return;
   }
   if (method === 'warning' || method === 'error') {
-    upsertEvent({
+    upsertEvent(threadId, {
       id: id(method),
       type: 'warning',
       title: method === 'error' ? '运行错误' : '运行提示',
@@ -683,23 +840,24 @@ function onNotification(method: string, value: unknown): void {
   const failed = turn.status === 'failed';
   const interrupted = turn.status === 'interrupted';
   const unsuccessful = failed || interrupted;
-  const streamed = useCodexWorkspace.getState().streamingText.trim();
-  useCodexWorkspace.setState((current) => ({
+  const streamed = currentThreadState(useCodexWorkspace.getState(), threadId).streamingText.trim();
+  setThreadState(threadId, (thread) => ({
+    ...thread,
     status: 'ready',
     activeTurnId: undefined,
     streamingText: '',
     error: interrupted ? 'Codex 本轮已中断' : failed ? 'Codex 本轮未完成' : null,
-    events: current.events.map((event) => event.status === 'running'
+    events: thread.events.map((event) => event.status === 'running'
       ? { ...event, status: unsuccessful ? 'failed' as const : 'completed' as const }
       : event),
     messages: streamed
-      ? [...current.messages, { id: id('assistant'), role: 'assistant', text: streamed }]
-      : current.messages,
+      ? [...thread.messages, { id: id('assistant'), role: 'assistant', text: streamed }]
+      : thread.messages,
   }));
-  void reloadActiveThread()
+  void reloadThread(threadId)
     .catch(() => undefined)
     .finally(() => void useCodexWorkspace.getState().refreshThreads().catch(() => undefined))
-    .finally(() => void drainQueue());
+    .finally(() => void drainQueue(threadId));
 }
 
 async function onServerRequest(request: {
@@ -708,7 +866,6 @@ async function onServerRequest(request: {
   policy: 'host-approval' | 'host-input' | 'dynamic-tool' | 'local-safe' | 'safe-reject' | 'unknown';
 }): Promise<unknown> {
   const params = record(request.params);
-  const state = useCodexWorkspace.getState();
   const threadId = typeof params.threadId === 'string' ? params.threadId : '';
   const backgroundPermission = backgroundAutomationPermissions.get(threadId);
   if (backgroundPermission) {
@@ -729,9 +886,6 @@ async function onServerRequest(request: {
     }
     throw new Error(`无人值守任务不能处理 ${request.method}`);
   }
-  if (!state.activeThreadId || threadId !== state.activeThreadId) {
-    throw new Error('请求不属于当前 Codex 任务');
-  }
   if (request.policy !== 'host-approval' && request.policy !== 'host-input') {
     throw new Error(`当前 Codex 工作区不接受 ${request.method}`);
   }
@@ -749,12 +903,13 @@ async function onServerRequest(request: {
     turnId: typeof params.turnId === 'string' ? params.turnId : undefined,
     params,
   };
-  useCodexWorkspace.setState((current) => ({
-    pendingRequests: [...current.pendingRequests, pending],
+  setThreadState(threadId, (thread) => ({
+    ...thread,
+    pendingRequests: [...thread.pendingRequests, pending],
     status: 'waiting-input',
   }));
   return new Promise((resolve, reject) => {
-    requestWaiters.set(requestId, { method: request.method, resolve, reject });
+    requestWaiters.set(requestId, { threadId, method: request.method, resolve, reject });
   });
 }
 
@@ -766,31 +921,124 @@ function makeController(): AppServerController {
     onInterrupted: (error) => {
       if (controller !== managedController) return;
       const current = useCodexWorkspace.getState();
-      const interrupted = Boolean(current.activeThreadId && current.activeTurnId);
-      const streamed = current.streamingText.trim();
-      const interruptionError = interrupted && current.queuedMessages.length > 0
-        ? `${error.message}；${current.queuedMessages.length} 条排队消息未执行`
-        : error.message;
       rejectPendingRequests(error.message);
+      const nextThreadStates = Object.fromEntries(
+        Object.entries(current.threadStates).map(([threadId, thread]) => {
+          const interrupted = Boolean(thread.activeTurnId);
+          const queuedMessages = threadId === current.activeThreadId && current.queuedMessages.length > 0
+            ? current.queuedMessages
+            : thread.queuedMessages;
+          const streamed = (threadId === current.activeThreadId && current.streamingText
+            ? current.streamingText
+            : thread.streamingText).trim();
+          const interruptionError = interrupted && queuedMessages.length > 0
+            ? `${error.message}；${queuedMessages.length} 条排队消息未执行`
+            : error.message;
+          return [threadId, {
+            ...thread,
+            status: interrupted ? 'interrupted' : thread.status === 'external' ? 'external' : 'unavailable',
+            activeTurnId: undefined,
+            streamingText: '',
+            queuedMessages: [],
+            error: interruptionError,
+            events: interrupted
+              ? thread.events.map((event) => event.status === 'running'
+                ? { ...event, status: 'failed' as const }
+                : event)
+              : thread.events,
+            messages: interrupted && streamed
+              ? [...thread.messages, { id: id('assistant'), role: 'assistant', text: streamed }]
+              : thread.messages,
+          } satisfies CodexThreadState];
+        }),
+      ) as Record<string, CodexThreadState>;
       controller = undefined;
-      useCodexWorkspace.setState((state) => ({
-        status: interrupted ? 'interrupted' : 'unavailable',
-        activeTurnId: undefined,
-        streamingText: '',
-        queuedMessages: [],
-        error: interruptionError,
-        events: interrupted
-          ? state.events.map((event) => event.status === 'running'
-            ? { ...event, status: 'failed' as const }
-            : event)
-          : state.events,
-        messages: interrupted && streamed
-          ? [...state.messages, { id: id('assistant'), role: 'assistant', text: streamed }]
-          : state.messages,
-      }));
+      connectRequest = undefined;
+      useCodexWorkspace.setState((state) => {
+        const activeThread = state.activeThreadId
+          ? nextThreadStates[state.activeThreadId] ?? emptyThreadState('unavailable')
+          : emptyThreadState('unavailable');
+        return {
+          threadStates: nextThreadStates,
+          ...projectedThreadState(activeThread),
+        };
+      });
     },
   });
   return managedController;
+}
+
+async function sendThreadMessage(
+  threadId: string,
+  value: string,
+  images: readonly CodexImageInput[] = [],
+  modeOverride?: CodexFollowUpMode,
+): Promise<void> {
+  const text = value.trim();
+  const imageList = [...images];
+  if (!text && imageList.length === 0) return;
+  if (!controller) await useCodexWorkspace.getState().connect();
+  const state = useCodexWorkspace.getState();
+  const thread = currentThreadState(state, threadId);
+  const runtimeSelection = threadSelection(thread, state);
+  await ensureControllerWorkspace(thread.workspaceRoot || state.workspaceRoot);
+  if (thread.activeTurnId || thread.status === 'running' || thread.status === 'waiting-input') {
+    const followUp = modeOverride ?? state.followUpMode;
+    if (followUp === 'queue' || imageList.length > 0) {
+      setThreadState(threadId, (current) => ({
+        ...current,
+        queuedMessages: [...current.queuedMessages, { id: id('queued'), text, images: imageList }],
+      }));
+      return;
+    }
+    if (!thread.activeTurnId) throw new Error('Codex Turn 尚未就绪，暂时无法 Steer');
+    const input: UserInput[] = [{ type: 'text', text, text_elements: [] }];
+    await controller!.steerTurn(threadId, thread.activeTurnId, input);
+    setThreadState(threadId, (current) => ({
+      ...current,
+      messages: [...current.messages, { id: id('user'), role: 'user', text }],
+    }));
+    return;
+  }
+  let materialized = { paths: [] as string[], roots: [] as string[] };
+  if (imageList.length > 0) {
+    const sessionId = controller!.currentSessionId;
+    if (!sessionId) throw new Error('Codex Runtime 尚未准备好附件目录');
+    materialized = await materializeCodexImages(sessionId, imageList);
+  }
+  const input: UserInput[] = [
+    ...(text ? [{ type: 'text' as const, text, text_elements: [] }] : []),
+    ...materialized.paths.map((path) => ({ type: 'localImage' as const, path })),
+  ];
+  setThreadState(threadId, (current) => ({
+    ...current,
+    status: 'running',
+    error: null,
+    streamingText: '',
+    events: [],
+    messages: [...current.messages, {
+      id: id('user'),
+      role: 'user',
+      text,
+      attachments: codexImageAttachments(imageList),
+      pending: true,
+    }],
+  }));
+  try {
+    const turnId = await controller!.startTurn(threadId, input, runtimeSelection, {
+      runtimeWorkspaceRoots: materialized.roots,
+    });
+    setThreadState(threadId, (current) => ({
+      ...current,
+      activeTurnId: turnId,
+      status: 'running',
+      workspaceRoot: current.workspaceRoot || state.workspaceRoot,
+      runtimeSelection,
+    }));
+  } catch (error) {
+    setThreadState(threadId, (current) => ({ ...current, status: 'ready', error: message(error) }));
+    throw error;
+  }
 }
 
 export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
@@ -802,6 +1050,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   status: 'idle',
   error: null,
   threads: [],
+  threadStates: {},
   turns: [],
   messages: [],
   events: [],
@@ -857,6 +1106,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       status: 'idle',
       error: null,
       threads: [],
+      threadStates: {},
       activeThreadId: undefined,
       activeTurnId: undefined,
       turns: [],
@@ -928,7 +1178,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     return defaultWorkspaceRoot;
   },
 
-  setWorkspaceRoot: async (workspaceRoot, options) => {
+  setWorkspaceRoot: async (workspaceRoot) => {
     const normalized = workspaceRoot.trim();
     const current = get();
     if (normalized === current.workspaceRoot) {
@@ -938,10 +1188,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       }
       return;
     }
-    rejectPendingRequests('工作区已切换');
-    const reusedRuntime = options?.reuseRuntime === true
-      && controller?.switchWorkspaceRoot(normalized) === true;
-    if (!reusedRuntime) {
+    const reusedRuntime = controller?.switchWorkspaceRoot(normalized) === true;
+    if (!reusedRuntime && !Object.keys(current.threadStates).length) {
       await controller?.stop();
       controller = undefined;
     }
@@ -989,28 +1237,37 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   connect: async (options) => {
     if (!get().workspaceRoot) throw new Error('请先选择工作区');
-    if (get().status === 'connecting') return;
-    set({ status: 'connecting', error: null });
-    const activeController = controller ??= makeController();
-    try {
-      const catalog = await activeController.connect(id('workspace'), get().workspaceRoot);
-      const defaults = defaultSelection(catalog, get());
-      const hostingDefaults = defaultHostingSelection(catalog, get());
-      set({
-        ...catalog,
-        ...defaults,
-        ...hostingDefaults,
-        status: 'ready',
-        error: null,
-      });
-      persist(get());
-      if (options?.refreshThreads !== false) await get().refreshThreads();
-    } catch (error) {
-      await activeController.stop().catch(() => undefined);
-      if (controller === activeController) controller = undefined;
-      set({ status: 'unavailable', error: message(error) });
-      throw error;
-    }
+    if (connectRequest) return connectRequest;
+    set((state) => state.activeThreadId
+      ? { error: null }
+      : { status: 'connecting', error: null });
+    connectRequest = (async () => {
+      const activeController = controller ??= makeController();
+      try {
+        const catalog = await activeController.connect(id('workspace'), get().workspaceRoot);
+        const defaults = defaultSelection(catalog, get());
+        const hostingDefaults = defaultHostingSelection(catalog, get());
+        set((state) => ({
+          ...catalog,
+          ...defaults,
+          ...hostingDefaults,
+          ...(state.activeThreadId ? {} : { status: 'ready' as const, error: null }),
+        }));
+        persist(get());
+        if (options?.refreshThreads !== false) await get().refreshThreads();
+      } catch (error) {
+        await activeController.stop().catch(() => undefined);
+        if (controller === activeController) controller = undefined;
+        set((state) => ({
+          ...(state.activeThreadId ? {} : { status: 'unavailable' as const }),
+          error: message(error),
+        }));
+        throw error;
+      } finally {
+        connectRequest = undefined;
+      }
+    })();
+    return connectRequest;
   },
 
   refreshCatalog: async () => {
@@ -1025,100 +1282,167 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   startThread: async (name) => {
-    if (!controller) await get().connect();
-    const current = get();
-    if (current.activeTurnId && current.activeThreadId) {
-      await controller!.interruptTurn(current.activeThreadId, current.activeTurnId).catch(() => undefined);
-    }
-    rejectPendingRequests('已新建任务');
-    const thread = await controller!.startThread(selection(), name);
-    set({
-      activeThreadId: thread.id,
-      activeTurnId: undefined,
-      turns: [],
-      messages: [],
-      events: [],
-      streamingText: '',
+    const workspaceRoot = get().workspaceRoot;
+    await ensureControllerWorkspace(workspaceRoot);
+    const runtimeSelection = selection();
+    const thread = await controller!.startThread(runtimeSelection, name);
+    set((state) => ({
+      threadStates: {
+        ...state.threadStates,
+        [thread.id]: {
+          ...emptyThreadState('ready'),
+          workspaceRoot,
+          runtimeSelection,
+        },
+      },
       composerDraft: '',
-      pendingRequests: [],
-      queuedMessages: [],
-      status: 'ready',
-      error: null,
-    });
+    }));
+    setActiveThread(thread.id, 'ready');
     await get().refreshThreads();
+    return thread.id;
+  },
+
+  startTask: async (text, name) => {
+    const prompt = text.trim();
+    if (!prompt) throw new Error('任务内容不能为空');
+    const workspaceRoot = get().workspaceRoot;
+    await ensureControllerWorkspace(workspaceRoot);
+    const runtimeSelection = selection();
+    const thread = await controller!.startThread(runtimeSelection, name);
+    set((state) => ({
+      threadStates: {
+        ...state.threadStates,
+        [thread.id]: {
+          ...emptyThreadState('ready'),
+          workspaceRoot,
+          runtimeSelection,
+        },
+      },
+      composerDraft: '',
+    }));
+    setActiveThread(thread.id, 'ready');
+    await get().refreshThreads();
+    await sendThreadMessage(thread.id, prompt);
     return thread.id;
   },
 
   resumeThread: async (threadId) => {
     const requestId = ++resumeThreadRequestId;
     if (!controller) await get().connect();
-    if (requestId !== resumeThreadRequestId) return;
     let activeController = controller!;
-    const current = get();
-    if (current.activeTurnId && current.activeThreadId) {
-      await activeController.interruptTurn(current.activeThreadId, current.activeTurnId).catch(() => undefined);
+    const existing = get().threadStates[threadId];
+    if (existing) {
+      setActiveThread(threadId, existing.status);
+      await ensureControllerWorkspace(existing.workspaceRoot || get().workspaceRoot);
+      try {
+        const loaded = await activeController.readThread(threadId);
+        setThreadState(threadId, (thread) => ({
+          ...thread,
+          turns: loaded.turns,
+          messages: messagesFromTurns(loaded.turns),
+        }));
+      } catch {
+        // 已有本地状态时，切回优先保持运行态；只在显式刷新时再尝试恢复。
+      }
+      return;
     }
-    if (requestId !== resumeThreadRequestId) return;
-    rejectPendingRequests('已切换任务');
-    set({ status: 'connecting', activeThreadId: threadId, activeTurnId: undefined, error: null });
+    const runtimeSelection = selection();
+    const workspaceRoot = get().workspaceRoot;
+    await ensureControllerWorkspace(workspaceRoot);
+    set((state) => ({
+      threadStates: {
+        ...state.threadStates,
+        [threadId]: {
+          ...currentThreadState(state, threadId),
+          workspaceRoot,
+          runtimeSelection,
+          status: 'connecting',
+          error: null,
+          activeTurnId: undefined,
+        },
+      },
+    }));
+    setActiveThread(threadId, 'connecting');
     try {
       const loadThread = async () => {
-        const thread = await activeController.resumeThread(threadId, selection());
-        if (requestId !== resumeThreadRequestId) return undefined;
+        await ensureControllerWorkspace(workspaceRoot);
+        const thread = await activeController.resumeThread(threadId, runtimeSelection);
         const loaded = await activeController.readThread(thread.id);
-        if (requestId !== resumeThreadRequestId) return undefined;
         return { thread, loaded };
       };
       let result;
       try {
         result = await loadThread();
       } catch (error) {
-        if (!isRuntimeDisconnectedError(error) || requestId !== resumeThreadRequestId) throw error;
+        if (!isRuntimeDisconnectedError(error)) throw error;
         await activeController.stop().catch(() => undefined);
         if (controller === activeController) controller = undefined;
-        set({ status: 'idle', error: null });
+        connectRequest = undefined;
         await get().connect({ refreshThreads: false });
-        if (requestId !== resumeThreadRequestId) return;
         if (!controller) throw new Error('Codex Runtime 重新连接失败');
         activeController = controller;
         result = await loadThread();
       }
-      if (!result) return;
       const { thread, loaded } = result;
-      set({
-        activeThreadId: thread.id,
-        turns: loaded.turns,
-        messages: messagesFromTurns(loaded.turns),
-        events: [],
-        streamingText: '',
-        pendingRequests: [],
-        queuedMessages: [],
-        status: 'ready',
-        error: null,
-      });
+      const loadedState = currentThreadState(get(), thread.id);
+      set((state) => ({
+        threadStates: {
+          ...state.threadStates,
+          [thread.id]: {
+            ...loadedState,
+            workspaceRoot,
+            runtimeSelection,
+            turns: loaded.turns,
+            messages: messagesFromTurns(loaded.turns),
+            status: loadedState.status === 'running' || loadedState.status === 'waiting-input'
+              ? loadedState.status
+              : 'ready',
+            error: loadedState.status === 'running' || loadedState.status === 'waiting-input'
+              ? loadedState.error
+              : null,
+            activeTurnId: loadedState.status === 'running' || loadedState.status === 'waiting-input'
+              ? loadedState.activeTurnId
+              : undefined,
+            events: loadedState.status === 'running' || loadedState.status === 'waiting-input' ? loadedState.events : [],
+            streamingText: loadedState.status === 'running' || loadedState.status === 'waiting-input'
+              ? loadedState.streamingText
+              : '',
+            pendingRequests: loadedState.status === 'waiting-input' ? loadedState.pendingRequests : [],
+          },
+        },
+      }));
+      if (requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(thread.id, 'ready');
     } catch (error) {
-      if (requestId !== resumeThreadRequestId) return;
       if (!isActiveWriterError(error)) {
-        set({ status: controller ? 'ready' : 'unavailable', error: message(error) });
+        setThreadState(threadId, (thread) => ({
+          ...thread,
+          status: controller ? 'ready' : 'unavailable',
+          error: message(error),
+        }));
         throw error;
       }
       const loaded = await activeController.readThread(threadId);
-      if (requestId !== resumeThreadRequestId) return;
-      await activeController.stop().catch(() => undefined);
-      if (requestId !== resumeThreadRequestId) return;
-      if (controller === activeController) controller = undefined;
-      set({
-        activeThreadId: threadId,
-        activeTurnId: undefined,
-        turns: loaded.turns,
-        messages: messagesFromTurns(loaded.turns),
-        events: [],
-        streamingText: '',
-        pendingRequests: [],
-        queuedMessages: [],
-        status: 'external',
-        error: null,
-      });
+      await unsubscribeThreadIfSupported(activeController, threadId).catch(() => undefined);
+      set((state) => ({
+        threadStates: {
+          ...state.threadStates,
+          [threadId]: {
+            ...currentThreadState(state, threadId),
+            workspaceRoot,
+            runtimeSelection,
+            activeTurnId: undefined,
+            turns: loaded.turns,
+            messages: messagesFromTurns(loaded.turns),
+            events: [],
+            streamingText: '',
+            pendingRequests: [],
+            queuedMessages: [],
+            status: 'external',
+            error: null,
+          },
+        },
+      }));
+      if (requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(threadId, 'external');
     }
   },
 
@@ -1126,50 +1450,58 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const current = get();
     if (!current.workspaceRoot) throw new Error('请先选择工作区');
     if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
-    if (current.activeTurnId || current.status === 'running' || current.status === 'waiting-input') {
+    const activeThread = currentThreadState(current, current.activeThreadId, current.status);
+    if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
       throw new Error('任务运行中，完成后再从 Codex 刷新');
     }
     if (current.status === 'connecting') throw new Error('Codex 正在连接，请稍后刷新');
 
     const threadId = current.activeThreadId;
-    const knownTurnIds = new Set(current.turns.map((turn) => turn.id));
-    rejectPendingRequests('正在从 Codex 刷新');
-    await controller?.stop();
-    controller = undefined;
-    set({
-      status: 'idle',
+    const knownTurnIds = new Set(activeThread.turns.map((turn) => turn.id));
+    rejectPendingRequests('正在从 Codex 刷新', threadId);
+    await unsubscribeThreadIfSupported(controller, threadId).catch(() => undefined);
+    setThreadState(threadId, (thread) => ({
+      ...thread,
+      status: 'connecting',
       error: null,
       activeTurnId: undefined,
       streamingText: '',
       events: [],
       pendingRequests: [],
-    });
+    }));
+    setActiveThread(threadId, 'connecting');
 
     let externalLoaded: Awaited<ReturnType<AppServerController['readThread']>> | undefined;
     try {
+      await ensureControllerWorkspace(activeThread.workspaceRoot || current.workspaceRoot);
       await get().connect();
       const activeController = controller!;
       try {
-        const resumed = await activeController.resumeThread(threadId, selection());
+        const runtimeSelection = threadSelection(activeThread, current);
+        const resumed = await activeController.resumeThread(threadId, runtimeSelection);
         const loaded = await activeController.readThread(resumed.id);
-        set({
-          activeThreadId: resumed.id,
+        setThreadState(resumed.id, (thread) => ({
+          ...thread,
+          workspaceRoot: activeThread.workspaceRoot || current.workspaceRoot,
+          runtimeSelection,
           turns: loaded.turns,
           messages: messagesFromTurns(loaded.turns),
           events: [],
           streamingText: '',
           pendingRequests: [],
           queuedMessages: [],
+          activeTurnId: undefined,
           status: 'ready',
           error: null,
-        });
+        }));
+        setActiveThread(resumed.id, 'ready');
       } catch (error) {
         if (!isActiveWriterError(error)) throw error;
         externalLoaded = await activeController.readThread(threadId);
         const name = continuationName(externalLoaded.thread);
         const forked = await activeController.forkThread(
           threadId,
-          selection(),
+          threadSelection(activeThread, current),
           name,
         );
         const loaded = await activeController.readThread(forked.id);
@@ -1178,36 +1510,40 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
             { ...loaded.thread, name },
             ...state.threads.filter((thread) => thread.id !== forked.id),
           ],
-          activeThreadId: forked.id,
+          threadStates: {
+            ...state.threadStates,
+            [forked.id]: {
+              ...emptyThreadState('ready'),
+              workspaceRoot: activeThread.workspaceRoot || current.workspaceRoot,
+              runtimeSelection: threadSelection(activeThread, current),
+              turns: loaded.turns,
+              messages: messagesFromTurns(loaded.turns),
+            },
+          },
+        }));
+        setActiveThread(forked.id, 'ready');
+      }
+      return currentThreadState(get(), get().activeThreadId).turns.filter((turn) => !knownTurnIds.has(turn.id)).length;
+    } catch (error) {
+      if (externalLoaded) {
+        const loaded = externalLoaded;
+        setThreadState(threadId, (thread) => ({
+          ...thread,
+          status: 'external',
+          activeTurnId: undefined,
           turns: loaded.turns,
           messages: messagesFromTurns(loaded.turns),
-          events: [],
-          streamingText: '',
-          pendingRequests: [],
-          queuedMessages: [],
-          status: 'ready',
-          error: null,
-        }));
-      }
-      return get().turns.filter((turn) => !knownTurnIds.has(turn.id)).length;
-    } catch (error) {
-      await (controller as AppServerController | undefined)?.stop().catch(() => undefined);
-      controller = undefined;
-      if (externalLoaded) {
-        set({
-          status: 'external',
-          activeThreadId: threadId,
-          activeTurnId: undefined,
-          turns: externalLoaded.turns,
-          messages: messagesFromTurns(externalLoaded.turns),
           error: message(error),
-        });
+        }));
+        setActiveThread(threadId, 'external');
       } else {
-        set({
+        setThreadState(threadId, (thread) => ({
+          ...thread,
           status: 'unavailable',
           activeTurnId: undefined,
           error: message(error),
-        });
+        }));
+        setActiveThread(threadId, 'unavailable');
       }
       throw error;
     }
@@ -1215,13 +1551,15 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   handoffToCodex: async () => {
     const current = get();
-    if (current.activeTurnId || current.status === 'running' || current.status === 'waiting-input') {
+    if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
+    const activeThread = currentThreadState(current, current.activeThreadId, current.status);
+    if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
       throw new Error('任务运行中，完成或停止后再切换到 Codex App');
     }
-    rejectPendingRequests('会话已交给 Codex App');
-    await controller?.stop();
-    controller = undefined;
-    set({
+    rejectPendingRequests('会话已交给 Codex App', current.activeThreadId);
+    await unsubscribeThreadIfSupported(controller, current.activeThreadId).catch(() => undefined);
+    setThreadState(current.activeThreadId, (thread) => ({
+      ...thread,
       status: 'external',
       activeTurnId: undefined,
       streamingText: '',
@@ -1229,7 +1567,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       pendingRequests: [],
       queuedMessages: [],
       error: null,
-    });
+    }));
+    setActiveThread(current.activeThreadId, 'external');
   },
 
   renameThread: async (threadId, name) => {
@@ -1245,13 +1584,17 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   archiveThread: async (threadId) => {
     if (!controller) await get().connect();
     const state = get();
-    if (state.activeThreadId === threadId && state.activeTurnId) {
-      await controller!.interruptTurn(threadId, state.activeTurnId).catch(() => undefined);
+    const thread = currentThreadState(state, threadId);
+    if (state.activeThreadId === threadId && thread.activeTurnId) {
+      await controller!.interruptTurn(threadId, thread.activeTurnId).catch(() => undefined);
     }
     await controller!.archiveThread(threadId);
-    if (state.activeThreadId === threadId) rejectPendingRequests('任务已归档');
+    rejectPendingRequests('任务已归档', threadId);
     set((current) => ({
       threads: current.threads.filter((thread) => thread.id !== threadId),
+      threadStates: Object.fromEntries(
+        Object.entries(current.threadStates).filter(([id]) => id !== threadId),
+      ) as Record<string, CodexThreadState>,
       ...(current.activeThreadId === threadId ? {
         activeThreadId: undefined,
         activeTurnId: undefined,
@@ -1271,53 +1614,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (!text && imageList.length === 0) return;
     if (!controller) await get().connect();
     if (!get().activeThreadId) await get().startThread(text.slice(0, 48) || '图片任务');
-    const state = get();
-    if (state.activeTurnId || state.status === 'running' || state.status === 'waiting-input') {
-      const followUp = modeOverride ?? state.followUpMode;
-      if (followUp === 'queue' || imageList.length > 0) {
-        set((current) => ({
-          queuedMessages: [...current.queuedMessages, { id: id('queued'), text, images: imageList }],
-        }));
-        return;
-      }
-      if (!state.activeTurnId) throw new Error('Codex Turn 尚未就绪，暂时无法 Steer');
-      const input: UserInput[] = [{ type: 'text', text, text_elements: [] }];
-      await controller!.steerTurn(state.activeThreadId!, state.activeTurnId, input);
-      set((current) => ({ messages: [...current.messages, { id: id('user'), role: 'user', text }] }));
-      return;
-    }
-    let materialized = { paths: [] as string[], roots: [] as string[] };
-    if (imageList.length > 0) {
-      const sessionId = controller!.currentSessionId;
-      if (!sessionId) throw new Error('Codex Runtime 尚未准备好附件目录');
-      materialized = await materializeCodexImages(sessionId, imageList);
-    }
-    const input: UserInput[] = [
-      ...(text ? [{ type: 'text' as const, text, text_elements: [] }] : []),
-      ...materialized.paths.map((path) => ({ type: 'localImage' as const, path })),
-    ];
-    set((current) => ({
-      status: 'running',
-      error: null,
-      streamingText: '',
-      events: [],
-      messages: [...current.messages, {
-        id: id('user'),
-        role: 'user',
-        text,
-        attachments: codexImageAttachments(imageList),
-        pending: true,
-      }],
-    }));
-    try {
-      const turnId = await controller!.startTurn(get().activeThreadId!, input, selection(), {
-        runtimeWorkspaceRoots: materialized.roots,
-      });
-      set({ activeTurnId: turnId, status: 'running' });
-    } catch (error) {
-      set({ status: 'ready', error: message(error) });
-      throw error;
-    }
+    await sendThreadMessage(get().activeThreadId!, text, imageList, modeOverride);
   },
 
   setComposerDraft: (composerDraft) => set({ composerDraft }),
@@ -1326,17 +1623,31 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   interrupt: async () => {
     const state = get();
-    if (controller && state.activeThreadId && state.activeTurnId) {
-      await controller.interruptTurn(state.activeThreadId, state.activeTurnId).catch(() => undefined);
+    if (!state.activeThreadId) return;
+    const thread = currentThreadState(state, state.activeThreadId, state.status);
+    if (controller && thread.activeTurnId) {
+      await controller.interruptTurn(state.activeThreadId, thread.activeTurnId).catch(() => undefined);
     }
-    rejectPendingRequests('用户已停止当前任务');
-    set({ status: 'ready', activeTurnId: undefined, streamingText: '', queuedMessages: [] });
+    rejectPendingRequests('用户已停止当前任务', state.activeThreadId);
+    setThreadState(state.activeThreadId, (current) => ({
+      ...current,
+      status: 'ready',
+      activeTurnId: undefined,
+      streamingText: '',
+      queuedMessages: [],
+    }));
   },
 
   resolveRequest: (requestId, resolution) => {
-    const pending = get().pendingRequests.find((item) => item.id === requestId);
+    const state = get();
+    const pending = state.pendingRequests.find((item) => item.id === requestId)
+      ?? Object.values(state.threadStates)
+        .flatMap((thread) => thread.pendingRequests)
+        .find((item) => item.id === requestId);
     const waiter = requestWaiters.get(requestId);
     if (!pending || !waiter) return;
+    const thread = currentThreadState(state, pending.threadId, state.status);
+    const roots = thread.workspaceRoot ? [thread.workspaceRoot] : [state.workspaceRoot].filter(Boolean);
     const accepted = resolution.action === 'accept' || resolution.action === 'accept-session';
     let result: unknown;
     if (pending.kind === 'user-input') {
@@ -1358,7 +1669,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         const requested = pending.params.permissions ?? pending.params.additionalPermissions;
         permissions = validatePermissionRequest(
           requested as Parameters<typeof validatePermissionRequest>[0],
-          [get().workspaceRoot],
+          roots,
         );
       }
       result = {
@@ -1368,7 +1679,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       };
     } else if (pending.method.startsWith('item/')) {
       if (accepted) {
-        validateApprovalPaths(pending.params, [get().workspaceRoot]);
+        validateApprovalPaths(pending.params, roots);
         if (commandRequestMentionsSensitivePath(pending.params.command)) {
           throw new Error('命令涉及敏感路径，不能批准');
         }
@@ -1382,10 +1693,14 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       result = { decision: accepted ? 'approved' : 'denied' };
     }
     requestWaiters.delete(requestId);
-    set((current) => ({
-      pendingRequests: current.pendingRequests.filter((item) => item.id !== requestId),
-      status: current.pendingRequests.length === 1 ? 'running' : current.status,
-    }));
+    setThreadState(pending.threadId, (current) => {
+      const pendingRequests = current.pendingRequests.filter((item) => item.id !== requestId);
+      return {
+        ...current,
+        pendingRequests,
+        status: pendingRequests.length > 0 ? 'waiting-input' : current.activeTurnId ? 'running' : 'ready',
+      };
+    });
     waiter.resolve(result);
   },
 
@@ -1397,13 +1712,35 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     ) ? get().selectedEffort : model.defaultReasoningEffort;
     set({ selectedModel: model.model, selectedEffort });
     persist(get());
-    if (controller && get().activeThreadId) await controller.updateSettings(get().activeThreadId!, selection());
+    if (controller && get().activeThreadId) {
+      setThreadState(get().activeThreadId!, (thread) => ({
+        ...thread,
+        runtimeSelection: {
+          model: model.model,
+          effort: selectedEffort,
+          permissionPreset: get().permissionPreset,
+        },
+      }));
+      await ensureControllerWorkspace(currentThreadState(get(), get().activeThreadId!).workspaceRoot || get().workspaceRoot);
+      await controller.updateSettings(get().activeThreadId!, selection());
+    }
   },
 
   setEffort: async (selectedEffort) => {
     set({ selectedEffort });
     persist(get());
-    if (controller && get().activeThreadId) await controller.updateSettings(get().activeThreadId!, selection());
+    if (controller && get().activeThreadId) {
+      setThreadState(get().activeThreadId!, (thread) => ({
+        ...thread,
+        runtimeSelection: {
+          model: get().selectedModel,
+          effort: selectedEffort,
+          permissionPreset: get().permissionPreset,
+        },
+      }));
+      await ensureControllerWorkspace(currentThreadState(get(), get().activeThreadId!).workspaceRoot || get().workspaceRoot);
+      await controller.updateSettings(get().activeThreadId!, selection());
+    }
   },
 
   setHostingModel: async (hostingModel) => {
@@ -1433,7 +1770,18 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     }
     set({ permissionPreset });
     persist(get());
-    if (controller && get().activeThreadId) await controller.updateSettings(get().activeThreadId!, selection());
+    if (controller && get().activeThreadId) {
+      setThreadState(get().activeThreadId!, (thread) => ({
+        ...thread,
+        runtimeSelection: {
+          model: get().selectedModel,
+          effort: get().selectedEffort,
+          permissionPreset,
+        },
+      }));
+      await ensureControllerWorkspace(currentThreadState(get(), get().activeThreadId!).workspaceRoot || get().workspaceRoot);
+      await controller.updateSettings(get().activeThreadId!, selection());
+    }
   },
 
   setFollowUpMode: (followUpMode) => {
@@ -1591,6 +1939,7 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
     status: 'idle',
     error: null,
     threads: [],
+    threadStates: {},
     activeThreadId: undefined,
     activeTurnId: undefined,
     turns: [],

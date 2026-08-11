@@ -369,6 +369,13 @@ export class AppServerController {
     await this.requireClient().request('turn/interrupt', { threadId, turnId });
   }
 
+  async unsubscribeThread(threadId: string): Promise<void> {
+    const client = this.requireClient() as AppServerClient & {
+      request: (method: 'thread/unsubscribe', params: { threadId: string }) => Promise<unknown>;
+    };
+    await client.request('thread/unsubscribe', { threadId });
+  }
+
   async installPlugin(remoteMarketplaceName: string, pluginName: string): Promise<PluginInstallResponse> {
     return this.requireClient().request('plugin/install', { remoteMarketplaceName, pluginName });
   }

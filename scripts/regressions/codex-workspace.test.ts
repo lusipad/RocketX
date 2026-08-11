@@ -722,13 +722,14 @@ test('读取 Codex 线程时把生成图片附加到本轮最后一条回复', a
   }
 });
 
-test('交给 Codex App 前关闭 RocketX Runtime，并保留线程用于回来后刷新', async () => {
+test('交给 Codex App 时只释放目标线程，并保留其他 RocketX 任务', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
     value: { getItem: () => null, setItem: () => undefined },
   });
   let stopped = 0;
+  let unsubscribed = 0;
   const storedThread = thread('thread-handoff');
   const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
     connect: async () => ({
@@ -741,6 +742,7 @@ test('交给 Codex App 前关闭 RocketX Runtime，并保留线程用于回来�
     listThreads: async () => [storedThread],
     resumeThread: async () => storedThread,
     readThread: async () => ({ thread: storedThread, turns: [] }),
+    unsubscribeThread: async () => { unsubscribed += 1; },
     stop: async () => { stopped += 1; },
   } as never));
 
@@ -754,7 +756,8 @@ test('交给 Codex App 前关闭 RocketX Runtime，并保留线程用于回来�
     await useCodexWorkspace.getState().handoffToCodex();
 
     const state = useCodexWorkspace.getState();
-    assert.equal(stopped, 1);
+    assert.equal(unsubscribed, 1);
+    assert.equal(stopped, 0);
     assert.equal(state.status, 'external');
     assert.equal(state.activeThreadId, storedThread.id);
     assert.equal(state.activeTurnId, undefined);
@@ -787,6 +790,7 @@ test('从列表打开 Codex App 正在使用的线程时只读加载，不暴露
     ],
   };
   let stopped = 0;
+  let unsubscribed = 0;
   let writerActive = true;
   const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
     connect: async () => ({
@@ -802,6 +806,7 @@ test('从列表打开 Codex App 正在使用的线程时只读加载，不暴露
       throw new Error('MCP 配置无效');
     },
     readThread: async () => ({ thread: storedThread, turns: [externalTurn] }),
+    unsubscribeThread: async () => { unsubscribed += 1; },
     stop: async () => { stopped += 1; },
   } as never));
 
@@ -819,11 +824,14 @@ test('从列表打开 Codex App 正在使用的线程时只读加载，不暴露
     assert.equal(state.activeThreadId, storedThread.id);
     assert.equal(state.activeTurnId, undefined);
     assert.equal(state.messages.at(-1)?.text, 'Codex App 已处理完成');
-    assert.equal(stopped, 1);
+    assert.equal(unsubscribed, 1);
+    assert.equal(stopped, 0);
 
     writerActive = false;
-    await assert.rejects(useCodexWorkspace.getState().resumeThread(storedThread.id), /MCP 配置无效/);
-    assert.equal(stopped, 1);
+    await useCodexWorkspace.getState().resumeThread(storedThread.id);
+    assert.equal(useCodexWorkspace.getState().status, 'external');
+    assert.equal(unsubscribed, 1);
+    assert.equal(stopped, 0);
   } finally {
     restoreFactory();
     await resetCodexWorkspaceForTests();
@@ -857,6 +865,8 @@ test('从 Codex 刷新遇到外部写入者时同步最新内容并自动创建�
   const externalTurn = makeTurn('turn-external', '在 Codex App 中完成的任务');
   let controllerCount = 0;
   let stopped = 0;
+  let unsubscribed = 0;
+  let ownedByCodex = false;
   const resumedBy: number[] = [];
   const forkedBy: Array<{ instance: number; threadId: string; name?: string }> = [];
   const catalog = {
@@ -877,7 +887,7 @@ test('从 Codex 刷新遇到外部写入者时同步最新内容并自动创建�
       listThreads: async () => [storedThread],
       resumeThread: async () => {
         resumedBy.push(instance);
-        if (instance > 1) {
+        if (ownedByCodex) {
           throw new Error(`thread ${storedThread.id} already has an active writer`);
         }
         return storedThread;
@@ -886,6 +896,7 @@ test('从 Codex 刷新遇到外部写入者时同步最新内容并自动创建�
         forkedBy.push({ instance, threadId, name });
         return forkedThread;
       },
+      unsubscribeThread: async () => { unsubscribed += 1; },
       readThread: async (threadId: string) => threadId === forkedThread.id
         ? { thread: forkedThread, turns: [originalTurn, externalTurn] }
         : {
@@ -902,15 +913,17 @@ test('从 Codex 刷新遇到外部写入者时同步最新内容并自动创建�
     await useCodexWorkspace.getState().setWorkspaceRoot('D:/workspace');
     await useCodexWorkspace.getState().connect();
     await useCodexWorkspace.getState().resumeThread(storedThread.id);
+    ownedByCodex = true;
 
     const addedWhileExternal = await useCodexWorkspace.getState().refreshFromCodex();
 
     assert.equal(addedWhileExternal, 1);
-    assert.equal(controllerCount, 2);
-    assert.equal(stopped, 1);
-    assert.deepEqual(resumedBy, [1, 2]);
+    assert.equal(controllerCount, 1);
+    assert.equal(unsubscribed, 1);
+    assert.equal(stopped, 0);
+    assert.deepEqual(resumedBy, [1, 1]);
     assert.deepEqual(forkedBy, [{
-      instance: 2,
+      instance: 1,
       threadId: storedThread.id,
       name: '原任务 · RocketX 继续',
     }]);
@@ -930,12 +943,23 @@ test('从 Codex 刷新遇到外部写入者时同步最新内容并自动创建�
       storedThread.id,
     ]);
 
-    useCodexWorkspace.setState({ status: 'running', activeTurnId: 'turn-running' });
+    useCodexWorkspace.setState((state) => ({
+      status: 'running',
+      activeTurnId: 'turn-running',
+      threadStates: {
+        ...state.threadStates,
+        [forkedThread.id]: {
+          ...state.threadStates[forkedThread.id]!,
+          status: 'running',
+          activeTurnId: 'turn-running',
+        },
+      },
+    }));
     await assert.rejects(
       useCodexWorkspace.getState().refreshFromCodex(),
       /任务运行中，完成后再从 Codex 刷新/,
     );
-    assert.equal(controllerCount, 2);
+    assert.equal(controllerCount, 1);
   } finally {
     restoreFactory();
     await resetCodexWorkspaceForTests();

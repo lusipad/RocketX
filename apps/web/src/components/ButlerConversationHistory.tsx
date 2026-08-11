@@ -61,6 +61,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const status = useCodexWorkspace((state) => state.status);
   const error = useCodexWorkspace((state) => state.error);
   const threads = useCodexWorkspace((state) => state.threads);
+  const threadStates = useCodexWorkspace((state) => state.threadStates);
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
   const activeTurnId = useCodexWorkspace((state) => state.activeTurnId);
   const hydrate = useCodexWorkspace((state) => state.hydrate);
@@ -351,7 +352,12 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                   <ul>
                     {displayedThreads.map((thread) => {
                       const selected = thread.id === activeThreadId;
-                      const running = thread.status.type === 'active' || (selected && Boolean(activeTurnId));
+                      const runtimeState = threadStates[thread.id];
+                      const running = runtimeState
+                        ? ['connecting', 'running', 'waiting-input'].includes(runtimeState.status)
+                          || Boolean(runtimeState.activeTurnId)
+                        : thread.status.type === 'active' || (selected && Boolean(activeTurnId));
+                      const waiting = runtimeState?.status === 'waiting-input';
                       return (
                         <li key={thread.id} className="codex-native-thread-row">
                           {renamingThreadId === thread.id ? (
@@ -379,7 +385,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                                 }}
                                 aria-current={selected ? 'page' : undefined}
                               >
-                                <span className={`butler-conversation-history-status ${running ? 'is-running' : ''}`} />
+                                <span
+                                  className={`butler-conversation-history-status ${running ? 'is-running' : ''}`}
+                                  title={waiting ? '等待确认' : running ? '运行中' : undefined}
+                                />
                                 <span className="butler-conversation-history-title">{threadTitle(thread.name, thread.preview)}</span>
                                 <time dateTime={new Date(thread.updatedAt * 1_000).toISOString()}>{ageLabel(thread.updatedAt)}</time>
                               </button>
