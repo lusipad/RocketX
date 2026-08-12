@@ -629,7 +629,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
 
       <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
         {filtered.length > 0 && (
-          <div className="flex items-center gap-3 border-b border-line px-4 py-2 text-[11px] text-ink-3">
+          <div className="flex items-center gap-3 border-b border-line px-4 py-2 text-xs text-ink-3">
             <span className="min-w-0 flex-1 pl-5">构建</span>
             <span className="w-24 shrink-0">关联 PR</span>
             <span className="w-16 shrink-0 text-right">状态</span>

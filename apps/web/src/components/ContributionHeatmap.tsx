@@ -100,13 +100,13 @@ export default function ContributionHeatmap({
         <div className="mx-auto w-max">
           <div className="mb-1 ml-8 flex gap-1" aria-hidden="true">
             {labels.map((label, index) => (
-              <span key={`${index}-${label ?? ''}`} className="w-3 whitespace-nowrap text-[10px] text-ink-3">
+              <span key={`${index}-${label ?? ''}`} className="w-3 whitespace-nowrap text-xs text-ink-3">
                 {label}
               </span>
             ))}
           </div>
           <div className="flex gap-2">
-            <div className="grid grid-rows-7 gap-1 pt-0.5 text-[10px] leading-3 text-ink-3" aria-hidden="true">
+            <div className="grid grid-rows-7 gap-1 pt-0.5 text-xs leading-3 text-ink-3" aria-hidden="true">
               <span />
               <span>一</span>
               <span />
@@ -147,7 +147,7 @@ export default function ContributionHeatmap({
           </div>
           <div
             aria-label="贡献强度图例"
-            className="mt-3 flex items-center justify-end gap-1 text-[11px] text-ink-3"
+            className="mt-3 flex items-center justify-end gap-1 text-xs text-ink-3"
           >
             <span className="mr-1">较少</span>
             {LEVEL_COLORS.map((color, index) => (

@@ -200,7 +200,7 @@ export default function TodosPage() {
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="w-[200px] shrink-0 border-r border-line-strong bg-fill-2 p-3">
-        <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">待办</div>
+        <div className="px-2 py-1.5 text-base font-semibold text-ink">待办</div>
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}

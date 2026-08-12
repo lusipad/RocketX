@@ -60,7 +60,7 @@ function FieldLabel({ name, schema, required }: {
       <span className="font-medium text-ink">{'title' in schema && schema.title ? schema.title : name}</span>
       {required ? <span className="ml-1 text-danger" aria-label="必填">*</span> : null}
       {'description' in schema && schema.description ? (
-        <div className="mt-0.5 text-[11px] leading-4 text-ink-3">{schema.description}</div>
+        <div className="mt-0.5 text-xs leading-4 text-ink-3">{schema.description}</div>
       ) : null}
     </div>
   );
@@ -133,7 +133,7 @@ export default function ButlerErrandInputCard({
                       />
                       <span className="min-w-0">
                         <span className="block text-xs text-ink">{option.label}</span>
-                        {option.description ? <span className="block text-[11px] leading-4 text-ink-3">{option.description}</span> : null}
+                        {option.description ? <span className="block text-xs leading-4 text-ink-3">{option.description}</span> : null}
                       </span>
                     </label>
                   ))}
@@ -212,7 +212,7 @@ export default function ButlerErrandInputCard({
     return (
       <div className="rounded-lg border border-primary/35 bg-primary-light/30 p-3" data-testid="butler-mcp-unsupported-input">
         <p className="text-xs leading-5 text-ink">{mcpParams.message}</p>
-        <p className="mt-1 text-[11px] leading-4 text-ink-3">这个表单不是标准 MCP 字段，RocketX 不会猜测或代填。</p>
+        <p className="mt-1 text-xs leading-4 text-ink-3">这个表单不是标准 MCP 字段，RocketX 不会猜测或代填。</p>
         {error ? <div className="mt-2 text-xs text-danger" role="alert">{error}</div> : null}
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" disabled={submitting} onClick={() => void submit({ action: 'decline', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">不提供</button>
@@ -304,7 +304,7 @@ export default function ButlerErrandInputCard({
                 />
               )}
               {field.type === 'array' && (field.minItems !== undefined || field.maxItems !== undefined) ? (
-                <span className="mt-1 block text-[11px] text-ink-3">
+                <span className="mt-1 block text-xs text-ink-3">
                   选择 {numberLimit(field.minItems) ?? 0}–{numberLimit(field.maxItems) ?? '不限'} 项
                 </span>
               ) : null}

@@ -96,7 +96,7 @@ export default function PanelShell({
         className="flex w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface-3"
       >
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
-          <span className="text-[15px] font-semibold text-ink">{title}</span>
+          <span className="text-base font-semibold text-ink">{title}</span>
           <button
             onClick={() => setPanel(null)}
             className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"

@@ -50,7 +50,6 @@ test.afterEach(async () => {
     range: { from: '2026-06-13', to: '2026-08-12' },
     filters: {},
     projects: [],
-    repositories: [],
     selectedDay: null,
   });
   useWorkbench.setState({ config: null, configRevision: 0 });
@@ -64,7 +63,7 @@ test('同条件的普通在途加载只发起一次 ADO 请求', async () => {
   });
   useProfileContributions.setState({
     range: { from: '2026-06-13', to: '2026-08-12' },
-    filters: { type: 'work-item' },
+    filters: {},
   });
 
   let identityCalls = 0;
@@ -112,7 +111,7 @@ test('force 不复用同条件的普通在途加载', async () => {
     config: { adoBase: 'http://ado/force', pat: '', auth: 'none', account: '' },
     configRevision: 9,
   });
-  useProfileContributions.setState({ filters: { type: 'work-item' } });
+  useProfileContributions.setState({ filters: {} });
 
   let identityCalls = 0;
   let releaseIdentity!: () => void;
@@ -159,7 +158,7 @@ test('在途加载失败后同条件请求可以重新发起', async () => {
     config: { adoBase: 'http://ado/retry', pat: '', auth: 'none', account: '' },
     configRevision: 8,
   });
-  useProfileContributions.setState({ filters: { type: 'work-item' } });
+  useProfileContributions.setState({ filters: {} });
 
   let identityCalls = 0;
   globalThis.fetch = (async (input: RequestInfo | URL) => {

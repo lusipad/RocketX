@@ -114,7 +114,7 @@ export default function Dialog({
       >
         <header className="flex items-start justify-between px-5 pt-4 pb-2">
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold text-ink">{title}</div>
+            <div className="text-base font-semibold text-ink">{title}</div>
             {hint && <div className="mt-1 text-xs leading-relaxed text-ink-3">{hint}</div>}
           </div>
           <button

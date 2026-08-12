@@ -3,11 +3,9 @@ import {
   defaultContributionRange,
   loadAdoContributions,
   type ContributionEvent,
-  type ContributionEventType,
   type ContributionFilter,
   type ContributionIdentity,
   type ContributionRange,
-  type ContributionRepository,
   type ContributionSourceStatus,
 } from '../lib/adoContributions';
 import { useWorkbench } from './workbench';
@@ -22,7 +20,6 @@ interface ProfileContributionsState {
   range: ContributionRange;
   filters: ContributionFilter;
   projects: string[];
-  repositories: ContributionRepository[];
   selectedDay: string | null;
 
   load: (options?: { force?: boolean }) => Promise<void>;
@@ -59,7 +56,6 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
   range: defaultContributionRange(),
   filters: {},
   projects: [],
-  repositories: [],
   selectedDay: null,
 
   load: ({ force = false } = {}) => {
@@ -72,7 +68,6 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
         events: [],
         statuses: [],
         projects: [],
-        repositories: [],
         lastUpdated: null,
       });
       return Promise.resolve();
@@ -86,8 +81,6 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
       range: state.range,
       filters: {
         project: state.filters.project ?? '',
-        repository: state.filters.repository ?? '',
-        type: state.filters.type ?? '',
       },
       force,
     });
@@ -116,7 +109,6 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
           events: snapshot.events,
           statuses: snapshot.statuses,
           projects: snapshot.projects,
-          repositories: snapshot.repositories,
           lastUpdated: snapshot.fetchedAt,
         });
       } catch (err) {
@@ -135,18 +127,7 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
   },
 
   setRange: (range) => set({ range, selectedDay: null }),
-  setFilters: (patch) => {
-    const current = get().filters;
-    const projectChanged = 'project' in patch && patch.project !== current.project;
-    set({
-      filters: {
-        ...current,
-        ...patch,
-        ...(projectChanged && patch.repository === undefined ? { repository: undefined } : {}),
-      },
-      selectedDay: null,
-    });
-  },
+  setFilters: (patch) => set({ filters: { ...get().filters, ...patch }, selectedDay: null }),
   selectDay: (selectedDay) => set({ selectedDay }),
   cancel: () => {
     loadRevision += 1;
@@ -156,5 +137,3 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
     set({ loading: false });
   },
 }));
-
-export type { ContributionEventType };

@@ -299,10 +299,10 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
               <div className="inline-flex items-center gap-2 rounded-full bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">
                 <BrainCircuit size={14} /> 底层方法 · GTD，不是功能清单
               </div>
-              <h1 className="mt-4 max-w-[620px] text-3xl leading-[1.16] font-semibold tracking-[-0.035em] text-ink sm:text-4xl xl:text-[42px]">
+              <h1 className="mt-4 max-w-[620px] text-3xl leading-[1.16] font-semibold tracking-[-0.035em] text-ink sm:text-4xl xl:text-4xl">
                 把大脑从“记住所有事”里解放出来，<br className="hidden sm:block" />把注意力留给正在做的事。
               </h1>
-              <p className="mt-4 max-w-[590px] text-sm leading-6 text-ink-3 sm:text-[15px]">
+              <p className="mt-4 max-w-[590px] text-sm leading-6 text-ink-3 sm:text-base">
                 RocketX 不让你处理更多信息。它把消息、承诺和工作放进一个
                 <strong className="font-semibold text-ink">可信的外部系统</strong>：先收住，再明确下一步，最后只在值得你关注时出现。
               </p>
@@ -335,7 +335,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 <h2 className="mt-1.5 text-xl leading-snug font-semibold sm:text-2xl">GTD 是运行方式，注意力是检验标准。</h2>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {['群消息', '@提及', '工作项', '日程'].map((source) => (
-                    <span key={source} className="rounded-full border border-white/10 bg-white/[0.07] px-2.5 py-1.5 text-[11px] text-white/60">{source}</span>
+                    <span key={source} className="rounded-full border border-white/10 bg-white/[0.07] px-2.5 py-1.5 text-xs text-white/60">{source}</span>
                   ))}
                 </div>
 
@@ -350,9 +350,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-xs font-semibold text-primary-light">{mark}</span>
                       <div className="min-w-0">
                         <strong className="block text-sm font-medium">{title}</strong>
-                        <span className="block text-[11px] leading-4 text-white/50">{description}</span>
+                        <span className="block text-xs leading-4 text-white/50">{description}</span>
                       </div>
-                      <span className="hidden text-[10px] text-primary-light sm:block">{label}</span>
+                      <span className="hidden text-xs text-primary-light sm:block">{label}</span>
                     </div>
                   ))}
                 </div>
@@ -360,11 +360,11 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
                     <strong className="text-xs font-medium">工作台 · 事实与计划</strong>
-                    <p className="mt-1 text-[11px] leading-5 text-white/45">你直接掌握的确定性界面。</p>
+                    <p className="mt-1 text-xs leading-5 text-white/45">你直接掌握的确定性界面。</p>
                   </div>
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
                     <strong className="text-xs font-medium">管家 · 判断与执行</strong>
-                    <p className="mt-1 text-[11px] leading-5 text-white/45">来源可看、过程可停、越界前确认。</p>
+                    <p className="mt-1 text-xs leading-5 text-white/45">来源可看、过程可停、越界前确认。</p>
                   </div>
                 </div>
 
@@ -447,7 +447,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                     <div className="flex flex-wrap items-center gap-2">
                       <strong className="text-sm font-medium text-ink">允许系统通知</strong>
                       {(desktopApplied || desktopBusy) && (
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusTone(desktopResults.notifications)}`}>
+                        <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone(desktopResults.notifications)}`}>
                           {statusLabel(desktopResults.notifications)}
                         </span>
                       )}
@@ -482,7 +482,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                     <div className="flex flex-wrap items-center gap-2">
                       <strong className="text-sm font-medium text-ink">登录系统后启动 RocketX</strong>
                       {(desktopApplied || desktopBusy) && (
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusTone(desktopResults.autostart)}`}>
+                        <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone(desktopResults.autostart)}`}>
                           {statusLabel(desktopResults.autostart)}
                         </span>
                       )}

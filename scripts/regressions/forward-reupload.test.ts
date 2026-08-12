@@ -142,3 +142,21 @@ test('多选逐条转发跨会话时同样重传文件', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].msg, '纯文字');
 });
+
+test('多选逐条转发图片时下载原图而不是缩略图（issue #301）', async () => {
+  const { fetched, uploaded } = setup();
+  const image = imageMessage({
+    attachments: [
+      {
+        title: '截图.png',
+        image_url: '/file-upload/thumb/%E6%88%AA%E5%9B%BE.png',
+        title_link: '/file-upload/original/%E6%88%AA%E5%9B%BE.png',
+      },
+    ],
+  });
+
+  await useChat.getState().forwardMessages([image], ['target-room'], false);
+
+  assert.deepEqual(fetched, ['/file-upload/original/%E6%88%AA%E5%9B%BE.png']);
+  assert.equal(uploaded.length, 1);
+});

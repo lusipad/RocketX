@@ -882,21 +882,6 @@ async function installContributionAdoMock(page: Page) {
     if (path.endsWith('/_apis/projects')) {
       return fulfillJson(route, { value: [{ id: 'project-alpha', name: 'Alpha' }] });
     }
-    if (path.endsWith('/_apis/git/repositories')) {
-      return fulfillJson(route, {
-        value: [{ id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } }],
-      });
-    }
-    if (path.endsWith('/repositories/repo-a/commits')) {
-      return fulfillJson(route, {
-        value: [{
-          commitId: 'commit-a',
-          comment: '完成贡献日历',
-          author: { name: 'Test User', email: 'tester@example.com', date: '2026-08-10T02:00:00Z' },
-          remoteUrl: `${url.origin}/ado/Alpha/_git/RocketX/commit/commit-a`,
-        }],
-      });
-    }
     if (path.endsWith('/_apis/git/pullrequests')) {
       return fulfillJson(route, {
         value: [{
@@ -905,78 +890,6 @@ async function installContributionAdoMock(page: Page) {
           creationDate: '2026-08-10T03:00:00Z',
           createdBy: { id: 'ado-user', displayName: 'Test User' },
           repository: { id: 'repo-a', name: 'RocketX', project: { id: 'project-alpha', name: 'Alpha' } },
-        }],
-      });
-    }
-    if (path.endsWith('/pullrequests/101/threads')) {
-      return fulfillJson(route, [
-        {
-          id: 11,
-          publishedDate: '2026-08-10T04:00:00Z',
-          threadContext: { filePath: '/src/profile.ts' },
-          comments: [{
-            id: 1,
-            author: { id: 'ado-user', displayName: 'Test User' },
-            commentType: 'text',
-            content: '这里需要保留本地日期。',
-            isDeleted: false,
-            publishedDate: '2026-08-10T04:00:00Z',
-          }],
-        },
-        {
-          id: 12,
-          publishedDate: '2026-08-10T05:00:00Z',
-          comments: [{
-            id: 1,
-            author: { id: 'build-service', displayName: 'Build Service', isContainer: true },
-            commentType: 'system',
-            content: 'vote',
-            isDeleted: false,
-            publishedDate: '2026-08-10T05:00:00Z',
-          }],
-          properties: {
-            CodeReviewThreadType: { $value: 'VoteUpdate' },
-            CodeReviewVotedByTfId: { $value: 'ado-user' },
-            CodeReviewVoteResult: { $value: '10' },
-          },
-        },
-      ]);
-    }
-    if (path.endsWith('/_apis/wit/reporting/workitemrevisions')) {
-      if (url.searchParams.get('includeDiscussionChangesOnly') === 'true') {
-        return fulfillJson(route, {
-          values: [{
-            id: 41,
-            rev: 2,
-            fields: {
-              'System.TeamProject': 'Alpha',
-              'System.ChangedDate': '2026-08-10T07:00:00Z',
-            },
-          }],
-        });
-      }
-      return fulfillJson(route, {
-        values: [{
-          id: 41,
-          rev: 1,
-          fields: {
-            'System.Title': 'Add personal contribution page',
-            'System.WorkItemType': 'Task',
-            'System.TeamProject': 'Alpha',
-            'System.CreatedDate': '2026-08-10T06:00:00Z',
-            'System.CreatedBy': { id: 'ado-user', displayName: 'Test User' },
-          },
-        }],
-      });
-    }
-    if (path.endsWith('/_apis/wit/workitems/41/comments')) {
-      return fulfillJson(route, {
-        comments: [{
-          commentId: 7,
-          text: '补上键盘操作与明细链接。',
-          createdDate: '2026-08-10T07:00:00Z',
-          isDeleted: false,
-          createdBy: { id: 'ado-user', displayName: 'Test User' },
         }],
       });
     }
@@ -2096,7 +2009,7 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
-test('ADO 我的贡献通过工作台展示热力图、键盘日期明细与筛选（issue #291）', async ({ page }, testInfo) => {
+test('ADO 我的贡献只统计 PR，并保留热力图、键盘日期明细与项目筛选（issue #298）', async ({ page }, testInfo) => {
   const adoRequests: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/ado/')) adoRequests.push(request.url());
@@ -2113,23 +2026,20 @@ test('ADO 我的贡献通过工作台展示热力图、键盘日期明细与筛�
   const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
   await expect(page.getByRole('button', { name: '我的贡献', exact: true })).toHaveClass(/bg-primary-light/);
   await expect(page.getByRole('heading', { name: 'Test User' })).toBeVisible();
-  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
-  await expect(page.getByLabel('各类活动总数')).toContainText('工作项评论');
-  await expect(page.getByLabel('各类活动总数').getByText('≥1', { exact: true })).toHaveCount(1);
-  await expect(page.locator('main header')).toContainText('已读取的活动');
-  await expect(page.locator('main header').getByText('6', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('ADO PR 总数')).toContainText('创建 PR');
+  await expect(page.getByLabel('ADO PR 总数').getByText('1', { exact: true })).toBeVisible();
+  await expect(page.locator('main header')).toContainText('当前范围内创建的 ADO PR');
+  await expect(page.locator('main header').getByText('1', { exact: true })).toBeVisible();
 
-  const day = page.getByRole('button', { name: /2026年8月10日，6 项贡献/ });
+  const day = page.getByRole('button', { name: /2026年8月10日，1 项贡献/ });
   await expect(day).toBeVisible();
   await day.focus();
   await expect(day).toBeFocused();
   await day.press('Enter');
   const details = page.getByRole('region', { name: /2026年8月10日.*贡献明细/ });
   await expect(details).toBeVisible();
-  await expect(details.getByRole('link')).toHaveCount(6);
-  await expect(details).toContainText('完成贡献日历');
+  await expect(details.getByRole('link')).toHaveCount(1);
   await expect(details).toContainText('Improve contribution profile');
-  await expect(details).toContainText('Add personal contribution page');
 
   await page.setViewportSize({ width: 1280, height: 1100 });
   await testInfo.attach('issue-291-contribution-profile', {
@@ -2137,12 +2047,7 @@ test('ADO 我的贡献通过工作台展示热力图、键盘日期明细与筛�
     contentType: 'image/png',
   });
 
-  await page.getByLabel('活动类型').selectOption('commit');
-  await expect(page.locator('main header').getByText('1', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('各类活动总数')).toContainText('提交');
-  await expect(page.getByLabel('各类活动总数')).not.toContainText('创建 PR');
-
-  expect(adoRequests.filter((url) => /\/_apis\/wit\/wiql|\/_apis\/build\/builds/i.test(url))).toEqual([]);
+  expect(adoRequests.filter((url) => /\/_apis\/git\/repositories|\/commits|\/threads|\/_apis\/wit\//i.test(url))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 

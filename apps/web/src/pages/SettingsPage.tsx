@@ -30,7 +30,8 @@ import {
   type PresenceStatus,
 } from '../lib/presencePreference';
 import {
-  checkSignedHttpSource,
+  checkGithubUpdate,
+  checkHttpUpdate,
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
@@ -65,7 +66,7 @@ import {
   GLOBAL_SHORTCUT_OPTIONS,
   type GlobalShortcutValue,
 } from '../lib/globalShortcut';
-import { toast } from '../stores/toast';
+import { humanError, toast } from '../stores/toast';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
@@ -1879,14 +1880,12 @@ function UpdateSourceRow() {
   const [updating, setUpdating] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [probe, setProbe] = useState<UpdateProbe | null>(null);
-  const [signedUpdate, setSignedUpdate] = useState<Awaited<ReturnType<typeof checkSignedHttpSource>>>(null);
 
   function update(next: Partial<UpdateSourceConfig>): void {
     const merged = { ...config, ...next };
     setConfig(merged);
     saveUpdateSource(merged);
     setProbe(null);
-    setSignedUpdate(null);
     setStatus(null);
   }
 
@@ -1894,20 +1893,16 @@ function UpdateSourceRow() {
     setChecking(true);
     setStatus(null);
     setProbe(null);
-    setSignedUpdate(null);
     try {
       if (config.kind === 'github') {
-        const { check } = await import('@tauri-apps/plugin-updater');
-        const found = await check({ timeout: 15_000 });
+        const found = await checkGithubUpdate();
         if (found) {
-          setSignedUpdate(found);
           setProbe({ hasUpdate: true, version: found.version });
         }
         else setStatus('已是最新版本');
       } else if (config.kind === 'http') {
-        const found = await checkSignedHttpSource(config.location);
+        const found = await checkHttpUpdate(config.location);
         if (found) {
-          setSignedUpdate(found);
           setProbe({ hasUpdate: true, version: found.version });
         } else {
           setStatus('已是最新版本');
@@ -1929,15 +1924,19 @@ function UpdateSourceRow() {
     setUpdating(true);
     try {
       if (config.kind === 'github' || config.kind === 'http') {
-        const found = signedUpdate ?? (config.kind === 'github'
-          ? await import('@tauri-apps/plugin-updater').then(({ check }) => check({ timeout: 15_000 }))
-          : await checkSignedHttpSource(config.location));
+        const found = config.kind === 'github'
+          ? await checkGithubUpdate()
+          : await checkHttpUpdate(config.location);
         if (!found) return;
         const toastId = toast.loading(`正在下载并验证 RocketX ${found.version}…`);
-        await found.downloadAndInstall();
-        toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
-        const { relaunch } = await import('@tauri-apps/plugin-process');
-        await relaunch();
+        try {
+          await found.downloadAndInstall();
+          toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+          const { relaunch } = await import('@tauri-apps/plugin-process');
+          await relaunch();
+        } catch (error) {
+          toast.update(toastId, { kind: 'error', message: humanError(error, '更新失败') });
+        }
       } else if (probe.installerPath) {
         if (!probe.signature) throw new Error('更新包缺少签名');
         if (!probe.installerType) throw new Error('无法确认当前安装类型');
@@ -2079,7 +2078,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="w-[200px] shrink-0 border-r border-line-strong bg-surface-2 p-3">
-        <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">设置</div>
+        <div className="px-2 py-1.5 text-base font-semibold text-ink">设置</div>
         {visibleSections.map(({ key, label, icon: Icon }) => (
           <button
             key={key}

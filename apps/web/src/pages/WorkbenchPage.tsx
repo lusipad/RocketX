@@ -156,7 +156,7 @@ function QueryDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
-          <span className="text-[15px] font-semibold text-ink">添加自定义查询</span>
+          <span className="text-base font-semibold text-ink">添加自定义查询</span>
           <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭添加自定义查询">
             <XCircle size={16} />
           </button>
@@ -268,7 +268,7 @@ function FavoriteDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
-          <span className="text-[15px] font-semibold text-ink">{dialogTitle}</span>
+          <span className="text-base font-semibold text-ink">{dialogTitle}</span>
           <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭收藏编辑"><XCircle size={16} /></button>
         </header>
         <div className="space-y-4 p-5">
@@ -646,7 +646,7 @@ export default function WorkbenchPage() {
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[180px] shrink-0 flex-col border-r border-line-strong bg-fill-2 p-3">
-        <div className="px-2 py-1.5 text-[15px] font-semibold text-ink">工作台</div>
+        <div className="px-2 py-1.5 text-base font-semibold text-ink">工作台</div>
         {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
           <button
             key={key}
@@ -734,7 +734,7 @@ export default function WorkbenchPage() {
       ) : connected && tab !== 'overview' ? (
         <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
           <div className="flex items-center justify-between pb-3">
-            <span className="text-[15px] font-semibold text-ink">
+            <span className="text-base font-semibold text-ink">
               {activeQuery ? activeQuery.name : tabs.find((t) => t.key === tab)?.label}
               <span className="ml-2 text-xs font-normal text-ink-3">
                 {adoTitle}

@@ -313,7 +313,7 @@ export default function ChatArea({
             <div className="flex min-w-0 items-center gap-2">
               <button
                 onClick={() => togglePanel({ kind: 'info' })}
-                className="min-w-0 truncate text-[15px] font-semibold text-ink transition hover:text-primary"
+                className="min-w-0 truncate text-base font-semibold text-ink transition hover:text-primary"
                 title="查看群信息"
               >
                 {name}

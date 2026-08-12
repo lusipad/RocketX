@@ -60,7 +60,7 @@ export default function ButlerSources({
         aria-label={`查看参考来源 ${number}`}
         title={`查看参考来源 ${number}`}
         onClick={() => revealSources(number - 1)}
-        className="ml-0.5 inline-flex h-4 items-center rounded-sm px-0.5 text-[11px] font-medium leading-none text-primary underline decoration-primary/35 underline-offset-2 hover:bg-primary-light hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+        className="ml-0.5 inline-flex h-4 items-center rounded-sm px-0.5 text-xs font-medium leading-none text-primary underline decoration-primary/35 underline-offset-2 hover:bg-primary-light hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
       >
         <sup>{number}</sup>
       </button>
@@ -72,7 +72,7 @@ export default function ButlerSources({
       {children?.(renderLink)}
 
       <details ref={detailsRef} className="group mt-1.5 block border-t border-line/80 pt-1.5">
-        <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-[11px] text-ink-3 hover:text-ink-2">
+        <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-ink-3 hover:text-ink-2">
           <ChevronRight
             size={12}
             aria-hidden="true"

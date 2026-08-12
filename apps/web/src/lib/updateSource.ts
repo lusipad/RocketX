@@ -97,6 +97,25 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+export function isNewerNativeUpdate(
+  update: Pick<import('@tauri-apps/plugin-updater').Update, 'version' | 'currentVersion'> | null,
+): boolean {
+  return Boolean(update && compareVersions(update.version, update.currentVersion) > 0);
+}
+
+export async function checkGithubUpdate(): Promise<import('@tauri-apps/plugin-updater').Update | null> {
+  const { check } = await import('@tauri-apps/plugin-updater');
+  const update = await check({ timeout: 15_000 });
+  return isNewerNativeUpdate(update) ? update : null;
+}
+
+export async function checkHttpUpdate(
+  location: string,
+): Promise<import('@tauri-apps/plugin-updater').Update | null> {
+  const update = await checkSignedHttpSource(location);
+  return isNewerNativeUpdate(update) ? update : null;
+}
+
 interface UpdateManifest {
   version: string;
   notes?: string;

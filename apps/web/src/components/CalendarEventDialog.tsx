@@ -138,7 +138,7 @@ export default function CalendarEventDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3.5">
-          <span className="text-[15px] font-semibold text-ink">
+          <span className="text-base font-semibold text-ink">
             {dialogTitle}
           </span>
           <button onClick={onClose} className="text-ink-3 transition hover:text-ink" title="关闭" aria-label="关闭日程编辑">

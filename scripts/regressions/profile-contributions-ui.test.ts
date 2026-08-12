@@ -11,14 +11,14 @@ import { useProfileContributions } from '../../apps/web/src/stores/profileContri
 test('贡献日历按周补齐边界，并把本地日期事件放入对应格子', () => {
   const events: ContributionEvent[] = [
     {
-      id: 'commit:1',
-      type: 'commit',
+      id: 'pr:1',
+      type: 'pull-request',
       occurredAt: '2026-08-10T23:30:00Z',
       day: '2026-08-11',
       project: 'Alpha',
       repository: 'RocketX',
       title: '修复本地日期分桶',
-      url: 'https://ado.example/commit/1',
+      url: 'https://ado.example/pullrequest/1',
     },
   ];
   const weeks = buildContributionWeeks({ from: '2026-08-10', to: '2026-08-12' }, events);
@@ -38,27 +38,12 @@ test('贡献强度固定为 0 到 4 级', () => {
   assert.equal(contributionLevel(80, 8), 4);
 });
 
-test('切换或清除项目时同步清除仓库筛选', () => {
-  useProfileContributions.setState({
-    filters: { project: 'Alpha', repository: 'repo-a', type: 'commit' },
-  });
-
+test('贡献筛选只保留项目维度', () => {
+  useProfileContributions.setState({ filters: { project: 'Alpha' } });
   useProfileContributions.getState().setFilters({ project: 'Beta' });
-  assert.deepEqual(useProfileContributions.getState().filters, {
-    project: 'Beta',
-    repository: undefined,
-    type: 'commit',
-  });
-
-  useProfileContributions.setState({
-    filters: { project: 'Beta', repository: 'repo-b', type: 'commit' },
-  });
+  assert.deepEqual(useProfileContributions.getState().filters, { project: 'Beta' });
   useProfileContributions.getState().setFilters({ project: undefined });
-  assert.deepEqual(useProfileContributions.getState().filters, {
-    project: undefined,
-    repository: undefined,
-    type: 'commit',
-  });
+  assert.deepEqual(useProfileContributions.getState().filters, { project: undefined });
 });
 
 test('我的贡献归入工作台，并保留键盘格子、覆盖警告与中性文案合同', async () => {
@@ -84,7 +69,10 @@ test('我的贡献归入工作台，并保留键盘格子、覆盖警告与中�
   assert.match(page, /仅部分覆盖/);
   assert.match(page, /status\.state === 'partial' && status\.count > 0/);
   assert.match(page, /\? `≥\$\{status\.count\}`[\s\S]*: '—'/);
-  assert.match(page, /hasIncompleteCoverage \? '已读取的活动'/);
+  assert.match(page, /hasIncompleteCoverage \? '已读取的 ADO PR'/);
+  assert.match(page, /正在统计 Azure DevOps PR/);
+  assert.doesNotMatch(page, />仓库</);
+  assert.doesNotMatch(page, />活动类型</);
   assert.match(page, /取消加载/);
   assert.match(page, /load\(\{ force: true \}\)/);
   assert.match(page, /const AUTO_LOAD_DELAY_MS = 200/);

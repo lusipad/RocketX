@@ -36,12 +36,12 @@ function isProtectedRoomFile(url?: string): boolean {
 
 /**
  * 附件里指向原房间受保护文件的下载路径；不是受保护文件时返回 undefined。
- * 图片优先取原图 image_url，其余文件取 title_link。
+ * 图片的 title_link 是原图，image_url 是列表缩略图；其余文件也使用 title_link。
  */
 export function protectedFilePath(attachment: RcMessageAttachment): string | undefined {
   if (attachment.message_link) return undefined;
-  if (isProtectedRoomFile(attachment.image_url)) return attachment.image_url;
   if (isProtectedRoomFile(attachment.title_link)) return attachment.title_link;
+  if (isProtectedRoomFile(attachment.image_url)) return attachment.image_url;
   return undefined;
 }
 

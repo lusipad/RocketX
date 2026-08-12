@@ -199,7 +199,7 @@ export default function CreateWorkItemDialog({
           tabIndex={-1}
           className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
         >
-          <div className="text-[15px] font-semibold text-ink">创建工作项</div>
+          <div className="text-base font-semibold text-ink">创建工作项</div>
           <div className="mt-2 text-sm text-ink-2">请先在设置中配置 Azure DevOps 直连</div>
           <div className="mt-4 flex justify-end">
             <button onClick={requestClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover">关闭</button>
@@ -219,7 +219,7 @@ export default function CreateWorkItemDialog({
         tabIndex={-1}
         className="w-[460px] rounded-xl bg-surface-4 p-5 shadow-2xl"
       >
-        <div className="text-[15px] font-semibold text-ink">创建工作项</div>
+        <div className="text-base font-semibold text-ink">创建工作项</div>
 
         <div className="mt-3 space-y-3">
           {/* 模板选择 */}
