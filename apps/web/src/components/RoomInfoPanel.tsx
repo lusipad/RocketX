@@ -259,7 +259,7 @@ export default function RoomInfoPanel() {
             size={64}
           />
           <div className="text-center">
-            <div className="flex items-center justify-center gap-1.5 text-[15px] font-semibold text-ink">
+            <div className="flex items-center justify-center gap-1.5 text-base font-semibold text-ink">
               <TypeIcon size={14} className="text-ink-3" />
               {shownName}
             </div>

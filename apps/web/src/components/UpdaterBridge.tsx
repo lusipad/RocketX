@@ -1,13 +1,14 @@
 import { useEffect } from 'react';
 import { isTauri } from '../lib/http';
 import {
-  checkSignedHttpSource,
+  checkGithubUpdate,
+  checkHttpUpdate,
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
   takeUpdateResult,
 } from '../lib/updateSource';
-import { toast } from '../stores/toast';
+import { humanError, toast } from '../stores/toast';
 
 declare const __APP_VERSION__: string;
 
@@ -15,8 +16,7 @@ let checked = false;
 
 /** GitHub 源:原生 updater 通道,带签名校验与全自动下载安装 */
 async function checkGithubSource(): Promise<void> {
-  const { check } = await import('@tauri-apps/plugin-updater');
-  const update = await check({ timeout: 15_000 });
+  const update = await checkGithubUpdate();
   if (!update) return;
 
   toast.show({
@@ -26,18 +26,22 @@ async function checkGithubSource(): Promise<void> {
     action: {
       label: '更新并重启',
       onClick: () => {
-        const toastId = toast.loading(`正在下载 RocketX ${update.version}…`);
-        void update
-          .downloadAndInstall((event) => {
-            if (event.event === 'Finished') {
-              toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
-            }
-          })
-          .then(async () => {
+        void (async () => {
+          const freshUpdate = await checkGithubUpdate();
+          if (!freshUpdate) return;
+          const toastId = toast.loading(`正在下载 RocketX ${freshUpdate.version}…`);
+          try {
+            await freshUpdate.downloadAndInstall((event) => {
+              if (event.event === 'Finished') {
+                toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+              }
+            });
             const { relaunch } = await import('@tauri-apps/plugin-process');
             await relaunch();
-          })
-          .catch((error) => toast.update(toastId, { kind: 'error', message: String(error) }));
+          } catch (error) {
+            toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
+          }
+        })().catch((error) => toast.error(error, '自动更新失败'));
       },
     },
   });
@@ -47,7 +51,7 @@ async function checkGithubSource(): Promise<void> {
 async function checkCustomSource(): Promise<void> {
   const config = loadUpdateSource();
   if (config.kind === 'http') {
-    const update = await checkSignedHttpSource(config.location);
+    const update = await checkHttpUpdate(config.location);
     if (!update) return;
     toast.show({
       kind: 'info',
@@ -56,14 +60,19 @@ async function checkCustomSource(): Promise<void> {
       action: {
         label: '更新并重启',
         onClick: () => {
-          const toastId = toast.loading(`正在下载并验证 RocketX ${update.version}…`);
-          void update.downloadAndInstall()
-            .then(async () => {
+          void (async () => {
+            const freshUpdate = await checkHttpUpdate(config.location);
+            if (!freshUpdate) return;
+            const toastId = toast.loading(`正在下载并验证 RocketX ${freshUpdate.version}…`);
+            try {
+              await freshUpdate.downloadAndInstall();
               toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
               const { relaunch } = await import('@tauri-apps/plugin-process');
               await relaunch();
-            })
-            .catch((error) => toast.update(toastId, { kind: 'error', message: String(error) }));
+            } catch (error) {
+              toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
+            }
+          })().catch((error) => toast.error(error, '自动更新失败'));
         },
       },
     });

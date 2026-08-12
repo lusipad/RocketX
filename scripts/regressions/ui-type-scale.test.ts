@@ -48,6 +48,29 @@ test('12px 只给角标和键帽，成句的文字不许用', () => {
   );
 });
 
+test('TSX 不绕过语义字号写任意像素值', () => {
+  const offenders: string[] = [];
+  for (const file of tsxFiles(ROOT)) {
+    const source = readFileSync(file, 'utf8');
+    source.split('\n').forEach((line, index) => {
+      if (/text-\[\d+(?:\.\d+)?px\]/.test(line)) offenders.push(`${file}:${index + 1}`);
+    });
+  }
+  assert.deepEqual(offenders, [], `这些地方绕过了语义字号 token：\n${offenders.join('\n')}`);
+});
+
+test('CSS 的字号和行高只引用集中定义的排版 token', () => {
+  const css = readFileSync('apps/web/src/styles.css', 'utf8');
+  const offenders = css.split('\n').flatMap((line, index) => {
+    const fontSize = /font-size:\s*([^;]+);/.exec(line)?.[1].trim();
+    if ((fontSize && !fontSize.startsWith('var(')) || /line-height:\s*[\d.]+px/.test(line)) {
+      return [`apps/web/src/styles.css:${index + 1}`];
+    }
+    return [];
+  });
+  assert.deepEqual(offenders, [], `这些 CSS 绕过了排版 token：\n${offenders.join('\n')}`);
+});
+
 /**
  * text-xl 有意不在这份表里：全仓库只有几处用它，走 Tailwind 默认值就够，
  * 没必要为此再养一个 token。改这条断言之前先想清楚新档位的用途，

@@ -481,7 +481,7 @@ function ConfirmDeleteDialog({
         tabIndex={-1}
         className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
       >
-        <div className="text-[15px] font-semibold text-ink">删除消息</div>
+        <div className="text-base font-semibold text-ink">删除消息</div>
         <div className="mt-2 text-sm text-ink-2">确定删除这条消息吗？删除后不可恢复。</div>
         <div className="mt-4 flex justify-end gap-2">
           <button

@@ -85,7 +85,7 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
         className="w-[420px] rounded-xl bg-surface-4 shadow-2xl"
       >
         <header className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="text-[15px] font-semibold text-ink">发送给 {name}</span>
+          <span className="text-base font-semibold text-ink">发送给 {name}</span>
           <button
             onClick={cancelUpload}
             aria-label="关闭文件发送确认"

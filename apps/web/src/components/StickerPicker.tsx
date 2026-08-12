@@ -164,7 +164,7 @@ export default function StickerPicker({
             aria-label="导入图片"
             disabled={importing !== null}
             onClick={() => void importFromDialog('files')}
-            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-[11px] text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
           >
             {importing === 'files' ? '导入中…' : '导入图片'}
           </button>
@@ -173,7 +173,7 @@ export default function StickerPicker({
             aria-label="导入目录"
             disabled={importing !== null}
             onClick={() => void importFromDialog('directory')}
-            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-[11px] text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
+            className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
           >
             {importing === 'directory' ? '导入中…' : '导入目录'}
           </button>
@@ -258,7 +258,7 @@ export default function StickerPicker({
                   ?.querySelector(`[data-sticker-group="${group.title}"]`)
                   ?.scrollIntoView({ block: 'start' });
               }}
-              className="rounded bg-fill-1 px-2 py-1 text-[11px] text-ink-2 transition hover:bg-fill-hover"
+              className="rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 transition hover:bg-fill-hover"
             >
               {group.title}
             </button>

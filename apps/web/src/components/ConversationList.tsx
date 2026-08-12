@@ -405,7 +405,7 @@ export default function ConversationList({
     >
       {!avatarOnly && (
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
-          <span className="text-[15px] font-semibold text-ink">{title}</span>
+          <span className="text-base font-semibold text-ink">{title}</span>
           {newAction && (
             <button
               onClick={openNew}

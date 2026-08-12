@@ -71,7 +71,7 @@ function FolderDialog({
         tabIndex={-1}
         className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
       >
-        <div className="mb-3 text-[15px] font-semibold text-ink">{title}</div>
+        <div className="mb-3 text-base font-semibold text-ink">{title}</div>
         <input
           autoFocus
           value={name}
@@ -211,7 +211,7 @@ export default function GroupFilter({
   const compactCount = (count: number) =>
     count > 0 ? (
       <span
-        className="absolute -right-1 -top-1 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-[9px] leading-3 text-surface-4"
+        className="absolute -right-1 -top-1 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-2xs leading-3 text-surface-4"
       >
         {count > 9 ? '9+' : count}
       </span>

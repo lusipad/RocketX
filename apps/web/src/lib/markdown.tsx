@@ -264,9 +264,9 @@ type Variant = 'chat' | 'doc';
 
 const HEADING_CLS: Record<Variant, string[]> = {
   chat: [
-    'mt-1 mb-0.5 text-[17px] font-semibold',
-    'mt-1 mb-0.5 text-[16px] font-semibold',
-    'mt-1 mb-0.5 text-[15px] font-semibold',
+    'mt-1 mb-0.5 text-base font-semibold',
+    'mt-1 mb-0.5 text-base font-semibold',
+    'mt-1 mb-0.5 text-base font-semibold',
     'mt-0.5 text-sm font-semibold',
     'mt-0.5 text-sm font-semibold',
     'mt-0.5 text-sm font-medium text-ink-2',

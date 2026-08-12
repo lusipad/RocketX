@@ -2,37 +2,20 @@ import { useEffect, useMemo } from 'react';
 import {
   AlertTriangle,
   CalendarDays,
-  ClipboardList,
   ExternalLink,
-  GitCommitHorizontal,
   GitPullRequest,
-  MessageSquare,
   RefreshCw,
-  SquareActivity,
   X,
 } from 'lucide-react';
 import ContributionHeatmap from '../components/ContributionHeatmap';
 import {
   type ContributionEvent,
-  type ContributionEventType,
   type ContributionSourceStatus,
 } from '../lib/adoContributions';
 import { useProfileContributions } from '../stores/profileContributions';
 import { useWorkbench } from '../stores/workbench';
 
 const AUTO_LOAD_DELAY_MS = 200;
-
-const EVENT_META: Record<
-  ContributionEventType,
-  { label: string; icon: typeof SquareActivity }
-> = {
-  commit: { label: '提交', icon: GitCommitHorizontal },
-  'pull-request': { label: '创建 PR', icon: GitPullRequest },
-  'pull-request-review': { label: 'PR 评审', icon: SquareActivity },
-  'pull-request-comment': { label: 'PR 评论', icon: MessageSquare },
-  'work-item': { label: '创建工作项', icon: ClipboardList },
-  'work-item-comment': { label: '工作项评论', icon: MessageSquare },
-};
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -52,7 +35,7 @@ function formatTime(value: string): string {
 }
 
 function SourceWarnings({ statuses }: { statuses: ContributionSourceStatus[] }) {
-  const warnings = statuses.filter((status) => !status.skipped && status.state !== 'complete');
+  const warnings = statuses.filter((status) => status.state !== 'complete');
   if (warnings.length === 0) return null;
   return (
     <div className="space-y-2" aria-label="数据覆盖说明">
@@ -64,7 +47,7 @@ function SourceWarnings({ statuses }: { statuses: ContributionSourceStatus[] }) 
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
           <p>
             <span className="font-medium text-ink">
-              {EVENT_META[status.type].label}
+              创建 PR
               {status.state === 'unavailable' ? '不可用' : '仅部分覆盖'}：
             </span>{' '}
             {status.warnings.join('；') || '当前服务器或权限未能提供完整数据。'}
@@ -104,8 +87,6 @@ function DayDetails({ day, events, onClose }: { day: string; events: Contributio
       ) : (
         <ul className="divide-y divide-line">
           {events.map((event) => {
-            const meta = EVENT_META[event.type];
-            const Icon = meta.icon;
             return (
               <li key={event.id}>
                 <a
@@ -115,11 +96,11 @@ function DayDetails({ day, events, onClose }: { day: string; events: Contributio
                   className="group flex items-start gap-3 px-4 py-3 hover:bg-fill-2 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-primary"
                 >
                   <span className="mt-0.5 rounded-md bg-primary-light p-1.5 text-primary">
-                    <Icon size={15} aria-hidden="true" />
+                    <GitPullRequest size={15} aria-hidden="true" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="text-xs font-medium text-primary">{meta.label}</span>
+                      <span className="text-xs font-medium text-primary">创建 PR</span>
                       <time className="text-xs text-ink-3" dateTime={event.occurredAt}>
                         {formatTime(event.occurredAt)}
                       </time>
@@ -154,7 +135,6 @@ export default function ProfileContributionsPage() {
   const range = useProfileContributions((state) => state.range);
   const filters = useProfileContributions((state) => state.filters);
   const projects = useProfileContributions((state) => state.projects);
-  const repositories = useProfileContributions((state) => state.repositories);
   const selectedDay = useProfileContributions((state) => state.selectedDay);
   const load = useProfileContributions((state) => state.load);
   const setRange = useProfileContributions((state) => state.setRange);
@@ -163,7 +143,7 @@ export default function ProfileContributionsPage() {
   const cancel = useProfileContributions((state) => state.cancel);
   const configRevision = useWorkbench((state) => state.configRevision);
 
-  const filterKey = `${filters.project ?? ''}\0${filters.repository ?? ''}\0${filters.type ?? ''}`;
+  const filterKey = filters.project ?? '';
   useEffect(() => {
     // 合并 Debug StrictMode 双挂载与连续筛选，避免发出无法中止的重复 NTLM 请求。
     const timer = window.setTimeout(() => void load(), AUTO_LOAD_DELAY_MS);
@@ -173,10 +153,6 @@ export default function ProfileContributionsPage() {
     };
   }, [cancel, configRevision, filterKey, load, range.from, range.to]);
 
-  const visibleRepositories = useMemo(
-    () => repositories.filter((repository) => !filters.project || repository.project === filters.project),
-    [filters.project, repositories],
-  );
   const selectedEvents = useMemo(
     () =>
       selectedDay
@@ -186,8 +162,7 @@ export default function ProfileContributionsPage() {
         : [],
     [events, selectedDay],
   );
-  const visibleStatuses = statuses.filter((status) => !status.skipped);
-  const hasIncompleteCoverage = visibleStatuses.some((status) => status.state !== 'complete');
+  const hasIncompleteCoverage = statuses.some((status) => status.state !== 'complete');
 
   return (
     <main className="h-full min-w-0 flex-1 overflow-y-auto bg-surface-2" aria-label="我的贡献">
@@ -218,7 +193,7 @@ export default function ProfileContributionsPage() {
             <div>
               <p className="text-2xl font-semibold tabular-nums text-ink">{events.length}</p>
               <p className="text-xs text-ink-3">
-                {hasIncompleteCoverage ? '已读取的活动' : '当前范围内的活动'}
+                {hasIncompleteCoverage ? '已读取的 ADO PR' : '当前范围内创建的 ADO PR'}
               </p>
             </div>
             {loading ? (
@@ -242,7 +217,7 @@ export default function ProfileContributionsPage() {
           </div>
         </header>
 
-        <section className="grid gap-3 rounded-xl border border-line bg-surface-3 p-4 sm:grid-cols-2 lg:grid-cols-5" aria-label="贡献筛选">
+        <section className="grid gap-3 rounded-xl border border-line bg-surface-3 p-4 sm:grid-cols-3" aria-label="贡献筛选">
           <label className="text-xs font-medium text-ink-2">
             开始日期
             <input
@@ -278,32 +253,6 @@ export default function ProfileContributionsPage() {
               {projects.map((project) => <option key={project} value={project}>{project}</option>)}
             </select>
           </label>
-          <label className="text-xs font-medium text-ink-2">
-            仓库
-            <select
-              value={filters.repository ?? ''}
-              onChange={(event) => setFilters({ repository: event.target.value || undefined })}
-              className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none focus:border-primary"
-            >
-              <option value="">全部仓库</option>
-              {visibleRepositories.map((repository) => (
-                <option key={repository.id} value={repository.id}>
-                  {filters.project ? repository.name : `${repository.project} / ${repository.name}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-medium text-ink-2">
-            活动类型
-            <select
-              value={filters.type ?? ''}
-              onChange={(event) => setFilters({ type: (event.target.value || undefined) as ContributionEventType | undefined })}
-              className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none focus:border-primary"
-            >
-              <option value="">全部活动</option>
-              {Object.entries(EVENT_META).map(([type, meta]) => <option key={type} value={type}>{meta.label}</option>)}
-            </select>
-          </label>
         </section>
 
         {error && (
@@ -313,12 +262,12 @@ export default function ProfileContributionsPage() {
         )}
         <SourceWarnings statuses={statuses} />
 
-        {visibleStatuses.length > 0 && (
+        {statuses.length > 0 && (
           <section
-            aria-label="各类活动总数"
-            className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+            aria-label="ADO PR 总数"
+            className="grid grid-cols-2 gap-2 sm:grid-cols-3"
           >
-            {visibleStatuses.map((status) => (
+            {statuses.map((status) => (
               <div key={status.type} className="rounded-lg border border-line bg-surface-3 px-3 py-2.5">
                 <p className="text-lg font-semibold tabular-nums text-ink">
                   {status.state === 'complete'
@@ -327,7 +276,7 @@ export default function ProfileContributionsPage() {
                       ? `≥${status.count}`
                       : '—'}
                 </p>
-                <p className="truncate text-xs text-ink-3">{EVENT_META[status.type].label}</p>
+                <p className="truncate text-xs text-ink-3">创建 PR</p>
               </div>
             ))}
           </section>
@@ -343,7 +292,7 @@ export default function ProfileContributionsPage() {
           {loading && events.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-surface-3/80" role="status">
               <RefreshCw size={18} className="mr-2 animate-spin text-primary" aria-hidden="true" />
-              <span className="text-sm text-ink-2">正在汇总 Azure DevOps 活动…</span>
+              <span className="text-sm text-ink-2">正在统计 Azure DevOps PR…</span>
             </div>
           )}
         </div>
@@ -351,8 +300,8 @@ export default function ProfileContributionsPage() {
         {!loading && !error && events.length === 0 && (
           <section className="rounded-xl border border-dashed border-line bg-surface-3 px-5 py-10 text-center">
             <CalendarDays size={28} className="mx-auto text-ink-3" aria-hidden="true" />
-            <h2 className="mt-3 text-sm font-medium text-ink">当前范围内没有活动</h2>
-            <p className="mt-1 text-xs text-ink-3">可以扩大日期范围或清除项目、仓库和活动类型筛选。</p>
+            <h2 className="mt-3 text-sm font-medium text-ink">当前范围内没有创建 PR</h2>
+            <p className="mt-1 text-xs text-ink-3">可以扩大日期范围或清除项目筛选。</p>
           </section>
         )}
 

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   compareVersions,
+  isNewerNativeUpdate,
   loadUpdateSource,
   manifestUrlOf,
   parseUpdateManifest,
@@ -71,6 +72,13 @@ test('更新源配置：默认 GitHub，存取往返，坏数据回退默认', (
   assert.equal(loadUpdateSource(storage).kind, 'github');
 });
 
+test('原生 updater 即使返回同版本或旧版本也不得提示更新（issue #300）', () => {
+  assert.equal(isNewerNativeUpdate({ version: '0.40.2', currentVersion: '0.40.2' }), false);
+  assert.equal(isNewerNativeUpdate({ version: '0.40.1', currentVersion: '0.40.2' }), false);
+  assert.equal(isNewerNativeUpdate({ version: '0.40.3', currentVersion: '0.40.2' }), true);
+  assert.equal(isNewerNativeUpdate(null), false);
+});
+
 test('共享目录更新：helper 接管安装、单流程并在交接后真正退出', () => {
   const updateSource = readFileSync('apps/web/src/lib/updateSource.ts', 'utf8');
   const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
@@ -86,4 +94,22 @@ test('共享目录更新：helper 接管安装、单流程并在交接后真正�
   assert.match(bridge, /更新到 v\$\{probe\.version\} 并重启/);
   assert.match(settings, /更新到 v\$\{probe\.version\} 并重启/);
   assert.doesNotMatch(`${bridge}\n${settings}`, /请按安装向导完成更新/);
+});
+
+test('原生更新按钮点击时重新检查，不长期持有启动检查返回的资源（issue #300）', () => {
+  const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
+  const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+
+  assert.match(bridge, /const freshUpdate = await checkGithubUpdate\(\)/);
+  assert.match(bridge, /const freshUpdate = await checkHttpUpdate\(config\.location\)/);
+  assert.doesNotMatch(settings, /signedUpdate/);
+  assert.match(settings, /const found = config\.kind === 'github'[\s\S]*checkGithubUpdate\(\)[\s\S]*checkHttpUpdate\(config\.location\)/);
+});
+
+test('原生更新失败时复用下载提示展示错误，不留下永久 loading（issue #300）', () => {
+  const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
+  const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+
+  assert.equal((bridge.match(/toast\.update\(toastId, \{ kind: 'error'/g) ?? []).length, 3);
+  assert.equal((settings.match(/toast\.update\(toastId, \{ kind: 'error'/g) ?? []).length, 2);
 });

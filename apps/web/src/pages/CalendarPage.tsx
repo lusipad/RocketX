@@ -464,7 +464,7 @@ export default function CalendarPage() {
         {/* 顶栏 */}
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface-4 px-5">
           <div className="flex items-center gap-3">
-            <span className="text-[15px] font-semibold text-ink">{headerLabel}</span>
+            <span className="text-base font-semibold text-ink">{headerLabel}</span>
             <div className="flex items-center gap-0.5">
               <button
                 onClick={prev}

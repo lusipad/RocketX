@@ -5,6 +5,7 @@ import {
   codexInvocation,
   codexRuntimeSourceFromArgs,
 } from './lib/codex-app-server-spike.ts';
+import { assertCodexHandshake } from '../apps/web/src/agent/protocol/compatibility.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const cli = codexInvocation(codexRuntimeSourceFromArgs());
@@ -97,10 +98,7 @@ const initialized = await request('initialize', {
     optOutNotificationMethods: null,
   },
 });
-const initializedVersion = initialized.userAgent?.match(/^rocketx-smoke\/(\d+\.\d+\.\d+)/)?.[1];
-if (initializedVersion !== cliVersion) {
-  throw new Error(`初始化版本不匹配：${initialized.userAgent}`);
-}
+assertCodexHandshake(initialized.userAgent, cliVersion);
 write({ method: 'initialized' });
 await request('skills/extraRoots/set', {
   extraRoots: [
