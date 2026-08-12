@@ -194,13 +194,15 @@ export default function MessageList({
         if (!current) return;
         const gap = current.scrollHeight - current.scrollTop - current.clientHeight;
         recordScrollPhase('frame');
-        if (gap <= 2) {
-          if (completeOpen) openPhase.current = 'complete';
-          return;
+        if (gap > 2) {
+          current.scrollTop = current.scrollHeight;
+          stickToBottom.current = true;
         }
-        current.scrollTop = current.scrollHeight;
-        stickToBottom.current = true;
-        if (remaining > 1) verify(remaining - 1);
+        if (remaining > 1) {
+          verify(remaining - 1);
+        } else if (completeOpen) {
+          openPhase.current = 'complete';
+        }
       });
     };
     verify(OPEN_SETTLE_FRAME_LIMIT);

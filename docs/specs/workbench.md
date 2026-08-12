@@ -29,7 +29,7 @@
 
 ## 3. 入口与前置条件
 
-- 左侧“工作台”进入确定性 ADO 页面；工作台内的“我的贡献”进入当前 ADO 身份创建的 PR 日历。
+- 左侧“工作台”进入确定性 ADO 页面；工作台内的“贡献概览”进入当前 ADO 身份创建的 PR 日历。
 - 设置中配置 ADO 地址、认证类型和个人凭据；团队配置可提供非敏感默认端点。
 - 当前账号必须在 ADO 中具有对应项目和工作项权限。
 
@@ -41,7 +41,7 @@
 4. 写操作先在确定性表单中展示目标与字段；用户触发后提交一次。
 5. 成功时使用服务端返回或重新读取的版本更新界面；冲突或结果未知时停止并要求刷新确认。
 6. AI 查询 ADO 时必须走标准 Skill/工具，并将可验证结果和来源回到任务；工具失败不得把 `@Me` 快照当成全组织结果。
-7. 工作台“我的贡献”默认按本地时区汇总最近两个月由当前身份创建的 PR；用户可按日期和项目筛选，并从某天的格子进入 ADO PR 明细。为避免大型实例扫描放大，不枚举仓库、提交、PR 线程或工作项。
+7. 工作台“贡献概览”默认按本地时区汇总最近一年由当前身份创建的 PR；用户可按日期和项目筛选，并从某天的格子进入 ADO PR 明细。为避免大型实例扫描放大，只把日期范围交给服务端并按项目有限并发分页，不枚举仓库、提交、PR 线程或工作项。
 8. 拉取请求列表以整行跳转 ADO 为默认动作；AI 审查、比较和加入日历保留为独立的显式操作。
 
 ## 5. 状态与交互
@@ -99,7 +99,7 @@
 - `WB-AC-04`：任何写操作只提交一次；结果未知时必须先读回确认。
 - `WB-AC-05`：版本冲突不会静默覆盖服务端新值。
 - `WB-AC-06`：AI 对 ADO 的自然语言任务通过标准 Skill/工具执行，工具失败时给出真实失败原因。
-- `WB-AC-07`：工作台“我的贡献”按当前 ADO 稳定身份显示其创建 PR 的本地时区日历热力图，并支持项目与日期范围筛选。
+- `WB-AC-07`：工作台“贡献概览”默认显示最近一年，并按当前 ADO 稳定身份展示其创建 PR 的本地时区日历热力图，支持项目与日期范围筛选。
 - `WB-AC-08`：热力图日期格可用键盘聚焦，能读出日期与计数；选择日期后列出创建时间、项目、仓库、摘要和 ADO 链接。
 - `WB-AC-09`：PR 按项目分页并采用有限并发；任一项目失败不会清空其他项目的结果，也不会把部分覆盖误报为精确总数。
 - `WB-AC-10`：贡献加载具备取消、有限并发、连续筛选合并、同条件在途请求复用、按身份/范围/筛选隔离的有限缓存，以及绕过已完成缓存的手动刷新。
@@ -114,7 +114,7 @@
 - 自动化：`scripts/regressions/workbench-refresh.test.ts`、`scripts/regressions/custom-query.test.ts`
 - 自动化：`scripts/regressions/ado-write-actions.test.ts`、`scripts/regressions/ado-open-issues.test.ts`
 - 自动化：`scripts/regressions/profile-contributions-data.test.ts`、`scripts/regressions/profile-contributions-pr-only.test.ts`、`scripts/regressions/profile-contributions-ui.test.ts`
-- UI：`tests/ui/core-flows.spec.ts` 的工作台“我的贡献”导航与日期明细流程
+- UI：`tests/ui/core-flows.spec.ts` 的工作台“贡献概览”导航、一年默认范围与日期明细流程
 - Skill：`scripts/regressions/ado-skill-cli.test.ts`
 
 ## 12. 已知差距与目标

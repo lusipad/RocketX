@@ -26,8 +26,10 @@ export interface UpdateProbe {
   notes?: string;
   /** dir 源：清单声明且真实存在的安装包绝对路径 */
   installerPath?: string;
-  /** dir 源：Tauri Minisign 签名，启动前再次验证以阻止 TOCTOU 替换 */
+  /** dir 源：可选 Tauri Minisign 签名；HTTP/GitHub 源仍强制验签 */
   signature?: string;
+  /** dir 源：探测时计算，安装 helper 再次比对以阻止 TOCTOU 替换 */
+  sha256?: string;
   /** dir 源：必须与当前 RocketX 安装类型一致，禁止 NSIS/MSI 静默切换 */
   installerType?: UpdateInstallerType;
   /** http 源：Windows 安装包的下载地址 */
@@ -43,7 +45,8 @@ export interface UpdateInstallResult {
 interface DirUpdateInstallRequest {
   dir: string;
   path: string;
-  signature: string;
+  signature?: string;
+  sha256: string;
   expectedVersion: string;
   installerType: UpdateInstallerType;
 }
@@ -163,6 +166,7 @@ export async function probeDirSource(location: string, currentVersion: string): 
     manifest: string;
     installerPath: string | null;
     signature: string | null;
+    sha256: string;
     version: string;
     installerType: UpdateInstallerType | null;
   }>('read_update_manifest_dir', { dir: location.trim() });
@@ -170,27 +174,26 @@ export async function probeDirSource(location: string, currentVersion: string): 
   if (result.version.replace(/^v/i, '') !== probe.version) {
     throw new Error('更新清单版本与已验证安装包不一致');
   }
-  if (result.installerPath && (!result.signature || !result.installerType)) {
-    throw new Error('更新包缺少签名或安装类型');
+  if (result.installerPath && (!result.sha256 || !result.installerType)) {
+    throw new Error('更新包缺少 SHA-256 或安装类型');
   }
   return {
     ...probe,
     installerPath: result.installerPath ?? undefined,
     signature: result.signature ?? undefined,
+    sha256: result.sha256,
     installerType: result.installerType ?? undefined,
   };
 }
 
 let dirInstallInFlight: Promise<void> | null = null;
 
-/** helper 接管成功后真正退出主进程；失败时释放 singleflight 以允许重试。 */
+/** Rust 启动 helper 后直接退出主进程；失败时释放 singleflight 以允许重试。 */
 export function launchDirInstaller(request: DirUpdateInstallRequest): Promise<void> {
   if (dirInstallInFlight) return dirInstallInFlight;
   dirInstallInFlight = (async () => {
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('launch_update_installer', { ...request });
-    const { exit } = await import('@tauri-apps/plugin-process');
-    await exit(0);
+    await invoke('launch_update_installer', { ...request, signature: request.signature ?? null });
   })().catch((error) => {
     dirInstallInFlight = null;
     throw error;

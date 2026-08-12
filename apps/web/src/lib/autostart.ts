@@ -1,4 +1,5 @@
 import { isTauri } from './http';
+import { invoke } from '@tauri-apps/api/core';
 
 const isDebugBuild = import.meta.env?.DEV === true;
 
@@ -6,8 +7,7 @@ export const autostartAvailable = isTauri && !isDebugBuild;
 
 export async function readAutostartEnabled(): Promise<boolean | null> {
   if (!autostartAvailable) return null;
-  const { isEnabled } = await import('@tauri-apps/plugin-autostart');
-  return isEnabled();
+  return invoke<boolean | null>('read_autostart_enabled');
 }
 
 export async function updateAutostartEnabled(enabled: boolean): Promise<boolean> {
@@ -15,8 +15,5 @@ export async function updateAutostartEnabled(enabled: boolean): Promise<boolean>
   if (isDebugBuild) {
     throw new Error('Debug 版依赖开发服务器，不能设置为开机启动；请使用正式安装版');
   }
-  const plugin = await import('@tauri-apps/plugin-autostart');
-  if (enabled) await plugin.enable();
-  else await plugin.disable();
-  return plugin.isEnabled();
+  return invoke<boolean>('set_autostart_enabled', { enabled });
 }

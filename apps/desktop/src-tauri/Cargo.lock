@@ -4780,7 +4780,7 @@ dependencies = [
 
 [[package]]
 name = "rocketx"
-version = "0.40.4"
+version = "0.41.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -4816,6 +4816,7 @@ dependencies = [
  "tauri-plugin-updater",
  "ureq",
  "uuid",
+ "webview2-com",
  "windows",
  "zeroize",
  "zip",
