@@ -1076,13 +1076,17 @@ test('深色主题首次引导的说明面板保持高对比度（issue #305）'
     return locator.evaluate((element) => {
       const panel = element.closest('section');
       if (!panel) return 0;
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return 0;
       const parseColor = (value: string): { rgb: number[]; alpha: number } => {
-        const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
-        const colorFunction = value.startsWith('color(');
-        return {
-          rgb: channels.slice(0, 3).map((channel) => colorFunction ? channel * 255 : channel),
-          alpha: channels[3] ?? 1,
-        };
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = value;
+        context.fillRect(0, 0, 1, 1);
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+        return { rgb: [red, green, blue], alpha: alpha / 255 };
       };
       const composite = (
         foreground: { rgb: number[]; alpha: number },
@@ -1125,15 +1129,6 @@ test('深色主题首次引导的说明面板保持高对比度（issue #305）'
 
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  console.log(await page.getByText('你直接掌握的确定性界面。', { exact: true }).evaluate((element) => {
-    const values: Array<{ tag: string; color: string; background: string }> = [];
-    const panel = element.closest('section');
-    for (let current: Element | null = element; current; current = current.parentElement) {
-      values.push({ tag: current.tagName, color: getComputedStyle(current).color, background: getComputedStyle(current).backgroundColor });
-      if (current === panel) break;
-    }
-    return values;
-  }));
   expect(await contrastOf(page.getByRole('heading', { name: 'GTD 是运行方式，注意力是检验标准。' }))).toBeGreaterThanOrEqual(7);
   expect(await contrastOf(page.getByText('你直接掌握的确定性界面。', { exact: true }))).toBeGreaterThanOrEqual(4.5);
 
