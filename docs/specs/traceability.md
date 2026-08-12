@@ -1,6 +1,6 @@
 # 功能规格追踪索引
 
-> 基线：工作树 `2026-08-11`
+> 基线：工作树 `2026-08-12`
 > 用途：从验收 ID 定位当前实现、自动化证据和仍需真实验证的部分。
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
