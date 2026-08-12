@@ -81,7 +81,7 @@ async function checkCustomSource(): Promise<void> {
   const probe = await probeConfiguredSource(config, __APP_VERSION__);
   if (!probe.hasUpdate) return;
 
-  const action = probe.installerPath && probe.signature && probe.installerType
+  const action = probe.installerPath && probe.sha256 && probe.installerType
     ? {
         label: `更新到 v${probe.version} 并重启`,
         onClick: () => {
@@ -89,7 +89,8 @@ async function checkCustomSource(): Promise<void> {
           void launchDirInstaller({
             dir: config.location,
             path: probe.installerPath!,
-            signature: probe.signature!,
+            signature: probe.signature,
+            sha256: probe.sha256!,
             expectedVersion: probe.version,
             installerType: probe.installerType!,
           }).catch((error) => {
@@ -101,7 +102,7 @@ async function checkCustomSource(): Promise<void> {
 
   toast.show({
     kind: 'info',
-    message: `RocketX ${probe.version} 已发布（来自自定义更新源）`,
+    message: `RocketX ${probe.version} 已发布（${probe.signature ? '签名共享目录' : '未签名共享目录，已固定 SHA-256'}）`,
     duration: 0,
     ...(action ? { action } : {}),
   });

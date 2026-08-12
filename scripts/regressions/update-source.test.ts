@@ -79,21 +79,36 @@ test('原生 updater 即使返回同版本或旧版本也不得提示更新（is
   assert.equal(isNewerNativeUpdate(null), false);
 });
 
-test('共享目录更新：helper 接管安装、单流程并在交接后真正退出', () => {
+test('共享目录更新：helper 接管安装、单流程并由 Rust 完成交接退出（issue #304）', () => {
   const updateSource = readFileSync('apps/web/src/lib/updateSource.ts', 'utf8');
   const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
   const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+  const nativeProcess = readFileSync('apps/desktop/src-tauri/src/proc.rs', 'utf8');
 
   assert.match(updateSource, /export type UpdateInstallerType = 'nsis' \| 'msi'/);
   assert.match(updateSource, /expectedVersion/);
   assert.match(updateSource, /installerType/);
+  assert.match(updateSource, /sha256/);
   assert.match(updateSource, /take_update_result/);
   assert.match(updateSource, /dirInstallInFlight/);
-  assert.match(updateSource, /await exit\(0\)/);
+  assert.doesNotMatch(updateSource, /plugin-process/);
+  assert.match(nativeProcess, /app\.exit\(0\)/);
 
   assert.match(bridge, /更新到 v\$\{probe\.version\} 并重启/);
   assert.match(settings, /更新到 v\$\{probe\.version\} 并重启/);
   assert.doesNotMatch(`${bridge}\n${settings}`, /请按安装向导完成更新/);
+});
+
+test('共享目录更新：无 Minisign 时仍携带探测得到的 SHA-256，并明确提示未签名（issue #304）', () => {
+  const updateSource = readFileSync('apps/web/src/lib/updateSource.ts', 'utf8');
+  const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
+  const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
+
+  assert.match(updateSource, /signature\?: string/);
+  assert.match(updateSource, /sha256: string/);
+  assert.doesNotMatch(updateSource, /更新包缺少签名或安装类型/);
+  assert.match(bridge, /未签名共享目录/);
+  assert.match(settings, /共享目录可省略 signature/);
 });
 
 test('原生更新按钮点击时重新检查，不长期持有启动检查返回的资源（issue #300）', () => {

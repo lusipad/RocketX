@@ -11,13 +11,28 @@ test('Web 端不读取或修改操作系统开机自启', async () => {
   await assert.rejects(updateAutostartEnabled(true), /仅桌面端可用/);
 });
 
-test('正式版启动时会把已有启动项刷新到当前可执行文件', () => {
+test('正式安装版启动时会把已有启动项刷新到当前可执行文件', () => {
   const source = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
   assert.match(source, /refresh_autostart_registration\(app\)/);
   assert.match(source, /let manager = app\.autolaunch\(\)/);
   assert.match(source, /manager\.is_enabled\(\)/);
   assert.match(source, /manager\.enable\(\)/);
-  assert.match(source, /cfg!\(debug_assertions\)/);
+  assert.match(source, /autostart_registration_allowed/);
+  assert.match(source, /std::env::current_exe/);
+});
+
+test('本地 release 构建和前端都不能绕过正式安装版守卫', () => {
+  const nativeSource = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  const webSource = readFileSync('apps/web/src/lib/autostart.ts', 'utf8');
+  const capability = readFileSync('apps/desktop/src-tauri/capabilities/default.json', 'utf8');
+
+  assert.match(nativeSource, /autostart_registration_allowed/);
+  assert.match(nativeSource, /set_autostart_enabled/);
+  assert.match(nativeSource, /read_autostart_enabled/);
+  assert.match(webSource, /invoke<boolean \| null>\('read_autostart_enabled'\)/);
+  assert.match(webSource, /invoke<boolean>\('set_autostart_enabled'/);
+  assert.doesNotMatch(webSource, /plugin-autostart/);
+  assert.doesNotMatch(capability, /autostart:allow-/);
 });
 
 test('系统登录自启动带来源标记且主窗口默认保持隐藏', () => {
@@ -35,8 +50,10 @@ test('系统登录自启动带来源标记且主窗口默认保持隐藏', () =>
   assert.equal(config.app.windows[0]?.visible, false);
 });
 
-test('Debug 版不会允许登记依赖开发服务器的启动项', () => {
-  const source = readFileSync('apps/web/src/lib/autostart.ts', 'utf8');
-  assert.match(source, /import\.meta\.env\?\.DEV/);
-  assert.match(source, /Debug 版依赖开发服务器/);
+test('Debug 与任意 release 目录中的本地构建都不会登记启动项', () => {
+  const source = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  assert.match(source, /cfg!\(debug_assertions\)/);
+  assert.match(source, /eq_ignore_ascii_case\("debug"\)/);
+  assert.match(source, /eq_ignore_ascii_case\("release"\)/);
+  assert.match(source, /本地构建版不能设置开机启动/);
 });

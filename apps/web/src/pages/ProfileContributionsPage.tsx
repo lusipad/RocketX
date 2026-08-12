@@ -165,7 +165,7 @@ export default function ProfileContributionsPage() {
   const hasIncompleteCoverage = statuses.some((status) => status.state !== 'complete');
 
   return (
-    <main className="h-full min-w-0 flex-1 overflow-y-auto bg-surface-2" aria-label="我的贡献">
+    <main className="h-full min-w-0 flex-1 overflow-y-auto bg-surface-2" aria-label="贡献概览">
       <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4 px-5 py-5 lg:px-8">
         <header className="flex flex-col gap-4 rounded-xl border border-line bg-surface-3 p-5 md:flex-row md:items-center md:justify-between">
           <div className="flex min-w-0 items-center gap-3">
@@ -182,7 +182,7 @@ export default function ProfileContributionsPage() {
             )}
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold text-ink">
-                {identity?.displayName || '我的贡献'}
+                {identity?.displayName || '贡献概览'}
               </h1>
               <p className="truncate text-sm text-ink-3">
                 {identity?.account || 'Azure DevOps 个人活动'}

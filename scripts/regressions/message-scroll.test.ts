@@ -146,10 +146,15 @@ test('已经离开底部时内容撑高不会恢复贴底', () => {
 
 test('普通打开会做有界帧复核，并同时观察内容与视口尺寸', () => {
   const source = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
+  const verification = source.slice(
+    source.indexOf('const scheduleBottomVerification'),
+    source.indexOf('const scrollToBottom'),
+  );
   assert.match(source, /const OPEN_SETTLE_FRAME_LIMIT = 4/);
-  assert.match(source, /if \(!transactionIsCurrent\(\) \|\| openPhase\.current === 'cancelled'\) return/);
-  assert.match(source, /settleScrollFrame\.current = requestAnimationFrame/);
-  assert.match(source, /if \(remaining > 1\) verify\(remaining - 1\)/);
+  assert.match(verification, /if \(!transactionIsCurrent\(\) \|\| openPhase\.current === 'cancelled'\) return/);
+  assert.match(verification, /settleScrollFrame\.current = requestAnimationFrame/);
+  assert.match(verification, /if \(gap > 2\)[\s\S]*if \(remaining > 1\) \{\s*verify\(remaining - 1\);/);
+  assert.doesNotMatch(verification, /if \(gap <= 2\)[\s\S]*?return;/);
   assert.match(source, /ro\.observe\(el\)/);
   assert.match(source, /ro\.observe\(content\)/);
 });
