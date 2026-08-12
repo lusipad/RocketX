@@ -717,30 +717,71 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
 });
 
-test('管家任务运行时打开房间 Codex 会给出准确状态且不会抢占任务', async ({ page }) => {
+test('管家任务运行时仍可并行打开房间 Codex，且不会抢占管家线程', async ({ page }) => {
   await bootAuthenticated(page);
   await installCodexRuntime(page);
   await page.evaluate(async () => {
     const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
     const { useCodexWorkspace } = await loadWorkspace();
+    const state = useCodexWorkspace.getState();
+    const butlerThread = {
+      workspaceRoot: state.butlerWorkspaceRoot,
+      runtimeSelection: {
+        model: state.model,
+        effort: state.effort,
+        permissionPreset: state.permissionPreset,
+      },
+      status: 'running',
+      error: null,
+      activeTurnId: 'turn-running-elsewhere',
+      turns: [],
+      messages: [{ id: 'message-running-elsewhere', role: 'assistant', text: '管家任务仍在运行' }],
+      events: [],
+      streamingText: '',
+      pendingRequests: [],
+      queuedMessages: [],
+    };
     useCodexWorkspace.setState({
       status: 'running',
-      workspaceRoot: useCodexWorkspace.getState().butlerWorkspaceRoot,
+      workspaceRoot: state.butlerWorkspaceRoot,
       activeThreadId: 'thread-release',
       activeTurnId: 'turn-running-elsewhere',
+      messages: butlerThread.messages,
+      threadStates: {
+        ...state.threadStates,
+        'thread-release': butlerThread,
+      },
     });
   });
 
   await page.getByText('General', { exact: true }).first().click();
   await page.getByRole('button', { name: '打开房间管家' }).click();
   const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByRole('alert')).toContainText('AI 管家正在处理任务');
-  await expect(panel.getByRole('alert')).not.toContainText('另一个 Codex');
-  await expect(panel.getByPlaceholder(/在这个会话里继续提问|输入后续要求/)).toBeDisabled();
-  expect(await page.evaluate(() => ({
-    interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
-    stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
-  }))).toEqual({ interrupts: 0, stops: 0 });
+  const composer = panel.getByPlaceholder('在这个会话里继续提问');
+  await expect(composer).toBeEnabled();
+  await composer.fill('并行检查房间消息');
+  await panel.getByRole('button', { name: '发送到房间 Codex 会话' }).click();
+  await expect(panel.getByText(/已处理：并行检查房间消息/)).toBeVisible({ timeout: 5_000 });
+  expect(await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const state = useCodexWorkspace.getState();
+    return {
+      activeThreadId: state.activeThreadId,
+      butlerStatus: state.threadStates['thread-release']?.status,
+      butlerTurnId: state.threadStates['thread-release']?.activeTurnId,
+      butlerMessage: state.threadStates['thread-release']?.messages.at(-1)?.text,
+      interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
+      stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
+    };
+  })).toEqual({
+    activeThreadId: expect.not.stringMatching(/^thread-release$/),
+    butlerStatus: 'running',
+    butlerTurnId: 'turn-running-elsewhere',
+    butlerMessage: '管家任务仍在运行',
+    interrupts: 0,
+    stops: 0,
+  });
 });
 
 test('房间 Codex 在首段回复到达前持续显示思考反馈', async ({ page }) => {

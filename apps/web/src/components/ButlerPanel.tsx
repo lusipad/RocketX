@@ -69,20 +69,11 @@ function setRoomThreadId(scope: string, rid: string, threadId?: string): void {
   localStorage.setItem(ROOM_THREAD_STORAGE_KEY, JSON.stringify(value));
 }
 
-async function prepareRoomWorkspace(targetThreadId?: string): Promise<boolean> {
+export async function prepareRoomWorkspace(): Promise<boolean> {
   const workspace = useCodexWorkspace.getState();
   const defaultRoot = workspace.defaultWorkspaceRoot || await workspace.ensureDefaultWorkspace();
   if (!defaultRoot) throw new Error('系统临时工作区尚未准备好');
   const latest = useCodexWorkspace.getState();
-  const busy = Boolean(latest.activeTurnId)
-    || latest.status === 'running'
-    || latest.status === 'waiting-input';
-  if (busy && (latest.workspaceRoot !== defaultRoot || latest.activeThreadId !== targetThreadId)) {
-    if (latest.workspaceRoot === latest.butlerWorkspaceRoot) {
-      throw new Error('AI 管家正在处理任务；完成后即可打开房间会话');
-    }
-    throw new Error('另一个 Codex 任务正在运行；它完成后再打开这个房间会话');
-  }
   if (latest.workspaceRoot !== defaultRoot) {
     await latest.setWorkspaceRoot(defaultRoot, { reuseRuntime: true });
   }
@@ -177,7 +168,7 @@ export default function ButlerPanel() {
     void (async () => {
       try {
         const savedThreadId = roomThreadId(scope, rid);
-        const runtimeReconnected = await prepareRoomWorkspace(savedThreadId);
+        const runtimeReconnected = await prepareRoomWorkspace();
         if (cancelled) return;
         if (savedThreadId) {
           const current = useCodexWorkspace.getState();
@@ -249,7 +240,7 @@ export default function ButlerPanel() {
     stickToBottom.current = true;
     try {
       let threadId = roomThreadId(scope, rid);
-      const runtimeReconnected = await prepareRoomWorkspace(threadId);
+      const runtimeReconnected = await prepareRoomWorkspace();
       const workspace = useCodexWorkspace.getState();
       if (!threadId) {
         threadId = await workspace.startThread(`${currentRoomName} · 对话`);
