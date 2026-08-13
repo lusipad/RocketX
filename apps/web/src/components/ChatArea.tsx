@@ -253,10 +253,10 @@ export default function ChatArea({
       return;
     }
     setHosting(true);
+    setPanel({ kind: 'agent', tmid: agentSessionKey });
     try {
       await startRoomAgentHosting(activeRid, rawName, { workspaceRoot });
       setRoomHostingWorkspace(activeRid, workspaceRoot);
-      setPanel({ kind: 'agent', tmid: agentSessionKey });
     } catch (error) {
       toast.error(error, '开启 AI 托管失败');
     } finally {
