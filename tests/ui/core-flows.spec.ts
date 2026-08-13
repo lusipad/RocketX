@@ -2468,6 +2468,33 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   expect(pageErrors).toEqual([]);
 });
 
+test('首次开启 AI 托管立即打开进度面板（issue #310）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+
+  await page.getByRole('button', { name: '开启 AI 托管' }).click();
+  await expect(page.getByText('AI 托管独立配置')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
 test('本机托管时再次点击同一按钮会退出且不会打开错误面板', async ({ page }) => {
   const { pageErrors } = await installRocketChatMock(page);
   await page.goto('/');

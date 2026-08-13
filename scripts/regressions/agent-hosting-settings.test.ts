@@ -46,6 +46,10 @@ test('聊天托管面板展示独立托管配置，并提供管家统一管理�
   const chat = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
   assert.match(chat, /aria-label="开启 AI 托管"/);
   assert.match(chat, /aria-label="选择 AI 托管项目"/);
+  assert.match(
+    chat,
+    /setHosting\(true\);[\s\S]*setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\);[\s\S]*await startRoomAgentHosting/,
+  );
   assert.match(chat, /startRoomAgentHosting\(activeRid, rawName, \{ workspaceRoot \}\)/);
   assert.match(chat, /在 AI 管家中管理项目/);
   assert.match(chat, /openButlerConversation/);
