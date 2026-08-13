@@ -73,6 +73,15 @@ test('全局快捷键配置只接受受支持组合并安全回退', () => {
   assert.deepEqual(parseGlobalShortcutConfig('{broken'), defaultGlobalShortcutConfig());
 });
 
+test('全局快捷键重注册会等待上一轮注册完成并释放', () => {
+  const bridge = readFileSync('apps/web/src/components/GlobalShortcutBridge.tsx', 'utf8');
+  assert.match(bridge, /const registration = \(async \(\) =>/);
+  assert.match(
+    bridge,
+    /pendingUnregister = pendingUnregister\.then\(async \(\) => \{[\s\S]*await registration[\s\S]*release\(shortcut\)/,
+  );
+});
+
 test('弹窗关闭时焦点已被接管就不再还原抢走', () => {
   const body = {} as Element;
   const composerInput = {} as Element;
