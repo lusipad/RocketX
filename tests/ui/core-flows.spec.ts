@@ -2144,7 +2144,7 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
-test('ADO 贡献概览默认显示一年，并保留热力图、键盘日期明细与项目筛选（issues #298, #307）', async ({ page }, testInfo) => {
+test('ADO 我的代码默认显示一年，并保留热力图、键盘日期明细与项目筛选（issues #298, #307, #311）', async ({ page }, testInfo) => {
   const adoRequests: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/ado/')) adoRequests.push(request.url());
@@ -2159,7 +2159,7 @@ test('ADO 贡献概览默认显示一年，并保留热力图、键盘日期明�
     }));
   });
   const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
-  await expect(page.getByRole('button', { name: '贡献概览', exact: true })).toHaveClass(/bg-primary-light/);
+  await expect(page.getByRole('button', { name: '我的代码', exact: true })).toHaveClass(/bg-primary-light/);
   const [rangeFrom, rangeTo] = await Promise.all([
     page.getByLabel('开始日期').inputValue(),
     page.getByLabel('结束日期').inputValue(),
