@@ -78,15 +78,15 @@ AI 托管也可把记录交给 Codex App 形成新任务草稿。已安排任务
 一律靠脚本：
 
 ```bash
-pnpm smoke          # 53 项，打真实 RC：认证/会话/消息/引用/线程/讨论卡片/
+pnpm smoke          # 54 项，打真实 RC：认证/会话/消息/引用/线程/讨论卡片/
                     # 文件上传下载/中文搜索/置顶免打扰/通讯录/实时推送/
                     # 斜杠命令/群管理（踢人·角色·禁言·归档·只读）/
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 230 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 691 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 695 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 76 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
+pnpm test:ui        # 79 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
@@ -110,7 +110,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.41.0`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.41.1`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
