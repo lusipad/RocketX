@@ -1,7 +1,7 @@
 import { agentInstruction } from './context';
 
 const EXPECTED_REPLY_TTL_MS = 10 * 60 * 1_000;
-const AGENT_REPLY_RE = /^\s*🤖\s*Codex(?:\s|（|:|：|$)/i;
+const AGENT_REPLY_RE = /^\s*🤖\s*(?:Codex|DeepSeek)(?:\s|（|:|：|$)/i;
 
 interface PendingReply {
   count: number;

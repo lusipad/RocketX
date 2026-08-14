@@ -8,6 +8,7 @@ import type {
 } from '../../apps/web/src/agent/AppServerController';
 import type { AgentSession } from '../../apps/web/src/agent/session';
 import type { RcMessage } from '@rcx/rc-client';
+import type { HostedDshControllerOptions } from '../../apps/web/src/agent/dsh/HostedDshController';
 
 const values = new Map<string, string>();
 let restoreAgentSessionAppData: (() => void) | undefined;
@@ -306,6 +307,7 @@ async function prepareStore(sessions: AgentSession[]) {
     traces: {},
     approvals: [],
     inputs: [],
+    dshQuestions: [],
     memberRequests: [],
     error: null,
   });
@@ -725,6 +727,233 @@ test('共享 Agent 失败后再次显式恢复成功，不会自动重放旧 tur
     assert.equal(state.sessions[other.tmid]?.lastError, undefined);
     assert.equal(resumeAttempts, 2);
     assert.equal(calls.includes('startTurn'), false);
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('DeepSeek AI 托管沿用房间队列，并把审批和问题交给宿主', { concurrency: false }, async () => {
+  const { useSharedAgent, setSharedAgentDshControllerFactory } = await loadModules();
+  const target = readySession('deepseek-hosted', {
+    backend: 'deepseek',
+    codexThreadId: undefined,
+    dshSessionId: 'dsh-session-1',
+  });
+  await prepareStore([target]);
+  const invocations = installInvokeRecorder();
+  const calls: string[] = [];
+  let handlers: HostedDshControllerOptions | undefined;
+  let approvalResponse: boolean | undefined;
+  let questionAnswers: unknown;
+  const restoreFactory = setSharedAgentDshControllerFactory((_workspaceRoot, connectionId, options) => {
+    handlers = options;
+    assert.match(connectionId, /^hosting-/);
+    return {
+      connect: async () => { calls.push('connect'); },
+      createSession: async () => 'unused',
+      resumeSession: async () => { calls.push('resume'); },
+      prompt: async (sessionId, prompt) => {
+        calls.push(`prompt:${sessionId}`);
+        assert.match(prompt, /检查当前进度/);
+        return { turnId: 'dsh-turn-1', text: 'DeepSeek 已检查完成' };
+      },
+      cancel: async () => { calls.push('cancel'); },
+      respondApproval: async (_request, approved) => { approvalResponse = approved; },
+      respondQuestion: async (_request, answers) => { questionAnswers = answers; },
+      stop: async () => { calls.push('stop'); },
+    };
+  });
+
+  try {
+    await useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host', 'deepseek-command'),
+    );
+    assert.deepEqual(calls.slice(0, 2), ['connect', 'prompt:dsh-session-1']);
+    assert.ok(invocations.some((entry) => entry.args?.text === '🤖 DeepSeek 已收到，正在思考…'));
+    assert.ok(invocations.some((entry) => entry.args?.text === '🤖 DeepSeek\nDeepSeek 已检查完成'));
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+
+    handlers?.onApproval?.({
+      rpcId: 'approval-rpc',
+      sessionId: 'dsh-session-1',
+      approvalId: 'approval-1',
+      toolName: 'shell',
+      reason: '运行测试',
+    });
+    handlers?.onApproval?.({
+      rpcId: 'approval-rpc-replayed',
+      sessionId: 'dsh-session-1',
+      approvalId: 'approval-1',
+      toolName: 'shell',
+      reason: '运行测试',
+    });
+    assert.equal(useSharedAgent.getState().approvals.length, 1);
+    const approval = useSharedAgent.getState().approvals.at(-1);
+    assert.equal(approval?.method, 'dsh/approval');
+    await useSharedAgent.getState().resolveApproval(approval!.id, 'accept');
+    assert.equal(approvalResponse, true);
+
+    handlers?.onApproval?.({
+      rpcId: 'approval-rpc-resolved-upstream',
+      sessionId: 'dsh-session-1',
+      approvalId: 'approval-2',
+      toolName: 'shell',
+    });
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'waiting-approval');
+    handlers?.onApprovalResolved?.('dsh-session-1', 'approval-2');
+    assert.equal(useSharedAgent.getState().approvals.length, 0);
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+
+    handlers?.onQuestion?.({
+      rpcId: 'question-rpc',
+      sessionId: 'dsh-session-1',
+      questions: [{ id: 'q1', question: '继续吗？' }],
+    });
+    handlers?.onQuestion?.({
+      rpcId: 'question-rpc',
+      sessionId: 'dsh-session-1',
+      questions: [{ id: 'q1', question: '继续吗？' }],
+    });
+    assert.equal(useSharedAgent.getState().dshQuestions.length, 1);
+    const question = useSharedAgent.getState().dshQuestions.at(-1);
+    assert.ok(question);
+    await useSharedAgent.getState().resolveDshQuestion(question.id, [{ id: 'q1', selected: [], custom: '继续' }]);
+    assert.deepEqual(questionAnswers, [{ id: 'q1', selected: [], custom: '继续' }]);
+
+    handlers?.onQuestion?.({
+      rpcId: 'question-rpc-resolved-upstream',
+      sessionId: 'dsh-session-1',
+      questions: [{ id: 'q2', question: '还继续吗？' }],
+    });
+    handlers?.onQuestionResolved?.('dsh-session-1', 'question-rpc-resolved-upstream');
+    assert.equal(useSharedAgent.getState().dshQuestions.length, 0);
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+
+    handlers?.onApproval?.({
+      rpcId: 'foreign-approval',
+      sessionId: 'another-session',
+      approvalId: 'foreign-1',
+      toolName: 'shell',
+    });
+    assert.equal(useSharedAgent.getState().approvals.length, 0);
+
+    await useSharedAgent.getState().endSession(target.tmid);
+    handlers?.onQuestion?.({
+      rpcId: 'late-question',
+      sessionId: 'dsh-session-1',
+      questions: [{ id: 'late', question: '太晚了' }],
+    });
+    assert.equal(useSharedAgent.getState().dshQuestions.length, 0);
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ended');
+    assert.ok(calls.includes('stop'));
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { concurrency: false }, async () => {
+  const {
+    useSharedAgent,
+    useCodexWorkspace,
+    setSharedAgentDshControllerFactory,
+    clientModule,
+  } = await loadModules();
+  await prepareStore([]);
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+  });
+  const calls: string[] = [];
+  const restoreFactory = setSharedAgentDshControllerFactory(() => ({
+    connect: async () => { calls.push('connect'); },
+    createSession: async () => {
+      calls.push('create');
+      return 'dsh-created-session';
+    },
+    resumeSession: async (sessionId) => { calls.push(`resume:${sessionId}`); },
+    prompt: async () => ({ turnId: 'unused', text: '' }),
+    cancel: async () => undefined,
+    respondApproval: async () => undefined,
+    respondQuestion: async () => undefined,
+    stop: async () => undefined,
+  }));
+  const originalSendMessage = clientModule.rest.sendMessage.bind(clientModule.rest);
+  const originalUpdateMessage = clientModule.rest.updateMessage.bind(clientModule.rest);
+  clientModule.rest.sendMessage = async () => ({ _id: 'lease-deepseek' }) as never;
+  clientModule.rest.updateMessage = async () => ({}) as never;
+
+  try {
+    const started = await useSharedAgent.getState().startSession('room-deepseek-create', 'thread-deepseek-create', {
+      backend: 'deepseek',
+      workspaceRoot: 'D:/Repos/example',
+      replyTmid: 'thread-deepseek-create',
+    });
+    assert.equal(started.backend, 'deepseek');
+    assert.equal(started.dshSessionId, 'dsh-created-session');
+    assert.equal(started.codexThreadId, undefined);
+    assert.equal(started.runtimeModel, undefined);
+
+    useSharedAgent.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [started.tmid]: { ...state.sessions[started.tmid], status: 'interrupted' },
+      },
+    }));
+    await useSharedAgent.getState().resumeSession(started.tmid);
+    assert.deepEqual(calls, ['connect', 'create', 'resume:dsh-created-session']);
+    assert.equal(useSharedAgent.getState().sessions[started.tmid]?.status, 'ready');
+  } finally {
+    clientModule.rest.sendMessage = originalSendMessage;
+    clientModule.rest.updateMessage = originalUpdateMessage;
+    restoreFactory();
+  }
+});
+
+test('结束 DeepSeek 托管时会取消进行中的 turn，且晚到失败不会复活会话或发送失败回复', { concurrency: false }, async () => {
+  const { useSharedAgent, setSharedAgentDshControllerFactory } = await loadModules();
+  const target = readySession('deepseek-stop-running', {
+    backend: 'deepseek',
+    codexThreadId: undefined,
+    dshSessionId: 'dsh-session-running',
+  });
+  await prepareStore([target]);
+  const invocations = installInvokeRecorder();
+  const calls: string[] = [];
+  let rejectPrompt!: (error: Error) => void;
+  const pendingPrompt = new Promise<{ turnId: string; text: string }>((_resolve, reject) => {
+    rejectPrompt = reject;
+  });
+  const restoreFactory = setSharedAgentDshControllerFactory(() => ({
+    connect: async () => { calls.push('connect'); },
+    createSession: async () => 'unused',
+    resumeSession: async () => undefined,
+    prompt: async () => {
+      calls.push('prompt');
+      return pendingPrompt;
+    },
+    cancel: async () => { calls.push('cancel'); },
+    respondApproval: async () => undefined,
+    respondQuestion: async () => undefined,
+    stop: async () => {
+      calls.push('stop');
+      rejectPrompt(new Error('DSH 连接已关闭'));
+    },
+  }));
+
+  try {
+    const handling = useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host', 'deepseek-stop-command'),
+    );
+    await waitFor(() => useSharedAgent.getState().sessions[target.tmid]?.activeTurnId !== undefined);
+    await Promise.all([handling, useSharedAgent.getState().endSession(target.tmid)]);
+
+    assert.deepEqual(calls, ['connect', 'prompt', 'cancel', 'stop']);
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ended');
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.activeTurnId, undefined);
+    assert.ok(!invocations.some((entry) => (
+      typeof entry.args?.text === 'string' && entry.args.text.includes('DeepSeek 执行失败')
+    )));
   } finally {
     restoreFactory();
   }
