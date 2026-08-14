@@ -927,6 +927,11 @@ async function installRocketChatMock(
     contentType: 'text/html',
     body: '<!doctype html><html><body><h1>Sandboxed HTML preview</h1></body></html>',
   }));
+  await page.route('**/file-upload/preview/readme.md', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/markdown',
+    body: '# RocketX 文档\n\n> 统一 Markdown 预览。\n\n| 入口 | 状态 |\n| --- | --- |\n| 文件 | 正常 |\n\n```sh\npnpm test\n```',
+  }));
   await page.route('**/file-upload/preview/demo.mp4', (route) => route.fulfill({
     status: 200,
     contentType: 'video/mp4',
@@ -973,6 +978,7 @@ async function installRocketChatMock(
       return fulfillJson(route, {
         files: [
           { _id: 'preview-html', name: 'demo.html', type: 'text/html', url: '/file-upload/preview/demo.html', size: 82 },
+          { _id: 'preview-markdown', name: 'readme.md', type: 'text/markdown', url: '/file-upload/preview/readme.md', size: 128 },
           { _id: 'preview-video', name: 'demo.mp4', type: 'video/mp4', url: '/file-upload/preview/demo.mp4', size: 8 },
         ],
       });
@@ -1098,6 +1104,24 @@ test('文件面板在严格沙箱中预览 HTML，并为常见视频显示原生
 
   await page.getByText('demo.mp4', { exact: true }).click();
   await expect(page.locator('video[controls]')).toBeVisible();
+});
+
+test('Markdown 文件预览使用完整文档排版（issue #319）', async ({ page }, testInfo) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('文件', { exact: true }).click();
+
+  await page.getByText('readme.md', { exact: true }).click();
+  const markdown = page.locator('.rocketx-markdown--doc');
+  await expect(markdown).toHaveAttribute('data-variant', 'doc');
+  await expect(markdown.getByRole('heading', { name: 'RocketX 文档', level: 1 })).toBeVisible();
+  await expect(markdown.locator('blockquote')).toContainText('统一 Markdown 预览');
+  await expect(markdown.locator('table')).toContainText('文件');
+  await expect(markdown.locator('pre')).toContainText('pnpm test');
+  await markdown.screenshot({ path: testInfo.outputPath('markdown-file-preview-319.png') });
+  await page.getByTitle('关闭（Esc）').click();
+  expect(pageErrors).toEqual([]);
 });
 
 test('深色主题首次引导的说明面板保持高对比度（issue #305）', { tag: '@release-desktop' }, async ({ page }) => {
@@ -1543,10 +1567,33 @@ test('打开管家页后可返回消息', async ({ page }) => {
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'DeepSeek', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const deepSeekTab = page.getByRole('tab', { name: 'DeepSeek', exact: true });
+  const codexTab = page.getByRole('tab', { name: 'Codex', exact: true });
+  await expect(deepSeekTab).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('region', { name: 'DeepSeek 任务' })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const { useUI } = await import('/src/stores/ui.ts');
+    useUI.getState().openButlerConversation('codex');
+  });
+  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBeNull();
+  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
+  await butlerSection.getByRole('button', { name: /^管家/ }).click();
+  await expect(deepSeekTab).toHaveAttribute('aria-selected', 'true');
+
+  await codexTab.click();
+  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('region', { name: 'Codex 任务' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBe('codex');
+
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  await butlerSection.getByRole('button', { name: /^管家/ }).click();
+  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
+  await deepSeekTab.click();
+  await expect(page.getByRole('region', { name: 'DeepSeek 任务' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBe('deepseek');
   expect(pageErrors).toEqual([]);
 });
 
@@ -1836,6 +1883,67 @@ test('聊天消息渲染块公式、行内公式和可访问 MathML（issue #218
   await expect(page.locator('[data-rocketx-math="inline"] .katex')).toHaveCount(1);
   await expect(page.locator('[data-rocketx-math] .katex-mathml')).toHaveCount(3);
   await expect(page.locator('pre').filter({ hasText: '$not_math$' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('普通消息完整渲染标题、列表、引用、代码块和表格（issue #319）', async ({ page }, testInfo) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        getState: () => { messages: Record<string, unknown[]> };
+        setState: (state: { messages: Record<string, unknown[]> }) => void;
+      };
+    }>;
+    const { useChat } = await load();
+    const state = useChat.getState();
+    useChat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': [
+          ...(state.messages['room-general'] ?? []),
+          {
+            _id: 'markdown-319',
+            rid: 'room-general',
+            msg: [
+              '## 发布检查',
+              '',
+              '正文包含 **重点** 与 [文档](https://example.com/docs)。',
+              '',
+              '- [x] 回归通过',
+              '- [ ] 等待发布',
+              '',
+              '> 保持反馈清晰可读。',
+              '',
+              '| 门禁 | 状态 |',
+              '| --- | --- |',
+              '| Typecheck | 通过 |',
+              '| UI | 通过 |',
+              '',
+              '```ts',
+              'const release = true;',
+              '```',
+            ].join('\n'),
+            ts: '2026-08-15T08:00:00.000Z',
+            u: { _id: 'user-alice', username: 'alice', name: 'Alice' },
+          },
+        ],
+      },
+    });
+  });
+
+  const message = page.locator('[data-message-id="markdown-319"]');
+  const markdown = message.locator('.rocketx-markdown--chat');
+  await expect(markdown).toHaveAttribute('data-variant', 'chat');
+  await expect(markdown.getByRole('heading', { name: '发布检查', level: 2 })).toBeVisible();
+  await expect(markdown.getByRole('link', { name: '文档' })).toHaveAttribute('href', 'https://example.com/docs');
+  await expect(markdown.locator('.markdown-list-item')).toHaveCount(2);
+  await expect(markdown.locator('input[type="checkbox"]')).toHaveCount(2);
+  await expect(markdown.locator('blockquote')).toContainText('保持反馈清晰可读');
+  await expect(markdown.locator('table')).toContainText('Typecheck');
+  await expect(markdown.locator('pre')).toContainText('const release = true;');
+  await message.screenshot({ path: testInfo.outputPath('markdown-message-319.png') });
   expect(pageErrors).toEqual([]);
 });
 
@@ -2176,6 +2284,90 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   await page.getByTitle('查看群信息').first().click();
   const card = title.locator('xpath=ancestor::span[contains(@class,"inline-block")]');
   await expect.poll(() => card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('Basic 过程的层级模板文案逐项对应实际工作项预览（issue #325）', async ({ page }, testInfo) => {
+  const adoWrites: string[] = [];
+  await page.route('**/ado/**', (route) => {
+    const request = route.request();
+    const path = decodeURIComponent(new URL(request.url()).pathname).toLocaleLowerCase();
+    if (request.method() !== 'GET') adoWrites.push(`${request.method()} ${path}`);
+    if (path.endsWith('/_apis/connectiondata')) {
+      return fulfillJson(route, {
+        authenticatedUser: {
+          id: 'ado-user',
+          customDisplayName: 'Test User',
+          properties: { Account: { $value: 'tester' } },
+        },
+      });
+    }
+    if (path.endsWith('/_apis/projects')) {
+      return fulfillJson(route, { value: [{ id: 'basic-project', name: 'Basic Project' }] });
+    }
+    if (path.endsWith('/basic project/_apis/wit/workitemtypes')) {
+      return fulfillJson(route, {
+        value: [{ name: 'Epic' }, { name: 'Issue' }, { name: 'Task' }],
+      });
+    }
+    if (path.endsWith('/basic project/_apis/work/processconfiguration')) {
+      return fulfillJson(route, {
+        portfolioBacklogs: [{ workItemTypes: [{ name: 'Epic' }] }],
+        requirementBacklog: { workItemTypes: [{ name: 'Issue' }] },
+        taskBacklog: { workItemTypes: [{ name: 'Task' }] },
+      });
+    }
+    return fulfillJson(route, { value: [] });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-workbench', JSON.stringify({
+      adoBase: `${location.origin}/ado`,
+      auth: 'none',
+      account: 'tester',
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+
+  await conversation(page, 'General').click();
+  const sourceMessage = page.locator('[data-message-id="general-release"]');
+  await sourceMessage.hover();
+  await sourceMessage.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('创建工作项', { exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: '创建工作项' });
+  await expect(dialog.getByRole('button', { name: '层级工作项', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '层级工作项', exact: true }).click();
+  const layout = dialog.locator('select').first();
+  const expected = [
+    { value: 'epic-split', label: 'Epic → Issue → 【开发】Task + 【测试】Task' },
+    { value: 'epic-single', label: 'Epic → Issue → Task' },
+    { value: 'feature-split', label: 'Issue → 【开发】Task + 【测试】Task' },
+    { value: 'feature-single', label: 'Issue → Task' },
+    { value: 'story-split', label: 'Issue → 【开发】Task + 【测试】Task' },
+    { value: 'story-single', label: 'Issue → Task' },
+  ];
+  await expect(layout.locator('option')).toHaveCount(expected.length);
+  expect(await layout.locator('option').evaluateAll((options) => options.map((option) => ({
+    value: (option as HTMLOptionElement).value,
+    label: option.textContent,
+  })))).toEqual(expected);
+
+  const hierarchyPreview = layout.locator('xpath=following-sibling::div[1]');
+  for (const option of expected) {
+    await layout.selectOption(option.value);
+    await expect(hierarchyPreview).toHaveText(option.label);
+  }
+
+  await layout.selectOption('feature-split');
+  const creationPreview = dialog.getByText('将创建：', { exact: true }).locator('..');
+  await expect(creationPreview).toContainText('Issue：Release checklist ready');
+  await expect(creationPreview).toContainText('Task：【开发】Release checklist ready');
+  await expect(creationPreview).toContainText('Task：【测试】Release checklist ready');
+  await dialog.screenshot({ path: testInfo.outputPath('work-item-template-325.png') });
+
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(adoWrites).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 

@@ -3,6 +3,7 @@ import type { ButlerWorkspaceView } from '../lib/butlerWorkspace';
 import { runtimeFeatures } from '../lib/runtimeMode';
 
 export type ModuleKey = string;
+export type ButlerTaskProvider = 'codex' | 'deepseek';
 
 /** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
@@ -17,6 +18,7 @@ export const MODULE_ORDER: ModuleKey[] = [
 ];
 
 export const UI_MODULE_STORAGE_KEY = 'rcx-ui';
+export const BUTLER_TASK_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
 export const DEFAULT_WORK_ITEM_STATE_FILTER = '__default_hide_shelved__';
 
 /** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
@@ -76,6 +78,24 @@ export function readPersistedWorkbenchTab(
   return persistedModuleValue(readPersistedUIValue(storage)) === 'contributions'
     ? 'contributions'
     : 'overview';
+}
+
+export function readPersistedButlerTaskProvider(
+  storage: ModuleStorage | undefined = browserStorage(),
+): ButlerTaskProvider {
+  try {
+    return storage?.getItem(BUTLER_TASK_PROVIDER_STORAGE_KEY) === 'codex' ? 'codex' : 'deepseek';
+  } catch {
+    return 'deepseek';
+  }
+}
+
+function persistButlerTaskProvider(provider: ButlerTaskProvider): void {
+  try {
+    browserStorage()?.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, provider);
+  } catch {
+    // 浏览器禁用存储时仍保留本次会话选择。
+  }
 }
 
 export function readPersistedWorkItemStateFilter(
@@ -139,6 +159,10 @@ interface UIState {
   switcherCommandCenter: boolean;
   /** Codex 工作区的一级视图。 */
   butlerView: ButlerWorkspaceView;
+  /** 当前任务执行视图；只有用户主动切换时才持久化。 */
+  butlerTaskProvider: ButlerTaskProvider;
+  /** 用户显式选择的默认执行视图；临时 handoff 不改它。 */
+  butlerTaskProviderPreference: ButlerTaskProvider;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -153,7 +177,8 @@ interface UIState {
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
-  openButlerConversation: (provider?: 'codex' | 'deepseek') => void;
+  openButlerConversation: (provider?: ButlerTaskProvider) => void;
+  setButlerTaskProvider: (provider: ButlerTaskProvider) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
@@ -169,6 +194,8 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   butlerView: 'conversation',
+  butlerTaskProvider: readPersistedButlerTaskProvider(),
+  butlerTaskProviderPreference: readPersistedButlerTaskProvider(),
   workbenchTab: readPersistedWorkbenchTab(),
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
@@ -176,8 +203,12 @@ export const useUI = create<UIState>((set) => ({
   setModule: (m) => {
     if (moduleValidator(m)) {
       persistUIState({ module: m });
-      set(m === 'butler-view'
-        ? { module: m, butlerView: 'conversation' }
+      set((state) => m === 'butler-view'
+        ? {
+            module: m,
+            butlerView: 'conversation',
+            butlerTaskProvider: state.butlerTaskProviderPreference,
+          }
         : { module: m });
     }
   },
@@ -192,20 +223,21 @@ export const useUI = create<UIState>((set) => ({
   setSwitcherOpen: (open) =>
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
+  setButlerTaskProvider: (provider) => {
+    persistButlerTaskProvider(provider);
+    set({
+      butlerTaskProvider: provider,
+      butlerTaskProviderPreference: provider,
+    });
+  },
   openButlerConversation: (provider) => {
     if (!runtimeFeatures().butler) return;
-    if (provider && typeof localStorage !== 'undefined') {
-      try {
-        localStorage.setItem('rocketx.butler.task-provider', provider);
-      } catch {
-        // The destination still opens even when this browser refuses persistence.
-      }
-    }
     persistUIState({ module: 'butler-view' });
-    set({
+    set((state) => ({
       module: 'butler-view',
       butlerView: 'conversation',
-    });
+      butlerTaskProvider: provider ?? state.butlerTaskProviderPreference,
+    }));
   },
   setButlerView: (view) => {
     if (!runtimeFeatures().butler) return;

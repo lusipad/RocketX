@@ -7,8 +7,6 @@ import ButlerPluginsPage from '../components/ButlerPluginsPage';
 import ButlerRoutines from '../components/ButlerRoutines';
 import { useUI } from '../stores/ui';
 
-const TASK_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
-
 function ManagedSurface({ children }: { children: ReactNode }) {
   const [navigationOpen, setNavigationOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -82,23 +80,8 @@ function ManagedSurface({ children }: { children: ReactNode }) {
 /** Codex 式三工作面：任务、已安排、插件。其余能力留在任务上下文中。 */
 export default function ButlerPage() {
   const activeView = useUI((state) => state.butlerView);
-  const [taskProvider, setTaskProvider] = useState<'codex' | 'deepseek'>(() => {
-    if (typeof localStorage === 'undefined') return 'deepseek';
-    try {
-      return localStorage.getItem(TASK_PROVIDER_STORAGE_KEY) === 'codex' ? 'codex' : 'deepseek';
-    } catch {
-      return 'deepseek';
-    }
-  });
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem(TASK_PROVIDER_STORAGE_KEY, taskProvider);
-    } catch {
-      // The selected view still works for this session when persistence is unavailable.
-    }
-  }, [taskProvider]);
+  const taskProvider = useUI((state) => state.butlerTaskProvider);
+  const setTaskProvider = useUI((state) => state.setButlerTaskProvider);
 
   return (
     <div className="butler-workspace">

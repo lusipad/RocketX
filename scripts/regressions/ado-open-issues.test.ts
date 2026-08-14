@@ -13,6 +13,7 @@ import {
 } from '../../apps/web/src/lib/adoDirect';
 import { parseAdoUrl } from '../../apps/web/src/lib/ado';
 import {
+  hierarchyLayoutOptionsForTypes,
   hierarchyPreview,
   loadLastWorkItemProject,
   preferredWorkItemProject,
@@ -146,7 +147,7 @@ test('非 Agile 项目按服务器真实类型恢复层级模板，且不含 Epi
   }
 });
 
-test('层级工作项四种形态:含不含 Feature 层 × 拆不拆开发测试(用户配置)', () => {
+test('层级工作项中段/故事层四种形态 × 拆不拆开发测试(用户配置)', () => {
   const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
   const types = ['Epic', 'Feature', 'User Story', 'Task'];
   const hierarchy = ['Epic', 'Feature', 'User Story', 'Task'];
@@ -240,6 +241,65 @@ test('Epic 全链形态保留顶层,其余形态维持 issue #65 的砍层默认
     featureDefault?.items.map((entry) => entry.type),
     ['Feature', 'User Story', 'Task', 'Task'],
   );
+});
+
+test('层级形态下拉文案与实际生成模板一致', () => {
+  const templates = [{ name: '单个工作项', items: [{ type: '{type}', title: '{title}' }] }];
+  const cases = [
+    {
+      name: 'Agile',
+      types: ['Epic', 'Feature', 'User Story', 'Task'],
+      hierarchy: ['Epic', 'Feature', 'User Story', 'Task'],
+      expected: {
+        'epic-split': 'Epic → Feature → User Story → 【开发】Task + 【测试】Task',
+        'epic-single': 'Epic → Feature → User Story → Task',
+        'feature-split': 'Feature → User Story → 【开发】Task + 【测试】Task',
+        'feature-single': 'Feature → User Story → Task',
+        'story-split': 'User Story → 【开发】Task + 【测试】Task',
+        'story-single': 'User Story → Task',
+      },
+    },
+    {
+      name: 'Basic',
+      types: ['Epic', 'Issue', 'Task'],
+      hierarchy: ['Epic', 'Issue', 'Task'],
+      expected: {
+        'epic-split': 'Epic → Issue → 【开发】Task + 【测试】Task',
+        'epic-single': 'Epic → Issue → Task',
+        'feature-split': 'Issue → 【开发】Task + 【测试】Task',
+        'feature-single': 'Issue → Task',
+        'story-split': 'Issue → 【开发】Task + 【测试】Task',
+        'story-single': 'Issue → Task',
+      },
+    },
+    {
+      name: '自定义 Capability / Requirement',
+      types: ['Initiative', 'Capability', 'Requirement', 'Task'],
+      hierarchy: ['Initiative', 'Capability', 'Requirement', 'Task'],
+      expected: {
+        'epic-split': 'Initiative → Capability → Requirement → 【开发】Task + 【测试】Task',
+        'epic-single': 'Initiative → Capability → Requirement → Task',
+        'feature-split': 'Capability → Requirement → 【开发】Task + 【测试】Task',
+        'feature-single': 'Capability → Requirement → Task',
+        'story-split': 'Requirement → 【开发】Task + 【测试】Task',
+        'story-single': 'Requirement → Task',
+      },
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const options = hierarchyLayoutOptionsForTypes(item.types, item.hierarchy);
+    assert.equal(options.length, 6, `${item.name} 应展示 6 个层级选项`);
+
+    for (const [layout, preview] of Object.entries(item.expected)) {
+      const option = options.find((entry) => entry.value === layout);
+      assert.equal(option?.label, preview, `${item.name} ${layout} 下拉文案`);
+
+      const [template] = workItemTemplatesForTypes(templates, item.types, item.hierarchy, layout as HierarchyLayout);
+      assert.equal(hierarchyPreview(template!), preview, `${item.name} ${layout} 实际模板`);
+      assert.equal(option?.label, hierarchyPreview(template!), `${item.name} ${layout} 文案必须来自实际模板`);
+    }
+  }
 });
 
 test('过程层级读取使用 Server 2022 API 并保留真实类型名', async () => {

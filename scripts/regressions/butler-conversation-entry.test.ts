@@ -13,7 +13,9 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(page, /<ButlerRoutines \/>/);
   assert.match(page, /<ButlerPluginsPage \/>/);
   assert.match(page, /<section aria-label="任务" className="h-full min-h-0">/);
-  assert.match(page, /localStorage\.getItem\(TASK_PROVIDER_STORAGE_KEY\) === 'codex' \? 'codex' : 'deepseek'/);
+  assert.match(page, /const taskProvider = useUI\(\(state\) => state\.butlerTaskProvider\)/);
+  assert.match(page, /const setTaskProvider = useUI\(\(state\) => state\.setButlerTaskProvider\)/);
+  assert.doesNotMatch(page, /localStorage/);
   assert.match(page, /<ButlerConversation embedded \/>/);
   assert.doesNotMatch(page, /ButlerSessionSwitcher|ButlerIdentityPage|ButlerConnectionsPanel|Today/);
 

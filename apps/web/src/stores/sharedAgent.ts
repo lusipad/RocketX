@@ -370,6 +370,7 @@ function cardFor(session: AgentSession): AgentSessionCard {
     hostUsername: user?.username ?? session.host.userId,
     hostDeviceId: session.host.deviceId,
     leaseExpiresAt: session.host.expiresAt,
+    backend: agentBackend(session),
     environmentName: session.environmentName,
     workItem: session.workItem,
     proposedBranch: session.proposedBranch,
