@@ -48,4 +48,7 @@ test('slim 不携带 Codex/DSH 运行时，Windows full 额外携带 Codex、DSH
   assert.match(packageScript, /Get-Command node\.exe[^\r\n]*\|\s*[\r\n]+\s*Select-Object -First 1/);
   assert.match(packageScript, /Full setup requires Node\.js 22\.19\+ or 24\+/);
   assert.match(workflow, /matrix\.platform == 'windows-latest' && '22\.19\.0' \|\| '22'/);
+  assert.match(workflow, /\$version = \$env:GITHUB_REF_NAME\.Substring\(1\)/);
+  assert.match(workflow, /RocketX_\$\{version\}_full-setup\.exe/);
+  assert.doesNotMatch(workflow, /\$\{env:GITHUB_REF_NAME\.Substring/);
 });
