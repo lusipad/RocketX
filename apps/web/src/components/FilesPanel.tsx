@@ -159,7 +159,7 @@ export default function FilesPanel() {
         )}
       </div>
 
-      {/* 图片走灯箱，文本/PDF 走 FilePreview —— FilePreview 只认这两类，图片丢给它会显示「无法预览」 */}
+      {/* 图片走灯箱；文本/Markdown/PDF/HTML/常见视频走 FilePreview */}
       {preview &&
         (isImage(preview) ? (
           <ImageLightbox

@@ -801,6 +801,16 @@ async function main(): Promise<void> {
   check('拒绝 data 链接', normalizeFavoriteUrl('data:text/html,test') === null);
   check('拒绝无协议链接', normalizeFavoriteUrl('example.com') === null);
 
+  console.log('\n[文件预览支持类型]');
+  const { canPreview, extOf } = await import('../apps/web/src/components/FilePreview');
+  check('可预览：Markdown', canPreview('note.md'));
+  check('可预览：HTML', canPreview('demo.html'));
+  check('可预览：HTM', canPreview('demo.htm'));
+  check('可预览：MP4 视频', canPreview('clip.mp4'));
+  check('可预览：WEBM 视频', canPreview('clip.webm'));
+  check('不可预览：图片', !canPreview('photo.png'));
+  check('扩展名统一小写：HTM', extOf('DASHBOARD.HTM') === 'htm');
+
   console.log('\n[ADO · 工作项模板兼容性]');
   const { preferredWorkItemType, templateSupportsTypes } = await import(
     '../apps/web/src/stores/wiTemplates'

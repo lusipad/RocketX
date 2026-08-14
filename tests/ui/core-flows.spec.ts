@@ -922,6 +922,16 @@ async function installRocketChatMock(
     contentType: 'image/png',
     body: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03, 0x04]),
   }));
+  await page.route('**/file-upload/preview/demo.html', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><h1>Sandboxed HTML preview</h1></body></html>',
+  }));
+  await page.route('**/file-upload/preview/demo.mp4', (route) => route.fulfill({
+    status: 200,
+    contentType: 'video/mp4',
+    body: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]),
+  }));
   await page.route('**/api/info', (route) => fulfillJson(route, { version: '8.6.1' }));
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -958,6 +968,14 @@ async function installRocketChatMock(
     }
     if (endpoint === 'channels.members') {
       return fulfillJson(route, { members: [ME, ALICE], total: 2 });
+    }
+    if (endpoint === 'channels.files') {
+      return fulfillJson(route, {
+        files: [
+          { _id: 'preview-html', name: 'demo.html', type: 'text/html', url: '/file-upload/preview/demo.html', size: 82 },
+          { _id: 'preview-video', name: 'demo.mp4', type: 'video/mp4', url: '/file-upload/preview/demo.mp4', size: 8 },
+        ],
+      });
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
@@ -1064,6 +1082,22 @@ test('登录后进入主界面', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '连接 Azure DevOps' })).toHaveCount(0);
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
+});
+
+test('文件面板在严格沙箱中预览 HTML，并为常见视频显示原生控件（issue #318）', async ({ page }) => {
+  await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('文件', { exact: true }).click();
+
+  await page.getByText('demo.html', { exact: true }).click();
+  const htmlFrame = page.locator('iframe[title="网页预览"]');
+  await expect(htmlFrame).toHaveAttribute('sandbox', '');
+  await expect(htmlFrame.contentFrame().getByRole('heading', { name: 'Sandboxed HTML preview' })).toBeVisible();
+  await page.getByTitle('关闭（Esc）').click();
+
+  await page.getByText('demo.mp4', { exact: true }).click();
+  await expect(page.locator('video[controls]')).toBeVisible();
 });
 
 test('深色主题首次引导的说明面板保持高对比度（issue #305）', { tag: '@release-desktop' }, async ({ page }) => {
