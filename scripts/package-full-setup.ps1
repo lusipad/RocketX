@@ -35,7 +35,8 @@ if (-not (Test-Path -LiteralPath $codexRoot -PathType Container)) {
   throw "Full setup Codex resource is missing: $codexRoot"
 }
 New-Item -ItemType Directory -Force -Path $nodeRoot | Out-Null
-$nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction Stop
+$nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction Stop |
+  Select-Object -First 1
 $nodeVersionText = (& $nodeCommand.Source --version).Trim().TrimStart('v')
 if ($LASTEXITCODE -ne 0) {
   throw "Bundled Node version probe failed with exit code $LASTEXITCODE"

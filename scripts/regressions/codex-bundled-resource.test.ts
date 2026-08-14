@@ -45,6 +45,7 @@ test('slim 不携带 Codex/DSH 运行时，Windows full 额外携带 Codex、DSH
   assert.match(hooks, /Rename "\$LOCALAPPDATA\\RocketX\\resources\.__staging" "\$LOCALAPPDATA\\RocketX\\resources"/);
   assert.match(hooks, /原有资源保持不变/u);
   assert.match(hooks, /RMDir \/r "\$INSTDIR\\full-resources"/);
+  assert.match(packageScript, /Get-Command node\.exe[^\r\n]*\|\s*[\r\n]+\s*Select-Object -First 1/);
   assert.match(packageScript, /Full setup requires Node\.js 22\.19\+ or 24\+/);
   assert.match(workflow, /matrix\.platform == 'windows-latest' && '22\.19\.0' \|\| '22'/);
 });
