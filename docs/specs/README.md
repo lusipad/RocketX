@@ -7,7 +7,7 @@
 ## 阅读顺序
 
 1. [产品原则](product-principles.md)：GTD、注意力与“确定性界面 + AI 执行”的共同约束。
-2. [能力矩阵](capability-matrix.md)：快速判断桌面端、网页版和不同 Codex 条件下能否使用。
+2. [能力矩阵](capability-matrix.md)：快速判断桌面端、网页版和不同本地 AI 后端条件下能否使用。
 3. 下方能力域规格：查看入口、流程、状态、数据、失败表现和验收证据。
 4. [追踪索引](traceability.md)：从规格 ID 定位实现与自动化测试。
 
@@ -19,12 +19,12 @@
 | [消息与会话](messaging.md) | 会话列表、收发、线程、搜索、文件、通知、备注与分组 |
 | [工作台与 Azure DevOps](workbench.md) | 确定性查询、计划层级、工作项和写操作确认 |
 | [个人效率](personal-productivity.md) | 待办、日历、通讯录、下载记录 |
-| [管家任务](butler-tasks.md) | Codex Thread、对话、模型、图片、停止、跨 App 接续 |
+| [管家任务](butler-tasks.md) | Codex 与 DeepSeek 独立视图、原生会话、配置、审批、停止与后端边界 |
 | [Skills、Plugins 与 Apps](skills-and-plugins.md) | 发现、详情、启停、安装、卸载和能力边界 |
 | [Memory](memory.md) | Codex 原生 Memory 的启用、存储边界和失败语义 |
 | [已安排任务](scheduled-tasks.md) | 本机计划、触发、立即运行、无人值守限制和结果 |
-| [聊天 AI 托管与委托](delegation-and-shared-agent.md) | 房间/话题共享 Agent、本地环境和独立委托现状 |
-| [权限、审批与用户输入](approvals-and-permissions.md) | 权限档、命令审批、MCP 表单、拒绝和作用域 |
+| [聊天 AI 托管与委托](delegation-and-shared-agent.md) | 房间/话题共享 Agent、Codex/DeepSeek 后端、本地环境和独立委托现状 |
+| [权限、审批与用户输入](approvals-and-permissions.md) | Codex 权限档、DSH permission preset、审批、提问、拒绝和作用域 |
 | [Codex Runtime](codex-runtime.md) | CLI 发现、版本、登录、app-server、恢复和降级 |
 | [平台与桌面集成](platform-and-desktop.md) | Web/Tauri、性能模式、通知、托盘、开机启动、更新与 OCR |
 
@@ -45,6 +45,7 @@
 - `桌面端`：Tauri 壳中的 RocketX；可调用本地文件、系统能力和 Codex 进程。
 - `网页版`：浏览器中的 Vite Web 客户端；不能直接调用 Tauri 命令或访问任意本地目录。
 - `兼容 Codex`：已登录、具有 `app-server`，且通过 RocketX 版本与握手门禁的 Codex 运行时。
+- `可用 DSH`：桌面安装资源中存在固定 DSH 运行树，系统 Node.js 为 22.19+ 或 24+，需要执行时已配置 DeepSeek API Key。
 - `无 Codex`：没有可解析的系统、标准安装或手动指定运行时。
 - `性能模式`：保留常规 Rocket.Chat 功能并关闭 AI、管家、例行任务和本地 OCR 等高开销能力。
 

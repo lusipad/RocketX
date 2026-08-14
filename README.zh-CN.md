@@ -3,7 +3,7 @@
 以**原版 Rocket.Chat 为内核**、体验对标**飞书**的团队协作客户端。
 
 核心主旨：**团队版 GTD 可信系统**——GTD 管“承诺怎么处理”，注意力保护管“信息怎么到达”。
-消息、工作台、待办和日历承载确定性事实；管家通过 Codex 原生能力执行与协助，具体边界见
+消息、工作台、待办和日历承载确定性事实；管家分别通过 Codex 与 DeepSeek Harness 原生能力执行与协助，具体边界见
 [`产品原则`](docs/specs/product-principles.md)和[`能力矩阵`](docs/specs/capability-matrix.md)。
 
 Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实时 WebSocket API 通信，
@@ -29,6 +29,7 @@ Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实�
 | --- | --- |
 | `apps/web` | 飞书风格 Web 客户端（React + Vite + Tailwind） |
 | `apps/desktop` | 桌面客户端（Tauri 2 壳，复用 web 构建产物） |
+| `apps/dsh-runtime` | 桌面构建使用的私有 DSH 运行时包，精确锁定官方发布版本 |
 | `packages/rc-client` | Rocket.Chat API SDK（REST + 实时 WebSocket，零依赖） |
 | `services/ado-bridge` | Azure DevOps Server 2022 Service Hooks → 消息卡片桥接服务 |
 | `docker/` | 本地 Rocket.Chat 开发环境（原版镜像 + MongoDB 副本集） |
@@ -39,6 +40,8 @@ Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实�
 [`历史质量审查`](docs/quality-audit.md) · [`MIT License`](LICENSE)
 
 ## 快速开始
+
+开发环境使用 Node.js 22.19+ 与 pnpm 11.12.0；也可用 Node.js 24+ 运行 DSH。
 
 ```bash
 # 1. 启动 Rocket.Chat（已有服务器可跳过，改配 RC_URL 即可）
@@ -63,12 +66,16 @@ pnpm dev
 覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
-登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。「管家」复用 Codex 原生
-Thread、模型、权限、Skills、Plugins、Apps 和本地 Memory，并通过 `app-server` 真实执行；运行中
-需要补充输入或审批时，请求只回到所属任务。不同任务线程可在共享 Runtime 中并行运行；同一线程可与 Codex App 顺序接续并显式刷新，群聊
-AI 托管也可把记录交给 Codex App 形成新任务草稿。已安排任务保存在当前设备，只有 RocketX 进程
-仍在运行且本地 Codex 可用时才会执行。当前桌面安装包不捆绑 Codex；网页版可正常使用消息和
-确定性工作界面，但没有本地 Codex 执行通道。具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
+登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。「管家」提供 Codex 与
+DeepSeek 两套独立视图：Codex 继续复用原生 Thread、模型、权限、Skills、Plugins、Apps 和本地
+Memory；DeepSeek 直接使用 DSH 的会话、历史、模型与提供方、推理强度、Agent preset、权限、审批、
+提问和凭据接口。两套后端各自显示真实能力，不压成一套最小公共配置。AI 托管也可在创建会话时
+选择 Codex 或 DeepSeek，并保存对应的原生 Thread ID 或 DSH Session ID。已安排任务仍由 Codex
+执行并保存在当前设备，只有 RocketX 进程仍在运行且本地 Codex 可用时才会运行。当前桌面安装包
+不捆绑 Codex；安装包会固定携带 DSH 运行树，但 DeepSeek 仍需系统 Node.js 22.19+ 或 24+，并由用户
+在 DSH 视图中配置 DeepSeek API Key；DSH rc.6 将它保存在 RocketX 私有 `DSH_HOME/.credentials.yaml`，
+前端只读取“是否已配置”，不会回显密钥。网页版可正常使用消息和确定性工作界面，但没有本地 AI 执行通道。
+具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
 
 随 Windows 发布包提供的「飞鸽 / IPMSG」官方插件默认关闭，可随时禁用。协议、GBK 编码、UDP/TCP `2425`、消息和普通文件传输都在插件自己的 Rust Sidecar 中，RocketX 核心只提供通用进程桥。标准 IPMSG/飞鸽支持消息与文件；原版内网通仅支持 `1@shiyeline` 的 2425 发现和文本，不实现私有 `9011`。该旧协议能力不等同于 RocketX 的认证 LAN 通道。
 
@@ -84,7 +91,7 @@ pnpm smoke          # 54 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件与提及面板/改昵称与头像
 pnpm test:pure      # 230 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 695 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 729 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
 pnpm test:ui        # 79 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
@@ -110,7 +117,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.41.1`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.42.0`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
@@ -123,8 +130,9 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 - **手动构建**：Actions 页面运行 `Desktop Build` workflow → 从 Artifacts 下载安装包；
 - **本地开发**：`pnpm --filter @rcx/desktop dev`（需要 [Rust 工具链](https://tauri.app/start/prerequisites/)）。
 
-共享 Agent 需要已安装并登录的兼容本地 Codex Runtime。它使用在管家中配置的本机 AI 项目目录与 Codex
-原生沙箱、审批和会话能力；不同任务按线程隔离，不再构建或运行 Agent Runner Docker 镜像。
+共享 Agent 可按会话选择 Codex 或 DeepSeek。Codex 后端需要已安装并登录的兼容本地 Codex Runtime，
+并使用本机托管项目、原生沙箱、审批和 Thread；DeepSeek 后端使用安装包内固定的 DSH、系统 Node.js
+与 DSH 原生权限/审批/Session。两者都按会话隔离，不再构建或运行 Agent Runner Docker 镜像。
 
 桌面端在登录页填写 Rocket.Chat 服务器地址直连。服务器需开启 CORS：
 `API_Enable_CORS = true`、`API_CORS_Origin = *`（本仓库 docker-compose 已内置）。

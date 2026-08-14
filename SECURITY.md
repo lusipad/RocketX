@@ -22,10 +22,11 @@ The Rocket.Chat server is a separate upstream product. Report a Rocket.Chat serv
 
 - RocketX authenticates through Rocket.Chat's public APIs and must not log or commit credentials.
 - Codex authentication, sessions, and local Memory are owned by the user's local Codex installation. RocketX must not copy their secrets into source files, committed `.env` files, browser storage, screenshots, logs, or issue reports.
+- DeepSeek credentials and DSH sessions are owned by the fixed local DSH runtime under RocketX's private `DSH_HOME`. DSH `0.1.0-rc.6` stores managed keys in `.credentials.yaml`, using an owner-only directory and `0600` file mode on POSIX; Windows relies on the current user's application-data ACL because POSIX modes are unavailable. API keys may only pass through DSH credentials APIs and must never be persisted or echoed by the WebView, bridge logs, screenshots, or issue reports.
 - Third-party RocketX applications run behind manifest validation, explicit permissions, and a sandboxed Bridge. Remote applications cannot request process or Agent spawning permissions.
 - The authenticated M9 LAN transport and legacy IP Messenger compatibility mode are separate trust domains. IP Messenger is unauthenticated, disabled by default, and must not be treated as a trusted identity channel.
 - The bundled Compose credentials and permissive CORS setting are for local evaluation. Change credentials, restrict network exposure, configure TLS, and establish backups before non-local deployment.
 
 ## Dependency and release hygiene
 
-Review `pnpm-lock.yaml`, `apps/desktop/src-tauri/Cargo.lock`, container image tags, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when dependencies change. Release artifacts should be traced to a repository tag and the corresponding CI run; repository documentation alone is not proof that an artifact was published.
+Review `pnpm-lock.yaml`, `apps/desktop/src-tauri/Cargo.lock`, container image tags, the exact DSH runtime pin, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when dependencies change. Release artifacts should be traced to a repository tag and the corresponding CI run; repository documentation alone is not proof that an artifact was published.

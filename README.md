@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-RocketX is an independent team collaboration client built on the public Rocket.Chat REST and realtime APIs. It keeps the Rocket.Chat server unchanged while adding a focused desktop and web experience for messaging, GTD-style inbox processing, local AI stewardship, shared Codex agent sessions, and LAN continuity.
+RocketX is an independent team collaboration client built on the public Rocket.Chat REST and realtime APIs. It keeps the Rocket.Chat server unchanged while adding a focused desktop and web experience for messaging, GTD-style inbox processing, local AI stewardship, shared Codex or DeepSeek agent sessions, and LAN continuity.
 
 > RocketX is an independent project and is not affiliated with or endorsed by Rocket.Chat Technologies Corp. A feature described in this repository is not necessarily a published release; use the tags and [GitHub Releases](https://github.com/lusipad/RocketX/releases) as the publication record.
 
@@ -22,6 +22,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 
 - `apps/web`: React and Vite client.
 - `apps/desktop`: Tauri 2 desktop shell and native integrations.
+- `apps/dsh-runtime`: private, exactly pinned DeepSeek Harness runtime package used by desktop builds.
 - `packages/rc-client`: dependency-free Rocket.Chat REST and realtime client.
 - `packages/app-sdk`: public `@lusipad/rocketx` JSON-RPC bridge and application manifest contract.
 - `packages/create-rcx-app`: application scaffolding, validation, and local preview CLI.
@@ -52,7 +53,7 @@ docker compose -f docker/docker-compose.yml down
 
 ## Develop locally
 
-Prerequisites: Node.js 22 and pnpm 11.12.0. Docker is only needed when using the bundled Rocket.Chat self-host stack. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work. Codex features require a compatible, signed-in local Codex runtime discoverable on `PATH`, in a standard installation location, or through RocketX's manual runtime path setting.
+Prerequisites: Node.js 22.19+ and pnpm 11.12.0. Docker is only needed when using the bundled Rocket.Chat self-host stack. Rust stable plus the [Tauri prerequisites](https://tauri.app/start/prerequisites/) are required for desktop work. Codex features require a compatible, signed-in local Codex runtime discoverable on `PATH`, in a standard installation location, or through RocketX's manual runtime path setting. DeepSeek features use the DSH runtime bundled with desktop builds and require Node.js 22.19+ or 24+ on the user's system.
 
 ```bash
 corepack enable
@@ -72,7 +73,7 @@ pnpm --filter @rcx/desktop dev
 
 On a new desktop installation, RocketX first explains how its GTD flow captures work, clarifies the next action, and protects attention before opening team or personal setup. **Join a team** can then import a non-secret `rcx.workspace.json` from a local file or an anonymously reachable HTTP(S)/Git raw URL. After Azure DevOps is configured, Workspace settings can also read the same file from a protected ADO Git repository with the current PAT or Windows identity. Rocket.Chat, Azure DevOps, work-item template, hierarchy-layout, and update-source defaults are reviewed before they are applied; credentials are never stored in the workspace file or source record. URL- and ADO-based team configuration checks for changes every 24 hours and asks before applying them. Start from the [workspace configuration example](docs/examples/rcx.workspace.sample.json), and see the [configuration guide](docs/proposal-config-provisioning.md) for the field and security rules.
 
-After signing in, deterministic facts, plans, and state stay in Messages, Workbench, Todos, and Calendar. **Butler** is a native Codex task surface: it reuses Codex threads, models, permissions, Skills, Plugins, Apps, and local Memory through `app-server`; runtime input and approval requests return to their owning task. These AI surfaces currently require the desktop app plus a compatible, signed-in local Codex runtime—RocketX installers do not bundle Codex, and the web client keeps messaging and deterministic work surfaces available without pretending local AI can run. Scheduled tasks are device-local and execute only while RocketX is running. See the [capability matrix](docs/specs/capability-matrix.md) for exact platform and degradation behavior.
+After signing in, deterministic facts, plans, and state stay in Messages, Workbench, Todos, and Calendar. **Butler** has separate Codex and DeepSeek views. Codex reuses native threads, models, permissions, Skills, Plugins, Apps, and local Memory through `app-server`. DeepSeek directly uses the bundled DSH session, model/provider, reasoning, Agent preset, permission, approval, question, and credential APIs. Shared AI hosting chooses one backend per session and keeps that backend's native session ID; RocketX does not force the two runtimes into a lowest-common-denominator feature set. RocketX installers do not bundle Codex. They do bundle the pinned DSH production tree, but DSH still needs system Node.js 22.19+ or 24+ and a user-supplied DeepSeek API key. The web client keeps messaging and deterministic work surfaces available without pretending local AI can run. Scheduled tasks remain Codex-backed, device-local, and execute only while RocketX is running. See the [capability matrix](docs/specs/capability-matrix.md) for exact platform and degradation behavior.
 
 ## Verify changes
 
@@ -98,7 +99,7 @@ RocketX applications run behind a manifest, permission gate, and JSON-RPC bridge
 - RocketX uses public `/api/v1/*` and `/websocket` interfaces and does not patch the Rocket.Chat server.
 - Rocket.Chat `8.6.1` is the pinned, fully tested server in the repository. Other versions are not implied by that result.
 - The optional Windows "Feiq / IPMSG" plugin owns its protocol Sidecar and uses UDP/TCP 2425. Standard IPMSG supports messages and ordinary files; original Intranet Link peers are limited to `1@shiyeline` discovery and text on 2425. Private port 9011 is not implemented, and legacy peers never inherit RocketX LAN trust.
-- Secrets for native integrations are expected to stay in the operating-system credential store.
+- Secrets for native integrations stay in their documented local secret boundary. RocketX uses the operating-system credential store where its native integration supports it; DSH `0.1.0-rc.6` instead owns a private `DSH_HOME/.credentials.yaml` and never returns the stored value to the WebView.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Third-party licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
