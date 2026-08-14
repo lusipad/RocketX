@@ -51,6 +51,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.match(prepareScript, /部署产物实际安装版本必须是 @deepseek-ai\/dsh@\$\{dshVersion\}/u);
   assert.match(prepareScript, /'--trust-lockfile'/);
   assert.match(prepareScript, /'--config\.node-linker=hoisted'/);
+  assert.match(prepareScript, /'--config\.prefer-symlinked-executables=false'/);
   assert.match(prepareScript, /'--filter'/);
   assert.match(prepareScript, /'@rcx\/dsh-runtime'/);
   assert.match(prepareScript, /'deploy'/);

@@ -185,6 +185,7 @@ async function main() {
     ...pnpm.prefixArgs,
     '--trust-lockfile',
     '--config.node-linker=hoisted',
+    '--config.prefer-symlinked-executables=false',
     '--filter',
     '@rcx/dsh-runtime',
     'deploy',
