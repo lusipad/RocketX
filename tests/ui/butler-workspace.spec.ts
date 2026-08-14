@@ -421,6 +421,7 @@ async function openWorkspace(page: Page): Promise<void> {
   await page.getByRole('navigation', { name: 'RocketX 主导航' })
     .getByRole('button', { name: /^管家$/, exact: true })
     .click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
 }
 

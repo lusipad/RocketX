@@ -10,6 +10,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const runtimePackageRoot = path.join(repoRoot, 'apps', 'dsh-runtime');
 const tauriRoot = path.join(repoRoot, 'apps', 'desktop', 'src-tauri');
 const deployRoot = path.join(tauriRoot, 'target', 'dsh-runtime');
+const archivePath = path.join(tauriRoot, 'target', 'dsh-runtime.tar.gz');
 const bridgeSource = path.join(tauriRoot, 'src', 'dsh_bridge.mjs');
 const cliRelativePath = path.join('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 
@@ -60,12 +61,17 @@ async function pathExists(targetPath) {
 async function summarizeDirectory(root) {
   let files = 0;
   let bytes = 0;
+  const symlinks = [];
   const stack = [root];
   while (stack.length > 0) {
     const current = stack.pop();
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       const nextPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        symlinks.push(nextPath);
+        continue;
+      }
       if (entry.isDirectory()) {
         stack.push(nextPath);
         continue;
@@ -75,7 +81,7 @@ async function summarizeDirectory(root) {
       bytes += (await stat(nextPath)).size;
     }
   }
-  return { files, bytes };
+  return { files, bytes, symlinks };
 }
 
 function escapeRegExp(value) {
@@ -111,6 +117,34 @@ async function resolvePnpmInvocation() {
   );
   await ensureFile(windowsPnpm, 'pnpm CLI');
   return { command: process.execPath, prefixArgs: [windowsPnpm] };
+}
+
+function tarCommand() {
+  return process.platform === 'win32' ? 'tar.exe' : 'tar';
+}
+
+async function replacePathAtomically(targetPath, preparedPath) {
+  const backupPath = `${targetPath}.__old-${Date.now()}`;
+  const hadTarget = await pathExists(targetPath);
+  if (hadTarget) {
+    await rename(targetPath, backupPath);
+  }
+  try {
+    await rename(preparedPath, targetPath);
+  } catch (error) {
+    if (hadTarget && await pathExists(backupPath) && !await pathExists(targetPath)) {
+      await rename(backupPath, targetPath);
+    }
+    throw error;
+  }
+  if (await pathExists(backupPath)) {
+    void rm(backupPath, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 200,
+    }).catch(() => undefined);
+  }
 }
 
 async function main() {
@@ -150,6 +184,8 @@ async function main() {
   await run(pnpm.command, [
     ...pnpm.prefixArgs,
     '--trust-lockfile',
+    '--config.node-linker=hoisted',
+    '--config.prefer-symlinked-executables=false',
     '--filter',
     '@rcx/dsh-runtime',
     'deploy',
@@ -220,19 +256,18 @@ async function main() {
   }
 
   const summary = await summarizeDirectory(staging.root);
-  const backupRoot = `${deployRoot}.__old-${Date.now()}`;
-  if (await pathExists(deployRoot)) {
-    await rename(deployRoot, backupRoot);
-  }
-  await rename(staging.root, deployRoot);
-  if (await pathExists(backupRoot)) {
-    void rm(backupRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 3,
-      retryDelay: 200,
-    }).catch(() => undefined);
-  }
+  assert.equal(
+    summary.symlinks.length,
+    0,
+    `部署产物不能包含 symlink；请检查 node-linker=hoisted 是否生效：${summary.symlinks.slice(0, 5).join(', ')}`,
+  );
+
+  const archiveStagingPath = `${archivePath}.__staging`;
+  await rm(archiveStagingPath, { force: true });
+  await run(tarCommand(), ['-czf', archiveStagingPath, '-C', staging.root, '.']);
+
+  await replacePathAtomically(deployRoot, staging.root);
+  await replacePathAtomically(archivePath, archiveStagingPath);
   console.log(
     `Prepared DSH runtime at ${deployRoot} (${summary.files} files, ${summary.bytes} bytes)`,
   );

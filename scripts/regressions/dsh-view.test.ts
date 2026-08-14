@@ -12,7 +12,8 @@ test('Butler 任务页提供独立 DeepSeek 视图、凭据与原生运行配置
 
   assert.match(page, /import DshConversation from '\.\.\/components\/DshConversation';/);
   assert.match(page, /const TASK_PROVIDER_STORAGE_KEY = 'rocketx\.butler\.task-provider';/);
-  assert.match(page, /localStorage\.getItem\(TASK_PROVIDER_STORAGE_KEY\) === 'deepseek'/);
+  assert.match(page, /typeof localStorage === 'undefined'\) return 'deepseek';/);
+  assert.match(page, /localStorage\.getItem\(TASK_PROVIDER_STORAGE_KEY\) === 'codex' \? 'codex' : 'deepseek'/);
   assert.match(page, /localStorage\.setItem\(TASK_PROVIDER_STORAGE_KEY, taskProvider\)/);
   assert.match(page, /role="tab"/);
   assert.match(page, /DeepSeek/);

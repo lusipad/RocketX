@@ -1,6 +1,7 @@
 # 决策 15 实施记录
 
 > 文档状态：**历史实施记录**。本文记录当时的运行时发现与打包切片；当前行为见[Codex Runtime](specs/codex-runtime.md)、[平台与桌面](specs/platform-and-desktop.md)和[兼容性](compatibility.md)。
+> 备注：这篇文档只描述当时的系统-first 切片；v0.42.2 之后，Windows full 另外携带私有 Codex / DSH / Node 资源，slim 只负责探测外部安装。
 
 ## 已落地
 

@@ -78,7 +78,8 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Windows full 会复制当前 node.exe；固定版本保证同一提交可重建相同运行时。
+          node-version: ${{ matrix.platform == 'windows-latest' && '22.19.0' || '22' }}
           cache: pnpm
 
       - name: 安装 Rust
@@ -96,6 +97,10 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 准备固定版本 Codex 资源
+        if: matrix.platform == 'windows-latest'
+        run: pnpm prepare:codex
+
       - name: 准备并校验固定版本 DSH 运行时
         run: pnpm prepare:dsh-runtime
 
@@ -109,7 +114,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          ROCKETX_BUNDLE_OCR: ${{ github.ref_type == 'tag' && '1' || '0' }}
+          # 基础配置不引用 OCR 目录；Windows 在这里仅预生成供后续 full bundling 使用。
+          ROCKETX_BUNDLE_OCR: ${{ matrix.platform == 'windows-latest' && '1' || '0' }}
         with:
           projectPath: apps/desktop
           # 打标签时创建草稿 Release 并上传安装包
@@ -119,8 +125,8 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
-      - name: 生成并上传 full 安装包（仅发布标签）
-        if: github.ref_type == 'tag' && matrix.platform == 'windows-latest'
+      - name: 生成 full 安装包
+        if: matrix.platform == 'windows-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -129,6 +135,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $fullInstaller -PathType Leaf)) {
             throw "Full setup was not generated: $fullInstaller"
           }
+
+      - name: 上传 full 安装包到 Release
+        if: github.ref_type == 'tag' && matrix.platform == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $fullInstaller = Join-Path (Resolve-Path 'apps/desktop/src-tauri/target/release/bundle/nsis').Path "RocketX_${env:GITHUB_REF_NAME.Substring(1)}_full-setup.exe"
           gh release upload "$env:GITHUB_REF_NAME" "$fullInstaller" --repo "$env:GITHUB_REPOSITORY" --clobber
 
       - name: 上传构建产物（手动触发时）

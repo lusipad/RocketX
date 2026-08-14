@@ -1,25 +1,33 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
-    io::{BufRead, BufReader, Write},
+    fs::File,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use flate2::read::GzDecoder;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use tar::Archive;
 use tauri::{Emitter, Manager};
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MIN_NODE_22_MINOR: u64 = 19;
 const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
+const DSH_VERIFIED_VERSION: &str = "0.1.0-rc.6";
 const DSH_ROOT_DIR: &str = "dsh";
 const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";
+const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime.tar.gz";
+const DSH_BUNDLED_RUNTIME_CACHE_DIR: &str = "bundled-runtime";
+const DSH_BUNDLED_RUNTIME_SHA_MARKER: &str = ".archive-sha256";
 const DSH_HOME_SUBDIR: &str = "home";
 const DSH_CONNECTIONS_SUBDIR: &str = "connections";
 const DSH_SOURCE_CLI_ENTRY: [&str; 4] = ["apps", "cli", "lib", "bin.js"];
@@ -189,11 +197,39 @@ fn bundled_dsh_cli_entry(root: &Path) -> PathBuf {
         .fold(root.to_path_buf(), |path, segment| path.join(segment))
 }
 
+fn installed_dsh_cli_entry(node_modules_root: &Path) -> PathBuf {
+    ["@deepseek-ai", "dsh", "lib", "bin.js"]
+        .iter()
+        .fold(node_modules_root.to_path_buf(), |path, segment| {
+            path.join(segment)
+        })
+}
+
 fn source_bridge_path() -> PathBuf {
     DSH_BRIDGE_ENTRY.iter().fold(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         |path, segment| path.join(segment),
     )
+}
+
+fn packaged_bridge_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        paths.push(resource_dir.join(DSH_BUNDLED_BRIDGE_ENTRY));
+    }
+    if cfg!(debug_assertions) {
+        paths.push(source_bridge_path());
+    }
+    paths
+}
+
+fn resolve_packaged_bridge(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    packaged_bridge_candidates(app)
+        .into_iter()
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .map(|path| PathBuf::from(host_path(&path)))
+        .ok_or_else(|| "DSH bridge 脚本缺失；请重新安装 RocketX".to_string())
 }
 
 fn bundled_bridge_path(root: &Path) -> PathBuf {
@@ -204,6 +240,137 @@ fn development_bundled_runtime_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join(DSH_BUNDLED_RUNTIME_DIR)
+}
+
+fn development_bundled_runtime_archive() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(DSH_BUNDLED_RUNTIME_ARCHIVE)
+}
+
+fn bundled_runtime_cache_root(dsh_root: &Path) -> PathBuf {
+    dsh_root.join(DSH_BUNDLED_RUNTIME_CACHE_DIR)
+}
+
+fn bundled_runtime_sha_marker_path(root: &Path) -> PathBuf {
+    root.join(DSH_BUNDLED_RUNTIME_SHA_MARKER)
+}
+
+fn bundled_runtime_unpack_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn path_exists(path: &Path) -> bool {
+    path.symlink_metadata().is_ok()
+}
+
+fn unique_runtime_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn remove_dir_all_with_retries(path: &Path) -> Result<(), String> {
+    if !path_exists(path) {
+        return Ok(());
+    }
+    let mut last_error = None;
+    for _ in 0..5 {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    Err(format!(
+        "无法清理 DSH 运行时目录 {}：{}",
+        host_path(path),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
+}
+
+fn rename_with_retries(source: &Path, destination: &Path) -> Result<(), String> {
+    let mut last_error = None;
+    for _ in 0..5 {
+        match std::fs::rename(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(format!("DSH 运行时路径不存在：{}", host_path(source)))
+            }
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    Err(format!(
+        "无法重命名 DSH 运行时目录 {} -> {}：{}",
+        host_path(source),
+        host_path(destination),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
+}
+
+fn compute_sha256(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| format!("无法读取 DSH 运行时归档：{error}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let bytes = file
+            .read(&mut buffer)
+            .map_err(|error| format!("无法读取 DSH 运行时归档：{error}"))?;
+        if bytes == 0 {
+            break;
+        }
+        digest.update(&buffer[..bytes]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn validate_bundled_runtime_root(root: &Path) -> Result<(), String> {
+    let cli = bundled_dsh_cli_entry(root);
+    if !cli.is_file() {
+        return Err(format!(
+            "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
+            host_path(&cli)
+        ));
+    }
+    let bridge = bundled_bridge_path(root);
+    if !bridge.is_file() {
+        return Err(format!(
+            "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
+            host_path(&bridge)
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_bundled_runtime_root(root: &Path) -> Result<PathBuf, String> {
+    validate_bundled_runtime_root(root)?;
+    let root =
+        std::fs::canonicalize(root).map_err(|error| format!("DSH 运行时目录不可用：{error}"))?;
+    Ok(PathBuf::from(host_path(&root)))
+}
+
+fn bundled_runtime_marker_matches(root: &Path, expected_sha: &str) -> bool {
+    std::fs::read_to_string(bundled_runtime_sha_marker_path(root))
+        .map(|value| value.trim() == expected_sha)
+        .unwrap_or(false)
+}
+
+fn bundled_runtime_is_current(root: &Path, expected_sha: &str) -> bool {
+    path_exists(root)
+        && bundled_runtime_marker_matches(root, expected_sha)
+        && validate_bundled_runtime_root(root).is_ok()
 }
 
 fn explicit_or_env_source_candidate(explicit: Option<&str>) -> Option<PathBuf> {
@@ -246,47 +413,207 @@ fn source_root_from_candidates(explicit: Option<&str>) -> Result<Option<PathBuf>
     resolve_source_root(&candidate).map(Some)
 }
 
-fn bundled_runtime_root_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        roots.push(resource_dir.join(DSH_BUNDLED_RUNTIME_DIR));
+fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            paths.push(installed_dsh_cli_entry(
+                &PathBuf::from(app_data).join("npm").join("node_modules"),
+            ));
+        }
+        if let Some(prefix) = std::env::var_os("NPM_CONFIG_PREFIX") {
+            paths.push(installed_dsh_cli_entry(
+                &PathBuf::from(prefix).join("node_modules"),
+            ));
+        }
+        if let Some(pnpm_home) = std::env::var_os("PNPM_HOME") {
+            for generation in ["5", "6"] {
+                paths.push(installed_dsh_cli_entry(
+                    &PathBuf::from(&pnpm_home)
+                        .join("global")
+                        .join(generation)
+                        .join("node_modules"),
+                ));
+            }
+        }
+        for shim_name in ["dsh.cmd", "dsh.ps1", "dsh"] {
+            if let Some(shim) = find_program(shim_name) {
+                if let Some(prefix) = shim.parent() {
+                    paths.push(installed_dsh_cli_entry(&prefix.join("node_modules")));
+                }
+            }
+        }
     }
-    if cfg!(debug_assertions) {
-        roots.push(development_bundled_runtime_root());
+    #[cfg(not(windows))]
+    {
+        if let Some(prefix) = std::env::var_os("NPM_CONFIG_PREFIX") {
+            paths.push(installed_dsh_cli_entry(
+                &PathBuf::from(prefix).join("lib").join("node_modules"),
+            ));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            paths.push(installed_dsh_cli_entry(
+                &PathBuf::from(home)
+                    .join(".npm-global")
+                    .join("lib")
+                    .join("node_modules"),
+            ));
+        }
+        for root in ["/usr/local/lib/node_modules", "/usr/lib/node_modules"] {
+            paths.push(installed_dsh_cli_entry(Path::new(root)));
+        }
+        if let Some(shim) = find_program("dsh") {
+            if let Ok(target) = std::fs::canonicalize(shim) {
+                if target
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name == "bin.js")
+                {
+                    paths.push(target);
+                }
+            }
+        }
     }
-    roots
+    paths
 }
 
-fn resolve_bundled_runtime_root(candidates: &[PathBuf]) -> Result<PathBuf, String> {
-    let mut failure = None;
-    for candidate in candidates {
-        if !candidate.is_dir() {
-            continue;
-        }
-        let cli = bundled_dsh_cli_entry(candidate);
-        if !cli.is_file() {
-            failure = Some(format!(
-                "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
-                host_path(&cli)
-            ));
-            continue;
-        }
-        let bridge = bundled_bridge_path(candidate);
-        if !bridge.is_file() {
-            failure = Some(format!(
-                "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
-                host_path(&bridge)
-            ));
-            continue;
-        }
-        let root = std::fs::canonicalize(candidate)
-            .map_err(|error| format!("DSH 运行时目录不可用：{error}"))?;
-        return Ok(PathBuf::from(host_path(&root)));
+fn resolve_installed_dsh_cli(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .filter(|path| path.is_file())
+        .find_map(|path| std::fs::canonicalize(path).ok())
+        .map(|path| PathBuf::from(host_path(&path)))
+}
+
+fn installed_dsh_root(cli_path: &Path) -> PathBuf {
+    cli_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(cli_path)
+        .to_path_buf()
+}
+
+fn bundled_runtime_archive_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut archives = Vec::new();
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        archives.push(
+            PathBuf::from(local_app_data)
+                .join("RocketX")
+                .join("resources")
+                .join(DSH_BUNDLED_RUNTIME_ARCHIVE),
+        );
     }
-    Err(failure.unwrap_or_else(|| {
-        "未找到随 RocketX 分发的 DSH 运行时；请先运行 pnpm prepare:dsh-runtime，并确认 dsh-runtime 资源已随安装包分发"
-            .to_string()
-    }))
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        archives.push(resource_dir.join(DSH_BUNDLED_RUNTIME_ARCHIVE));
+    }
+    if cfg!(debug_assertions) {
+        archives.push(development_bundled_runtime_archive());
+    }
+    archives
+}
+
+fn resolve_bundled_runtime_root(root: &Path) -> Result<PathBuf, String> {
+    canonicalize_bundled_runtime_root(root)
+}
+
+fn resolve_debug_bundled_runtime_root() -> Result<Option<PathBuf>, String> {
+    if !cfg!(debug_assertions) {
+        return Ok(None);
+    }
+    let root = development_bundled_runtime_root();
+    if !root.is_dir() {
+        return Ok(None);
+    }
+    resolve_bundled_runtime_root(&root).map(Some).or(Ok(None))
+}
+
+fn resolve_bundled_runtime_archive(candidates: &[PathBuf]) -> Result<PathBuf, String> {
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let archive = std::fs::canonicalize(candidate)
+            .map_err(|error| format!("DSH 运行时归档不可用：{error}"))?;
+        return Ok(PathBuf::from(host_path(&archive)));
+    }
+    Err("未找到随 RocketX 分发的 DSH 运行时归档；请先运行 pnpm prepare:dsh-runtime，并确认 dsh-runtime.tar.gz 资源已随安装包分发".to_string())
+}
+
+fn prepare_bundled_runtime_root_from_archive(
+    archive_path: &Path,
+    dsh_root: &Path,
+) -> Result<PathBuf, String> {
+    let archive_sha = compute_sha256(archive_path)?;
+    let runtime_root = bundled_runtime_cache_root(dsh_root);
+    if bundled_runtime_is_current(&runtime_root, &archive_sha) {
+        return canonicalize_bundled_runtime_root(&runtime_root);
+    }
+
+    let _guard = bundled_runtime_unpack_lock()
+        .lock()
+        .map_err(|_| "DSH 运行时解包锁不可用".to_string())?;
+    if bundled_runtime_is_current(&runtime_root, &archive_sha) {
+        return canonicalize_bundled_runtime_root(&runtime_root);
+    }
+
+    let staging_root = dsh_root.join(format!(
+        "{DSH_BUNDLED_RUNTIME_CACHE_DIR}.__staging-{}-{}",
+        std::process::id(),
+        unique_runtime_suffix()
+    ));
+    let backup_root = dsh_root.join(format!(
+        "{DSH_BUNDLED_RUNTIME_CACHE_DIR}.__old-{}",
+        unique_runtime_suffix()
+    ));
+    remove_dir_all_with_retries(&staging_root)?;
+    remove_dir_all_with_retries(&backup_root)?;
+    std::fs::create_dir_all(&staging_root)
+        .map_err(|error| format!("无法准备 DSH 运行时解包目录：{error}"))?;
+
+    let unpack_result = (|| -> Result<(), String> {
+        let archive_file = File::open(archive_path)
+            .map_err(|error| format!("无法打开 DSH 运行时归档：{error}"))?;
+        let decoder = GzDecoder::new(BufReader::new(archive_file));
+        let mut archive = Archive::new(decoder);
+        archive
+            .unpack(&staging_root)
+            .map_err(|error| format!("无法解压 DSH 运行时归档：{error}"))?;
+        validate_bundled_runtime_root(&staging_root)?;
+        std::fs::write(
+            bundled_runtime_sha_marker_path(&staging_root),
+            format!("{archive_sha}\n"),
+        )
+        .map_err(|error| format!("无法写入 DSH 运行时归档校验标记：{error}"))?;
+        Ok(())
+    })();
+    if let Err(error) = unpack_result {
+        let _ = remove_dir_all_with_retries(&staging_root);
+        return Err(error);
+    }
+
+    let mut moved_existing_runtime = false;
+    if path_exists(&runtime_root) {
+        rename_with_retries(&runtime_root, &backup_root)?;
+        moved_existing_runtime = true;
+    }
+    if let Err(error) = rename_with_retries(&staging_root, &runtime_root) {
+        if moved_existing_runtime && !path_exists(&runtime_root) && path_exists(&backup_root) {
+            let _ = rename_with_retries(&backup_root, &runtime_root);
+        }
+        let _ = remove_dir_all_with_retries(&staging_root);
+        return Err(error);
+    }
+    let _ = remove_dir_all_with_retries(&backup_root);
+    canonicalize_bundled_runtime_root(&runtime_root)
+}
+
+fn prepare_bundled_runtime_root(
+    app: &tauri::AppHandle,
+    dsh_root: &Path,
+) -> Result<PathBuf, String> {
+    let archive = resolve_bundled_runtime_archive(&bundled_runtime_archive_candidates(app))?;
+    prepare_bundled_runtime_root_from_archive(&archive, dsh_root)
 }
 
 fn parse_node_version(value: &str) -> Option<(u64, u64, u64)> {
@@ -309,13 +636,34 @@ fn node_version_is_compatible(value: &str) -> bool {
     }
 }
 
-fn resolve_node_runtime() -> Result<(PathBuf, String), String> {
-    let program = if cfg!(windows) {
-        find_program("node.exe")
-    } else {
-        find_program("node")
+fn bundled_node_paths(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let executable = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut paths = Vec::new();
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(
+            PathBuf::from(local_app_data)
+                .join("RocketX")
+                .join("resources")
+                .join("node")
+                .join(executable),
+        );
     }
-    .ok_or_else(|| "未找到兼容的 Node.js 运行时".to_string())?;
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        paths.push(resource_dir.join("node").join(executable));
+    }
+    if cfg!(debug_assertions) {
+        paths.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("node-resources")
+                .join("node")
+                .join(executable),
+        );
+    }
+    paths
+}
+
+fn probe_node_runtime(program: &Path) -> Result<(PathBuf, String), String> {
     let output = hidden_command(&program)
         .arg("--version")
         .stdin(Stdio::null())
@@ -333,6 +681,72 @@ fn resolve_node_runtime() -> Result<(PathBuf, String), String> {
         ));
     }
     Ok((PathBuf::from(host_path(&program)), version))
+}
+
+fn node_runtime_candidates(
+    system: Option<PathBuf>,
+    bundled: Vec<PathBuf>,
+    use_private_node: bool,
+) -> Vec<PathBuf> {
+    if use_private_node {
+        bundled
+    } else {
+        system.into_iter().collect()
+    }
+}
+
+fn resolve_node_runtime(
+    app: &tauri::AppHandle,
+    use_private_node: bool,
+) -> Result<(PathBuf, String), String> {
+    let system = if cfg!(windows) {
+        find_program("node.exe")
+    } else {
+        find_program("node")
+    };
+    let candidates = node_runtime_candidates(system, bundled_node_paths(app), use_private_node);
+
+    let mut failure = None;
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        match probe_node_runtime(&candidate) {
+            Ok(runtime) => return Ok(runtime),
+            Err(error) => failure = Some(error),
+        }
+    }
+    Err(failure.unwrap_or_else(|| "未找到兼容的 Node.js 运行时".to_string()))
+}
+
+fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<(), String> {
+    let output = hidden_command(node_path)
+        .arg(cli_path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("无法检测已安装的 DSH 版本：{error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "无法检测已安装的 DSH 版本".to_string()
+        } else {
+            format!("无法检测已安装的 DSH 版本：{stderr}")
+        });
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !dsh_version_is_compatible(&version) {
+        return Err(format!(
+            "已安装的 DSH 版本 {version} 不兼容；RocketX 当前验证版本为 {DSH_VERIFIED_VERSION}"
+        ));
+    }
+    Ok(())
+}
+
+fn dsh_version_is_compatible(version: &str) -> bool {
+    version.trim() == DSH_VERIFIED_VERSION
 }
 
 fn dsh_root_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
@@ -358,34 +772,42 @@ fn resolve_dsh_runtime(
     app: &tauri::AppHandle,
     source_path: Option<&str>,
 ) -> Result<ResolvedDshRuntime, String> {
-    let (source_root, cli_entry, bridge_entry) =
+    let (dsh_root, home_root) = dsh_root_paths(app)?;
+    let (source_root, cli_entry, use_private_node, verify_installed_version) =
         if let Some(source_root) = source_root_from_candidates(source_path)? {
             (
                 source_root.clone(),
                 source_dsh_cli_entry(&source_root),
-                source_bridge_path(),
+                false,
+                false,
             )
-        } else {
-            let bundled_root = resolve_bundled_runtime_root(&bundled_runtime_root_candidates(app))?;
+        } else if let Some(cli_path) = resolve_installed_dsh_cli(&installed_dsh_cli_candidates()) {
+            (installed_dsh_root(&cli_path), cli_path, false, true)
+        } else if let Some(bundled_root) = resolve_debug_bundled_runtime_root()? {
             (
                 bundled_root.clone(),
                 bundled_dsh_cli_entry(&bundled_root),
-                bundled_bridge_path(&bundled_root),
+                false,
+                false,
+            )
+        } else {
+            let bundled_root = prepare_bundled_runtime_root(app, &dsh_root)?;
+            (
+                bundled_root.clone(),
+                bundled_dsh_cli_entry(&bundled_root),
+                true,
+                false,
             )
         };
     let cli_path = PathBuf::from(host_path(
         &std::fs::canonicalize(&cli_entry)
             .map_err(|error| format!("DSH CLI 入口不可用：{error}"))?,
     ));
-    if !bridge_entry.is_file() {
-        return Err(format!("DSH bridge 脚本缺失：{}", host_path(&bridge_entry)));
+    let bridge_path = resolve_packaged_bridge(app)?;
+    let (node_path, _) = resolve_node_runtime(app, use_private_node)?;
+    if verify_installed_version {
+        verify_installed_dsh_version(&node_path, &cli_path)?;
     }
-    let bridge_path = PathBuf::from(host_path(
-        &std::fs::canonicalize(&bridge_entry)
-            .map_err(|error| format!("DSH bridge 脚本不可用：{error}"))?,
-    ));
-    let (node_path, _) = resolve_node_runtime()?;
-    let (dsh_root, home_root) = dsh_root_paths(app)?;
     Ok(ResolvedDshRuntime {
         source_root,
         cli_path,
@@ -789,20 +1211,52 @@ pub fn shutdown(app: &tauri::AppHandle) {
 mod tests {
     use super::{
         build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry, business_mcp_patch_text,
-        cleanup_runtime_dir, debug_sibling_dsh_root, development_bundled_runtime_root,
-        encode_message, graceful_shutdown_message, host_path, node_version_is_compatible,
-        resolve_bundled_runtime_root, resolve_source_root, source_bridge_path,
-        source_dsh_cli_entry, source_root_from_candidates, validate_connection_id,
-        ResolvedDshRuntime,
+        cleanup_runtime_dir, debug_sibling_dsh_root, development_bundled_runtime_archive,
+        development_bundled_runtime_root, dsh_version_is_compatible, encode_message,
+        graceful_shutdown_message, host_path, installed_dsh_cli_entry, installed_dsh_root,
+        node_runtime_candidates, node_version_is_compatible,
+        prepare_bundled_runtime_root_from_archive, resolve_bundled_runtime_root,
+        resolve_installed_dsh_cli, resolve_source_root, source_bridge_path, source_dsh_cli_entry,
+        source_root_from_candidates, validate_connection_id, ResolvedDshRuntime,
     };
+    use flate2::{write::GzEncoder, Compression};
     use serde_json::json;
-    use std::{ffi::OsStr, fs, path::PathBuf};
+    use std::{ffi::OsStr, fs, fs::File, path::PathBuf};
+    use tar::Builder;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "rocketx-dsh-tests-{label}-{}",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    fn write_runtime_archive(
+        archive_path: &PathBuf,
+        cli_contents: Option<&[u8]>,
+        bridge_contents: Option<&[u8]>,
+    ) {
+        let source = unique_temp_dir("bundled-runtime-archive-source");
+        fs::create_dir_all(&source).unwrap();
+        if let Some(contents) = cli_contents {
+            fs::create_dir_all(
+                bundled_dsh_cli_entry(&source)
+                    .parent()
+                    .expect("bundled cli parent"),
+            )
+            .unwrap();
+            fs::write(bundled_dsh_cli_entry(&source), contents).unwrap();
+        }
+        if let Some(contents) = bridge_contents {
+            fs::write(bundled_bridge_path(&source), contents).unwrap();
+        }
+        let archive = File::create(archive_path).unwrap();
+        let encoder = GzEncoder::new(archive, Compression::default());
+        let mut builder = Builder::new(encoder);
+        builder.append_dir_all(".", &source).unwrap();
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap();
+        let _ = fs::remove_dir_all(source);
     }
 
     #[test]
@@ -852,6 +1306,32 @@ mod tests {
         assert!(!node_version_is_compatible("v22.18.0"));
         assert!(!node_version_is_compatible("v23.9.0"));
         assert!(!node_version_is_compatible("nightly"));
+    }
+
+    #[test]
+    fn installed_dsh_requires_the_verified_version() {
+        assert!(dsh_version_is_compatible("0.1.0-rc.6"));
+        assert!(dsh_version_is_compatible(" 0.1.0-rc.6\n"));
+        assert!(!dsh_version_is_compatible("0.1.0-rc.5"));
+        assert!(!dsh_version_is_compatible("0.1.0-rc.7"));
+    }
+
+    #[test]
+    fn dsh_runtime_sources_do_not_mix_node_candidates() {
+        let system = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
+        let private = PathBuf::from(r"C:\Users\test\AppData\Local\RocketX\resources\node\node.exe");
+        assert_eq!(
+            node_runtime_candidates(Some(system.clone()), vec![private.clone()], false),
+            vec![system]
+        );
+        assert_eq!(
+            node_runtime_candidates(
+                Some(PathBuf::from(r"C:\Program Files\nodejs\node.exe")),
+                vec![private.clone()],
+                true,
+            ),
+            vec![private]
+        );
     }
 
     #[test]
@@ -914,10 +1394,37 @@ mod tests {
     }
 
     #[test]
+    fn installed_dsh_uses_the_global_package_cli_entry() {
+        let root = unique_temp_dir("installed-runtime");
+        let node_modules = root.join("node_modules");
+        let cli = installed_dsh_cli_entry(&node_modules);
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(&cli, b"console.log('installed')").unwrap();
+
+        let missing = root.join("missing").join("bin.js");
+        let resolved = resolve_installed_dsh_cli(&[missing, cli.clone()]).unwrap();
+        assert_eq!(
+            resolved,
+            PathBuf::from(host_path(&cli.canonicalize().unwrap()))
+        );
+        assert_eq!(
+            installed_dsh_root(&resolved),
+            PathBuf::from(host_path(
+                &node_modules
+                    .join("@deepseek-ai")
+                    .join("dsh")
+                    .canonicalize()
+                    .unwrap()
+            ))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn bundled_runtime_requires_cli_and_bridge_contract() {
         let root = unique_temp_dir("bundled-runtime-contract");
         fs::create_dir_all(&root).unwrap();
-        let missing_cli = resolve_bundled_runtime_root(&[root.clone()]).unwrap_err();
+        let missing_cli = resolve_bundled_runtime_root(&root).unwrap_err();
         assert!(missing_cli.contains("@deepseek-ai"));
 
         fs::create_dir_all(
@@ -927,11 +1434,11 @@ mod tests {
         )
         .unwrap();
         fs::write(bundled_dsh_cli_entry(&root), b"console.log('bundled')").unwrap();
-        let missing_bridge = resolve_bundled_runtime_root(&[root.clone()]).unwrap_err();
+        let missing_bridge = resolve_bundled_runtime_root(&root).unwrap_err();
         assert!(missing_bridge.contains("dsh_bridge.mjs"));
 
         fs::write(bundled_bridge_path(&root), b"console.log('bridge')").unwrap();
-        let resolved = resolve_bundled_runtime_root(&[root.clone()]).unwrap();
+        let resolved = resolve_bundled_runtime_root(&root).unwrap();
         assert_eq!(
             resolved,
             PathBuf::from(host_path(&root.canonicalize().unwrap()))
@@ -946,6 +1453,97 @@ mod tests {
             host_path(&path).ends_with("target\\dsh-runtime")
                 || host_path(&path).ends_with("target/dsh-runtime")
         );
+    }
+
+    #[test]
+    fn bundled_runtime_archive_path_matches_resource_contract() {
+        let path = development_bundled_runtime_archive();
+        assert!(
+            host_path(&path).ends_with("target\\dsh-runtime.tar.gz")
+                || host_path(&path).ends_with("target/dsh-runtime.tar.gz")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_release_archive_is_readable_by_the_rust_unpacker_when_present() {
+        let archive = development_bundled_runtime_archive();
+        if !archive.is_file() {
+            return;
+        }
+        let root = unique_temp_dir("prepared-release-archive");
+        let dsh_root = root.join("app-data").join("dsh");
+        fs::create_dir_all(&dsh_root).unwrap();
+        let extracted = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap();
+        assert!(bundled_dsh_cli_entry(&extracted).is_file());
+        assert!(bundled_bridge_path(&extracted).is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_runtime_archive_cache_is_reusable_when_sha_matches() {
+        let root = unique_temp_dir("bundled-runtime-cache-reuse");
+        let archive = root.join("dsh-runtime.tar.gz");
+        let dsh_root = root.join("app-data").join("dsh");
+        fs::create_dir_all(&dsh_root).unwrap();
+        write_runtime_archive(
+            &archive,
+            Some(b"console.log('cli-v1')"),
+            Some(b"console.log('bridge-v1')"),
+        );
+
+        let extracted = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap();
+        let sentinel = extracted.join("sentinel.txt");
+        fs::write(&sentinel, b"keep").unwrap();
+
+        let reused = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap();
+        assert_eq!(reused, extracted);
+        assert!(sentinel.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_runtime_archive_cache_refreshes_when_archive_sha_changes() {
+        let root = unique_temp_dir("bundled-runtime-cache-refresh");
+        let archive = root.join("dsh-runtime.tar.gz");
+        let dsh_root = root.join("app-data").join("dsh");
+        fs::create_dir_all(&dsh_root).unwrap();
+        write_runtime_archive(
+            &archive,
+            Some(b"console.log('cli-v1')"),
+            Some(b"console.log('bridge-v1')"),
+        );
+
+        let extracted = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap();
+        let sentinel = extracted.join("sentinel.txt");
+        fs::write(&sentinel, b"stale").unwrap();
+
+        write_runtime_archive(
+            &archive,
+            Some(b"console.log('cli-v2')"),
+            Some(b"console.log('bridge-v2')"),
+        );
+        let refreshed = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap();
+        assert_eq!(refreshed, extracted);
+        assert!(!sentinel.exists());
+        assert_eq!(
+            fs::read_to_string(bundled_dsh_cli_entry(&refreshed)).unwrap(),
+            "console.log('cli-v2')"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_runtime_archive_requires_cli_and_bridge_entries() {
+        let root = unique_temp_dir("bundled-runtime-archive-missing-entry");
+        let archive = root.join("dsh-runtime.tar.gz");
+        let dsh_root = root.join("app-data").join("dsh");
+        fs::create_dir_all(&dsh_root).unwrap();
+        write_runtime_archive(&archive, None, Some(b"console.log('bridge-only')"));
+
+        let error = prepare_bundled_runtime_root_from_archive(&archive, &dsh_root).unwrap_err();
+        assert!(error.contains("@deepseek-ai"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

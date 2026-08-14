@@ -83,11 +83,11 @@ function ManagedSurface({ children }: { children: ReactNode }) {
 export default function ButlerPage() {
   const activeView = useUI((state) => state.butlerView);
   const [taskProvider, setTaskProvider] = useState<'codex' | 'deepseek'>(() => {
-    if (typeof localStorage === 'undefined') return 'codex';
+    if (typeof localStorage === 'undefined') return 'deepseek';
     try {
-      return localStorage.getItem(TASK_PROVIDER_STORAGE_KEY) === 'deepseek' ? 'deepseek' : 'codex';
+      return localStorage.getItem(TASK_PROVIDER_STORAGE_KEY) === 'codex' ? 'codex' : 'deepseek';
     } catch {
-      return 'codex';
+      return 'deepseek';
     }
   });
 

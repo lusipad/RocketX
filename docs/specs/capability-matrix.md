@@ -1,6 +1,6 @@
 # RocketX 能力矩阵
 
-> 基线：工作树 `2026-08-14`，应用版本 `0.42.1`
+> 基线：工作树 `2026-08-14`，应用版本 `0.42.2`
 > 判断口径：只记录当前可观察行为；未来目标见各能力域的“已知差距与目标”。
 
 ## 1. 场景定义
@@ -9,7 +9,7 @@
 | --- | --- |
 | 桌面端 + 兼容 Codex | Tauri 桌面端可解析已登录的 Codex，`app-server` 探测和版本门禁通过 |
 | 桌面端，无可用 Codex | 未安装、未登录、版本被阻止，或 `app-server` 探测失败 |
-| 桌面端 + 可用 DSH | 安装资源包含固定 DSH 运行树，系统 Node.js 为 22.19+ 或 24+；发送时已配置 DeepSeek API Key |
+| 桌面端 + 可用 DSH | slim 可连接已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH；Windows full 则使用同样锁定为 `0.1.0-rc.6` 的私有固定 DSH 运行时；发送时已配置 DeepSeek API Key |
 | 网页版 | 浏览器访问 RocketX，不具备 Tauri 本地进程与文件能力 |
 | 性能模式 | 用户主动关闭 Codex、DSH、例行任务、共享 Agent、本地 OCR 等高开销能力 |
 
@@ -30,9 +30,10 @@
 | ADO 我的代码 | 受限 | 受限 | 受限 | 受限 | 默认汇总最近一年当前身份创建的 PR；旧 Server、权限和项目局部失败会明确标注部分覆盖 |
 | ADO 写操作 | 受限 | 受限 | 受限 | 受限 | 只通过显式动作执行；结果未知时不得自动重试 |
 | 待办、日历、通讯录 | 已实现 | 已实现 | 已实现 | 已实现 | 待办和日历以本机数据为主；通讯录来自 Rocket.Chat |
+| 管家默认后端 | 已实现 | 已实现 | 已实现 | 已实现 | 新安装首次默认打开 DeepSeek 视图；已保存的后端偏好继续恢复 |
 | 管家 Codex 原生任务 | 已实现 | 不可用 | 不可用 | 不适用 | 当前只有桌面端本地 `app-server` 传输 |
-| 管家 DeepSeek 原生任务 | 受限 | 受限 | 不可用 | 不适用 | 与 Codex 是否可用无关；依赖随包 DSH、兼容 Node.js 与 DeepSeek API Key |
-| DSH 模型 / Provider / 推理 / Agent / 权限配置 | 受限 | 受限 | 不可用 | 不适用 | 读取和选择 DSH 原生目录与 Settings；不提供 endpoint CRUD 或 preset 编辑器 |
+| 管家 DeepSeek 原生任务 | 受限 | 受限 | 不可用 | 不适用 | 与 Codex 是否可用无关；slim 依赖已安装且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH，Windows full 依赖同版本私有 DSH 运行时，再配合 DeepSeek API Key |
+| DSH 模型 / Provider / 推理 / Agent / 权限配置 | 受限 | 受限 | 不可用 | 不适用 | 读取和选择 DSH 原生目录与 Settings；slim 只探测系统安装，full 才提供私有运行时；不提供 endpoint CRUD 或 preset 编辑器 |
 | 管家与 Codex App 接续 | 受限 | 不可用 | 不可用 | 不适用 | 支持打开和手动刷新；同一线程顺序接续，不同任务线程可在共享 Runtime 中并行 |
 | Skills / Plugins / Apps 目录 | 已实现 | 不可用 | 不可用 | 不适用 | 目录和动作来自当前 Codex `app-server` |
 | Codex 原生 Memory | 受限 | 不可用 | 不可用 | 不适用 | 每个管家线程启用；还受 Codex 全局 Memory 配置影响 |
@@ -56,19 +57,20 @@
 | Codex 未登录 | Runtime 可被发现，但 AI 任务不可进入可运行状态 |
 | 手动路径无效 | 显示具体探测错误，并继续允许用户改回系统或标准安装路径 |
 
-RocketX 当前桌面安装包不捆绑 Codex。全量包比精简包多的是 OCR 等资源，不是 Codex Runtime；两种包都携带固定 DSH 运行树，但都不携带 Node.js。
+RocketX 当前桌面安装包采用 slim/full 分层。默认 slim 不捆绑 Codex 或 DSH，只负责探测系统安装；系统 DSH 只有在版本被 RocketX 验证为 `0.1.0-rc.6` 时才可用，更高版本需先升级 RocketX 支持线。Windows full 额外在私有资源目录中安装固定的 Codex 0.144.4、DSH 0.1.0-rc.6、私有 Node 与 OCR。macOS 和 Linux 官方包目前仍是 slim-only。
 
 ## 4. DSH Runtime 兼容结论
 
 | 条件 | 当前表现 |
 | --- | --- |
-| 随包 `@deepseek-ai/dsh@0.1.0-rc.6` + Node.js 22.19+/24+ | 可启动 DSH bridge，并使用原生 Session、配置、审批、提问与凭据 API |
-| Node.js 缺失或版本过低 | DeepSeek 后端不可用并显示版本要求；不影响 Codex 与确定性界面 |
+| 官方 slim 发现到可运行的系统 DSH | 可启动 DSH bridge，并使用原生 Session、配置、审批、提问与凭据 API |
+| Windows full 私有 `@deepseek-ai/dsh@0.1.0-rc.6` 运行时 | 可启动 DSH bridge，并使用原生 Session、配置、审批、提问与凭据 API |
+| DSH 不可用 | DeepSeek 后端不可用并显示诊断；不影响 Codex 与确定性界面 |
 | DeepSeek API Key 未配置 | 可以查看 DSH 状态和配置，但发送前 fail-closed 并提示配置 |
 | 随包资源缺失/不完整 | 拒绝启动，不在运行时下载或猜测兼容版本 |
 | DSH bridge 退出 | 清理旧审批/问题/队列，把运行 Session 标为中断；重连后从原生历史恢复 |
 
-正式安装包固定携带 DSH 生产运行树，但不携带 Node.js。开发环境可通过 `sourcePath` 或 `ROCKETX_DSH_SOURCE` 显式覆盖源码构建；正式运行默认不依赖兄弟源码仓库。
+正式安装包采用 slim/full 分层：slim 只做系统探测，系统 DSH 必须先通过 RocketX 的 `0.1.0-rc.6` 验证；Windows full 另带私有 DSH 生产运行树和私有 Node。开发环境可通过 `sourcePath` 或 `ROCKETX_DSH_SOURCE` 显式覆盖源码构建；正式运行默认不依赖兄弟源码仓库。
 
 ## 5. 规格维护检查
 

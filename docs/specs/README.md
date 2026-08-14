@@ -45,7 +45,7 @@
 - `桌面端`：Tauri 壳中的 RocketX；可调用本地文件、系统能力和 Codex 进程。
 - `网页版`：浏览器中的 Vite Web 客户端；不能直接调用 Tauri 命令或访问任意本地目录。
 - `兼容 Codex`：已登录、具有 `app-server`，且通过 RocketX 版本与握手门禁的 Codex 运行时。
-- `可用 DSH`：桌面安装资源中存在固定 DSH 运行树，系统 Node.js 为 22.19+ 或 24+，需要执行时已配置 DeepSeek API Key。
+- `可用 DSH`：slim 能发现并连接系统里已安装且可运行、且版本已被 RocketX 验证为 `0.1.0-rc.6` 的 DSH；更高版本只有在 RocketX 更新支持线后才可用。Windows full 提供的私有固定 DSH 运行时同样锁定为 `0.1.0-rc.6`；需要执行时已配置 DeepSeek API Key。
 - `无 Codex`：没有可解析的系统、标准安装或手动指定运行时。
 - `性能模式`：保留常规 Rocket.Chat 功能并关闭 AI、管家、例行任务和本地 OCR 等高开销能力。
 
