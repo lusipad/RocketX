@@ -26,7 +26,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. Starting with `v0.42.0`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. The `v0.42.0` build candidate was not published after its desktop matrix failed before packaging. Starting with `v0.42.1`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
 
 ## Codex runtime compatibility
 
@@ -44,7 +44,7 @@ See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, an
 
 ## DeepSeek Harness runtime compatibility
 
-RocketX `v0.42.0` desktop installers bundle the complete production installation tree for exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Users do not need a separate DSH installation or a `deepseek-harness` source checkout. RocketX still uses a system Node.js runtime and requires Node.js 22.19+ or 24+; the Web client cannot start the local DSH process.
+RocketX `v0.42.1` desktop installers bundle the complete production installation tree for exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Users do not need a separate DSH installation or a `deepseek-harness` source checkout. RocketX still uses a system Node.js runtime and requires Node.js 22.19+ or 24+; the Web client cannot start the local DSH process.
 
 | DSH condition | RocketX behavior |
 | --- | --- |
