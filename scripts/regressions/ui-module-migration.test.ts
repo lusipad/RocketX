@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_WORK_ITEM_STATE_FILTER,
+  BUTLER_TASK_PROVIDER_STORAGE_KEY,
   migratePersistedModule,
+  readPersistedButlerTaskProvider,
   readPersistedModule,
   readPersistedWorkbenchTab,
   readPersistedWorkItemStateFilter,
@@ -60,6 +62,15 @@ test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () =>
 
   storage.setItem(UI_MODULE_STORAGE_KEY, JSON.stringify({ state: { workItemStateFilter: '活动' } }));
   assert.equal(readPersistedWorkItemStateFilter(storage), '活动');
+});
+
+test('管家 provider 偏好只接受当前支持的执行视图', () => {
+  const storage = new MemoryStorage();
+  assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
+  storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'codex');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'codex');
+  storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'unknown');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
 });
 
 test('可编程入口只通过 butlerView 驱动任务、已安排、插件三个工作面', () => {

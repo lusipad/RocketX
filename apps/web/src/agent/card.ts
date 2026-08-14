@@ -1,3 +1,5 @@
+import type { AgentBackend } from './session';
+
 export interface AgentSessionCard {
   version: 1;
   sessionId: string;
@@ -7,6 +9,8 @@ export interface AgentSessionCard {
   hostDeviceId: string;
   leaseExpiresAt: number;
   status: 'active' | 'interrupted' | 'ended';
+  /** 旧卡片没有该字段时按 Codex 读取。 */
+  backend?: AgentBackend;
   environmentName?: string;
   workItem?: { id: number; project?: string; title: string };
   proposedBranch?: string;
@@ -36,7 +40,7 @@ export function renderAgentSessionCard(card: AgentSessionCard): string {
     card.environmentName ? `本地项目：${card.environmentName}` : '',
     card.proposedBranch ? `计划分支：\`${card.proposedBranch}\`` : '',
     `主持人：@${card.hostUsername} · 状态：${status}`,
-    card.status === 'active' ? '房间成员：使用 `@ai` 提问；权限与审批由主持人的 Codex 任务控制。' : '',
+    card.status === 'active' ? '房间成员：使用 `@ai` 提问；权限与审批由主持人的 AI 管家会话控制。' : '',
     `宿主租约至：${new Date(card.leaseExpiresAt).toLocaleString()}`,
     `<!--rocketx-agent:${encoded}-->`,
   ].filter(Boolean).join('\n');
@@ -55,7 +59,8 @@ export function parseAgentSessionCard(text: string): AgentSessionCard | null {
       typeof value.hostUsername !== 'string' ||
       typeof value.hostDeviceId !== 'string' ||
       typeof value.leaseExpiresAt !== 'number' ||
-      !['active', 'interrupted', 'ended'].includes(value.status ?? '')
+      !['active', 'interrupted', 'ended'].includes(value.status ?? '') ||
+      (value.backend !== undefined && !['codex', 'deepseek'].includes(value.backend))
     ) {
       return null;
     }

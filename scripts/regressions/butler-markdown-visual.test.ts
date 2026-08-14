@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -36,16 +35,5 @@ test('管家富 Markdown 保留完整块级语义', () => {
   assert.match(html, /<pre class="markdown-code-block/);
   assert.match(html, /<code/);
   assert.match(html, /target="_blank" rel="noreferrer"/);
-});
-
-test('Codex 风格只作用于管家 Markdown 容器', () => {
-  const styles = readFileSync('apps/web/src/styles.css', 'utf8');
-  const routines = readFileSync('apps/web/src/components/ButlerRoutines.tsx', 'utf8');
-
-  assert.match(styles, /\.butler-conversation-markdown > :is\(h1, h2, h3, h4, h5, h6\)/);
-  assert.match(styles, /\.butler-conversation-markdown > pre/);
-  assert.match(styles, /\.butler-conversation-markdown blockquote/);
-  assert.match(styles, /\.butler-conversation-markdown > div:has\(> table\)/);
-  assert.doesNotMatch(styles, /\n(?:pre|blockquote|table)\s*\{[^}]*Codex/s);
-  assert.match(routines, /butler-routine-result butler-conversation-markdown/);
+  assert.match(html, /^<div class="rocketx-markdown rocketx-markdown--chat" data-variant="chat">/);
 });

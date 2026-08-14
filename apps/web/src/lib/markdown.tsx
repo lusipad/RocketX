@@ -498,7 +498,7 @@ function renderWithCodeFences(
     index % 2 === 0 ? splitBlockMath(part) : null
   ));
   return (
-    <>
+    <div className={`rocketx-markdown rocketx-markdown--${variant}`} data-variant={variant}>
       {parts.map((part, i) =>
         i % 2 === 1 ? (
           <pre
@@ -534,7 +534,7 @@ function renderWithCodeFences(
           </Fragment>
         ),
       )}
-    </>
+    </div>
   );
 }
 

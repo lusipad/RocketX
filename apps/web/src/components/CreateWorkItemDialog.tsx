@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useWorkbench } from '../stores/workbench';
 import {
-  HIERARCHY_LAYOUT_OPTIONS,
+  hierarchyLayoutOptionsForTypes,
   hierarchyPreview,
   loadHierarchyLayout,
   loadLastWorkItemProject,
@@ -64,6 +64,7 @@ export default function CreateWorkItemDialog({
     () => workItemTemplatesForTypes(templates, workItemTypes, workItemHierarchy, hierarchyLayout),
     [templates, workItemTypes, workItemHierarchy, hierarchyLayout],
   );
+  const hierarchyLayoutOptions = hierarchyLayoutOptionsForTypes(workItemTypes, workItemHierarchy);
   const tpl = compatibleTemplates[tplIdx];
   const isSingle = tpl?.items.length === 1 && tpl.items[0].type === '{type}';
   const isHierarchy = tpl?.name === '层级工作项';
@@ -242,8 +243,8 @@ export default function CreateWorkItemDialog({
             )}
           </div>
 
-          {/* 层级形态四选一(选择即记住,下次默认) + 结构预览 */}
-          {isHierarchy && (
+          {/* 层级形态六选一(选择即记住,下次默认) + 结构预览 */}
+          {isHierarchy && hierarchyLayoutOptions.length > 0 && (
             <div className="flex flex-col gap-1">
               <select
                 value={hierarchyLayout}
@@ -254,7 +255,7 @@ export default function CreateWorkItemDialog({
                 }}
                 className="h-8 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
               >
-                {HIERARCHY_LAYOUT_OPTIONS.map((option) => (
+                {hierarchyLayoutOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>

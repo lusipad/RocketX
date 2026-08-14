@@ -11,10 +11,9 @@ test('Butler 任务页提供独立 DeepSeek 视图、凭据与原生运行配置
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
 
   assert.match(page, /import DshConversation from '\.\.\/components\/DshConversation';/);
-  assert.match(page, /const TASK_PROVIDER_STORAGE_KEY = 'rocketx\.butler\.task-provider';/);
-  assert.match(page, /typeof localStorage === 'undefined'\) return 'deepseek';/);
-  assert.match(page, /localStorage\.getItem\(TASK_PROVIDER_STORAGE_KEY\) === 'codex' \? 'codex' : 'deepseek'/);
-  assert.match(page, /localStorage\.setItem\(TASK_PROVIDER_STORAGE_KEY, taskProvider\)/);
+  assert.match(page, /const taskProvider = useUI\(\(state\) => state\.butlerTaskProvider\)/);
+  assert.match(page, /const setTaskProvider = useUI\(\(state\) => state\.setButlerTaskProvider\)/);
+  assert.doesNotMatch(page, /localStorage/);
   assert.match(page, /role="tab"/);
   assert.match(page, /DeepSeek/);
   assert.match(page, /taskProvider === 'deepseek' \? <DshConversation \/> : <ButlerConversation embedded \/>/);

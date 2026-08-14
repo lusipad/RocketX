@@ -108,13 +108,13 @@ export type HierarchyLayout =
   | 'story-split'
   | 'story-single';
 
-export const HIERARCHY_LAYOUT_OPTIONS: { value: HierarchyLayout; label: string }[] = [
-  { value: 'epic-split', label: '完整到 Epic · 拆开发/测试' },
-  { value: 'epic-single', label: '完整到 Epic · 单个 Task' },
-  { value: 'feature-split', label: '从 Feature 起 · 拆开发/测试（默认）' },
-  { value: 'feature-single', label: '从 Feature 起 · 单个 Task' },
-  { value: 'story-split', label: '仅故事层 · 拆开发/测试' },
-  { value: 'story-single', label: '仅故事层 · 单个 Task' },
+const HIERARCHY_LAYOUTS: HierarchyLayout[] = [
+  'epic-split',
+  'epic-single',
+  'feature-split',
+  'feature-single',
+  'story-split',
+  'story-single',
 ];
 
 const LAYOUT_KEY = 'rcx-wi-hierarchy-layout';
@@ -122,7 +122,7 @@ const LAYOUT_KEY = 'rcx-wi-hierarchy-layout';
 export function loadHierarchyLayout(): HierarchyLayout {
   try {
     const saved = localStorage.getItem(LAYOUT_KEY);
-    return HIERARCHY_LAYOUT_OPTIONS.some((option) => option.value === saved)
+    return HIERARCHY_LAYOUTS.includes(saved as HierarchyLayout)
       ? (saved as HierarchyLayout)
       : 'feature-split';
   } catch {
@@ -166,6 +166,18 @@ function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-s
   return { name: '层级工作项', items };
 }
 
+function hierarchyForLayout(
+  availableTypes: string[],
+  processHierarchy: string[],
+  layout: HierarchyLayout,
+): string[] {
+  const exactHierarchy = processHierarchy
+    .map((type) => actualType(type, availableTypes))
+    .filter((type): type is string => !!type);
+  const full = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
+  return layout.startsWith('epic') ? full : withoutEpicLevel(full);
+}
+
 /** 结构预览:「Feature → User Story → 【开发】Task + 【测试】Task」 */
 export function hierarchyPreview(template: WiTemplate): string {
   const chain = template.items.filter((item) => !item.title.startsWith('【'));
@@ -178,10 +190,22 @@ export function hierarchyPreview(template: WiTemplate): string {
   return `${chainText} → ${taskText}`;
 }
 
+export function hierarchyLayoutOptionsForTypes(
+  availableTypes: string[],
+  processHierarchy: string[] = [],
+): { value: HierarchyLayout; label: string }[] {
+  return HIERARCHY_LAYOUTS.flatMap((value) => {
+    const hierarchy = hierarchyForLayout(availableTypes, processHierarchy, value);
+    if (hierarchy.length < 2) return [];
+    const template = hierarchyTemplate(hierarchy, value);
+    return [{ value, label: hierarchyPreview(template) }];
+  });
+}
+
 /**
  * 返回项目真正可创建的模板，并把固定模板类型替换为服务器返回的精确名称。
  * 「层级工作项」按过程配置生成（Basic/Scrum/CMMI/自定义都认），形态由
- * layout 四选一决定，始终排第一位；远程自定义模板跟在后面。
+ * layout 六选一决定，始终排第一位；远程自定义模板跟在后面。
  */
 export function workItemTemplatesForTypes(
   templates: WiTemplate[],
@@ -193,12 +217,7 @@ export function workItemTemplatesForTypes(
     .filter((template) => templateSupportsTypes(template, availableTypes))
     .map((template) => resolveTemplateTypes(template, availableTypes));
 
-  const exactHierarchy = processHierarchy
-    .map((type) => actualType(type, availableTypes))
-    .filter((type): type is string => !!type);
-  const full = exactHierarchy.length >= 2 ? exactHierarchy : inferredHierarchy(availableTypes);
-  // Epic 全链形态保留顶层；其余形态沿 issue #65 砍掉 Epic/Initiative
-  const hierarchy = layout.startsWith('epic') ? full : withoutEpicLevel(full);
+  const hierarchy = hierarchyForLayout(availableTypes, processHierarchy, layout);
   return hierarchy.length >= 2
     ? [hierarchyTemplate(hierarchy, layout), ...compatible]
     : compatible;
@@ -210,7 +229,7 @@ export function preferredWorkItemType(availableTypes: string[]): string {
 }
 
 // 「Feature 全套」「UserStory + Tasks」两个死级联已被可配置的「层级工作项」
-// 取代(四种形态,见 HierarchyLayout);内置只留单项创建,自定义级联走远程模板。
+// 取代(六种形态,见 HierarchyLayout);内置只留单项创建,自定义级联走远程模板。
 const BUILTIN: WiTemplate[] = [
   {
     name: '单个工作项',
