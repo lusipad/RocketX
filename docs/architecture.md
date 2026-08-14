@@ -2,7 +2,7 @@
 
 > 文档状态：**当前架构说明**。用户可见能力、平台边界和验收以 [功能规格](specs/README.md) 为准；本文件只记录稳定架构决策与实现陷阱。
 
-首次记录：2026-07-13；最近校准：2026-08-09
+首次记录：2026-07-13；最近校准：2026-08-14
 
 ## 决策 1：自研客户端 + 原版 Rocket.Chat 后端
 
@@ -38,13 +38,15 @@ rcx-hub 集中管控等平台级投入全部冻结。功能取舍以「GTD 五�
 
 ## 关键技术点
 
-### 确定性界面与 Codex 原生 AI 边界
+### 确定性界面与原生 AI 后端边界
 
 - 消息、工作台、待办、日历和通讯录保存可查询、可编辑的权威事实；AI 回答不构成第二套业务数据。
-- 管家、Skills/Plugins/Apps、原生 Memory、已安排执行和共享 Agent 统一通过本机 Codex `app-server`，不再运行旧 Butler 大脑、Blackboard 或自建 Memory Store。
+- 管家提供 Codex 与 DSH 两条独立纵切。Codex 视图直接使用本机 `app-server` 的 Thread、Skills/Plugins/Apps、Memory 和审批；DeepSeek 视图直接使用 DSH Web Host API 的 Session、模型/提供方、Agent preset、权限、审批、提问和凭据语义。
+- AI 托管只共用 Rocket.Chat 租约、消息上下文、状态与回帖；每个会话固定一个后端并保存其原生 ID，不建立通用 Runtime registry，也不把不同能力压成最小公共集合。已安排任务仍由 Codex 执行。
 - 桌面端通过 Tauri 发现并管理用户已安装、已登录且通过版本门禁的 Codex。精简包和全量包都不捆绑 Codex。
-- 网页版保留 Rocket.Chat 与确定性工作界面，但当前没有本地 Codex Transport。详细降级行为见 [能力矩阵](specs/capability-matrix.md)。
-- 交互式请求按 Codex Thread 隔离；“替我审批”仍使用工作区沙箱，“完全访问”才放开到 `danger-full-access`。
+- 正式安装包通过 lockfile 固定并携带 `@deepseek-ai/dsh@0.1.0-rc.6` 生产运行树，运行时由 Tauri 管理 Node bridge；用户无需另装 DSH 或保留源码仓库，但当前仍需系统 Node.js 22.19+ 或 24+。
+- 网页版保留 Rocket.Chat 与确定性工作界面，但当前没有本地 Codex 或 DSH Transport。详细降级行为见 [能力矩阵](specs/capability-matrix.md)。
+- 交互式请求按原生 Thread/Session 隔离。Codex 的三档快捷权限与 DSH 的原生 permission preset 分别处理，不能互相映射后假装等价。
 
 ### 与 Rocket.Chat 的通信
 
@@ -131,6 +133,7 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | ADO 自定义查询 | `rcx-custom-queries` | 跟 Rocket.Chat 账号隔离，再按稳定的 ADO 基址与认证方式分区；旧查询只在匹配连接后认领 |
 | 管家 Codex 工作区设置 | `rcx-codex-workspace-v1:<scope>` | 按 Rocket.Chat 服务器与账号保存工作区、模型、推理强度、权限档和后续消息模式；Thread/Turn 正文由 Codex Home 管理，不写入该 key |
 | AI 托管 Codex 设置 | `rcx-agent-hosting-v1:codex-*` | 共享 Agent 独立保存模型、推理强度和权限档；权限默认“替我审批” |
+| AI 托管后端与 DSH 会话 | `rcx-agent-hosting-v1:*` + DSH Home | RocketX 保存会话所选后端和原生 ID；DSH 自己保存 Session、默认模型/Agent/权限，并把托管密钥写入私有 `.credentials.yaml`，RocketX 不复制密钥或配置正文 |
 | 已安排任务 | `rcx-codex-automations-v1:*` | 保存本机计划、版本、触发游标与最近结果；只在 RocketX 进程存活且 Codex 可用时执行，不跨设备同步 |
 | 本地 Agent 环境 | `rcx-agent-environments` | 保存用户明确允许共享 Agent 使用的目录、项目映射和活动绑定；一个环境不能同时绑定两个活动 Discussion |
 | Codex Memory | Codex Home（例如 `~/.codex/memories`） | 由 Codex 原生管理；RocketX 在 Thread 启动前请求启用，不维护独立用户画像库，也不与 ChatGPT Web Memory 混用 |
@@ -182,5 +185,5 @@ Vite HMR 会导致 store 模块分叉（`window.__chat` 与界面里的 store �
   客服（Omnichannel）、管理后台、邀请链接、批量清理消息（prune）；
 - 单聊 / 多人聊天没有群管理能力（这是 RC 的模型限制：它们都是 `t='d'`）；
 - 分组、备注名、待办只存本机（见上方「本地数据」）。
-- 管家、原生 Memory、已安排执行和共享 Agent 当前只在桌面端且本地 Codex 可用时运行；网页版没有远端执行面。
+- 管家与共享 Agent 当前只在桌面端运行；Codex 路径要求兼容且已登录的本机 Codex，DeepSeek 路径要求系统 Node.js、随包 DSH 和已配置密钥。原生 Memory、Skills/Plugins/Apps、已安排执行仍只属于 Codex；网页版没有远端执行面。
 - 已安排任务不是操作系统或云端常驻调度，RocketX 真正退出、电脑关机或休眠时不执行。

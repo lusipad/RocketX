@@ -26,7 +26,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. Starting with `v0.41.1`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. Starting with `v0.42.0`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
 
 ## Codex runtime compatibility
 
@@ -41,6 +41,20 @@ RocketX installers do not bundle Codex. Desktop AI features require a compatible
 | Web client | No local Codex transport; messaging and deterministic work surfaces remain usable |
 
 See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, and release evidence.
+
+## DeepSeek Harness runtime compatibility
+
+RocketX `v0.42.0` desktop installers bundle the complete production installation tree for exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Users do not need a separate DSH installation or a `deepseek-harness` source checkout. RocketX still uses a system Node.js runtime and requires Node.js 22.19+ or 24+; the Web client cannot start the local DSH process.
+
+| DSH condition | RocketX behavior |
+| --- | --- |
+| Bundled `0.1.0-rc.6`, compatible Node.js, API key configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DeepSeek AI hosting are available |
+| Node.js missing or below 22.19 | DSH does not start and shows the runtime requirement; Codex and deterministic surfaces keep their own availability |
+| DeepSeek API key missing | DSH configuration and history remain visible, but sending fails closed until the key is stored through DSH credentials |
+| DSH resource missing or incomplete | RocketX refuses to start that backend instead of downloading an unpinned runtime at run time |
+| Web client | No local DSH transport; messaging and deterministic work surfaces remain usable |
+
+An upstream DSH upgrade is a full runtime upgrade: change the exact version in `apps/dsh-runtime/package.json`, update `pnpm-lock.yaml`, run `pnpm prepare:dsh-runtime`, and repeat bridge, Host API, native dependency, session/configuration, approval, and packaging checks. RocketX does not maintain a compatibility shim for multiple DSH wire contracts.
 
 ## Required and optional server settings
 

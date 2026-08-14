@@ -376,18 +376,18 @@ function PrRow({
         type="button"
         onClick={() => onAsk(pr)}
         disabled={!features.butler}
-        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 AI 审查'}
+        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 Codex 审查'}
         aria-label={`用 Codex 审查 PR !${pr.id}：${pr.title}`}
         className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Bot size={13} aria-hidden="true" />
-        AI 审查
+        Codex 审查
       </button>
       <button
         type="button"
         onClick={() => onCompare(pr)}
-        title={comparing ? '取消选择' : '选它来比较'}
-        aria-label={comparing ? '取消选择' : '选它来比较'}
+        title={comparing ? '取消选择' : '选它交给 Codex 比较'}
+        aria-label={comparing ? '取消选择' : '选它交给 Codex 比较'}
         aria-pressed={comparing}
         className={`shrink-0 rounded-md p-1.5 hover:bg-fill-hover hover:text-ink focus:opacity-100 ${
           comparing
@@ -491,7 +491,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         <div className="mb-2 flex items-center justify-between rounded-md border border-primary/30 bg-primary-light/20 px-3 py-1.5 text-xs text-ink-2">
           <span>
             已选 <span className="font-medium text-ink">!{comparing[0].id}</span> {comparing[0].title}
-            <span className="ml-2 text-ink-3">再选一个就开始比较</span>
+            <span className="ml-2 text-ink-3">再选一个就交给 Codex 比较</span>
           </span>
           <button
             type="button"

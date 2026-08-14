@@ -3,7 +3,7 @@ import test from 'node:test';
 import { humanError } from '../../apps/web/src/stores/toast';
 
 /**
- * issue #229：「AI 提取为待办」「AI 提取为工作项」点了没反应，几秒后弹一句
+ * issue #229：「Codex 提取为待办」「Codex 提取为工作项」点了没反应，几秒后弹一句
  * 「没有权限执行此操作」。用户以为是 Rocket.Chat 的权限问题，其实是内置的
  * AI provider 从来没有密钥、请求拿回 401，而 401 被当成 RC 的权限错误翻译了。
  */

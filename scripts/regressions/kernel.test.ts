@@ -142,7 +142,7 @@ test('/ai 命令仍注册到统一派发器，但实现已改为创建 Codex 任
 
   assert.equal(typeof runButlerCommand, 'function');
   assert.match(runtime, /name: 'ai'/);
-  assert.match(runtime, /description: '打开 AI，可直接跟上问题'/);
+  assert.match(runtime, /description: '打开 Codex，可直接跟上问题'/);
   assert.match(runtime, /run: runButlerCommand/);
   assert.match(butler, /import \{ handoffToCodexTask \} from '\.\.\/lib\/codexTaskHandoff';/);
   assert.match(butler, /useUI\.getState\(\)\.openButlerConversation\(\);/);

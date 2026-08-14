@@ -346,7 +346,7 @@ test('PR 列表默认跳转 Azure DevOps，Codex 审查是独立次要动作', (
   assert.doesNotMatch(primaryLink, /onAsk\(pr\)/);
   assert.match(row, /onClick=\{\(\) => onAsk\(pr\)\}/);
   assert.match(row, /aria-label=\{`用 Codex 审查 PR !\$\{pr\.id\}：\$\{pr\.title\}`\}/);
-  assert.match(row, /AI 审查/);
+  assert.match(row, /Codex 审查/);
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

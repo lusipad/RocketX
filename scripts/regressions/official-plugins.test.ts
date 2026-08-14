@@ -98,6 +98,7 @@ test('通用宿主拒绝 PATH 查找与目录逃逸并限制 JSON 帧', async ()
     'resources/codex-skills/': 'codex-skills/',
     '../../web/src/butler/skills/core/': 'rocketx-core-skills/',
     'resources/plugins/': 'plugins/',
+    'target/dsh-runtime/': 'dsh-runtime/',
   });
   assert.match(
     (tauriConfig as { build?: { beforeBuildCommand?: string } }).build?.beforeBuildCommand ?? '',

@@ -32,7 +32,7 @@ function shortened(text: string, limit: number): string {
 
 function assistantText(text: string): string {
   const raw = stripAgentSessionMarker(text).trim();
-  return raw.replace(/^🤖\s*(?:Codex)?(?:\s*\n|\s+)/u, '').trim() || raw;
+  return raw.replace(/^🤖\s*(?:Codex|DeepSeek)?(?:\s*\n|\s+)/u, '').trim() || raw;
 }
 
 function belongsToSession(message: RcMessage, session: AgentSession): boolean {

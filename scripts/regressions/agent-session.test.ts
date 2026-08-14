@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   SerialCommandQueue,
+  agentBackend,
   approveMember,
   assertHost,
   commandAccess,
@@ -131,6 +132,24 @@ test('中断会话保留 threadId，只有原宿主可进入恢复态', () => {
   assert.equal(resumed.createdWithRuntimeSource, 'system');
   assert.equal(resumed.lastResumedWithCodexVersion, '0.145.0');
   assert.equal(resumed.lastResumedWithRuntimeSource, 'manual');
+});
+
+test('旧托管记录默认仍是 Codex，DeepSeek 使用自己的可恢复 sessionId', () => {
+  assert.equal(agentBackend(session()), 'codex');
+  assert.equal(agentBackend(session({ backend: 'deepseek' })), 'deepseek');
+
+  const deepseek = interruptSession(session({
+    backend: 'deepseek',
+    dshSessionId: 'dsh-session',
+    activeTurnId: 'turn',
+  }), 1_100);
+  const resumed = resumeSession(deepseek, { userId: 'host', deviceId: 'device-a' }, 1_200);
+  assert.equal(resumed.status, 'starting');
+  assert.equal(resumed.dshSessionId, 'dsh-session');
+  assert.throws(
+    () => resumeSession({ ...deepseek, dshSessionId: undefined }, { userId: 'host', deviceId: 'device-a' }, 1_200),
+    /DeepSeek sessionId/,
+  );
 });
 
 test('恢复时标记中断，超过孤儿超时则自动结束', () => {

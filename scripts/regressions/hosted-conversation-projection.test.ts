@@ -77,6 +77,16 @@ test('房间 AI 托管只投影指令和 Codex 回复，并使用真实消息时
   );
 });
 
+test('DeepSeek 托管回复投影时去掉后端署名', () => {
+  const agent = session({ backend: 'deepseek' });
+  const projected = projectHostedConversation(agent, '研发群', [
+    message('question-deepseek', '@ai 检查构建', 1_000),
+    message('reply-deepseek', '🤖 DeepSeek\n构建正常。', 2_000),
+  ]);
+
+  assert.equal(projected?.lines.at(-1)?.text, '构建正常。');
+});
+
 test('话题托管不会混入同房间其他话题，投影身份保持稳定', () => {
   const agent = session({ tmid: 'thread-42', replyTmid: 'thread-42' });
   const input = [

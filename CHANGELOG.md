@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.42.0 - 2026-08-14
+
+### 新增
+
+- 管家新增独立的 DeepSeek 视图，直接使用 DSH 的原生会话、历史、模型与提供方、推理强度、Agent preset、权限 preset、审批、问题和凭据能力；Codex 视图继续保留 Skills、Plugins、Apps、Memory 与 Codex App 接续，两套后端各自展示真实能力。
+- 房间与话题中的 AI 托管可以在创建会话时选择 Codex 或 DeepSeek，并分别保存原生 Thread ID 或 DSH Session ID；旧会话继续按 Codex 恢复，不做隐式跨后端迁移。
+- DeepSeek API Key 可在 DSH 视图内写入其私有 `DSH_HOME` 凭据文档；模型、Agent 和权限选择直接调用 DSH 原生 RPC，不在 RocketX 中复制一套通用配置或 Provider 管理层。
+
+### 改进
+
+- 正式桌面安装包固定携带官方 `@deepseek-ai/dsh@0.1.0-rc.6` 的完整生产运行树，不再要求用户另行下载 DSH 或保留 `deepseek-harness` 源码仓库；当前仍需要系统安装 Node.js 22.19+ 或 24+。
+- Codex 与 DeepSeek 使用两套明确的视图和控制器，共用的只有 Rocket.Chat 托管租约、消息上下文、状态与回帖，不再为了后端可换而增加通用 Runtime 抽象。
+
+### 修复
+
+- DSH 进程断开时会清理失效的审批、问题和排队消息，并把仍在运行的会话标记为中断，避免旧卡片继续可操作或界面假装任务仍在执行。
+
+### 发布
+
+- 本版本继续通过受保护工作流交付 Windows x64、macOS universal 与 Linux x64 安装包、更新签名、插件包和 SHA256 校验文件。
+
 ## v0.41.1 - 2026-08-13
 
 ### 改进

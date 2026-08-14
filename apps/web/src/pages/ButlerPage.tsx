@@ -2,9 +2,12 @@ import { PanelLeft, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerConversationHistory from '../components/ButlerConversationHistory';
+import DshConversation from '../components/DshConversation';
 import ButlerPluginsPage from '../components/ButlerPluginsPage';
 import ButlerRoutines from '../components/ButlerRoutines';
 import { useUI } from '../stores/ui';
+
+const TASK_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
 
 function ManagedSurface({ children }: { children: ReactNode }) {
   const [navigationOpen, setNavigationOpen] = useState(false);
@@ -79,6 +82,23 @@ function ManagedSurface({ children }: { children: ReactNode }) {
 /** Codex 式三工作面：任务、已安排、插件。其余能力留在任务上下文中。 */
 export default function ButlerPage() {
   const activeView = useUI((state) => state.butlerView);
+  const [taskProvider, setTaskProvider] = useState<'codex' | 'deepseek'>(() => {
+    if (typeof localStorage === 'undefined') return 'codex';
+    try {
+      return localStorage.getItem(TASK_PROVIDER_STORAGE_KEY) === 'deepseek' ? 'deepseek' : 'codex';
+    } catch {
+      return 'codex';
+    }
+  });
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(TASK_PROVIDER_STORAGE_KEY, taskProvider);
+    } catch {
+      // The selected view still works for this session when persistence is unavailable.
+    }
+  }, [taskProvider]);
 
   return (
     <div className="butler-workspace">
@@ -89,7 +109,34 @@ export default function ButlerPage() {
           <ManagedSurface><ButlerPluginsPage /></ManagedSurface>
         ) : (
           <section aria-label="任务" className="h-full min-h-0">
-            <ButlerConversation embedded />
+            <div className="butler-task-provider-shell">
+              <header className="butler-task-provider-switcher" aria-label="任务执行视图">
+                <span>执行视图</span>
+                <div role="tablist" aria-label="任务执行视图切换">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={taskProvider === 'codex'}
+                    className={taskProvider === 'codex' ? 'is-active' : undefined}
+                    onClick={() => setTaskProvider('codex')}
+                  >
+                    Codex
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={taskProvider === 'deepseek'}
+                    className={taskProvider === 'deepseek' ? 'is-active' : undefined}
+                    onClick={() => setTaskProvider('deepseek')}
+                  >
+                    DeepSeek
+                  </button>
+                </div>
+              </header>
+              <div className="butler-task-provider-panel">
+                {taskProvider === 'deepseek' ? <DshConversation /> : <ButlerConversation embedded />}
+              </div>
+            </div>
           </section>
         )}
       </main>

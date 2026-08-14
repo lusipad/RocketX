@@ -1,10 +1,15 @@
 import { Bot, Check, ChevronLeft, Copy, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { agentBackend, type AgentBackend, type AgentSession } from '../agent/session';
 import { permissionRequestSummary } from '../agent/safety';
 import {
   autoHostEnvironmentId,
+  defaultHostingBackend,
+  roomHostingBackend,
   roomHostingWorkspaceRoot,
+  setDefaultHostingBackend,
   setRoomAutoHosting,
+  setRoomHostingBackend,
   setRoomHostingWorkspace,
 } from '../lib/agentHosting';
 import { isTauriRuntime } from '../lib/client';
@@ -19,9 +24,11 @@ import {
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
+import { useDshWorkspace } from '../stores/dshWorkspace';
 import { useUI } from '../stores/ui';
 import PanelShell from './PanelShell';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
+import { DshQuestionCard } from './DshConversation';
 
 function approvalSummary(method: string, params: unknown): string {
   const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
@@ -41,14 +48,19 @@ function projectName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
 
+function backendLabel(backend: AgentBackend): string {
+  return backend === 'deepseek' ? 'DeepSeek' : 'Codex';
+}
+
 export default function AgentPanel() {
   const [projectOverride, setProjectOverride] = useState<string>();
   const [autoHost, setAutoHost] = useState(false);
+  const [selectedBackend, setSelectedBackend] = useState<AgentBackend>('codex');
   const panel = useChat((state) => state.rightPanel);
   const tmid = panel?.kind === 'agent' ? panel.tmid : null;
   const setPanel = useChat((state) => state.setPanel);
   const rid = useChat((state) => state.activeRid);
-  const session = useSharedAgent((state) => (tmid ? state.sessions[tmid] : undefined));
+  const session = useSharedAgent((state) => (tmid ? state.sessions[tmid] as AgentSession | undefined : undefined));
   const bindings = useAgentEnvironments((state) => state.bindings);
   const binding = bindings.find((item) => item.sessionKey === tmid && item.status === 'active');
   const environments = useAgentEnvironments((state) => state.environments);
@@ -71,6 +83,7 @@ export default function AgentPanel() {
   const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
   const allApprovals = useSharedAgent((state) => state.approvals);
   const allInputs = useSharedAgent((state) => state.inputs);
+  const allDshQuestions = useSharedAgent((state) => state.dshQuestions);
   const allMemberRequests = useSharedAgent((state) => state.memberRequests);
   const traces = sessionTraces ?? [];
   const approvals = useMemo(
@@ -81,6 +94,10 @@ export default function AgentPanel() {
     () => allInputs.filter((item) => item.tmid === tmid),
     [allInputs, tmid],
   );
+  const dshQuestions = useMemo(
+    () => allDshQuestions.filter((item) => item.tmid === tmid),
+    [allDshQuestions, tmid],
+  );
   const members = useMemo(
     () => allMemberRequests.filter((item) => item.tmid === tmid),
     [allMemberRequests, tmid],
@@ -90,6 +107,7 @@ export default function AgentPanel() {
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
   const resolveApproval = useSharedAgent((state) => state.resolveApproval);
   const resolveInput = useSharedAgent((state) => state.resolveInput);
+  const resolveDshQuestion = useSharedAgent((state) => state.resolveDshQuestion);
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
@@ -97,6 +115,10 @@ export default function AgentPanel() {
   const hostingModel = useCodexWorkspace((state) => state.hostingModel);
   const hostingEffort = useCodexWorkspace((state) => state.hostingEffort);
   const permissionPreset = useCodexWorkspace((state) => state.permissionPreset);
+  const dshModelSelection = useDshWorkspace((state) => state.modelSelection);
+  const dshModelGroups = useDshWorkspace((state) => state.modelGroups);
+  const dshAgentPreset = useDshWorkspace((state) => state.defaultAgentPreset);
+  const dshPermissionPreset = useDshWorkspace((state) => state.defaultPermissionPreset);
   const openButlerConversation = useUI((state) => state.openButlerConversation);
   const [transferring, setTransferring] = useState(false);
   const [resumingTmid, setResumingTmid] = useState<string | null>(null);
@@ -113,6 +135,14 @@ export default function AgentPanel() {
     setProjectOverride(undefined);
   }, [rid]);
 
+  useEffect(() => {
+    if (!rid) return;
+    const current = session
+      ? agentBackend(session)
+      : roomHostingBackend(rid) ?? defaultHostingBackend();
+    setSelectedBackend(current);
+  }, [rid, session]);
+
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
   const resuming = resumingTmid === tmid;
@@ -127,6 +157,23 @@ export default function AgentPanel() {
         ended: '已结束',
       }[session.status]
     : '';
+  const currentBackend = session ? agentBackend(session) : (rid ? roomHostingBackend(rid) : undefined) ?? selectedBackend;
+  const codexRuntimeSummary = `${hostingModel || 'Codex 默认模型'} · ${hostingEffort ?? '默认推理'} · ${
+    permissionPreset === 'ask' ? '询问审批' : permissionPreset === 'auto' ? '替我审批' : '完全访问'
+  }`;
+  const dshModel = dshModelGroups.find((group) => group.id === dshModelSelection?.provider)
+    ?.models.find((model) => model.id === dshModelSelection?.model);
+  const dshRuntimeSummary = `${dshModel?.name ?? dshModelSelection?.model ?? 'DSH 默认模型'} · ${
+    dshAgentPreset ?? '默认 Agent'
+  } · ${dshPermissionPreset ?? '默认权限'}`;
+  const backendSummary = currentBackend === 'deepseek'
+    ? dshRuntimeSummary
+    : codexRuntimeSummary;
+  const updateBackendPreference = (backend: AgentBackend): void => {
+    setSelectedBackend(backend);
+    setDefaultHostingBackend(backend);
+    if (rid) setRoomHostingBackend(rid, backend);
+  };
 
   return (
     <PanelShell
@@ -147,15 +194,16 @@ export default function AgentPanel() {
       <div className="flex items-center justify-between gap-3 border-b border-line bg-fill-1 px-4 py-2.5 text-xs">
         <div className="min-w-0">
           <div className="font-medium text-ink">AI 托管独立配置</div>
-          <div className="mt-0.5 truncate text-ink-3" title={hostingModel || 'Codex 默认模型'}>
-            {hostingModel || 'Codex 默认模型'} · {hostingEffort ?? '默认推理'} · {
-              permissionPreset === 'ask' ? '询问审批' : permissionPreset === 'auto' ? '替我审批' : '完全访问'
-            }
+          <div className="mt-0.5 truncate text-ink-3" title={`${backendLabel(currentBackend)} · ${backendSummary}`}>
+            {backendLabel(currentBackend)} · {backendSummary}
           </div>
         </div>
         <button
           type="button"
-          onClick={openButlerConversation}
+          onClick={() => {
+            if (currentBackend === 'deepseek') openButlerConversation('deepseek');
+            else openButlerConversation('codex');
+          }}
           className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1.5 text-ink-2 hover:bg-fill-hover"
         >
           在 AI 管家中调整
@@ -186,6 +234,32 @@ export default function AgentPanel() {
           ) : (
             <>
               <div className="w-full max-w-sm">
+                <div className="mb-3 text-left text-xs text-ink-3">
+                  <span className="mb-1 block">托管后端</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      aria-pressed={selectedBackend === 'codex'}
+                      onClick={() => updateBackendPreference('codex')}
+                      className={`rounded-md border px-3 py-1.5 ${selectedBackend === 'codex' ? 'border-primary bg-primary-light text-primary' : 'border-line bg-surface text-ink-2'}`}
+                    >
+                      Codex
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={selectedBackend === 'deepseek'}
+                      onClick={() => updateBackendPreference('deepseek')}
+                      className={`rounded-md border px-3 py-1.5 ${selectedBackend === 'deepseek' ? 'border-primary bg-primary-light text-primary' : 'border-line bg-surface text-ink-2'}`}
+                    >
+                      DeepSeek
+                    </button>
+                  </div>
+                  <div className="mt-1 text-ink-3">
+                    {selectedBackend === 'deepseek'
+                      ? 'DeepSeek 使用 DSH 原生模型、Agent 和权限配置；可在 AI 管家 → DeepSeek 调整。'
+                      : codexRuntimeSummary}
+                  </div>
+                </div>
                 <label className="block text-left text-xs text-ink-3">
                   <span className="mb-1 block">托管项目</span>
                   <select
@@ -208,7 +282,8 @@ export default function AgentPanel() {
                 disabled={!selectedProject}
                 onClick={() => {
                   if (!selectedProject) return;
-                  void start(rid, tmid, {
+                  updateBackendPreference(selectedBackend);
+                  const startOptions = {
                     workspaceRoot: selectedProject,
                     replyTmid: tmid.startsWith('room:') ? undefined : tmid,
                     environmentId: projectEnvironment?.id,
@@ -218,7 +293,9 @@ export default function AgentPanel() {
                       ? proposedAgentBranch(projectEnvironment.branchPrefix, binding.workItemId, binding.workItemTitle)
                       : undefined,
                     baseBranch: projectEnvironment?.defaultBaseBranch,
-                  })
+                    backend: selectedBackend,
+                  };
+                  void start(rid, tmid, startOptions)
                     .then(() => {
                       if (tmid.startsWith('room:')) setRoomHostingWorkspace(rid, selectedProject);
                     })
@@ -237,6 +314,13 @@ export default function AgentPanel() {
             <div className="flex items-center justify-between">
               <span className="text-ink-3">状态</span>
               <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{statusLabel}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-ink-3">后端</span>
+              <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{backendLabel(currentBackend)}</span>
+            </div>
+            <div className="text-xs text-ink-3">
+              {currentBackend === 'deepseek' ? dshRuntimeSummary : codexRuntimeSummary}
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-ink-3">指挥范围</span>
@@ -348,7 +432,7 @@ export default function AgentPanel() {
             </div>
           </div>
 
-          {(members.length > 0 || approvals.length > 0 || inputs.length > 0) && (
+          {(members.length > 0 || approvals.length > 0 || inputs.length > 0 || dshQuestions.length > 0) && (
             <div className="space-y-3 border-b border-line bg-warning-light/30 p-4">
               {members.map((request) => (
                 <div key={request.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
@@ -405,6 +489,13 @@ export default function AgentPanel() {
                   key={input.id}
                   input={input}
                   onResolve={(response) => resolveInput(input.id, response)}
+                />
+              ))}
+              {dshQuestions.map((question) => (
+                <DshQuestionCard
+                  key={question.id}
+                  question={question}
+                  respondQuestion={(answers) => resolveDshQuestion(question.id, answers)}
                 />
               ))}
             </div>

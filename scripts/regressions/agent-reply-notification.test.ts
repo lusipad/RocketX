@@ -20,6 +20,12 @@ test('并发 @ai 请求分别消费对应数量的回复', () => {
   assert.equal(tracker.consume('room', '🤖 Codex\n第三条', 2_200), false);
 });
 
+test('DeepSeek 托管回复与 Codex 使用相同的本机通知抑制规则', () => {
+  const tracker = createAgentReplyNotificationTracker();
+  tracker.expect('room', '@ai 使用 DeepSeek 检查', 1_000);
+  assert.equal(tracker.consume('room', '🤖 DeepSeek\n检查完成', 2_000), true);
+});
+
 test('发送失败可撤销等待，过期请求不会长期吞掉通知', () => {
   const tracker = createAgentReplyNotificationTracker();
   assert.equal(tracker.expect('room', '普通聊天', 1_000), false);

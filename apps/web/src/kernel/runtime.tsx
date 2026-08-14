@@ -536,7 +536,7 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'summary',
       name: 'summary',
-      description: '用 AI 总结当前会话未读消息',
+      description: '用 Codex 总结当前会话未读消息',
       run: ({ rid }) => {
         void summarizeRoom(rid);
       },
@@ -544,7 +544,7 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'butler',
       name: 'ai',
-      description: '打开 AI，可直接跟上问题',
+      description: '打开 Codex，可直接跟上问题',
       params: '问题（可选）',
       run: runButlerCommand,
     });

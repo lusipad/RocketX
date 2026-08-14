@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+test('Butler 任务页提供独立 DeepSeek 视图、凭据与原生运行配置 UI', () => {
+  const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
+  const conversation = readFileSync('apps/web/src/components/DshConversation.tsx', 'utf8');
+  const workspace = readFileSync('apps/web/src/stores/dshWorkspace.ts', 'utf8');
+  const history = readFileSync('apps/web/src/components/DshConversationHistory.tsx', 'utf8');
+  const helpers = readFileSync('apps/web/src/components/DshConversationShared.ts', 'utf8');
+  const styles = readFileSync('apps/web/src/styles.css', 'utf8');
+
+  assert.match(page, /import DshConversation from '\.\.\/components\/DshConversation';/);
+  assert.match(page, /const TASK_PROVIDER_STORAGE_KEY = 'rocketx\.butler\.task-provider';/);
+  assert.match(page, /localStorage\.getItem\(TASK_PROVIDER_STORAGE_KEY\) === 'deepseek'/);
+  assert.match(page, /localStorage\.setItem\(TASK_PROVIDER_STORAGE_KEY, taskProvider\)/);
+  assert.match(page, /role="tab"/);
+  assert.match(page, /DeepSeek/);
+  assert.match(page, /taskProvider === 'deepseek' \? <DshConversation \/> : <ButlerConversation embedded \/>/);
+
+  assert.match(conversation, /useDshWorkspace,[\s\S]*from '\.\.\/stores\/dshWorkspace';/);
+  assert.doesNotMatch(conversation, /import\.meta\.glob|unknown\[\]|normalize|available|loadError/);
+  assert.doesNotMatch(conversation, /function selectDsh|@ts-ignore/);
+  assert.match(conversation, /pendingApproval = useDshWorkspace\(\(state\) => state\.pendingApproval\)/);
+  assert.match(conversation, /pendingQuestion = useDshWorkspace\(\(state\) => state\.pendingQuestion\)/);
+  assert.match(conversation, /queuedMessages = useDshWorkspace\(\(state\) => state\.queuedMessages\)/);
+  assert.match(conversation, /credentialConfigured = useDshWorkspace\(\(state\) => state\.credentialConfigured\)/);
+  assert.match(conversation, /setDeepSeekApiKey = useDshWorkspace\(\(state\) => state\.setDeepSeekApiKey\)/);
+  assert.match(conversation, /clearDeepSeekApiKey = useDshWorkspace\(\(state\) => state\.clearDeepSeekApiKey\)/);
+  assert.match(conversation, /DshConfigurationCard/);
+  assert.match(conversation, /DeepSeek 运行配置/);
+  assert.match(conversation, /模型与提供方/);
+  assert.match(conversation, /Agent preset/);
+  assert.match(conversation, /权限与审批/);
+  assert.match(conversation, /selectModel/);
+  assert.match(conversation, /selectAgentPreset/);
+  assert.match(conversation, /selectPermissionPreset/);
+  assert.match(workspace, /'session\.selectModel'/);
+  assert.match(workspace, /'agentPreset\.select'/);
+  assert.match(workspace, /'settings\.update', \{ ns: 'agent-presets'/);
+  assert.match(workspace, /'settings\.mutate'/);
+  assert.match(workspace, /'commands\/execute'/);
+  assert.match(workspace, /args: \{ agentId: sessionId, line: `\/permission \$\{permissionPreset\}` \}/);
+  assert.match(workspace, /`\/permission \$\{permissionPreset\}`/);
+  assert.doesNotMatch(workspace, /agentPreset: 'standard'/);
+  assert.match(conversation, /type="password"/);
+  assert.match(conversation, /DeepSeek API Key/);
+  assert.match(conversation, /setApiKey\(''\);/);
+  assert.match(conversation, /respondApproval/);
+  assert.match(conversation, /respondQuestion/);
+  assert.match(conversation, /审批与问题会在当前视图处理/);
+  assert.match(conversation, /!workspaceRoot[\s\S]*'先选择 DeepSeek 工作区'[\s\S]*status === 'connecting'[\s\S]*'正在连接 DeepSeek'/);
+  assert.match(conversation, /允许一次/);
+  assert.match(conversation, /等待 DeepSeek 处理/);
+  assert.match(conversation, /void cancel\(\)/);
+  assert.match(conversation, /status === 'error'/);
+  assert.match(conversation, /<h1>先选择 DeepSeek 工作区<\/h1>/);
+  assert.match(conversation, /status === 'connecting'/);
+  assert.match(conversation, /credentialConfigured === false/);
+
+  assert.match(history, /useDshWorkspace, type DshSession/);
+  assert.doesNotMatch(history, /function selectDsh|@ts-ignore/);
+  assert.match(history, /pendingApproval = useDshWorkspace\(\(state\) => state\.pendingApproval\)/);
+  assert.match(history, /pendingQuestion = useDshWorkspace\(\(state\) => state\.pendingQuestion\)/);
+  assert.match(history, /选择 DeepSeek 工作区/);
+  assert.match(history, /搜索 DeepSeek 会话/);
+  assert.match(history, /DeepSeek 会话列表/);
+
+  assert.match(helpers, /export function workspaceLabel/);
+  assert.match(helpers, /export function ageLabel/);
+  assert.doesNotMatch(helpers, /useSyncExternalStore|import\.meta\.glob|respondApproval/);
+
+  assert.match(styles, /\.butler-task-provider-switcher/);
+  assert.match(styles, /\.dsh-conversation-layout/);
+  assert.match(styles, /\.dsh-conversation-history/);
+  assert.match(styles, /\.dsh-credential-card/);
+  assert.match(styles, /\.dsh-configuration-card/);
+  assert.match(styles, /\.dsh-question-card/);
+  assert.match(styles, /\.dsh-queue/);
+  assert.match(styles, /\.butler-conversation-mobile-panel \.dsh-conversation-history\s*\{/);
+  assert.match(styles, /\.butler-conversation-mobile-panel \.dsh-conversation-history > header\s*\{/);
+});

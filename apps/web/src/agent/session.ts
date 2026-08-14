@@ -9,6 +9,8 @@ export type AgentSessionStatus =
   | 'interrupted'
   | 'ended';
 
+export type AgentBackend = 'codex' | 'deepseek';
+
 export interface AgentHostLease {
   userId: string;
   deviceId: string;
@@ -37,7 +39,10 @@ export interface AgentSession {
   access: 'room-members' | 'host-only';
   approvedMemberIds: string[];
   status: AgentSessionStatus;
+  /** 旧记录没有该字段时按 Codex 读取。 */
+  backend?: AgentBackend;
   codexThreadId?: string;
+  dshSessionId?: string;
   createdWithCodexVersion?: string;
   createdWithRuntimeSource?: CodexProcessInfo['runtimeSource'];
   lastResumedWithCodexVersion?: string;
@@ -146,13 +151,23 @@ export function restoreSession(
   return interruptSession(session, now);
 }
 
+export function agentBackend(session: Pick<AgentSession, 'backend'>): AgentBackend {
+  return session.backend === 'deepseek' ? 'deepseek' : 'codex';
+}
+
 export function resumeSession(
   session: AgentSession,
   actor: Pick<AgentHostLease, 'userId' | 'deviceId'>,
   now = Date.now(),
 ): AgentSession {
   assertHost(session, actor, now);
-  if (!session.codexThreadId) throw new Error('缺少可恢复的 Codex threadId');
+  const backend = agentBackend(session);
+  if (backend === 'deepseek' && !session.dshSessionId) {
+    throw new Error('缺少可恢复的 DeepSeek sessionId');
+  }
+  if (backend === 'codex' && !session.codexThreadId) {
+    throw new Error('缺少可恢复的 Codex threadId');
+  }
   if (session.status !== 'interrupted') throw new Error('只有已中断会话可以恢复');
   return { ...session, status: 'starting', updatedAt: now };
 }

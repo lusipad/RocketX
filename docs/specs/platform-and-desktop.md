@@ -1,12 +1,12 @@
 # `PLAT` 平台与桌面集成
 
 > 当前状态：`已实现`，具体能力按平台受限
-> 基线：工作树 `2026-08-12`
+> 基线：工作树 `2026-08-14`
 > 平台：桌面端与网页版
 
 ## 1. 目标
 
-让同一套 RocketX 产品在浏览器中提供可靠的 Rocket.Chat 与确定性工作界面，在桌面端增加本地文件、通知、托盘、开机启动、更新、OCR 和 Codex 等系统能力。平台差异必须在入口处真实呈现，不能把只有桌面端能完成的动作伪装成 Web 可用。
+让同一套 RocketX 产品在浏览器中提供可靠的 Rocket.Chat 与确定性工作界面，在桌面端增加本地文件、通知、托盘、开机启动、更新、OCR、Codex 和 DSH 等系统能力。平台差异必须在入口处真实呈现，不能把只有桌面端能完成的动作伪装成 Web 可用。
 
 ## 2. 范围
 
@@ -22,6 +22,7 @@
 - 标准/性能运行模式；
 - 原生 WebView 界面缩放与本机缩放偏好；
 - 桌面全局快捷键等本地桥接能力。
+- 固定版本 DSH 生产运行树、Node bridge、私有 `DSH_HOME` 与进程生命周期。
 
 ### 不包含
 
@@ -30,6 +31,7 @@
 - 绕过 CORS/TLS/浏览器安全策略；
 - 未签名的 GitHub/HTTP 更新，或跳过目录安装器 SHA-256 与 Release 完整性验证；
 - 在性能模式保留 AI 后台副作用。
+- Web 端启动本地 Codex 或 DSH，或运行时在线下载未经锁定的 DSH。
 
 ## 3. 入口与前置条件
 
@@ -44,7 +46,7 @@
 1. 用户通过同源部署或反向代理访问 RocketX。
 2. 浏览器连接 Rocket.Chat REST/实时 API，使用消息、搜索、工作台和个人效率界面。
 3. 上传下载走浏览器能力；桌面专属设置隐藏或标为不可用。
-4. 管家等本地 Codex 能力显示真实不可用状态，不能调用 Tauri 命令。
+4. 管家等本地 Codex/DSH 能力显示真实不可用状态，不能调用 Tauri 命令。
 
 ### 4.2 桌面
 
@@ -58,6 +60,7 @@
 8. 更新检查按配置源获取清单；GitHub/HTTP 源必须通过内置公钥签名，共享目录源可使用签名，也可省略签名并固定探测时计算的 SHA-256。目录源按当前 NSIS/MSI 安装类型选包，主进程、交接和临时 helper 三阶段复核同一摘要后才静默安装、校验新版本并重启。
 9. 图片 OCR 优先使用随全量包提供的增强本地资源；支持的平台可按实现回退系统 OCR。
 10. Windows WebView2 在主窗口隐藏、最小化或失焦时切换到官方低内存目标；显示或重新聚焦时恢复正常目标，不用不受支持的浏览器启动参数暂停后台脚本。
+11. DeepSeek 视图启动时由 Tauri 从安装资源解析固定 DSH CLI 与 bridge，使用系统 Node.js 22.19+ 或 24+，并把持久数据写入应用数据目录；缺少资源或 Node 时明确失败，不在运行时下载替代版本。
 
 ### 4.3 性能模式
 
@@ -90,13 +93,14 @@
 | WebView 失活内存回收 | Windows 已实现 | 不适用 |
 | 本地 OCR | 受限可用 | 不适用 |
 | 本地 Codex `app-server` | 受限可用 | 不可用 |
+| 本地 DeepSeek Harness | 受限可用 | 不可用 |
 | 性能模式 | 已实现 | 已实现 |
 
 ## 7. 数据与同步
 
 - 外观、运行模式、界面缩放、开机启动偏好、更新源和桌面布局保存在本机；开机启动实际状态以操作系统为准。
 - 未读和消息内容以 Rocket.Chat 为真源，本地只汇总展示。
-- 下载路径、OCR 临时数据和 Codex 的 system/current/runtime 工作区不上传到 Rocket.Chat；用户托管项目元数据由 `agentEnvironments` 单独管理。
+- 下载路径、OCR 临时数据、Codex 的 system/current/runtime 工作区和 DSH Home 不上传到 Rocket.Chat；用户托管项目元数据由 `agentEnvironments` 单独管理。
 - Web 与桌面共用账号时不会自动同步所有本地 UI 偏好和本机数据。
 
 ## 8. 权限与安全
@@ -105,7 +109,7 @@
 - 外部 URL、更新清单和本地文件路径均需验证；共享目录产物在主进程与 helper 中都要重新确认目录边界、版本、安装类型和固定 SHA-256，有签名时还要验证签名，阻止 TOCTOU 替换。
 - 开机启动只通过 Tauri autostart 插件读取和切换。
 - OCR 全程本地处理；输入大小和像素受限，避免资源耗尽。
-- 退出应用必须停止受管进程，避免用户以为已退出而任务仍在执行；关闭到托盘则需让用户看得见驻留语义。
+- 退出应用必须停止受管 Codex 与 DSH 进程，避免用户以为已退出而任务仍在执行；关闭到托盘则需让用户看得见驻留语义。
 
 ## 9. 失败与降级
 
@@ -120,6 +124,7 @@
 | 当前安装类型未知或缺少同类型产物 | 明确说明无法选择 NSIS/MSI 包 | 不静默切换安装类型 |
 | 静默安装退出码异常或版本复核失败 | 下次启动显示 helper 保存的失败原因 | 保留当前可启动版本并允许修复更新源后重试 |
 | OCR 资源缺失 | 显示降级引擎或不可用原因 | 可安装全量包；不上传图片到外部服务 |
+| DSH 资源或 Node.js 不兼容 | DeepSeek 视图显示精确原因 | 不影响 Codex、Rocket.Chat 或确定性界面；修复 Node/安装后重连 |
 | 性能模式启用 | AI/OCR/例行入口关闭 | 切回标准模式后重新初始化，不保留半运行任务 |
 
 ## 10. 验收标准
@@ -129,12 +134,13 @@
 - `PLAT-AC-03`：关闭桌面窗口只隐藏到托盘；托盘恢复有效；真正退出终止进程。
 - `PLAT-AC-04`：开机启动开关从操作系统实际状态初始化，切换失败不显示假成功；系统登录启动只驻留托盘且不弹窗，重复启动不产生第二个进程。
 - `PLAT-AC-05`：共享目录更新必须选择与当前安装类型一致的 NSIS/MSI；签名可选，但探测结果必须固定 SHA-256，并由主进程交接与临时 helper 重复校验。主进程退出后才非交互安装，退出码与新版本校验成功才重启并报告成功，失败不得假报完成。GitHub/HTTP 更新仍必须签名。
-- `PLAT-AC-06`：全量包与精简包的 OCR 差异明确；两者都不包含 Codex。
+- `PLAT-AC-06`：全量包与精简包的 OCR 差异明确；两者都不包含 Codex，都包含固定 DSH 运行树但不包含 Node.js。
 - `PLAT-AC-07`：性能模式同时关闭 AI、管家、共享 Agent、例行任务、Runtime 探测、OCR 和轮询，并减少动画。
 - `PLAT-AC-08`：未读状态在侧栏、标题、任务栏和托盘之间使用同一汇总口径。
 - `PLAT-AC-09`：全新正式桌面安装只在用户手势后应用通知与登录启动默认；升级、重跑引导和换账号不重新开启，Web/Debug 不触碰系统启动项。
 - `PLAT-AC-10`：桌面端只使用原生 WebView 在六个固定档位缩放，设置与快捷键共用同一设备偏好并在重启后恢复；Web 不显示入口、不拦截浏览器缩放快捷键。
 - `PLAT-AC-11`：Windows WebView2 在窗口隐藏、最小化或失焦时使用官方低内存目标，显示或聚焦时恢复；不得用 `disable-gpu` 等不受支持的生产参数换取表面内存下降。
+- `PLAT-AC-12`：正式三平台安装包携带精确锁定且自证版本/默认 profile 的 DSH 生产运行树；运行时只接受随包资源或显式开发覆盖，不在线获取未知版本。
 
 ## 11. 实现与测试证据
 
@@ -144,13 +150,16 @@
 - 实现：`apps/web/src/components/UpdaterBridge.tsx`、`apps/web/src/lib/updateSource.ts`、`apps/desktop/src-tauri/src/proc.rs`
 - 实现：`apps/web/src/lib/imageOcr.ts`、`apps/desktop/src-tauri/src/ocr.rs`
 - 实现：`apps/desktop/src-tauri/src/main.rs`、Tauri capabilities/config
+- 实现：`apps/desktop/src-tauri/src/dsh.rs`、`dsh_bridge.mjs`、`apps/dsh-runtime/package.json`、`scripts/prepare-dsh-runtime.mjs`
 - 自动化：`scripts/regressions/autostart.test.ts`、`scripts/regressions/issue-264-performance-mode.test.ts`、`scripts/regressions/webview-memory.test.ts`、`scripts/regressions/ui-scale.test.ts`
 - 自动化：`tests/ui/core-flows.spec.ts` 的桌面缩放/Web 隔离场景
 - 自动化：`scripts/regressions/update-source.test.ts`、`scripts/regressions/image-ocr.test.ts`
 - 自动化：托盘/任务栏相关回归与桌面 Rust tests
+- 自动化：`scripts/regressions/dsh-bundled-runtime.test.ts`、DSH bridge/store 回归与桌面 Rust tests
 
 ## 12. 已知差距与目标
 
 - Web 当前没有管家远端执行架构；它是消息与确定性工作界面的可用平台，不是完整桌面替代。
 - 操作系统通知、托盘和开机启动仍需在 Windows/macOS/Linux 发布产物上分别做候选版人工验证；共享目录更新还必须在 Windows 候选版覆盖真实 UNC、UAC、NSIS、MSI、有签名/无签名清单、TOCTOU 与安装后版本复核矩阵，浏览器/Rust mock 不能替代该门禁。
 - 原生 WebView 缩放仍需在 Windows/macOS/Linux 发布产物上分别确认清晰度和快捷键行为；浏览器 mock 不能替代该门禁。
+- DSH 内含平台原生 optional dependencies；Windows 已完成部署树 CLI、PTY 与真实 bridge smoke，macOS universal 和 Linux x64 仍需由本次 Release matrix 验证实际安装资源与启动。

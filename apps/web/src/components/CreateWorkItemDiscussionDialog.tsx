@@ -2,6 +2,7 @@ import { Bot, ExternalLink, FolderOpen, Loader2, MessageSquarePlus } from 'lucid
 import { useMemo, useState } from 'react';
 import { commentWorkItem } from '../lib/ado';
 import { getServerBase, rest } from '../lib/client';
+import { defaultHostingBackend } from '../lib/agentHosting';
 import {
   agentRoomSessionKey,
   environmentIsBusy,
@@ -122,6 +123,7 @@ export default function CreateWorkItemDiscussionDialog({
         try {
           const { useSharedAgent } = await import('../stores/sharedAgent');
           await useSharedAgent.getState().startSession(room._id, sessionKey, {
+            backend: defaultHostingBackend(),
             workspaceRoot: environment.path,
             environmentId: environment.id,
             environmentName: environment.name,
