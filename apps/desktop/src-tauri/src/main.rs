@@ -5,6 +5,7 @@ mod agent_bot;
 mod business_mcp;
 mod butler_db;
 mod diagnostics;
+mod dsh;
 mod lan;
 mod mcp;
 mod native_service;
@@ -557,6 +558,9 @@ fn main() {
             proc::launch_update_installer,
             proc::take_update_result,
             proc::codex_agent_attachment_write,
+            dsh::dsh_bridge_start,
+            dsh::dsh_bridge_write,
+            dsh::dsh_bridge_stop,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
             mcp::mcp_config_disable,
@@ -583,6 +587,7 @@ fn main() {
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
+        .manage(dsh::DshBridgeState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(business_mcp::BusinessMcpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
@@ -682,6 +687,7 @@ fn main() {
             if matches!(event, tauri::RunEvent::Exit) {
                 native_service::shutdown(app);
                 proc::shutdown(app);
+                dsh::shutdown(app);
             }
         });
 }
