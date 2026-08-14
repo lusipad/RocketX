@@ -1,0 +1,9 @@
+{
+  "name": "@rcx/dsh-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Private deployable DSH runtime bundle for RocketX desktop packaging",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  }
+}

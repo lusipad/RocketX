@@ -3,4 +3,15 @@ packages:
   - packages/*
   - services/*
 allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local@0.1.0-rc.6': true
+  '@google/genai@1.52.0': false
   esbuild: true
+  'koffi@3.1.4': true
+  'node-pty@1.1.0': true
+  'protobufjs@7.6.5': false
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'
+supportedArchitectures:
+  cpu:
+    - x64
+    - arm64

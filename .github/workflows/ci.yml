@@ -21,6 +21,9 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 准备并校验固定版本 DSH 运行时
+        run: pnpm prepare:dsh-runtime
+
       - name: 安装 Codex CLI
         run: npm install --global @openai/codex@0.144.4
 

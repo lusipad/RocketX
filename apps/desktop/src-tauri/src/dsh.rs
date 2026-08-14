@@ -19,10 +19,13 @@ const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MIN_NODE_22_MINOR: u64 = 19;
 const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const DSH_ROOT_DIR: &str = "dsh";
+const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";
 const DSH_HOME_SUBDIR: &str = "home";
 const DSH_CONNECTIONS_SUBDIR: &str = "connections";
-const DSH_CLI_ENTRY: [&str; 4] = ["apps", "cli", "lib", "bin.js"];
+const DSH_SOURCE_CLI_ENTRY: [&str; 4] = ["apps", "cli", "lib", "bin.js"];
+const DSH_BUNDLED_CLI_ENTRY: [&str; 5] = ["node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"];
 const DSH_BRIDGE_ENTRY: [&str; 2] = ["src", "dsh_bridge.mjs"];
+const DSH_BUNDLED_BRIDGE_ENTRY: &str = "dsh_bridge.mjs";
 
 #[derive(Clone)]
 struct ManagedDshBridge {
@@ -174,42 +177,116 @@ fn derive_source_root(candidate: &Path) -> PathBuf {
     candidate.to_path_buf()
 }
 
-fn dsh_cli_entry(root: &Path) -> PathBuf {
-    DSH_CLI_ENTRY
+fn source_dsh_cli_entry(root: &Path) -> PathBuf {
+    DSH_SOURCE_CLI_ENTRY
         .iter()
         .fold(root.to_path_buf(), |path, segment| path.join(segment))
 }
 
-fn default_bridge_path() -> PathBuf {
+fn bundled_dsh_cli_entry(root: &Path) -> PathBuf {
+    DSH_BUNDLED_CLI_ENTRY
+        .iter()
+        .fold(root.to_path_buf(), |path, segment| path.join(segment))
+}
+
+fn source_bridge_path() -> PathBuf {
     DSH_BRIDGE_ENTRY.iter().fold(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         |path, segment| path.join(segment),
     )
 }
 
-fn source_root_from_candidates(explicit: Option<&str>) -> Result<PathBuf, String> {
+fn bundled_bridge_path(root: &Path) -> PathBuf {
+    root.join(DSH_BUNDLED_BRIDGE_ENTRY)
+}
+
+fn development_bundled_runtime_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(DSH_BUNDLED_RUNTIME_DIR)
+}
+
+fn explicit_or_env_source_candidate(explicit: Option<&str>) -> Option<PathBuf> {
     let explicit = explicit.map(str::trim).filter(|value| !value.is_empty());
     let env_source = std::env::var("ROCKETX_DSH_SOURCE")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let candidate = if let Some(value) = explicit {
-        PathBuf::from(value)
+    if let Some(value) = explicit {
+        Some(PathBuf::from(value))
     } else if let Some(value) = env_source {
-        PathBuf::from(value)
-    } else if let Some(value) = debug_sibling_dsh_root() {
-        value
+        Some(PathBuf::from(value))
     } else {
-        return Err("未找到 DSH 源码仓库；请传入 sourcePath 或设置 ROCKETX_DSH_SOURCE".to_string());
-    };
+        None
+    }
+}
+
+fn resolve_source_root(candidate: &Path) -> Result<PathBuf, String> {
     let root = derive_source_root(&candidate);
     let root =
         std::fs::canonicalize(&root).map_err(|error| format!("DSH 源码路径不可用：{error}"))?;
-    let cli_path = dsh_cli_entry(&root);
+    let cli_path = source_dsh_cli_entry(&root);
     if !cli_path.is_file() {
         return Err("DSH CLI 未构建：缺少 apps/cli/lib/bin.js".to_string());
     }
     Ok(PathBuf::from(host_path(&root)))
+}
+
+fn source_root_from_candidates(explicit: Option<&str>) -> Result<Option<PathBuf>, String> {
+    if let Some(candidate) = explicit_or_env_source_candidate(explicit) {
+        return resolve_source_root(&candidate).map(Some);
+    }
+    let Some(candidate) = debug_sibling_dsh_root() else {
+        return Ok(None);
+    };
+    let root = derive_source_root(&candidate);
+    if !source_dsh_cli_entry(&root).is_file() {
+        return Ok(None);
+    }
+    resolve_source_root(&candidate).map(Some)
+}
+
+fn bundled_runtime_root_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        roots.push(resource_dir.join(DSH_BUNDLED_RUNTIME_DIR));
+    }
+    if cfg!(debug_assertions) {
+        roots.push(development_bundled_runtime_root());
+    }
+    roots
+}
+
+fn resolve_bundled_runtime_root(candidates: &[PathBuf]) -> Result<PathBuf, String> {
+    let mut failure = None;
+    for candidate in candidates {
+        if !candidate.is_dir() {
+            continue;
+        }
+        let cli = bundled_dsh_cli_entry(candidate);
+        if !cli.is_file() {
+            failure = Some(format!(
+                "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
+                host_path(&cli)
+            ));
+            continue;
+        }
+        let bridge = bundled_bridge_path(candidate);
+        if !bridge.is_file() {
+            failure = Some(format!(
+                "随 RocketX 分发的 DSH 运行时不完整：缺少 {}",
+                host_path(&bridge)
+            ));
+            continue;
+        }
+        let root = std::fs::canonicalize(candidate)
+            .map_err(|error| format!("DSH 运行时目录不可用：{error}"))?;
+        return Ok(PathBuf::from(host_path(&root)));
+    }
+    Err(failure.unwrap_or_else(|| {
+        "未找到随 RocketX 分发的 DSH 运行时；请先运行 pnpm prepare:dsh-runtime，并确认 dsh-runtime 资源已随安装包分发"
+            .to_string()
+    }))
 }
 
 fn parse_node_version(value: &str) -> Option<(u64, u64, u64)> {
@@ -252,7 +329,7 @@ fn resolve_node_runtime() -> Result<(PathBuf, String), String> {
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !node_version_is_compatible(&version) {
         return Err(format!(
-            "Node.js 版本 {version} 不兼容；DSH 源码运行需要 22.19+ 或 24+"
+            "Node.js 版本 {version} 不兼容；DSH 运行需要 22.19+ 或 24+"
         ));
     }
     Ok((PathBuf::from(host_path(&program)), version))
@@ -281,17 +358,30 @@ fn resolve_dsh_runtime(
     app: &tauri::AppHandle,
     source_path: Option<&str>,
 ) -> Result<ResolvedDshRuntime, String> {
-    let source_root = source_root_from_candidates(source_path)?;
+    let (source_root, cli_entry, bridge_entry) =
+        if let Some(source_root) = source_root_from_candidates(source_path)? {
+            (
+                source_root.clone(),
+                source_dsh_cli_entry(&source_root),
+                source_bridge_path(),
+            )
+        } else {
+            let bundled_root = resolve_bundled_runtime_root(&bundled_runtime_root_candidates(app))?;
+            (
+                bundled_root.clone(),
+                bundled_dsh_cli_entry(&bundled_root),
+                bundled_bridge_path(&bundled_root),
+            )
+        };
     let cli_path = PathBuf::from(host_path(
-        &std::fs::canonicalize(dsh_cli_entry(&source_root))
+        &std::fs::canonicalize(&cli_entry)
             .map_err(|error| format!("DSH CLI 入口不可用：{error}"))?,
     ));
-    let bridge_path = default_bridge_path();
-    if !bridge_path.is_file() {
-        return Err(format!("DSH bridge 脚本缺失：{}", host_path(&bridge_path)));
+    if !bridge_entry.is_file() {
+        return Err(format!("DSH bridge 脚本缺失：{}", host_path(&bridge_entry)));
     }
     let bridge_path = PathBuf::from(host_path(
-        &std::fs::canonicalize(&bridge_path)
+        &std::fs::canonicalize(&bridge_entry)
             .map_err(|error| format!("DSH bridge 脚本不可用：{error}"))?,
     ));
     let (node_path, _) = resolve_node_runtime()?;
@@ -698,9 +788,11 @@ pub fn shutdown(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_bridge_command, business_mcp_patch_text, cleanup_runtime_dir, debug_sibling_dsh_root,
-        default_bridge_path, dsh_cli_entry, encode_message, graceful_shutdown_message, host_path,
-        node_version_is_compatible, source_root_from_candidates, validate_connection_id,
+        build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry, business_mcp_patch_text,
+        cleanup_runtime_dir, debug_sibling_dsh_root, development_bundled_runtime_root,
+        encode_message, graceful_shutdown_message, host_path, node_version_is_compatible,
+        resolve_bundled_runtime_root, resolve_source_root, source_bridge_path,
+        source_dsh_cli_entry, source_root_from_candidates, validate_connection_id,
         ResolvedDshRuntime,
     };
     use serde_json::json;
@@ -769,19 +861,20 @@ mod tests {
         let env_root = root.join("env");
         fs::create_dir_all(explicit.join("apps").join("cli").join("lib")).unwrap();
         fs::create_dir_all(env_root.join("apps").join("cli").join("lib")).unwrap();
-        fs::write(dsh_cli_entry(&explicit), b"console.log('explicit')").unwrap();
-        fs::write(dsh_cli_entry(&env_root), b"console.log('env')").unwrap();
+        fs::write(source_dsh_cli_entry(&explicit), b"console.log('explicit')").unwrap();
+        fs::write(source_dsh_cli_entry(&env_root), b"console.log('env')").unwrap();
 
         unsafe {
             std::env::set_var("ROCKETX_DSH_SOURCE", &env_root);
         }
-        let resolved =
-            source_root_from_candidates(Some(explicit.to_string_lossy().as_ref())).unwrap();
+        let resolved = source_root_from_candidates(Some(explicit.to_string_lossy().as_ref()))
+            .unwrap()
+            .unwrap();
         assert_eq!(
             host_path(&resolved),
             host_path(&explicit.canonicalize().unwrap())
         );
-        let resolved_env = source_root_from_candidates(None).unwrap();
+        let resolved_env = source_root_from_candidates(None).unwrap().unwrap();
         assert_eq!(
             host_path(&resolved_env),
             host_path(&env_root.canonicalize().unwrap())
@@ -801,7 +894,9 @@ mod tests {
         let cli = root.join("apps").join("cli").join("lib").join("bin.js");
         fs::create_dir_all(cli.parent().unwrap()).unwrap();
         fs::write(&cli, b"console.log('entry')").unwrap();
-        let resolved = source_root_from_candidates(Some(cli.to_string_lossy().as_ref())).unwrap();
+        let resolved = source_root_from_candidates(Some(cli.to_string_lossy().as_ref()))
+            .unwrap()
+            .unwrap();
         assert_eq!(
             host_path(&resolved),
             host_path(&root.canonicalize().unwrap())
@@ -810,12 +905,56 @@ mod tests {
     }
 
     #[test]
+    fn explicit_source_override_still_fails_loud_when_cli_is_missing() {
+        let root = unique_temp_dir("source-missing-cli");
+        fs::create_dir_all(&root).unwrap();
+        let error = resolve_source_root(&root).unwrap_err();
+        assert!(error.contains("apps/cli/lib/bin.js"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_runtime_requires_cli_and_bridge_contract() {
+        let root = unique_temp_dir("bundled-runtime-contract");
+        fs::create_dir_all(&root).unwrap();
+        let missing_cli = resolve_bundled_runtime_root(&[root.clone()]).unwrap_err();
+        assert!(missing_cli.contains("@deepseek-ai"));
+
+        fs::create_dir_all(
+            bundled_dsh_cli_entry(&root)
+                .parent()
+                .expect("bundled cli parent"),
+        )
+        .unwrap();
+        fs::write(bundled_dsh_cli_entry(&root), b"console.log('bundled')").unwrap();
+        let missing_bridge = resolve_bundled_runtime_root(&[root.clone()]).unwrap_err();
+        assert!(missing_bridge.contains("dsh_bridge.mjs"));
+
+        fs::write(bundled_bridge_path(&root), b"console.log('bridge')").unwrap();
+        let resolved = resolve_bundled_runtime_root(&[root.clone()]).unwrap();
+        assert_eq!(
+            resolved,
+            PathBuf::from(host_path(&root.canonicalize().unwrap()))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_runtime_falls_back_to_development_target_candidate() {
+        let path = development_bundled_runtime_root();
+        assert!(
+            host_path(&path).ends_with("target\\dsh-runtime")
+                || host_path(&path).ends_with("target/dsh-runtime")
+        );
+    }
+
+    #[test]
     fn bridge_command_matches_runtime_contract() {
         let runtime = ResolvedDshRuntime {
             source_root: PathBuf::from(r"C:\dsh"),
             cli_path: PathBuf::from(r"C:\dsh\apps\cli\lib\bin.js"),
             node_path: PathBuf::from(r"C:\Program Files\nodejs\node.exe"),
-            bridge_path: default_bridge_path(),
+            bridge_path: source_bridge_path(),
             dsh_root: PathBuf::from(r"C:\Users\test\AppData\Roaming\RocketX\dsh"),
             home_root: PathBuf::from(r"C:\Users\test\AppData\Roaming\RocketX\dsh\home"),
         };
@@ -876,7 +1015,7 @@ mod tests {
 
     #[test]
     fn bridge_path_is_stable_relative_to_tauri_crate() {
-        let path = default_bridge_path();
+        let path = source_bridge_path();
         assert!(
             host_path(&path).ends_with("src\\dsh_bridge.mjs")
                 || host_path(&path).ends_with("src/dsh_bridge.mjs")
