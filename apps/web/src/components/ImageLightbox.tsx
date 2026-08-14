@@ -71,6 +71,19 @@ export default function ImageLightbox({
     setOffset({ x: 0, y: 0 });
   };
 
+  const onDownload = async () => {
+    if (!path.trim()) {
+      toast.error('下载链接缺失', '下载失败');
+      return;
+    }
+
+    try {
+      await saveFile(path, fileName, source);
+    } catch (error) {
+      toast.error(error, '下载失败');
+    }
+  };
+
   const recognize = async () => {
     if (ocrBusy) return;
     setOcrBusy(true);
@@ -143,7 +156,7 @@ export default function ImageLightbox({
           title="下载"
           aria-label="下载"
           className={btn}
-          onClick={() => void saveFile(path, fileName, source).catch((err) => toast.error(err, '下载失败'))}
+          onClick={() => void onDownload()}
         >
           <Download size={16} />
         </button>

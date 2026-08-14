@@ -358,7 +358,7 @@ export function AttachmentCard({
       <>
         <ImageAttachment
           thumbPath={att.image_url}
-          fullPath={att.title_link ?? att.image_url}
+          fullPath={att.title_link || att.image_url}
           name={name}
           dims={att.image_dimensions}
           source={source}
