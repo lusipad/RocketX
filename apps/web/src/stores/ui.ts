@@ -153,7 +153,7 @@ interface UIState {
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
-  openButlerConversation: () => void;
+  openButlerConversation: (provider?: 'codex' | 'deepseek') => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
@@ -192,8 +192,15 @@ export const useUI = create<UIState>((set) => ({
   setSwitcherOpen: (open) =>
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
-  openButlerConversation: () => {
+  openButlerConversation: (provider) => {
     if (!runtimeFeatures().butler) return;
+    if (provider && typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem('rocketx.butler.task-provider', provider);
+      } catch {
+        // The destination still opens even when this browser refuses persistence.
+      }
+    }
     persistUIState({ module: 'butler-view' });
     set({
       module: 'butler-view',

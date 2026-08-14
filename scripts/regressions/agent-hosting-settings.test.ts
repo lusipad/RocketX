@@ -44,11 +44,12 @@ test('聊天托管面板展示独立托管配置，并提供管家统一管理�
   assert.doesNotMatch(panel, /临时工作区（系统默认）/);
   assert.doesNotMatch(panel, /临时选择 AI 托管项目|其他目录/);
   const chat = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
-  assert.match(chat, /aria-label="开启 AI 托管"/);
+  assert.match(chat, /aria-label="配置 AI 托管"/);
   assert.match(chat, /aria-label="选择 AI 托管项目"/);
-  assert.match(chat, /startRoomAgentHosting\(activeRid, rawName, \{ workspaceRoot \}\)/);
+  assert.match(chat, /title="选择后端和项目后开启 AI 托管"/);
+  assert.match(chat, /onClick=\{\(\) => setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)\}/);
   assert.match(chat, /在 AI 管家中管理项目/);
   assert.match(chat, /openButlerConversation/);
-  assert.match(chat, /setRoomHostingWorkspace\(activeRid, workspaceRoot\)/);
+  assert.match(chat, /setRoomHostingWorkspace\(activeRid, path\.path\)/);
   assert.doesNotMatch(chat, /butlerWorkspaceRoot|isSystemCodexWorkspace/);
 });

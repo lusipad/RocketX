@@ -92,8 +92,8 @@ test('会话只保留一个 AI 托管入口，并支持按房间自动开启', a
     readFile(new URL('apps/web/src/components/AgentPanel.tsx', root), 'utf8'),
   ]);
 
-  assert.match(chatArea, /aria-label="开启 AI 托管"/);
-  assert.match(chatArea, /startRoomAgentHosting\(activeRid, rawName, \{ workspaceRoot \}\)/);
+  assert.match(chatArea, /aria-label="配置 AI 托管"/);
+  assert.match(chatArea, /title="选择后端和项目后开启 AI 托管"/);
   assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
   assert.match(chatArea, /setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)/);
   assert.match(chatArea, /aria-label=\{localAgentActive \? '关闭 AI 托管'/);

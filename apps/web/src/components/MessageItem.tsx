@@ -761,12 +761,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     ...(features.ai
       ? [
           {
-            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
+            label: aiExtracting ? 'Codex 提取中…' : 'Codex 提取为待办',
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('todo'),
           },
           {
-            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
+            label: aiExtracting ? 'Codex 提取中…' : 'Codex 提取为工作项',
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('workitem'),
           },

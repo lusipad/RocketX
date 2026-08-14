@@ -32,7 +32,8 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(workspace, /importLegacyWorkspaceRoots\(legacyWorkspaceRoots\)/);
   assert.match(workspace, /controller\.listThreads\(threadWorkspaceRoots\(get\(\)\)\)/);
 
-  assert.match(ui, /openButlerConversation: \(\) => \{/);
+  assert.match(ui, /openButlerConversation: \(provider\) => \{/);
+  assert.match(ui, /localStorage\.setItem\('rocketx\.butler\.task-provider', provider\)/);
   assert.match(ui, /module: 'butler-view',[\s\S]*butlerView: 'conversation'/);
   assert.match(ui, /setButlerView: \(view\) => \{/);
   assert.match(ui, /module: 'butler-view',[\s\S]*butlerView: view/);
