@@ -12,7 +12,7 @@ RocketX 保留既有 Codex 前端与运行时，另建一条直接消费 DSH Web
 - **Adapt:** 通过 Tauri 托管 Node bridge，WebView 不直接跨 origin 访问 DSH loopback。
 - **Drop:** DSH 自带 Web UI、ACP fresh-session 替代方案、通用 runtime registry/capability 层。
 - 正式发行改为固定随 RocketX 安装包分发官方 npm `@deepseek-ai/dsh@0.1.0-rc.6`，通过私有 workspace 包 `@rcx/dsh-runtime` 和 pnpm 的标准隔离 `deploy --prod` 生成可搬运运行时目录，再映射进 Tauri `dsh-runtime/` 资源。
-- v0.42.0 不捆绑 Node.js；正式运行仍要求系统 Node.js 22.19+ 或 24+。缺少兼容 Node 时只禁用 DSH 并显示诊断，不在线下载未知运行时。
+- v0.42.1 不捆绑 Node.js；正式运行仍要求系统 Node.js 22.19+ 或 24+。缺少兼容 Node 时只禁用 DSH 并显示诊断，不在线下载未知运行时。
 - DSH 使用稳定的 RocketX 私有 `DSH_HOME`；连接目录只保存可删除的临时 patch，会话与凭据不能随 bridge stop 删除。
 - RocketX 现有只读 business MCP 通过 DSH 自带 `@deepseek-ai/dsh-mcp-client` 注入；有副作用的计划任务工具本轮不接入。
 - DSH 凭据只经 `credentials.describe/set/unset` 单向写入 DSH 自己的 `$DSH_HOME/.credentials.yaml`；前端不得持久化、回显或记录密钥值。上游 rc.6 在 POSIX 使用 `0700/0600`，Windows 依赖用户应用数据目录 ACL，并非系统 Keychain。

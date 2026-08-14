@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('DSH 运行时以固定 npm 产物随 RocketX 打包，并在 prepare 合同里自证版本', async () => {
-  const [rootPackageText, runtimePackageText, tauriConfigText, prepareScript, workspace, dshRs, notes] =
+  const [rootPackageText, runtimePackageText, tauriConfigText, prepareScript, workspace, desktopWorkflow, dshRs, notes] =
     await Promise.all([
       readFile('package.json', 'utf8'),
       readFile('apps/dsh-runtime/package.json', 'utf8'),
       readFile('apps/desktop/src-tauri/tauri.conf.json', 'utf8'),
       readFile('scripts/prepare-dsh-runtime.mjs', 'utf8'),
       readFile('pnpm-workspace.yaml', 'utf8'),
+      readFile('.github/workflows/desktop.yml', 'utf8'),
       readFile('apps/desktop/src-tauri/src/dsh.rs', 'utf8'),
       readFile('docs/implementation-notes-dsh.md', 'utf8'),
     ]);
@@ -64,6 +65,11 @@ test('DSH 运行时以固定 npm 产物随 RocketX 打包，并在 prepare 合�
   assert.match(workspace, /injectWorkspacePackages: true/);
   assert.match(workspace, /minimumReleaseAgeExclude:\s*\n\s*- '@deepseek-ai\/\*'/);
   assert.match(workspace, /supportedArchitectures:\s*\n\s*cpu:\s*\n\s*- x64\s*\n\s*- arm64/);
+
+  const prepareRuntimeIndex = desktopWorkflow.indexOf('run: pnpm prepare:dsh-runtime');
+  const rustTestsIndex = desktopWorkflow.indexOf('- name: Rust 单元测试');
+  assert.ok(prepareRuntimeIndex >= 0);
+  assert.ok(rustTestsIndex > prepareRuntimeIndex);
 
   assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";/);
   assert.match(dshRs, /const DSH_BUNDLED_CLI_ENTRY: \[&str; 5\]/);

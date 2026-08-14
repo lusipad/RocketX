@@ -96,6 +96,9 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 准备并校验固定版本 DSH 运行时
+        run: pnpm prepare:dsh-runtime
+
       - name: Rust 单元测试
         run: |
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
