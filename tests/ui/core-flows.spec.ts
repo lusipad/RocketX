@@ -1730,7 +1730,7 @@ test('精简模式关闭 AI 入口但保留常规聊天流程（issue #264）', 
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
 
   await conversation(page, 'General').click();
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toHaveCount(0);
   await expect(page.locator('#room-butler-launcher')).toHaveCount(0);
 
   await page.getByPlaceholder(/输入消息/).fill('performance mode smoke');
@@ -2456,8 +2456,8 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\rocketchatx');
   });
   await conversation(page, 'General').click();
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toHaveAttribute('title', /专用工作项目 RocketChat X - 主目录/);
+  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toHaveAttribute('title', '选择后端和项目后开启 AI 托管');
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
   await expect(page.getByRole('button', { name: /RocketChat X - 主目录（默认）/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
@@ -2468,7 +2468,7 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   expect(pageErrors).toEqual([]);
 });
 
-test('首次开启 AI 托管立即打开进度面板（issue #310）', async ({ page }) => {
+test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
@@ -2490,7 +2490,7 @@ test('首次开启 AI 托管立即打开进度面板（issue #310）', async ({ 
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
 
-  await page.getByRole('button', { name: '开启 AI 托管' }).click();
+  await page.getByRole('button', { name: '配置 AI 托管' }).click();
   await expect(page.getByText('AI 托管独立配置')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
@@ -2559,7 +2559,7 @@ test('本机托管时再次点击同一按钮会退出且不会打开错误面�
   const stopButton = page.getByRole('button', { name: '关闭 AI 托管' });
   await expect(stopButton).toBeVisible();
   await stopButton.click();
-  await expect(page.getByRole('button', { name: '开启 AI 托管' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toBeVisible();
   await expect(page.getByText('共享 Agent')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });

@@ -648,7 +648,7 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   await bootAuthenticated(page);
   await installCodexRuntime(page);
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间管家' }).click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
 
   let panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await expect(panel).toBeVisible();
@@ -675,7 +675,7 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   await expect(panel.getByText(question, { exact: true })).toBeVisible();
 
   await panel.getByRole('button', { name: '关闭房间会话' }).click();
-  await page.getByRole('button', { name: '打开房间管家' }).click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
   panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await expect(panel.getByText('正在接回房间会话', { exact: true })).toHaveCount(0);
   await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
@@ -710,7 +710,7 @@ test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显�
   })).toBe('general-release');
 
   await expect(panel).toHaveCount(0);
-  await page.getByRole('button', { name: '打开房间管家' }).click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
   panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await panel.getByRole('button', { name: '新建房间会话' }).click();
   await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
@@ -755,7 +755,7 @@ test('管家任务运行时仍可并行打开房间 Codex，且不会抢占管�
   });
 
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间管家' }).click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
   const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   const composer = panel.getByPlaceholder('在这个会话里继续提问');
   await expect(composer).toBeEnabled();
@@ -788,7 +788,7 @@ test('房间 Codex 在首段回复到达前持续显示思考反馈', async ({ p
   await bootAuthenticated(page);
   await installCodexRuntime(page);
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间管家' }).click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
   const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
   await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
 
