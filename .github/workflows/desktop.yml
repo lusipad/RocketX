@@ -141,7 +141,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $fullInstaller = Join-Path (Resolve-Path 'apps/desktop/src-tauri/target/release/bundle/nsis').Path "RocketX_${env:GITHUB_REF_NAME.Substring(1)}_full-setup.exe"
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $fullInstaller = Join-Path (Resolve-Path 'apps/desktop/src-tauri/target/release/bundle/nsis').Path "RocketX_${version}_full-setup.exe"
           gh release upload "$env:GITHUB_REF_NAME" "$fullInstaller" --repo "$env:GITHUB_REPOSITORY" --clobber
 
       - name: 上传构建产物（手动触发时）
