@@ -66,6 +66,7 @@ async function openNativeTask(page: Page): Promise<string[]> {
     await useCodexWorkspace.getState().resumeThread('native-thread');
   });
   await page.getByRole('navigation', { name: 'RocketX 主导航' }).getByRole('button', { name: /^管家$/ }).click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Codex 任务' })).toBeVisible();
   return pageErrors;
 }

@@ -1509,7 +1509,8 @@ test('打开管家页后可返回消息', async ({ page }) => {
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'DeepSeek', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('region', { name: 'DeepSeek 任务' })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -2287,6 +2288,7 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
   const { pageErrors } = await bootAuthenticated(page);
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
@@ -2463,6 +2465,7 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
   await page.getByRole('button', { name: '在 AI 管家中管理项目…' }).click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：another-project' })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -2642,6 +2645,7 @@ test('托管项目归入管家，AI 设置只保留模型运行配置', async ({
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   const projects = page.getByLabel('项目目录');
   await expect(projects.getByLabel('托管项目')).toBeVisible();
   await expect(projects.getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
@@ -2658,6 +2662,7 @@ test('管家通过系统目录选择器添加并持久化托管项目', async ({
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
+  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByLabel('项目目录').getByText('添加托管项目', { exact: true })).toBeVisible();
   await page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' }).first().click();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
