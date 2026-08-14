@@ -6,6 +6,7 @@ import PdfView from './PdfView';
 import { toast } from '../stores/toast';
 import { saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
+import { sandboxArtifactHtml } from '../lib/codexArtifacts';
 
 /** 能直接看的文本类文件：按扩展名判断（服务端返回的 MIME 不一定靠谱） */
 const TEXT_EXT = new Set([
@@ -24,6 +25,8 @@ const TEXT_EXT = new Set([
   'bat',
   'ps1',
   'sql',
+  'html',
+  'htm',
   'js',
   'ts',
   'tsx',
@@ -37,7 +40,6 @@ const TEXT_EXT = new Set([
   'cpp',
   'cs',
   'css',
-  'html',
   'vue',
   'toml',
   'env',
@@ -46,6 +48,7 @@ const TEXT_EXT = new Set([
 ]);
 
 const PDF_EXT = new Set(['pdf']);
+const VIDEO_EXT = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogg', 'ogv']);
 
 /** 超过这个大小就不当文本预览了——渲染几十兆纯文本会把页面卡死 */
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -58,11 +61,11 @@ export function extOf(name: string): string {
 /** 这个文件能不能预览（决定要不要显示「预览」入口） */
 export function canPreview(name: string): boolean {
   const ext = extOf(name);
-  return TEXT_EXT.has(ext) || PDF_EXT.has(ext);
+  return TEXT_EXT.has(ext) || PDF_EXT.has(ext) || VIDEO_EXT.has(ext);
 }
 
 /**
- * 文件预览：文本 / 代码 / Markdown 渲染，PDF 用 pdf.js 画。
+ * 文件预览：文本 / 代码 / Markdown / 沙箱 HTML / 视频，PDF 用 pdf.js 画。
  *
  * 两个踩过的坑：
  * 1. 不能把服务端 URL 直接交给 <iframe>：Rocket.Chat 给文件带的是
@@ -87,10 +90,14 @@ export default function FilePreview({
 }) {
   const ext = extOf(fileName);
   const isPdf = PDF_EXT.has(ext);
+  const isHtml = ext === 'html' || ext === 'htm';
+  const isVideo = VIDEO_EXT.has(ext);
   const isMarkdown = ext === 'md' || ext === 'markdown';
 
   const [text, setText] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
+  const [htmlText, setHtmlText] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -107,8 +114,14 @@ export default function FilePreview({
 
   useEffect(() => {
     let alive = true;
+    let objectUrl: string | null = null;
+    setText(null);
+    setPdfData(null);
+    setHtmlText(null);
+    setVideoUrl(null);
+    setError(null);
 
-    if (size !== undefined && size > MAX_TEXT_BYTES && !isPdf) {
+    if (size !== undefined && size > MAX_TEXT_BYTES && !isPdf && !isVideo) {
       setError('文件太大，不适合在线预览，请下载后查看');
       return;
     }
@@ -119,6 +132,11 @@ export default function FilePreview({
         if (!alive) return;
         // PDF 交给 pdf.js 自己画（见 PdfView），不依赖 webview 自带的阅读器
         if (isPdf) setPdfData(await blob.arrayBuffer());
+        else if (isVideo) {
+          objectUrl = URL.createObjectURL(blob);
+          setVideoUrl(objectUrl);
+        }
+        else if (isHtml) setHtmlText(await blob.text());
         else setText(await blob.text());
       })
       .catch((err: unknown) => {
@@ -133,8 +151,11 @@ export default function FilePreview({
 
     return () => {
       alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, isPdf, size]);
+  }, [path, isPdf, isHtml, isVideo, size]);
+
+  const sandboxHtml = htmlText !== null ? sandboxArtifactHtml(htmlText) : null;
 
   const download = async () => {
     setSaving(true);
@@ -147,7 +168,7 @@ export default function FilePreview({
     }
   };
 
-  const loading = text === null && !pdfData && !error;
+  const loading = text === null && !pdfData && htmlText === null && !videoUrl && !error;
 
   return (
     <div
@@ -199,6 +220,17 @@ export default function FilePreview({
         )}
 
         {pdfData && <PdfView data={pdfData} />}
+
+        {videoUrl && <video className="h-full w-full" controls src={videoUrl} />}
+
+        {sandboxHtml && (
+          <iframe
+            title="网页预览"
+            className="h-full w-full bg-white"
+            sandbox=""
+            srcDoc={sandboxHtml}
+          />
+        )}
 
         {text !== null &&
           (isMarkdown ? (
