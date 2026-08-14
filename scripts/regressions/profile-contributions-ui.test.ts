@@ -46,7 +46,7 @@ test('贡献筛选只保留项目维度', () => {
   assert.deepEqual(useProfileContributions.getState().filters, { project: undefined });
 });
 
-test('我的贡献归入工作台，并保留键盘格子、覆盖警告与中性文案合同', async () => {
+test('我的代码归入工作台，并保留键盘格子、覆盖警告与中性文案合同', async () => {
   const [runtime, nav, workbench, heatmap, page] = await Promise.all([
     readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/NavRail.tsx', import.meta.url), 'utf8'),
@@ -57,10 +57,10 @@ test('我的贡献归入工作台，并保留键盘格子、覆盖警告与中�
 
   assert.doesNotMatch(runtime, /ProfileContributionsModule|\['contributions'/);
   assert.doesNotMatch(nav, /contributions: \{ label:/);
-  assert.match(workbench, /label: '我的贡献'/);
+  assert.match(workbench, /label: '我的代码'/);
   assert.match(workbench, /tab === 'contributions'[\s\S]*<ProfileContributionsPage \/>/);
   assert.match(workbench, /tab === 'contributions'\) return;[\s\S]*void refresh\(\)/);
-  assert.match(page, /aria-label="我的贡献"/);
+  assert.match(page, /aria-label="贡献概览"/);
   assert.match(heatmap, /<button[\s\S]*aria-label=\{label\}[\s\S]*aria-pressed=\{selectedDay === day\.day\}[\s\S]*title=\{label\}/);
   assert.match(heatmap, /className="w-full rounded-xl/);
   assert.doesNotMatch(heatmap, /w-fit/);

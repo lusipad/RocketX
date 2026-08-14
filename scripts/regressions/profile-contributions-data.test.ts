@@ -29,13 +29,13 @@ test.afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-test('localDayKey 按本地时区分桶，默认范围为最近两个月', () => {
+test('localDayKey 按本地时区分桶，默认范围为最近一年（issue #307）', () => {
   assert.equal(localDayKey('2026-08-10T23:30:00Z', -480), '2026-08-11');
   assert.equal(localDayKey('2026-08-10T00:30:00Z', 330), '2026-08-09');
 
   const range = defaultContributionRange();
   const today = new Date();
-  const expectedFrom = new Date(today.getFullYear(), today.getMonth() - 2, today.getDate() + 1, 12);
+  const expectedFrom = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1, 12);
   assert.equal(range.from, localDayKey(expectedFrom));
   assert.equal(range.to, localDayKey(today));
 });

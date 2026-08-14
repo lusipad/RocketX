@@ -28,7 +28,7 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.doesNotMatch(navRail, /['"]today['"]/);
   assert.doesNotMatch(navRail, /['"]ai-assistant['"]/);
 
-  assert.match(workbench, /label: '我的贡献'/);
+  assert.match(workbench, /label: '我的代码'/);
   assert.match(workbench, /tab === 'contributions'[\s\S]*<ProfileContributionsPage \/>/);
 
   assert.match(page, /className="butler-workspace"/);

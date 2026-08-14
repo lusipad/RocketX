@@ -79,7 +79,7 @@ export function localDayKey(value: string | number | Date, timezoneOffsetMinutes
 
 export function defaultContributionRange(): ContributionRange {
   const today = new Date();
-  const from = new Date(today.getFullYear(), today.getMonth() - 2, today.getDate() + 1, 12);
+  const from = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1, 12);
   return { from: localDayKey(from), to: localDayKey(today) };
 }
 

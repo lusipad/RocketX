@@ -329,9 +329,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
               </p>
             </section>
 
-            <section className="flex bg-ink px-6 py-9 text-white sm:px-10 sm:py-9 lg:items-center lg:px-10 lg:py-6">
+            <section className="flex bg-code-bg px-6 py-9 text-code-ink sm:px-10 sm:py-9 lg:items-center lg:px-10 lg:py-6">
               <div className="w-full">
-                <p className="text-xs font-semibold text-primary-light">一件事如何离开大脑，又在正确时刻回来</p>
+                <p className="text-xs font-semibold text-white/80">一件事如何离开大脑，又在正确时刻回来</p>
                 <h2 className="mt-1.5 text-xl leading-snug font-semibold sm:text-2xl">GTD 是运行方式，注意力是检验标准。</h2>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {['群消息', '@提及', '工作项', '日程'].map((source) => (
@@ -347,12 +347,12 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                     ['回', '该处理时再出现', '到期、受阻或需要决定时，带着动作回来。', 'Engage'],
                   ].map(([mark, title, description, label], index) => (
                     <div key={mark} className={`relative grid grid-cols-[36px_1fr_auto] items-center gap-3 rounded-xl border px-3.5 py-2.5 ${index === 3 ? 'border-primary bg-primary/15' : 'border-white/10 bg-white/[0.05]'}`}>
-                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-xs font-semibold text-primary-light">{mark}</span>
+                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-xs font-semibold text-white/80">{mark}</span>
                       <div className="min-w-0">
                         <strong className="block text-sm font-medium">{title}</strong>
                         <span className="block text-xs leading-4 text-white/50">{description}</span>
                       </div>
-                      <span className="hidden text-xs text-primary-light sm:block">{label}</span>
+                      <span className="hidden text-xs text-white/80 sm:block">{label}</span>
                     </div>
                   ))}
                 </div>
@@ -360,24 +360,24 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
                     <strong className="text-xs font-medium">工作台 · 事实与计划</strong>
-                    <p className="mt-1 text-xs leading-5 text-white/45">你直接掌握的确定性界面。</p>
+                    <p className="mt-1 text-xs leading-5 text-white/50">你直接掌握的确定性界面。</p>
                   </div>
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
                     <strong className="text-xs font-medium">管家 · 判断与执行</strong>
-                    <p className="mt-1 text-xs leading-5 text-white/45">来源可看、过程可停、越界前确认。</p>
+                    <p className="mt-1 text-xs leading-5 text-white/50">来源可看、过程可停、越界前确认。</p>
                   </div>
                 </div>
 
-                <div className="mt-2.5 rounded-xl bg-primary/20 px-4 py-2.5 text-xs leading-5 text-primary-light">
+                <div className="mt-2.5 rounded-xl bg-primary/20 px-4 py-2.5 text-xs leading-5 text-white/80">
                   管家的价值不在于说了多少，而在于替你判断了多少事情此刻不值得打扰。
                 </div>
                 <button
                   onClick={() => openDesktopStep('setup')}
-                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light"
+                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 >
                   {showDesktopStep ? '继续：设置桌面体验' : '继续：选择如何加入'} <ArrowRight size={15} />
                 </button>
-                <button onClick={() => openDesktopStep('personal')} className="mt-1 h-8 w-full text-xs text-white/45 hover:text-white/75">
+                <button onClick={() => openDesktopStep('personal')} className="mt-1 h-8 w-full text-xs text-white/50 hover:text-white/75">
                   稍后连接，先进入个人设置
                 </button>
               </div>
@@ -385,9 +385,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
           </div>
         ) : step === 'desktop' ? (
           <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[0.92fr_1.08fr]">
-            <section className="flex flex-col justify-between bg-ink px-6 py-9 text-white sm:px-10 lg:px-12 lg:py-12">
+            <section className="flex flex-col justify-between bg-code-bg px-6 py-9 text-code-ink sm:px-10 lg:px-12 lg:py-12">
               <div>
-                <p className="text-xs font-semibold text-primary-light">桌面端默认体验</p>
+                <p className="text-xs font-semibold text-white/80">桌面端默认体验</p>
                 <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight">
                   第一次启动时，<br />把该交给系统的事交给系统。
                 </h1>
@@ -413,9 +413,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
 
               <div className="mt-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2 text-xs text-white/50">
-                  <ShieldCheck size={15} className="text-primary-light" /> 只在你明确点击“应用并继续”后才写入系统级默认
+                  <ShieldCheck size={15} className="text-white/80" /> 只在你明确点击“应用并继续”后才写入系统级默认
                 </div>
-                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/45 hover:text-white/75">← 返回设计理念</button>
+                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/50 hover:text-white/75">← 返回设计理念</button>
               </div>
             </section>
 
@@ -543,9 +543,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
           </div>
         ) : (
           <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[0.88fr_1.12fr]">
-            <section className="flex flex-col justify-between bg-ink px-6 py-9 text-white sm:px-10 lg:px-12 lg:py-12">
+            <section className="flex flex-col justify-between bg-code-bg px-6 py-9 text-code-ink sm:px-10 lg:px-12 lg:py-12">
               <div>
-                <p className="text-xs font-semibold text-primary-light">少一些入口，多一个清楚的分工</p>
+                <p className="text-xs font-semibold text-white/80">少一些入口，多一个清楚的分工</p>
                 <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight">
                   消息用来沟通，<br />工作台用来确定，<br />管家用来完成。
                 </h1>
@@ -555,15 +555,15 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
 
                 <div className="mt-8 space-y-3">
                   <div className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
-                    <MessageSquareText className="mt-0.5 shrink-0 text-primary-light" size={18} />
+                    <MessageSquareText className="mt-0.5 shrink-0 text-white/80" size={18} />
                     <div><strong className="text-sm font-medium">消息</strong><p className="mt-1 text-xs leading-5 text-white/50">团队讨论、上下文和原始事实留在这里。</p></div>
                   </div>
                   <div className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
-                    <ListChecks className="mt-0.5 shrink-0 text-primary-light" size={18} />
+                    <ListChecks className="mt-0.5 shrink-0 text-white/80" size={18} />
                     <div><strong className="text-sm font-medium">工作台</strong><p className="mt-1 text-xs leading-5 text-white/50">计划、状态和关键工作由你确定，结果可追踪。</p></div>
                   </div>
                   <div className="flex gap-3 rounded-xl border border-primary/60 bg-primary/15 px-4 py-3.5">
-                    <Sparkles className="mt-0.5 shrink-0 text-primary-light" size={18} />
+                    <Sparkles className="mt-0.5 shrink-0 text-white/80" size={18} />
                     <div><strong className="text-sm font-medium">管家</strong><p className="mt-1 text-xs leading-5 text-white/50">回答、整理或执行；需要时才调用 Skill。</p></div>
                   </div>
                 </div>
@@ -571,9 +571,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
 
               <div className="mt-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2 text-xs text-white/50">
-                  <ShieldCheck size={15} className="text-primary-light" /> 来源可看 · 步骤可停 · 按既定权限执行
+                  <ShieldCheck size={15} className="text-white/80" /> 来源可看 · 步骤可停 · 按既定权限执行
                 </div>
-                <button onClick={() => setStep(showDesktopStep ? 'desktop' : 'principles')} className="mt-4 text-xs text-white/45 hover:text-white/75">
+                <button onClick={() => setStep(showDesktopStep ? 'desktop' : 'principles')} className="mt-4 text-xs text-white/50 hover:text-white/75">
                   ← 返回{showDesktopStep ? '桌面默认' : '设计理念'}
                 </button>
               </div>

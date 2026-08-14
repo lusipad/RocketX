@@ -614,7 +614,7 @@ export default function WorkbenchPage() {
       ...(connected
         ? [
             { key: 'workitems' as const, label: '我的工作项', icon: CircleDot, badge: workItems.length },
-            { key: 'contributions' as const, label: '我的贡献', icon: SquareActivity },
+            { key: 'contributions' as const, label: '我的代码', icon: SquareActivity },
             { key: 'prs' as const, label: '拉取请求', icon: GitPullRequest, badge: reviewPrs.length },
             {
               key: 'builds' as const,

@@ -21,7 +21,7 @@
 
 | 验收 ID | 主要实现 | 自动化证据 | 仍需验证 |
 | --- | --- | --- | --- |
-| `ONB-AC-01` | `pages/FirstRunPage.tsx`、`lib/firstRun.ts` | `scripts/regressions/first-run.test.ts` | 新安装包 MAN |
+| `ONB-AC-01` | `pages/FirstRunPage.tsx`、`lib/firstRun.ts` | `scripts/regressions/first-run.test.ts`、`tests/ui/core-flows.spec.ts` 深色对比度 | 新安装包 MAN |
 | `ONB-AC-02`、`ONB-AC-03`、`ONB-AC-04` | `components/WorkspaceConfigImport.tsx`、`lib/workspaceConfig.ts` | `workspace-config.test.ts`、`workspace-config-source.test.ts` | 真实远程 Raw URL |
 | `ONB-AC-05` | `WorkspaceConfigImport.tsx`、`stores/auth.ts` | `workspace-config.test.ts`、`onboarding.test.ts` | 切换真实服务器 |
 | `ONB-AC-06` | `pages/LoginPage.tsx`、`lib/loginDiagnostic.ts` | `tests/ui/core-flows.spec.ts` | 真实错误分类 |
@@ -102,12 +102,13 @@
 | `PLAT-AC-01` | 主导航与管家布局 | `tests/ui/butler-workspace.spec.ts` | 各分辨率视觉 MAN |
 | `PLAT-AC-02` | 平台检测、`lib/autostart.ts`、Tauri transport | `autostart.test.ts`、`codex-runtime.test.ts` | Web 部署 MAN |
 | `PLAT-AC-03` | `apps/desktop/src-tauri/src/main.rs` | Rust tray tests | 三平台发布产物 MAN |
-| `PLAT-AC-04` | `lib/autostart.ts`、系统插件 | `autostart.test.ts` | Windows/macOS/Linux MAN |
-| `PLAT-AC-05` | `UpdaterBridge.tsx`、`lib/updateSource.ts` | `update-source.test.ts` | 签名 Release MAN |
+| `PLAT-AC-04` | `lib/autostart.ts`、`apps/desktop/src-tauri/src/main.rs`、系统插件 | `autostart.test.ts`、Rust tests、`tests/ui/core-flows.spec.ts` | Windows/macOS/Linux MAN |
+| `PLAT-AC-05` | `UpdaterBridge.tsx`、`lib/updateSource.ts`、`apps/desktop/src-tauri/src/proc.rs` | `update-source.test.ts`、Rust tests | 签名 Release 与真实 UNC 有签名/无签名安装 MAN |
 | `PLAT-AC-06` | Tauri bundle/OCR 配置 | `image-ocr.test.ts`、`codex-bundled-resource.test.ts` | 精简/全量产物审计 |
 | `PLAT-AC-07` | `lib/runtimeMode.ts` | `issue-264-performance-mode.test.ts` | 长时间资源观察 |
 | `PLAT-AC-08` | `lib/unread.ts`、`lib/tray.ts` | `tray-flash.test.ts`、`taskbar-badge.test.ts`、通知聚合 tests | 三平台 MAN |
 | `PLAT-AC-10` | `lib/uiScale.ts`、`components/DesktopUiScaleBridge.tsx`、`stores/uiPrefs.ts`、Tauri capability | `ui-scale.test.ts`、`tests/ui/core-flows.spec.ts` | 三平台 1080p 发布产物清晰度与快捷键 MAN |
+| `PLAT-AC-11` | `apps/desktop/src-tauri/src/main.rs`、WebView2 官方内存目标 | `webview-memory.test.ts`、Windows Release 前后进程采样 | macOS/Linux 系统 WebView 不适用；Windows 长时间驻留观察 |
 
 ## 8. 发布候选门禁
 

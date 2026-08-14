@@ -1938,7 +1938,7 @@ function UpdateSourceRow() {
           toast.update(toastId, { kind: 'error', message: humanError(error, '更新失败') });
         }
       } else if (probe.installerPath) {
-        if (!probe.signature) throw new Error('更新包缺少签名');
+        if (!probe.sha256) throw new Error('更新包缺少 SHA-256');
         if (!probe.installerType) throw new Error('无法确认当前安装类型');
         const toastId = toast.loading(`正在退出并安装 RocketX ${probe.version}…`);
         try {
@@ -1946,6 +1946,7 @@ function UpdateSourceRow() {
             dir: config.location,
             path: probe.installerPath,
             signature: probe.signature,
+            sha256: probe.sha256,
             expectedVersion: probe.version,
             installerType: probe.installerType,
           });
@@ -1961,7 +1962,7 @@ function UpdateSourceRow() {
   }
 
   return (
-    <Row label="更新" hint="内网 HTTP 与共享目录都必须使用带 signature 的 latest.json；安装前使用内置公钥验签">
+    <Row label="更新" hint="内网 HTTP 必须使用带 signature 的 latest.json；共享目录可省略 signature，未签名包会明确提示并用 SHA-256 固定本次检查内容">
       <div className="flex flex-col gap-2">
         <select
           value={config.kind}

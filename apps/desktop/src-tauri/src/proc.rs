@@ -15,6 +15,7 @@ use std::{
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -2508,6 +2509,7 @@ pub struct UpdateDirManifest {
     manifest: String,
     installer_path: Option<String>,
     signature: Option<String>,
+    sha256: String,
     version: String,
     installer_type: String,
 }
@@ -2594,7 +2596,7 @@ fn detect_current_install_kind() -> Result<WindowsInstallerKind, String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedUpdatePackage {
     package_path: PathBuf,
-    signature: String,
+    signature: Option<String>,
     version: String,
     installer_kind: WindowsInstallerKind,
 }
@@ -2604,7 +2606,8 @@ struct UpdateHelperArgs {
     wait_pid: u32,
     base_dir: PathBuf,
     package_path: PathBuf,
-    signature: String,
+    signature: Option<String>,
+    sha256: String,
     target_version: String,
     relaunch_path: PathBuf,
     installer_kind: WindowsInstallerKind,
@@ -2674,6 +2677,47 @@ fn verify_update_package(path: &Path, signature: &str) -> Result<(), String> {
         .map_err(|error| format!("更新包签名校验失败：{error}"))
 }
 
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("读取更新包 {} 失败：{error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("读取更新包 {} 失败：{error}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn normalize_update_sha256(value: &str) -> Result<String, String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("更新包 SHA-256 无效".to_string());
+    }
+    Ok(value)
+}
+
+fn verify_update_package_identity(
+    path: &Path,
+    signature: Option<&str>,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    let expected_sha256 = normalize_update_sha256(expected_sha256)?;
+    let actual_sha256 = sha256_file(path)?;
+    if actual_sha256 != expected_sha256 {
+        return Err("更新包 SHA-256 已变化，拒绝继续安装".to_string());
+    }
+    if let Some(signature) = signature {
+        verify_update_package(path, signature)?;
+    }
+    Ok(())
+}
+
 fn normalize_update_version_text(version: &str) -> Option<String> {
     let value = version.trim().trim_start_matches(['v', 'V']);
     (!value.is_empty()).then(|| value.to_string())
@@ -2722,8 +2766,7 @@ fn resolve_update_package_with_kind(
         .get("signature")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "Windows 更新条目缺少 signature，拒绝使用未签名安装包".to_string())?
-        .to_string();
+        .map(str::to_string);
     let file_name = url
         .rsplit(['/', '\\'])
         .next()
@@ -2807,12 +2850,16 @@ pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, 
     let value = serde_json::from_str::<serde_json::Value>(&manifest)
         .map_err(|error| format!("latest.json 无效：{error}"))?;
     let resolved = resolve_update_package(&base, &value)?;
-    verify_update_package(&resolved.package_path, &resolved.signature)?;
+    let sha256 = sha256_file(&resolved.package_path)?;
+    if let Some(signature) = resolved.signature.as_deref() {
+        verify_update_package(&resolved.package_path, signature)?;
+    }
 
     Ok(UpdateDirManifest {
         manifest,
         installer_path: Some(resolved.package_path.to_string_lossy().into_owned()),
-        signature: Some(resolved.signature),
+        signature: resolved.signature,
+        sha256,
         version: resolved.version,
         installer_type: resolved.installer_kind.cli_value().to_string(),
     })
@@ -2958,7 +3005,7 @@ fn create_unique_temp_dir(label: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn extract_signed_installer(
+fn prepare_update_installer(
     package: &Path,
     installer_kind: WindowsInstallerKind,
 ) -> Result<PreparedInstaller, String> {
@@ -2981,7 +3028,7 @@ fn extract_signed_installer(
         ));
     }
     if extension != "zip" {
-        return Err("签名更新包只支持 .zip / .exe / .msi".to_string());
+        return Err("更新包只支持 .zip / .exe / .msi".to_string());
     }
     let target_dir = create_unique_temp_dir("update-extract")?;
     let mut command = Command::new("powershell");
@@ -3044,6 +3091,7 @@ fn parse_update_helper_args(args: &[String]) -> Result<UpdateHelperArgs, String>
     let mut base_dir = None;
     let mut package_path = None;
     let mut signature = None;
+    let mut sha256 = None;
     let mut target_version = None;
     let mut relaunch_path = None;
     let mut installer_kind = None;
@@ -3066,6 +3114,7 @@ fn parse_update_helper_args(args: &[String]) -> Result<UpdateHelperArgs, String>
             "--base" => base_dir = Some(PathBuf::from(value)),
             "--package" => package_path = Some(PathBuf::from(value)),
             "--signature" => signature = Some(value.clone()),
+            "--sha256" => sha256 = Some(value.clone()),
             "--target-version" => target_version = Some(value.clone()),
             "--relaunch" => relaunch_path = Some(PathBuf::from(value)),
             "--installer-kind" => installer_kind = WindowsInstallerKind::from_cli(value),
@@ -3079,7 +3128,8 @@ fn parse_update_helper_args(args: &[String]) -> Result<UpdateHelperArgs, String>
         wait_pid: wait_pid.ok_or_else(|| "更新 helper 缺少 wait-pid".to_string())?,
         base_dir: base_dir.ok_or_else(|| "更新 helper 缺少 base".to_string())?,
         package_path: package_path.ok_or_else(|| "更新 helper 缺少 package".to_string())?,
-        signature: signature.ok_or_else(|| "更新 helper 缺少 signature".to_string())?,
+        signature,
+        sha256: sha256.ok_or_else(|| "更新 helper 缺少 sha256".to_string())?,
         target_version: target_version
             .ok_or_else(|| "更新 helper 缺少 target-version".to_string())?,
         relaunch_path: relaunch_path.ok_or_else(|| "更新 helper 缺少 relaunch".to_string())?,
@@ -3315,7 +3365,8 @@ fn wait_for_installed_version(path: &Path, target_version: &str) -> Result<(), S
 fn validate_manifest_package(
     base_dir: &Path,
     package_path: &Path,
-    signature: &str,
+    signature: Option<&str>,
+    sha256: &str,
     expected_version: &str,
     installer_kind: WindowsInstallerKind,
 ) -> Result<ResolvedUpdatePackage, String> {
@@ -3337,7 +3388,7 @@ fn validate_manifest_package(
     if resolved_package != package {
         return Err("latest.json 指向的更新包已变化，拒绝继续安装".to_string());
     }
-    if resolved.signature != signature {
+    if resolved.signature.as_deref() != signature {
         return Err("latest.json 中的更新签名已变化，拒绝继续安装".to_string());
     }
     let expected_version = normalize_update_version_text(expected_version)
@@ -3345,7 +3396,7 @@ fn validate_manifest_package(
     if resolved.version != expected_version {
         return Err("latest.json 中的更新版本已变化，拒绝继续安装".to_string());
     }
-    verify_update_package(&resolved_package, &resolved.signature)?;
+    verify_update_package_identity(&resolved_package, resolved.signature.as_deref(), sha256)?;
     Ok(ResolvedUpdatePackage {
         package_path: resolved_package,
         ..resolved
@@ -3381,7 +3432,11 @@ fn restart_rocketx(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("无法重新启动 RocketX：{error}"))
 }
 
-fn stage_verified_package(package: &Path, signature: &str) -> Result<(PathBuf, PathBuf), String> {
+fn stage_update_package(
+    package: &Path,
+    signature: Option<&str>,
+    sha256: &str,
+) -> Result<(PathBuf, PathBuf), String> {
     let staging_dir = create_unique_temp_dir("update-stage")?;
     let staged_package = staging_dir.join(
         package
@@ -3395,7 +3450,7 @@ fn stage_verified_package(package: &Path, signature: &str) -> Result<(PathBuf, P
                 staged_package.display()
             )
         })
-        .and_then(|_| verify_update_package(&staged_package, signature));
+        .and_then(|_| verify_update_package_identity(&staged_package, signature, sha256));
     match result {
         Ok(()) => Ok((staged_package, staging_dir)),
         Err(error) => {
@@ -3410,14 +3465,18 @@ fn run_update_helper_inner(args: &UpdateHelperArgs) -> Result<(), String> {
     let resolved = validate_manifest_package(
         &args.base_dir,
         &args.package_path,
-        &args.signature,
+        args.signature.as_deref(),
+        &args.sha256,
         &args.target_version,
         args.installer_kind,
     )?;
-    let (staged_package, staging_dir) =
-        stage_verified_package(&resolved.package_path, &resolved.signature)?;
+    let (staged_package, staging_dir) = stage_update_package(
+        &resolved.package_path,
+        resolved.signature.as_deref(),
+        &args.sha256,
+    )?;
     let install_result =
-        extract_signed_installer(&staged_package, args.installer_kind).and_then(|prepared| {
+        prepare_update_installer(&staged_package, args.installer_kind).and_then(|prepared| {
             let result = run_silent_installer(&prepared.path, args.installer_kind);
             if let Some(cleanup_dir) = prepared.cleanup_dir.as_ref() {
                 let _ = std::fs::remove_dir_all(cleanup_dir);
@@ -3486,7 +3545,8 @@ fn spawn_update_helper(
     helper: &Path,
     base: &Path,
     package: &Path,
-    signature: &str,
+    signature: Option<&str>,
+    sha256: &str,
     target_version: &str,
     installer_kind: WindowsInstallerKind,
     lock_path: &Path,
@@ -3500,12 +3560,15 @@ fn spawn_update_helper(
         .args(["--wait-pid", &std::process::id().to_string()])
         .args(["--base", &base.to_string_lossy()])
         .args(["--package", &package.to_string_lossy()])
-        .args(["--signature", signature])
+        .args(["--sha256", sha256])
         .args(["--target-version", target_version])
         .args(["--relaunch", &current_exe.to_string_lossy()])
         .args(["--installer-kind", installer_kind.cli_value()])
         .args(["--helper-lock", &lock_path.to_string_lossy()])
         .args(["--result-path", &result_path.to_string_lossy()]);
+    if let Some(signature) = signature {
+        command.args(["--signature", signature]);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -3517,13 +3580,14 @@ fn spawn_update_helper(
         .map_err(|error| format!("无法启动更新 helper：{error}"))
 }
 
-/// 只启动配置目录里的签名更新包；启动前再次验签，避免检查与执行之间被替换。
+/// 只启动配置目录里已探测的更新包；签名可选，SHA-256 固定本次探测内容。
 #[tauri::command]
 pub async fn launch_update_installer(
     app: tauri::AppHandle,
     dir: String,
     path: String,
-    signature: String,
+    signature: Option<String>,
+    sha256: String,
     expected_version: String,
     installer_type: String,
 ) -> Result<(), String> {
@@ -3538,7 +3602,8 @@ pub async fn launch_update_installer(
     let resolved = validate_manifest_package(
         &base,
         Path::new(path.trim()),
-        &signature,
+        signature.as_deref(),
+        &sha256,
         &expected_version,
         installer_kind,
     )?;
@@ -3551,7 +3616,8 @@ pub async fn launch_update_installer(
         &helper,
         &base,
         &resolved.package_path,
-        &resolved.signature,
+        resolved.signature.as_deref(),
+        &sha256,
         &resolved.version,
         installer_kind,
         &lock_path,
@@ -3561,6 +3627,7 @@ pub async fn launch_update_installer(
         std::mem::forget(lock);
     }
     spawn_result?;
+    app.exit(0);
     Ok(())
 }
 
@@ -3618,15 +3685,15 @@ mod tests {
         parse_update_helper_args, probe_resolve_codex_from_candidates_with_probe,
         read_codex_artifact, redact_json_secret, resolve_codex_from_candidates_with_probe,
         resolve_update_package_with_kind, run_business_azure_devops_server_read_with,
-        run_butler_azure_devops_server_read, safe_attachment_path, silent_install_invocation,
-        standalone_azure_devops_server_adapter_path,
+        run_butler_azure_devops_server_read, safe_attachment_path, sha256_file,
+        silent_install_invocation, standalone_azure_devops_server_adapter_path,
         validate_butler_azure_devops_server_read_request, validate_session_id,
-        verify_update_package, ButlerAzureDevOpsServerReadRequest, CodexCompatibilityStatus,
-        CodexProcessInfo, CodexRuntimeCandidate, CodexRuntimeCandidateOutcome, CodexRuntimeProbe,
-        CodexRuntimeReasonCode, CodexRuntimeSource, UpdateResult, UpdateResultStatus,
-        WindowsInstallerKind, AZURE_DEVOPS_SERVER_BODY_LIMIT, AZURE_DEVOPS_SERVER_HOST_ADAPTER,
-        CODEX_MINIMUM_CANDIDATE, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS,
-        UPDATER_PUBLIC_KEY,
+        verify_update_package, verify_update_package_identity, ButlerAzureDevOpsServerReadRequest,
+        CodexCompatibilityStatus, CodexProcessInfo, CodexRuntimeCandidate,
+        CodexRuntimeCandidateOutcome, CodexRuntimeProbe, CodexRuntimeReasonCode,
+        CodexRuntimeSource, UpdateResult, UpdateResultStatus, WindowsInstallerKind,
+        AZURE_DEVOPS_SERVER_BODY_LIMIT, AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE,
+        CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
     };
     #[cfg(windows)]
     use super::{
@@ -3743,7 +3810,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_directory_update_rejects_unsigned_packages() {
+    fn shared_directory_update_accepts_unsigned_packages_for_explicit_local_trust() {
         let root = unique_temp_dir("unsigned-update");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("RocketX-update.zip"), b"zip").unwrap();
@@ -3755,9 +3822,26 @@ mod tests {
                 }
             }
         });
-        let error = resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis)
-            .unwrap_err();
-        assert!(error.contains("缺少 signature"));
+        let resolved =
+            resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis).unwrap();
+        assert_eq!(resolved.signature, None);
+        assert!(resolved.package_path.ends_with("RocketX-update.zip"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_directory_update_rejects_package_changed_after_probe() {
+        let root = unique_temp_dir("changed-update");
+        fs::create_dir_all(&root).unwrap();
+        let package = root.join("RocketX-update.exe");
+        fs::write(&package, b"original installer").unwrap();
+        let sha256 = sha256_file(&package).unwrap();
+
+        verify_update_package_identity(&package, None, &sha256).unwrap();
+        fs::write(&package, b"replaced installer").unwrap();
+        let error = verify_update_package_identity(&package, None, &sha256).unwrap_err();
+
+        assert!(error.contains("SHA-256 已变化"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3783,12 +3867,12 @@ mod tests {
         let nsis =
             resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Nsis).unwrap();
         assert!(nsis.package_path.ends_with("RocketX_0.40.2_x64-setup.exe"));
-        assert_eq!(nsis.signature, "sig-a");
+        assert_eq!(nsis.signature.as_deref(), Some("sig-a"));
         assert_eq!(nsis.version, "0.40.2");
         let msi =
             resolve_update_package_with_kind(&root, &manifest, WindowsInstallerKind::Msi).unwrap();
         assert!(msi.package_path.ends_with("RocketX_0.40.2_x64.msi"));
-        assert_eq!(msi.signature, "sig-b");
+        assert_eq!(msi.signature.as_deref(), Some("sig-b"));
         assert_eq!(msi.installer_kind, WindowsInstallerKind::Msi);
         let _ = fs::remove_dir_all(root);
     }
@@ -3938,6 +4022,8 @@ mod tests {
             r"\\server\share\rocketx\RocketX_0.40.2_x64-setup.exe".to_string(),
             "--signature".to_string(),
             "sig".to_string(),
+            "--sha256".to_string(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
             "--target-version".to_string(),
             "0.40.2".to_string(),
             "--relaunch".to_string(),
@@ -3953,6 +4039,8 @@ mod tests {
         assert_eq!(parsed.wait_pid, 42);
         assert_eq!(parsed.installer_kind, WindowsInstallerKind::Nsis);
         assert_eq!(parsed.target_version, "0.40.2");
+        assert_eq!(parsed.signature.as_deref(), Some("sig"));
+        assert_eq!(parsed.sha256.len(), 64);
         assert_eq!(
             parsed.result_path,
             PathBuf::from(r"C:\Temp\update-result.json")

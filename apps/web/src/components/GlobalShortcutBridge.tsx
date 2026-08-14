@@ -27,7 +27,7 @@ export default function GlobalShortcutBridge() {
     let unregister: ((shortcut: string) => Promise<void>) | null = null;
     setRuntimeStatus('registering');
 
-    void (async () => {
+    const registration = (async () => {
       await pendingUnregister;
       if (cancelled) return;
       try {
@@ -43,10 +43,7 @@ export default function GlobalShortcutBridge() {
           })();
         });
         registered = true;
-        if (cancelled) {
-          await plugin.unregister(shortcut).catch(() => {});
-          return;
-        }
+        if (cancelled) return;
         setRuntimeStatus('registered');
       } catch (error) {
         if (!cancelled) {
@@ -60,10 +57,12 @@ export default function GlobalShortcutBridge() {
 
     return () => {
       cancelled = true;
-      if (registered && unregister) {
+      pendingUnregister = pendingUnregister.then(async () => {
+        await registration.catch(() => {});
+        if (!registered || !unregister) return;
         const release = unregister;
-        pendingUnregister = pendingUnregister.then(() => release(shortcut).catch(() => {}));
-      }
+        await release(shortcut).catch(() => {});
+      });
     };
   }, [enabled, setRuntimeStatus, shortcut]);
 

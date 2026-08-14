@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 
@@ -74,15 +74,11 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
           if (command === 'plugin:notification|is_permission_granted') {
             return notificationPermission === 'granted';
           }
-          if (command === 'plugin:autostart|enable') {
-            autostartEnabled = true;
-            return null;
+          if (command === 'set_autostart_enabled') {
+            autostartEnabled = Boolean(args?.enabled);
+            return autostartEnabled;
           }
-          if (command === 'plugin:autostart|disable') {
-            autostartEnabled = false;
-            return null;
-          }
-          if (command === 'plugin:autostart|is_enabled') return autostartEnabled;
+          if (command === 'read_autostart_enabled') return autostartEnabled;
           if (command === 'plugin:updater|check') return null;
           return null;
         },
@@ -1070,6 +1066,85 @@ test('登录后进入主界面', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('深色主题首次引导的说明面板保持高对比度（issue #305）', { tag: '@release-desktop' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installTauriMock(page);
+  await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
+
+  const contrastOf = async (locator: Locator): Promise<number> => {
+    await expect(locator).toBeVisible();
+    return locator.evaluate((element) => {
+      const panel = element.closest('section');
+      if (!panel) return 0;
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return 0;
+      const parseColor = (value: string): { rgb: number[]; alpha: number } => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = value;
+        context.fillRect(0, 0, 1, 1);
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+        return { rgb: [red, green, blue], alpha: alpha / 255 };
+      };
+      const composite = (
+        foreground: { rgb: number[]; alpha: number },
+        background: { rgb: number[]; alpha: number },
+      ): { rgb: number[]; alpha: number } => {
+        const alpha = foreground.alpha + background.alpha * (1 - foreground.alpha);
+        return {
+          rgb: foreground.rgb.map((channel, index) => (
+            channel * foreground.alpha
+              + (background.rgb[index] ?? 0) * background.alpha * (1 - foreground.alpha)
+          ) / alpha),
+          alpha,
+        };
+      };
+      const layers: Element[] = [];
+      for (let current: Element | null = element; current; current = current.parentElement) {
+        layers.push(current);
+        if (current === panel) break;
+      }
+      const background = layers.reverse().reduce(
+        (result, layer) => composite(parseColor(getComputedStyle(layer).backgroundColor), result),
+        { rgb: [0, 0, 0], alpha: 0 },
+      );
+      const foreground = composite(parseColor(getComputedStyle(element).color), background);
+      const luminance = ([red = 0, green = 0, blue = 0]: number[]): number => {
+        const linear = [red, green, blue].map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.04045
+            ? normalized / 12.92
+            : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+      };
+      const foregroundLuminance = luminance(foreground.rgb);
+      const backgroundLuminance = luminance(background.rgb);
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+    });
+  };
+
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await contrastOf(page.getByRole('heading', { name: 'GTD 是运行方式，注意力是检验标准。' }))).toBeGreaterThanOrEqual(7);
+  expect(await contrastOf(page.getByText('你直接掌握的确定性界面。', { exact: true }))).toBeGreaterThanOrEqual(4.5);
+
+  await page.getByRole('button', {
+    name: RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入',
+  }).click();
+  if (RELEASE_DESKTOP_E2E) {
+    expect(await contrastOf(page.getByRole('heading', { name: /第一次启动时.*把该交给系统的事交给系统/ }))).toBeGreaterThanOrEqual(7);
+    expect(await contrastOf(page.getByText(/这一步只决定是否向操作系统申请通知权限/))).toBeGreaterThanOrEqual(4.5);
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await page.getByRole('button', { name: '继续加入团队' }).click();
+  }
+  expect(await contrastOf(page.getByRole('heading', { name: /消息用来沟通.*工作台用来确定.*管家用来完成/ }))).toBeGreaterThanOrEqual(7);
+  expect(await contrastOf(page.getByText('团队讨论、上下文和原始事实留在这里。', { exact: true }))).toBeGreaterThanOrEqual(4.5);
+});
+
 test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -1472,6 +1547,66 @@ test('普通打开和同会话重开在异步布局增长后都完成贴底（is
   )).toBeLessThan(2);
 
   await conversation(page, 'General').click();
+  await expect.poll(() => viewport.evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('普通打开的有界帧复核会覆盖第二帧布局增长（issue #299）', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeResizeObserver = window.ResizeObserver;
+    Object.defineProperty(window, 'ResizeObserver', {
+      configurable: true,
+      value: class ResizeObserverWithoutMessageListCallbacks {
+        private readonly observer: ResizeObserver;
+
+        constructor(callback: ResizeObserverCallback) {
+          this.observer = new NativeResizeObserver((entries, observer) => {
+            const unrelatedEntries = entries.filter((entry) => {
+              const target = entry.target;
+              return !(target instanceof HTMLElement && target.closest('[data-testid="message-scroll"]'));
+            });
+            if (unrelatedEntries.length > 0) callback(unrelatedEntries, observer);
+          });
+        }
+
+        observe(target: Element, options?: ResizeObserverOptions) {
+          this.observer.observe(target, options);
+        }
+
+        unobserve(target: Element) {
+          this.observer.unobserve(target);
+        }
+
+        disconnect() {
+          this.observer.disconnect();
+        }
+      },
+    });
+  });
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Delayed frame message') },
+  });
+
+  const delayedGrowth = page.evaluate(() => new Promise<void>((resolve) => {
+    const observer = new MutationObserver(() => {
+      const viewport = document.querySelector<HTMLElement>('[data-testid="message-scroll"]');
+      if (!viewport) return;
+      observer.disconnect();
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const spacer = document.createElement('div');
+        spacer.style.height = '600px';
+        viewport.firstElementChild?.append(spacer);
+        resolve();
+      }));
+    });
+    observer.observe(document.getElementById('root')!, { childList: true, subtree: true });
+  }));
+
+  await conversation(page, 'General').click();
+  await delayedGrowth;
+  const viewport = page.getByTestId('message-scroll');
   await expect.poll(() => viewport.evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeLessThan(2);
@@ -2009,7 +2144,7 @@ test('Azure DevOps 卡片会随聊天栏收窄（issue #116）', async ({ page }
   expect(pageErrors).toEqual([]);
 });
 
-test('ADO 我的贡献只统计 PR，并保留热力图、键盘日期明细与项目筛选（issue #298）', async ({ page }, testInfo) => {
+test('ADO 我的代码默认显示一年，并保留热力图、键盘日期明细与项目筛选（issues #298, #307, #311）', async ({ page }, testInfo) => {
   const adoRequests: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/ado/')) adoRequests.push(request.url());
@@ -2024,7 +2159,16 @@ test('ADO 我的贡献只统计 PR，并保留热力图、键盘日期明细与�
     }));
   });
   const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
-  await expect(page.getByRole('button', { name: '我的贡献', exact: true })).toHaveClass(/bg-primary-light/);
+  await expect(page.getByRole('button', { name: '我的代码', exact: true })).toHaveClass(/bg-primary-light/);
+  const [rangeFrom, rangeTo] = await Promise.all([
+    page.getByLabel('开始日期').inputValue(),
+    page.getByLabel('结束日期').inputValue(),
+  ]);
+  const rangeDays = Math.round(
+    (Date.parse(`${rangeTo}T12:00:00`) - Date.parse(`${rangeFrom}T12:00:00`)) / 86_400_000,
+  ) + 1;
+  expect(rangeDays).toBeGreaterThanOrEqual(365);
+  expect(rangeDays).toBeLessThanOrEqual(366);
   await expect(page.getByRole('heading', { name: 'Test User' })).toBeVisible();
   await expect(page.getByLabel('ADO PR 总数')).toContainText('创建 PR');
   await expect(page.getByLabel('ADO PR 总数').getByText('1', { exact: true })).toBeVisible();
@@ -2321,6 +2465,33 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
   await page.getByRole('button', { name: '在 AI 管家中管理项目…' }).click();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：another-project' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('首次开启 AI 托管立即打开进度面板（issue #310）', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-main',
+        name: 'RocketChat X - 主目录',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+
+  await page.getByRole('button', { name: '开启 AI 托管' }).click();
+  await expect(page.getByText('AI 托管独立配置')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

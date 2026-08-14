@@ -13,7 +13,11 @@ mod ocr;
 mod proc;
 mod winauth;
 
-use std::{collections::HashSet, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 #[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
@@ -32,6 +36,13 @@ const AUTOSTART_ARG: &str = "--autostart";
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
 
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug)]
+enum WebviewMemoryUsage {
+    Normal,
+    Low,
+}
+
 fn is_autostart_launch<I, S>(args: I) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -49,12 +60,35 @@ where
     !is_autostart_launch(args)
 }
 
+fn executable_is_local_build(executable: &Path) -> bool {
+    executable
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|directory| directory.to_str())
+        .is_some_and(|directory| {
+            directory.eq_ignore_ascii_case("debug") || directory.eq_ignore_ascii_case("release")
+        })
+}
+
+fn autostart_registration_allowed(debug: bool, executable: &Path) -> bool {
+    !debug && !executable_is_local_build(executable)
+}
+
+fn current_autostart_registration_allowed() -> Result<bool, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("无法确认当前 RocketX 安装路径：{error}"))?;
+    Ok(autostart_registration_allowed(
+        cfg!(debug_assertions),
+        &executable,
+    ))
+}
+
 fn refresh_autostart_registration_with(
-    debug: bool,
+    allowed: bool,
     is_enabled: impl FnOnce() -> Result<bool, String>,
     enable: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    if debug {
+    if !allowed {
         return Ok(());
     }
     if is_enabled()? {
@@ -64,10 +98,9 @@ fn refresh_autostart_registration_with(
 }
 
 fn refresh_autostart_registration<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), String> {
-    // Debug EXE 依赖 Vite 开发服务器，不能成为可独立运行的系统启动项。
     let manager = app.autolaunch();
     refresh_autostart_registration_with(
-        cfg!(debug_assertions),
+        current_autostart_registration_allowed()?,
         || manager.is_enabled().map_err(|error| error.to_string()),
         || {
             // 官方插件的 is_enabled 只检查注册表值是否存在，不检查其中的 EXE 路径。
@@ -75,6 +108,31 @@ fn refresh_autostart_registration<R: tauri::Runtime>(app: &tauri::App<R>) -> Res
             manager.enable().map_err(|error| error.to_string())
         },
     )
+}
+
+#[tauri::command]
+fn read_autostart_enabled(app: tauri::AppHandle) -> Result<Option<bool>, String> {
+    if !current_autostart_registration_allowed()? {
+        return Ok(None);
+    }
+    app.autolaunch()
+        .is_enabled()
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_autostart_enabled(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    if !current_autostart_registration_allowed()? {
+        return Err("本地构建版不能设置开机启动；请使用正式安装版".to_string());
+    }
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|error| error.to_string())?;
+    } else {
+        manager.disable().map_err(|error| error.to_string())?;
+    }
+    manager.is_enabled().map_err(|error| error.to_string())
 }
 
 fn validate_external_url(url: &str) -> Result<&str, String> {
@@ -215,9 +273,43 @@ fn allow_http_origin(
     Ok(origin)
 }
 
+#[cfg(windows)]
+fn set_webview_memory_usage(window: &tauri::WebviewWindow, usage: WebviewMemoryUsage) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+
+    let target = match usage {
+        WebviewMemoryUsage::Normal => COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        WebviewMemoryUsage::Low => COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    };
+    let label = window.label().to_string();
+    if let Err(error) = window.with_webview(move |webview| {
+        let result = unsafe { webview.controller().CoreWebView2() }
+            .and_then(|webview| webview.cast::<ICoreWebView2_19>())
+            .and_then(|webview| unsafe { webview.SetMemoryUsageTargetLevel(target) });
+        if let Err(error) = result {
+            log::warn!("failed to set {label} WebView2 memory target to {usage:?}: {error}");
+        }
+    }) {
+        log::warn!("failed to access {} WebView2: {error}", window.label());
+    }
+}
+
+#[cfg(windows)]
+fn set_window_webview_memory_usage(window: &tauri::Window, usage: WebviewMemoryUsage) {
+    if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+        set_webview_memory_usage(&webview, usage);
+    }
+}
+
 /// 显示并聚焦主窗口（从托盘点回来）
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        #[cfg(windows)]
+        set_webview_memory_usage(&w, WebviewMemoryUsage::Normal);
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -268,12 +360,7 @@ fn show_message_notification(
     // 未安装的 target/debug、target/release 没有注册 AppUserModelId，沿用 PowerShell 标识；
     // 安装包运行时才使用应用 identifier，与官方通知插件行为一致。
     let target_build = tauri::utils::platform::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
-        .is_some_and(|dir| {
-            dir.ends_with(std::path::Path::new("target").join("debug"))
-                || dir.ends_with(std::path::Path::new("target").join("release"))
-        });
+        .is_ok_and(|executable| executable_is_local_build(&executable));
     if !target_build {
         notification.app_id(&app.config().identifier);
     }
@@ -361,10 +448,11 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 #[cfg(test)]
 mod tray_icon_tests {
     use super::{
-        dim_tray_icon, is_autostart_launch, launch_opens_main_window, normalize_http_origin,
-        refresh_autostart_registration_with, resolve_download_history_path, validate_external_url,
+        autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
+        launch_opens_main_window, normalize_http_origin, refresh_autostart_registration_with,
+        resolve_download_history_path, validate_external_url,
     };
-    use std::cell::Cell;
+    use std::{cell::Cell, path::Path};
     use tauri::image::Image;
 
     #[test]
@@ -424,7 +512,7 @@ mod tray_icon_tests {
         let checks = Cell::new(0);
         let enables = Cell::new(0);
         refresh_autostart_registration_with(
-            false,
+            true,
             || {
                 checks.set(checks.get() + 1);
                 Ok(true)
@@ -439,17 +527,35 @@ mod tray_icon_tests {
         assert_eq!(enables.get(), 1);
 
         refresh_autostart_registration_with(
-            false,
+            true,
             || Ok(false),
             || panic!("disabled registration must not be enabled"),
         )
         .unwrap();
         refresh_autostart_registration_with(
-            true,
-            || panic!("debug build must not inspect the system registration"),
-            || panic!("debug build must not register itself"),
+            false,
+            || panic!("local build must not inspect the system registration"),
+            || panic!("local build must not register itself"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn autostart_rejects_debug_and_release_build_executables() {
+        let local_release = Path::new("repo")
+            .join("target")
+            .join("release")
+            .join("rocketx");
+        let custom_target_release = Path::new("cargo-output").join("release").join("rocketx");
+        let installed = Path::new("installed").join("RocketX").join("rocketx");
+
+        assert!(!autostart_registration_allowed(false, &local_release));
+        assert!(!autostart_registration_allowed(
+            false,
+            &custom_target_release
+        ));
+        assert!(!autostart_registration_allowed(true, &installed));
+        assert!(autostart_registration_allowed(false, &installed));
     }
 
     #[test]
@@ -521,6 +627,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             allow_http_origin,
             open_external_url,
+            read_autostart_enabled,
+            set_autostart_enabled,
             download_history_open,
             download_history_reveal,
             diagnostics::collect_diagnostic_logs,
@@ -633,6 +741,11 @@ fn main() {
         .setup(move |app| {
             if show_main_on_launch {
                 show_main(app.handle());
+            } else {
+                #[cfg(windows)]
+                if let Some(window) = app.get_webview_window("main") {
+                    set_webview_memory_usage(&window, WebviewMemoryUsage::Low);
+                }
             }
             if let Err(error) = refresh_autostart_registration(app) {
                 log::warn!("failed to refresh autostart registration: {error}");
@@ -673,13 +786,31 @@ fn main() {
                 .build(app)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // 点关闭按钮 = 隐藏到托盘，不退出进程（issue #3）。
             // 真正退出走托盘菜单的「退出」。
-            if let WindowEvent::CloseRequested { api, .. } = event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(windows)]
+                set_window_webview_memory_usage(window, WebviewMemoryUsage::Low);
             }
+            WindowEvent::Resized(_) =>
+            {
+                #[cfg(windows)]
+                if window.is_minimized().unwrap_or(false) {
+                    set_window_webview_memory_usage(window, WebviewMemoryUsage::Low);
+                }
+            }
+            WindowEvent::Focused(false) => {
+                #[cfg(windows)]
+                set_window_webview_memory_usage(window, WebviewMemoryUsage::Low);
+            }
+            WindowEvent::Focused(true) => {
+                #[cfg(windows)]
+                set_window_webview_memory_usage(window, WebviewMemoryUsage::Normal);
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building RocketX")
