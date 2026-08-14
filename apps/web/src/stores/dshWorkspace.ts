@@ -202,6 +202,25 @@ function activeConversationState(sessionId: string | null): Pick<
   };
 }
 
+export function resetDshConversationAfterDisconnect(message: string): void {
+  approvalsBySession.clear();
+  questionsBySession.clear();
+  queueBySession.clear();
+  useDshWorkspace.setState((state) => ({
+    status: 'error',
+    error: message,
+    sessions: state.sessions.map((session) => (
+      session.status === 'running' ? { ...session, status: 'error' } : session
+    )),
+    pendingApproval: null,
+    pendingQuestion: null,
+    queuedMessages: [],
+    isRunning: false,
+    configurationStatus: 'error',
+    configurationError: message,
+  }));
+}
+
 function addPending<T extends { rpcId: string }>(items: T[] | undefined, item: T): T[] {
   if (items?.some((entry) => entry.rpcId === item.rpcId)) return items;
   return [...(items ?? []), item];
@@ -621,26 +640,14 @@ async function connectWorkspace(): Promise<void> {
       onHost: (request) => handleHost(request, generation),
       onError: (error) => {
         if (generation === connectionGeneration) {
-          useDshWorkspace.setState({
-            status: 'error',
-            error: error.message,
-            isRunning: false,
-            configurationStatus: 'error',
-            configurationError: error.message,
-          });
+          resetDshConversationAfterDisconnect(error.message);
         }
       },
       onExit: () => {
         if (generation === connectionGeneration) {
           controller = null;
           connectedWorkspace = null;
-          useDshWorkspace.setState({
-            status: 'error',
-            error: 'DSH 进程已退出',
-            isRunning: false,
-            configurationStatus: 'error',
-            configurationError: 'DSH 进程已退出',
-          });
+          resetDshConversationAfterDisconnect('DSH 进程已退出');
         }
       },
     });
@@ -685,13 +692,7 @@ async function connectWorkspace(): Promise<void> {
       }
     } catch (reason) {
       if (generation === connectionGeneration) {
-        useDshWorkspace.setState({
-          status: 'error',
-          error: errorMessage(reason),
-          isRunning: false,
-          configurationStatus: 'error',
-          configurationError: errorMessage(reason),
-        });
+        resetDshConversationAfterDisconnect(errorMessage(reason));
         controller = null;
         connectedWorkspace = null;
       }

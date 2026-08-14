@@ -10,6 +10,7 @@ import {
 import {
   applyDshMuxFrame,
   dshCredentialState,
+  resetDshConversationAfterDisconnect,
   useDshWorkspace,
 } from '../../apps/web/src/stores/dshWorkspace';
 
@@ -104,6 +105,52 @@ test('DSH workspace ignores stale title projections and mirrors the authoritativ
   assert.deepEqual(useDshWorkspace.getState().queuedMessages, [
     { id: 'message-1', placement: 'queued', text: '稍后执行' },
   ]);
+});
+
+test('DSH disconnect clears stale interactions and marks running sessions as failed', () => {
+  const sessionId = 'session-disconnected';
+  useDshWorkspace.setState({
+    status: 'ready',
+    activeSessionId: sessionId,
+    sessions: [
+      { id: sessionId, updatedAt: 2, status: 'running', blank: false },
+      { id: 'session-idle', updatedAt: 1, status: 'idle', blank: false },
+    ],
+    pendingApproval: null,
+    pendingQuestion: null,
+    queuedMessages: [],
+    isRunning: true,
+  });
+  applyDshMuxFrame({
+    type: 'server-request', rpcId: 'approval-disconnect', method: 'approval/requested',
+    payload: { type: 'approval/requested', sessionId, approvalId: 'approval-1', toolName: 'shell' },
+  });
+  applyDshMuxFrame({
+    type: 'server-request', rpcId: 'question-disconnect', method: 'question/requested',
+    payload: { type: 'question/requested', sessionId, questions: [{ id: 'q1', question: '继续？' }] },
+  });
+  applyDshMuxFrame({
+    type: 'server-request', rpcId: 'queue-disconnect', method: 'session/queue',
+    payload: {
+      type: 'session/queue', sessionId,
+      items: [{
+        id: 'queued-1', placement: 'queued',
+        message: { id: 'queued-1', content: [{ type: 'text', text: '稍后执行' }] },
+      }],
+    },
+  });
+
+  resetDshConversationAfterDisconnect('DSH 进程已退出');
+
+  const state = useDshWorkspace.getState();
+  assert.equal(state.status, 'error');
+  assert.equal(state.error, 'DSH 进程已退出');
+  assert.equal(state.pendingApproval, null);
+  assert.equal(state.pendingQuestion, null);
+  assert.deepEqual(state.queuedMessages, []);
+  assert.equal(state.isRunning, false);
+  assert.equal(state.sessions.find((session) => session.id === sessionId)?.status, 'error');
+  assert.equal(state.sessions.find((session) => session.id === 'session-idle')?.status, 'idle');
 });
 
 test('DSH credentials keep environment-provided keys configured but read-only', () => {
