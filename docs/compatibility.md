@@ -20,13 +20,13 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 | Surface | Baseline | Notes |
 | --- | --- | --- |
 | Web | Production Vite build behind the pinned Nginx image | Nginx serves the SPA and proxies Rocket.Chat API, file, avatar, emoji, and WebSocket routes on the same origin. |
-| Windows desktop | Tauri 2 / WebView2 | Official x64 NSIS slim, MSI, and optional full installers. Windows-specific integrated authentication and native notifications are platform-gated. |
+| Windows desktop | Tauri 2 / WebView2 | Official x64 NSIS slim, MSI, and optional full installers. Slim only probes installed Codex/DSH runtimes; Windows full additionally carries private Codex/DSH payloads. Windows-specific integrated authentication and native notifications are platform-gated. |
 | macOS desktop | Tauri 2 / system WebView | Official universal DMG and updater archive. The app uses an ad-hoc macOS signature and RocketX updater signature, but is not Apple-notarized; users may need to allow it in Privacy & Security. |
 | Linux desktop | Tauri 2 / WebKitGTK | Official x64 AppImage, DEB, and RPM packages. Distribution-specific behavior beyond the CI baseline remains unverified. |
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. The `v0.42.0` build candidate was not published after its desktop matrix failed before packaging. Starting with `v0.42.1`, the complete Windows, macOS, and Linux updater manifest continues to be promoted as GitHub Latest.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. The `v0.42.0` and `v0.42.1` build candidates were not published after their desktop matrices exposed DSH preparation and raw-resource packaging limits. Starting with `v0.42.2`, the verified release continues to promote GitHub Latest; the desktop line is split into default slim artifacts that only probe installed runtimes and a Windows full installer that adds the private bundled payloads.
 
 ## Codex runtime compatibility
 
@@ -44,17 +44,17 @@ See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, an
 
 ## DeepSeek Harness runtime compatibility
 
-RocketX `v0.42.1` desktop installers bundle the complete production installation tree for exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Users do not need a separate DSH installation or a `deepseek-harness` source checkout. RocketX still uses a system Node.js runtime and requires Node.js 22.19+ or 24+; the Web client cannot start the local DSH process.
+RocketX `v0.42.2` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, the current verified compatibility line is exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Newer DSH versions stay unavailable until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.1.0-rc.6` plus a private Node payload into the application data directory. A separate `deepseek-harness` source checkout is not a release prerequisite. The Web client cannot start the local DSH process.
 
 | DSH condition | RocketX behavior |
 | --- | --- |
-| Bundled `0.1.0-rc.6`, compatible Node.js, API key configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DeepSeek AI hosting are available |
-| Node.js missing or below 22.19 | DSH does not start and shows the runtime requirement; Codex and deterministic surfaces keep their own availability |
+| Installed compatible DSH `0.1.0-rc.6` or Windows full private runtime, API key configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DeepSeek AI hosting are available |
+| DSH missing or unavailable | DeepSeek backend is unavailable in slim mode; Codex and deterministic surfaces keep their own availability |
 | DeepSeek API key missing | DSH configuration and history remain visible, but sending fails closed until the key is stored through DSH credentials |
-| DSH resource missing or incomplete | RocketX refuses to start that backend instead of downloading an unpinned runtime at run time |
+| Private full runtime missing or incomplete | RocketX refuses to start that backend instead of downloading an unpinned runtime at run time |
 | Web client | No local DSH transport; messaging and deterministic work surfaces remain usable |
 
-An upstream DSH upgrade is a full runtime upgrade: change the exact version in `apps/dsh-runtime/package.json`, update `pnpm-lock.yaml`, run `pnpm prepare:dsh-runtime`, and repeat bridge, Host API, native dependency, session/configuration, approval, and packaging checks. RocketX does not maintain a compatibility shim for multiple DSH wire contracts.
+An upstream DSH upgrade is a full runtime upgrade for the Windows full package: change the exact version in `apps/dsh-runtime/package.json`, update `pnpm-lock.yaml`, run `pnpm prepare:dsh-runtime`, and repeat bridge, Host API, native dependency, session/configuration, approval, and packaging checks. Slim builds only track external installation discovery and do not carry the private runtime. RocketX does not maintain a compatibility shim for multiple DSH wire contracts, so newer system DSH builds stay unsupported until this exact upgrade path lands.
 
 ## Required and optional server settings
 

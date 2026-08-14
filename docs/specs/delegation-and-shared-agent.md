@@ -32,7 +32,7 @@
 
 - 会话标题/右侧 Agent 面板提供“AI 托管”。
 - 工作项可先创建 Rocket.Chat 原生 Discussion，再选择一个空闲本地环境或托管项目。
-- Codex 后端要求兼容且已登录的本地 Codex；DeepSeek 后端要求随包 DSH、系统 Node.js 22.19+ 或 24+ 和已配置 DeepSeek API Key。
+- Codex 后端要求兼容且已登录的本地 Codex；DeepSeek 后端要求系统里已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的 DSH，或者 Windows full 私有运行时，再加已配置 DeepSeek API Key。
 - 管家 → 托管项目中可添加、编辑、删除允许访问的本地环境；路径只保存在本机，模型不能自行添加。
 
 ## 4. 主流程

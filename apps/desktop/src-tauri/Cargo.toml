@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.42.1"
+version = "0.42.2"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -38,7 +38,9 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 blake3 = "1.8"
+flate2 = "1"
 sha2 = "0.10"
+tar = "0.4"
 ed25519-dalek = "3.0"
 getrandom = "0.4"
 image = "0.25"

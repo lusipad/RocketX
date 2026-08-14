@@ -36,7 +36,7 @@
 
 - 顶部/左侧 RocketX 导航中的“管家”进入任务面；RocketX 全局导航不能因进入管家而消失。
 - Codex 视图要求先配置真实本地目录作为托管项目，桌面端发现通过门禁且已登录的 Codex。
-- DeepSeek 视图使用当前托管项目目录；正式安装版使用随包 DSH，系统需有 Node.js 22.19+ 或 24+，发送前需在该视图配置 DeepSeek API Key。
+- DeepSeek 视图使用当前托管项目目录；默认 slim 连接系统里已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的 DSH，Windows full 则使用同版本私有固定 DSH 运行时，发送前需在该视图配置 DeepSeek API Key。
 - 性能模式关闭时才提供 AI 任务执行。
 
 ## 4. 主流程
@@ -99,7 +99,7 @@ DeepSeek 视图不复制上述 Codex 专属动作。模型可切当前 Session�
 | --- | --- | --- |
 | 托管项目未选择/不存在 | 提示选择有效目录 | 不启动进程；重新选择 |
 | Runtime 不可用 | 显示探测原因 | Rocket.Chat/工作台仍可用；安装、登录或改路径后重连 |
-| DSH Node/资源不满足 | 显示精确运行时原因 | 不在线下载或降级到未知 DSH；修复系统 Node 或安装资源后重连 |
+| DSH Node/资源不满足 | 显示精确运行时原因 | 不在线下载或降级到未知 DSH；修复系统安装或安装/升级 full 后重连 |
 | DeepSeek API Key 未配置 | 发送前提示配置 | 不发送 prompt；在当前 DSH 视图配置后重试 |
 | DSH bridge 退出 | 当前运行 Session 标为中断并清理旧审批/问题/队列 | 重连后读取原生 Session 历史，不把旧卡片继续当成可操作请求 |
 | `app-server` 退出 | 当前任务标为中断 | 重连并恢复 Thread；不伪造完成 |

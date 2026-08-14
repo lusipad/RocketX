@@ -47,6 +47,7 @@ test('默认安装包不下载或捆绑增强 OCR，full 构建必须显式开�
     bundle: { resources: Record<string, string> };
   };
   assert.equal(config.bundle.resources['target/ocr-resources/ocr/'], undefined);
+  assert.equal(config.bundle.resources['target/codex-resources/codex/'], undefined);
   assert.match(buildScript, /bundle_resource\("ROCKETX_BUNDLE_OCR"\)/);
   assert.doesNotMatch(buildScript, /ROCKETX_BUNDLE_CODEX|prepare_codex_resources/);
 });

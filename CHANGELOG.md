@@ -1,5 +1,25 @@
 # 更新日志
 
+## v0.42.2 - 2026-08-14
+
+### 新增
+
+- 管家新增独立的 DeepSeek 视图，首次默认打开 DSH 视图并保留既有偏好；直接使用 DSH 的原生会话、历史、模型与提供方、推理强度、Agent preset、权限 preset、审批、问题和凭据能力；房间与话题中的 AI 托管也可以按会话选择 Codex 或 DeepSeek。
+
+### 改进
+
+- 桌面交付改为分层：默认 slim 只探测已安装的 Codex / DSH，不随包携带这两个运行时；系统 DSH 只有在 RocketX 验证为 `0.1.0-rc.6` 时才可用，后续版本需先升级支持线；Windows full 额外把固定的 `@openai/codex@0.144.4`、`@deepseek-ai/dsh@0.1.0-rc.6`、私有 Node 与 OCR 安装到 `%LOCALAPPDATA%\RocketX\resources`，macOS 和 Linux 官方包当前仍是 slim-only。slim updater 不会更新 full 的私有资源。
+
+### 修复
+
+- DSH 固定运行树改为 Windows full 私有资源中的单归档分发，并在首次使用时解压到 RocketX 应用数据目录；默认 slim 不再携带这类资源，避免 Windows MSI 超过 32,767 个文件，也避免 Linux AppImage 的 `linuxdeploy` 扫描 DSH 内部原生库。
+- DSH 进程断开时会清理失效的审批、问题和排队消息，并把仍在运行的会话标记为中断，避免旧卡片继续可操作或界面假装任务仍在执行。
+- `v0.42.0` 与 `v0.42.1` 候选均未公开发布；本版本补齐三平台打包门禁后再交付完整安装包。
+
+### 发布
+
+- 本版本继续通过受保护工作流交付 Windows x64、macOS universal 与 Linux x64 安装包、更新签名、插件包和 SHA256 校验文件。
+
 ## v0.42.1 - 2026-08-14
 
 ### 新增
@@ -10,7 +30,7 @@
 
 ### 改进
 
-- 正式桌面安装包固定携带官方 `@deepseek-ai/dsh@0.1.0-rc.6` 的完整生产运行树，不再要求用户另行下载 DSH 或保留 `deepseek-harness` 源码仓库；当前仍需要系统安装 Node.js 22.19+ 或 24+。
+- 当时的正式桌面安装包候选固定携带官方 `@deepseek-ai/dsh@0.1.0-rc.6` 的完整生产运行树，不再要求用户另行下载 DSH 或保留 `deepseek-harness` 源码仓库；这一口径后来被 v0.42.2 的 slim/full 分层取代，当前只对 Windows full 保留私有运行时。
 - Codex 与 DeepSeek 使用两套明确的视图和控制器，共用的只有 Rocket.Chat 托管租约、消息上下文、状态与回帖，不再为了后端可换而增加通用 Runtime 抽象。
 
 ### 修复

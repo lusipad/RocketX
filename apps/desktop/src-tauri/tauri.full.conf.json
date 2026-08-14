@@ -2,7 +2,10 @@
   "bundle": {
     "createUpdaterArtifacts": false,
     "resources": {
-      "target/ocr-resources/ocr/": "full-resources/ocr/"
+      "target/ocr-resources/ocr/": "full-resources/ocr/",
+      "target/codex-resources/codex/": "full-resources/codex/",
+      "target/dsh-runtime.tar.gz": "full-resources/dsh-runtime.tar.gz",
+      "target/node-resources/node/": "full-resources/node/"
     },
     "windows": {
       "nsis": {

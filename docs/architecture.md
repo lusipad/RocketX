@@ -43,8 +43,8 @@ rcx-hub 集中管控等平台级投入全部冻结。功能取舍以「GTD 五�
 - 消息、工作台、待办、日历和通讯录保存可查询、可编辑的权威事实；AI 回答不构成第二套业务数据。
 - 管家提供 Codex 与 DSH 两条独立纵切。Codex 视图直接使用本机 `app-server` 的 Thread、Skills/Plugins/Apps、Memory 和审批；DeepSeek 视图直接使用 DSH Web Host API 的 Session、模型/提供方、Agent preset、权限、审批、提问和凭据语义。
 - AI 托管只共用 Rocket.Chat 租约、消息上下文、状态与回帖；每个会话固定一个后端并保存其原生 ID，不建立通用 Runtime registry，也不把不同能力压成最小公共集合。已安排任务仍由 Codex 执行。
-- 桌面端通过 Tauri 发现并管理用户已安装、已登录且通过版本门禁的 Codex。精简包和全量包都不捆绑 Codex。
-- 正式安装包通过 lockfile 固定并携带 `@deepseek-ai/dsh@0.1.0-rc.6` 生产运行树，运行时由 Tauri 管理 Node bridge；用户无需另装 DSH 或保留源码仓库，但当前仍需系统 Node.js 22.19+ 或 24+。
+- 桌面端通过 Tauri 发现并管理用户已安装、已登录且通过版本门禁的 Codex。默认 slim 只探测系统里已安装的 Codex / DSH；Windows full 才在私有资源中携带固定 Codex / DSH / Node / OCR。
+- DSH 只在两种路径下可用：slim 连接系统里已安装且可运行的 DSH，Windows full 则在应用数据目录中使用私有固定运行时；用户无需保留 `deepseek-harness` 源码仓库，但私有 full 资源只随 full 升级。
 - 网页版保留 Rocket.Chat 与确定性工作界面，但当前没有本地 Codex 或 DSH Transport。详细降级行为见 [能力矩阵](specs/capability-matrix.md)。
 - 交互式请求按原生 Thread/Session 隔离。Codex 的三档快捷权限与 DSH 的原生 permission preset 分别处理，不能互相映射后假装等价。
 
@@ -185,5 +185,5 @@ Vite HMR 会导致 store 模块分叉（`window.__chat` 与界面里的 store �
   客服（Omnichannel）、管理后台、邀请链接、批量清理消息（prune）；
 - 单聊 / 多人聊天没有群管理能力（这是 RC 的模型限制：它们都是 `t='d'`）；
 - 分组、备注名、待办只存本机（见上方「本地数据」）。
-- 管家与共享 Agent 当前只在桌面端运行；Codex 路径要求兼容且已登录的本机 Codex，DeepSeek 路径要求系统 Node.js、随包 DSH 和已配置密钥。原生 Memory、Skills/Plugins/Apps、已安排执行仍只属于 Codex；网页版没有远端执行面。
+- 管家与共享 Agent 当前只在桌面端运行；Codex 路径要求兼容且已登录的本机 Codex，DeepSeek 路径要求系统里已安装且可运行的 DSH，或者 Windows full 私有运行时，再加已配置密钥。原生 Memory、Skills/Plugins/Apps、已安排执行仍只属于 Codex；网页版没有远端执行面。
 - 已安排任务不是操作系统或云端常驻调度，RocketX 真正退出、电脑关机或休眠时不执行。
