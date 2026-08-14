@@ -849,10 +849,27 @@ fn business_mcp_patch_text(
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || *character == '_')
         .collect::<String>();
-    let server_name = format!("rocketx_{suffix}");
-    if server_name.len() > 32 {
-        return Err("DSH MCP server name exceeds 32 characters".to_string());
-    }
+    let server_name = {
+        const MAX_LEN: usize = 32;
+        const PREFIX: &str = "rocketx_";
+        let mut hash = 0u64;
+        for character in suffix.as_bytes() {
+            hash = hash
+                .wrapping_mul(131)
+                .wrapping_add((*character as u64).wrapping_add(1));
+        }
+        let tail = format!("{:08x}", hash);
+        let available = MAX_LEN
+            .saturating_sub(PREFIX.len())
+            .saturating_sub(1)
+            .saturating_sub(tail.len());
+        if suffix.len() <= available {
+            format!("{PREFIX}{suffix}")
+        } else {
+            let short_suffix = suffix.chars().take(available).collect::<String>();
+            format!("{PREFIX}{short_suffix}_{tail}")
+        }
+    };
     Ok(format!(
         concat!(
             "- insert:\n",
@@ -1296,6 +1313,30 @@ mod tests {
         assert!(patch.contains("serverName: 'rocketx_conn_7'"));
         assert!(!patch.contains("authToken"));
         assert!(!patch.contains("pat:"));
+    }
+
+    #[test]
+    fn patch_shortens_business_mcp_server_name_when_too_long() {
+        let long_patch_key = "very_long_connection_id_with_many_segments_and_entropy_0001";
+        let patch = business_mcp_patch_text(
+            long_patch_key,
+            r"C:\workspace",
+            r"C:\Program Files\RocketX\RocketX.exe",
+        )
+        .unwrap();
+        let server_name_line = patch
+            .lines()
+            .find(|line| line.trim_start().starts_with("serverName:"))
+            .expect("missing serverName");
+        let value = server_name_line
+            .splitn(2, "serverName: ")
+            .nth(1)
+            .unwrap()
+            .trim();
+        assert!(value.starts_with("'rocketx_"));
+        assert!(value.starts_with('\'' ) && value.ends_with('\''));
+        let server_name = value.trim_matches('\'');
+        assert!(server_name.len() <= 32);
     }
 
     #[test]
