@@ -1334,7 +1334,7 @@ mod tests {
             .unwrap()
             .trim();
         assert!(value.starts_with("'rocketx_"));
-        assert!(value.starts_with('\'' ) && value.ends_with('\''));
+        assert!(value.starts_with('\'') && value.ends_with('\''));
         let server_name = value.trim_matches('\'');
         assert!(server_name.len() <= 32);
     }
