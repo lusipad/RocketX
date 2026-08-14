@@ -41,6 +41,7 @@ test('DSH 运行时以固定 npm 产物随 RocketX 打包，并在 prepare 合�
   assert.match(prepareScript, /process\.env\.APPDATA/);
   assert.match(prepareScript, /pnpm\.mjs/);
   assert.match(prepareScript, /runtimePackage\.dependencies\?\.\['@deepseek-ai\/dsh'\]/);
+  assert.match(prepareScript, /deployedPackage\.dependencies\?\.\['@deepseek-ai\/dsh'\]\?\.split\('\(', 1\)\[0\]/);
   assert.match(prepareScript, /部署产物实际安装版本必须是 @deepseek-ai\/dsh@\$\{dshVersion\}/u);
   assert.match(prepareScript, /'--trust-lockfile'/);
   assert.match(prepareScript, /'--filter'/);
@@ -48,7 +49,7 @@ test('DSH 运行时以固定 npm 产物随 RocketX 打包，并在 prepare 合�
   assert.match(prepareScript, /'deploy'/);
   assert.match(prepareScript, /staging\.root/);
   assert.match(prepareScript, /'--prod'/);
-  assert.match(prepareScript, /'--legacy'/);
+  assert.doesNotMatch(prepareScript, /'--legacy'/);
   assert.doesNotMatch(prepareScript, /'--ignore-scripts'/);
   assert.match(prepareScript, /process\.execPath, \[staging\.cliPath, '--version'\]/);
   assert.match(prepareScript, /'--profile', 'web', '--dump-default-config'/);
@@ -60,6 +61,7 @@ test('DSH 运行时以固定 npm 产物随 RocketX 打包，并在 prepare 合�
 
   assert.match(workspace, /'@deepseek-ai\/dsh-subprocess-local@0\.1\.0-rc\.6': true/);
   assert.match(workspace, /'node-pty@1\.1\.0': true/);
+  assert.match(workspace, /injectWorkspacePackages: true/);
   assert.match(workspace, /minimumReleaseAgeExclude:\s*\n\s*- '@deepseek-ai\/\*'/);
   assert.match(workspace, /supportedArchitectures:\s*\n\s*cpu:\s*\n\s*- x64\s*\n\s*- arm64/);
 

@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - services/*
+injectWorkspacePackages: true
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local@0.1.0-rc.6': true
   '@google/genai@1.52.0': false

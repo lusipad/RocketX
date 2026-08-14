@@ -155,7 +155,6 @@ async function main() {
     'deploy',
     staging.root,
     '--prod',
-    '--legacy',
   ], {
     env: {
       ...process.env,
@@ -170,9 +169,9 @@ async function main() {
 
   const deployedPackage = await readJson(staging.deployedPackageJsonPath);
   assert.equal(
-    deployedPackage.dependencies?.['@deepseek-ai/dsh'],
+    deployedPackage.dependencies?.['@deepseek-ai/dsh']?.split('(', 1)[0],
     dshVersion,
-    `部署产物 package.json 必须固定 @deepseek-ai/dsh@${dshVersion}`,
+    `部署产物 package.json 必须解析到 @deepseek-ai/dsh@${dshVersion}`,
   );
 
   const deployedDshPackage = await readJson(staging.deployedDshPackageJsonPath);
