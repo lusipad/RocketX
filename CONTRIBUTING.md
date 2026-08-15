@@ -13,7 +13,7 @@ Security reports must follow [SECURITY.md](SECURITY.md), not the public issue tr
 
 ## Development environment
 
-The CI baseline uses Node.js 22.19+ and pnpm 11.12.0. Node.js 24+ is also compatible with the bundled DSH runtime. Docker is required for the reproducible Rocket.Chat test stack. Desktop changes also require Rust stable and the platform-specific [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+The CI baseline uses Node.js 22.19+ and pnpm 11.12.0. Node.js 24+ is also compatible with the pinned DSH runtime prepared for Windows full builds and release validation. Docker is required for the reproducible Rocket.Chat test stack. Desktop changes also require Rust stable and the platform-specific [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
 ```bash
 corepack enable
