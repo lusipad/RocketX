@@ -191,6 +191,7 @@ let controllerFactory: ControllerFactory = (options) => new AppServerController(
 let resumeThreadRequestId = 0;
 let connectRequest: Promise<void> | undefined;
 let handoffInProgress = false;
+const controllerOperations = new Set<symbol>();
 let defaultWorkspaceRequest: Promise<string> | undefined;
 let butlerWorkspaceRequest: Promise<string> | undefined;
 const requestWaiters = new Map<string, {
@@ -203,6 +204,17 @@ const backgroundAutomationPermissions = new Map<string, Map<symbol, CodexPermiss
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+async function withControllerOperation<T>(operation: () => Promise<T>): Promise<T> {
+  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+  const token = Symbol('controller-operation');
+  controllerOperations.add(token);
+  try {
+    return await operation();
+  } finally {
+    controllerOperations.delete(token);
+  }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -992,7 +1004,7 @@ function makeController(): AppServerController {
   return managedController;
 }
 
-async function sendThreadMessage(
+async function sendThreadMessageUnsafe(
   threadId: string,
   value: string,
   images: readonly CodexImageInput[] = [],
@@ -1063,6 +1075,15 @@ async function sendThreadMessage(
     setThreadState(threadId, (current) => ({ ...current, status: 'ready', error: message(error) }));
     throw error;
   }
+}
+
+async function sendThreadMessage(
+  threadId: string,
+  value: string,
+  images: readonly CodexImageInput[] = [],
+  modeOverride?: CodexFollowUpMode,
+): Promise<void> {
+  return withControllerOperation(() => sendThreadMessageUnsafe(threadId, value, images, modeOverride));
 }
 
 export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
@@ -1324,48 +1345,52 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   startThread: async (name) => {
-    const workspaceRoot = get().workspaceRoot;
-    await ensureControllerWorkspace(workspaceRoot);
-    const runtimeSelection = selection();
-    const thread = await controller!.startThread(runtimeSelection, name);
-    set((state) => ({
-      threadStates: {
-        ...state.threadStates,
-        [thread.id]: {
-          ...emptyThreadState('ready'),
-          workspaceRoot,
-          runtimeSelection,
+    return withControllerOperation(async () => {
+      const workspaceRoot = get().workspaceRoot;
+      await ensureControllerWorkspace(workspaceRoot);
+      const runtimeSelection = selection();
+      const thread = await controller!.startThread(runtimeSelection, name);
+      set((state) => ({
+        threadStates: {
+          ...state.threadStates,
+          [thread.id]: {
+            ...emptyThreadState('ready'),
+            workspaceRoot,
+            runtimeSelection,
+          },
         },
-      },
-      composerDraft: '',
-    }));
-    setActiveThread(thread.id, 'ready');
-    await get().refreshThreads();
-    return thread.id;
+        composerDraft: '',
+      }));
+      setActiveThread(thread.id, 'ready');
+      await get().refreshThreads();
+      return thread.id;
+    });
   },
 
   startTask: async (text, name) => {
-    const prompt = text.trim();
-    if (!prompt) throw new Error('任务内容不能为空');
-    const workspaceRoot = get().workspaceRoot;
-    await ensureControllerWorkspace(workspaceRoot);
-    const runtimeSelection = selection();
-    const thread = await controller!.startThread(runtimeSelection, name);
-    set((state) => ({
-      threadStates: {
-        ...state.threadStates,
-        [thread.id]: {
-          ...emptyThreadState('ready'),
-          workspaceRoot,
-          runtimeSelection,
+    return withControllerOperation(async () => {
+      const prompt = text.trim();
+      if (!prompt) throw new Error('任务内容不能为空');
+      const workspaceRoot = get().workspaceRoot;
+      await ensureControllerWorkspace(workspaceRoot);
+      const runtimeSelection = selection();
+      const thread = await controller!.startThread(runtimeSelection, name);
+      set((state) => ({
+        threadStates: {
+          ...state.threadStates,
+          [thread.id]: {
+            ...emptyThreadState('ready'),
+            workspaceRoot,
+            runtimeSelection,
+          },
         },
-      },
-      composerDraft: '',
-    }));
-    setActiveThread(thread.id, 'ready');
-    await get().refreshThreads();
-    await sendThreadMessage(thread.id, prompt);
-    return thread.id;
+        composerDraft: '',
+      }));
+      setActiveThread(thread.id, 'ready');
+      await get().refreshThreads();
+      await sendThreadMessage(thread.id, prompt);
+      return thread.id;
+    });
   },
 
   resumeThread: async (threadId) => {
@@ -1489,6 +1514,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   refreshFromCodex: async () => {
+    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
     const current = get();
     if (!current.workspaceRoot) throw new Error('请先选择工作区');
     if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
@@ -1605,6 +1631,9 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (backgroundAutomationPermissions.size > 0) {
       throw new Error('已安排任务正在运行，完成后再切换到 Codex App');
     }
+    if (controllerOperations.size > 0) {
+      throw new Error('RocketX 正在处理其他 Codex 操作，完成后再切换到 Codex App');
+    }
     const otherTaskRunning = Object.entries(current.threadStates).some(([threadId, thread]) =>
       threadId !== current.activeThreadId
       && (
@@ -1648,40 +1677,44 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   renameThread: async (threadId, name) => {
-    if (!controller) await get().connect();
-    await controller!.renameThread(threadId, name);
-    set((state) => ({
-      threads: state.threads.map((thread) => thread.id === threadId
-        ? { ...thread, name: name.trim() }
-        : thread),
-    }));
+    await withControllerOperation(async () => {
+      if (!controller) await get().connect();
+      await controller!.renameThread(threadId, name);
+      set((state) => ({
+        threads: state.threads.map((thread) => thread.id === threadId
+          ? { ...thread, name: name.trim() }
+          : thread),
+      }));
+    });
   },
 
   archiveThread: async (threadId) => {
-    if (!controller) await get().connect();
-    const state = get();
-    const thread = currentThreadState(state, threadId);
-    if (state.activeThreadId === threadId && thread.activeTurnId) {
-      await controller!.interruptTurn(threadId, thread.activeTurnId).catch(() => undefined);
-    }
-    await controller!.archiveThread(threadId);
-    rejectPendingRequests('任务已归档', threadId);
-    set((current) => ({
-      threads: current.threads.filter((thread) => thread.id !== threadId),
-      threadStates: Object.fromEntries(
-        Object.entries(current.threadStates).filter(([id]) => id !== threadId),
-      ) as Record<string, CodexThreadState>,
-      ...(current.activeThreadId === threadId ? {
-        activeThreadId: undefined,
-        activeTurnId: undefined,
-        turns: [],
-        messages: [],
-        events: [],
-        streamingText: '',
-        queuedMessages: [],
-        status: 'ready' as const,
-      } : {}),
-    }));
+    await withControllerOperation(async () => {
+      if (!controller) await get().connect();
+      const state = get();
+      const thread = currentThreadState(state, threadId);
+      if (state.activeThreadId === threadId && thread.activeTurnId) {
+        await controller!.interruptTurn(threadId, thread.activeTurnId).catch(() => undefined);
+      }
+      await controller!.archiveThread(threadId);
+      rejectPendingRequests('任务已归档', threadId);
+      set((current) => ({
+        threads: current.threads.filter((thread) => thread.id !== threadId),
+        threadStates: Object.fromEntries(
+          Object.entries(current.threadStates).filter(([id]) => id !== threadId),
+        ) as Record<string, CodexThreadState>,
+        ...(current.activeThreadId === threadId ? {
+          activeThreadId: undefined,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          queuedMessages: [],
+          status: 'ready' as const,
+        } : {}),
+      }));
+    });
   },
 
   send: async (value, images = [], modeOverride) => {
@@ -2011,6 +2044,7 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
   await controller?.stop();
   controller = undefined;
   handoffInProgress = false;
+  controllerOperations.clear();
   defaultWorkspaceRequest = undefined;
   butlerWorkspaceRequest = undefined;
   useCodexWorkspace.setState({

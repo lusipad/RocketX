@@ -772,6 +772,11 @@ test('交给 Codex App 时停止空闲 app-server，立即释放线程写入权'
       }),
       /正在交接/,
     );
+    await assert.rejects(
+      useCodexWorkspace.getState().refreshFromCodex(),
+      /正在交接/,
+    );
+    assert.equal(useCodexWorkspace.getState().status, 'external');
     openFinished.resolve();
     await handoff;
 
@@ -1038,6 +1043,74 @@ test('连接请求进行中时不开始桌面交接', async () => {
   }
 });
 
+test('创建新线程的 RPC 未完成时不停止共享 app-server', async () => {
+  const catalog = {
+    models: [MODEL],
+    permissionProfiles: [],
+    skills: [],
+    apps: [],
+    plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+  };
+  const storedThread = thread('thread-create-pending', 'D:/workspace');
+  const creationStarted = deferred<void>();
+  const creationFinished = deferred<void>();
+  let stopped = 0;
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: 'D:/workspace',
+    currentCatalog: catalog,
+    connect: async () => catalog,
+    listThreads: async () => [],
+    startThread: async () => {
+      creationStarted.resolve();
+      await creationFinished.promise;
+      return storedThread;
+    },
+    stop: async () => { stopped += 1; },
+  } as never));
+  let creation: Promise<string> | undefined;
+
+  try {
+    await resetCodexWorkspaceForTests();
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:/workspace',
+      workspaceRoots: ['D:/workspace'],
+      activeThreadId: 'thread-handoff',
+      status: 'ready',
+      threadStates: {
+        'thread-handoff': {
+          workspaceRoot: 'D:/workspace',
+          runtimeSelection: undefined,
+          status: 'ready',
+          error: null,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+        },
+      },
+    });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    creation = useCodexWorkspace.getState().startThread('新任务');
+    await creationStarted.promise;
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /正在处理其他 Codex 操作/,
+    );
+    assert.equal(stopped, 0);
+    creationFinished.resolve();
+    await creation;
+  } finally {
+    creationFinished.resolve();
+    await creation?.catch(() => undefined);
+    await resetCodexWorkspaceForTests();
+    restoreFactory();
+  }
+});
+
 test('从 Codex 刷新开始后立即阻止桌面交接', async () => {
   const catalog = {
     models: [MODEL],
@@ -1170,6 +1243,10 @@ test('桌面交接开始后阻止新的 heartbeat 进入共享 app-server', asyn
 
     await assert.rejects(
       useCodexWorkspace.getState().setWorkspaceRoot('D:/other-workspace'),
+      /正在交接/,
+    );
+    await assert.rejects(
+      useCodexWorkspace.getState().archiveThread(storedThread.id),
       /正在交接/,
     );
     assert.equal(useCodexWorkspace.getState().workspaceRoot, 'D:/workspace');
