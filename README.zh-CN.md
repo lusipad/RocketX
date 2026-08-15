@@ -29,7 +29,7 @@ Rocket.Chat 服务端一行不改：本项目只通过其公开 REST API 与实�
 | --- | --- |
 | `apps/web` | 飞书风格 Web 客户端（React + Vite + Tailwind） |
 | `apps/desktop` | 桌面客户端（Tauri 2 壳，复用 web 构建产物） |
-| `apps/dsh-runtime` | 桌面构建使用的私有 DSH 运行时包，精确锁定官方发布版本 |
+| `apps/dsh-runtime` | Windows full 构建与发布验证使用的私有 DSH 运行时包，精确锁定官方发布版本 |
 | `packages/rc-client` | Rocket.Chat API SDK（REST + 实时 WebSocket，零依赖） |
 | `services/ado-bridge` | Azure DevOps Server 2022 Service Hooks → 消息卡片桥接服务 |
 | `docker/` | 本地 Rocket.Chat 开发环境（原版镜像 + MongoDB 副本集） |
@@ -90,11 +90,11 @@ pnpm smoke          # 54 项，打真实 RC：认证/会话/消息/引用/线程
                     # 文件上传下载/中文搜索/置顶免打扰/通讯录/实时推送/
                     # 斜杠命令/群管理（踢人·角色·禁言·归档·只读）/
                     # 文件与提及面板/改昵称与头像
-pnpm test:pure      # 230 项纯函数：拼音、日期、分组规则、待办、emoji、
+pnpm test:pure      # 237 项纯函数：拼音、日期、分组规则、待办、emoji、
                     # markdown、日历重复、ADO、斜杠命令、群管理与安全边界
-pnpm test:regression # 729 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
+pnpm test:regression # 736 项回归：搜索并发、目录/成员分页、讨论访问与初始滚动、
                      # ADO 链路、管家/Codex、团队配置、更新源、共享 Agent 与 LAN/outbox
-pnpm test:ui        # 79 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
+pnpm test:ui        # 83 项浏览器流程：登录、消息、管家、首次引导、AI 设置与插件 Bridge
 pnpm test:ecosystem # SDK、CLI clean-room 脚手架与官方样例
 pnpm test:classify  # 5 项，打真实 RC：单聊/多人直聊/群组分类、会话排序
 
@@ -118,7 +118,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.42.3`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.42.4`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
