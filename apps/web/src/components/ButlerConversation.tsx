@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { openCodexNewThread, openCodexThread } from '../agent/codexTransfer';
+import { openCodexNewThread } from '../agent/codexTransfer';
 import {
   codexArtifactFromLink,
   codexArtifactsFromMarkdown,
@@ -438,8 +438,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const openInCodex = async (): Promise<void> => {
     try {
       if (activeThreadId) {
-        await handoffToCodex();
-        const result = await openCodexThread(activeThreadId);
+        const result = await handoffToCodex();
         if (result === 'unavailable') {
           await refreshFromCodex().catch(() => undefined);
           throw new Error('Codex App 没有响应');

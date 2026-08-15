@@ -60,7 +60,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(conversation, /const send = useCodexWorkspace\(\(state\) => state\.send\)/);
   assert.match(conversation, /const interrupt = useCodexWorkspace\(\(state\) => state\.interrupt\)/);
   assert.match(conversation, /const handoffToCodex = useCodexWorkspace\(\(state\) => state\.handoffToCodex\)/);
-  assert.match(conversation, /await handoffToCodex\(\);[\s\S]*await openCodexThread\(activeThreadId\)/);
+  assert.match(conversation, /const result = await handoffToCodex\(\)/);
   assert.match(conversation, /在 Codex 中打开/);
   assert.match(conversation, /在 RocketX 继续/);
   assert.match(conversation, /不需要退出 Codex App/);
