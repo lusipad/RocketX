@@ -1500,7 +1500,6 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const threadId = current.activeThreadId;
     const knownTurnIds = new Set(activeThread.turns.map((turn) => turn.id));
     rejectPendingRequests('正在从 Codex 刷新', threadId);
-    await unsubscribeThreadIfSupported(controller, threadId).catch(() => undefined);
     setThreadState(threadId, (thread) => ({
       ...thread,
       status: 'connecting',
@@ -1511,6 +1510,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       pendingRequests: [],
     }));
     setActiveThread(threadId, 'connecting');
+    await unsubscribeThreadIfSupported(controller, threadId).catch(() => undefined);
 
     let externalLoaded: Awaited<ReturnType<AppServerController['readThread']>> | undefined;
     try {

@@ -1015,6 +1015,79 @@ test('连接请求进行中时不开始桌面交接', async () => {
   }
 });
 
+test('从 Codex 刷新开始后立即阻止桌面交接', async () => {
+  const catalog = {
+    models: [MODEL],
+    permissionProfiles: [],
+    skills: [],
+    apps: [],
+    plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+  };
+  const storedThread = thread('thread-refresh-handoff', 'D:/workspace');
+  const unsubscribeStarted = deferred<void>();
+  const unsubscribeFinished = deferred<void>();
+  let unsubscribeCalls = 0;
+  let stopped = 0;
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: 'D:/workspace',
+    currentCatalog: catalog,
+    connect: async () => catalog,
+    listThreads: async () => [storedThread],
+    resumeThread: async () => storedThread,
+    readThread: async () => ({ thread: storedThread, turns: [] }),
+    unsubscribeThread: async () => {
+      unsubscribeCalls += 1;
+      if (unsubscribeCalls === 1) {
+        unsubscribeStarted.resolve();
+        await unsubscribeFinished.promise;
+      }
+    },
+    stop: async () => { stopped += 1; },
+  } as never));
+  let refresh: Promise<number> | undefined;
+
+  try {
+    await resetCodexWorkspaceForTests();
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:/workspace',
+      workspaceRoots: ['D:/workspace'],
+      activeThreadId: storedThread.id,
+      status: 'ready',
+      threadStates: {
+        [storedThread.id]: {
+          workspaceRoot: 'D:/workspace',
+          runtimeSelection: undefined,
+          status: 'ready',
+          error: null,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+        },
+      },
+    });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    refresh = useCodexWorkspace.getState().refreshFromCodex();
+    await unsubscribeStarted.promise;
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /正在连接/,
+    );
+    assert.equal(stopped, 0);
+    unsubscribeFinished.resolve();
+    await refresh;
+  } finally {
+    unsubscribeFinished.resolve();
+    await refresh?.catch(() => undefined);
+    await resetCodexWorkspaceForTests();
+    restoreFactory();
+  }
+});
+
 test('桌面交接开始后阻止新的 heartbeat 进入共享 app-server', async () => {
   const catalog = {
     models: [MODEL],
