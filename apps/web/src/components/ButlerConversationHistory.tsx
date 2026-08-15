@@ -17,7 +17,7 @@ import {
   Search,
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { openCodexNewThread, openCodexSurface, openCodexThread } from '../agent/codexTransfer';
+import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import {
   environmentIsBusy,
@@ -395,8 +395,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       if (activeView === 'routines') result = await openCodexSurface('scheduled');
       else if (activeView === 'plugins') result = await openCodexSurface('plugins');
       else if (activeThreadId) {
-        await handoffToCodex();
-        result = await openCodexThread(activeThreadId);
+        result = await handoffToCodex();
         if (result === 'unavailable') await refreshFromCodex().catch(() => undefined);
       } else result = workspaceRoot ? await openCodexNewThread('', workspaceRoot) : 'unavailable';
       if (result === 'unavailable') throw new Error('Codex App 没有响应');

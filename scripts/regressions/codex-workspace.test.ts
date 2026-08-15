@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AppServerControllerOptions } from '../../apps/web/src/agent/AppServerController';
+import { setCodexUrlOpener } from '../../apps/web/src/agent/codexTransfer';
 import {
   resetCodexWorkspaceForTests,
   runExistingThreadAutomation,
@@ -730,7 +731,15 @@ test('交给 Codex App 时停止空闲 app-server，立即释放线程写入权'
   });
   let stopped = 0;
   let unsubscribed = 0;
+  let opened = 0;
+  const openStarted = deferred<void>();
+  const openFinished = deferred<void>();
   const storedThread = thread('thread-handoff');
+  const restoreOpener = setCodexUrlOpener(async () => {
+    opened += 1;
+    openStarted.resolve();
+    await openFinished.promise;
+  });
   const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
     connect: async () => ({
       models: [MODEL],
@@ -753,15 +762,29 @@ test('交给 Codex App 时停止空闲 app-server，立即释放线程写入权'
     await useCodexWorkspace.getState().connect();
     await useCodexWorkspace.getState().resumeThread(storedThread.id);
 
-    await useCodexWorkspace.getState().handoffToCodex();
+    const handoff = useCodexWorkspace.getState().handoffToCodex();
+    await openStarted.promise;
+    await assert.rejects(
+      runExistingThreadAutomation({
+        threadId: storedThread.id,
+        workspaceRoot: 'D:/workspace',
+        text: '继续检查',
+      }),
+      /正在交接/,
+    );
+    openFinished.resolve();
+    await handoff;
 
     const state = useCodexWorkspace.getState();
     assert.equal(unsubscribed, 1);
     assert.equal(stopped, 1);
+    assert.equal(opened, 1);
     assert.equal(state.status, 'external');
     assert.equal(state.activeThreadId, storedThread.id);
     assert.equal(state.activeTurnId, undefined);
   } finally {
+    openFinished.resolve();
+    restoreOpener();
     restoreFactory();
     await resetCodexWorkspaceForTests();
     if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);

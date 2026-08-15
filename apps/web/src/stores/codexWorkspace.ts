@@ -19,6 +19,7 @@ import type { ThreadItem } from '../agent/protocol/generated/v2/ThreadItem';
 import type { Turn } from '../agent/protocol/generated/v2/Turn';
 import type { UserInput } from '../agent/protocol/generated/v2/UserInput';
 import { materializeCodexImages } from '../agent/attachments';
+import { openCodexThread } from '../agent/codexTransfer';
 import {
   commandRequestMentionsSensitivePath,
   validateApprovalPaths,
@@ -155,7 +156,7 @@ interface CodexWorkspaceState {
   startTask: (text: string, name?: string) => Promise<string>;
   resumeThread: (threadId: string) => Promise<void>;
   refreshFromCodex: () => Promise<number>;
-  handoffToCodex: () => Promise<void>;
+  handoffToCodex: () => Promise<'opened-existing' | 'unavailable'>;
   renameThread: (threadId: string, name: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;
   send: (
@@ -1640,6 +1641,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         error: null,
       }));
       setActiveThread(current.activeThreadId, 'external');
+      return await openCodexThread(current.activeThreadId);
     } finally {
       handoffInProgress = false;
     }
