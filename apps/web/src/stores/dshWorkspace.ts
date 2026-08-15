@@ -996,8 +996,11 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
       const host = await active.call<DshHostDescriptionWire>('host.describe');
       const configuration = await readConfiguration(active, host);
       if (controller !== active) return;
-      set(configuration);
       const sessionId = get().activeSessionId;
+      set({
+        ...configuration,
+        ...(sessionId ? { modelSelection: null } : {}),
+      });
       if (sessionId) await loadSessionModel(active, sessionId);
     } catch (reason) {
       if (controller === active) set({ configurationStatus: 'error', configurationError: errorMessage(reason) });

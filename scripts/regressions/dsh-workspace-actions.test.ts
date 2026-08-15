@@ -326,6 +326,51 @@ test('connect does not attribute the configured default to an existing session w
   }
 });
 
+test('configuration refresh does not replace an existing session model with the configured default', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue(
+    'host.describe',
+    { provider: 'deepseek', model: 'deepseek-chat' },
+    { provider: 'deepseek', model: 'deepseek-chat' },
+  );
+  fake.queue('session.list', {
+    items: [{
+      sessionId: 'session-existing',
+      updatedAt: 1,
+      running: false,
+      blank: false,
+      cwd: `${WORKSPACE_ROOT}/refresh-existing-model`,
+    }],
+  });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] }, { presets: [] });
+  fake.queue('settings.describe', configurationResponse(), configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] }, { groups: [], failures: [] });
+  fake.queue('session.history', { events: [], hasMore: false });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
+  activeNative = fake;
+  try {
+    const workspace = await resetWorkspace('refresh-existing-model');
+    await workspace.useDshWorkspace.getState().connect();
+
+    await assert.rejects(
+      workspace.useDshWorkspace.getState().refreshConfiguration(),
+      /unexpected native call: session\.models/,
+    );
+
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
+  } finally {
+    activeNative = null;
+  }
+});
+
 test('send fails closed before any native RPC when DeepSeek credential is missing', async () => {
   activeNative = new FakeNativeDsh();
   try {
