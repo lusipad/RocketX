@@ -64,7 +64,9 @@ test('新任务 deep link 只预填输入和工作区，不在 RocketX 内重复
 
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   const history = readFileSync('apps/web/src/components/ButlerConversationHistory.tsx', 'utf8');
-  assert.match(conversation, /openCodexThread\(activeThreadId\)/);
+  const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
+  assert.match(conversation, /const result = await handoffToCodex\(\)/);
+  assert.match(workspace, /return await openCodexThread\(current\.activeThreadId\)/);
   assert.match(conversation, /openCodexNewThread\('', workspaceRoot\)/);
   assert.match(history, /openCodexSurface\('scheduled'\)/);
   assert.match(history, /openCodexSurface\('plugins'\)/);
