@@ -118,7 +118,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.42.6`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.42.7`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，
