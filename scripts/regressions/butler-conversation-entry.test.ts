@@ -55,7 +55,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(conversation, /const workspaceRoot = useCodexWorkspace\(\(state\) => state\.workspaceRoot\)/);
   assert.match(conversation, /const threads = useCodexWorkspace\(\(state\) => state\.threads\)/);
   assert.match(conversation, /const messages = useCodexWorkspace\(\(state\) => state\.messages\)/);
-  assert.match(conversation, /const events = useCodexWorkspace\(\(state\) => state\.events\)/);
+  assert.match(conversation, /const \{ streamingText, events \} = useCodexStreamingView\(\)/);
   assert.match(conversation, /const requests = useCodexWorkspace\(\(state\) => state\.pendingRequests\)/);
   assert.match(conversation, /const send = useCodexWorkspace\(\(state\) => state\.send\)/);
   assert.match(conversation, /const interrupt = useCodexWorkspace\(\(state\) => state\.interrupt\)/);

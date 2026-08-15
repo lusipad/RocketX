@@ -144,7 +144,9 @@ let controller: DshController | null = null;
 let connectedWorkspace: string | null = null;
 let connectionGeneration = 0;
 let connectPromise: Promise<void> | null = null;
+const TRANSCRIPT_RENDER_INTERVAL_MS = 50;
 const eventsBySession = new Map<string, Map<number, DshSessionEvent>>();
+const transcriptRenderTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const approvalsBySession = new Map<string, DshPendingApproval[]>();
 const questionsBySession = new Map<string, DshPendingQuestion[]>();
 const queueBySession = new Map<string, DshQueuedMessage[]>();
@@ -203,6 +205,8 @@ function activeConversationState(sessionId: string | null): Pick<
 }
 
 export function resetDshConversationAfterDisconnect(message: string): void {
+  for (const timer of transcriptRenderTimers.values()) clearTimeout(timer);
+  transcriptRenderTimers.clear();
   approvalsBySession.clear();
   questionsBySession.clear();
   queueBySession.clear();
@@ -247,14 +251,49 @@ function applyTitleProjection(sessionId: string, value: unknown, seq: unknown): 
 }
 
 function updateTranscript(sessionId: string): void {
-  if (useDshWorkspace.getState().activeSessionId !== sessionId) return;
-  const transcript = projectDshTranscript(sessionId, eventMap(sessionId).values());
-  useDshWorkspace.setState({ ...transcript });
+  const events = [...eventMap(sessionId).values()];
+  const transcript = projectDshTranscript(sessionId, events);
   const preview = dshPreview(transcript.messages);
-  if (!preview) return;
+  const updatedAt = events.reduce((latest, event) => Math.max(latest, event.time), 0);
   useDshWorkspace.setState((state) => ({
-    sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, preview } : session),
+    ...(state.activeSessionId === sessionId ? transcript : {}),
+    sessions: sortSessions(state.sessions.map((session) => session.id === sessionId
+      ? {
+          ...session,
+          ...(preview ? { preview } : {}),
+          updatedAt: Math.max(session.updatedAt, updatedAt),
+          blank: events.length === 0 ? session.blank : false,
+        }
+      : session)),
   }));
+}
+
+function clearTranscriptRenderTimer(sessionId: string): void {
+  const timer = transcriptRenderTimers.get(sessionId);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  transcriptRenderTimers.delete(sessionId);
+}
+
+function flushTranscript(sessionId: string): void {
+  clearTranscriptRenderTimer(sessionId);
+  updateTranscript(sessionId);
+}
+
+function scheduleTranscript(sessionId: string): void {
+  if (transcriptRenderTimers.has(sessionId)) return;
+  transcriptRenderTimers.set(sessionId, setTimeout(() => {
+    transcriptRenderTimers.delete(sessionId);
+    updateTranscript(sessionId);
+  }, TRANSCRIPT_RENDER_INTERVAL_MS));
+}
+
+function isAssistantTextDelta(event: DshSessionEvent): boolean {
+  if (event.type !== 'assistant/chunk' || !event.data || typeof event.data !== 'object') return false;
+  const chunk = (event.data as Record<string, unknown>).chunk;
+  return !!chunk && typeof chunk === 'object'
+    && (chunk as Record<string, unknown>).type === 'text-delta'
+    && typeof (chunk as Record<string, unknown>).text === 'string';
 }
 
 function upsertSession(session: DshSession): void {
@@ -283,15 +322,13 @@ export function applyDshMuxFrame(request: DshServerRequest): void {
         queueBySession.set(sessionId, remaining);
       }
     }
-    updateTranscript(sessionId);
+    if (isAssistantTextDelta(event)) scheduleTranscript(sessionId);
+    else flushTranscript(sessionId);
     useDshWorkspace.setState((state) => ({
       error: state.activeSessionId === sessionId ? null : state.error,
       queuedMessages: state.activeSessionId === sessionId
         ? queueBySession.get(sessionId) ?? []
         : state.queuedMessages,
-      sessions: sortSessions(state.sessions.map((session) => session.id === sessionId
-        ? { ...session, updatedAt: Math.max(session.updatedAt, event.time), blank: false }
-        : session)),
     }));
     return;
   }
@@ -430,6 +467,7 @@ function handleHost(request: DshServerRequest, generation: number): void {
   }
 
   if (frame.type === 'host/session-removed' && sessionId) {
+    clearTranscriptRenderTimer(sessionId);
     eventsBySession.delete(sessionId);
     approvalsBySession.delete(sessionId);
     questionsBySession.delete(sessionId);
@@ -594,7 +632,7 @@ async function loadHistory(active: DshController, sessionId: string): Promise<vo
       useDshWorkspace.setState({ activePermission: permission });
     }
   }
-  updateTranscript(sessionId);
+  flushTranscript(sessionId);
 }
 
 function requireController(): DshController {
@@ -739,6 +777,8 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
     const pendingConnect = connectPromise;
     await disconnect();
     if (pendingConnect) await pendingConnect.catch(() => undefined);
+    for (const timer of transcriptRenderTimers.values()) clearTimeout(timer);
+    transcriptRenderTimers.clear();
     eventsBySession.clear();
     approvalsBySession.clear();
     questionsBySession.clear();

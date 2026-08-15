@@ -9,6 +9,8 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   assert.match(hook, /element\.scrollHeight - element\.scrollTop - element\.clientHeight < NEAR_BOTTOM_PX/);
 
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
+  assert.match(conversation, /const \{ streamingText, events \} = useCodexStreamingView\(\)/);
+  assert.doesNotMatch(conversation, /useCodexWorkspace\(\(state\) => state\.events\)/);
   assert.match(
     conversation,
     /useStickToBottom\(\[\s*messages,\s*streamingText,\s*events,\s*requests,\s*queuedMessages,\s*\]\)/,
@@ -17,6 +19,13 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   assert.match(conversation, /stickToBottom\.current = true/);
   assert.match(conversation, /\{streamingText\}/);
   assert.doesNotMatch(conversation, /renderMarkdown\(streamingText/);
+
+  const roomPanel = readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8');
+  assert.match(roomPanel, /\{streamingText\}/);
+  assert.doesNotMatch(roomPanel, /renderMarkdown\(streamingText/);
+
+  const dshConversation = readFileSync('apps/web/src/components/DshConversation.tsx', 'utf8');
+  assert.match(dshConversation, /entry\.streaming\s*\? entry\.text/);
 
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
   assert.match(styles, /\.codex-native-transcript\s*\{[^}]*overflow-anchor:\s*none/s);

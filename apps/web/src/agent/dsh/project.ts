@@ -9,6 +9,7 @@ export interface DshMessage {
   id: string;
   role: 'assistant' | 'user' | 'system';
   text: string;
+  streaming?: boolean;
 }
 
 export interface DshActivity {
@@ -148,6 +149,7 @@ export function projectDshTranscript(sessionId: string, sourceEvents: Iterable<D
       id: `${sessionId}:draft:${key}`,
       role: 'assistant',
       text,
+      streaming: true,
       seq: draft.seq,
     });
   }
