@@ -198,7 +198,7 @@ const requestWaiters = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }>();
-const backgroundAutomationPermissions = new Map<string, CodexPermissionPreset>();
+const backgroundAutomationPermissions = new Map<string, Map<symbol, CodexPermissionPreset>>();
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -887,7 +887,7 @@ async function onServerRequest(request: {
 }): Promise<unknown> {
   const params = record(request.params);
   const threadId = typeof params.threadId === 'string' ? params.threadId : '';
-  const backgroundPermission = backgroundAutomationPermissions.get(threadId);
+  const backgroundPermission = [...(backgroundAutomationPermissions.get(threadId)?.values() ?? [])].at(-1);
   if (backgroundPermission) {
     if (request.policy === 'host-input') {
       throw new Error('该已安排任务需要用户输入，请手动运行后回答');
@@ -1210,6 +1210,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   setWorkspaceRoot: async (workspaceRoot) => {
+    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
     const normalized = workspaceRoot.trim();
     const current = get();
     const systemRootsReady = Boolean(current.defaultWorkspaceRoot && current.butlerWorkspaceRoot);
@@ -1951,12 +1952,15 @@ export async function runExistingThreadAutomation(
     permissionPreset: options.permissionPreset ?? state.permissionPreset,
   };
   const activeController = controller;
+  const automationToken = Symbol(options.threadId);
   let turnId = '';
   const interrupt = (): void => {
     if (turnId) void activeController.interruptTurn(options.threadId, turnId).catch(() => undefined);
   };
   options.signal?.addEventListener('abort', interrupt, { once: true });
-  backgroundAutomationPermissions.set(options.threadId, runtimeSelection.permissionPreset);
+  const threadPermissions = backgroundAutomationPermissions.get(options.threadId) ?? new Map();
+  threadPermissions.set(automationToken, runtimeSelection.permissionPreset);
+  backgroundAutomationPermissions.set(options.threadId, threadPermissions);
   try {
     await activeController.resumeThread(options.threadId, runtimeSelection);
     turnId = await activeController.startTurn(
@@ -1985,7 +1989,9 @@ export async function runExistingThreadAutomation(
     }
     throw new Error('已安排任务运行超时');
   } finally {
-    backgroundAutomationPermissions.delete(options.threadId);
+    const activePermissions = backgroundAutomationPermissions.get(options.threadId);
+    activePermissions?.delete(automationToken);
+    if (activePermissions?.size === 0) backgroundAutomationPermissions.delete(options.threadId);
     options.signal?.removeEventListener('abort', interrupt);
   }
 }

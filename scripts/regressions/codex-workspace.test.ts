@@ -856,6 +856,104 @@ test('heartbeat 使用共享 app-server 时阻止桌面交接停止运行时', a
   }
 });
 
+test('同一线程仍有并发 heartbeat 时保留共享 app-server', async () => {
+  const catalog = {
+    models: [MODEL],
+    permissionProfiles: [],
+    skills: [],
+    apps: [],
+    plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+  };
+  const heartbeatThread = thread('thread-heartbeat-concurrent', 'D:/workspace');
+  const bothStarted = deferred<void>();
+  const secondFinished = deferred<void>();
+  let started = 0;
+  let reads = 0;
+  let stopped = 0;
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: 'D:/workspace',
+    currentCatalog: catalog,
+    connect: async () => catalog,
+    listThreads: async () => [],
+    resumeThread: async () => heartbeatThread,
+    startTurn: async () => {
+      started += 1;
+      if (started === 2) bothStarted.resolve();
+      return `turn-heartbeat-${started}`;
+    },
+    readThread: async (_threadId: string) => {
+      reads += 1;
+      const secondCompleted = reads > 1;
+      if (secondCompleted) await secondFinished.promise;
+      return {
+        thread: heartbeatThread,
+        turns: [1, 2].map((index) => ({
+          id: `turn-heartbeat-${index}`,
+          itemsView: 'full' as const,
+          status: index === 1 || secondCompleted ? 'completed' as const : 'inProgress' as const,
+          error: null,
+          startedAt: 1,
+          completedAt: index === 1 ? 2 : null,
+          durationMs: index === 1 ? 1 : null,
+          items: [{ type: 'agentMessage' as const, id: `answer-${index}`, text: '完成', phase: null }],
+        })),
+      };
+    },
+    interruptTurn: async () => undefined,
+    stop: async () => { stopped += 1; },
+  } as never));
+
+  try {
+    await resetCodexWorkspaceForTests();
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:/workspace',
+      workspaceRoots: ['D:/workspace'],
+      activeThreadId: 'thread-handoff',
+      status: 'ready',
+      threadStates: {
+        'thread-handoff': {
+          workspaceRoot: 'D:/workspace',
+          runtimeSelection: undefined,
+          status: 'ready',
+          error: null,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+        },
+      },
+    });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    const first = runExistingThreadAutomation({
+      threadId: heartbeatThread.id,
+      workspaceRoot: 'D:/workspace',
+      text: '第一次检查',
+    });
+    const second = runExistingThreadAutomation({
+      threadId: heartbeatThread.id,
+      workspaceRoot: 'D:/workspace',
+      text: '第二次检查',
+    });
+    await bothStarted.promise;
+    await first;
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /已安排任务正在运行/,
+    );
+    assert.equal(stopped, 0);
+    secondFinished.resolve();
+    await second;
+  } finally {
+    secondFinished.resolve();
+    await resetCodexWorkspaceForTests();
+    restoreFactory();
+  }
+});
+
 test('连接请求进行中时不开始桌面交接', async () => {
   const catalog = {
     models: [MODEL],
@@ -973,6 +1071,12 @@ test('桌面交接开始后阻止新的 heartbeat 进入共享 app-server', asyn
     heartbeatResumed = 0;
     const handoff = useCodexWorkspace.getState().handoffToCodex();
     await unsubscribeStarted.promise;
+
+    await assert.rejects(
+      useCodexWorkspace.getState().setWorkspaceRoot('D:/other-workspace'),
+      /正在交接/,
+    );
+    assert.equal(useCodexWorkspace.getState().workspaceRoot, 'D:/workspace');
 
     await assert.rejects(
       runExistingThreadAutomation({
