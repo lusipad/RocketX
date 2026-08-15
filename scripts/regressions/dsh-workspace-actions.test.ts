@@ -248,6 +248,12 @@ test('connect loads workspace state from native RPC and startSession creates a b
   fake.queue('settings.describe', configurationResponse());
   fake.queue('llm.models', { groups: [], failures: [] });
   fake.queue('session.create', { sessionId: 'session-new' });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
   activeNative = fake;
   try {
     const workspace = await resetWorkspace('connect-start');
@@ -266,9 +272,10 @@ test('connect loads workspace state from native RPC and startSession creates a b
         'settings.describe',
         'llm.models',
         'session.create',
+        'session.models',
       ],
     );
-    assert.deepEqual(fake.calls.at(-1), {
+    assert.deepEqual(fake.calls.at(-2), {
       method: 'session.create',
       payload: { cwd: workspaceRoot },
     });
@@ -276,6 +283,10 @@ test('connect loads workspace state from native RPC and startSession creates a b
     assert.equal(state.status, 'ready');
     assert.equal(state.activeSessionId, 'session-new');
     assert.equal(state.sessions[0]?.blank, true);
+    assert.deepEqual(state.modelSelection, {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+    });
   } finally {
     activeNative = null;
   }
@@ -312,6 +323,12 @@ test('selectModel creates a blank session before calling the native model select
   fake.queue('settings.describe', configurationResponse());
   fake.queue('llm.models', { groups: [], failures: [] });
   fake.queue('session.create', { sessionId: 'session-model' });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
   fake.queue('session.selectModel', {
     selected: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
   });
@@ -328,8 +345,9 @@ test('selectModel creates a blank session before calling the native model select
     };
     await workspace.useDshWorkspace.getState().selectModel(selection);
 
-    assert.deepEqual(fake.calls.slice(-2), [
+    assert.deepEqual(fake.calls.slice(-3), [
       { method: 'session.create', payload: { cwd: workspaceRoot } },
+      { method: 'session.models', payload: { sessionId: 'session-model' } },
       {
         method: 'session.selectModel',
         payload: {

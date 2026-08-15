@@ -888,10 +888,14 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
     eventsBySession.set(session.id, new Map());
     set({
       activeSessionId: session.id,
+      modelSelection: null,
       messages: [],
       activities: [],
       isRunning: false,
       ...activeConversationState(session.id),
+    });
+    await loadSessionModel(active, session.id).catch((reason) => {
+      if (controller === active) set({ configurationError: errorMessage(reason) });
     });
   },
 
