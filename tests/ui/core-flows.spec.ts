@@ -1597,6 +1597,49 @@ test('打开管家页后可返回消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('DeepSeek 页头显示模型详情且配置按钮打开可见弹窗（issue #334）', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const { useDshWorkspace } = await import('/src/stores/dshWorkspace.ts');
+    useDshWorkspace.setState({
+      status: 'ready',
+      workspaceRoot: 'C:\\projects\\rocketx',
+      credentialConfigured: true,
+      credentialWritable: true,
+      configurationStatus: 'ready',
+      configurationWritable: true,
+      modelSelection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' },
+      modelGroups: [{
+        id: 'deepseek',
+        name: 'DeepSeek',
+        models: [{
+          id: 'deepseek-chat',
+          name: 'DeepSeek Chat',
+          reasoning: { efforts: [{ id: 'medium', name: 'Medium' }], defaultEffort: 'medium' },
+        }],
+      }],
+      sessions: [{ id: 'session-334', title: 'Issue 334', updatedAt: Date.now(), status: 'idle', blank: false }],
+      activeSessionId: 'session-334',
+      messages: Array.from({ length: 20 }, (_, index) => ({
+        id: `message-${index}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        text: `历史消息 ${index}`,
+      })),
+    });
+  });
+
+  const navigation = page.getByRole('navigation');
+  await navigation.getByRole('region', { name: '管家' }).getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByText('DeepSeek 模型：DeepSeek / DeepSeek Chat · Medium')).toBeVisible();
+
+  await page.getByRole('button', { name: '配置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'DeepSeek 运行配置' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('combobox', { name: 'DeepSeek 模型与提供方' })).toHaveValue('["deepseek","deepseek-chat"]');
+  expect(pageErrors).toEqual([]);
+});
+
 test('切换会话会渲染对应历史消息', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();

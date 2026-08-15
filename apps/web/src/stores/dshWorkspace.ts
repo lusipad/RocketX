@@ -579,9 +579,10 @@ async function readConfiguration(
   };
 }
 
-async function loadSessionModel(active: DshController, sessionId: string): Promise<void> {
+async function loadSessionModel(active: DshController, sessionId: string, onlyIfUnset = false): Promise<void> {
   const directory = await active.call<DshModelDirectory>('session.models', { sessionId });
   if (controller !== active || useDshWorkspace.getState().activeSessionId !== sessionId) return;
+  if (onlyIfUnset && useDshWorkspace.getState().modelSelection) return;
   useDshWorkspace.setState({
     modelSelection: directory.current,
     modelGroups: directory.groups,
@@ -717,6 +718,7 @@ async function connectWorkspace(): Promise<void> {
         isRunning: active?.status === 'running',
         ...credential,
         ...configuration,
+        ...(activeSessionId ? { modelSelection: null } : {}),
         ...activeConversationState(activeSessionId),
         ...(activeSessionId ? {} : { messages: [], activities: [] }),
       });
@@ -848,6 +850,7 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
       isRunning: selected?.status === 'running',
       ...credential,
       ...configuration,
+      ...(activeSessionId ? { modelSelection: null } : {}),
       ...activeConversationState(activeSessionId),
       ...(activeSessionId ? {} : { messages: [], activities: [] }),
     });
@@ -888,10 +891,14 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
     eventsBySession.set(session.id, new Map());
     set({
       activeSessionId: session.id,
+      modelSelection: null,
       messages: [],
       activities: [],
       isRunning: false,
       ...activeConversationState(session.id),
+    });
+    void loadSessionModel(active, session.id, true).catch((reason) => {
+      if (controller === active) set({ configurationError: errorMessage(reason) });
     });
   },
 
@@ -901,6 +908,7 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
     if (!session) throw new Error('DeepSeek 会话不存在');
     set({
       activeSessionId: id,
+      modelSelection: null,
       messages: [],
       activities: [],
       isRunning: session.status === 'running',
@@ -989,8 +997,11 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
       const host = await active.call<DshHostDescriptionWire>('host.describe');
       const configuration = await readConfiguration(active, host);
       if (controller !== active) return;
-      set(configuration);
       const sessionId = get().activeSessionId;
+      set({
+        ...configuration,
+        ...(sessionId ? { modelSelection: null } : {}),
+      });
       if (sessionId) await loadSessionModel(active, sessionId);
     } catch (reason) {
       if (controller === active) set({ configurationStatus: 'error', configurationError: errorMessage(reason) });

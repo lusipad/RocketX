@@ -118,10 +118,12 @@ class FakeNativeDsh {
     this.calls.push({ method, payload });
     const queue = this.responses.get(method) ?? [];
     if (queue.length === 0) throw new Error(`unexpected native call: ${method}`);
+    const queued = queue.shift();
+    const value = queued instanceof Promise ? await queued : queued;
     const response = {
       type: 'server-response',
       rpcId: String(message.id ?? ''),
-      result: { ok: true, value: queue.shift() },
+      result: { ok: true, value },
     };
     queueMicrotask(() => {
       this.emit('dsh-bridge-output', {
@@ -248,6 +250,12 @@ test('connect loads workspace state from native RPC and startSession creates a b
   fake.queue('settings.describe', configurationResponse());
   fake.queue('llm.models', { groups: [], failures: [] });
   fake.queue('session.create', { sessionId: 'session-new' });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
   activeNative = fake;
   try {
     const workspace = await resetWorkspace('connect-start');
@@ -255,6 +263,7 @@ test('connect loads workspace state from native RPC and startSession creates a b
 
     await workspace.useDshWorkspace.getState().connect();
     await workspace.useDshWorkspace.getState().startSession();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.deepEqual(
       fake.calls.map((call) => call.method),
@@ -266,9 +275,10 @@ test('connect loads workspace state from native RPC and startSession creates a b
         'settings.describe',
         'llm.models',
         'session.create',
+        'session.models',
       ],
     );
-    assert.deepEqual(fake.calls.at(-1), {
+    assert.deepEqual(fake.calls.at(-2), {
       method: 'session.create',
       payload: { cwd: workspaceRoot },
     });
@@ -276,6 +286,132 @@ test('connect loads workspace state from native RPC and startSession creates a b
     assert.equal(state.status, 'ready');
     assert.equal(state.activeSessionId, 'session-new');
     assert.equal(state.sessions[0]?.blank, true);
+    assert.deepEqual(state.modelSelection, {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+    });
+  } finally {
+    activeNative = null;
+  }
+});
+
+test('startSession does not wait for display-only model metadata', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue('host.describe', {});
+  fake.queue('session.list', { items: [] });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] });
+  fake.queue('settings.describe', configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] });
+  fake.queue('session.create', { sessionId: 'session-delayed-model' });
+  let releaseModel!: (value: unknown) => void;
+  const delayedModel = new Promise<unknown>((resolve) => {
+    releaseModel = resolve;
+  });
+  fake.queue('session.models', delayedModel);
+  activeNative = fake;
+  let starting: Promise<void> | null = null;
+  try {
+    const workspace = await resetWorkspace('start-delayed-model');
+    await workspace.useDshWorkspace.getState().connect();
+
+    starting = workspace.useDshWorkspace.getState().startSession();
+    const completedPromptPath = await Promise.race([
+      starting.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 25)),
+    ]);
+
+    assert.equal(completedPromptPath, true);
+    assert.equal(workspace.useDshWorkspace.getState().activeSessionId, 'session-delayed-model');
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
+  } finally {
+    releaseModel({
+      current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+      routable: true,
+      groups: [],
+      failures: [],
+    });
+    await starting?.catch(() => undefined);
+    activeNative = null;
+  }
+});
+
+test('connect does not attribute the configured default to an existing session when its model fails to load', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue('host.describe', { provider: 'deepseek', model: 'deepseek-chat' });
+  fake.queue('session.list', {
+    items: [{
+      sessionId: 'session-existing',
+      updatedAt: 1,
+      running: false,
+      blank: false,
+      cwd: `${WORKSPACE_ROOT}/connect-existing-model`,
+    }],
+  });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] });
+  fake.queue('settings.describe', configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] });
+  fake.queue('session.history', { events: [], hasMore: false });
+  activeNative = fake;
+  try {
+    const workspace = await resetWorkspace('connect-existing-model');
+
+    await workspace.useDshWorkspace.getState().connect();
+
+    const state = workspace.useDshWorkspace.getState();
+    assert.equal(state.activeSessionId, 'session-existing');
+    assert.equal(state.modelSelection, null);
+    assert.match(state.configurationError ?? '', /unexpected native call: session\.models/);
+  } finally {
+    activeNative = null;
+  }
+});
+
+test('configuration refresh does not replace an existing session model with the configured default', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue(
+    'host.describe',
+    { provider: 'deepseek', model: 'deepseek-chat' },
+    { provider: 'deepseek', model: 'deepseek-chat' },
+  );
+  fake.queue('session.list', {
+    items: [{
+      sessionId: 'session-existing',
+      updatedAt: 1,
+      running: false,
+      blank: false,
+      cwd: `${WORKSPACE_ROOT}/refresh-existing-model`,
+    }],
+  });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] }, { presets: [] });
+  fake.queue('settings.describe', configurationResponse(), configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] }, { groups: [], failures: [] });
+  fake.queue('session.history', { events: [], hasMore: false });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
+  activeNative = fake;
+  try {
+    const workspace = await resetWorkspace('refresh-existing-model');
+    await workspace.useDshWorkspace.getState().connect();
+
+    await assert.rejects(
+      workspace.useDshWorkspace.getState().refreshConfiguration(),
+      /unexpected native call: session\.models/,
+    );
+
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
   } finally {
     activeNative = null;
   }
@@ -312,6 +448,10 @@ test('selectModel creates a blank session before calling the native model select
   fake.queue('settings.describe', configurationResponse());
   fake.queue('llm.models', { groups: [], failures: [] });
   fake.queue('session.create', { sessionId: 'session-model' });
+  let releaseModel!: (value: unknown) => void;
+  fake.queue('session.models', new Promise<unknown>((resolve) => {
+    releaseModel = resolve;
+  }));
   fake.queue('session.selectModel', {
     selected: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
   });
@@ -328,8 +468,9 @@ test('selectModel creates a blank session before calling the native model select
     };
     await workspace.useDshWorkspace.getState().selectModel(selection);
 
-    assert.deepEqual(fake.calls.slice(-2), [
+    assert.deepEqual(fake.calls.slice(-3), [
       { method: 'session.create', payload: { cwd: workspaceRoot } },
+      { method: 'session.models', payload: { sessionId: 'session-model' } },
       {
         method: 'session.selectModel',
         payload: {
@@ -341,6 +482,57 @@ test('selectModel creates a blank session before calling the native model select
       },
     ]);
     assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, selection);
+    releaseModel({
+      current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+      routable: true,
+      groups: [],
+      failures: [],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, selection);
+  } finally {
+    releaseModel?.({ current: null, routable: true, groups: [], failures: [] });
+    activeNative = null;
+  }
+});
+
+test('openSession clears the previous model before loading the selected session model', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue('host.describe', {});
+  fake.queue('session.list', { items: [] });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] });
+  fake.queue('settings.describe', configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] });
+  fake.queue('session.history', { events: [], hasMore: false });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
+  activeNative = fake;
+  try {
+    const workspace = await resetWorkspace('open-session-model');
+    await workspace.useDshWorkspace.getState().connect();
+    workspace.useDshWorkspace.setState({
+      activeSessionId: 'session-old',
+      sessions: [
+        { id: 'session-old', updatedAt: 1, status: 'idle', blank: false },
+        { id: 'session-new', updatedAt: 2, status: 'idle', blank: false },
+      ],
+      modelSelection: { provider: 'deepseek', model: 'deepseek-chat' },
+    });
+
+    const opening = workspace.useDshWorkspace.getState().openSession('session-new');
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
+    await opening;
+    assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+    });
   } finally {
     activeNative = null;
   }
