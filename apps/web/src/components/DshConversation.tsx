@@ -21,7 +21,9 @@ function DshMessageBubble({ entry }: { entry: DshMessage }) {
     <article data-speaker={entry.role === 'system' ? 'assistant' : entry.role} className="codex-native-message">
       <span>{entry.role === 'assistant' ? 'DeepSeek' : entry.role === 'system' ? '系统' : '你'}</span>
       <div className="butler-conversation-markdown">
-        {entry.role === 'assistant' || entry.role === 'system' ? renderMarkdown(entry.text) : entry.text}
+        {entry.streaming
+          ? entry.text
+          : entry.role === 'assistant' || entry.role === 'system' ? renderMarkdown(entry.text) : entry.text}
       </div>
     </article>
   );

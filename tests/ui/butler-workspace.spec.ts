@@ -478,6 +478,222 @@ test('管家输出保持稳定文本流且输入区不常驻 AI 托管横幅（i
   ))).toBeLessThan(2);
 });
 
+test('主管家高频回答与任务过程只合并界面刷新', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'running',
+      activeTurnId: 'turn-high-frequency',
+      messages: Array.from({ length: 24 }, (_, index) => ({
+        id: `high-frequency-history-${index}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        text: `历史消息 ${index} `.repeat(8),
+      })),
+      streamingText: '开始',
+      events: [{
+        id: 'reasoning-high-frequency',
+        type: 'reasoning',
+        title: '思考',
+        detail: '开始',
+        status: 'running',
+      }],
+    });
+  });
+
+  const transcript = page.locator('.codex-native-transcript');
+  await expect(transcript.locator('.codex-native-message.is-streaming')).toContainText('开始');
+  const result = await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const transcriptElement = document.querySelector<HTMLElement>('.codex-native-transcript')!;
+    let mutations = 0;
+    const observer = new MutationObserver((records) => {
+      mutations += records.filter((record) => record.type === 'characterData' || record.type === 'childList').length;
+    });
+    observer.observe(transcriptElement, { subtree: true, characterData: true, childList: true });
+
+    for (let index = 0; index < 60; index += 1) {
+      useCodexWorkspace.setState((state: any) => ({
+        streamingText: `${state.streamingText} 分片 ${index}`,
+        events: state.events.map((event: any) => event.id === 'reasoning-high-frequency'
+          ? { ...event, detail: `${event.detail} 分片 ${index}` }
+          : event),
+      }));
+      await new Promise((resolve) => window.setTimeout(resolve, 2));
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    observer.disconnect();
+    const state = useCodexWorkspace.getState();
+    return {
+      mutations,
+      storeText: state.streamingText,
+      renderedText: transcriptElement.querySelector<HTMLElement>('.is-streaming .butler-conversation-markdown')?.textContent ?? '',
+      renderedDetail: transcriptElement.querySelector<HTMLElement>('.codex-native-activity pre')?.textContent ?? '',
+      bottomGap: transcriptElement.scrollHeight - transcriptElement.scrollTop - transcriptElement.clientHeight,
+    };
+  });
+
+  expect(result.mutations).toBeLessThanOrEqual(24);
+  expect(result.storeText).toContain('分片 59');
+  expect(result.renderedText).toContain('分片 59');
+  expect(result.renderedDetail).toContain('分片 59');
+  expect(result.bottomGap).toBeLessThan(2);
+});
+
+test('房间 Codex 连续吐字保持纯文本，完成后再解析 Markdown', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootAuthenticated(page);
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间 Codex' }).click();
+  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
+  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'running',
+      activeTurnId: 'turn-streaming-markdown',
+      streamingText: '## 尚未完成的标题\n\n- 正在输出的条目',
+    });
+  });
+
+  const streaming = panel.locator('.codex-native-message.is-streaming');
+  await expect(streaming).toContainText('## 尚未完成的标题');
+  await expect(streaming.getByRole('heading')).toHaveCount(0);
+  await expect(streaming.locator('li')).toHaveCount(0);
+
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'ready',
+      activeTurnId: undefined,
+      streamingText: '',
+      messages: [{
+        id: 'completed-streaming-markdown',
+        role: 'assistant',
+        text: '## 尚未完成的标题\n\n- 正在输出的条目',
+      }],
+    });
+  });
+
+  await expect(panel.getByRole('heading', { name: '尚未完成的标题' })).toBeVisible();
+  await expect(panel.locator('.rocketx-markdown')).toContainText('正在输出的条目');
+});
+
+test('DeepSeek 高频吐字保持纯文本，完成后再解析 Markdown', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openWorkspace(page);
+  await page.getByRole('tab', { name: 'DeepSeek', exact: true }).click();
+  const pane = page.getByRole('region', { name: 'DeepSeek 任务' });
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
+    const { useDshWorkspace } = await loadWorkspace();
+    useDshWorkspace.setState({
+      status: 'ready',
+      error: null,
+      workspaceRoot: 'D:/Repos/rocketchatx',
+      activeSessionId: 'dsh-streaming',
+      sessions: [{ id: 'dsh-streaming', title: '流式验证', updatedAt: 1, status: 'running', blank: false }],
+      messages: [],
+      activities: [],
+      isRunning: true,
+      credentialConfigured: true,
+    });
+  });
+  await expect(pane).toBeVisible();
+
+  const result = await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
+    const { applyDshMuxFrame, useDshWorkspace } = await loadWorkspace();
+    const transcriptElement = document.querySelector<HTMLElement>('.dsh-conversation-layout .codex-native-transcript')!;
+    let mutations = 0;
+    const observer = new MutationObserver((records) => {
+      mutations += records.filter((record) => record.type === 'characterData' || record.type === 'childList').length;
+    });
+    observer.observe(transcriptElement, { subtree: true, characterData: true, childList: true });
+
+    for (let index = 0; index < 60; index += 1) {
+      applyDshMuxFrame({
+        type: 'server-request',
+        rpcId: `dsh-stream-${index}`,
+        method: 'session/event',
+        payload: {
+          type: 'session/event',
+          sessionId: 'dsh-streaming',
+          event: {
+            type: 'assistant/chunk',
+            seq: index + 1,
+            time: index + 1,
+            data: {
+              turn: 1,
+              step: 1,
+              chunk: {
+                type: 'text-delta',
+                index: 0,
+                text: index === 0 ? '## 尚未完成的标题\n\n- 正在输出的条目 0' : `\n分片 ${index}`,
+              },
+            },
+          },
+        },
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 2));
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    observer.disconnect();
+    const state = useDshWorkspace.getState();
+    return {
+      mutations,
+      storeText: state.messages.at(-1)?.text ?? '',
+      bottomGap: transcriptElement.scrollHeight - transcriptElement.scrollTop - transcriptElement.clientHeight,
+    };
+  });
+
+  const draft = pane.locator('.codex-native-message').last();
+  expect(result.mutations).toBeLessThanOrEqual(24);
+  expect(result.storeText).toContain('分片 59');
+  expect(result.bottomGap).toBeLessThan(2);
+  await expect(draft).toContainText('## 尚未完成的标题');
+  await expect(draft.getByRole('heading')).toHaveCount(0);
+  await expect(draft.locator('li')).toHaveCount(0);
+
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
+    const { applyDshMuxFrame } = await loadWorkspace();
+    applyDshMuxFrame({
+      type: 'server-request',
+      rpcId: 'dsh-stream-complete',
+      method: 'session/event',
+      payload: {
+        type: 'session/event',
+        sessionId: 'dsh-streaming',
+        event: {
+          type: 'assistant/message',
+          seq: 61,
+          time: 61,
+          data: {
+            turn: 1,
+            step: 1,
+            message: {
+              id: 'dsh-stream-complete',
+              role: 'assistant',
+              content: [{ type: 'text', text: '## 已完成的标题\n\n- 已完成的条目' }],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  await expect(pane.getByRole('heading', { name: '已完成的标题' })).toBeVisible();
+  await expect(pane.locator('.rocketx-markdown').last()).toContainText('已完成的条目');
+});
+
 test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请求、已安排、插件和项目结构', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await openWorkspace(page);

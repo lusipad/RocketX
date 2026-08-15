@@ -265,6 +265,7 @@ test('DSH transcript shows only human prompts, streams draft text, and completes
     { role: 'user', text: '你好' },
     { role: 'assistant', text: '正在处理' },
   ]);
+  assert.equal(transcript.messages.at(-1)?.streaming, true);
   assert.equal(transcript.activities[0]?.title, 'read_file');
   assert.equal(transcript.activities[0]?.status, 'completed');
 });
@@ -292,10 +293,49 @@ test('final assistant message replaces its raw chunks and turn errors stay out o
       data: { turn: 2, reason: { kind: 'error', error: { code: 'BROKEN', message: '模型失败' } } },
     },
   ]);
+  assert.equal(transcript.messages.at(-1)?.streaming, undefined);
 
   assert.deepEqual(transcript.messages.map((message) => message.text), ['完成']);
   assert.equal(transcript.activities[0]?.status, 'failed');
   assert.equal(transcript.activities[0]?.summary, '模型失败');
+});
+
+test('final assistant event immediately flushes and cancels a pending draft render', async () => {
+  const sessionId = 'session-render-flush';
+  useDshWorkspace.setState({
+    activeSessionId: sessionId,
+    sessions: [{ id: sessionId, updatedAt: 1, status: 'running', blank: false }],
+    messages: [],
+    activities: [],
+  });
+  applyDshMuxFrame({
+    type: 'server-request', rpcId: 'draft', method: 'session/event',
+    payload: {
+      type: 'session/event', sessionId,
+      event: {
+        type: 'assistant/chunk', seq: 1, time: 1,
+        data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: '草稿' } },
+      },
+    },
+  });
+  applyDshMuxFrame({
+    type: 'server-request', rpcId: 'complete', method: 'session/event',
+    payload: {
+      type: 'session/event', sessionId,
+      event: {
+        type: 'assistant/message', seq: 2, time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: { id: 'complete', role: 'assistant', content: [{ type: 'text', text: '完成' }] },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(useDshWorkspace.getState().messages.map((message) => message.text), ['完成']);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.deepEqual(useDshWorkspace.getState().messages.map((message) => message.text), ['完成']);
 });
 
 test('DSH approval and question responses use the original server rpcId', () => {

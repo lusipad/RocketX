@@ -21,6 +21,7 @@ import {
 } from '../lib/imLayout';
 import { renderMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { useCodexStreamingText } from '../lib/useCodexStreamingText';
 import { useChat } from '../stores/chat';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useImLayout } from '../stores/imLayout';
@@ -117,7 +118,7 @@ export default function ButlerPanel() {
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
   const status = useCodexWorkspace((state) => state.status);
   const messages = useCodexWorkspace((state) => state.messages);
-  const streamingText = useCodexWorkspace((state) => state.streamingText);
+  const streamingText = useCodexStreamingText();
   const pendingRequests = useCodexWorkspace((state) => state.pendingRequests);
   const error = useCodexWorkspace((state) => state.error);
   const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
@@ -400,7 +401,7 @@ export default function ButlerPanel() {
             {streamingText ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming">
                 <span>Codex</span>
-                <div className="butler-conversation-markdown">{renderMarkdown(streamingText)}</div>
+                <div className="butler-conversation-markdown">{streamingText}</div>
               </article>
             ) : running ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">

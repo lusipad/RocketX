@@ -23,6 +23,7 @@ import {
 import { isTauriRuntime } from '../lib/client';
 import { renderMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { useCodexStreamingView } from '../lib/useCodexStreamingText';
 import type { CodexHostInput } from '../agent/codexHostInput';
 import type { CodexImageInput } from '../lib/codexImages';
 import {
@@ -267,8 +268,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const threads = useCodexWorkspace((state) => state.threads);
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
   const messages = useCodexWorkspace((state) => state.messages);
-  const streamingText = useCodexWorkspace((state) => state.streamingText);
-  const events = useCodexWorkspace((state) => state.events);
+  const { streamingText, events } = useCodexStreamingView();
   const requests = useCodexWorkspace((state) => state.pendingRequests);
   const queuedMessages = useCodexWorkspace((state) => state.queuedMessages);
   const composerDraft = useCodexWorkspace((state) => state.composerDraft);
