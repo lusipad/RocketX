@@ -1593,8 +1593,29 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
       throw new Error('任务运行中，完成或停止后再切换到 Codex App');
     }
+    const otherTaskRunning = Object.entries(current.threadStates).some(([threadId, thread]) =>
+      threadId !== current.activeThreadId
+      && (
+        Boolean(thread.activeTurnId)
+        || thread.queuedMessages.length > 0
+        || thread.status === 'running'
+        || thread.status === 'waiting-input'
+        || thread.status === 'connecting'
+      )
+    );
+    if (otherTaskRunning) {
+      throw new Error('还有其他 RocketX 任务正在运行，完成或停止后再切换到 Codex App');
+    }
     rejectPendingRequests('会话已交给 Codex App', current.activeThreadId);
-    await unsubscribeThreadIfSupported(controller, current.activeThreadId).catch(() => undefined);
+    const activeController = controller;
+    await unsubscribeThreadIfSupported(activeController, current.activeThreadId).catch(() => undefined);
+    if (activeController) {
+      if (controller === activeController) {
+        controller = undefined;
+        connectRequest = undefined;
+      }
+      await activeController.stop();
+    }
     setThreadState(current.activeThreadId, (thread) => ({
       ...thread,
       status: 'external',

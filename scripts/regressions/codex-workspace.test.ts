@@ -722,7 +722,7 @@ test('读取 Codex 线程时把生成图片附加到本轮最后一条回复', a
   }
 });
 
-test('交给 Codex App 时只释放目标线程，并保留其他 RocketX 任务', async () => {
+test('交给 Codex App 时停止空闲 app-server，立即释放线程写入权', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -757,10 +757,66 @@ test('交给 Codex App 时只释放目标线程，并保留其他 RocketX 任务
 
     const state = useCodexWorkspace.getState();
     assert.equal(unsubscribed, 1);
-    assert.equal(stopped, 0);
+    assert.equal(stopped, 1);
     assert.equal(state.status, 'external');
     assert.equal(state.activeThreadId, storedThread.id);
     assert.equal(state.activeTurnId, undefined);
+  } finally {
+    restoreFactory();
+    await resetCodexWorkspaceForTests();
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
+
+test('其他 RocketX 任务仍在运行时不停止共享 app-server', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: () => null, setItem: () => undefined },
+  });
+  let stopped = 0;
+  let unsubscribed = 0;
+  const storedThread = thread('thread-handoff-busy');
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    connect: async () => ({
+      models: [MODEL],
+      permissionProfiles: [],
+      skills: [],
+      apps: [],
+      plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+    }),
+    listThreads: async () => [storedThread],
+    resumeThread: async () => storedThread,
+    readThread: async () => ({ thread: storedThread, turns: [] }),
+    unsubscribeThread: async () => { unsubscribed += 1; },
+    stop: async () => { stopped += 1; },
+  } as never));
+
+  try {
+    await resetCodexWorkspaceForTests();
+    useCodexWorkspace.getState().hydrate('account-handoff-busy');
+    await useCodexWorkspace.getState().setWorkspaceRoot('D:/workspace');
+    await useCodexWorkspace.getState().connect();
+    await useCodexWorkspace.getState().resumeThread(storedThread.id);
+    useCodexWorkspace.setState((state) => ({
+      threadStates: {
+        ...state.threadStates,
+        'thread-running': {
+          ...state.threadStates[storedThread.id]!,
+          status: 'running',
+          activeTurnId: 'turn-running',
+        },
+      },
+    }));
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /还有其他 RocketX 任务正在运行/,
+    );
+    assert.equal(unsubscribed, 0);
+    assert.equal(stopped, 0);
+    assert.equal(useCodexWorkspace.getState().status, 'ready');
   } finally {
     restoreFactory();
     await resetCodexWorkspaceForTests();
