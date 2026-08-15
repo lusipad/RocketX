@@ -717,6 +717,7 @@ async function connectWorkspace(): Promise<void> {
         isRunning: active?.status === 'running',
         ...credential,
         ...configuration,
+        ...(activeSessionId ? { modelSelection: null } : {}),
         ...activeConversationState(activeSessionId),
         ...(activeSessionId ? {} : { messages: [], activities: [] }),
       });
@@ -848,6 +849,7 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
       isRunning: selected?.status === 'running',
       ...credential,
       ...configuration,
+      ...(activeSessionId ? { modelSelection: null } : {}),
       ...activeConversationState(activeSessionId),
       ...(activeSessionId ? {} : { messages: [], activities: [] }),
     });
