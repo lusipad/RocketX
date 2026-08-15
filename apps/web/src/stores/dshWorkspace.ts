@@ -579,9 +579,10 @@ async function readConfiguration(
   };
 }
 
-async function loadSessionModel(active: DshController, sessionId: string): Promise<void> {
+async function loadSessionModel(active: DshController, sessionId: string, onlyIfUnset = false): Promise<void> {
   const directory = await active.call<DshModelDirectory>('session.models', { sessionId });
   if (controller !== active || useDshWorkspace.getState().activeSessionId !== sessionId) return;
+  if (onlyIfUnset && useDshWorkspace.getState().modelSelection) return;
   useDshWorkspace.setState({
     modelSelection: directory.current,
     modelGroups: directory.groups,
@@ -896,7 +897,7 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
       isRunning: false,
       ...activeConversationState(session.id),
     });
-    await loadSessionModel(active, session.id).catch((reason) => {
+    void loadSessionModel(active, session.id, true).catch((reason) => {
       if (controller === active) set({ configurationError: errorMessage(reason) });
     });
   },

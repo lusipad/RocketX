@@ -118,10 +118,12 @@ class FakeNativeDsh {
     this.calls.push({ method, payload });
     const queue = this.responses.get(method) ?? [];
     if (queue.length === 0) throw new Error(`unexpected native call: ${method}`);
+    const queued = queue.shift();
+    const value = queued instanceof Promise ? await queued : queued;
     const response = {
       type: 'server-response',
       rpcId: String(message.id ?? ''),
-      result: { ok: true, value: queue.shift() },
+      result: { ok: true, value },
     };
     queueMicrotask(() => {
       this.emit('dsh-bridge-output', {
@@ -261,6 +263,7 @@ test('connect loads workspace state from native RPC and startSession creates a b
 
     await workspace.useDshWorkspace.getState().connect();
     await workspace.useDshWorkspace.getState().startSession();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.deepEqual(
       fake.calls.map((call) => call.method),
@@ -288,6 +291,49 @@ test('connect loads workspace state from native RPC and startSession creates a b
       model: 'deepseek-reasoner',
     });
   } finally {
+    activeNative = null;
+  }
+});
+
+test('startSession does not wait for display-only model metadata', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue('host.describe', {});
+  fake.queue('session.list', { items: [] });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] });
+  fake.queue('settings.describe', configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] });
+  fake.queue('session.create', { sessionId: 'session-delayed-model' });
+  let releaseModel!: (value: unknown) => void;
+  const delayedModel = new Promise<unknown>((resolve) => {
+    releaseModel = resolve;
+  });
+  fake.queue('session.models', delayedModel);
+  activeNative = fake;
+  let starting: Promise<void> | null = null;
+  try {
+    const workspace = await resetWorkspace('start-delayed-model');
+    await workspace.useDshWorkspace.getState().connect();
+
+    starting = workspace.useDshWorkspace.getState().startSession();
+    const completedPromptPath = await Promise.race([
+      starting.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 25)),
+    ]);
+
+    assert.equal(completedPromptPath, true);
+    assert.equal(workspace.useDshWorkspace.getState().activeSessionId, 'session-delayed-model');
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
+  } finally {
+    releaseModel({
+      current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+      routable: true,
+      groups: [],
+      failures: [],
+    });
+    await starting?.catch(() => undefined);
     activeNative = null;
   }
 });
@@ -402,12 +448,10 @@ test('selectModel creates a blank session before calling the native model select
   fake.queue('settings.describe', configurationResponse());
   fake.queue('llm.models', { groups: [], failures: [] });
   fake.queue('session.create', { sessionId: 'session-model' });
-  fake.queue('session.models', {
-    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
-    routable: true,
-    groups: [],
-    failures: [],
-  });
+  let releaseModel!: (value: unknown) => void;
+  fake.queue('session.models', new Promise<unknown>((resolve) => {
+    releaseModel = resolve;
+  }));
   fake.queue('session.selectModel', {
     selected: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
   });
@@ -438,7 +482,16 @@ test('selectModel creates a blank session before calling the native model select
       },
     ]);
     assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, selection);
+    releaseModel({
+      current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+      routable: true,
+      groups: [],
+      failures: [],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, selection);
   } finally {
+    releaseModel?.({ current: null, routable: true, groups: [], failures: [] });
     activeNative = null;
   }
 });
