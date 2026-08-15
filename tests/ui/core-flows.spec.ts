@@ -1598,6 +1598,7 @@ test('打开管家页后可返回消息', async ({ page }) => {
 });
 
 test('DeepSeek 页头显示模型详情且配置按钮打开可见弹窗（issue #334）', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
   const { pageErrors } = await bootAuthenticated(page);
   await page.evaluate(async () => {
     const { useDshWorkspace } = await import('/src/stores/dshWorkspace.ts');

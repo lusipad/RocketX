@@ -1256,6 +1256,16 @@ body {
   white-space: nowrap;
 }
 
+.dsh-model-summary {
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--color-ink-3);
+  font-size: var(--text-xs);
+  line-height: var(--line-ui-compact);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .butler-conversation-header-actions {
   display: flex;
   min-width: 0;

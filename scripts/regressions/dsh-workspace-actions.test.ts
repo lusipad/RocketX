@@ -346,6 +346,48 @@ test('selectModel creates a blank session before calling the native model select
   }
 });
 
+test('openSession clears the previous model before loading the selected session model', async () => {
+  const fake = new FakeNativeDsh();
+  fake.queue('host.describe', {});
+  fake.queue('session.list', { items: [] });
+  fake.queue('credentials.describe', {
+    credentials: { DEEPSEEK_API_KEY: { configured: true, writable: false } },
+  });
+  fake.queue('agentPreset.list', { presets: [] });
+  fake.queue('settings.describe', configurationResponse());
+  fake.queue('llm.models', { groups: [], failures: [] });
+  fake.queue('session.history', { events: [], hasMore: false });
+  fake.queue('session.models', {
+    current: { provider: 'deepseek', model: 'deepseek-reasoner' },
+    routable: true,
+    groups: [],
+    failures: [],
+  });
+  activeNative = fake;
+  try {
+    const workspace = await resetWorkspace('open-session-model');
+    await workspace.useDshWorkspace.getState().connect();
+    workspace.useDshWorkspace.setState({
+      activeSessionId: 'session-old',
+      sessions: [
+        { id: 'session-old', updatedAt: 1, status: 'idle', blank: false },
+        { id: 'session-new', updatedAt: 2, status: 'idle', blank: false },
+      ],
+      modelSelection: { provider: 'deepseek', model: 'deepseek-chat' },
+    });
+
+    const opening = workspace.useDshWorkspace.getState().openSession('session-new');
+    assert.equal(workspace.useDshWorkspace.getState().modelSelection, null);
+    await opening;
+    assert.deepEqual(workspace.useDshWorkspace.getState().modelSelection, {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+    });
+  } finally {
+    activeNative = null;
+  }
+});
+
 test('selectAgentPreset applies the preset to the current blank session through native RPC', async () => {
   const fake = new FakeNativeDsh();
   fake.queue('host.describe', {});

@@ -529,7 +529,8 @@ export default function DshConversation() {
           <div className="min-w-0">
             <span>{workspaceRoot ? workspaceLabel(workspaceRoot) : 'DeepSeek'}</span>
             <h2>{activeSession?.title || 'DeepSeek 会话'}</h2>
-            {workspaceRoot ? <p title={`${workspaceRoot} · DeepSeek 模型：${modelSummary}`}>{workspaceRoot} · DeepSeek 模型：{modelSummary}</p> : null}
+            {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot}</p> : null}
+            {workspaceRoot ? <div className="dsh-model-summary">DeepSeek 模型：{modelSummary}</div> : null}
           </div>
           <div className="butler-conversation-header-actions">
             <button

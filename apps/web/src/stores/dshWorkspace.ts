@@ -901,6 +901,7 @@ export const useDshWorkspace = create<DshWorkspaceState>((set, get) => ({
     if (!session) throw new Error('DeepSeek 会话不存在');
     set({
       activeSessionId: id,
+      modelSelection: null,
       messages: [],
       activities: [],
       isRunning: session.status === 'running',
