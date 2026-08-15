@@ -26,7 +26,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 
 Repository configuration is not proof that an installer has been published. Use tagged GitHub Release assets as the publication record.
 
-Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. The `v0.42.0`, `v0.42.1`, and `v0.42.2` build candidates were not published after their desktop matrices exposed DSH preparation, raw-resource packaging, and full-asset upload limits. `v0.42.4` was also withheld after a Butler streaming regression was found before publication, while `v0.42.3` remains the verified GitHub Latest. Starting with `v0.42.5`, the current target continues that policy with default slim artifacts that only probe installed runtimes and a Windows full installer that adds the private bundled payloads.
+Releases `v0.29.1` through the cancelled `v0.34.4` candidates were never promoted as a new cross-platform Latest. `v0.34.5` restored the official macOS and Linux packages, and `v0.40.2` continued that complete updater manifest. The `v0.42.0`, `v0.42.1`, and `v0.42.2` build candidates were not published after their desktop matrices exposed DSH preparation, raw-resource packaging, and full-asset upload limits. `v0.42.4` was also withheld after a Butler streaming regression was found before publication, while `v0.42.5` resumed verified GitHub Latest delivery. Starting with `v0.42.6`, the current target continues that policy with default slim artifacts that only probe installed runtimes and a Windows full installer that adds the private bundled payloads.
 
 ## Codex runtime compatibility
 
@@ -44,7 +44,7 @@ See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, an
 
 ## DeepSeek Harness runtime compatibility
 
-RocketX `v0.42.5` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, the current verified compatibility line is exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Newer DSH versions stay unavailable until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.1.0-rc.6` plus a private Node payload into the application data directory. A separate `deepseek-harness` source checkout is not a release prerequisite. The Web client cannot start the local DSH process.
+RocketX `v0.42.6` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, the current verified compatibility line is exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Newer DSH versions stay unavailable until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.1.0-rc.6` plus a private Node payload into the application data directory. A separate `deepseek-harness` source checkout is not a release prerequisite. The Web client cannot start the local DSH process.
 
 | DSH condition | RocketX behavior |
 | --- | --- |
