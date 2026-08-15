@@ -28,6 +28,8 @@ test('Butler 任务页提供独立 DeepSeek 视图、凭据与原生运行配置
   assert.match(conversation, /setDeepSeekApiKey = useDshWorkspace\(\(state\) => state\.setDeepSeekApiKey\)/);
   assert.match(conversation, /clearDeepSeekApiKey = useDshWorkspace\(\(state\) => state\.clearDeepSeekApiKey\)/);
   assert.match(conversation, /DshConfigurationCard/);
+  assert.match(conversation, /<Dialog[\s\S]*title="DeepSeek 运行配置"/);
+  assert.match(conversation, /DeepSeek 模型：/);
   assert.match(conversation, /DeepSeek 运行配置/);
   assert.match(conversation, /模型与提供方/);
   assert.match(conversation, /Agent preset/);

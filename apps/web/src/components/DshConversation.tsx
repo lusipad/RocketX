@@ -15,6 +15,7 @@ import type { DshMessage } from '../agent/dsh/project';
 import { selectedModel, type DshModelSelection } from '../agent/dsh/config';
 import DshConversationHistory from './DshConversationHistory';
 import { workspaceLabel } from './DshConversationShared';
+import Dialog from './Dialog';
 
 function DshMessageBubble({ entry }: { entry: DshMessage }) {
   return (
@@ -429,6 +430,8 @@ export default function DshConversation() {
   const respondQuestion = useDshWorkspace((state) => state.respondQuestion);
   const setDeepSeekApiKey = useDshWorkspace((state) => state.setDeepSeekApiKey);
   const clearDeepSeekApiKey = useDshWorkspace((state) => state.clearDeepSeekApiKey);
+  const modelSelection = useDshWorkspace((state) => state.modelSelection);
+  const modelGroups = useDshWorkspace((state) => state.modelGroups);
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
@@ -438,6 +441,12 @@ export default function DshConversation() {
   const historyPanelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeSession = useMemo(() => sessions.find((session) => session.id === activeSessionId) ?? null, [activeSessionId, sessions]);
+  const currentModel = selectedModel(modelGroups, modelSelection);
+  const currentProvider = modelGroups.find((group) => group.id === modelSelection?.provider);
+  const currentReasoning = currentModel?.reasoning?.efforts.find((effort) => effort.id === modelSelection?.reasoningEffort);
+  const modelSummary = modelSelection
+    ? `${currentProvider?.name ?? modelSelection.provider} / ${currentModel?.name ?? modelSelection.model}${modelSelection.reasoningEffort ? ` · ${currentReasoning?.name ?? modelSelection.reasoningEffort}` : ''}`
+    : '未选择';
   const latestActivity = activities.at(-1);
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     messages, activities, queuedMessages, pendingApproval, pendingQuestion, error,
@@ -520,7 +529,7 @@ export default function DshConversation() {
           <div className="min-w-0">
             <span>{workspaceRoot ? workspaceLabel(workspaceRoot) : 'DeepSeek'}</span>
             <h2>{activeSession?.title || 'DeepSeek 会话'}</h2>
-            {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot}</p> : null}
+            {workspaceRoot ? <p title={`${workspaceRoot} · DeepSeek 模型：${modelSummary}`}>{workspaceRoot} · DeepSeek 模型：{modelSummary}</p> : null}
           </div>
           <div className="butler-conversation-header-actions">
             <button
@@ -572,6 +581,19 @@ export default function DshConversation() {
           </div>
         </header>
 
+        {configurationOpen ? (
+          <Dialog
+            title="DeepSeek 运行配置"
+            hint="直接读写 DSH 原生配置；AI 托管创建的新会话也使用这些默认值。"
+            width={720}
+            onClose={() => setConfigurationOpen(false)}
+          >
+            <div className="px-5 pb-5">
+              <DshConfigurationCard />
+            </div>
+          </Dialog>
+        ) : null}
+
         <main ref={scrollRef} onScroll={onScroll} className="codex-native-transcript">
           {!workspaceRoot ? (
             <div className="codex-native-landing">
@@ -616,7 +638,6 @@ export default function DshConversation() {
             </div>
           ) : (
             <div className="codex-native-transcript-inner">
-              {configurationOpen ? <DshConfigurationCard /> : null}
               {credentialOpen ? (
                 <CredentialCard
                   credentialConfigured
