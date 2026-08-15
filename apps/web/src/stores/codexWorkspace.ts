@@ -1590,8 +1590,14 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const current = get();
     if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
     const activeThread = currentThreadState(current, current.activeThreadId, current.status);
+    if (activeThread.status === 'connecting') {
+      throw new Error('Codex 正在连接，请稍后再切换到 Codex App');
+    }
     if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
       throw new Error('任务运行中，完成或停止后再切换到 Codex App');
+    }
+    if (backgroundAutomationPermissions.size > 0) {
+      throw new Error('已安排任务正在运行，完成后再切换到 Codex App');
     }
     const otherTaskRunning = Object.entries(current.threadStates).some(([threadId, thread]) =>
       threadId !== current.activeThreadId

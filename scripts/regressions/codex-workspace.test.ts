@@ -769,7 +769,94 @@ test('交给 Codex App 时停止空闲 app-server，立即释放线程写入权'
   }
 });
 
-test('其他 RocketX 任务仍在运行时不停止共享 app-server', async () => {
+test('heartbeat 使用共享 app-server 时阻止桌面交接停止运行时', async () => {
+  const catalog = {
+    models: [MODEL],
+    permissionProfiles: [],
+    skills: [],
+    apps: [],
+    plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+  };
+  const heartbeatThread = thread('thread-heartbeat-running', 'D:/workspace');
+  const heartbeatStarted = deferred<void>();
+  const heartbeatFinished = deferred<void>();
+  let stopped = 0;
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: 'D:/workspace',
+    currentCatalog: catalog,
+    connect: async () => catalog,
+    listThreads: async () => [],
+    resumeThread: async () => heartbeatThread,
+    startTurn: async () => {
+      heartbeatStarted.resolve();
+      return 'turn-heartbeat-running';
+    },
+    readThread: async () => {
+      await heartbeatFinished.promise;
+      return {
+        thread: heartbeatThread,
+        turns: [{
+          id: 'turn-heartbeat-running',
+          itemsView: 'full',
+          status: 'completed',
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1,
+          items: [{ type: 'agentMessage', id: 'heartbeat-answer', text: '完成', phase: null }],
+        }],
+      };
+    },
+    interruptTurn: async () => undefined,
+    stop: async () => { stopped += 1; },
+  } as never));
+
+  try {
+    await resetCodexWorkspaceForTests();
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:/workspace',
+      workspaceRoots: ['D:/workspace'],
+      activeThreadId: 'thread-handoff',
+      status: 'ready',
+      threadStates: {
+        'thread-handoff': {
+          workspaceRoot: 'D:/workspace',
+          runtimeSelection: undefined,
+          status: 'ready',
+          error: null,
+          activeTurnId: undefined,
+          turns: [],
+          messages: [],
+          events: [],
+          streamingText: '',
+          pendingRequests: [],
+          queuedMessages: [],
+        },
+      },
+    });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    const heartbeat = runExistingThreadAutomation({
+      threadId: heartbeatThread.id,
+      workspaceRoot: 'D:/workspace',
+      text: '继续检查',
+    });
+    await heartbeatStarted.promise;
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /已安排任务正在运行/,
+    );
+    assert.equal(stopped, 0);
+    heartbeatFinished.resolve();
+    await heartbeat;
+  } finally {
+    heartbeatFinished.resolve();
+    await resetCodexWorkspaceForTests();
+    restoreFactory();
+  }
+});
+
+test('当前线程连接中或其他 RocketX 任务运行时不停止共享 app-server', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -800,8 +887,31 @@ test('其他 RocketX 任务仍在运行时不停止共享 app-server', async () 
     await useCodexWorkspace.getState().connect();
     await useCodexWorkspace.getState().resumeThread(storedThread.id);
     useCodexWorkspace.setState((state) => ({
+      status: 'connecting',
       threadStates: {
         ...state.threadStates,
+        [storedThread.id]: {
+          ...state.threadStates[storedThread.id]!,
+          status: 'connecting',
+        },
+      },
+    }));
+
+    await assert.rejects(
+      useCodexWorkspace.getState().handoffToCodex(),
+      /正在连接/,
+    );
+    assert.equal(unsubscribed, 0);
+    assert.equal(stopped, 0);
+
+    useCodexWorkspace.setState((state) => ({
+      status: 'ready',
+      threadStates: {
+        ...state.threadStates,
+        [storedThread.id]: {
+          ...state.threadStates[storedThread.id]!,
+          status: 'ready',
+        },
         'thread-running': {
           ...state.threadStates[storedThread.id]!,
           status: 'running',
