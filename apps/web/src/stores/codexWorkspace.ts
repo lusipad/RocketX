@@ -189,6 +189,7 @@ let controller: AppServerController | undefined;
 let controllerFactory: ControllerFactory = (options) => new AppServerController(options);
 let resumeThreadRequestId = 0;
 let connectRequest: Promise<void> | undefined;
+let handoffInProgress = false;
 let defaultWorkspaceRequest: Promise<string> | undefined;
 let butlerWorkspaceRequest: Promise<string> | undefined;
 const requestWaiters = new Map<string, {
@@ -564,6 +565,7 @@ function threadSelection(thread: CodexThreadState, state = useCodexWorkspace.get
 
 async function ensureControllerWorkspace(workspaceRoot: string): Promise<void> {
   if (!workspaceRoot.trim()) return;
+  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
   if (connectRequest) await connectRequest;
   if (!controller) await useCodexWorkspace.getState().connect();
   const activeController = controller;
@@ -1274,6 +1276,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   connect: async (options) => {
     if (!get().workspaceRoot) throw new Error('请先选择工作区');
+    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
     if (connectRequest) return connectRequest;
     set((state) => state.activeThreadId
       ? { error: null }
@@ -1589,8 +1592,9 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   handoffToCodex: async () => {
     const current = get();
     if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
+    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
     const activeThread = currentThreadState(current, current.activeThreadId, current.status);
-    if (activeThread.status === 'connecting') {
+    if (connectRequest || activeThread.status === 'connecting') {
       throw new Error('Codex 正在连接，请稍后再切换到 Codex App');
     }
     if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
@@ -1612,27 +1616,32 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (otherTaskRunning) {
       throw new Error('还有其他 RocketX 任务正在运行，完成或停止后再切换到 Codex App');
     }
-    rejectPendingRequests('会话已交给 Codex App', current.activeThreadId);
-    const activeController = controller;
-    await unsubscribeThreadIfSupported(activeController, current.activeThreadId).catch(() => undefined);
-    if (activeController) {
-      if (controller === activeController) {
-        controller = undefined;
-        connectRequest = undefined;
+    handoffInProgress = true;
+    try {
+      rejectPendingRequests('会话已交给 Codex App', current.activeThreadId);
+      const activeController = controller;
+      await unsubscribeThreadIfSupported(activeController, current.activeThreadId).catch(() => undefined);
+      if (activeController) {
+        if (controller === activeController) {
+          controller = undefined;
+          connectRequest = undefined;
+        }
+        await activeController.stop();
       }
-      await activeController.stop();
+      setThreadState(current.activeThreadId, (thread) => ({
+        ...thread,
+        status: 'external',
+        activeTurnId: undefined,
+        streamingText: '',
+        events: [],
+        pendingRequests: [],
+        queuedMessages: [],
+        error: null,
+      }));
+      setActiveThread(current.activeThreadId, 'external');
+    } finally {
+      handoffInProgress = false;
     }
-    setThreadState(current.activeThreadId, (thread) => ({
-      ...thread,
-      status: 'external',
-      activeTurnId: undefined,
-      streamingText: '',
-      events: [],
-      pendingRequests: [],
-      queuedMessages: [],
-      error: null,
-    }));
-    setActiveThread(current.activeThreadId, 'external');
   },
 
   renameThread: async (threadId, name) => {
@@ -1918,6 +1927,7 @@ export interface ExistingThreadAutomationOptions {
 export async function runExistingThreadAutomation(
   options: ExistingThreadAutomationOptions,
 ): Promise<{ text: string; threadId: string }> {
+  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
   const state = useCodexWorkspace.getState();
   if (state.activeThreadId === options.threadId && state.activeTurnId) {
     throw new Error('目标会话正在运行，请等待当前任务完成');
@@ -1992,6 +2002,7 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
   rejectPendingRequests('测试重置');
   await controller?.stop();
   controller = undefined;
+  handoffInProgress = false;
   defaultWorkspaceRequest = undefined;
   butlerWorkspaceRequest = undefined;
   useCodexWorkspace.setState({
