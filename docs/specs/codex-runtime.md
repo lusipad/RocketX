@@ -1,7 +1,7 @@
 # `RUN` Codex Runtime
 
 > 当前状态：`受限可用`
-> 基线：工作树 `2026-08-09`；已验证协议基线 `0.144.4`
+> 基线：工作树 `2026-08-15`；已验证协议基线 `0.144.4`
 > 平台：桌面端；网页版当前无执行传输
 
 ## 1. 目标
@@ -17,15 +17,15 @@
 - 版本分类：verified、untested-newer、blocked；
 - Tauri 管理的 `app-server` 进程、JSON-RPC 消息和退出事件；
 - 中断、停止、重连和 Thread 恢复；
-- 注册 RocketX 受管 Skill 根目录与业务 MCP 配置。
+- 注册 RocketX 受管 Skill 根目录与业务 MCP 配置；
+- Windows full 安装包中的固定 Codex `0.144.4` 私有候选，以及 slim / full 一致的版本、能力和登录探测。
 
 ### 不包含
 
-- 当前安装包内置 Codex；
-- 自动安装、自动升级或替用户登录 Codex；
+- slim、macOS 与 Linux 安装包不内置 Codex；
+- 运行时在线安装、自动升级或替用户登录 Codex；
 - 低于协议基线的“尽力兼容”；
-- 生产可用的浏览器直连远程 `app-server`；
-- 把“全量安装包”解释为包含 Codex。
+- 生产可用的浏览器直连远程 `app-server`。
 
 ## 3. 入口与前置条件
 
@@ -64,7 +64,8 @@
 | 低于 `0.144.4` | `blocked` |
 | 内部最低候选常量 | 仅为探测元数据，不是可用承诺；实际低于基线仍阻止 |
 | 没有 Runtime | 不可用；非 AI 功能继续运行 |
-| 精简包/全量包 | 两者都不包含 Codex；全量包只增加 OCR 等资源 |
+| slim、macOS 与 Linux 包 | 不包含 Codex；只探测手动路径、PATH 与受支持的标准安装位置 |
+| Windows full 包 | 在私有资源目录安装固定 Codex `0.144.4`，作为受版本、能力和登录门禁约束的 bundled 候选；同时包含固定 DSH、私有 Node 与 OCR |
 
 ## 6. 平台与依赖
 
@@ -109,7 +110,7 @@
 - `RUN-AC-03`：候选必须同时通过二进制、版本、`app-server --help` 和登录探测才进入 ready。
 - `RUN-AC-03A`：自动模式会保留全部候选的结构化诊断，并在可用候选通过时继续 fallback，不因前一个候选失败而误报 unavailable。
 - `RUN-AC-04`：切换工作区、刷新、停止和关闭应用不会遗留受管进程或旧请求。
-- `RUN-AC-05`：精简与全量发布配置均不宣称/捆绑 Codex。
+- `RUN-AC-05`：slim、macOS 与 Linux 发布配置不捆绑 Codex；Windows full 只携带固定的 `0.144.4` 私有候选，并继续执行版本、`app-server` 能力与登录门禁，更新清单仍指向 slim。
 - `RUN-AC-06`：网页版不尝试调用不存在的 Tauri transport，也不显示伪成功。
 - `RUN-AC-07`：中断后可通过同一原生 Thread 恢复已有 Turns。
 - `RUN-AC-08`：复制出的诊断摘要只包含结构化字段与协议基线，必须脱敏用户主目录与 token/PAT，且不暴露自由文本错误原因。
