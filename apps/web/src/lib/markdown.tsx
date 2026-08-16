@@ -467,7 +467,7 @@ function renderBlocks(
   return nodes;
 }
 
-/** 每层缩进 16px；不做真正的嵌套列表，视觉对齐就够聊天用了 */
+/** 标记与间距由 CSS 占 21px；这里只累加每层 16px 的嵌套缩进。 */
 function indentOf(spaces: string): number {
   return Math.min(Math.floor(spaces.replace(/\t/g, '  ').length / 2), 4) * 16;
 }
@@ -556,9 +556,13 @@ export function renderMarkdown(
   );
 }
 
-/** 文档预览（.md 文件）：同一套解析，排版更松 */
-export function renderMarkdownDoc(text: string): ReactNode {
-  return renderWithCodeFences(text, undefined, 'doc', 'chip');
+/** 文档预览与 AI 长回答：同一套解析，排版更松 */
+export function renderMarkdownDoc(
+  text: string,
+  me?: string,
+  renderLink?: MarkdownLinkRenderer,
+): ReactNode {
+  return renderWithCodeFences(text, me, 'doc', 'chip', renderLink);
 }
 
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */

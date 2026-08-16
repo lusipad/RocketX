@@ -8,7 +8,7 @@ import { useSyncExternalStore } from 'react';
  *
  * pinyin-pro 带着一份完整字典，直接 import 会给首屏加约 300KB。所以这里异步加载：
  * 加载完成前退化成原文子串匹配，加载完再通知订阅方重算一次筛选结果。
- * 实际上启动时就开始预加载，用户点开搜索框时早就好了。
+ * 宿主会在首屏渲染后空闲预加载，尽量不占用启动关键路径。
  */
 type PinyinFn = (
   text: string,
@@ -32,7 +32,7 @@ function load(): Promise<void> {
   return loading;
 }
 
-/** 应用启动时预热，避免用户第一次搜索时才等字典 */
+/** 首屏后预热，避免用户第一次搜索时才等字典 */
 export function preloadPinyin(): void {
   void load();
 }

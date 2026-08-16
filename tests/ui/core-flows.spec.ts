@@ -598,7 +598,7 @@ test('桌面附件留存默认关闭，可配置并按房间删除且不会重�
         },
       ],
     }));
-  }, { server: SERVER, userId: ME._id, cachedAt: Date.parse(NOW) });
+  }, { server: SERVER, userId: ME._id, cachedAt: Date.now() });
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -1119,6 +1119,24 @@ test('Markdown 文件预览使用完整文档排版（issue #319）', async ({ p
   await expect(markdown.locator('blockquote')).toContainText('统一 Markdown 预览');
   await expect(markdown.locator('table')).toContainText('文件');
   await expect(markdown.locator('pre')).toContainText('pnpm test');
+  const docLayout = await markdown.evaluate((element) => {
+    const heading = element.querySelector('h1');
+    const paragraph = element.querySelector('p');
+    const codeBlock = element.querySelector('pre');
+    const containerRect = element.getBoundingClientRect();
+    const paragraphRect = paragraph?.getBoundingClientRect();
+    const codeRect = codeBlock?.getBoundingClientRect();
+    return {
+      headingFontSize: heading ? Number.parseFloat(getComputedStyle(heading).fontSize) : 0,
+      paragraphWidth: paragraphRect?.width ?? 0,
+      containerWidth: containerRect.width,
+      codeWidth: codeRect?.width ?? 0,
+    };
+  });
+  expect(docLayout.headingFontSize).toBeLessThanOrEqual(24);
+  expect(docLayout.paragraphWidth).toBeGreaterThan(480);
+  expect(docLayout.paragraphWidth).toBeLessThan(docLayout.containerWidth * 0.82);
+  expect(docLayout.codeWidth).toBeGreaterThan(docLayout.paragraphWidth);
   await markdown.screenshot({ path: testInfo.outputPath('markdown-file-preview-319.png') });
   await page.getByTitle('关闭（Esc）').click();
   expect(pageErrors).toEqual([]);
@@ -1566,77 +1584,55 @@ test('打开管家页后可返回消息', async ({ page }) => {
     .getByRole('button', { name: '工作台', exact: true })).toBeVisible();
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
-  const deepSeekTab = page.getByRole('tab', { name: 'DeepSeek', exact: true });
-  const codexTab = page.getByRole('tab', { name: 'Codex', exact: true });
-  await expect(deepSeekTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('region', { name: 'DeepSeek 任务' })).toBeVisible();
-
-  await page.evaluate(async () => {
-    const { useUI } = await import('/src/stores/ui.ts');
-    useUI.getState().openButlerConversation('codex');
-  });
-  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toHaveCount(0);
+  await expect(butlerSection.getByRole('group', { name: '管家执行引擎' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBeNull();
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(deepSeekTab).toHaveAttribute('aria-selected', 'true');
-
-  await codexTab.click();
-  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('region', { name: 'Codex 任务' })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBe('codex');
-
-  await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
-  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
-  await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(codexTab).toHaveAttribute('aria-selected', 'true');
-  await deepSeekTab.click();
-  await expect(page.getByRole('region', { name: 'DeepSeek 任务' })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBe('deepseek');
+  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-test('DeepSeek 页头显示模型详情且配置按钮打开可见弹窗（issue #334）', async ({ page }) => {
+test('DeepSeek 视图在 Web 端提示使用桌面端 DSH Web', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   const { pageErrors } = await bootAuthenticated(page);
-  await page.evaluate(async () => {
-    const { useDshWorkspace } = await import('/src/stores/dshWorkspace.ts');
-    useDshWorkspace.setState({
-      status: 'ready',
-      workspaceRoot: 'C:\\projects\\rocketx',
-      credentialConfigured: true,
-      credentialWritable: true,
-      configurationStatus: 'ready',
-      configurationWritable: true,
-      modelSelection: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' },
-      modelGroups: [{
-        id: 'deepseek',
-        name: 'DeepSeek',
-        models: [{
-          id: 'deepseek-chat',
-          name: 'DeepSeek Chat',
-          reasoning: { efforts: [{ id: 'medium', name: 'Medium' }], defaultEffort: 'medium' },
-        }],
-      }],
-      sessions: [{ id: 'session-334', title: 'Issue 334', updatedAt: Date.now(), status: 'idle', blank: false }],
-      activeSessionId: 'session-334',
-      messages: Array.from({ length: 20 }, (_, index) => ({
-        id: `message-${index}`,
-        role: index % 2 === 0 ? 'user' : 'assistant',
-        text: `历史消息 ${index}`,
-      })),
-    });
-  });
-
   const navigation = page.getByRole('navigation');
   await navigation.getByRole('region', { name: '管家' }).getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByText('DeepSeek 模型：DeepSeek / DeepSeek Chat · Medium')).toBeVisible();
+  await expect(page.getByText('DSH 原生会话仅支持 RocketX 桌面端')).toBeVisible();
+  await expect(page.getByRole('button', { name: '配置', exact: true })).toHaveCount(0);
+  await expect(page.locator('iframe[title="DSH 原生会话"]')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
 
-  await page.getByRole('button', { name: '配置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'DeepSeek 运行配置' });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('combobox', { name: 'DeepSeek 模型与提供方' })).toHaveValue('["deepseek","deepseek-chat"]');
+test('AI 运行时三选一只在重启后生效，无 AI 只禁用执行能力', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page);
+  const navigation = page.getByRole('navigation', { name: 'RocketX 主导航' });
+  await navigation.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
+
+  await expect(page.getByText('AI 运行时', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /无 AI/ }).click();
+  await expect(page.getByText(/已保存，重启后切换为 无 AI/)).toBeVisible();
+  await expect(navigation.getByRole('button', { name: /^管家/ })).toBeVisible();
+
+  await page.reload();
+  const restartedNavigation = page.getByRole('navigation', { name: 'RocketX 主导航' });
+  await expect(restartedNavigation.getByRole('button', { name: /^管家/ })).toBeVisible();
+  await restartedNavigation.getByRole('button', { name: /^管家/ }).click();
+  await expect(page.getByText('当前未启用 AI 执行引擎', { exact: true })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })
+    .getByText('AI 托管', { exact: true })).toBeVisible();
+  await restartedNavigation.getByRole('button', { name: /^消息/ }).click();
+  await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
+  await conversation(page, 'General').click();
+  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toBeVisible();
+  await expect(page.locator('#room-butler-launcher')).toBeVisible();
+
+  await page.getByRole('navigation', { name: 'RocketX 主导航' })
+    .getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
+  await expect(page.getByText('当前运行：无 AI')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -1986,7 +1982,80 @@ test('普通消息完整渲染标题、列表、引用、代码块和表格（is
   await expect(markdown.locator('blockquote')).toContainText('保持反馈清晰可读');
   await expect(markdown.locator('table')).toContainText('Typecheck');
   await expect(markdown.locator('pre')).toContainText('const release = true;');
+  const markdownWidth = await markdown.evaluate((element) => element.getBoundingClientRect().width);
+  expect(markdownWidth).toBeGreaterThan(400);
   await message.screenshot({ path: testInfo.outputPath('markdown-message-319.png') });
+  expect(pageErrors).toEqual([]);
+});
+
+test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'General').click();
+  await page.evaluate(async ({ me }) => {
+    const load = new Function('return import("/src/stores/chat.ts")') as () => Promise<{
+      useChat: {
+        getState: () => { messages: Record<string, unknown[]> };
+        setState: (state: { messages: Record<string, unknown[]> }) => void;
+      };
+    }>;
+    const { useChat } = await load();
+    const state = useChat.getState();
+    useChat.setState({
+      messages: {
+        ...state.messages,
+        'room-general': [
+          ...(state.messages['room-general'] ?? []),
+          {
+            _id: 'hosted-agent-document',
+            rid: 'room-general',
+            msg: [
+              '🤖 DeepSeek',
+              '以下是 **General** 群的聊天总结：',
+              '',
+              '## 房间概览',
+              '',
+              '- **性质：** 测试群，绝大多数消息是功能验证与自动化测试',
+              '- **参与者：** Admin、张三、李四',
+              '',
+              '## 测试类内容',
+              '',
+              '1. 历史消息批量导入与引用验证',
+              '2. Markdown 标题、列表、表格、代码块与附件验证',
+              '3. 自动化测试和聊天记录转发',
+            ].join('\n'),
+            ts: '2026-08-16T08:00:00.000Z',
+            u: me,
+          },
+        ],
+      },
+    });
+  }, { me: ME });
+
+  const row = page.locator('[data-message-id="hosted-agent-document"]');
+  await row.scrollIntoViewIfNeeded();
+  await page.locator('main').screenshot({ path: testInfo.outputPath('room-agent-document-layout.png') });
+  await expect(row).toHaveClass(/rocketx-agent-answer-row/);
+  await expect(row.getByText('DeepSeek', { exact: true })).toBeVisible();
+  const answer = row.locator('.rocketx-agent-answer');
+  const body = row.locator('.rocketx-agent-answer-body');
+  await expect(body.getByRole('heading', { name: '房间概览', level: 2 })).toBeVisible();
+  await expect(body).not.toContainText('🤖 DeepSeek');
+
+  const layout = await answer.evaluate((element) => {
+    const paragraph = element.querySelector('p');
+    const paragraphRect = paragraph?.getBoundingClientRect();
+    return {
+      background: getComputedStyle(element.querySelector('.rocketx-agent-answer-body')!).backgroundColor,
+      headingFontSize: Number.parseFloat(getComputedStyle(element.querySelector('h2')!).fontSize),
+      paragraphWidth: paragraphRect?.width ?? 0,
+    };
+  });
+  expect(layout.background).toBe('rgba(0, 0, 0, 0)');
+  expect(layout.headingFontSize).toBe(17);
+  expect(layout.paragraphWidth).toBeGreaterThan(460);
+  expect(layout.paragraphWidth).toBeLessThan(760);
   expect(pageErrors).toEqual([]);
 });
 
@@ -2145,7 +2214,7 @@ test('主 Composer 贴纸首次打开后动态加载，并沿用现有上传确�
   await expect(page.locator('[data-sticker-group="进度状态"]').first()).toBeVisible();
 
   await search.fill('赞');
-  const sticker = page.getByRole('button', { name: '发送贴纸 赞' });
+  const sticker = page.getByRole('button', { name: '发送贴纸 赞', exact: true });
   await expect(sticker).toBeVisible();
   await expect(sticker).toHaveAttribute('title', '赞');
   await expect(sticker.getByText('赞', { exact: true })).toHaveCount(0);
@@ -2544,6 +2613,32 @@ test('全局搜索能命中已加载消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('DSH 全局搜索任务复制提示词并打开官方 DSH Web', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'deepseek');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as Window & { __copiedText?: string }).__copiedText = value;
+        },
+      },
+    });
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.keyboard.press('Control+Shift+F');
+  const search = page.getByRole('dialog', { name: '全局搜索' });
+  await search.getByPlaceholder(/搜索会话、消息/).fill('检查发布风险');
+  await search.getByRole('button', { name: '创建任务' }).click();
+
+  await expect(page.getByRole('heading', { name: 'DSH 原生会话仅支持 RocketX 桌面端' })).toBeVisible();
+  await expect(page.getByText('任务已复制，请在 DSH 中粘贴发送', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (
+    window as Window & { __copiedText?: string }
+  ).__copiedText)).toBe('检查发布风险');
+  expect(pageErrors).toEqual([]);
+});
+
 test('会话右键菜单提供常用管理操作', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click({ button: 'right' });
@@ -2554,10 +2649,12 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
 });
 
 test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 不显示为侧栏一级入口', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
+  });
   const { pageErrors } = await bootAuthenticated(page);
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
@@ -2687,20 +2784,31 @@ test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）
   expect(pageErrors).toEqual([]);
 });
 
-test('工作项 Discussion 在会话头部显著标明由谁的 AI 托管', async ({ page }, testInfo) => {
+test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', async ({ page }, testInfo) => {
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, '#128 Login failure').click();
-  const badge = page.getByLabel('@alice 的 AI 正在提供服务');
+  const badge = page.getByLabel('打开 AI 托管控制面');
   await expect(badge).toBeVisible();
-  await expect(badge).toContainText('@alice 的 AI');
+  await expect(badge).toContainText('AI 托管');
   await expect(page.getByText(/rocketx-agent/)).toHaveCount(0);
   await page.locator('main').screenshot({ path: testInfo.outputPath('agent-presence-message.png') });
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('agent-presence-header.png') });
+  await badge.click();
+  const panel = page.locator('aside').filter({ hasText: 'AI 托管' }).last();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText('@alice 正在另一台设备托管')).toBeVisible();
+  await expect(panel.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(0);
+  await panel.getByRole('button', { name: '在 AI 管家中查看' }).click();
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
+  await expect(page.getByText('DSH 原生会话仅支持 RocketX 桌面端')).toBeVisible();
+  await expect(page.locator('[data-session-key="room:discussion-agent"]')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
-test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ page }, testInfo) => {
+test('普通会话同时提供私人房间 AI 和共享托管配置', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
       environments: [{
@@ -2727,14 +2835,14 @@ test('普通会话进行到一半仍显示唯一的 AI 托管入口', async ({ p
     await useCodexWorkspace.getState().setWorkspaceRoot('D:\\Repos\\rocketchatx');
   });
   await conversation(page, 'General').click();
+  await expect(page.getByRole('button', { name: '打开房间 AI', exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '配置 AI 托管' })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '配置 AI 托管' })).toHaveAttribute('title', '选择后端和项目后开启 AI 托管');
+  await expect(page.getByRole('button', { name: '选择 AI 托管项目' })).toHaveAttribute('title', '选择项目或打开托管设置');
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
   await expect(page.getByRole('button', { name: /RocketChat X - 主目录（默认）/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /another-project/ })).toBeVisible();
   await page.locator('main > header').screenshot({ path: testInfo.outputPath('conversation-ai-hosting-entry.png') });
   await page.getByRole('button', { name: '在 AI 管家中管理项目…' }).click();
-  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：another-project' })).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -2762,13 +2870,209 @@ test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', 
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
 
-  await page.getByRole('button', { name: '配置 AI 托管' }).click();
-  await expect(page.getByText('AI 托管独立配置')).toBeVisible();
+  await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
+  await page.getByRole('button', { name: /RocketChat X - 主目录/ }).click();
+  await expect(page.getByText('AI 托管配置')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-test('本机托管时再次点击同一按钮会退出且不会打开错误面板', async ({ page }) => {
+test('开启 Codex 群托管时选择本次模型、推理和权限，不改管家默认值', async ({ page }, testInfo) => {
+  await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-hosting',
+        name: 'RocketX 托管项目',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:\\Repos\\rocketchatx',
+      selectedModel: 'gpt-default',
+      selectedEffort: 'medium',
+      permissionPreset: 'auto',
+      models: [{
+        id: 'gpt-default',
+        model: 'gpt-default',
+        displayName: 'GPT Default',
+        description: '默认模型',
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'medium', description: '平衡' },
+          { reasoningEffort: 'high', description: '深入' },
+        ],
+        defaultReasoningEffort: 'medium',
+        isDefault: true,
+      }, {
+        id: 'gpt-review',
+        model: 'gpt-review',
+        displayName: 'GPT Review',
+        description: '评审模型',
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'high', description: '深入' },
+          { reasoningEffort: 'xhigh', description: '最深入' },
+        ],
+        defaultReasoningEffort: 'high',
+        isDefault: false,
+      }],
+    } as never);
+  });
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '配置 AI 托管' }).click();
+
+  const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
+  await expect(panel).toBeVisible();
+  await panel.getByLabel('AI 托管模型').selectOption('gpt-review');
+  await expect(panel.getByLabel('AI 托管推理强度')).toHaveValue('high');
+  await panel.getByLabel('AI 托管推理强度').selectOption('xhigh');
+  await panel.getByLabel('AI 托管权限').selectOption('ask');
+  await expect(panel.getByText('开启配置：gpt-review · xhigh · 询问审批', { exact: true })).toBeVisible();
+  await panel.screenshot({ path: testInfo.outputPath('agent-hosting-start-config.png') });
+
+  expect(await page.evaluate(async () => {
+    const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
+    const state = useCodexWorkspace.getState();
+    return [state.selectedModel, state.selectedEffort, state.permissionPreset];
+  })).toEqual(['gpt-default', 'medium', 'auto']);
+  expect(pageErrors).toEqual([]);
+});
+
+test('开启 DeepSeek 群托管时从 DSH 原生目录选择模型、Agent 和权限', async ({ page }, testInfo) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page);
+  await page.evaluate(async () => {
+    const [{ useUI }, runtimeMode, environments, sharedAgent] = await Promise.all([
+      import('/src/stores/ui.ts'),
+      import('/src/lib/runtimeMode.ts'),
+      import('/src/stores/agentEnvironments.ts'),
+      import('/src/stores/sharedAgent.ts'),
+    ]);
+    runtimeMode.resetAiRuntimeProviderForTests('deepseek');
+    useUI.setState({ aiRuntimeProvider: 'deepseek' });
+    environments.useAgentEnvironments.setState({
+      environments: [{
+        id: 'environment-dsh-hosting',
+        name: 'RocketX DSH 项目',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    });
+    sharedAgent.setSharedAgentDshControllerFactory(() => ({
+      connect: async () => undefined,
+      getStartConfiguration: async () => ({
+        models: {
+          groups: [{
+            id: 'deepseek-official',
+            name: 'DeepSeek',
+            models: [{
+              id: 'deepseek-v4-flash',
+              name: 'DeepSeek V4 Flash',
+              reasoning: {
+                efforts: [{ id: 'medium', name: '中' }, { id: 'high', name: '高' }],
+                defaultEffort: 'high',
+              },
+            }, {
+              id: 'deepseek-v4-pro',
+              name: 'DeepSeek V4 Pro',
+              reasoning: {
+                efforts: [{ id: 'high', name: '高' }],
+                defaultEffort: 'high',
+              },
+            }],
+          }],
+          defaultSelection: {
+            provider: 'deepseek-official',
+            model: 'deepseek-v4-flash',
+            reasoningEffort: 'high',
+          },
+        },
+        agentPresets: [
+          { id: 'standard', name: '标准', isDefault: true },
+          { id: 'code', name: '代码', isDefault: false },
+          { id: 'broken', name: '不可用', isDefault: false, broken: '缺少依赖' },
+        ],
+        defaultAgentPreset: 'standard',
+        permission: {
+          options: [
+            { id: 'workspace-write', name: '工作区写入' },
+            { id: 'danger-full-access', name: '完全访问' },
+          ],
+          defaultPreset: 'workspace-write',
+        },
+      }),
+      createSession: async (options) => {
+        (window as Window & { __dshStartOptions?: unknown }).__dshStartOptions = options;
+        return 'dsh-ui-session';
+      },
+      resumeSession: async () => undefined,
+      getTranscript: async () => ({ messages: [], activities: [] }),
+      attachmentLeaseId: () => 'dsh-ui-lease',
+      prompt: async () => ({ turnId: 'unused', text: '' }),
+      cancel: async () => undefined,
+      respondApproval: async () => undefined,
+      respondQuestion: async () => undefined,
+      stop: async () => undefined,
+    }));
+  });
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '配置 AI 托管' }).click();
+
+  const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
+  await expect(panel.getByLabel('DSH AI 托管模型')).toBeVisible();
+  await expect(panel.getByLabel('DSH AI 托管 Agent').locator('option:disabled')).toHaveText('不可用（不可用：缺少依赖）');
+  await panel.getByLabel('DSH AI 托管模型').selectOption({ label: 'DeepSeek · DeepSeek V4 Pro' });
+  await panel.getByLabel('DSH AI 托管 Agent').selectOption('code');
+  await panel.getByLabel('DSH AI 托管权限').selectOption('danger-full-access');
+  await expect(panel.getByText('DSH 当前接口会把这次显式模型选择同步为后续会话的默认模型。')).toBeVisible();
+  const startHosting = panel.getByRole('button', { name: '开启 AI 托管' });
+  await expect(startHosting).toBeInViewport();
+  await panel.screenshot({ path: testInfo.outputPath('agent-hosting-dsh-start-config.png') });
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await startHosting.scrollIntoViewIfNeeded();
+  await expect(startHosting).toBeInViewport();
+  await startHosting.click();
+
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __dshStartOptions?: unknown }
+  ).__dshStartOptions)).toEqual({
+    model: {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'high',
+    },
+    agentPreset: 'code',
+    permissionPreset: 'danger-full-access',
+  });
+  expect(pageErrors).toEqual([]);
+});
+
+test('本机托管时点击状态入口只打开同一会话，结束需要显式操作', async ({ page }) => {
   const { pageErrors } = await installRocketChatMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
+  });
   await page.goto('/');
   await expect(page.getByText('RocketChat X', { exact: true })).toBeVisible();
   await page.evaluate(async ({ server, me }) => {
@@ -2828,11 +3132,17 @@ test('本机托管时再次点击同一按钮会退出且不会打开错误面�
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   await conversation(page, 'General').click();
 
-  const stopButton = page.getByRole('button', { name: '关闭 AI 托管' });
-  await expect(stopButton).toBeVisible();
-  await stopButton.click();
+  const statusButton = page.getByRole('button', { name: '打开 AI 托管控制面' });
+  await expect(statusButton).toBeVisible();
+  await statusButton.click();
+  const panel = page.locator('aside').filter({ hasText: 'AI 托管' }).last();
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: '结束' }).click();
   await expect(page.getByRole('button', { name: '配置 AI 托管' })).toBeVisible();
-  await expect(page.getByText('共享 Agent')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(async () => {
+    const { useSharedAgent } = await import('/src/stores/sharedAgent.ts');
+    return useSharedAgent.getState().sessions['room:room-general']?.status;
+  })).toBe('ended');
   expect(pageErrors).toEqual([]);
 });
 
@@ -2845,7 +3155,7 @@ test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局
   expect(pageErrors).toEqual([]);
 });
 
-test('托管项目归入管家，AI 设置只保留模型运行配置', async ({ page }, testInfo) => {
+test('托管项目归入管家，AI 设置按启动运行时展示 Codex 配置', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -2856,6 +3166,7 @@ test('托管项目归入管家，AI 设置只保留模型运行配置', async ({
         },
       },
     });
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
       environments: [{
@@ -2914,7 +3225,6 @@ test('托管项目归入管家，AI 设置只保留模型运行配置', async ({
   await expect(page.getByRole('heading', { name: '外部集成' })).toBeVisible();
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   const projects = page.getByLabel('项目目录');
   await expect(projects.getByLabel('托管项目')).toBeVisible();
   await expect(projects.getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
@@ -2925,13 +3235,13 @@ test('托管项目归入管家，AI 设置只保留模型运行配置', async ({
 test('管家通过系统目录选择器添加并持久化托管项目', async ({ page }) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'codex');
     (window as Window & { __dialogOpenResponses?: Array<string | string[] | null> })
       .__dialogOpenResponses = ['D:\\Repos\\rocketchatx'];
   });
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByLabel('项目目录').getByText('添加托管项目', { exact: true })).toBeVisible();
   await page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' }).first().click();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();

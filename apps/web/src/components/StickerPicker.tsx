@@ -190,9 +190,9 @@ export default function StickerPicker({
                 aria-label={`发送贴纸 ${sticker.title}`}
                 title={sticker.title}
                 onClick={() => pick(sticker)}
-                className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
+                className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
               >
-                <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
+                <img src={sticker.src} alt={sticker.title} className="h-10 w-10 object-contain" />
               </button>
             ))}
           </div>
@@ -213,9 +213,9 @@ export default function StickerPicker({
                   aria-label={`发送贴纸 ${sticker.title}`}
                   title={sticker.title}
                   onClick={() => pick(sticker)}
-                  className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
+                  className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
                 >
-                  <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
+                  <img src={sticker.src} alt={sticker.title} className="h-10 w-10 object-contain" />
                 </button>
               ))}
             </div>
@@ -235,9 +235,9 @@ export default function StickerPicker({
                     aria-label={`发送贴纸 ${sticker.title}`}
                     title={sticker.title}
                     onClick={() => pick(sticker)}
-                    className="flex h-20 items-center justify-center rounded-md bg-fill-1 p-2 transition hover:bg-fill-hover"
+                    className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
                   >
-                    <img src={sticker.src} alt={sticker.title} className="h-12 w-12 object-contain" />
+                    <img src={sticker.src} alt={sticker.title} className="h-10 w-10 object-contain" />
                   </button>
                 ))}
               </div>

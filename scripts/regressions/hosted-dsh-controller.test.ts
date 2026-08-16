@@ -12,7 +12,7 @@ import type {
   DshPendingApproval,
   DshPendingQuestion,
   DshQuestionAnswer,
-} from '../../apps/web/src/stores/dshWorkspace';
+} from '../../apps/web/src/agent/dsh/types';
 
 type EventName = 'dsh-bridge-output' | 'dsh-bridge-exit';
 
@@ -25,6 +25,94 @@ interface RuntimeCall {
   kind: 'call' | 'respond';
   processId: string;
   message: Record<string, unknown>;
+}
+
+function startConfigResponses() {
+  return [
+    () => okServerResponse('ignored', {
+      groups: [
+        {
+          id: 'deepseek-official',
+          name: 'DeepSeek',
+          models: [
+            {
+              id: 'deepseek-v4-flash',
+              name: 'DeepSeek-V4-Flash',
+              description: '快速响应',
+              reasoning: {
+                efforts: [
+                  { id: 'medium', name: 'Medium' },
+                  { id: 'high', name: 'High' },
+                ],
+                defaultEffort: 'high',
+              },
+            },
+          ],
+        },
+      ],
+      failures: [],
+    }),
+    () => okServerResponse('ignored', {
+      presets: [
+        { id: 'standard', name: '标准模式', trust: 'system', isDefault: true },
+        { id: 'research', name: '研究模式', trust: 'user', isDefault: false, broken: '缺少依赖' },
+      ],
+      authorable: true,
+      hasDocument: true,
+    }),
+    () => okServerResponse('ignored', {
+      writable: true,
+      hasDocument: true,
+      namespaces: [
+        {
+          ns: 'agent-default-model',
+          schema: {
+            type: 'object',
+            dict: {
+              provider: { type: 'string' },
+              model: { type: 'string' },
+              reasoningEffort: { type: 'string' },
+            },
+          },
+          value: {
+            provider: 'deepseek-official',
+            model: 'deepseek-v4-flash',
+            reasoningEffort: 'high',
+          },
+          applies: 'live',
+          secrets: [],
+          revision: 1,
+        },
+        {
+          ns: 'permission',
+          schema: {
+            type: 'object',
+            dict: {
+              defaultPreset: {
+                type: 'union',
+                list: [
+                  {
+                    type: 'const',
+                    value: 'workspace-write',
+                    meta: { description: 'Workspace Write' },
+                  },
+                  {
+                    type: 'const',
+                    value: 'danger-full-access',
+                    meta: { description: 'Full access' },
+                  },
+                ],
+              },
+            },
+          },
+          value: { defaultPreset: 'workspace-write' },
+          applies: 'restart',
+          secrets: [],
+          revision: 2,
+        },
+      ],
+    }),
+  ];
 }
 
 function deferred<T>() {
@@ -46,7 +134,7 @@ function okServerResponse(rpcId: string, value: unknown) {
 }
 
 function createRuntime() {
-  const start = deferred<{ processId: string }>();
+  const start = deferred<{ processId: string; leaseId: string }>();
   const listeners = new Map<EventName, Set<(event: { payload: unknown }) => void>>();
   const stops: string[] = [];
   const calls: RuntimeCall[] = [];
@@ -138,7 +226,7 @@ function createRuntime() {
       for (const handler of listeners.get(event) ?? []) handler({ payload });
     },
     startBridge(processId = 'process-1') {
-      start.resolve({ processId });
+      start.resolve({ processId, leaseId: `lease-${processId}` });
       queueMicrotask(() => {
         runtime.emit('dsh-bridge-output', {
           processId,
@@ -385,6 +473,167 @@ test('hosted DSH controller connects, validates credentials, manages sessions, a
   assert.deepEqual(runtime.stops, ['process-hosted']);
   assert.ok(sink.traces.some((request) => request.method === 'session/event'));
   assert.deepEqual(sink.interrupted, []);
+});
+
+test('hosted DSH controller reads start configuration from DSH native descriptors', async () => {
+  const runtime = createRuntime();
+  runtime.setCallResponse('llm.models', startConfigResponses().slice(0, 1));
+  runtime.setCallResponse('agentPreset.list', startConfigResponses().slice(1, 2));
+  runtime.setCallResponse('settings.describe', startConfigResponses().slice(2));
+  const controller = new HostedDshController(
+    'D:/Repos/rocketchatx',
+    'hosted-room-config',
+    { runtime },
+  );
+
+  const connecting = controller.connect();
+  runtime.startBridge('process-hosted-config');
+  await connecting;
+
+  const config = await controller.getStartConfiguration();
+  assert.deepEqual(config, {
+    models: {
+      groups: [
+        {
+          id: 'deepseek-official',
+          name: 'DeepSeek',
+          models: [
+            {
+              id: 'deepseek-v4-flash',
+              name: 'DeepSeek-V4-Flash',
+              description: '快速响应',
+              reasoning: {
+                efforts: [
+                  { id: 'medium', name: 'Medium' },
+                  { id: 'high', name: 'High' },
+                ],
+                defaultEffort: 'high',
+              },
+            },
+          ],
+        },
+      ],
+      defaultSelection: {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        reasoningEffort: 'high',
+      },
+    },
+    agentPresets: [
+      { id: 'standard', name: '标准模式', trust: 'system', isDefault: true },
+      { id: 'research', name: '研究模式', trust: 'user', isDefault: false, broken: '缺少依赖' },
+    ],
+    defaultAgentPreset: 'standard',
+    permission: {
+      options: [
+        { id: 'workspace-write', name: 'Workspace Write', description: 'Workspace Write' },
+        { id: 'danger-full-access', name: 'Full access', description: 'Full access' },
+      ],
+      defaultPreset: 'workspace-write',
+    },
+  });
+});
+
+test('hosted DSH controller creates a session with explicit agent, model, and permission choices in strict order', async () => {
+  const runtime = createRuntime();
+  runtime.setCallResponse('session.selectModel', [
+    () => okServerResponse('ignored', {
+      selected: {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-pro',
+        reasoningEffort: 'high',
+      },
+    }),
+  ]);
+  runtime.setCallResponse('commands/execute', [
+    () => okServerResponse('ignored', {
+      commandId: 'cmd-1',
+      result: { kind: 'success', text: 'preset danger-full-access' },
+    }),
+  ]);
+  const controller = new HostedDshController(
+    'D:/Repos/rocketchatx',
+    'hosted-room-start',
+    { runtime },
+  );
+
+  const connecting = controller.connect();
+  runtime.startBridge('process-hosted-start');
+  await connecting;
+
+  const sessionId = await controller.createSession({
+    agentPreset: 'research',
+    model: {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'high',
+    },
+    permissionPreset: 'danger-full-access',
+  });
+  assert.equal(sessionId, 'session-1');
+  assert.deepEqual(
+    runtime.calls
+      .filter((call) => call.kind === 'call')
+      .slice(-3)
+      .map((call) => [call.message.method, call.message.payload]),
+    [
+      ['session.create', { cwd: 'D:/Repos/rocketchatx', agentPreset: 'research' }],
+      ['session.selectModel', {
+        sessionId: 'session-1',
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-pro',
+        reasoningEffort: 'high',
+      }],
+      ['commands/execute', {
+        args: { agentId: 'session-1', line: '/permission danger-full-access' },
+      }],
+    ],
+  );
+});
+
+test('hosted DSH controller rejects failed permission switching during session creation', async () => {
+  const runtime = createRuntime();
+  runtime.setCallResponse('commands/execute', [
+    () => okServerResponse('ignored', {
+      commandId: 'cmd-2',
+      result: { kind: 'error', text: 'unknown preset "bad"' },
+    }),
+  ]);
+  const controller = new HostedDshController(
+    'D:/Repos/rocketchatx',
+    'hosted-room-bad-permission',
+    { runtime },
+  );
+
+  const connecting = controller.connect();
+  runtime.startBridge('process-hosted-bad-permission');
+  await connecting;
+
+  await assert.rejects(
+    () => controller.createSession({ permissionPreset: 'bad' }),
+    /unknown preset "bad"/,
+  );
+});
+
+test('hosted DSH controller rejects missing or empty permission command results during session creation', async () => {
+  const runtime = createRuntime();
+  runtime.setCallResponse('commands/execute', [
+    () => okServerResponse('ignored', undefined),
+  ]);
+  const controller = new HostedDshController(
+    'D:/Repos/rocketchatx',
+    'hosted-room-empty-permission',
+    { runtime },
+  );
+
+  const connecting = controller.connect();
+  runtime.startBridge('process-hosted-empty-permission');
+  await connecting;
+
+  await assert.rejects(
+    () => controller.createSession({ permissionPreset: 'workspace-write' }),
+    /DeepSeek 权限切换失败/,
+  );
 });
 
 test('hosted DSH controller fails closed on host agent errors', async () => {

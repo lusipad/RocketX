@@ -395,7 +395,7 @@ test('PR 卡片摘要保留批准进度和必审组', () => {
   });
 });
 
-test('PR 列表默认跳转 Azure DevOps，Codex 审查是独立次要动作', () => {
+test('PR 列表默认跳转 Azure DevOps，AI 审查是独立次要动作', () => {
   const source = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
   const row = source.slice(source.indexOf('function PrRow('), source.indexOf('/** 拉取请求：'));
   const primaryLink = row.slice(row.indexOf('<a'), row.indexOf('</a>') + '</a>'.length);
@@ -405,8 +405,9 @@ test('PR 列表默认跳转 Azure DevOps，Codex 审查是独立次要动作', (
   assert.match(primaryLink, /aria-label=\{`在 Azure DevOps 中打开 PR !\$\{pr\.id\}`\}/);
   assert.doesNotMatch(primaryLink, /onAsk\(pr\)/);
   assert.match(row, /onClick=\{\(\) => onAsk\(pr\)\}/);
-  assert.match(row, /aria-label=\{`用 Codex 审查 PR !\$\{pr\.id\}：\$\{pr\.title\}`\}/);
-  assert.match(row, /Codex 审查/);
+  assert.match(row, /aria-label=\{`用 AI 管家审查 PR !\$\{pr\.id\}：\$\{pr\.title\}`\}/);
+  assert.match(row, /AI 审查/);
+  assert.match(row, /aria-label=\{comparing \? '取消选择' : '选它交给 AI 管家比较'\}/);
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

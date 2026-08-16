@@ -1,11 +1,17 @@
 import { spawn } from 'node:child_process'
+import { open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 const READY_RE = /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+)\b/u
 const SHUTDOWN_GRACE_MS = 2_000
 const SHUTDOWN_KILL_MS = 5_000
 const REQUEST_TIMEOUT_MS = 110_000
+const WEB_PROBE_TIMEOUT_MS = 10_000
+const WEB_PROBE_RPC_ID = 'rocketx-dsh-web-probe'
+const CHILD_STDERR_LINE_LIMIT = 80
+const SESSION_FRAME_PROBE_BYTES = 8_192
 
 const ALLOWED_METHODS = new Set([
   'session.list',
@@ -38,7 +44,9 @@ let childClosed = false
 let intendedExitCode = 0
 let readyEmitted = false
 const inflight = new Set()
+const childStderrLines = []
 let stdinReader = null
+let sessionRepairSequence = 0
 
 function emit(frame) {
   process.stdout.write(`${JSON.stringify(frame)}\n`)
@@ -50,6 +58,136 @@ function emitLog(stream, message) {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function rememberChildStderr(line) {
+  const message = line.trim().slice(0, 2_000)
+  if (message === '') return
+  childStderrLines.push(message)
+  if (childStderrLines.length > CHILD_STDERR_LINE_LIMIT) childStderrLines.shift()
+}
+
+function childStartupFailure() {
+  const detail = childStderrLines.find((line) => line.startsWith('Error:'))
+    ?? childStderrLines.find((line) => /(?:corrupt|error|failed)/iu.test(line))
+    ?? childStderrLines.at(-1)
+  if (detail === undefined) return new Error('DSH child exited before reporting its web URL')
+  return new Error(`DSH child exited before reporting its web URL: ${detail.replace(/^Error:\s*/u, '')}`)
+}
+
+function monolithicSessionHeaderEnd(plaintext) {
+  const headerEnd = plaintext.indexOf(10) + 1
+  if (headerEnd <= 0 || headerEnd === plaintext.length || plaintext.at(-1) !== 10) return null
+
+  const lines = plaintext.toString('utf8').trimEnd().split('\n')
+  let header
+  try {
+    header = JSON.parse(lines[0])
+    for (const line of lines.slice(1)) JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!isObject(header) || header.type !== 'session' || typeof header.id !== 'string') return null
+  return headerEnd
+}
+
+function reframeMonolithicSession(buffer) {
+  let firstFrame
+  try {
+    firstFrame = zstdDecompressSync(buffer, { info: true })
+  } catch {
+    return null
+  }
+  const plaintext = firstFrame.buffer
+  const headerEnd = monolithicSessionHeaderEnd(plaintext)
+  if (headerEnd === null) return null
+
+  const consumed = firstFrame.engine.bytesWritten
+  if (!Number.isSafeInteger(consumed) || consumed <= 0 || consumed > buffer.length) return null
+  return Buffer.concat([
+    zstdCompressSync(plaintext.subarray(0, headerEnd)),
+    zstdCompressSync(plaintext.subarray(headerEnd)),
+    buffer.subarray(consumed),
+  ])
+}
+
+async function readFirstSessionFrame(path) {
+  const handle = await open(path, 'r')
+  let content = Buffer.alloc(0)
+  let chunkBytes = SESSION_FRAME_PROBE_BYTES
+  try {
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(chunkBytes)
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+      if (bytesRead === 0) return null
+      content = Buffer.concat([content, chunk.subarray(0, bytesRead)])
+      try {
+        return zstdDecompressSync(content, { info: true }).buffer
+      } catch {
+        chunkBytes = Math.min(chunkBytes * 2, 1024 * 1024)
+      }
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function sessionLogs(root) {
+  let entries
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
+  const logs = []
+  for (const entry of entries) {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) logs.push(...await sessionLogs(path))
+    else if (entry.isFile() && entry.name === 'session.jsonl.zstd') logs.push(path)
+  }
+  return logs
+}
+
+function sameSessionSnapshot(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+}
+
+async function repairIncompatibleSessionFrames() {
+  const home = process.env.DSH_HOME
+  if (typeof home !== 'string' || home.trim() === '') return
+  for (const path of await sessionLogs(join(home, 'sessions'))) {
+    const firstFrame = await readFirstSessionFrame(path)
+    if (firstFrame === null || monolithicSessionHeaderEnd(firstFrame) === null) continue
+    const originalStat = await stat(path)
+    const original = await readFile(path)
+    if (!sameSessionSnapshot(originalStat, await stat(path))) {
+      throw new Error(`DSH session changed while preparing compatibility migration: ${path}`)
+    }
+    const repaired = reframeMonolithicSession(original)
+    if (repaired === null) continue
+
+    const suffix = `${Date.now()}-${process.pid}-${++sessionRepairSequence}`
+    const backup = `${path}.legacy-frame-${suffix}.bak`
+    const temporary = `${path}.legacy-frame-${suffix}.tmp`
+    await writeFile(backup, original, { flag: 'wx' })
+    try {
+      await writeFile(temporary, repaired, { flag: 'wx' })
+      const current = await readFile(path)
+      if (!sameSessionSnapshot(originalStat, await stat(path)) || !current.equals(original)) {
+        throw new Error(`DSH session changed during compatibility migration: ${path}`)
+      }
+      await rename(temporary, path)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined)
+      throw error
+    }
+    emitLog('dsh.repair', `Migrated incompatible session frame layout: ${path}`)
+  }
 }
 
 function badRequest(message) {
@@ -170,10 +308,10 @@ function handleFatal(error, details = {}) {
   void beginShutdown(1)
 }
 
-async function postJson(path, body, validate) {
+async function postJson(path, body, validate, timeoutMs = REQUEST_TIMEOUT_MS) {
   if (baseUrl === null) throw new Error('DSH web base URL is not ready')
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   inflight.add(controller)
   try {
     const response = await fetch(new URL(path, baseUrl), {
@@ -246,10 +384,28 @@ async function connectStreams() {
     connectDownlink('mux', '/api/events.mux'),
     connectDownlink('host', '/api/events.host'),
   ])
-  if (!readyEmitted) {
-    readyEmitted = true
-    emit({ kind: 'ready', url: baseUrl })
-  }
+  emitReady()
+}
+
+async function verifyWebHost() {
+  const response = await postJson(
+    '/api/host.describe',
+    {
+      type: 'client-request',
+      rpcId: WEB_PROBE_RPC_ID,
+      method: 'host.describe',
+      payload: {},
+    },
+    (value) => validateServerResponseEnvelope(value, WEB_PROBE_RPC_ID),
+    WEB_PROBE_TIMEOUT_MS,
+  )
+  if (!response.result.ok) throw new Error('DSH web host.describe probe was rejected')
+}
+
+function emitReady() {
+  if (readyEmitted) return
+  readyEmitted = true
+  emit({ kind: 'ready', url: baseUrl })
 }
 
 async function handleCall(message) {
@@ -408,15 +564,21 @@ function watchLines(stream, name, onLine) {
 }
 
 async function start() {
-  const [, , dshCliArg, patchArg] = process.argv
+  const [, , dshCliArg, patchArg, modeArg] = process.argv
   if (dshCliArg === undefined || patchArg === undefined) {
-    throw new Error('usage: node dsh_bridge.mjs <dsh-cli> <patch>')
+    throw new Error('usage: node dsh_bridge.mjs <dsh-cli> <patch> [controller|web]')
   }
 
   const dshCli = resolve(dshCliArg)
   const patch = resolve(patchArg)
+  if (modeArg !== undefined && modeArg !== 'controller' && modeArg !== 'web') {
+    throw new Error(`unsupported DSH bridge mode: ${modeArg}`)
+  }
+  const mode = modeArg ?? 'controller'
 
-  child = spawn(process.execPath, [dshCli, '--profile', 'web', '--patch', patch, '--port', '0'], {
+  await repairIncompatibleSessionFrames()
+
+  child = spawn(process.execPath, [dshCli, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0'], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -429,7 +591,7 @@ async function start() {
     childClosed = true
     emit({ kind: 'exit', code, signal })
     if (!shuttingDown && baseUrl === null) {
-      handleFatal(new Error('DSH child exited before reporting its web URL'))
+      handleFatal(childStartupFailure())
       return
     }
     if (shuttingDown) {
@@ -444,10 +606,17 @@ async function start() {
       if (baseUrl !== null) return
       const match = READY_RE.exec(line)
       if (match === null) return
-      baseUrl = match[1]
+      baseUrl = new URL(match[1]).toString()
+      if (mode === 'web') {
+        void verifyWebHost().then(() => {
+          emitReady()
+          resolveReady()
+        }, rejectReady)
+        return
+      }
       void connectStreams().then(resolveReady, rejectReady)
     })
-    watchLines(child.stderr, 'dsh.stderr', () => {})
+    watchLines(child.stderr, 'dsh.stderr', rememberChildStderr)
   })
 
   await ready

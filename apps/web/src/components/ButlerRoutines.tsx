@@ -23,7 +23,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BUTLER_ABILITY_TEMPLATES, type ButlerAbilityTemplate } from '../lib/butlerAbilityTemplates';
 import { isTauriRuntime } from '../lib/client';
 import { describeRrule } from '../lib/codexSchedule';
-import { renderMarkdown } from '../lib/markdown';
+import { renderMarkdownDoc } from '../lib/markdown';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useRoutines, type Routine, type RoutineTrigger } from '../stores/routines';
 import { toast } from '../stores/toast';
@@ -401,7 +401,7 @@ export default function ButlerRoutines() {
                         <time>{runTime(run.at)}</time>
                         {!run.readAt ? <i aria-label="未读" /> : null}
                       </summary>
-                      <div className="butler-routine-result butler-conversation-markdown">{renderMarkdown(run.text)}</div>
+                      <div className="butler-routine-result butler-conversation-markdown">{renderMarkdownDoc(run.text)}</div>
                     </details>
                   ))}
                 </section>

@@ -2,7 +2,7 @@ import type {
   DshPendingApproval,
   DshPendingQuestion,
   DshQuestionAnswer,
-} from '../../stores/dshWorkspace';
+} from './types';
 
 export function approvalResponse(
   approval: DshPendingApproval,

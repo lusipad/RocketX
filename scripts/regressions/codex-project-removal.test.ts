@@ -49,7 +49,6 @@ test('移除项目只更新 RocketX 项目列表，并在移除当前项目后�
       workspaceRoot: 'D:/workspace-b',
       workspaceRoots: ['D:/workspace-b'],
       selectedEffort: null,
-      hostingEffort: 'high',
       permissionPreset: 'auto',
       followUpMode: 'steer',
     });

@@ -13,16 +13,10 @@ import {
 } from '../stores/agentEnvironments';
 import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
 import { useSharedAgent } from '../stores/sharedAgent';
+import { useUI } from '../stores/ui';
 
 const AUTO_HOST_STORAGE_KEY = 'rcx-agent-auto-host-rooms';
 const ROOM_WORKSPACE_STORAGE_KEY = 'rcx-agent-room-workspaces-v1';
-const DEFAULT_BACKEND_STORAGE_KEY = 'rcx-agent-default-backend-v1';
-const ROOM_BACKEND_STORAGE_KEY = 'rcx-agent-room-backend-v1';
-
-function accountScope(): string {
-  const userId = useAuth.getState().user?._id ?? 'guest';
-  return `${userId}@${getServerBase() || 'same-origin'}`;
-}
 
 function roomScope(rid: string): string {
   const userId = useAuth.getState().user?._id ?? 'guest';
@@ -50,21 +44,6 @@ function setRoomValue(storageKey: string, rid: string, value?: string): void {
   }
 }
 
-function scopedValue(storageKey: string, scope: string): string | undefined {
-  return loadRoomMap(storageKey)[scope];
-}
-
-function setScopedValue(storageKey: string, scope: string, value?: string): void {
-  const values = loadRoomMap(storageKey);
-  if (value) values[scope] = value;
-  else delete values[scope];
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(values));
-  } catch {
-    // 偏好存储失败时不阻塞当前托管流程。
-  }
-}
-
 export function autoHostEnvironmentId(rid: string): string | undefined {
   return loadRoomMap(AUTO_HOST_STORAGE_KEY)[roomScope(rid)];
 }
@@ -82,26 +61,15 @@ export function setRoomHostingWorkspace(rid: string, workspaceRoot?: string): vo
 }
 
 export function defaultHostingBackend(): AgentBackend {
-  return scopedValue(DEFAULT_BACKEND_STORAGE_KEY, accountScope()) === 'deepseek' ? 'deepseek' : 'codex';
-}
-
-export function setDefaultHostingBackend(backend: AgentBackend): void {
-  setScopedValue(DEFAULT_BACKEND_STORAGE_KEY, accountScope(), backend);
-}
-
-export function roomHostingBackend(rid: string): AgentBackend | undefined {
-  const value = scopedValue(ROOM_BACKEND_STORAGE_KEY, roomScope(rid));
-  return value === 'deepseek' || value === 'codex' ? value : undefined;
-}
-
-export function setRoomHostingBackend(rid: string, backend?: AgentBackend): void {
-  setRoomValue(ROOM_BACKEND_STORAGE_KEY, rid, backend);
+  const provider = useUI.getState().aiRuntimeProvider;
+  if (provider === 'none') throw new Error('当前未启用 AI');
+  return provider;
 }
 
 export async function startRoomAgentHosting(
   rid: string,
   roomTitle: string,
-  options: { preferredEnvironmentId?: string; workspaceRoot?: string; backend?: AgentBackend } = {},
+  options: { preferredEnvironmentId?: string; workspaceRoot?: string } = {},
 ): Promise<void> {
   const workspaceState = useCodexWorkspace.getState();
   const defaultWorkspaceRoot = workspaceState.defaultWorkspaceRoot
@@ -153,9 +121,7 @@ export async function startRoomAgentHosting(
         title: fetchedWorkItem?.title ?? roomTitle,
       }
     : undefined;
-  const backend = options.backend ?? roomHostingBackend(rid) ?? defaultHostingBackend();
-  setDefaultHostingBackend(backend);
-  setRoomHostingBackend(rid, backend);
+  const backend = defaultHostingBackend();
 
   const startOptions = {
     workspaceRoot,

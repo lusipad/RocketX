@@ -40,7 +40,7 @@ import {
   type SearchTimeRange,
 } from '../lib/searchFilters';
 import { focusComposerInput } from '../lib/focus';
-import { handoffToCodexTask } from '../lib/codexTaskHandoff';
+import { handoffToButlerTask } from '../lib/butlerTaskHandoff';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { toast } from '../stores/toast';
 import Avatar from './Avatar';
@@ -496,13 +496,13 @@ export default function QuickSwitcher({
 
   const jumpToMessage = useChat((s) => s.jumpToMessage);
 
-  /** 语义提问进入统一 Codex 任务，由对应 Skill/App 检索真实数据。 */
+  /** 语义提问进入当前启动选择的 AI 管家。 */
   const askButlerFromSearch = () => {
     const query = keyword.trim();
     if (!query) return;
     onClose();
-    void handoffToCodexTask(query, `搜索 · ${query}`)
-      .catch((error) => toast.error(error, '无法创建 Codex 任务'));
+    void handoffToButlerTask(query, `搜索 · ${query}`)
+      .catch((error) => toast.error(error, '无法创建 AI 管家任务'));
   };
 
   const pickConv = (rid: string) => {
@@ -733,7 +733,7 @@ export default function QuickSwitcher({
           />
           {!!keyword.trim() && runtimeFeatures().butler && (
             <button
-              title="创建 Codex 任务，并由 Skills 或 Apps 查找真实信息"
+              title="创建 AI 管家任务，并由当前运行时查找真实信息"
               onClick={askButlerFromSearch}
               className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
             >

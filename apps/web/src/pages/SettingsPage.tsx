@@ -85,7 +85,7 @@ import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
 import { lanOutboxCapability } from '../lan/outbox';
 import { fmtSize } from '../lib/format';
-import { getRuntimeMode, persistRuntimeMode, runtimeFeatures, type RuntimeMode } from '../lib/runtimeMode';
+import { getRuntimeMode, persistRuntimeMode, type RuntimeMode } from '../lib/runtimeMode';
 import { roomArchiveSummaries, type AttachmentArchiveSettingsV1 } from '../lib/attachmentArchive';
 import {
   ATTACHMENT_ARCHIVE_CHANGED,
@@ -2058,9 +2058,10 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
   const loadPrefs = usePrefs((s) => s.load);
+  const aiSettingsVisible = getRuntimeMode() !== 'performance';
   const visibleSections = useMemo(
-    () => SECTIONS.filter((item) => runtimeFeatures().ai || item.key !== 'ai'),
-    [],
+    () => SECTIONS.filter((item) => aiSettingsVisible || item.key !== 'ai'),
+    [aiSettingsVisible],
   );
 
   // 自己负责把偏好拉起来，不指望 MainPage 挂载时那一次。
@@ -2133,7 +2134,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               {section === 'desktop' && <DesktopSection />}
               {section === 'shortcuts' && <ShortcutSection />}
               {section === 'workbench' && <WorkbenchSection />}
-              {section === 'ai' && runtimeFeatures().ai && (
+              {section === 'ai' && aiSettingsVisible && (
                 <Suspense
                   fallback={
                     <div className="flex items-center gap-2 py-10 text-sm text-ink-3">

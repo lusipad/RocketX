@@ -56,6 +56,7 @@ export type CodexFollowUpMode = 'queue' | 'steer';
 export interface CodexWorkspaceMessage {
   id: string;
   role: 'user' | 'assistant';
+  speaker?: string;
   text: string;
   attachments?: CodexImageAttachment[];
   generatedImages?: CodexGeneratedImage[];
@@ -105,8 +106,6 @@ interface PersistedWorkspace {
   workspaceRoots?: string[];
   selectedModel?: string;
   selectedEffort?: string | null;
-  hostingModel?: string;
-  hostingEffort?: string | null;
   permissionPreset?: CodexPermissionPreset;
   followUpMode?: CodexFollowUpMode;
 }
@@ -138,8 +137,6 @@ interface CodexWorkspaceState {
   catalogErrors: { apps?: string; plugins?: string };
   selectedModel: string;
   selectedEffort: string | null;
-  hostingModel: string;
-  hostingEffort: string | null;
   permissionPreset: CodexPermissionPreset;
   followUpMode: CodexFollowUpMode;
   hydrate: (scope: string) => void;
@@ -170,8 +167,6 @@ interface CodexWorkspaceState {
   resolveRequest: (requestId: string, resolution: CodexRequestResolution) => void;
   setModel: (model: string) => Promise<void>;
   setEffort: (effort: string | null) => Promise<void>;
-  setHostingModel: (model: string) => Promise<void>;
-  setHostingEffort: (effort: string | null) => Promise<void>;
   setPermissionPreset: (preset: CodexPermissionPreset) => Promise<void>;
   setFollowUpMode: (mode: CodexFollowUpMode) => void;
   installPlugin: (marketplace: string, pluginName: string) => Promise<void>;
@@ -251,8 +246,6 @@ function persist(state: CodexWorkspaceState): void {
     workspaceRoots: state.workspaceRoots.length > 0 ? state.workspaceRoots : undefined,
     selectedModel: state.selectedModel || undefined,
     selectedEffort: state.selectedEffort,
-    hostingModel: state.hostingModel || undefined,
-    hostingEffort: state.hostingEffort,
     permissionPreset: state.permissionPreset,
     followUpMode: state.followUpMode,
   };
@@ -281,24 +274,6 @@ function defaultSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
     ? saved.selectedEffort
     : model.defaultReasoningEffort;
   return { selectedModel: model.model, selectedEffort: effort };
-}
-
-function defaultHostingSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
-  hostingModel: string;
-  hostingEffort: string | null;
-} {
-  const model = catalog.models.find((item) => (
-    item.model === saved.hostingModel || item.id === saved.hostingModel
-  )) ?? catalog.models.find((item) => item.isDefault) ?? catalog.models[0];
-  if (!model) throw new Error('当前 Codex Runtime 没有可用模型，请升级或检查模型配置。');
-  const requestedEffort = saved.hostingEffort;
-  const hostingEffort = requestedEffort
-    && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
-    ? requestedEffort
-    : model.supportedReasoningEfforts.some((item) => item.reasoningEffort === 'high')
-      ? 'high'
-      : model.defaultReasoningEffort;
-  return { hostingModel: model.model, hostingEffort };
 }
 
 function workspacePathKey(path: string): string {
@@ -421,7 +396,7 @@ function sourcesFromToolItem(item: ThreadItem): ButlerSource[] {
   )));
 }
 
-function messagesFromTurns(turns: readonly Turn[]): CodexWorkspaceMessage[] {
+export function messagesFromTurns(turns: readonly Turn[]): CodexWorkspaceMessage[] {
   return turns.flatMap((turn) => {
     const messages: CodexWorkspaceMessage[] = [];
     const generatedImages: CodexGeneratedImage[] = [];
@@ -1111,8 +1086,6 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   catalogErrors: {},
   selectedModel: '',
   selectedEffort: null,
-  hostingModel: '',
-  hostingEffort: 'high',
   permissionPreset: 'auto',
   followUpMode: 'steer',
 
@@ -1142,8 +1115,6 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       workspaceRoots,
       selectedModel: saved.selectedModel ?? '',
       selectedEffort: saved.selectedEffort ?? null,
-      hostingModel: saved.hostingModel ?? '',
-      hostingEffort: saved.hostingEffort ?? 'high',
       permissionPreset: ['ask', 'auto', 'full'].includes(saved.permissionPreset ?? '')
         ? saved.permissionPreset as CodexPermissionPreset
         : 'auto',
@@ -1309,11 +1280,9 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       try {
         const catalog = await activeController.connect(id('workspace'), get().workspaceRoot);
         const defaults = defaultSelection(catalog, get());
-        const hostingDefaults = defaultHostingSelection(catalog, get());
         set((state) => ({
           ...catalog,
           ...defaults,
-          ...hostingDefaults,
           ...(state.activeThreadId ? {} : { status: 'ready' as const, error: null }),
         }));
         persist(get());
@@ -1852,26 +1821,6 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     }
   },
 
-  setHostingModel: async (hostingModel) => {
-    const model = get().models.find((item) => item.model === hostingModel || item.id === hostingModel);
-    if (!model) throw new Error(`未知模型：${hostingModel}`);
-    const currentEffort = get().hostingEffort;
-    const hostingEffort = model.supportedReasoningEfforts.some(
-      (item) => item.reasoningEffort === currentEffort,
-    )
-      ? currentEffort
-      : model.supportedReasoningEfforts.some((item) => item.reasoningEffort === 'high')
-        ? 'high'
-        : model.defaultReasoningEffort;
-    set({ hostingModel: model.model, hostingEffort });
-    persist(get());
-  },
-
-  setHostingEffort: async (hostingEffort) => {
-    set({ hostingEffort });
-    persist(get());
-  },
-
   setPermissionPreset: async (permissionPreset) => {
     const profile = permissionSettings(permissionPreset).permissions;
     if (!get().permissionProfiles.some((item) => item.id === profile && item.allowed)) {
@@ -2074,8 +2023,6 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
     catalogErrors: {},
     selectedModel: '',
     selectedEffort: null,
-    hostingModel: '',
-    hostingEffort: 'high',
     permissionPreset: 'auto',
     followUpMode: 'steer',
   });

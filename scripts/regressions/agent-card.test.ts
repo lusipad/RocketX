@@ -11,19 +11,26 @@ test('共享 Agent 状态卡可由官方客户端阅读并由 RocketX 解析租�
   const card = {
     version: 1 as const,
     sessionId: 'session-1',
+    rid: 'room-general',
     tmid: 'thread-1',
+    roomNameSnapshot: '研发讨论',
     hostUserId: 'user-1',
     hostUsername: 'alice',
     hostDeviceId: 'device-1',
     leaseExpiresAt: 1_800_000_000_000,
     status: 'active' as const,
+    environmentName: '火箭项目',
+    currentTaskLabel: '检查原版客户端显示',
   };
   const rendered = renderAgentSessionCard(card);
   assert.match(rendered, /AI 托管已开启/);
   assert.match(rendered, /@alice/);
   assert.match(rendered, /房间成员：使用 `@ai` 提问/);
+  assert.doesNotMatch(rendered, /<!--|rocketx-agent|%22|hostDeviceId/);
   assert.deepEqual(parseAgentSessionCard(rendered), card);
   const visible = stripAgentSessionMarker(rendered);
+  const officialClientVisible = rendered.replace(/\p{Default_Ignorable_Code_Point}/gu, '');
+  assert.equal(officialClientVisible, visible);
   assert.match(visible, /AI 托管已开启/);
   assert.doesNotMatch(visible, /rocketx-agent|hostDeviceId|%22/);
 });
@@ -45,6 +52,26 @@ test('共享 Agent 状态卡对房间成员隐藏 provider，但保留后端信�
   assert.match(visible, /AI 管家会话控制/);
   assert.doesNotMatch(visible, /Codex|DeepSeek/);
   assert.deepEqual(parseAgentSessionCard(rendered), card);
+});
+
+test('共享 Agent 状态卡携带全局托管总览所需的房间、项目和当前任务快照', () => {
+  const card = {
+    version: 1 as const,
+    sessionId: 'session-overview',
+    rid: 'room-general',
+    tmid: 'room:room-general',
+    roomNameSnapshot: 'General',
+    hostUserId: 'user-1',
+    hostUsername: 'alice',
+    hostDeviceId: 'device-1',
+    leaseExpiresAt: 1_800_000_000_000,
+    status: 'active' as const,
+    backend: 'deepseek' as const,
+    environmentName: 'RocketX',
+    currentTaskLabel: '检查发布门禁',
+  };
+
+  assert.deepEqual(parseAgentSessionCard(renderAgentSessionCard(card)), card);
 });
 
 test('Discussion 顶层状态卡按 room 会话键匹配，不依赖消息 tmid', () => {
@@ -80,7 +107,8 @@ test('旧共享 Agent 状态卡缺少 backend 时仍按 Codex 兼容解析', () 
     leaseExpiresAt: 1_800_000_000_000,
     status: 'active',
   }));
-  assert.deepEqual(parseAgentSessionCard(`<!--rocketx-agent:${encoded}-->`), {
+  const legacy = `🤖 **AI 托管已开启**\n<!--rocketx-agent:${encoded}-->`;
+  assert.deepEqual(parseAgentSessionCard(legacy), {
     version: 1,
     sessionId: 'legacy-session',
     tmid: 'thread-legacy',
@@ -90,4 +118,5 @@ test('旧共享 Agent 状态卡缺少 backend 时仍按 Codex 兼容解析', () 
     leaseExpiresAt: 1_800_000_000_000,
     status: 'active',
   });
+  assert.equal(stripAgentSessionMarker(legacy), '🤖 **AI 托管已开启**');
 });

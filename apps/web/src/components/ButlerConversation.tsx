@@ -21,7 +21,7 @@ import {
   type CodexArtifact,
 } from '../lib/codexArtifacts';
 import { isTauriRuntime } from '../lib/client';
-import { renderMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
+import { renderMarkdownDoc, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useCodexStreamingView } from '../lib/useCodexStreamingText';
 import type { CodexHostInput } from '../agent/codexHostInput';
@@ -224,7 +224,7 @@ function ConversationMessage({
     <article data-speaker={entry.role} className="codex-native-message">
       <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
       <div className="butler-conversation-markdown">
-        {entry.text ? (entry.role === 'assistant' ? renderMarkdown(entry.text, undefined, renderLink) : entry.text) : null}
+        {entry.text ? (entry.role === 'assistant' ? renderMarkdownDoc(entry.text, undefined, renderLink) : entry.text) : null}
         <CodexImageAttachments attachments={entry.attachments} />
         <CodexGeneratedImages images={entry.generatedImages} />
       </div>

@@ -1,0 +1,9 @@
+{
+  "name": "rocketx-dsh-focus-plugin",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js"
+  }
+}

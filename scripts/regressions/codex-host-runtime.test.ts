@@ -71,7 +71,12 @@ test('桌面端自动准备临时会话与管家会话目录，并把用户目�
   assert.match(history, /管家会话/);
   assert.match(history, /托管项目/);
   assert.match(history, /butlerWorkspaceRoot/);
-  assert.match(panel, /系统临时工作区/);
+  assert.match(panel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/);
+  assert.match(panel, /prepareRoomWorkspace/);
+  assert.match(panel, /latest\.butlerWorkspaceRoot \|\| latest\.defaultWorkspaceRoot/);
+  assert.match(panel, /useCodexWorkspace/);
+  assert.match(panel, /<PanelShell[\s\S]*resizable/);
+  assert.doesNotMatch(panel, /useSharedAgent|agentRoomSessionKey|HostedConversationTranscript/);
 });
 
 test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版传了会以退出码 2 退出）', async () => {
@@ -84,7 +89,7 @@ test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版�
   assert.doesNotMatch(proc, /args\(\["app-server", "--stdio"\]\)/);
 });
 
-test('会话只保留一个 AI 托管入口，并支持按房间自动开启', async () => {
+test('私人房间 AI 与共享托管保留独立入口，并支持显式自动托管', async () => {
   const [chatArea, threadPanel, hosting, agentPanel] = await Promise.all([
     readFile(new URL('apps/web/src/components/ChatArea.tsx', root), 'utf8'),
     readFile(new URL('apps/web/src/components/ThreadPanel.tsx', root), 'utf8'),
@@ -92,12 +97,14 @@ test('会话只保留一个 AI 托管入口，并支持按房间自动开启', a
     readFile(new URL('apps/web/src/components/AgentPanel.tsx', root), 'utf8'),
   ]);
 
+  assert.match(chatArea, /id="room-butler-launcher"/);
+  assert.match(chatArea, /aria-label=\{butlerPanelOpen \? '收起房间 AI' : '打开房间 AI'\}/);
   assert.match(chatArea, /aria-label="配置 AI 托管"/);
-  assert.match(chatArea, /title="选择后端和项目后开启 AI 托管"/);
-  assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
+  assert.match(chatArea, /title="选择项目或打开托管设置"/);
   assert.match(chatArea, /setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)/);
-  assert.match(chatArea, /aria-label=\{localAgentActive \? '关闭 AI 托管'/);
-  assert.match(chatArea, /await endAgentSession\(agentSessionKey\)/);
+  assert.match(chatArea, /aria-label="打开 AI 托管控制面"/);
+  assert.match(chatArea, /由 @\$\{agentPresence\.username\} 托管/);
+  assert.match(chatArea, /onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
   assert.doesNotMatch(threadPanel, /共享 Agent/);
   assert.match(hosting, /autoHostEnvironmentId/);
   assert.match(hosting, /fetchWorkItem\(workItemId\)/);

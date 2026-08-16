@@ -20,3 +20,17 @@ export function shouldSearchMentionDirectory(
 ): boolean {
   return canMentionInRoom(roomType) && !!mentionQuery?.trim();
 }
+
+export function insertMentionAtCursor(
+  value: string,
+  cursor: number,
+  username: string,
+): { value: string; cursor: number } {
+  const before = value.slice(0, cursor).replace(MENTION_RE, (full) =>
+    full.startsWith('@') ? `@${username} ` : `${full[0]}@${username} `,
+  );
+  return {
+    value: before + value.slice(cursor),
+    cursor: before.length,
+  };
+}

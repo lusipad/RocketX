@@ -1,0 +1,32 @@
+{
+  "id": "noto-animated",
+  "title": "Noto 动态贴纸",
+  "source": "Google Noto Emoji Animation",
+  "license": "CC-BY-4.0",
+  "groups": [
+    {
+      "id": "animated-replies",
+      "title": "动态回应",
+      "items": [
+        {
+          "id": "wave_animated",
+          "title": "挥手（动图）",
+          "src": "./wave.gif",
+          "tags": ["wave", "hello", "gif", "动图", "挥手"]
+        },
+        {
+          "id": "celebrate_animated",
+          "title": "庆祝（动图）",
+          "src": "./celebrate.gif",
+          "tags": ["celebrate", "party", "gif", "动图", "庆祝"]
+        },
+        {
+          "id": "thumbs_up_animated",
+          "title": "赞（动图）",
+          "src": "./thumbs-up.gif",
+          "tags": ["thumbs-up", "like", "gif", "动图", "赞"]
+        }
+      ]
+    }
+  ]
+}

@@ -557,8 +557,8 @@ test('工作区只持久化工作区和 Codex 设置，不保存任务正文', a
     useCodexWorkspace.setState({
       messages: [{ id: 'secret', role: 'user', text: '敏感任务正文' }],
       events: [{ id: 'event', type: 'reasoning', title: '敏感过程', status: 'completed' }],
-      hostingModel: 'gpt-hosting',
-      hostingEffort: 'high',
+      selectedModel: 'gpt-hosting',
+      selectedEffort: 'high',
     });
     useCodexWorkspace.getState().setFollowUpMode('steer');
 
@@ -567,9 +567,8 @@ test('工作区只持久化工作区和 Codex 设置，不保存任务正文', a
     assert.deepEqual(JSON.parse(saved), {
       workspaceRoot: 'D:/workspace',
       workspaceRoots: ['D:/workspace', 'D:/another-workspace'],
-      selectedEffort: null,
-      hostingModel: 'gpt-hosting',
-      hostingEffort: 'high',
+      selectedModel: 'gpt-hosting',
+      selectedEffort: 'high',
       permissionPreset: 'auto',
       followUpMode: 'steer',
     });

@@ -1,6 +1,6 @@
 # 功能规格追踪索引
 
-> 基线：工作树 `2026-08-14`
+> 基线：工作树 `2026-08-16`
 > 用途：从验收 ID 定位当前实现、自动化证据和仍需真实验证的部分。
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
@@ -65,9 +65,9 @@
 | `BUT-AC-05` | 请求路由、输入卡片 | `tests/ui/butler-host-input.regression-1.spec.ts` | 真实 Codex 请求 INT |
 | `BUT-AC-06` | `agent/codexTransfer.ts`、`refreshFromCodex` | `codex-transfer.test.ts`、`codex-workspace.test.ts` | Codex App 顺序接续 MAN |
 | `BUT-AC-07` | Runtime 门禁与 unavailable 状态 | `codex-runtime.test.ts`、`tests/ui/butler-workspace.spec.ts` | Web 部署 MAN |
-| `BUT-AC-08` | `pages/ButlerPage.tsx`、Codex/DeepSeek 独立视图 | `dsh-view.test.ts`、`butler-entry-points.test.ts`、`tests/ui/butler-workspace.spec.ts` | 正式桌面切换 MAN |
-| `BUT-AC-09` | `agent/dsh/config.ts`、`stores/dshWorkspace.ts`、`components/DshConversation.tsx`、`apps/desktop/src-tauri/src/dsh_bridge.mjs` | `dsh-web-core.test.ts`、`dsh-workspace-actions.test.ts`、`dsh-bridge-script.test.ts` | 固定 DSH 真实配置 INT |
-| `BUT-AC-10` | `stores/dshWorkspace.ts`、`agent/dsh/DshController.ts` | `dsh-workspace-actions.test.ts`、`dsh-controller-runtime.test.ts` | 进程崩溃与恢复 INT |
+| `BUT-AC-08` | `pages/ButlerPage.tsx`、启动级 AI 运行时选择、Codex/DeepSeek 视图 | `dsh-view.test.ts`、`butler-entry-points.test.ts`、`tests/ui/butler-workspace.spec.ts` | 正式桌面重启生效 MAN |
+| `BUT-AC-09` | `pages/ButlerPage.tsx`、`components/DshConversation.tsx`、`components/DshQuestionCard.tsx`、`agent/dsh/DshController.ts`、`agent/dsh/HostedDshController.ts`、`apps/desktop/src-tauri/src/dsh_bridge.mjs` | `dsh-controller-runtime.test.ts`、`hosted-dsh-controller.test.ts`、`dsh-bridge-script.test.ts`、`dsh-view.test.ts` | 官方 DSH Web iframe 宿主与 loopback URL INT |
+| `BUT-AC-10` | `agent/dsh/DshController.ts`、`agent/dsh/HostedDshController.ts` | `dsh-controller-runtime.test.ts`、`hosted-dsh-controller.test.ts` | 进程崩溃与恢复 INT |
 | `EXT-AC-01`、`EXT-AC-02`、`EXT-AC-03` | `agent/AppServerController.ts`、`components/ButlerPluginsPage.tsx` | `butler-plugin-marketplace-ui.test.ts`、`butler-bundled-skills.test.ts` | 真实目录 INT |
 | `EXT-AC-04` | `stores/codexWorkspace.ts` 的安装/启停动作 | `tests/ui/butler-workspace.spec.ts` | Marketplace 安装/卸载 INT |
 | `EXT-AC-05` | Runtime 门禁与目录错误隔离 | `butler-plugin-marketplace-ui.test.ts` | Web/no Runtime MAN |
@@ -89,11 +89,11 @@
 | `AGT-AC-05` | 共享 Agent 租约逻辑 | `shared-agent-runtime.test.ts` | 两设备 INT |
 | `AGT-AC-06` | 中断恢复与环境释放 | `agent-session.test.ts`、`shared-agent-runtime.test.ts` | 进程崩溃 INT |
 | `AGT-AC-07` | 产品/规格门禁 | 文档与入口审查 | 独立委托未实现 |
-| `AGT-AC-08`、`AGT-AC-09` | `stores/sharedAgent.ts`、`components/AgentPanel.tsx`、`agent/dsh/HostedDshController.ts` | `agent-hosting-backend.test.ts`、`hosted-dsh-controller.test.ts`、`shared-agent-runtime.test.ts` | Codex/DeepSeek 两后端真实房间 INT |
+| `AGT-AC-08`、`AGT-AC-09` | `stores/sharedAgent.ts`、`components/AgentPanel.tsx`、`agent/dsh/HostedDshController.ts` | `agent-hosting-backend.test.ts`、`hosted-dsh-controller.test.ts`、`shared-agent-runtime.test.ts` | 共享 Agent 继承全局启动级运行时的真实房间 INT |
 | `PERM-AC-01`、`PERM-AC-02` | `permissionSettings`、`components/ButlerConversation.tsx` | `app-server-controller.test.ts`、`codex-workspace.test.ts` | 上游 Profile 版本变化 |
 | `PERM-AC-03`、`PERM-AC-04`、`PERM-AC-05`、`PERM-AC-06` | Server Request 路由、审批与输入卡 | `tests/ui/butler-host-input.regression-1.spec.ts` | 真实命令/MCP 请求 INT |
 | `PERM-AC-07` | `agent/codexAutomation.ts` | `routines.test.ts` | 真实无人值守审批 INT |
-| `PERM-AC-08`、`PERM-AC-09` | `agent/dsh/protocol.ts`、`stores/dshWorkspace.ts`、`agent/dsh/HostedDshController.ts` | `dsh-web-core.test.ts`、`dsh-workspace-actions.test.ts`、`hosted-dsh-controller.test.ts` | DSH 原生审批/问题 INT |
+| `PERM-AC-08`、`PERM-AC-09` | `agent/dsh/protocol.ts`、`agent/dsh/DshController.ts`、`agent/dsh/HostedDshController.ts` | `dsh-controller-runtime.test.ts`、`hosted-dsh-controller.test.ts`、`dsh-bridge-script.test.ts` | DSH 原生审批/问题 INT |
 
 ## 7. Runtime 与平台
 

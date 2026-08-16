@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 const bridgeScript = path.resolve('apps/desktop/src-tauri/src/dsh_bridge.mjs');
 
@@ -45,11 +46,13 @@ import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import http from 'node:http'
 
-const [, , profileFlag, profileName, patchFlag, patchPath, portFlag, portValue] = process.argv
+const [, , profileFlag, profileName, patchFlag, patchPath, hostFlag, hostValue, portFlag, portValue] = process.argv
 if (profileFlag !== '--profile'
   || profileName !== 'web'
   || patchFlag !== '--patch'
   || !patchPath
+  || hostFlag !== '--host'
+  || hostValue !== '127.0.0.1'
   || portFlag !== '--port'
   || portValue !== '0') {
   console.error('unexpected argv', process.argv.slice(2))
@@ -270,7 +273,7 @@ process.on('SIGINT', () => { void shutdown() })
 
   try {
     const ready = await waitForFrame((frame) => frame.kind === 'ready');
-    assert.match(String(ready.url), /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.match(String(ready.url), /^http:\/\/127\.0\.0\.1:\d+\/$/);
 
     const logFrames = stdoutLines
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -433,6 +436,334 @@ process.on('SIGINT', () => { void shutdown() })
     for (const line of stdoutLines) JSON.parse(line);
     assert.ok(!stdoutLines.some((line) => (JSON.parse(line) as { kind?: string }).kind === 'fatal'));
     assert.equal(stderrChunks.join(''), '');
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('DSH bridge web mode emits ready URL without websocket streams and binds host explicitly', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rocketx-dsh-bridge-web-'));
+  const patchPath = path.join(tempRoot, 'fixture.patch.yml');
+  const cliPath = path.join(tempRoot, 'fake-dsh-cli-web.mjs');
+  const argvLogPath = path.join(tempRoot, 'fixture-argv.json');
+  const serverLogPath = path.join(tempRoot, 'fixture-server-log.jsonl');
+  const fixtureScript = String.raw`
+import { appendFile, writeFile } from 'node:fs/promises'
+import http from 'node:http'
+
+const args = process.argv.slice(2)
+await writeFile(process.env.DSH_BRIDGE_ARGV_LOG, JSON.stringify(args), 'utf8')
+const expected = ['--profile', 'web', '--patch', args[3], '--host', '127.0.0.1', '--port', '0']
+if (args.length !== expected.length || args.some((value, index) => value !== expected[index])) {
+  console.error('unexpected argv', args)
+  process.exit(2)
+}
+
+const serverLog = process.env.DSH_BRIDGE_FIXTURE_LOG
+if (!serverLog) {
+  console.error('missing DSH_BRIDGE_FIXTURE_LOG')
+  process.exit(3)
+}
+
+function log(entry) {
+  return appendFile(serverLog, JSON.stringify(entry) + '\n')
+}
+
+const server = http.createServer(async (request, response) => {
+  const chunks = []
+  for await (const chunk of request) chunks.push(chunk)
+  const bodyText = Buffer.concat(chunks).toString('utf8')
+  await log({ path: request.url, body: bodyText })
+  if (request.method === 'POST' && request.url === '/api/host.describe') {
+    const body = JSON.parse(bodyText)
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({
+      type: 'server-response',
+      rpcId: body.rpcId,
+      result: { ok: true, value: { version: 1 } },
+    }))
+    return
+  }
+  response.statusCode = 404
+  response.end('not-used')
+})
+
+server.on('upgrade', async (request, socket) => {
+  await log({ path: request.url, upgrade: true })
+  socket.end()
+})
+
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const address = server.address()
+if (address === null || typeof address === 'string') {
+  console.error('failed to read server address')
+  process.exit(4)
+}
+
+console.log('dsh web: http://127.0.0.1:' + address.port)
+
+const shutdown = async () => {
+  await new Promise((resolve) => server.close(resolve))
+  process.exit(0)
+}
+
+process.on('SIGTERM', () => { void shutdown() })
+process.on('SIGINT', () => { void shutdown() })
+`;
+
+  await writeFile(patchPath, '# fixture patch\n', 'utf8');
+  await writeFile(cliPath, fixtureScript, 'utf8');
+
+  const child = spawn(process.execPath, [bridgeScript, cliPath, patchPath, 'web'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DSH_BRIDGE_FIXTURE_LOG: serverLogPath,
+      DSH_BRIDGE_ARGV_LOG: argvLogPath,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const closePromise = once(child, 'close');
+  child.stdin.setDefaultEncoding('utf8');
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+
+  const stdoutLines: string[] = [];
+  let stdoutBuffer = '';
+  child.stdout.on('data', (chunk: string) => {
+    stdoutBuffer += chunk;
+    let boundary = stdoutBuffer.indexOf('\n');
+    while (boundary !== -1) {
+      stdoutLines.push(stdoutBuffer.slice(0, boundary));
+      stdoutBuffer = stdoutBuffer.slice(boundary + 1);
+      boundary = stdoutBuffer.indexOf('\n');
+    }
+  });
+
+  const deadline = Date.now() + 15_000;
+  const waitForFrame = async (predicate: (frame: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> => {
+    for (;;) {
+      for (const line of stdoutLines) {
+        const frame = JSON.parse(line) as Record<string, unknown>;
+        if (predicate(frame)) return frame;
+      }
+      assert.ok(Date.now() < deadline, `timed out waiting for frame\n${stdoutLines.join('\n')}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+
+  try {
+    const ready = await waitForFrame((frame) => frame.kind === 'ready');
+    assert.match(String(ready.url), /^http:\/\/127\.0\.0\.1:\d+\/$/);
+
+    child.stdin.write(JSON.stringify({ kind: 'shutdown' }) + '\n');
+    const exitFrame = await waitForFrame((frame) => frame.kind === 'exit');
+    assert.ok(typeof exitFrame.code === 'number' || typeof exitFrame.signal === 'string');
+    const [bridgeCode, bridgeSignal] = await closePromise;
+    assert.equal(bridgeSignal, null);
+    assert.equal(bridgeCode, 0);
+
+    assert.deepEqual(
+      JSON.parse(await readFile(argvLogPath, 'utf8')) as string[],
+      ['--profile', 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', '0'],
+    );
+    const serverLogText = await readFile(serverLogPath, 'utf8').catch(() => '');
+    const serverLog = serverLogText
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { path: string; body?: string; upgrade?: boolean });
+    assert.equal(serverLog.length, 1);
+    assert.equal(serverLog[0]?.path, '/api/host.describe');
+    assert.equal(
+      (JSON.parse(serverLog[0]?.body ?? '{}') as { method?: string }).method,
+      'host.describe',
+    );
+    assert.ok(!serverLog.some((entry) => entry.upgrade));
+    assert.ok(!stdoutLines.some((line) => {
+      const frame = JSON.parse(line) as { kind?: string };
+      return frame.kind === 'mux' || frame.kind === 'host' || frame.kind === 'fatal';
+    }));
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('DSH bridge surfaces child stderr when startup exits before ready', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rocketx-dsh-bridge-startup-error-'));
+  const patchPath = path.join(tempRoot, 'fixture.patch.yml');
+  const cliPath = path.join(tempRoot, 'fake-dsh-cli-error.mjs');
+  const fixtureError = 'dsh: plugin tree failed to load: corrupt Zstandard session log';
+
+  await writeFile(patchPath, '# fixture patch\n', 'utf8');
+  await writeFile(cliPath, `console.error(${JSON.stringify(`Error: ${fixtureError}`)})\nprocess.exit(17)\n`, 'utf8');
+
+  const child = spawn(process.execPath, [bridgeScript, cliPath, patchPath, 'web'], {
+    cwd: process.cwd(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  child.stdout.on('data', (chunk: string) => stdoutChunks.push(chunk));
+  child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
+
+  try {
+    const [bridgeCode, bridgeSignal] = await once(child, 'close');
+    const frames = stdoutChunks
+      .join('')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { kind?: string; message?: string; stream?: string });
+    const fatal = frames.find((frame) => frame.kind === 'fatal');
+
+    assert.equal(bridgeSignal, null);
+    assert.equal(bridgeCode, 1);
+    assert.match(fatal?.message ?? '', new RegExp(fixtureError));
+    assert.ok(frames.some((frame) => (
+      frame.kind === 'log'
+      && frame.stream === 'dsh.stderr'
+      && frame.message === `Error: ${fixtureError}`
+    )));
+    assert.equal(stderrChunks.join(''), '');
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('DSH bridge migrates a monolithic Zstandard session frame without losing JSONL data', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rocketx-dsh-bridge-session-migration-'));
+  const dshHome = path.join(tempRoot, 'home');
+  const sessionDirectory = path.join(dshHome, 'sessions', '--D-tmp--', 'session-migration-fixture');
+  const sessionPath = path.join(sessionDirectory, 'session.jsonl.zstd');
+  const validSessionDirectory = path.join(dshHome, 'sessions', '--D-tmp--', 'session-valid-fixture');
+  const validSessionPath = path.join(validSessionDirectory, 'session.jsonl.zstd');
+  const patchPath = path.join(tempRoot, 'fixture.patch.yml');
+  const cliPath = path.join(tempRoot, 'fake-dsh-cli-migration.mjs');
+  const jsonl = [
+    { type: 'session', version: 0, id: 'session-migration-fixture', createdAt: 1, cwd: 'D:\\tmp', delegationDepth: 0 },
+    { type: 'event', seq: 0, data: { value: 'first' } },
+    { type: 'event', seq: 1, data: { value: 'second' } },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n';
+  const original = zstdCompressSync(Buffer.from(jsonl));
+  const validHeader = JSON.stringify({
+    type: 'session', version: 0, id: 'session-valid-fixture', createdAt: 2, cwd: 'D:\\tmp', delegationDepth: 0,
+  }) + '\n';
+  const validEvents = JSON.stringify({ type: 'event', seq: 0, data: { value: 'already-valid' } }) + '\n';
+  const validOriginal = Buffer.concat([
+    zstdCompressSync(Buffer.from(validHeader)),
+    zstdCompressSync(Buffer.from(validEvents)),
+  ]);
+
+  await mkdir(sessionDirectory, { recursive: true });
+  await mkdir(validSessionDirectory, { recursive: true });
+  await writeFile(sessionPath, original);
+  await writeFile(validSessionPath, validOriginal);
+  await writeFile(patchPath, '# fixture patch\n', 'utf8');
+  await writeFile(cliPath, `console.error('Error: migration fixture complete')\nprocess.exit(17)\n`, 'utf8');
+
+  const child = spawn(process.execPath, [bridgeScript, cliPath, patchPath, 'web'], {
+    cwd: process.cwd(),
+    env: { ...process.env, DSH_HOME: dshHome },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  try {
+    await once(child, 'close');
+    const migrated = await readFile(sessionPath);
+    const firstFrame = zstdDecompressSync(migrated, { info: true });
+    const decodedFrames: Buffer[] = [];
+    let offset = 0;
+    while (offset < migrated.length) {
+      const frame = zstdDecompressSync(migrated.subarray(offset), { info: true });
+      decodedFrames.push(frame.buffer);
+      offset += frame.engine.bytesWritten;
+    }
+    const backups = (await readdir(sessionDirectory))
+      .filter((name) => /^session\.jsonl\.zstd\.legacy-frame-.*\.bak$/u.test(name));
+    const validBackups = (await readdir(validSessionDirectory))
+      .filter((name) => /^session\.jsonl\.zstd\.legacy-frame-.*\.bak$/u.test(name));
+
+    assert.equal(firstFrame.buffer.toString('utf8'), `${jsonl.split('\n', 1)[0]}\n`);
+    assert.equal(Buffer.concat(decodedFrames).toString('utf8'), jsonl);
+    assert.equal(backups.length, 1);
+    assert.deepEqual(await readFile(path.join(sessionDirectory, backups[0])), original);
+    assert.deepEqual(await readFile(validSessionPath), validOriginal);
+    assert.equal(validBackups.length, 0);
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('DSH bridge never overwrites events appended while a session migration is in progress', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'rocketx-dsh-bridge-session-migration-race-'));
+  const dshHome = path.join(tempRoot, 'home');
+  const sessionDirectory = path.join(dshHome, 'sessions', '--D-tmp--', 'session-migration-race-fixture');
+  const sessionPath = path.join(sessionDirectory, 'session.jsonl.zstd');
+  const patchPath = path.join(tempRoot, 'fixture.patch.yml');
+  const cliPath = path.join(tempRoot, 'fake-dsh-cli-migration-race.mjs');
+  const preloadPath = path.join(tempRoot, 'append-during-migration.cjs');
+  const jsonl = [
+    { type: 'session', version: 0, id: 'session-migration-race-fixture', createdAt: 1, cwd: 'D:\\tmp', delegationDepth: 0 },
+    { type: 'event', seq: 0, data: { value: 'first' } },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n';
+  const concurrentLine = JSON.stringify({ type: 'event', seq: 1, data: { value: 'concurrent' } }) + '\n';
+  const original = zstdCompressSync(Buffer.from(jsonl));
+  const concurrentFrame = zstdCompressSync(Buffer.from(concurrentLine));
+
+  await mkdir(sessionDirectory, { recursive: true });
+  await writeFile(sessionPath, original);
+  await writeFile(patchPath, '# fixture patch\n', 'utf8');
+  await writeFile(cliPath, `console.error('Error: migration race fixture complete')\nprocess.exit(17)\n`, 'utf8');
+  await writeFile(preloadPath, `
+const fsPromises = require('node:fs/promises')
+const { syncBuiltinESMExports } = require('node:module')
+const originalWriteFile = fsPromises.writeFile
+let appended = false
+fsPromises.writeFile = async (...args) => {
+  const result = await originalWriteFile(...args)
+  if (!appended && String(args[0]).endsWith('.tmp')) {
+    appended = true
+    await fsPromises.appendFile(
+      process.env.DSH_BRIDGE_RACE_SESSION,
+      Buffer.from(process.env.DSH_BRIDGE_RACE_FRAME, 'base64'),
+    )
+  }
+  return result
+}
+syncBuiltinESMExports()
+`, 'utf8');
+
+  const child = spawn(process.execPath, ['--require', preloadPath, bridgeScript, cliPath, patchPath, 'web'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DSH_HOME: dshHome,
+      DSH_BRIDGE_RACE_SESSION: sessionPath,
+      DSH_BRIDGE_RACE_FRAME: concurrentFrame.toString('base64'),
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  try {
+    await once(child, 'close');
+    const current = await readFile(sessionPath);
+    const decodedFrames: Buffer[] = [];
+    let offset = 0;
+    while (offset < current.length) {
+      const frame = zstdDecompressSync(current.subarray(offset), { info: true });
+      decodedFrames.push(frame.buffer);
+      offset += frame.engine.bytesWritten;
+    }
+
+    assert.equal(Buffer.concat(decodedFrames).toString('utf8'), jsonl + concurrentLine);
   } finally {
     if (child.exitCode === null) child.kill('SIGKILL');
     await rm(tempRoot, { recursive: true, force: true });

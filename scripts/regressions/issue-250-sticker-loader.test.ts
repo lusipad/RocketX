@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import test from 'node:test';
 import {
   fetchStickerFile,
@@ -122,7 +124,6 @@ test('贴纸 loader 会逐包/逐项跳过非法 manifest，并保留其他有�
     stickerEntryKey({ packageId: 'signals', id: 'shared' }),
   );
 });
-
 test('贴纸资源转 File 时在响应头缺失类型的情况下仍按扩展名保留图片 MIME（issue #250）', async () => {
   const file = await fetchStickerFile(
     {
@@ -143,4 +144,79 @@ test('贴纸资源转 File 时在响应头缺失类型的情况下仍按扩展�
   assert.equal(file.name, 'ship-it.webp');
   assert.equal(file.type, 'image/webp');
   assert.equal(file.size, 4);
+});
+
+test('真实默认贴纸目录提供 21 张静态贴纸和 3 张 GIF（issue #250）', async () => {
+  const stickersRoot = path.resolve('apps/web/public/stickers');
+  const rawIndex = JSON.parse(await readFile(path.join(stickersRoot, 'index.json'), 'utf8')) as {
+    packages?: Array<{ manifest?: string }>;
+  };
+  const manifests = (rawIndex.packages ?? [])
+    .map((pkg) => typeof pkg.manifest === 'string' ? pkg.manifest : null)
+    .filter((manifest): manifest is string => !!manifest);
+
+  let totalEntries = 0;
+  const packageIds = new Set<string>();
+  const packageCounts = new Map<string, number>();
+  const entryIds = new Set<string>();
+  for (const manifest of manifests) {
+    const manifestPath = path.resolve(stickersRoot, manifest);
+    const rawManifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      id?: string;
+      groups?: Array<{ items?: Array<{ id?: string }> }>;
+    };
+    const packageId = typeof rawManifest.id === 'string' ? rawManifest.id : '';
+    if (packageId) packageIds.add(packageId);
+    for (const group of rawManifest.groups ?? []) {
+      for (const item of group.items ?? []) {
+        if (typeof item.id === 'string' && item.id) {
+          totalEntries += 1;
+          packageCounts.set(packageId, (packageCounts.get(packageId) ?? 0) + 1);
+          entryIds.add(item.id);
+        }
+      }
+    }
+  }
+
+  assert.equal(totalEntries, 24);
+  assert.equal(packageCounts.get('twemoji'), 21);
+  assert.equal(packageCounts.get('noto-animated'), 3);
+  assert.ok(packageIds.has('noto-animated'), `缺少 noto-animated 包：${JSON.stringify([...packageIds])}`);
+  assert.ok(entryIds.has('1f44d'), '缺少现有静态贴纸 1f44d');
+  assert.ok(entryIds.has('1f91d'), `缺少新增静态贴纸 1f91d：${JSON.stringify([...entryIds])}`);
+});
+
+test('贴纸资源转 File 时保留多帧 GIF 的 MIME、文件名和原始 GIF89a 字节（issue #250）', async () => {
+  const gifBytes = new Uint8Array([
+    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+    0x02, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
+    0x21, 0xf9, 0x04, 0x04, 0x00, 0x00, 0x00, 0x00,
+    0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00,
+    0x02, 0x02, 0x44, 0x01, 0x00,
+    0x21, 0xf9, 0x04, 0x04, 0x00, 0x00, 0x00, 0x00,
+    0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00,
+    0x02, 0x02, 0x4c, 0x01, 0x00,
+    0x3b,
+  ]);
+  const file = await fetchStickerFile(
+    {
+      id: 'waiting-ping',
+      title: '等你一句话',
+      packageId: 'noto-animated',
+      packageTitle: 'Noto Animated',
+      groupId: 'async-signals',
+      groupTitle: '异步信号',
+      src: 'https://assets.test/stickers/noto-animated/waiting-ping.gif',
+      fileName: 'waiting-ping.gif',
+      mimeType: 'image/gif',
+      tags: ['waiting'],
+    },
+    async () => new Response(gifBytes, { status: 200 }),
+  );
+
+  assert.equal(file.name, 'waiting-ping.gif');
+  assert.equal(file.type, 'image/gif');
+  assert.deepEqual(new Uint8Array(await file.arrayBuffer()), gifBytes);
+  assert.equal(new TextDecoder().decode(gifBytes.slice(0, 6)), 'GIF89a');
 });

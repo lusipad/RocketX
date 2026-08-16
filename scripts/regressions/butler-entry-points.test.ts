@@ -17,6 +17,8 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(history, /startThread\(\)/);
   assert.match(history, /resumeThread\(thread\.id\)/);
   assert.match(history, /aria-label="Codex 工作区"/);
+  assert.match(history, /AI 托管/);
+  assert.match(history, /aria-label="AI 托管会话"/);
   assert.match(history, />项目</);
   assert.match(history, /Codex 对话历史/);
   assert.match(history, /setWorkbenchTab\('prs'\)/);
@@ -26,18 +28,18 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(history, /const projectEntries = useMemo/);
   assert.match(history, /aria-label=\{`项目配置：\$\{entry\.label\}`\}/);
   assert.match(history, /title="项目配置"/);
+  assert.doesNotMatch(history, /setButlerView\('hosting'\)/);
   assert.doesNotMatch(history, /aria-label="任务"/);
   assert.doesNotMatch(history, /ButlerSessionSwitcher|today|memory|paper|manage/);
 
   assert.match(workspace, /importLegacyWorkspaceRoots\(legacyWorkspaceRoots\)/);
   assert.match(workspace, /controller\.listThreads\(threadWorkspaceRoots\(get\(\)\)\)/);
 
-  assert.match(ui, /openButlerConversation: \(provider\) => \{/);
-  assert.match(ui, /setButlerTaskProvider: \(provider\) => \{/);
-  assert.match(ui, /persistButlerTaskProvider\(provider\)/);
-  assert.match(ui, /butlerTaskProvider: provider \?\? state\.butlerTaskProviderPreference/);
-  assert.match(ui, /butlerTaskProvider: state\.butlerTaskProviderPreference/);
-  assert.match(ui, /module: 'butler-view',[\s\S]*butlerView: 'conversation'/);
+  assert.match(ui, /aiRuntimeProvider: getAiRuntimeProvider\(\)/);
+  assert.match(ui, /openButlerConversation: \(focusSessionKey\?: string\) => \{/);
+  assert.doesNotMatch(ui, /setButlerTaskProvider|butlerTaskProviderPreference/);
+  assert.match(ui, /butlerView: 'conversation'/);
+  assert.match(ui, /selectedHostedSessionKey: focusSessionKey \?\? null/);
   assert.match(ui, /setButlerView: \(view\) => \{/);
   assert.match(ui, /module: 'butler-view',[\s\S]*butlerView: view/);
   assert.doesNotMatch(ui, /openButlerManage|openButlerPaper|butlerPaperDate|butlerConversationOpen|butlerManageOpen/);

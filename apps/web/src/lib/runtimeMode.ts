@@ -1,7 +1,9 @@
 export const RUNTIME_MODE_STORAGE_KEY = 'rcx-runtime-mode-v1';
 export const RUNTIME_MODE_QUERY_KEY = 'rcx-mode';
+export const AI_RUNTIME_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
 
 export type RuntimeMode = 'standard' | 'performance';
+export type AiRuntimeProvider = 'codex' | 'deepseek' | 'none';
 
 export interface RuntimeFeatures {
   mode: RuntimeMode;
@@ -16,7 +18,7 @@ export interface RuntimeFeatures {
   sharedAgent: boolean;
 }
 
-interface RuntimeModeStorage {
+export interface RuntimeModeStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
@@ -60,13 +62,81 @@ export function readRuntimeMode(
   }
 }
 
+export function normalizeAiRuntimeProvider(value: unknown): AiRuntimeProvider {
+  return value === 'codex' || value === 'none' ? value : 'deepseek';
+}
+
+export function readConfiguredAiRuntimeProvider(
+  storage: RuntimeModeStorage | undefined = browserStorage(),
+): AiRuntimeProvider | undefined {
+  try {
+    const value = storage?.getItem(AI_RUNTIME_PROVIDER_STORAGE_KEY);
+    return value === 'codex' || value === 'deepseek' || value === 'none' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function selectStartupAiRuntimeProvider(
+  configured: AiRuntimeProvider | undefined,
+  availability: Readonly<Record<'codex' | 'deepseek', boolean>>,
+): AiRuntimeProvider {
+  if (configured === 'none') return 'none';
+  if (configured) return availability[configured] ? configured : 'none';
+  if (availability.deepseek) return 'deepseek';
+  if (availability.codex) return 'codex';
+  return 'none';
+}
+
+export function readAiRuntimeProvider(
+  storage: RuntimeModeStorage | undefined = browserStorage(),
+): AiRuntimeProvider {
+  try {
+    return normalizeAiRuntimeProvider(storage?.getItem(AI_RUNTIME_PROVIDER_STORAGE_KEY));
+  } catch {
+    return 'deepseek';
+  }
+}
+
 let currentMode = readRuntimeMode();
+let currentAiRuntimeProvider = readAiRuntimeProvider();
 
 export function getRuntimeMode(): RuntimeMode {
   return currentMode;
 }
 
-export function runtimeFeatures(mode: RuntimeMode = currentMode): RuntimeFeatures {
+export function getAiRuntimeProvider(): AiRuntimeProvider {
+  return currentAiRuntimeProvider;
+}
+
+/** 应用本次进程实际使用的 AI 后端，不改写用户保存的下次启动选择。 */
+export function activateAiRuntimeProvider(
+  provider: AiRuntimeProvider,
+  doc: Document | undefined = browserDocument(),
+): AiRuntimeProvider {
+  currentAiRuntimeProvider = normalizeAiRuntimeProvider(provider);
+  if (doc?.documentElement) doc.documentElement.dataset.aiRuntime = currentAiRuntimeProvider;
+  return currentAiRuntimeProvider;
+}
+
+/** 只保存下次启动要使用的后端；当前进程的运行时选择保持不变。 */
+export function persistAiRuntimeProvider(
+  provider: AiRuntimeProvider,
+  storage: RuntimeModeStorage | undefined = browserStorage(),
+): AiRuntimeProvider {
+  const next = normalizeAiRuntimeProvider(provider);
+  try {
+    storage?.setItem(AI_RUNTIME_PROVIDER_STORAGE_KEY, next);
+  } catch {
+    // 存储不可用时保持当前启动配置。
+  }
+  return next;
+}
+
+export function runtimeFeatures(
+  mode: RuntimeMode = currentMode,
+  provider: AiRuntimeProvider = currentAiRuntimeProvider,
+): RuntimeFeatures {
   if (mode === 'performance') {
     return {
       mode,
@@ -81,16 +151,17 @@ export function runtimeFeatures(mode: RuntimeMode = currentMode): RuntimeFeature
       sharedAgent: false,
     };
   }
+  const aiEnabled = provider !== 'none';
   return {
     mode,
-    ai: true,
+    ai: aiEnabled,
     bootKernel: true,
     butler: true,
-    ocr: true,
+    ocr: aiEnabled,
     polling: true,
     reducedMotion: false,
-    routines: true,
-    runtimeProbes: true,
+    routines: provider === 'codex',
+    runtimeProbes: provider === 'codex',
     sharedAgent: true,
   };
 }
@@ -99,6 +170,7 @@ export function applyRuntimeModeDocumentState(doc: Document | undefined = browse
   currentMode = readRuntimeMode();
   if (!doc?.documentElement) return currentMode;
   doc.documentElement.dataset.runtimeMode = currentMode;
+  doc.documentElement.dataset.aiRuntime = currentAiRuntimeProvider;
   doc.documentElement.classList.toggle('runtime-performance', currentMode === 'performance');
   return currentMode;
 }
@@ -123,4 +195,8 @@ export function persistRuntimeMode(
 
 export function resetRuntimeModeForTests(): void {
   currentMode = 'standard';
+}
+
+export function resetAiRuntimeProviderForTests(provider: AiRuntimeProvider): void {
+  activateAiRuntimeProvider(provider);
 }

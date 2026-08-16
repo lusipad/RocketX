@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AppServerControllerOptions } from '../../apps/web/src/agent/AppServerController';
-import { prepareRoomWorkspace } from '../../apps/web/src/components/ButlerPanel';
 import {
   resetCodexWorkspaceForTests,
   setCodexWorkspaceControllerFactory,
@@ -118,102 +117,6 @@ function setProjectedActiveThread(
     queuedMessages: threadState.queuedMessages,
   };
 }
-
-test('AI 管家运行时仍可准备房间工作区，且不会中断管家线程', async () => {
-  const switchedRoots: string[] = [];
-  const interruptCalls: Array<{ threadId: string; turnId: string }> = [];
-  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
-    currentWorkspaceRoot: 'D:/butler',
-    connect: async () => CATALOG,
-    switchWorkspaceRoot: (workspaceRoot: string) => {
-      switchedRoots.push(workspaceRoot);
-      return true;
-    },
-    listThreads: async () => [],
-    interruptTurn: async (threadId: string, turnId: string) => {
-      interruptCalls.push({ threadId, turnId });
-    },
-    stop: async () => undefined,
-  } as never));
-
-  try {
-    await resetCodexWorkspaceForTests();
-    const butlerThread = makeThreadState('D:/butler', {
-      status: 'running',
-      activeTurnId: 'turn-butler',
-      messages: [{ id: 'message-butler', role: 'assistant', text: '管家仍在运行' }],
-    });
-    useCodexWorkspace.setState({
-      defaultWorkspaceRoot: 'D:/rooms',
-      butlerWorkspaceRoot: 'D:/butler',
-      workspaceRoot: 'D:/butler',
-      workspaceRoots: ['D:/rooms', 'D:/butler'],
-      threadStates: { 'thread-butler': butlerThread },
-      ...setProjectedActiveThread('thread-butler', butlerThread),
-    });
-    await useCodexWorkspace.getState().connect({ refreshThreads: false });
-
-    const reconnected = await prepareRoomWorkspace();
-
-    const state = useCodexWorkspace.getState();
-    assert.equal(reconnected, false);
-    assert.deepEqual(switchedRoots, ['D:/rooms']);
-    assert.equal(state.workspaceRoot, 'D:/rooms');
-    assert.equal(state.activeThreadId, undefined);
-    assert.equal(state.threadStates['thread-butler']?.status, 'running');
-    assert.equal(state.threadStates['thread-butler']?.activeTurnId, 'turn-butler');
-    assert.equal(state.threadStates['thread-butler']?.messages.at(-1)?.text, '管家仍在运行');
-    assert.deepEqual(interruptCalls, []);
-  } finally {
-    restoreFactory();
-    await resetCodexWorkspaceForTests();
-  }
-});
-
-test('另一个房间运行时仍可准备新房间会话，且不会中断原房间线程', async () => {
-  const interruptCalls: Array<{ threadId: string; turnId: string }> = [];
-  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
-    currentWorkspaceRoot: 'D:/rooms',
-    connect: async () => CATALOG,
-    switchWorkspaceRoot: () => true,
-    listThreads: async () => [],
-    interruptTurn: async (threadId: string, turnId: string) => {
-      interruptCalls.push({ threadId, turnId });
-    },
-    stop: async () => undefined,
-  } as never));
-
-  try {
-    await resetCodexWorkspaceForTests();
-    const firstRoomThread = makeThreadState('D:/rooms', {
-      status: 'running',
-      activeTurnId: 'turn-room-a',
-      messages: [{ id: 'message-room-a', role: 'assistant', text: '房间 A 仍在运行' }],
-    });
-    useCodexWorkspace.setState({
-      defaultWorkspaceRoot: 'D:/rooms',
-      butlerWorkspaceRoot: 'D:/butler',
-      workspaceRoot: 'D:/rooms',
-      workspaceRoots: ['D:/rooms', 'D:/butler'],
-      threadStates: { 'thread-room-a': firstRoomThread },
-      ...setProjectedActiveThread('thread-room-a', firstRoomThread),
-    });
-    await useCodexWorkspace.getState().connect({ refreshThreads: false });
-
-    const reconnected = await prepareRoomWorkspace();
-
-    const state = useCodexWorkspace.getState();
-    assert.equal(reconnected, false);
-    assert.equal(state.activeThreadId, 'thread-room-a');
-    assert.equal(state.threadStates['thread-room-a']?.status, 'running');
-    assert.equal(state.threadStates['thread-room-a']?.activeTurnId, 'turn-room-a');
-    assert.equal(state.threadStates['thread-room-a']?.messages.at(-1)?.text, '房间 A 仍在运行');
-    assert.deepEqual(interruptCalls, []);
-  } finally {
-    restoreFactory();
-    await resetCodexWorkspaceForTests();
-  }
-});
 
 test('Promise.all 并发 startTask 时分别在各自线程启动 turn，且不会打断别的线程', async () => {
   const startTurnCalls: Array<{

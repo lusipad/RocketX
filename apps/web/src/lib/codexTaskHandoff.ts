@@ -12,7 +12,10 @@ export async function handoffToCodexTask(
 ): Promise<CodexTaskHandoffResult> {
   const prompt = text.trim();
   if (!prompt) throw new Error('任务内容不能为空');
-  useUI.getState().openButlerConversation('codex');
+  if (useUI.getState().aiRuntimeProvider !== 'codex') {
+    throw new Error('当前 AI 运行时不是 Codex');
+  }
+  useUI.getState().openButlerConversation();
 
   const workspace = useCodexWorkspace.getState();
   if (!workspace.workspaceRoot) {

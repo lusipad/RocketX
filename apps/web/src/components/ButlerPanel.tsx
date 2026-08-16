@@ -1,45 +1,31 @@
 import {
   ArrowUpRight,
-  Bot,
+  CircleAlert,
+  Copy,
   Loader2,
+  MessageCircle,
   MessageSquarePlus,
   SendHorizontal,
-  X,
+  Settings,
+  Square,
 } from 'lucide-react';
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from 'react';
-import { isTauriRuntime } from '../lib/client';
-import {
-  MAX_BUTLER_PANEL_WIDTH,
-  MIN_BUTLER_PANEL_WIDTH,
-  clampButlerPanelWidth,
-} from '../lib/imLayout';
-import { renderMarkdown } from '../lib/markdown';
+import { useEffect, useState } from 'react';
+import { getServerBase, isTauriRuntime } from '../lib/client';
+import { renderMarkdownDoc } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
-import { useCodexStreamingText } from '../lib/useCodexStreamingText';
+import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
-import { useImLayout } from '../stores/imLayout';
-import { useUI } from '../stores/ui';
+import { privateRoomDshKey, usePrivateRoomDsh } from '../stores/privateRoomDsh';
 import { toast } from '../stores/toast';
+import { useUI } from '../stores/ui';
 import ButlerSources from './ButlerSources';
 import { CodexGeneratedImages, CodexImageAttachments } from './CodexImagePicker';
+import DshQuestionCard from './DshQuestionCard';
+import PanelShell from './PanelShell';
 
 const ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1';
 const ROOM_MESSAGE_SEPARATOR = '\n\n<<<ROCKETX_ROOM_MESSAGE>>>\n';
-
-function roomName(
-  rid: string,
-  subscription: { fname?: string; name?: string } | undefined,
-  room: { fname?: string; name?: string } | undefined,
-): string {
-  return subscription?.fname || subscription?.name || room?.fname || room?.name || rid;
-}
 
 function roomThreadKey(scope: string, rid: string): string {
   return `${scope}:${rid}`;
@@ -72,18 +58,15 @@ function setRoomThreadId(scope: string, rid: string, threadId?: string): void {
 
 export async function prepareRoomWorkspace(): Promise<boolean> {
   const workspace = useCodexWorkspace.getState();
-  const defaultRoot = workspace.defaultWorkspaceRoot || await workspace.ensureDefaultWorkspace();
-  if (!defaultRoot) throw new Error('系统临时工作区尚未准备好');
+  await workspace.ensureDefaultWorkspace();
   const latest = useCodexWorkspace.getState();
-  if (latest.workspaceRoot !== defaultRoot) {
-    await latest.setWorkspaceRoot(defaultRoot, { reuseRuntime: true });
+  const root = latest.butlerWorkspaceRoot || latest.defaultWorkspaceRoot;
+  if (!root) throw new Error('系统管家工作区尚未准备好');
+  if (latest.workspaceRoot !== root) {
+    await latest.setWorkspaceRoot(root, { reuseRuntime: true });
   }
   const current = useCodexWorkspace.getState();
-  if (
-    current.status === 'idle'
-    || current.status === 'interrupted'
-    || current.status === 'unavailable'
-  ) {
+  if (['idle', 'interrupted', 'unavailable'].includes(current.status)) {
     await current.connect({ refreshThreads: false });
     return true;
   }
@@ -93,6 +76,7 @@ export async function prepareRoomWorkspace(): Promise<boolean> {
 function roomPrompt(roomTitle: string, rid: string, question: string): string {
   return [
     `请在 Rocket.Chat 房间「${roomTitle}」（rid: ${rid}）的语境中回答。`,
+    '这是当前用户的私人房间 AI 会话。不要把回答发送到房间，也不要假设其他成员能看到本会话。',
     '需要房间数据时使用对应 Skill 或 App 获取真实内容，不要猜测。',
     '事实性结论后用 [来源](工具返回的原始 link 或 webUrl) 标注；工具没有返回链接时不要编造。',
     ROOM_MESSAGE_SEPARATOR,
@@ -105,58 +89,82 @@ function visibleUserText(text: string): string {
   return marker >= 0 ? text.slice(marker + ROOM_MESSAGE_SEPARATOR.length).trim() : text;
 }
 
-/** 房间里的轻量 Codex 会话；普通聊天固定使用系统临时工作区。 */
-export default function ButlerPanel() {
-  const rid = useChat((state) => state.activeRid);
-  const subscription = useChat((state) => (
-    state.activeRid ? state.subscriptions[state.activeRid] : undefined
-  ));
-  const room = useChat((state) => (state.activeRid ? state.rooms[state.activeRid] : undefined));
-  const setPanel = useChat((state) => state.setPanel);
-  const scope = useCodexWorkspace((state) => state.scope);
-  const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+function PrivateNote() {
+  return <p className="mt-2 text-xs text-ink-3">仅你可见，不会向当前房间发送消息。</p>;
+}
+
+function ConversationCopyButton({
+  text,
+  speaker,
+  align,
+}: {
+  text: string;
+  speaker: string;
+  align: 'left' | 'right';
+}) {
+  const copy = async (): Promise<void> => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('系统剪贴板不可用');
+      await navigator.clipboard.writeText(text);
+      toast.success(`${speaker}消息已复制`);
+    } catch (reason) {
+      toast.error(reason, '复制失败');
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      aria-label={`复制${speaker}消息`}
+      title={`复制${speaker}消息`}
+      className={`absolute bottom-0 flex translate-y-full items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-3 opacity-0 transition-opacity hover:bg-fill-hover hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${align === 'right' ? 'right-0' : 'left-0'}`}
+    >
+      <Copy size={11} aria-hidden="true" /> 复制
+    </button>
+  );
+}
+
+function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
+  const desktopRuntime = isTauriRuntime();
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
-  const status = useCodexWorkspace((state) => state.status);
-  const messages = useCodexWorkspace((state) => state.messages);
-  const streamingText = useCodexStreamingText();
-  const pendingRequests = useCodexWorkspace((state) => state.pendingRequests);
-  const error = useCodexWorkspace((state) => state.error);
-  const savedWidth = useImLayout((state) => state.layout.butlerPanelWidth);
-  const setButlerPanelWidth = useImLayout((state) => state.setButlerPanelWidth);
-  const resetButlerPanelWidth = useImLayout((state) => state.resetButlerPanelWidth);
+  const globalStatus = useCodexWorkspace((state) => state.status);
+  const globalError = useCodexWorkspace((state) => state.error);
+  const globalMessages = useCodexWorkspace((state) => state.messages);
+  const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
+  const models = useCodexWorkspace((state) => state.models);
+  const selectedModel = useCodexWorkspace((state) => state.selectedModel);
+  const [threadId, setThreadId] = useState(() => roomThreadId(scope, rid));
+  const thread = useCodexWorkspace((state) => threadId ? state.threadStates[threadId] : undefined);
+  const messages = thread?.messages ?? (activeThreadId === threadId ? globalMessages : []);
+  const status = thread?.status ?? (activeThreadId === threadId ? globalStatus : 'connecting');
+  const streamingText = thread?.streamingText ?? '';
+  const pendingRequests = thread?.pendingRequests ?? [];
+  const runtimeError = thread?.error ?? (activeThreadId === threadId ? globalError : null);
+  const modelId = thread?.runtimeSelection?.model || selectedModel;
+  const modelLabel = models.find((model) => model.model === modelId || model.id === modelId)?.displayName
+    || modelId
+    || 'Codex';
   const [input, setInput] = useState('');
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [roomError, setRoomError] = useState<string>();
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const resizeStart = useRef<{
-    x: number;
-    width: number;
-    currentWidth: number;
-    moved: boolean;
-  } | null>(null);
-  const panelWidth = dragWidth ?? savedWidth;
-  const currentRoomName = useMemo(
-    () => rid ? roomName(rid, subscription, room) : '',
-    [rid, room, subscription],
-  );
+  const running = status === 'running' || status === 'waiting-input';
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     rid,
     messages,
     streamingText,
     pendingRequests,
   ]);
-  const desktopRuntime = isTauriRuntime();
-  const running = status === 'running' || status === 'waiting-input';
-  const savedRoomThreadId = rid && scope ? roomThreadId(scope, rid) : undefined;
-  const blockingRoomLoad = loadingRoom && (!savedRoomThreadId || activeThreadId !== savedRoomThreadId);
   const canCompose = desktopRuntime
     && !loadingRoom
     && !roomError
-    && Boolean(workspaceRoot)
+    && Boolean(butlerWorkspaceRoot || workspaceRoot)
     && !['idle', 'connecting', 'interrupted', 'external', 'unavailable'].includes(status);
 
   useEffect(() => {
-    if (!rid || !scope || !desktopRuntime) {
+    setThreadId(roomThreadId(scope, rid));
+    if (!scope || !desktopRuntime) {
       setLoadingRoom(false);
       return;
     }
@@ -168,7 +176,7 @@ export default function ButlerPanel() {
 
     void (async () => {
       try {
-        const savedThreadId = roomThreadId(scope, rid);
+        let savedThreadId = roomThreadId(scope, rid);
         const runtimeReconnected = await prepareRoomWorkspace();
         if (cancelled) return;
         if (savedThreadId) {
@@ -177,18 +185,18 @@ export default function ButlerPanel() {
             try {
               await current.resumeThread(savedThreadId);
             } catch (reason) {
-              if (cancelled) return;
               const detail = reason instanceof Error ? reason.message : String(reason);
-              if (!/not found|unknown thread|不存在|找不到/i.test(detail)) throw reason;
+              if (!/not found|unknown thread|不存在|找不到/iu.test(detail)) throw reason;
               setRoomThreadId(scope, rid);
-              const threadId = await useCodexWorkspace.getState().startThread(`${currentRoomName} · 对话`);
-              setRoomThreadId(scope, rid, threadId);
+              savedThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+              setRoomThreadId(scope, rid, savedThreadId);
             }
           }
         } else {
-          const threadId = await useCodexWorkspace.getState().startThread(`${currentRoomName} · 对话`);
-          setRoomThreadId(scope, rid, threadId);
+          savedThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+          setRoomThreadId(scope, rid, savedThreadId);
         }
+        if (!cancelled) setThreadId(savedThreadId);
       } catch (reason) {
         if (!cancelled) setRoomError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -206,12 +214,10 @@ export default function ButlerPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentRoomName, desktopRuntime, rid, scope, scrollRef, stickToBottom]);
+  }, [desktopRuntime, rid, roomName, scope, scrollRef, stickToBottom]);
 
-  if (!rid) return null;
-
-  const openTasks = (): void => {
-    setPanel(null);
+  const openFullConversation = (): void => {
+    useChat.getState().setPanel(null);
     useUI.getState().openButlerConversation();
   };
 
@@ -221,13 +227,14 @@ export default function ButlerPanel() {
     setRoomError(undefined);
     try {
       await prepareRoomWorkspace();
-      const threadId = await useCodexWorkspace.getState().startThread(`${currentRoomName} · 对话`);
-      setRoomThreadId(scope, rid, threadId);
+      const nextThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+      setRoomThreadId(scope, rid, nextThreadId);
+      setThreadId(nextThreadId);
       setInput('');
       stickToBottom.current = true;
     } catch (reason) {
       setRoomError(reason instanceof Error ? reason.message : String(reason));
-      toast.error(reason, '无法新建会话');
+      toast.error(reason, '无法新建私人房间 AI 会话');
     } finally {
       setLoadingRoom(false);
     }
@@ -240,155 +247,91 @@ export default function ButlerPanel() {
     setRoomError(undefined);
     stickToBottom.current = true;
     try {
-      let threadId = roomThreadId(scope, rid);
+      let currentThreadId = roomThreadId(scope, rid);
       const runtimeReconnected = await prepareRoomWorkspace();
       const workspace = useCodexWorkspace.getState();
-      if (!threadId) {
-        threadId = await workspace.startThread(`${currentRoomName} · 对话`);
-        setRoomThreadId(scope, rid, threadId);
-      } else if (runtimeReconnected || workspace.activeThreadId !== threadId) {
-        await workspace.resumeThread(threadId);
+      if (!currentThreadId) {
+        currentThreadId = await workspace.startThread(`${roomName} · 房间 AI`);
+        setRoomThreadId(scope, rid, currentThreadId);
+      } else if (runtimeReconnected || workspace.activeThreadId !== currentThreadId) {
+        await workspace.resumeThread(currentThreadId);
       }
-      const firstMessage = useCodexWorkspace.getState().messages.length === 0;
+      setThreadId(currentThreadId);
+      const currentMessages = useCodexWorkspace.getState().threadStates[currentThreadId]?.messages ?? [];
       await useCodexWorkspace.getState().send(
-        firstMessage ? roomPrompt(currentRoomName, rid, question) : question,
+        currentMessages.length === 0 ? roomPrompt(roomName, rid, question) : question,
       );
     } catch (reason) {
       setInput(question);
       setRoomError(reason instanceof Error ? reason.message : String(reason));
-      toast.error(reason, '消息没有发出');
+      toast.error(reason, '私人房间 AI 消息没有发出');
     }
   };
 
-  const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    resizeStart.current = {
-      x: event.clientX,
-      width: panelWidth,
-      currentWidth: panelWidth,
-      moved: false,
-    };
-    setDragWidth(panelWidth);
-  };
-
-  const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const start = resizeStart.current;
-    if (!start) return;
-    const next = clampButlerPanelWidth(start.width + start.x - event.clientX);
-    if (next !== start.width) start.moved = true;
-    start.currentWidth = next;
-    setDragWidth(next);
-  };
-
-  const finishResize = (): void => {
-    const start = resizeStart.current;
-    if (start?.moved) setButlerPanelWidth(start.currentWidth);
-    resizeStart.current = null;
-    setDragWidth(null);
-  };
-
   return (
-    <aside
-      id="room-butler-panel"
-      role="dialog"
-      aria-modal="false"
-      aria-label="房间 Codex 会话"
-      style={{ width: `min(${panelWidth}px, calc(100% - 1.5rem))` }}
-      className="absolute top-4 right-3 bottom-28 z-30 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-surface shadow-[0_24px_64px_-24px_rgba(0,0,0,0.78),0_8px_20px_-12px_rgba(0,0,0,0.55)]"
-    >
-      <div
-        role="separator"
-        aria-label="调整房间 Codex 会话宽度"
-        aria-orientation="vertical"
-        aria-valuemin={MIN_BUTLER_PANEL_WIDTH}
-        aria-valuemax={MAX_BUTLER_PANEL_WIDTH}
-        aria-valuenow={panelWidth}
-        tabIndex={0}
-        title="拖动调整宽度，双击恢复默认"
-        onDoubleClick={resetButlerPanelWidth}
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={finishResize}
-        onPointerCancel={finishResize}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-            event.preventDefault();
-            setButlerPanelWidth(panelWidth + (event.key === 'ArrowLeft' ? 10 : -10));
-          } else if (event.key === 'Home') {
-            event.preventDefault();
-            resetButlerPanelWidth();
-          }
-        }}
-        style={{ touchAction: 'none' }}
-        className="group absolute inset-y-0 left-0 z-10 flex w-2 cursor-col-resize items-stretch justify-center outline-none"
-      >
-        <span className="my-auto h-10 w-px rounded-full bg-line-strong transition-colors group-hover:bg-primary group-focus:bg-primary" />
-      </div>
-
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-4 py-3.5">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-light text-primary">
-            <Bot size={18} aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-ink">在 Codex 中处理</h2>
-            <p className="truncate text-xs text-ink-3">{currentRoomName}</p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 border-b border-line-soft bg-fill-1 px-4 py-2.5 text-xs">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={openFullConversation}
+              aria-label="设置 Codex 模型与权限"
+              title="在 AI 管家中设置当前 Codex 会话的模型、推理强度和权限"
+              className="flex min-w-0 max-w-40 items-center gap-1 rounded bg-surface px-2 py-0.5 text-ink-2 hover:bg-fill-hover"
+            >
+              <Settings size={11} className="shrink-0" aria-hidden="true" />
+              <span className="truncate">{modelLabel}</span>
+            </button>
+            <span className="shrink-0 whitespace-nowrap rounded bg-surface px-2 py-0.5 text-ink-2">私人会话</span>
           </div>
-        </div>
-        <div className="flex items-center gap-1">
           <button
             type="button"
             disabled={loadingRoom || running}
             onClick={() => void newConversation()}
-            aria-label="新建房间会话"
-            title={running ? '当前任务完成后再新建会话' : '新会话，不带入当前上下文'}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="新建私人房间 AI 会话"
+            title={running ? '当前回复完成后再新建会话' : '新建私人会话'}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <MessageSquarePlus size={17} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setPanel(null)}
-            aria-label="关闭房间会话"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
-          >
-            <X size={17} aria-hidden="true" />
+            <MessageSquarePlus size={14} aria-hidden="true" />
           </button>
         </div>
-      </header>
+        <div className="mt-1.5 truncate text-ink-3" title={butlerWorkspaceRoot || workspaceRoot}>
+          {butlerWorkspaceRoot || workspaceRoot || '系统管家目录'}
+        </div>
+      </div>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {blockingRoomLoad ? (
+        {loadingRoom ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            正在接回房间会话
+            正在接回私人房间会话
           </div>
         ) : !desktopRuntime ? (
           <div className="rounded-xl border border-line bg-fill-1 p-4 text-sm leading-6 text-ink-2">
-            网页版可以继续使用聊天，但本地 Codex 会话需要 RocketX 桌面端。
+            私人房间 AI 需要 RocketX 桌面端。
           </div>
         ) : messages.length === 0 && !streamingText && !running ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-light text-primary">
-              <Bot size={21} aria-hidden="true" />
+              <MessageCircle size={21} aria-hidden="true" />
             </span>
-            <h3 className="mt-3 text-sm font-semibold text-ink">直接在这里继续</h3>
+            <h3 className="mt-3 text-sm font-semibold text-ink">和房间 AI 私下聊聊</h3>
             <p className="mt-1 max-w-72 text-xs leading-5 text-ink-3">
-              当前房间使用系统临时工作区。Codex 会在这个会话里保留上下文；需要清空时点击右上角的新会话按钮。
+              会话使用你的系统管家目录，其他房间成员看不到这里的内容。
             </p>
           </div>
         ) : (
           <div className="codex-native-transcript-inner" aria-live="polite">
             {messages.map((entry) => (
-              <article key={entry.id} data-speaker={entry.role} className="codex-native-message">
+              <article key={entry.id} data-speaker={entry.role} className="codex-native-message group relative">
                 <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
                 <div className="butler-conversation-markdown">
                   {entry.text
                     ? entry.role === 'assistant'
                       ? (
                           <ButlerSources sources={entry.sources} text={entry.text}>
-                            {(renderLink) => renderMarkdown(entry.text, undefined, renderLink)}
+                            {(renderLink) => renderMarkdownDoc(entry.text, undefined, renderLink)}
                           </ButlerSources>
                         )
                       : visibleUserText(entry.text)
@@ -396,6 +339,13 @@ export default function ButlerPanel() {
                   <CodexImageAttachments attachments={entry.attachments} />
                   <CodexGeneratedImages images={entry.generatedImages} />
                 </div>
+                {entry.text ? (
+                  <ConversationCopyButton
+                    text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
+                    speaker={entry.role === 'assistant' ? 'Codex' : '你的'}
+                    align={entry.role === 'user' ? 'right' : 'left'}
+                  />
+                ) : null}
               </article>
             ))}
             {streamingText ? (
@@ -416,63 +366,395 @@ export default function ButlerPanel() {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-line-soft bg-surface px-4 pt-3 pb-4">
+      <div className="shrink-0 border-t border-line-soft bg-surface px-4 py-3">
         {pendingRequests.length > 0 ? (
           <button
             type="button"
-            onClick={openTasks}
+            onClick={openFullConversation}
             className="mb-3 flex w-full items-center justify-between rounded-lg border border-warning/30 bg-warning-light px-3 py-2 text-left text-xs text-ink-2"
           >
             <span>Codex 正在等待你处理 {pendingRequests.length} 项确认</span>
             <ArrowUpRight size={14} aria-hidden="true" />
           </button>
         ) : null}
-        {roomError || error ? (
-          <p className="mb-2 text-xs leading-5 text-danger" role="alert">{roomError || error}</p>
+        {roomError || runtimeError ? (
+          <p className="mb-2 text-xs leading-5 text-danger" role="alert">{roomError || runtimeError}</p>
         ) : null}
-        <div className="mb-2 flex items-center justify-between gap-3 text-xs text-ink-3">
-          <span className="min-w-0 truncate" title={workspaceRoot || undefined}>
-            {workspaceRoot ? `临时工作区：${workspaceRoot}` : '临时工作区尚未准备好'}
-          </span>
-          <button type="button" onClick={openTasks} className="shrink-0 text-primary hover:text-primary-hover">
-            查看完整任务
-          </button>
-        </div>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit();
-          }}
-          className="rounded-xl border border-line bg-fill-2 p-2 shadow-sm"
-        >
-          <textarea
-            data-composer-input
-            value={input}
-            disabled={!canCompose}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+        <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <div className="flex items-end gap-2 rounded-xl border border-line bg-fill-2 p-2 focus-within:border-primary">
+            <textarea
+              data-composer-input
+              value={input}
+              disabled={!canCompose}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
                 event.preventDefault();
                 void submit();
-              }
-            }}
-            rows={2}
-            placeholder={running ? '输入后续要求，立即调整当前任务' : '在这个会话里继续提问'}
-            className="max-h-32 w-full resize-none bg-transparent px-1 py-1.5 text-sm leading-6 outline-none placeholder:text-ink-3 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <div className="flex justify-end">
+              }}
+              aria-label="发送给私人房间 AI"
+              placeholder={running ? '输入后续要求，调整当前回答…' : '给你的房间 AI 发消息…'}
+              rows={1}
+              autoFocus
+              className="min-h-8 max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-5 text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
+            />
             <button
               type="submit"
-              disabled={!input.trim() || !canCompose}
-              aria-label="发送到房间 Codex 会话"
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!canCompose || !input.trim()}
+              aria-label="发送到私人房间 AI"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <SendHorizontal size={14} aria-hidden="true" />
-              发送
+              <SendHorizontal size={15} aria-hidden="true" />
             </button>
           </div>
+          <PrivateNote />
         </form>
       </div>
-    </aside>
+    </div>
+  );
+}
+
+function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
+  const desktopRuntime = isTauriRuntime();
+  const ensureDefaultWorkspace = useCodexWorkspace((state) => state.ensureDefaultWorkspace);
+  const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
+  const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
+  const key = privateRoomDshKey(scope, rid);
+  const session = usePrivateRoomDsh((state) => state.sessions[key]);
+  const openRoom = usePrivateRoomDsh((state) => state.openRoom);
+  const newRoomSession = usePrivateRoomDsh((state) => state.newRoomSession);
+  const prompt = usePrivateRoomDsh((state) => state.prompt);
+  const cancel = usePrivateRoomDsh((state) => state.cancel);
+  const respondApproval = usePrivateRoomDsh((state) => state.respondApproval);
+  const respondQuestion = usePrivateRoomDsh((state) => state.respondQuestion);
+  const [input, setInput] = useState('');
+  const [opening, setOpening] = useState(true);
+  const workspaceRoot = butlerWorkspaceRoot || defaultWorkspaceRoot;
+  const running = session?.status === 'running' || session?.status === 'waiting-input';
+  const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
+    rid,
+    session?.transcript.messages,
+    session?.approvals,
+    session?.questions,
+    session?.status,
+  ]);
+
+  const prepare = async (): Promise<string> => {
+    await ensureDefaultWorkspace();
+    const latest = useCodexWorkspace.getState();
+    const root = latest.butlerWorkspaceRoot || latest.defaultWorkspaceRoot;
+    if (!root) throw new Error('系统管家工作区尚未准备好');
+    return root;
+  };
+
+  useEffect(() => {
+    if (!scope || !desktopRuntime) {
+      setOpening(false);
+      return;
+    }
+    let cancelled = false;
+    setOpening(true);
+    setInput('');
+    void prepare()
+      .then((root) => openRoom({ scope, rid, workspaceRoot: root }))
+      .catch((reason) => {
+        if (!cancelled) toast.error(reason, '无法打开私人 DeepSeek 会话');
+      })
+      .finally(() => {
+        if (!cancelled) setOpening(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopRuntime, openRoom, rid, scope]);
+
+  const createConversation = async (): Promise<void> => {
+    if (running) return;
+    setOpening(true);
+    try {
+      const root = await prepare();
+      await newRoomSession({ scope, rid, workspaceRoot: root });
+      setInput('');
+      stickToBottom.current = true;
+    } catch (reason) {
+      toast.error(reason, '无法新建私人 DeepSeek 会话');
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const submit = async (): Promise<void> => {
+    const question = input.trim();
+    if (!question || !session?.dshSessionId || running) return;
+    setInput('');
+    stickToBottom.current = true;
+    try {
+      const firstMessage = session.transcript.messages.every((message) => message.role !== 'user');
+      await prompt(key, firstMessage ? roomPrompt(roomName, rid, question) : question);
+    } catch (reason) {
+      setInput(question);
+      toast.error(reason, '私人房间 AI 消息没有发出');
+    }
+  };
+
+  const openNativeConversation = (): void => {
+    if (!session?.dshSessionId) return;
+    useChat.getState().setPanel(null);
+    useUI.getState().openPersonalDshConversation(session.dshSessionId);
+  };
+
+  const retry = async (): Promise<void> => {
+    setOpening(true);
+    try {
+      const root = await prepare();
+      await openRoom({ scope, rid, workspaceRoot: root });
+    } catch (reason) {
+      toast.error(reason, '无法重新连接私人 DeepSeek 会话');
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const activeActivity = session?.transcript.activities.find((activity) => activity.status === 'running');
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 border-b border-line-soft bg-fill-1 px-4 py-2.5 text-xs">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={!session?.dshSessionId}
+              onClick={openNativeConversation}
+              aria-label="设置 DeepSeek 模型与 Agent"
+              title="在 DSH 中设置当前私人会话的模型、Agent 和权限"
+              className="flex min-w-0 items-center gap-1 rounded bg-surface px-2 py-0.5 text-ink-2 hover:bg-fill-hover disabled:opacity-40"
+            >
+              <Settings size={11} className="shrink-0" aria-hidden="true" /> DeepSeek
+            </button>
+            <span className="shrink-0 whitespace-nowrap rounded bg-surface px-2 py-0.5 text-ink-2">私人会话</span>
+          </div>
+          <button
+            type="button"
+            disabled={opening || running}
+            onClick={() => void createConversation()}
+            aria-label="新建私人 DeepSeek 会话"
+            title={running ? '当前回复完成后再新建会话' : '新建私人会话'}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <MessageSquarePlus size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="mt-1.5 truncate text-ink-3" title={session?.workspaceRoot || workspaceRoot}>
+          {session?.workspaceRoot || workspaceRoot || '系统管家目录'}
+        </div>
+      </div>
+
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        {opening || session?.status === 'connecting' ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-ink-3">
+            <Loader2 size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            正在接回私人 DeepSeek 会话
+          </div>
+        ) : !desktopRuntime ? (
+          <div className="rounded-xl border border-line bg-fill-1 p-4 text-sm leading-6 text-ink-2">
+            私人房间 AI 需要 RocketX 桌面端。
+          </div>
+        ) : session?.status === 'error' ? (
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <CircleAlert size={22} className="text-danger" aria-hidden="true" />
+            <h3 className="mt-3 text-sm font-semibold text-ink">私人 DeepSeek 会话连接失败</h3>
+            <p className="mt-1 max-w-sm text-xs leading-5 text-danger">{session.error}</p>
+            <button
+              type="button"
+              onClick={() => void retry()}
+              className="mt-3 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
+            >
+              重试
+            </button>
+          </div>
+        ) : !session || session.transcript.messages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center px-4 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-light text-primary">
+              <MessageCircle size={21} aria-hidden="true" />
+            </span>
+            <h3 className="mt-3 text-sm font-semibold text-ink">和房间 AI 私下聊聊</h3>
+            <p className="mt-1 max-w-72 text-xs leading-5 text-ink-3">
+              使用 DSH 当前模型、Agent 和权限；其他房间成员看不到这里的内容。
+            </p>
+          </div>
+        ) : (
+          <div className="codex-native-transcript-inner" aria-live="polite">
+            {session.transcript.messages.map((entry) => (
+              <article key={entry.id} data-speaker={entry.role} className={`codex-native-message group relative ${entry.streaming ? 'is-streaming' : ''}`}>
+                <span>{entry.role === 'assistant' ? 'DeepSeek' : entry.role === 'user' ? '你' : '系统'}</span>
+                <div className="butler-conversation-markdown">
+                  {entry.role === 'assistant' && !entry.streaming
+                    ? renderMarkdownDoc(entry.text)
+                    : entry.role === 'user'
+                      ? visibleUserText(entry.text)
+                      : entry.text}
+                </div>
+                {entry.text && !entry.streaming && entry.role !== 'system' ? (
+                  <ConversationCopyButton
+                    text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
+                    speaker={entry.role === 'assistant' ? 'DeepSeek' : '你的'}
+                    align={entry.role === 'user' ? 'right' : 'left'}
+                  />
+                ) : null}
+              </article>
+            ))}
+            {running && !session.transcript.messages.some((entry) => entry.streaming) ? (
+              <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
+                <span>DeepSeek</span>
+                <div className="flex items-center gap-2 text-ink-3">
+                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  {activeActivity?.title || 'DeepSeek 正在思考…'}
+                </div>
+              </article>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      {session?.status === 'waiting-input' ? (
+        <>
+          {session.approvals.map((approval) => (
+            <div key={approval.approvalId} className="mx-4 mb-2 rounded-lg border border-warning/30 bg-warning-light p-3 text-xs text-ink-2">
+              <strong className="block text-ink">DeepSeek 请求执行：{approval.toolName}</strong>
+              {approval.reason ? <p className="mt-1 leading-5">{approval.reason}</p> : null}
+              <div className="mt-2 flex justify-end gap-2">
+                <button type="button" onClick={() => void respondApproval(key, approval.approvalId, false)} className="rounded border border-line px-2.5 py-1 hover:bg-fill-hover">拒绝</button>
+                <button type="button" onClick={() => void respondApproval(key, approval.approvalId, true)} className="rounded bg-primary px-2.5 py-1 text-white hover:bg-primary-hover">允许</button>
+              </div>
+            </div>
+          ))}
+          {session.questions.map((question) => (
+            <div key={question.rpcId} className="mx-4 mb-2">
+              <DshQuestionCard
+                question={question}
+                respondQuestion={(answers) => respondQuestion(key, question.rpcId, answers)}
+              />
+            </div>
+          ))}
+        </>
+      ) : null}
+
+      <div className="shrink-0 border-t border-line-soft bg-surface px-4 py-3">
+        <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <div className="flex items-end gap-2 rounded-xl border border-line bg-fill-2 p-2 focus-within:border-primary">
+            <textarea
+              data-composer-input
+              value={input}
+              disabled={!session?.dshSessionId || session.status === 'connecting' || session.status === 'error' || running}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                void submit();
+              }}
+              aria-label="发送给私人房间 AI"
+              placeholder={running ? 'DeepSeek 正在处理当前消息…' : '给你的房间 AI 发消息…'}
+              rows={1}
+              autoFocus
+              className="min-h-8 max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-5 text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
+            />
+            {running && session?.status !== 'waiting-input' ? (
+              <button
+                type="button"
+                onClick={() => void cancel(key).catch((reason) => toast.error(reason, '无法停止 DeepSeek'))}
+                aria-label="停止私人房间 AI"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-danger text-white hover:opacity-90"
+              >
+                <Square size={13} fill="currentColor" aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!session?.dshSessionId || running || !input.trim()}
+                aria-label="发送到私人房间 AI"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <SendHorizontal size={15} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          <PrivateNote />
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function DisabledRoomConversation() {
+  const setModule = useUI((state) => state.setModule);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+      <CircleAlert size={23} className="text-ink-3" aria-hidden="true" />
+      <h3 className="mt-3 text-sm font-semibold text-ink">当前未启用 AI</h3>
+      <p className="mt-1 max-w-sm text-xs leading-5 text-ink-3">
+        私人房间 AI 暂不可发送；已有 Codex 和 DSH 私人会话不会被删除，共享 AI 托管也不会因此变成私人会话。
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          useChat.getState().setPanel(null);
+          setModule('settings');
+        }}
+        className="mt-3 flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
+      >
+        <Settings size={14} aria-hidden="true" /> AI 设置
+      </button>
+    </div>
+  );
+}
+
+export default function ButlerPanel() {
+  const rid = useChat((state) => state.activeRid);
+  const room = useChat((state) => (state.activeRid ? state.rooms[state.activeRid] : undefined));
+  const subscription = useChat((state) => (
+    state.activeRid ? state.subscriptions[state.activeRid] : undefined
+  ));
+  const userId = useAuth((state) => state.user?._id);
+  const runtimeScope = useCodexWorkspace((state) => state.scope);
+  const provider = useUI((state) => state.aiRuntimeProvider);
+  const scope = userId ? `${getServerBase() || 'same-origin'}:${userId}` : '';
+  const name = rid
+    ? subscription?.fname || subscription?.name || room?.fname || room?.name || rid
+    : '';
+
+  useEffect(() => {
+    if (!scope || runtimeScope === scope) return;
+    useCodexWorkspace.getState().hydrate(scope);
+  }, [runtimeScope, scope]);
+
+  if (!rid) return null;
+
+  return (
+    <div
+      id="room-butler-panel"
+      role="dialog"
+      aria-modal="false"
+      aria-label="私人房间 AI 对话"
+      className="absolute top-4 right-3 bottom-28 left-3 z-30 flex justify-end overflow-hidden rounded-xl shadow-[0_24px_64px_-24px_rgba(0,0,0,0.78)]"
+    >
+      <PanelShell
+        resizable
+        title={(
+          <span className="flex min-w-0 items-center gap-2">
+            <MessageCircle size={17} className="shrink-0 text-primary" aria-hidden="true" />
+            <span className="truncate">房间 AI · {name}</span>
+          </span>
+        )}
+      >
+        {!scope || provider === 'none' ? (
+          <DisabledRoomConversation />
+        ) : provider === 'deepseek' ? (
+          <DeepSeekRoomConversation rid={rid} roomName={name} scope={scope} />
+        ) : (
+          <CodexRoomConversation rid={rid} roomName={name} scope={scope} />
+        )}
+      </PanelShell>
+    </div>
   );
 }

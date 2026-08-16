@@ -11,6 +11,7 @@ import type { RcMessage } from '@rcx/rc-client';
 import type { HostedDshControllerOptions } from '../../apps/web/src/agent/dsh/HostedDshController';
 
 const values = new Map<string, string>();
+values.set('rocketx.butler.task-provider', 'codex');
 let restoreAgentSessionAppData: (() => void) | undefined;
 const storage: Storage = {
   get length() {
@@ -35,6 +36,8 @@ test.afterEach(async () => {
   }
   restoreAgentSessionAppData?.();
   restoreAgentSessionAppData = undefined;
+  const { resetAiRuntimeProviderForTests } = await import('../../apps/web/src/lib/runtimeMode');
+  resetAiRuntimeProviderForTests('codex');
 });
 
 function ensureTauriWindow(): void {
@@ -52,14 +55,15 @@ function ensureTauriWindow(): void {
 
 async function loadModules() {
   ensureTauriWindow();
-  const [{ useAuth }, sharedAgent, sessionStore, clientModule, codexWorkspace] = await Promise.all([
+  const [{ useAuth }, sharedAgent, sessionStore, clientModule, codexWorkspace, runtimeMode] = await Promise.all([
     import('../../apps/web/src/stores/auth'),
     import('../../apps/web/src/stores/sharedAgent'),
     import('../../apps/web/src/agent/sessionStore'),
     import('../../apps/web/src/lib/client'),
     import('../../apps/web/src/stores/codexWorkspace'),
+    import('../../apps/web/src/lib/runtimeMode'),
   ]);
-  return { useAuth, ...sharedAgent, ...sessionStore, clientModule, ...codexWorkspace };
+  return { useAuth, ...sharedAgent, ...sessionStore, clientModule, ...codexWorkspace, ...runtimeMode };
 }
 
 type SharedAgentModules = Awaited<ReturnType<typeof loadModules>>;
@@ -314,9 +318,9 @@ async function prepareStore(sessions: AgentSession[]) {
   return { useAuth, useSharedAgent };
 }
 
-const DEFAULT_HOSTING_RUNTIME = {
-  hostingModel: 'gpt-test',
-  hostingEffort: 'high',
+const DEFAULT_RUNTIME_SELECTION = {
+  selectedModel: 'gpt-test',
+  selectedEffort: 'high',
   permissionPreset: 'auto' as const,
 };
 
@@ -330,12 +334,12 @@ interface SharedThreadHarness {
   restoreFactory: () => void;
 }
 
-function setHostingRuntime(
+function setRuntimeSelection(
   useCodexWorkspace: SharedAgentModules['useCodexWorkspace'],
-  overrides: Partial<typeof DEFAULT_HOSTING_RUNTIME> = {},
+  overrides: Partial<typeof DEFAULT_RUNTIME_SELECTION> = {},
 ): void {
   useCodexWorkspace.setState({
-    ...DEFAULT_HOSTING_RUNTIME,
+    ...DEFAULT_RUNTIME_SELECTION,
     ...overrides,
   });
 }
@@ -354,6 +358,94 @@ function installInvokeRecorder(): BotInvocation[] {
   return invocations;
 }
 
+test('另一设备的托管租约仍有效时不会为同一 session key 重复启动', { concurrency: false }, async () => {
+  const { useSharedAgent } = await prepareStore([]);
+  const tmid = 'room:shared-room';
+  useSharedAgent.setState({
+    remoteCards: {
+      [tmid]: {
+        version: 1,
+        sessionId: 'remote-session',
+        rid: 'shared-room',
+        tmid,
+        hostUserId: 'other-user',
+        hostUsername: 'alice',
+        hostDeviceId: 'other-device',
+        leaseExpiresAt: Date.now() + 60_000,
+        status: 'interrupted',
+      },
+    },
+  });
+
+  await assert.rejects(
+    useSharedAgent.getState().startSession('shared-room', tmid, { workspaceRoot: 'D:/Repos/example' }),
+    /由 @alice 的另一台设备托管/,
+  );
+  assert.equal(useSharedAgent.getState().sessions[tmid], undefined);
+});
+
+test('有效远端租约会阻止本机旧会话自动恢复或处理同一条 @ai 指令', { concurrency: false }, async () => {
+  const tmid = 'remote-authoritative-session';
+  const local = interruptedSession(tmid);
+  const { useSharedAgent } = await prepareStore([local]);
+  useSharedAgent.setState({
+    remoteCards: {
+      [tmid]: {
+        version: 1,
+        sessionId: 'remote-authoritative',
+        rid: local.rid,
+        tmid,
+        hostUserId: 'other-user',
+        hostUsername: 'alice',
+        hostDeviceId: 'other-device',
+        leaseExpiresAt: Date.now() + 60_000,
+        status: 'active',
+      },
+    },
+  });
+
+  await assert.rejects(
+    useSharedAgent.getState().resumeSession(tmid),
+    /由 @alice 的另一台设备托管/,
+  );
+  await useSharedAgent.getState().handleMessage(
+    commandMessage(tmid, local.host.userId, 'host', 'remote-authoritative-command'),
+  );
+  assert.equal(useSharedAgent.getState().sessions[tmid]?.status, 'interrupted');
+  assert.deepEqual(useSharedAgent.getState().traces[tmid] ?? [], []);
+});
+
+test('并发有效宿主声明使用稳定仲裁，失败方不会执行同一条 @ai 指令', { concurrency: false }, async () => {
+  const tmid = 'concurrent-host-claims';
+  const local = readySession(tmid);
+  const { useSharedAgent } = await prepareStore([local]);
+  useSharedAgent.setState({
+    remoteCards: {
+      [tmid]: {
+        version: 1,
+        sessionId: 'remote-concurrent-session',
+        rid: local.rid,
+        tmid,
+        hostUserId: 'other-user',
+        hostUsername: 'alice',
+        hostDeviceId: '000-remote-device',
+        leaseExpiresAt: Date.now() + 60_000,
+        status: 'active',
+      },
+    },
+  });
+
+  await assert.rejects(
+    useSharedAgent.getState().resumeSession(tmid),
+    /由 @alice 的另一台设备托管/,
+  );
+  await useSharedAgent.getState().handleMessage(
+    commandMessage(tmid, local.host.userId, 'host', 'concurrent-host-command'),
+  );
+  assert.equal(useSharedAgent.getState().sessions[tmid]?.status, 'ready');
+  assert.deepEqual(useSharedAgent.getState().traces[tmid] ?? [], []);
+});
+
 async function setupSharedThreadHarness(
   first: AgentSession,
   second: AgentSession,
@@ -361,7 +453,7 @@ async function setupSharedThreadHarness(
 ): Promise<SharedThreadHarness> {
   const { useSharedAgent, setSharedAgentControllerFactory, useCodexWorkspace } = await loadModules();
   await prepareStore([first, second]);
-  setHostingRuntime(useCodexWorkspace);
+  setRuntimeSelection(useCodexWorkspace);
   const states: FakeClientState[] = [];
   const restoreFactory = setSharedAgentControllerFactory((options) => {
     const built = fakeController(options, request);
@@ -450,15 +542,71 @@ test('AI 托管拒绝临时会话和管家系统目录', { concurrency: false },
   );
 });
 
+test('AI 托管拒绝绕过当前启动运行时选择另一后端', { concurrency: false }, async () => {
+  const {
+    useSharedAgent,
+    useCodexWorkspace,
+    resetAiRuntimeProviderForTests,
+  } = await loadModules();
+  resetAiRuntimeProviderForTests('codex');
+  await prepareStore([]);
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+  });
+
+  await assert.rejects(
+    useSharedAgent.getState().startSession('room-runtime', 'thread-runtime', {
+      backend: 'deepseek',
+      workspaceRoot: 'D:/Repos/example',
+    }),
+    /AI 托管必须使用当前启动的 AI 运行时/,
+  );
+  assert.equal(useSharedAgent.getState().sessions['thread-runtime'], undefined);
+});
+
+test('无 AI 或切换引擎后恢复仍保留原托管 session，只禁用执行', { concurrency: false }, async () => {
+  const saved = readySession('provider-neutral-restore', {
+    backend: 'codex',
+    roomNameSnapshot: '研发群',
+    currentTaskLabel: '检查发布门禁',
+  });
+  const {
+    useAuth,
+    useSharedAgent,
+    saveAgentSession,
+    resetAiRuntimeProviderForTests,
+  } = await loadModules();
+  await prepareStore([]);
+  await saveAgentSession(saved, saved.ownerUserId);
+
+  for (const provider of ['none', 'deepseek'] as const) {
+    resetAiRuntimeProviderForTests(provider);
+    useAuth.setState({ user: undefined });
+    await useSharedAgent.getState().restore();
+    useAuth.setState({ user: { _id: 'host-user', username: 'host' } as never });
+    await useSharedAgent.getState().restore();
+
+    const restored = useSharedAgent.getState().sessions[saved.tmid];
+    assert.ok(restored, `${provider} 不应隐藏已有托管 session`);
+    assert.equal(restored.status, 'interrupted', `${provider} 不应把托管 session 改成 ended`);
+    assert.equal(restored.roomNameSnapshot, '研发群');
+    assert.equal(restored.currentTaskLabel, '检查发布门禁');
+    await assert.rejects(
+      useSharedAgent.getState().resumeSession(saved.tmid),
+      /另一套 AI 运行时/,
+    );
+  }
+});
+
 test('AI 托管恢复会话时使用独立模型与推理强度，权限仍跟随管家', { concurrency: false }, async () => {
   const target = interruptedSession('hosting-profile');
   const { useSharedAgent, useCodexWorkspace, setSharedAgentControllerFactory } = await loadModules();
   await prepareStore([target]);
   useCodexWorkspace.setState({
     selectedModel: 'gpt-test',
-    selectedEffort: 'medium',
-    hostingModel: 'gpt-hosting',
-    hostingEffort: 'high',
+    selectedEffort: 'high',
     permissionPreset: 'auto',
   });
   let fake!: FakeClientState;
@@ -471,7 +619,7 @@ test('AI 托管恢复会话时使用独立模型与推理强度，权限仍跟�
   try {
     await useSharedAgent.getState().resumeSession(target.tmid);
     assert.deepEqual(fake.selections.at(-1), {
-      model: 'gpt-hosting',
+      model: 'gpt-test',
       effort: 'high',
       permissionPreset: 'auto',
     });
@@ -537,7 +685,11 @@ test('AI 托管在执行期间先向房间发送持续可见的思考反馈', { 
     const handling = useSharedAgent.getState().handleMessage(
       commandMessage(target.tmid, target.host.userId, 'host'),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => fake?.calls.includes('startTurn') === true);
+    assert.equal(
+      useSharedAgent.getState().sessions[target.tmid]?.currentTaskLabel,
+      '请检查当前进度',
+    );
     assert.equal(
       invocations.some((entry) => entry.command === 'agent_bot_send'
         && entry.args?.text === '🤖 Codex 已收到，正在思考…'),
@@ -548,6 +700,7 @@ test('AI 托管在执行期间先向房间发送持续可见的思考反馈', { 
       turn: { id: 'turn-thinking-feedback', status: 'completed' },
     });
     await handling;
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.currentTaskLabel, undefined);
   } finally {
     restoreFactory();
   }
@@ -733,7 +886,8 @@ test('共享 Agent 失败后再次显式恢复成功，不会自动重放旧 tur
 });
 
 test('DeepSeek AI 托管沿用房间队列，并把审批和问题交给宿主', { concurrency: false }, async () => {
-  const { useSharedAgent, setSharedAgentDshControllerFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentDshControllerFactory, resetAiRuntimeProviderForTests } = await loadModules();
+  resetAiRuntimeProviderForTests('deepseek');
   const target = readySession('deepseek-hosted', {
     backend: 'deepseek',
     codexThreadId: undefined,
@@ -752,6 +906,7 @@ test('DeepSeek AI 托管沿用房间队列，并把审批和问题交给宿主',
       connect: async () => { calls.push('connect'); },
       createSession: async () => 'unused',
       resumeSession: async () => { calls.push('resume'); },
+      attachmentLeaseId: () => 'lease-hosted',
       prompt: async (sessionId, prompt) => {
         calls.push(`prompt:${sessionId}`);
         assert.match(prompt, /检查当前进度/);
@@ -851,11 +1006,323 @@ test('DeepSeek AI 托管沿用房间队列，并把审批和问题交给宿主',
   }
 });
 
-test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { concurrency: false }, async () => {
+test('AI 托管只读视图从 Codex Harness 的原线程读取自然对话，不恢复或新建线程', { concurrency: false }, async () => {
+  const target = readySession('harness-transcript-codex');
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  const calls: string[] = [];
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async () => ({ id: target.codexThreadId! }));
+    return {
+      ...built.controller,
+      connect: async (sessionId: string, workspaceRoot: string) => {
+        calls.push(`connect:${sessionId}:${workspaceRoot}`);
+        return built.controller.connect(sessionId, workspaceRoot);
+      },
+      readThread: async (threadId: string) => {
+        calls.push(`readThread:${threadId}`);
+        return {
+          thread: { id: threadId },
+          turns: [{
+            id: 'turn-harness-history',
+            itemsView: 'full',
+            status: 'completed',
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1_000,
+            items: [{
+              type: 'userMessage',
+              id: 'harness-user',
+              content: [{
+                type: 'text',
+                text: '触发者: 张三 (user-zhang)\n<rocket_chat_untrusted_context>历史消息</rocket_chat_untrusted_context>\n<rocket_chat_user_request>\n请检查发布门禁\n</rocket_chat_user_request>',
+                text_elements: [],
+              }],
+            }, {
+              type: 'agentMessage',
+              id: 'harness-assistant',
+              text: '发布门禁已经通过。',
+              phase: 'final_answer',
+            }],
+          }],
+        };
+      },
+    } as never;
+  });
+
+  try {
+    const transcript = await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.deepEqual(transcript.map((message) => ({ role: message.role, text: message.text })), [
+      { role: 'user', text: '请检查发布门禁' },
+      { role: 'assistant', text: '发布门禁已经通过。' },
+    ]);
+    assert.equal(transcript[0]?.speaker, '张三');
+    assert.deepEqual(calls, [
+      `connect:${target.sessionId}:${target.workspaceRoots[0]}`,
+      `readThread:${target.codexThreadId}`,
+    ]);
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('读取已结束 Harness 历史后释放 reader，同 key 新会话不会复用旧 controller', { concurrency: false }, async () => {
+  const target = readySession('ended-harness-reader', { status: 'ended' });
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  const states: FakeClientState[] = [];
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async () => ({ id: 'unused' }));
+    states.push(built.state);
+    return {
+      ...built.controller,
+      readThread: async (threadId: string) => ({ thread: { id: threadId }, turns: [] }),
+    } as never;
+  });
+
+  try {
+    await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.equal(states.length, 1);
+    assert.equal(states[0].stopped, true);
+
+    const replacement = readySession(target.tmid, {
+      sessionId: 'replacement-session',
+      codexThreadId: 'replacement-thread',
+      workspaceRoots: ['D:/Repos/replacement'],
+    });
+    useSharedAgent.setState((state) => ({
+      sessions: { ...state.sessions, [target.tmid]: replacement },
+    }));
+    await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.equal(states.length, 2);
+    assert.equal(states[1].connectedSessionId, 'replacement-session');
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('慢速已结束 Harness 读取完成时不会停止同 key 的新会话 controller', { concurrency: false }, async () => {
+  const target = readySession('slow-ended-harness-reader', { status: 'ended' });
+  const replacement = readySession(target.tmid, {
+    sessionId: 'replacement-while-reading',
+    codexThreadId: 'replacement-thread-while-reading',
+    workspaceRoots: ['D:/Repos/replacement-while-reading'],
+  });
+  const { useSharedAgent, setSharedAgentControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  const states: FakeClientState[] = [];
+  let finishOldRead: (() => void) | undefined;
+  const oldRead = new Promise<void>((resolve) => { finishOldRead = resolve; });
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async () => ({ id: 'unused' }));
+    states.push(built.state);
+    const index = states.length - 1;
+    return {
+      ...built.controller,
+      readThread: async (threadId: string) => {
+        if (index === 0) await oldRead;
+        return { thread: { id: threadId }, turns: [] };
+      },
+    } as never;
+  });
+
+  try {
+    const staleRead = useSharedAgent.getState().readTranscript(target.tmid);
+    while (states.length === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    useSharedAgent.setState((state) => ({
+      sessions: { ...state.sessions, [target.tmid]: replacement },
+    }));
+    await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.equal(states.length, 2);
+    assert.equal(states[1].stopped, false);
+
+    finishOldRead?.();
+    await staleRead;
+    assert.equal(states[1].stopped, false, '旧 reader 的 finally 不得按 tmid 停掉替代会话');
+  } finally {
+    finishOldRead?.();
+    restoreFactory();
+  }
+});
+
+test('AI 托管只读视图从同一 DSH Harness session.history 读取自然对话', { concurrency: false }, async () => {
+  const target = readySession('harness-transcript-dsh', {
+    backend: 'deepseek',
+    codexThreadId: undefined,
+    dshSessionId: 'dsh-harness-history',
+  });
+  const { useSharedAgent, setSharedAgentDshControllerFactory } = await loadModules();
+  await prepareStore([target]);
+  const calls: string[] = [];
+  let interrupt: ((error: Error) => void) | undefined;
+  const restoreFactory = setSharedAgentDshControllerFactory((_workspace, _connectionId, options) => {
+    interrupt = options.onInterrupted;
+    return ({
+    connect: async () => { calls.push('connect'); },
+    createSession: async () => { calls.push('createSession'); return 'unused'; },
+    resumeSession: async (sessionId) => { calls.push(`resumeSession:${sessionId}`); },
+    getTranscript: (sessionId) => {
+      calls.push(`getTranscript:${sessionId}`);
+      return {
+        messages: [
+          { id: 'dsh-user', role: 'user', text: '请整理房间结论' },
+          { id: 'dsh-assistant', role: 'assistant', text: '已经整理完成。' },
+        ],
+        activities: [],
+      };
+    },
+    attachmentLeaseId: () => 'unused',
+    prompt: async () => { calls.push('prompt'); return { turnId: 'unused', text: '' }; },
+    cancel: async () => undefined,
+    respondApproval: async () => undefined,
+    respondQuestion: async () => undefined,
+    stop: async () => undefined,
+    });
+  });
+
+  try {
+    const transcript = await useSharedAgent.getState().readTranscript(target.tmid);
+    await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.deepEqual(transcript.map((message) => ({ role: message.role, text: message.text })), [
+      { role: 'user', text: '请整理房间结论' },
+      { role: 'assistant', text: '已经整理完成。' },
+    ]);
+    assert.deepEqual(calls, [
+      'connect',
+      `resumeSession:${target.dshSessionId}`,
+      `getTranscript:${target.dshSessionId}`,
+      `getTranscript:${target.dshSessionId}`,
+    ]);
+    const disconnect = interrupt;
+    assert.ok(disconnect);
+    disconnect(new Error('DSH 连接中断'));
+    await useSharedAgent.getState().readTranscript(target.tmid);
+    assert.deepEqual(calls, [
+      'connect',
+      `resumeSession:${target.dshSessionId}`,
+      `getTranscript:${target.dshSessionId}`,
+      `getTranscript:${target.dshSessionId}`,
+      'connect',
+      `resumeSession:${target.dshSessionId}`,
+      `getTranscript:${target.dshSessionId}`,
+    ]);
+  } finally {
+    restoreFactory();
+  }
+});
+
+test('DeepSeek AI 托管处理历史附件时使用 DSH 暂存路径，不调用 Codex 附件命令', { concurrency: false }, async () => {
+  const { useSharedAgent, setSharedAgentDshControllerFactory, resetAiRuntimeProviderForTests, clientModule } = await loadModules();
+  resetAiRuntimeProviderForTests('deepseek');
+  const chat = await import('../../apps/web/src/stores/chat');
+  const target = readySession('deepseek-hosted-attachment', {
+    backend: 'deepseek',
+    codexThreadId: undefined,
+    dshSessionId: 'dsh-session-attachment',
+  });
+  await prepareStore([target]);
+  const command = commandMessage(target.tmid, target.host.userId, 'host', 'deepseek-attachment-command');
+  const attachedMessage: RcMessage = {
+    _id: 'message-deepseek-history-attachment',
+    rid: target.rid,
+    tmid: target.tmid,
+    msg: '请结合这个附件继续处理',
+    ts: new Date().toISOString(),
+    u: { _id: 'member-user', username: 'member', name: 'member' },
+    attachments: [{
+      title: 'spec.txt',
+      title_link: '/file-upload/spec.txt',
+      title_link_download: true,
+    }] as never,
+  };
+  const chatState = chat.useChat.getState();
+  chat.useChat.setState({
+    messages: {
+      ...chatState.messages,
+      [target.rid]: [attachedMessage, command],
+    },
+    rooms: {
+      ...chatState.rooms,
+      [target.rid]: { _id: target.rid, t: 'p', fname: '附件房间' } as never,
+    },
+    subscriptions: {
+      ...chatState.subscriptions,
+      [target.rid]: { rid: target.rid, t: 'p' } as never,
+    },
+  });
+  const invocations: Array<{ command: string; args?: unknown }> = [];
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {
+      invoke: async (commandName: string, args?: unknown) => {
+        invocations.push({ command: commandName, args });
+        if (commandName === 'dsh_agent_attachment_write') {
+          return { path: 'D:/tmp/dsh-attachments/spec.txt', root: 'D:/tmp/dsh-attachments' };
+        }
+        return [];
+      },
+    },
+  });
+  const originalGetThreadMessages = clientModule.rest.getThreadMessages.bind(clientModule.rest);
+  const originalFetchFile = clientModule.rest.fetchFile.bind(clientModule.rest);
+  clientModule.rest.getThreadMessages = async () => [] as never;
+  clientModule.rest.fetchFile = async () => new Blob(['history attachment']) as never;
+  let promptText = '';
+  const restoreFactory = setSharedAgentDshControllerFactory(() => ({
+    connect: async () => undefined,
+    createSession: async () => 'unused',
+    resumeSession: async () => undefined,
+    attachmentLeaseId: () => 'lease-hosted-attachment',
+    prompt: async (_sessionId, prompt) => {
+      promptText = prompt;
+      return { turnId: 'dsh-turn-attachment', text: 'DeepSeek 已检查附件' };
+    },
+    cancel: async () => undefined,
+    respondApproval: async () => undefined,
+    respondQuestion: async () => undefined,
+    stop: async () => undefined,
+  }));
+
+  try {
+    await useSharedAgent.getState().handleMessage(command);
+    assert.equal(
+      invocations.some((entry) => entry.command === 'codex_agent_attachment_write'),
+      false,
+    );
+    const dshWrite = invocations.find((entry) => entry.command === 'dsh_agent_attachment_write');
+    assert.ok(dshWrite?.args instanceof Uint8Array);
+    const metadataLength = new DataView(
+      dshWrite.args.buffer,
+      dshWrite.args.byteOffset,
+      4,
+    ).getUint32(0, true);
+    const metadata = JSON.parse(new TextDecoder().decode(
+      dshWrite.args.subarray(4, 4 + metadataLength),
+    ));
+    assert.deepEqual(metadata, {
+      connectionId: 'hosting-session-deepseek-hosted-attachment',
+      leaseId: 'lease-hosted-attachment',
+      relativePath: 'message-deepseek-history-attachment/1-spec.txt',
+    });
+    assert.match(promptText, /\[附件路径: D:\/tmp\/dsh-attachments\/spec\.txt\]/);
+  } finally {
+    clientModule.rest.getThreadMessages = originalGetThreadMessages;
+    clientModule.rest.fetchFile = originalFetchFile;
+    chat.useChat.setState({
+      messages: chatState.messages,
+      rooms: chatState.rooms,
+      subscriptions: chatState.subscriptions,
+    });
+    restoreFactory();
+  }
+});
+
+test('开启 Codex 托管时使用启动面板提交的模型、推理和权限快照', { concurrency: false }, async () => {
   const {
     useSharedAgent,
     useCodexWorkspace,
-    setSharedAgentDshControllerFactory,
+    setSharedAgentControllerFactory,
     clientModule,
   } = await loadModules();
   await prepareStore([]);
@@ -863,36 +1330,134 @@ test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { conc
     scope: 'same-origin:host-user',
     defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
     butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+    selectedModel: 'gpt-test',
+    selectedEffort: 'high',
+    permissionPreset: 'auto',
+  });
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      assert.equal(method, 'startThread');
+      return { id: 'codex-hosting-selected' };
+    });
+    fake = built.state;
+    return built.controller as never;
+  });
+  const originalSendMessage = clientModule.rest.sendMessage.bind(clientModule.rest);
+  clientModule.rest.sendMessage = async () => ({ _id: 'lease-codex-selected' }) as never;
+
+  try {
+    const started = await useSharedAgent.getState().startSession('room-codex-selected', 'thread-codex-selected', {
+      backend: 'codex',
+      workspaceRoot: 'D:/Repos/example',
+      replyTmid: 'thread-codex-selected',
+      runtimeModel: 'gpt-hosting',
+      runtimeEffort: 'high',
+      runtimePermissionPreset: 'ask',
+    });
+    assert.equal(started.runtimeModel, 'gpt-hosting');
+    assert.equal(started.runtimeEffort, 'high');
+    assert.equal(started.runtimePermissionPreset, 'ask');
+    assert.deepEqual(fake.selections[0], {
+      model: 'gpt-hosting',
+      effort: 'high',
+      permissionPreset: 'ask',
+    });
+    assert.equal(useCodexWorkspace.getState().selectedModel, 'gpt-test');
+    assert.equal(useCodexWorkspace.getState().selectedEffort, 'high');
+    assert.equal(useCodexWorkspace.getState().permissionPreset, 'auto');
+  } finally {
+    clientModule.rest.sendMessage = originalSendMessage;
+    restoreFactory();
+  }
+});
+
+test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { concurrency: false }, async () => {
+  const {
+    useSharedAgent,
+    useCodexWorkspace,
+    prepareSharedDshStartConfiguration,
+    setSharedAgentDshControllerFactory,
+    clientModule,
+    resetAiRuntimeProviderForTests,
+  } = await loadModules();
+  resetAiRuntimeProviderForTests('deepseek');
+  await prepareStore([]);
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
   });
   const calls: string[] = [];
-  const restoreFactory = setSharedAgentDshControllerFactory(() => ({
-    connect: async () => { calls.push('connect'); },
-    createSession: async () => {
-      calls.push('create');
-      return 'dsh-created-session';
-    },
-    resumeSession: async (sessionId) => { calls.push(`resume:${sessionId}`); },
-    prompt: async () => ({ turnId: 'unused', text: '' }),
-    cancel: async () => undefined,
-    respondApproval: async () => undefined,
-    respondQuestion: async () => undefined,
-    stop: async () => undefined,
-  }));
+  let createOptions: unknown;
+  let factoryCalls = 0;
+  const restoreFactory = setSharedAgentDshControllerFactory(() => {
+    factoryCalls += 1;
+    return {
+      connect: async () => { calls.push('connect'); },
+      getStartConfiguration: async () => {
+        calls.push('catalog');
+        return {
+          models: { groups: [] },
+          agentPresets: [],
+        };
+      },
+      createSession: async (options) => {
+        createOptions = options;
+        calls.push('create');
+        return 'dsh-created-session';
+      },
+      resumeSession: async (sessionId) => { calls.push(`resume:${sessionId}`); },
+      getTranscript: (sessionId) => {
+        calls.push(`history:${sessionId}`);
+        return { messages: [], activities: [] };
+      },
+      attachmentLeaseId: () => 'lease-hosted-create',
+      prompt: async () => ({ turnId: 'unused', text: '' }),
+      cancel: async () => undefined,
+      respondApproval: async () => undefined,
+      respondQuestion: async () => undefined,
+      stop: async () => undefined,
+    };
+  });
   const originalSendMessage = clientModule.rest.sendMessage.bind(clientModule.rest);
   const originalUpdateMessage = clientModule.rest.updateMessage.bind(clientModule.rest);
   clientModule.rest.sendMessage = async () => ({ _id: 'lease-deepseek' }) as never;
   clientModule.rest.updateMessage = async () => ({}) as never;
 
   try {
+    await prepareSharedDshStartConfiguration('thread-deepseek-create', 'D:/Repos/example');
     const started = await useSharedAgent.getState().startSession('room-deepseek-create', 'thread-deepseek-create', {
       backend: 'deepseek',
       workspaceRoot: 'D:/Repos/example',
       replyTmid: 'thread-deepseek-create',
+      dshModelSelection: {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        reasoningEffort: 'high',
+      },
+      dshAgentPreset: 'code',
+      dshPermissionPreset: 'workspace-write',
     });
     assert.equal(started.backend, 'deepseek');
     assert.equal(started.dshSessionId, 'dsh-created-session');
     assert.equal(started.codexThreadId, undefined);
     assert.equal(started.runtimeModel, undefined);
+    assert.deepEqual(started.dshModelSelection, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      reasoningEffort: 'high',
+    });
+    assert.equal(started.dshAgentPreset, 'code');
+    assert.equal(started.dshPermissionPreset, 'workspace-write');
+    assert.deepEqual(createOptions, {
+      model: started.dshModelSelection,
+      agentPreset: 'code',
+      permissionPreset: 'workspace-write',
+    });
+    assert.equal(factoryCalls, 1);
+    await useSharedAgent.getState().readTranscript(started.tmid);
+    assert.deepEqual(calls, ['connect', 'catalog', 'create', 'history:dsh-created-session']);
 
     useSharedAgent.setState((state) => ({
       sessions: {
@@ -901,7 +1466,7 @@ test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { conc
       },
     }));
     await useSharedAgent.getState().resumeSession(started.tmid);
-    assert.deepEqual(calls, ['connect', 'create', 'resume:dsh-created-session']);
+    assert.deepEqual(calls, ['connect', 'catalog', 'create', 'history:dsh-created-session', 'resume:dsh-created-session']);
     assert.equal(useSharedAgent.getState().sessions[started.tmid]?.status, 'ready');
   } finally {
     clientModule.rest.sendMessage = originalSendMessage;
@@ -911,7 +1476,8 @@ test('DeepSeek AI 托管创建和恢复都持久化原生 DSH sessionId', { conc
 });
 
 test('结束 DeepSeek 托管时会取消进行中的 turn，且晚到失败不会复活会话或发送失败回复', { concurrency: false }, async () => {
-  const { useSharedAgent, setSharedAgentDshControllerFactory } = await loadModules();
+  const { useSharedAgent, setSharedAgentDshControllerFactory, resetAiRuntimeProviderForTests } = await loadModules();
+  resetAiRuntimeProviderForTests('deepseek');
   const target = readySession('deepseek-stop-running', {
     backend: 'deepseek',
     codexThreadId: undefined,
@@ -928,6 +1494,7 @@ test('结束 DeepSeek 托管时会取消进行中的 turn，且晚到失败不�
     connect: async () => { calls.push('connect'); },
     createSession: async () => 'unused',
     resumeSession: async () => undefined,
+    attachmentLeaseId: () => 'lease-hosted-running',
     prompt: async () => {
       calls.push('prompt');
       return pendingPrompt;
@@ -1152,7 +1719,7 @@ test('共享 Agent 中断后同一 tmid 复用 turnId 和 itemId 时不会带出
   const target = readySession('restart-after-interrupt', { codexThreadId: 'shared-thread' });
   const { useSharedAgent, setSharedAgentControllerFactory, useCodexWorkspace } = await loadModules();
   await prepareStore([target]);
-  setHostingRuntime(useCodexWorkspace);
+  setRuntimeSelection(useCodexWorkspace);
   const invocations = installInvokeRecorder();
   const states: FakeClientState[] = [];
   const restoreFactory = setSharedAgentControllerFactory((options) => {
@@ -1222,7 +1789,7 @@ test('共享 Agent 结束后同一 tmid 复用 turnId 和 itemId 时不会带出
   const target = readySession('restart-after-end', { codexThreadId: 'shared-thread' });
   const { useSharedAgent, setSharedAgentControllerFactory, useCodexWorkspace } = await loadModules();
   await prepareStore([target]);
-  setHostingRuntime(useCodexWorkspace);
+  setRuntimeSelection(useCodexWorkspace);
   const invocations = installInvokeRecorder();
   const states: FakeClientState[] = [];
   const restoreFactory = setSharedAgentControllerFactory((options) => {
@@ -1325,7 +1892,7 @@ test('共享 Agent 已启动会话继续执行时固定使用各自的运行时�
       secondController,
     } = await startSharedThreadCommands(harness);
     const { useCodexWorkspace } = await loadModules();
-    setHostingRuntime(useCodexWorkspace, { hostingModel: 'gpt-hosting' });
+    setRuntimeSelection(useCodexWorkspace, { selectedModel: 'gpt-hosting' });
 
     firstController.options.onNotification?.('turn/completed', { threadId: 'thread-runtime-a', turn: { id: 'turn-runtime-a', status: 'completed' } });
     secondController.options.onNotification?.('turn/completed', { threadId: 'thread-runtime-b', turn: { id: 'turn-runtime-b', status: 'completed' } });
@@ -1360,8 +1927,8 @@ test('共享 Agent 旧会话首次恢复时补齐运行时快照并沿用当时�
   const { useSharedAgent, setSharedAgentControllerFactory, useCodexWorkspace } = await loadModules();
   await prepareStore([legacy]);
   useCodexWorkspace.setState({
-    hostingModel: 'gpt-hosting',
-    hostingEffort: 'high',
+    selectedModel: 'gpt-hosting',
+    selectedEffort: 'high',
     permissionPreset: 'auto',
   });
   let fake!: FakeClientState;

@@ -71,6 +71,35 @@ full_resources_rollback_failed:
   Abort
 
 full_resources_installed:
+  CreateDirectory "$LOCALAPPDATA\RocketX"
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile.__staging"
+  ClearErrors
+  FileOpen $1 "$LOCALAPPDATA\RocketX\rocketx-package-profile.__staging" w
+  IfErrors full_profile_open_failed
+  FileWrite $1 "full"
+  IfErrors full_profile_write_failed
+  FileClose $1
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile"
+  ClearErrors
+  Rename "$LOCALAPPDATA\RocketX\rocketx-package-profile.__staging" "$LOCALAPPDATA\RocketX\rocketx-package-profile"
+  IfErrors full_profile_activate_failed full_profile_installed
+
+full_profile_write_failed:
+  FileClose $1
+
+full_profile_open_failed:
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile.__staging"
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile"
+  MessageBox MB_ICONEXCLAMATION "RocketX full 已安装，但无法记录安装包形态；下次启动将自动检测内置 AI 运行时。"
+  Goto full_profile_installed
+
+full_profile_activate_failed:
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile.__staging"
+  Delete "$LOCALAPPDATA\RocketX\rocketx-package-profile"
+  MessageBox MB_ICONEXCLAMATION "RocketX full 已安装，但无法启用安装包形态标记；下次启动将自动检测内置 AI 运行时。"
+  Goto full_profile_installed
+
+full_profile_installed:
   RMDir /r "$LOCALAPPDATA\RocketX\resources.__old"
   RMDir /r "$INSTDIR\full-resources"
 !macroend

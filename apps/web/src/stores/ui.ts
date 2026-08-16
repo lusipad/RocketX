@@ -1,9 +1,15 @@
 import { create } from 'zustand';
 import type { ButlerWorkspaceView } from '../lib/butlerWorkspace';
-import { runtimeFeatures } from '../lib/runtimeMode';
+import {
+  AI_RUNTIME_PROVIDER_STORAGE_KEY,
+  getAiRuntimeProvider,
+  readAiRuntimeProvider,
+  runtimeFeatures,
+  type AiRuntimeProvider,
+} from '../lib/runtimeMode';
 
 export type ModuleKey = string;
-export type ButlerTaskProvider = 'codex' | 'deepseek';
+export type ButlerTaskProvider = AiRuntimeProvider;
 
 /** 内置模块顺序；运行时快捷键会把注册的 nav.module 插在 settings 之前。 */
 export const MODULE_ORDER: ModuleKey[] = [
@@ -18,7 +24,7 @@ export const MODULE_ORDER: ModuleKey[] = [
 ];
 
 export const UI_MODULE_STORAGE_KEY = 'rcx-ui';
-export const BUTLER_TASK_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
+export const BUTLER_TASK_PROVIDER_STORAGE_KEY = AI_RUNTIME_PROVIDER_STORAGE_KEY;
 export const DEFAULT_WORK_ITEM_STATE_FILTER = '__default_hide_shelved__';
 
 /** 工作台内部的子标签（提到全局状态，切走再回来才能停在原来那页） */
@@ -66,7 +72,7 @@ export function readPersistedModule(storage: ModuleStorage | undefined = browser
   try {
     const parsed = readPersistedUIValue(storage);
     const module = migratePersistedModule(persistedModuleValue(parsed));
-    return !runtimeFeatures().ai && module === 'butler-view' ? 'messages' : module;
+    return !runtimeFeatures().butler && module === 'butler-view' ? 'messages' : module;
   } catch {
     return 'messages';
   }
@@ -83,19 +89,7 @@ export function readPersistedWorkbenchTab(
 export function readPersistedButlerTaskProvider(
   storage: ModuleStorage | undefined = browserStorage(),
 ): ButlerTaskProvider {
-  try {
-    return storage?.getItem(BUTLER_TASK_PROVIDER_STORAGE_KEY) === 'codex' ? 'codex' : 'deepseek';
-  } catch {
-    return 'deepseek';
-  }
-}
-
-function persistButlerTaskProvider(provider: ButlerTaskProvider): void {
-  try {
-    browserStorage()?.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, provider);
-  } catch {
-    // 浏览器禁用存储时仍保留本次会话选择。
-  }
+  return readAiRuntimeProvider(storage);
 }
 
 export function readPersistedWorkItemStateFilter(
@@ -159,10 +153,14 @@ interface UIState {
   switcherCommandCenter: boolean;
   /** Codex 工作区的一级视图。 */
   butlerView: ButlerWorkspaceView;
-  /** 当前任务执行视图；只有用户主动切换时才持久化。 */
-  butlerTaskProvider: ButlerTaskProvider;
-  /** 用户显式选择的默认执行视图；临时 handoff 不改它。 */
-  butlerTaskProviderPreference: ButlerTaskProvider;
+  /** 从房间跳转时需要聚焦的同一条 AI 托管会话。 */
+  selectedHostedSessionKey: string | null;
+  /** 从私人房间 AI 跳转时需要在 DSH Web 中聚焦的原生会话。 */
+  selectedPersonalDshSessionId: string | null;
+  /** 私人 DSH 会话的聚焦请求序号；允许同一 session 重复触发 focus。 */
+  selectedPersonalDshFocusNonce: number;
+  /** 本次启动独占使用的 AI 运行时。 */
+  aiRuntimeProvider: AiRuntimeProvider;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -177,9 +175,10 @@ interface UIState {
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
-  openButlerConversation: (provider?: ButlerTaskProvider) => void;
-  setButlerTaskProvider: (provider: ButlerTaskProvider) => void;
+  openButlerConversation: (focusSessionKey?: string) => void;
+  openPersonalDshConversation: (sessionId: string) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
+  setSelectedHostedSessionKey: (sessionKey: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
   setPrTab: (t: 'review' | 'mine') => void;
@@ -194,8 +193,10 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   butlerView: 'conversation',
-  butlerTaskProvider: readPersistedButlerTaskProvider(),
-  butlerTaskProviderPreference: readPersistedButlerTaskProvider(),
+  selectedHostedSessionKey: null,
+  selectedPersonalDshSessionId: null,
+  selectedPersonalDshFocusNonce: 0,
+  aiRuntimeProvider: getAiRuntimeProvider(),
   workbenchTab: readPersistedWorkbenchTab(),
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
@@ -203,11 +204,13 @@ export const useUI = create<UIState>((set) => ({
   setModule: (m) => {
     if (moduleValidator(m)) {
       persistUIState({ module: m });
-      set((state) => m === 'butler-view'
-        ? {
+      set(m === 'butler-view'
+          ? {
             module: m,
             butlerView: 'conversation',
-            butlerTaskProvider: state.butlerTaskProviderPreference,
+            selectedHostedSessionKey: null,
+            selectedPersonalDshSessionId: null,
+            selectedPersonalDshFocusNonce: 0,
           }
         : { module: m });
     }
@@ -223,20 +226,26 @@ export const useUI = create<UIState>((set) => ({
   setSwitcherOpen: (open) =>
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
-  setButlerTaskProvider: (provider) => {
-    persistButlerTaskProvider(provider);
+  openButlerConversation: (focusSessionKey?: string) => {
+    if (!runtimeFeatures().butler) return;
+    persistUIState({ module: 'butler-view' });
     set({
-      butlerTaskProvider: provider,
-      butlerTaskProviderPreference: provider,
+      module: 'butler-view',
+      butlerView: 'conversation',
+      selectedHostedSessionKey: focusSessionKey ?? null,
+      selectedPersonalDshSessionId: null,
+      selectedPersonalDshFocusNonce: 0,
     });
   },
-  openButlerConversation: (provider) => {
+  openPersonalDshConversation: (sessionId) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set((state) => ({
       module: 'butler-view',
       butlerView: 'conversation',
-      butlerTaskProvider: provider ?? state.butlerTaskProviderPreference,
+      selectedHostedSessionKey: null,
+      selectedPersonalDshSessionId: sessionId,
+      selectedPersonalDshFocusNonce: state.selectedPersonalDshFocusNonce + 1,
     }));
   },
   setButlerView: (view) => {
@@ -245,8 +254,18 @@ export const useUI = create<UIState>((set) => ({
     set({
       module: 'butler-view',
       butlerView: view,
+      ...(view === 'hosting' ? {} : {
+        selectedHostedSessionKey: null,
+        selectedPersonalDshSessionId: null,
+        selectedPersonalDshFocusNonce: 0,
+      }),
     });
   },
+  setSelectedHostedSessionKey: (sessionKey) => set({
+    selectedHostedSessionKey: sessionKey,
+    selectedPersonalDshSessionId: null,
+    selectedPersonalDshFocusNonce: 0,
+  }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => {
     persistUIState({ workItemStateFilter: s });

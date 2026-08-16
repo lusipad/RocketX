@@ -33,6 +33,30 @@ use tauri_plugin_opener::OpenerExt;
 
 const MAIN_TRAY_ID: &str = "main";
 const AUTOSTART_ARG: &str = "--autostart";
+const PACKAGE_PROFILE_FILE: &str = "rocketx-package-profile";
+
+fn normalize_desktop_distribution_profile(value: Option<&str>) -> &'static str {
+    match value.map(str::trim) {
+        Some("full") => "full",
+        Some("slim") => "slim",
+        _ => "unknown",
+    }
+}
+
+#[tauri::command]
+fn desktop_distribution_profile() -> &'static str {
+    if std::env::current_exe().is_ok_and(|executable| executable_is_local_build(&executable)) {
+        return "unknown";
+    }
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
+        return "unknown";
+    };
+    let profile_path = PathBuf::from(local_app_data)
+        .join("RocketX")
+        .join(PACKAGE_PROFILE_FILE);
+    let profile = std::fs::read_to_string(profile_path).ok();
+    normalize_desktop_distribution_profile(profile.as_deref())
+}
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
 
@@ -449,8 +473,8 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 mod tray_icon_tests {
     use super::{
         autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
-        launch_opens_main_window, normalize_http_origin, refresh_autostart_registration_with,
-        resolve_download_history_path, validate_external_url,
+        launch_opens_main_window, normalize_desktop_distribution_profile, normalize_http_origin,
+        refresh_autostart_registration_with, resolve_download_history_path, validate_external_url,
     };
     use std::{cell::Cell, path::Path};
     use tauri::image::Image;
@@ -460,6 +484,20 @@ mod tray_icon_tests {
         let source = Image::new_owned(vec![100, 200, 50, 0, 200, 100, 40, 255], 2, 1);
         let dimmed = dim_tray_icon(&source);
         assert_eq!(dimmed.rgba(), &[35, 70, 17, 0, 70, 35, 14, 255]);
+    }
+
+    #[test]
+    fn package_profile_accepts_only_installer_markers() {
+        assert_eq!(
+            normalize_desktop_distribution_profile(Some("full\r\n")),
+            "full"
+        );
+        assert_eq!(normalize_desktop_distribution_profile(Some("slim")), "slim");
+        assert_eq!(normalize_desktop_distribution_profile(None), "unknown");
+        assert_eq!(
+            normalize_desktop_distribution_profile(Some("FULL")),
+            "unknown"
+        );
     }
 
     #[test]
@@ -626,6 +664,7 @@ fn main() {
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
             allow_http_origin,
+            desktop_distribution_profile,
             open_external_url,
             read_autostart_enabled,
             set_autostart_enabled,
@@ -666,6 +705,8 @@ fn main() {
             proc::launch_update_installer,
             proc::take_update_result,
             proc::codex_agent_attachment_write,
+            dsh::dsh_agent_attachment_write,
+            dsh::dsh_runtime_probe,
             dsh::dsh_bridge_start,
             dsh::dsh_bridge_write,
             dsh::dsh_bridge_stop,

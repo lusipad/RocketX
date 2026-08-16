@@ -92,14 +92,14 @@ export default function PanelShell({
         </div>
       )}
       <aside
-        style={resizable ? { width } : undefined}
-        className="flex w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface-3"
+        style={resizable ? { width, maxWidth: 'calc(100% - 0.375rem)' } : undefined}
+        className="flex min-w-0 w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface-3"
       >
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
-          <span className="text-base font-semibold text-ink">{title}</span>
+          <span className="min-w-0 flex-1 text-base font-semibold text-ink">{title}</span>
           <button
             onClick={() => setPanel(null)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
           >
             <X size={16} />
           </button>

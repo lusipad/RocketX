@@ -21,11 +21,13 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   assert.doesNotMatch(conversation, /renderMarkdown\(streamingText/);
 
   const roomPanel = readFileSync('apps/web/src/components/ButlerPanel.tsx', 'utf8');
+  const hostedConversation = readFileSync('apps/web/src/components/HostedConversation.tsx', 'utf8');
+  assert.match(roomPanel, /useStickToBottom\(\[/);
+  assert.match(roomPanel, /<div ref=\{scrollRef\} onScroll=\{onScroll\}/);
   assert.match(roomPanel, /\{streamingText\}/);
   assert.doesNotMatch(roomPanel, /renderMarkdown\(streamingText/);
-
-  const dshConversation = readFileSync('apps/web/src/components/DshConversation.tsx', 'utf8');
-  assert.match(dshConversation, /entry\.streaming\s*\? entry\.text/);
+  assert.match(hostedConversation, /useStickToBottom\(\[session\.key, messages\]\)/);
+  assert.match(hostedConversation, /<div ref=\{scrollRef\} onScroll=\{onScroll\} className="codex-native-transcript">/);
 
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
   assert.match(styles, /\.codex-native-transcript\s*\{[^}]*overflow-anchor:\s*none/s);

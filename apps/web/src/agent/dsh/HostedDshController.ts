@@ -4,13 +4,17 @@ import {
   type DshServerRequest,
 } from './DshController';
 import { approvalResponse, questionResponse } from './protocol';
-import { projectDshTranscript, type DshSessionEvent } from './project';
+import {
+  projectDshTranscript,
+  type DshSessionEvent,
+  type DshTranscript,
+} from './project';
 import type {
   DshPendingApproval,
   DshPendingQuestion,
   DshQuestion,
   DshQuestionAnswer,
-} from '../../stores/dshWorkspace';
+} from './types';
 
 const DEEPSEEK_API_KEY_REF = 'DEEPSEEK_API_KEY';
 const HISTORY_PAGE_SIZE = 200;
@@ -19,12 +23,40 @@ interface DshCredentialDescribeResponse {
   credentials?: Record<string, { configured?: unknown; writable?: unknown }>;
 }
 
+interface DshModelGroupResponse {
+  groups?: Array<{
+    id?: unknown;
+    name?: unknown;
+    models?: Array<{
+      id?: unknown;
+      name?: unknown;
+      description?: unknown;
+      reasoning?: {
+        efforts?: Array<{ id?: unknown }>;
+        defaultEffort?: unknown;
+      };
+    }>;
+  }>;
+}
+
+interface DshAgentPresetListResponse {
+  presets?: Array<{ id?: unknown; trust?: unknown; isDefault?: unknown }>;
+}
+
+interface DshSettingsDescribeResponse {
+  namespaces?: Array<{ ns?: unknown; schema?: unknown; value?: unknown }>;
+}
+
 interface DshSessionCreateResponse {
   sessionId?: unknown;
 }
 
 interface DshSessionHistoryResponse {
   events?: Array<{ event?: unknown }>;
+}
+
+interface DshCommandExecutionResponse {
+  result?: { kind?: unknown; text?: unknown };
 }
 
 interface PendingPrompt {
@@ -39,9 +71,66 @@ export interface HostedDshControllerOptions {
   onApprovalResolved?: (sessionId: string, approvalId: string) => void;
   onQuestion?: (question: DshPendingQuestion) => void;
   onQuestionResolved?: (sessionId: string, questionRpcId: string) => void;
+  onSessionUpdated?: (sessionId: string) => void;
   onTrace?: (request: DshServerRequest) => void;
   onInterrupted?: (error: Error) => void;
   runtime?: DshControllerRuntime;
+}
+
+export interface DshModelSelection {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+}
+
+export interface DshModelOption {
+  id: string;
+  name: string;
+  description?: string;
+  reasoning?: {
+    efforts: Array<{ id: string; name?: string }>;
+    defaultEffort?: string;
+  };
+}
+
+export interface DshModelGroup {
+  id: string;
+  name: string;
+  models: DshModelOption[];
+}
+
+export interface DshAgentPreset {
+  id: string;
+  name?: string;
+  description?: string;
+  trust?: string;
+  isDefault: boolean;
+  broken?: string;
+}
+
+export interface DshPermissionPreset {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface DshStartConfiguration {
+  models: {
+    groups: DshModelGroup[];
+    defaultSelection?: DshModelSelection;
+  };
+  agentPresets: DshAgentPreset[];
+  defaultAgentPreset?: string;
+  permission?: {
+    options: DshPermissionPreset[];
+    defaultPreset?: string;
+  };
+}
+
+export interface DshSessionCreateOptions {
+  model?: DshModelSelection;
+  agentPreset?: string;
+  permissionPreset?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -58,6 +147,79 @@ function asTurnId(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return `turn-${value}`;
   return undefined;
+}
+
+function titleCaseKebab(value: string): string {
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function schemaNodeAtPath(schema: unknown, path: readonly string[]): Record<string, unknown> | null {
+  let node = record(schema);
+  for (const key of path) {
+    if (!node) return null;
+    if (node.type === 'object') {
+      node = record(record(node.dict)?.[key] ?? record(node.properties)?.[key]);
+      continue;
+    }
+    if (node.type === 'dict' || node.type === 'array') {
+      node = record(node.inner);
+      continue;
+    }
+    return null;
+  }
+  return node;
+}
+
+function schemaEnumOptions(node: unknown): DshPermissionPreset[] {
+  const current = record(node);
+  if (!current) return [];
+  const candidates = current.type === 'union' && Array.isArray(current.list)
+    ? current.list
+    : [current];
+  return candidates.flatMap((candidate): DshPermissionPreset[] => {
+    const choice = record(candidate);
+    const id = asString(choice?.value);
+    if (choice?.type === 'const' && id) {
+      const description = asString(record(choice.meta)?.description);
+      return [{
+        id,
+        name: description ?? titleCaseKebab(id),
+        ...(description ? { description } : {}),
+      }];
+    }
+    if (Array.isArray(choice?.enum)) {
+      return choice.enum.flatMap((entry): DshPermissionPreset[] => {
+        const id = asString(entry);
+        return id ? [{ id, name: titleCaseKebab(id) }] : [];
+      });
+    }
+    return [];
+  });
+}
+
+function modelSelectionFromSettings(value: unknown): DshModelSelection | undefined {
+  const selection = record(value);
+  const provider = asString(selection?.provider);
+  const model = asString(selection?.model);
+  if (!provider || !model) return undefined;
+  const reasoningEffort = asString(selection?.reasoningEffort);
+  return {
+    provider,
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function requireCommandSuccess(response: unknown): void {
+  const payload = record(response) as DshCommandExecutionResponse | null;
+  const result = record(payload?.result);
+  if (result?.kind === 'success') return;
+  const message = asString(result?.text);
+  throw new Error(message ?? 'DeepSeek 权限切换失败');
 }
 
 function asSessionEvent(value: unknown): DshSessionEvent | null {
@@ -198,12 +360,128 @@ export class HostedDshController {
     return tracked;
   }
 
-  async createSession(): Promise<string> {
+  async getStartConfiguration(): Promise<DshStartConfiguration> {
     const controller = await this.requireController();
+    const [modelsResponse, presetsResponse, settingsResponse] = await Promise.all([
+      controller.call<DshModelGroupResponse>('llm.models'),
+      controller.call<DshAgentPresetListResponse>('agentPreset.list'),
+      controller.call<DshSettingsDescribeResponse>('settings.describe'),
+    ]);
+
+    const groups = (modelsResponse.groups ?? []).flatMap((group): DshModelGroup[] => {
+      const provider = asString(group?.id);
+      const providerLabel = asString(group?.name) ?? provider;
+      if (!provider || !providerLabel) return [];
+      const models = (group.models ?? []).flatMap((entry): DshModelOption[] => {
+        const model = asString(entry?.id);
+        const modelLabel = asString(entry?.name) ?? model;
+        if (!model || !modelLabel) return [];
+        const efforts = Array.isArray(entry.reasoning?.efforts)
+          ? entry.reasoning.efforts.flatMap((effort) => {
+            const current = record(effort);
+            const id = asString(current?.id);
+            const name = asString(current?.name);
+            return id ? [{ id, ...(name ? { name } : {}) }] : [];
+          })
+          : [];
+        const defaultReasoningEffort = asString(entry.reasoning?.defaultEffort);
+        return [{
+          id: model,
+          name: modelLabel,
+          ...(asString(entry?.description) ? { description: asString(entry?.description)! } : {}),
+          ...(efforts.length > 0 || defaultReasoningEffort
+            ? {
+              reasoning: {
+                efforts,
+                ...(defaultReasoningEffort ? { defaultEffort: defaultReasoningEffort } : {}),
+              },
+            }
+            : {}),
+        }];
+      });
+      return [{ id: provider, name: providerLabel, models }];
+    });
+
+    const agentPresets = (presetsResponse.presets ?? []).flatMap((entry): DshAgentPreset[] => {
+      const current = record(entry);
+      const id = asString(current?.id);
+      if (!id) return [];
+      const trust = asString(current?.trust);
+      const name = asString(current?.name);
+      const description = asString(current?.description);
+      const broken = asString(current?.broken);
+      return [{
+        id,
+        ...(name ? { name } : {}),
+        ...(trust ? { trust } : {}),
+        ...(description ? { description } : {}),
+        isDefault: current?.isDefault === true,
+        ...(broken ? { broken } : {}),
+      }];
+    });
+
+    const namespaces = settingsResponse.namespaces ?? [];
+    const modelSelection = modelSelectionFromSettings(
+      namespaces.find((view) => asString(view?.ns) === 'agent-default-model')?.value,
+    );
+    const permissionView = namespaces.find((view) => asString(view?.ns) === 'permission');
+    const defaultPermissionPreset = asString(record(permissionView?.value)?.defaultPreset);
+    const permissionPresets = permissionView
+      ? schemaEnumOptions(schemaNodeAtPath(permissionView.schema, ['defaultPreset']))
+      : [];
+
+    return {
+      models: {
+        groups,
+        ...(modelSelection ? { defaultSelection: modelSelection } : {}),
+      },
+      agentPresets,
+      ...(agentPresets.find((entry) => entry.isDefault)?.id
+        ? { defaultAgentPreset: agentPresets.find((entry) => entry.isDefault)!.id }
+        : {}),
+      ...(permissionPresets.length > 0 || defaultPermissionPreset
+        ? {
+          permission: {
+            options: permissionPresets,
+            ...(defaultPermissionPreset ? { defaultPreset: defaultPermissionPreset } : {}),
+          },
+        }
+        : {}),
+    };
+  }
+
+  async createSession(options: DshSessionCreateOptions = {}): Promise<string> {
+    const controller = await this.requireController();
+    const agentPreset = asString(options.agentPreset);
+    const modelSelection = record(options.model);
+    const provider = asString(modelSelection?.provider);
+    const model = asString(modelSelection?.model);
+    const reasoningEffort = asString(modelSelection?.reasoningEffort);
+    const permissionPreset = asString(options.permissionPreset);
+    if ((provider && !model) || (!provider && model) || (!provider && reasoningEffort)) {
+      throw new Error('DSH 会话启动参数缺少完整模型选择');
+    }
     const sessionId = requireSessionId(await controller.call<DshSessionCreateResponse>('session.create', {
       cwd: this.workspaceRoot,
+      ...(agentPreset ? { agentPreset } : {}),
     }));
     this.events.set(sessionId, this.events.get(sessionId) ?? new Map());
+    if (provider && model) {
+      await controller.call('session.selectModel', {
+        sessionId,
+        provider,
+        model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      });
+    }
+    if (permissionPreset) {
+      requireCommandSuccess(await controller.call<DshCommandExecutionResponse>('commands/execute', {
+        args: {
+          agentId: sessionId,
+          line: `/permission ${permissionPreset}`,
+        },
+      }));
+    }
     return sessionId;
   }
 
@@ -223,10 +501,21 @@ export class HostedDshController {
         const event = asSessionEvent(item?.event);
         if (event) sessionEvents.set(event.seq, event);
       }
+      this.options.onSessionUpdated?.(normalized);
     } catch (error) {
       if (!existed) this.events.delete(normalized);
       throw error;
     }
+  }
+
+  getTranscript(sessionId: string): DshTranscript {
+    const normalized = sessionId.trim();
+    return projectDshTranscript(normalized, this.events.get(normalized)?.values() ?? []);
+  }
+
+  attachmentLeaseId(): string {
+    if (!this.controller) throw new Error('DSH 尚未连接');
+    return this.controller.attachmentLeaseId();
   }
 
   async prompt(sessionId: string, text: string): Promise<{ turnId: string; text: string }> {
@@ -363,6 +652,7 @@ export class HostedDshController {
     const events = this.events.get(sessionId) ?? new Map<number, DshSessionEvent>();
     events.set(event.seq, event);
     this.events.set(sessionId, events);
+    this.options.onSessionUpdated?.(sessionId);
     this.maybeResolvePrompt(sessionId, events);
   }
 

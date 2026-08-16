@@ -1,7 +1,7 @@
 # `PERM` 权限、审批与用户输入
 
 > 当前状态：`已实现`（交互式管家与共享 Agent）；已安排任务采用无人值守限制
-> 基线：工作树 `2026-08-14`
+> 基线：工作树 `2026-08-16`
 > 平台：桌面端；Codex 与 DSH 使用各自原生权限语义
 
 ## 1. 目标
@@ -57,8 +57,8 @@
 
 ### 4.3 DSH 原生权限与请求
 
-- RocketX 从 DSH `settings.describe` 读取 permission schema 和当前默认 preset，不维护固定枚举。
-- 选择 preset 时通过 `settings.mutate` 更新 DSH 后续默认；当前 Session 存在时，再通过原生 `commands/execute` 执行 `/permission <preset>`。
+- RocketX 在开启共享托管时从 DSH `settings.describe` 读取 permission schema 和当前默认 preset，不维护固定枚举。
+- “沿用 DSH 默认”不写任何设置；显式选择只在新建 Session 后通过原生 `commands/execute` 执行 `/permission <preset>`，不调用 `settings.update` 或 `settings.mutate`。
 - DSH 发出 `approval/requested` 或 `question/requested` 时，RocketX 保留原始 `rpcId`，在所属 Session 显示卡片，并把用户结果经 `/api/respond` 返回。
 - DSH 进程退出、Session 结束或用户取消后，待审批、待提问与排队输入全部失效并清理，不能继续点击旧卡片。
 - DSH preset 的名称、说明和实际能力由当前固定 DSH 运行时定义；RocketX 不把它翻译成 Codex 的“询问审批 / 替我审批 / 完全访问”。
@@ -88,7 +88,7 @@
 - “允许一次”只作用于当前请求；“本次任务允许”只作用于当前任务生命周期。
 - 审批卡片和待答输入是内存中的活动请求，不作为长期业务记录。
 - Runtime 权限 profile 目录来自当前 Codex；RocketX 的三档映射是当前产品快捷项。
-- DSH 默认 permission preset 与 schema 由 DSH Settings 保存；RocketX只保存当前投影，不建立第二份权限真源。
+- DSH 默认 permission preset 与 schema 由 DSH Settings 保存；RocketX 只保存共享会话实际采用的快照，不建立第二份权限真源。
 
 ## 8. 权限与安全
 
@@ -119,7 +119,7 @@
 - `PERM-AC-05`：其他 Thread 的请求不会出现在当前任务，也不能被当前任务处理。
 - `PERM-AC-06`：停止或中断任务会清理待处理请求。
 - `PERM-AC-07`：已安排任务不会因等待人类确认而永久挂起，也不会自动接受危险动作。
-- `PERM-AC-08`：DSH permission preset 来自原生 schema；改变默认值和当前 Session 时分别调用 Settings 与 `/permission` 原生路径。
+- `PERM-AC-08`：DSH permission preset 来自原生 schema；共享托管的显式选择只对新 Session 调用 `/permission`，沿用默认时不产生写入。
 - `PERM-AC-09`：DSH approval/question 保留原始 `rpcId`，只在所属 Session 回答；bridge 退出会使待处理卡片失效。
 
 ## 11. 实现与测试证据
@@ -129,8 +129,8 @@
 - 实现：`apps/web/src/components/ButlerConversation.tsx`、`apps/web/src/components/AgentPanel.tsx`
 - 自动化：`tests/ui/butler-host-input.regression-1.spec.ts`
 - 自动化：`scripts/regressions/codex-workspace.test.ts`、`scripts/regressions/shared-agent-runtime.test.ts`
-- 实现：`apps/web/src/agent/dsh/protocol.ts`、`apps/web/src/stores/dshWorkspace.ts`、`apps/web/src/agent/dsh/HostedDshController.ts`
-- 自动化：`scripts/regressions/dsh-web-core.test.ts`、`dsh-workspace-actions.test.ts`、`hosted-dsh-controller.test.ts`
+- 实现：`apps/web/src/agent/dsh/protocol.ts`、`apps/web/src/agent/dsh/DshController.ts`、`apps/web/src/agent/dsh/HostedDshController.ts`
+- 自动化：`scripts/regressions/dsh-controller-runtime.test.ts`、`scripts/regressions/hosted-dsh-controller.test.ts`、`scripts/regressions/dsh-bridge-script.test.ts`
 - 上游参考：[Codex permissions](https://learn.chatgpt.com/docs/permissions)
 
 ## 12. 已知差距与目标

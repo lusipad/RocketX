@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 import { isTauri } from '../lib/http';
 import { openExternal } from '../lib/client';
+import { getAiRuntimeStartupResolution } from '../lib/aiRuntimeBootstrap';
+import {
+  getAiRuntimeProvider,
+  persistAiRuntimeProvider,
+  readConfiguredAiRuntimeProvider,
+  runtimeFeatures,
+  type AiRuntimeProvider,
+} from '../lib/runtimeMode';
 import {
   ocrBackendLabel,
   probeImageOcrRuntime,
@@ -13,9 +21,10 @@ import {
   useCodexRuntime,
 } from '../stores/codexRuntime';
 import { toast } from '../stores/toast';
+import { useUI } from '../stores/ui';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
-import { Row } from './SettingControls';
+import { RadioGroup, Row } from './SettingControls';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -42,45 +51,81 @@ function codexReasonLabel(reasonCode: ReturnType<typeof useCodexRuntime.getState
 }
 
 function codexSourceName(source: ReturnType<typeof useCodexRuntime.getState>['source']): string {
-  return source === 'manual'
-    ? '手动'
-    : source === 'system'
-      ? '系统'
-      : source === 'standard'
-        ? '标准安装'
-        : source === 'bundled'
-          ? '内置'
-          : '未知';
+  switch (source) {
+    case 'manual':
+      return '手动';
+    case 'system':
+      return '系统';
+    case 'standard':
+      return '标准安装';
+    case 'bundled':
+      return '内置';
+    default:
+      return '未知';
+  }
+}
+
+function codexSourceLabel(source: ReturnType<typeof useCodexRuntime.getState>['source']): string {
+  switch (source) {
+    case 'manual':
+      return '手动指定';
+    case 'system':
+      return '系统 Codex';
+    case 'standard':
+      return '标准位置 Codex';
+    case 'bundled':
+      return 'RocketX 内置 Codex';
+    default:
+      return '未检测到';
+  }
+}
+
+function codexCompatibilityLabel(
+  status: ReturnType<typeof useCodexRuntime.getState>['compatibilityStatus'],
+): string {
+  switch (status) {
+    case 'verified':
+      return '已验证';
+    case 'untested-newer':
+      return '新版待验证';
+    case 'blocked':
+      return '已阻止';
+    default:
+      return '';
+  }
+}
+
+function aiRuntimeLabel(provider: AiRuntimeProvider): string {
+  switch (provider) {
+    case 'codex':
+      return 'Codex';
+    case 'deepseek':
+      return 'DSH';
+    default:
+      return '无 AI';
+  }
 }
 
 export default function AiSettings() {
+  const activeAiRuntime = getAiRuntimeProvider();
+  const startupResolution = getAiRuntimeStartupResolution();
+  const [selectedAiRuntime, setSelectedAiRuntime] = useState<AiRuntimeProvider>(
+    () => readConfiguredAiRuntimeProvider() ?? getAiRuntimeProvider(),
+  );
   const [manualCodexPath, setManualCodexPathState] = useState(getCodexManualPath);
   const [ocrRuntime, setOcrRuntime] = useState<ImageOcrRuntimeProbe>();
   const codexRuntime = useCodexRuntime();
+  const openButlerConversation = useUI((state) => state.openButlerConversation);
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !runtimeFeatures().ocr) return;
     void probeImageOcrRuntime().then(setOcrRuntime, (error) => {
       setOcrRuntime({ reason: error instanceof Error ? error.message : String(error) });
     });
   }, []);
 
-  const codexSourceLabel = codexRuntime.source === 'manual'
-    ? '手动指定'
-    : codexRuntime.source === 'system'
-      ? '系统 Codex'
-      : codexRuntime.source === 'standard'
-        ? '标准位置 Codex'
-        : codexRuntime.source === 'bundled'
-          ? 'RocketX 内置 Codex'
-          : '未检测到';
-  const codexCompatibilityLabel = codexRuntime.compatibilityStatus === 'verified'
-    ? '已验证'
-    : codexRuntime.compatibilityStatus === 'untested-newer'
-      ? '新版待验证'
-      : codexRuntime.compatibilityStatus === 'blocked'
-        ? '已阻止'
-        : '';
+  const codexSource = codexSourceLabel(codexRuntime.source);
+  const codexCompatibility = codexCompatibilityLabel(codexRuntime.compatibilityStatus);
 
   const saveCodexPath = async () => {
     setCodexManualPath(manualCodexPath);
@@ -102,10 +147,54 @@ export default function AiSettings() {
   const rejectedCandidates = codexRuntime.candidates.filter((candidate) => candidate.outcome === 'rejected');
   const hasOutdatedCandidate = rejectedCandidates.some((candidate) => candidate.reasonCode === 'outdated')
     || codexRuntime.reasonCode === 'outdated';
+  const selectAiRuntime = (provider: AiRuntimeProvider): void => {
+    setSelectedAiRuntime(persistAiRuntimeProvider(provider));
+  };
+  const activeAiRuntimeLabel = aiRuntimeLabel(activeAiRuntime);
+  const startupModeHint = startupResolution.source === 'automatic'
+    ? '（按本机可用性自动判断）'
+    : startupResolution.source === 'full-default'
+      ? '（完整包默认）'
+      : '';
+  const explicitRuntimeUnavailable = startupResolution.source === 'explicit-unavailable'
+    && selectedAiRuntime === startupResolution.configured;
 
   return (
     <div className="space-y-6">
       <section>
+        <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行时</h2>
+        <div className="rounded-lg bg-surface px-4 shadow-raise">
+          <Row label="执行后端" hint="全局只启用一个后端，主管家、房间侧栏和 AI 托管共用该选择。">
+            <div className="space-y-2">
+              <RadioGroup
+                value={selectedAiRuntime}
+                options={[
+                  { key: 'codex', label: 'Codex', hint: '使用 Codex 原生任务、Skills 和插件' },
+                  { key: 'deepseek', label: 'DSH', hint: '使用 DeepSeek DSH 原生界面与配置' },
+                  { key: 'none', label: '无 AI', hint: '不启动本地 AI；仍可查看已有托管记录' },
+                ]}
+                onChange={selectAiRuntime}
+              />
+              <p className="text-xs leading-5 text-ink-3">
+                当前运行：{activeAiRuntimeLabel}{startupModeHint}。修改后重启 RocketX 生效；当前进程不会热切换或同时启动两个后端。
+              </p>
+              {explicitRuntimeUnavailable ? (
+                <p className="text-xs font-medium leading-5 text-warning" role="status">
+                  {aiRuntimeLabel(selectedAiRuntime)} 选择已保留，但当前运行时不可用，本次未启用 AI。
+                  {startupResolution.reason ? ` ${startupResolution.reason}` : ''}
+                  {' '}修复后重启 RocketX 即可继续使用。
+                </p>
+              ) : selectedAiRuntime !== activeAiRuntime ? (
+                <p className="text-xs font-medium text-warning" role="status">
+                  已保存，重启后切换为 {aiRuntimeLabel(selectedAiRuntime)}。
+                </p>
+              ) : null}
+            </div>
+          </Row>
+        </div>
+      </section>
+
+      {activeAiRuntime === 'codex' ? <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">Codex</h2>
         <div className="rounded-lg bg-surface px-4 shadow-raise">
           {codexRuntime.phase !== 'ready' ? (
@@ -115,7 +204,7 @@ export default function AiSettings() {
                 <div className="mt-2 space-y-1 text-xs text-ink-2">
                   <p>判定：{codexReasonLabel(codexRuntime.reasonCode)}</p>
                   {codexRuntime.version ? <p>版本：{codexRuntime.version}</p> : null}
-                  {codexRuntime.source ? <p>来源：{codexSourceLabel}</p> : null}
+                  {codexRuntime.source ? <p>来源：{codexSource}</p> : null}
                   {codexRuntime.executablePath ? (
                     <p>路径：<span className="break-all font-mono">{codexRuntime.executablePath}</span></p>
                   ) : null}
@@ -189,9 +278,9 @@ export default function AiSettings() {
           <Row label="运行时" hint="默认自动检测系统和标准安装位置；只有需要固定另一份安装时才填写手动路径。">
             <div className="space-y-2">
               <p className="text-sm text-ink-2">
-                {codexSourceLabel}
+                {codexSource}
                 {codexRuntime.version ? ` · ${codexRuntime.version}` : ''}
-                {codexCompatibilityLabel ? ` · ${codexCompatibilityLabel}` : ''}
+                {codexCompatibility ? ` · ${codexCompatibility}` : ''}
               </p>
               {codexRuntime.executablePath ? (
                 <p className="break-all font-mono text-xs leading-5 text-ink-3">{codexRuntime.executablePath}</p>
@@ -258,15 +347,34 @@ export default function AiSettings() {
             </div>
           </Row>
         </div>
-      </section>
+      </section> : activeAiRuntime === 'deepseek' ? (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold text-ink">DSH</h2>
+          <div className="rounded-lg bg-surface px-4 shadow-raise">
+            <Row label="原生配置" hint="模型、Agent、凭据和权限统一由 DSH Web 管理。">
+              <button
+                type="button"
+                onClick={() => openButlerConversation()}
+                className={secondaryButtonCls}
+              >
+                打开 DSH 配置
+              </button>
+            </Row>
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-lg bg-surface px-4 py-3 text-sm leading-6 text-ink-2 shadow-raise">
+          当前启动未启用 AI。聊天、工作台和普通协作能力保持可用。
+        </section>
+      )}
 
-      <section>
+      {activeAiRuntime !== 'none' ? <section>
         <h2 className="mb-2 text-sm font-semibold text-ink">外部集成</h2>
         <div className="space-y-6 rounded-lg bg-surface p-4 shadow-raise">
           <ReverseMcpSettings />
           <AgentBotSettings />
         </div>
-      </section>
+      </section> : null}
     </div>
   );
 }

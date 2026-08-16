@@ -17,6 +17,8 @@ export interface DshControllerHandlers {
 
 interface DshBridgeInfo {
   processId: string;
+  leaseId: string;
+  readyUrl?: string;
 }
 
 interface DshOutputEvent {
@@ -38,6 +40,13 @@ interface DshRpcError {
 export interface DshControllerRuntime {
   invoke: typeof invoke;
   listen: typeof listen;
+}
+
+export type DshControllerMode = 'controller' | 'web';
+
+export interface DshControllerOptions {
+  connectionId?: string;
+  mode?: DshControllerMode;
 }
 
 type DshBridgeFrame =
@@ -73,12 +82,37 @@ function serverRequest(value: unknown): DshServerRequest | null {
   return candidate as unknown as DshServerRequest;
 }
 
+function readyUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('DSH bridge 返回了无效 ready URL');
+  }
+  if (
+    parsed.protocol !== 'http:'
+    || parsed.hostname !== '127.0.0.1'
+    || parsed.username !== ''
+    || parsed.password !== ''
+    || parsed.search !== ''
+    || parsed.hash !== ''
+    || parsed.pathname !== '/'
+  ) {
+    throw new Error('DSH bridge 返回了无效 ready URL');
+  }
+  const port = Number(parsed.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('DSH bridge 返回了无效 ready URL');
+  }
+  return parsed.toString();
+}
+
 export function parseDshBridgeLine(line: string): DshBridgeFrame {
   const frame = record(JSON.parse(line));
   if (!frame || typeof frame.kind !== 'string') throw new Error('DSH bridge 返回了无效消息');
 
   if (frame.kind === 'ready' && typeof frame.url === 'string') {
-    return { kind: 'ready', url: frame.url };
+    return { kind: 'ready', url: readyUrl(frame.url) };
   }
   if (
     frame.kind === 'response'
@@ -115,28 +149,32 @@ function rpcValue(response: unknown): unknown {
 
 export class DshController {
   private processId: string | null = null;
+  private leaseId: string | null = null;
   private requestSequence = 0;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly unlisten: UnlistenFn[] = [];
-  private ready: Promise<void> | null = null;
-  private settleReady: (() => void) | null = null;
+  private ready: Promise<string> | null = null;
+  private settleReady: ((url: string) => void) | null = null;
   private rejectReady: ((error: Error) => void) | null = null;
   private stopped = false;
   private readonly connectionId: string;
+  private readonly mode: DshControllerMode;
 
   constructor(
     private readonly workspaceRoot: string,
     private readonly handlers: DshControllerHandlers,
     private readonly runtime: DshControllerRuntime = { invoke, listen },
-    connectionId = 'butler',
+    options: string | DshControllerOptions = {},
   ) {
-    this.connectionId = connectionId;
+    const resolved = typeof options === 'string' ? { connectionId: options } : options;
+    this.connectionId = resolved.connectionId ?? 'butler';
+    this.mode = resolved.mode ?? 'controller';
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<string> {
     if (this.ready) return this.ready;
     this.stopped = false;
-    this.ready = new Promise<void>((resolve, reject) => {
+    this.ready = new Promise<string>((resolve, reject) => {
       this.settleReady = resolve;
       this.rejectReady = reject;
     });
@@ -171,21 +209,29 @@ export class DshController {
       const process = await this.runtime.invoke<DshBridgeInfo>('dsh_bridge_start', {
         connectionId: this.connectionId,
         workspaceRoot: this.workspaceRoot,
+        ...(this.mode === 'web' ? { mode: this.mode } : {}),
       });
       if (this.stopped) {
-        await this.runtime.invoke('dsh_bridge_stop', { processId: process.processId }).catch(() => undefined);
+        await this.runtime.invoke('dsh_bridge_stop', {
+          processId: process.processId,
+          leaseId: process.leaseId,
+        }).catch(() => undefined);
         throw new Error('DSH 连接已关闭');
       }
       this.processId = process.processId;
+      this.leaseId = process.leaseId;
+      if (typeof process.readyUrl === 'string') this.resolveReadyUrl(process.readyUrl);
       for (const event of earlyOutput) {
         if (event.processId === process.processId && event.stream === 'stdout') this.handleLine(event.line);
       }
       const matchingExit = earlyExit.find((event) => event.processId === process.processId);
       if (matchingExit) this.handleExit(matchingExit.code);
-      await this.ready;
+      return await this.ready;
     } catch (reason) {
       const error = reason instanceof Error ? reason : new Error(String(reason));
-      this.fail(error);
+      const alreadyFailed = this.settleReady === null && this.rejectReady === null;
+      if (!alreadyFailed) this.fail(error);
+      await this.cleanupAfterStartFailure();
       throw error;
     } finally {
       globalThis.clearTimeout(timeout);
@@ -193,12 +239,19 @@ export class DshController {
   }
 
   async call<T>(method: string, payload: Record<string, unknown> = {}): Promise<T> {
+    if (this.mode === 'web') throw new Error('DSH web 模式不支持 call');
     await this.requireReady();
     const response = await this.request('call', { method, payload });
     return rpcValue(response) as T;
   }
 
+  attachmentLeaseId(): string {
+    if (!this.leaseId || this.stopped) throw new Error('DSH 连接已关闭');
+    return this.leaseId;
+  }
+
   async respond(response: Record<string, unknown>): Promise<void> {
+    if (this.mode === 'web') throw new Error('DSH web 模式不支持 respond');
     await this.requireReady();
     const receipt = record(await this.request('respond', { response }));
     if (receipt?.accepted === true) return;
@@ -210,12 +263,17 @@ export class DshController {
     if (this.stopped) return;
     this.stopped = true;
     const processId = this.processId;
+    const leaseId = this.leaseId;
     this.processId = null;
+    this.leaseId = null;
+    this.rejectReady?.(new Error('DSH 连接已关闭'));
+    this.settleReady = null;
+    this.rejectReady = null;
     this.rejectPending(new Error('DSH 连接已关闭'));
     this.clearListeners();
-    if (processId) {
+    if (processId && leaseId) {
       try {
-        await this.runtime.invoke('dsh_bridge_stop', { processId });
+        await this.runtime.invoke('dsh_bridge_stop', { processId, leaseId });
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
         if (!/未运行|not running/i.test(message)) throw reason;
@@ -223,16 +281,18 @@ export class DshController {
     }
   }
 
-  private async requireReady(): Promise<void> {
+  private async requireReady(): Promise<string> {
     if (!this.ready) throw new Error('DSH 尚未启动');
-    await this.ready;
-    if (!this.processId || this.stopped) throw new Error('DSH 连接已关闭');
+    const url = await this.ready;
+    if (!this.processId || !this.leaseId || this.stopped) throw new Error('DSH 连接已关闭');
+    return url;
   }
 
   private async request(kind: 'call' | 'respond', fields: Record<string, unknown>): Promise<unknown> {
     const processId = this.processId;
-    if (!processId) throw new Error('DSH 连接已关闭');
-    const id = `dsh-${Date.now().toString(36)}-${(++this.requestSequence).toString(36)}`;
+    const leaseId = this.leaseId;
+    if (!processId || !leaseId) throw new Error('DSH 连接已关闭');
+    const id = `dsh-${this.connectionId}-${leaseId}-${Date.now().toString(36)}-${(++this.requestSequence).toString(36)}`;
     const response = new Promise<unknown>((resolve, reject) => {
       const timeout = globalThis.setTimeout(() => {
         this.pending.delete(id);
@@ -251,13 +311,16 @@ export class DshController {
     return response;
   }
 
+  private async cleanupAfterStartFailure(): Promise<void> {
+    if (this.stopped) return;
+    await this.stop().catch(() => undefined);
+  }
+
   private handleLine(line: string): void {
     try {
       const frame = parseDshBridgeLine(line);
       if (frame.kind === 'ready') {
-        this.settleReady?.();
-        this.settleReady = null;
-        this.rejectReady = null;
+        this.resolveReadyUrl(frame.url);
       } else if (frame.kind === 'response') {
         const pending = this.pending.get(frame.id);
         if (!pending) return;
@@ -286,8 +349,15 @@ export class DshController {
 
   private handleExit(code: number | null): void {
     this.processId = null;
+    this.leaseId = null;
     this.fail(new Error(`DSH 已退出${code === null ? '' : `（${code}）`}`));
     this.handlers.onExit(code);
+  }
+
+  private resolveReadyUrl(url: string): void {
+    this.settleReady?.(readyUrl(url));
+    this.settleReady = null;
+    this.rejectReady = null;
   }
 
   private rejectPending(error: Error): void {

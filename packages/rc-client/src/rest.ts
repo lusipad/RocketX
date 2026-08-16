@@ -78,6 +78,33 @@ export interface RcRestOptions {
   onAuthError?: () => void;
 }
 
+export interface RcCustomEmoji {
+  name: string;
+  aliases: string[];
+}
+
+type RcCustomEmojiPayload = {
+  name?: unknown;
+  aliases?: unknown;
+};
+
+function normalizeCustomEmojiAliases(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function sanitizeMultipartToken(value: string): string {
+  return value.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
+}
+
 /**
  * Rocket.Chat REST API 客户端（api/v1）。
  * 只依赖 fetch，浏览器 / Node 18+ 通用。
@@ -480,6 +507,39 @@ export class RcRestClient {
     return this.request('POST', 'chat.postMessage', params);
   }
 
+  async getCustomEmojiByName(name: string): Promise<RcCustomEmoji | null> {
+    const res = await this.request<{ emojis?: RcCustomEmojiPayload[] }>(
+      'GET',
+      'emoji-custom.all',
+      undefined,
+      { name },
+    );
+    const emoji = (res.emojis ?? []).find((item) => item?.name === name);
+    if (!emoji || typeof emoji.name !== 'string') return null;
+    return {
+      name: emoji.name,
+      aliases: normalizeCustomEmojiAliases(emoji.aliases),
+    };
+  }
+
+  async createCustomEmoji(params: {
+    name: string;
+    file: Blob;
+    fileName: string;
+    aliases?: string[];
+  }): Promise<void> {
+    await this.postMultipart(
+      'emoji-custom.create',
+      'emoji',
+      params.file,
+      params.fileName,
+      {
+        name: params.name,
+        aliases: params.aliases?.join(','),
+      },
+    );
+  }
+
   /** emoji 传 :name: 格式；shouldReact 省略时为切换 */
   react(messageId: string, emoji: string, shouldReact?: boolean): Promise<unknown> {
     return this.request('POST', 'chat.react', { messageId, emoji, shouldReact });
@@ -845,21 +905,40 @@ export class RcRestClient {
     fieldName: string,
     file: Blob,
     fileName: string,
+    textFields?: Record<string, string | undefined>,
   ): Promise<any> {
     const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     const encoder = new TextEncoder();
-    const safeName = fileName.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
-    const head = encoder.encode(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="${fieldName}"; filename="${safeName}"\r\n` +
-        `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
-    );
-    const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
     const fileBytes = new Uint8Array(await file.arrayBuffer());
-    const body = new Uint8Array(head.length + fileBytes.length + tail.length);
-    body.set(head, 0);
-    body.set(fileBytes, head.length);
-    body.set(tail, head.length + fileBytes.length);
+    const parts: Uint8Array[] = [];
+    const pushTextField = (name: string, value: string) => {
+      parts.push(
+        encoder.encode(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="${sanitizeMultipartToken(name)}"\r\n\r\n` +
+            `${value}\r\n`,
+        ),
+      );
+    };
+    for (const [name, value] of Object.entries(textFields ?? {})) {
+      if (value !== undefined) pushTextField(name, value);
+    }
+    parts.push(
+      encoder.encode(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="${sanitizeMultipartToken(fieldName)}"; filename="${sanitizeMultipartToken(fileName)}"\r\n` +
+          `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
+      ),
+    );
+    parts.push(fileBytes);
+    parts.push(encoder.encode(`\r\n--${boundary}--\r\n`));
+    const bodyLength = parts.reduce((total, part) => total + part.length, 0);
+    const body = new Uint8Array(bodyLength);
+    let offset = 0;
+    for (const part of parts) {
+      body.set(part, offset);
+      offset += part.length;
+    }
 
     const auth =
       this.authProvider?.() ??

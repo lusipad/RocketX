@@ -376,18 +376,18 @@ function PrRow({
         type="button"
         onClick={() => onAsk(pr)}
         disabled={!features.butler}
-        title={features.butler ? '用 Codex 审查这个 PR' : '当前模式未启用 Codex 审查'}
-        aria-label={`用 Codex 审查 PR !${pr.id}：${pr.title}`}
+        title={features.butler ? '用 AI 管家审查这个 PR' : '当前未启用 AI 管家'}
+        aria-label={`用 AI 管家审查 PR !${pr.id}：${pr.title}`}
         className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Bot size={13} aria-hidden="true" />
-        Codex 审查
+        AI 审查
       </button>
       <button
         type="button"
         onClick={() => onCompare(pr)}
-        title={comparing ? '取消选择' : '选它交给 Codex 比较'}
-        aria-label={comparing ? '取消选择' : '选它交给 Codex 比较'}
+        title={comparing ? '取消选择' : '选它交给 AI 管家比较'}
+        aria-label={comparing ? '取消选择' : '选它交给 AI 管家比较'}
         aria-pressed={comparing}
         className={`shrink-0 rounded-md p-1.5 hover:bg-fill-hover hover:text-ink focus:opacity-100 ${
           comparing

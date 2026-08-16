@@ -44,17 +44,28 @@ interface AgentAttachmentRuntimePath {
   root: string;
 }
 
+export type AgentAttachmentDestination =
+  | { kind: 'codex'; sessionId: string }
+  | { kind: 'dsh'; connectionId: string; leaseId: string };
+
 async function writeAgentAttachment(
-  sessionId: string,
+  destination: AgentAttachmentDestination,
   relativePath: string,
   bytes: Uint8Array,
 ): Promise<AgentAttachmentRuntimePath> {
-  const metadata = new TextEncoder().encode(JSON.stringify({ sessionId, relativePath }));
+  const metadata = new TextEncoder().encode(JSON.stringify(
+    destination.kind === 'codex'
+      ? { sessionId: destination.sessionId, relativePath }
+      : { connectionId: destination.connectionId, leaseId: destination.leaseId, relativePath },
+  ));
   const request = new Uint8Array(4 + metadata.length + bytes.length);
   new DataView(request.buffer).setUint32(0, metadata.length, true);
   request.set(metadata, 4);
   request.set(bytes, 4 + metadata.length);
-  return invoke<AgentAttachmentRuntimePath>('codex_agent_attachment_write', request);
+  return invoke<AgentAttachmentRuntimePath>(
+    destination.kind === 'codex' ? 'codex_agent_attachment_write' : 'dsh_agent_attachment_write',
+    request,
+  );
 }
 
 function dataUrlBytes(dataUrl: string): Uint8Array {
@@ -80,7 +91,7 @@ export async function materializeCodexImages(
   const batch = `composer-${crypto.randomUUID()}`;
   for (const [index, image] of images.entries()) {
     const runtime = await writeAgentAttachment(
-      sessionId,
+      { kind: 'codex', sessionId },
       `${batch}/${index + 1}-${safeSegment(image.name, 'image')}`,
       dataUrlBytes(image.dataUrl),
     );
@@ -91,7 +102,7 @@ export async function materializeCodexImages(
 }
 
 export async function materializeAgentAttachments(
-  sessionId: string,
+  destination: AgentAttachmentDestination,
   messages: readonly RcMessage[],
 ): Promise<MaterializedAgentAttachments> {
   const paths: Record<string, string[]> = {};
@@ -114,7 +125,7 @@ export async function materializeAgentAttachments(
       }
       const relativePath = `${safeSegment(source.messageId, 'message')}/${index + 1}-${safeSegment(source.name, 'attachment')}`;
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const runtime = await writeAgentAttachment(sessionId, relativePath, bytes);
+      const runtime = await writeAgentAttachment(destination, relativePath, bytes);
       (paths[source.messageId] ??= []).push(runtime.path);
       if (source.image) imagePaths.push(runtime.path);
       roots.add(runtime.root);

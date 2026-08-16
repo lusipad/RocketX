@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { tsMs } from '@rcx/rc-client';
-import { AtSign, Bell, BellOff, SendHorizontal, Smile } from 'lucide-react';
+import { AtSign, Bell, BellOff, Bot, SendHorizontal, Smile } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
@@ -9,7 +9,14 @@ import MessageItem from './MessageItem';
 import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
-import { canMentionInRoom } from '../lib/mentions';
+import {
+  canMentionInRoom,
+  insertMentionAtCursor,
+  mentionQueryAtCursor,
+} from '../lib/mentions';
+import { matchSharedAiMention, resolveSharedAiMentionTarget } from '../lib/aiMention';
+import { runtimeFeatures } from '../lib/runtimeMode';
+import { useSharedAgent } from '../stores/sharedAgent';
 
 const SUPPORTS_FIELD_SIZING =
   typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
@@ -28,9 +35,14 @@ export default function ThreadPanel() {
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const prefsLoaded = usePrefs((s) => s.loaded);
   const canMention = canMentionInRoom(roomType);
+  const sharedAiStatus = useSharedAgent((s) => {
+    if (!rid || !rootId || !runtimeFeatures().ai) return null;
+    return resolveSharedAiMentionTarget(rid, rootId, s.sessions, s.remoteCards)?.status ?? null;
+  });
 
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [followLoading, setFollowLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -43,11 +55,13 @@ export default function ThreadPanel() {
   const following = !!myId && !!root && (
     root.replies?.includes(myId) || (!root.tcount && root.u._id === myId)
   );
+  const showSharedAiMention = canMention && !!sharedAiStatus && matchSharedAiMention(mentionQuery);
 
   // 切换话题时清空草稿并聚焦
   useEffect(() => {
     setText('');
     setPicker(false);
+    setMentionQuery(null);
     textareaRef.current?.focus();
   }, [rootId]);
 
@@ -86,6 +100,21 @@ export default function ThreadPanel() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!e.nativeEvent.isComposing && showSharedAiMention) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertSharedAiMention();
+        return;
+      }
+      if (e.key === 'Escape') {
+        setMentionQuery(null);
+        return;
+      }
+    }
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     // 偏好未加载完先沿用产品默认值，避免首屏短暂变成 Ctrl+Enter 发送（issue #122）
     const effectiveMode = prefsLoaded ? sendOnEnter : 'normal';
@@ -110,6 +139,18 @@ export default function ThreadPanel() {
       el?.setSelectionRange(cursor + s.length, cursor + s.length);
     });
   };
+
+  function insertSharedAiMention() {
+    const el = textareaRef.current;
+    const cursor = el?.selectionStart ?? text.length;
+    const inserted = insertMentionAtCursor(text, cursor, 'ai');
+    setText(inserted.value);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(inserted.cursor, inserted.cursor);
+    });
+  }
 
   return (
     <PanelShell
@@ -173,6 +214,34 @@ export default function ThreadPanel() {
       </div>
 
       <div className="relative shrink-0 border-t border-line p-3">
+        {showSharedAiMention && (
+          <div
+            id="thread-mention-list"
+            role="listbox"
+            aria-label="提及共享 AI"
+            className="absolute bottom-full left-3 z-30 mb-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop"
+          >
+            <button
+              id="thread-mention-option-ai"
+              role="option"
+              aria-selected="true"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                insertSharedAiMention();
+              }}
+              className="flex w-full items-center gap-2 bg-primary-light px-3 py-1.5 text-left text-sm"
+            >
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary-light text-primary">
+                <Bot size={14} />
+              </span>
+              <span className="font-medium text-ink">AI 托管</span>
+              <span className="min-w-0 truncate text-xs text-ink-3">@ai</span>
+              <span className="ml-auto shrink-0 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-3">
+                {sharedAiStatus === 'interrupted' ? '话题共享 · 已中断' : '话题共享'}
+              </span>
+            </button>
+          </div>
+        )}
         {picker && (
           <EmojiPicker
             onPick={(e) => {
@@ -194,7 +263,10 @@ export default function ThreadPanel() {
           {canMention && (
             <button
               title="提及成员"
-              onClick={() => insertText('@')}
+              onClick={() => {
+                insertText('@');
+                setMentionQuery('');
+              }}
               className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink"
             >
               <AtSign size={16} />
@@ -208,8 +280,17 @@ export default function ThreadPanel() {
             onChange={(e) => {
               setText(e.target.value);
               emitTyping();
+              setMentionQuery(mentionQueryAtCursor(e.target.value, e.target.selectionStart, roomType));
             }}
             onKeyDown={onKeyDown}
+            onClick={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              setMentionQuery(mentionQueryAtCursor(text, target.selectionStart, roomType));
+            }}
+            aria-autocomplete="list"
+            aria-controls={showSharedAiMention ? 'thread-mention-list' : undefined}
+            aria-expanded={showSharedAiMention}
+            aria-activedescendant={showSharedAiMention ? 'thread-mention-option-ai' : undefined}
             rows={1}
             placeholder={
               sendOnEnter === 'alternative'

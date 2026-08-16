@@ -69,6 +69,8 @@ test('管家 provider 偏好只接受当前支持的执行视图', () => {
   assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
   storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'codex');
   assert.equal(readPersistedButlerTaskProvider(storage), 'codex');
+  storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'none');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'none');
   storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'unknown');
   assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
 });

@@ -15,6 +15,12 @@
           "tags": ["thumbs-up", "like", "ok", "认可"]
         },
         {
+          "id": "1f44c",
+          "title": "OK",
+          "src": "./ok.png",
+          "tags": ["ok-hand", "ok", "收到", "没问题"]
+        },
+        {
           "id": "1f64f",
           "title": "谢谢",
           "src": "./thanks.png",
@@ -31,6 +37,18 @@
           "title": "关注",
           "src": "./watching.png",
           "tags": ["watching", "eyes", "看看", "关注"]
+        },
+        {
+          "id": "1f44b",
+          "title": "招手",
+          "src": "./wave.png",
+          "tags": ["wave", "hello", "hi", "打招呼"]
+        },
+        {
+          "id": "1f91d",
+          "title": "握手",
+          "src": "./handshake.png",
+          "tags": ["handshake", "deal", "合作", "同意"]
         }
       ]
     },
@@ -55,6 +73,36 @@
           "title": "完成",
           "src": "./done.png",
           "tags": ["done", "check", "完成"]
+        },
+        {
+          "id": "1f44f",
+          "title": "鼓掌",
+          "src": "./clap.png",
+          "tags": ["clap", "applause", "鼓掌", "赞成"]
+        },
+        {
+          "id": "1f525",
+          "title": "火速",
+          "src": "./fire.png",
+          "tags": ["fire", "urgent", "hot", "火速"]
+        },
+        {
+          "id": "1f4aa",
+          "title": "加油",
+          "src": "./strong.png",
+          "tags": ["strong", "muscle", "加油", "力量"]
+        },
+        {
+          "id": "1f4a1",
+          "title": "有想法",
+          "src": "./idea.png",
+          "tags": ["idea", "light", "灵感", "想法"]
+        },
+        {
+          "id": "23f3",
+          "title": "等待",
+          "src": "./waiting.png",
+          "tags": ["waiting", "hourglass", "稍等", "处理中"]
         }
       ]
     },
@@ -67,6 +115,36 @@
           "title": "思考",
           "src": "./thinking.png",
           "tags": ["thinking", "ponder", "思考"]
+        },
+        {
+          "id": "1f602",
+          "title": "笑哭",
+          "src": "./laugh.png",
+          "tags": ["laugh", "joy", "好笑", "笑哭"]
+        },
+        {
+          "id": "1f60a",
+          "title": "开心",
+          "src": "./smile.png",
+          "tags": ["smile", "happy", "开心", "微笑"]
+        },
+        {
+          "id": "1f622",
+          "title": "难过",
+          "src": "./sad.png",
+          "tags": ["sad", "tear", "难过", "遗憾"]
+        },
+        {
+          "id": "1f621",
+          "title": "生气",
+          "src": "./angry.png",
+          "tags": ["angry", "mad", "生气", "不满"]
+        },
+        {
+          "id": "2753",
+          "title": "疑问",
+          "src": "./question.png",
+          "tags": ["question", "why", "疑问", "为什么"]
         }
       ]
     }

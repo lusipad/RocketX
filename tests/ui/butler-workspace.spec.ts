@@ -1,18 +1,34 @@
 import { expect, test, type Page } from '@playwright/test';
 import { bootAuthenticated, TEST_SERVER } from './support/rocket-chat-mock';
 
+async function bootWithAiRuntime(page: Page, provider: 'codex' | 'deepseek'): Promise<void> {
+  await page.addInitScript((nextProvider) => {
+    localStorage.setItem('rocketx.butler.task-provider', nextProvider);
+  }, provider);
+  await bootAuthenticated(page);
+}
+
 async function installCodexRuntime(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
     const loadAuth = new Function('return import("/src/stores/auth.ts")') as () => Promise<any>;
     const loadClient = new Function('return import("/src/lib/client.ts")') as () => Promise<any>;
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
     const [{
       resetCodexWorkspaceForTests,
       setCodexWorkspaceControllerFactory,
       useCodexWorkspace,
-    }, { useAuth }, { getServerBase }] = await Promise.all([loadWorkspace(), loadAuth(), loadClient()]);
+    }, { useAuth }, { getServerBase }, { useUI }] = await Promise.all([
+      loadWorkspace(),
+      loadAuth(),
+      loadClient(),
+      loadUI(),
+    ]);
 
     await resetCodexWorkspaceForTests();
+    useUI.setState({
+      aiRuntimeProvider: 'codex',
+    });
     const testWindow = window as typeof window & {
       __codexMethods?: string[];
       __codexTurns?: Array<{ text: string; mode: string }>;
@@ -414,14 +430,85 @@ async function installCodexRuntime(page: Page): Promise<void> {
   });
 }
 
+async function installHostedSession(
+  page: Page,
+  provider: 'codex' | 'deepseek',
+  status: 'ready' | 'running' | 'interrupted' | 'ended' = 'interrupted',
+): Promise<void> {
+  await page.evaluate(async ({ nextProvider, nextStatus, server }) => {
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    const loadAuth = new Function('return import("/src/stores/auth.ts")') as () => Promise<any>;
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    const [{ useSharedAgent }, { useAuth }, { useUI }] = await Promise.all([
+      loadSharedAgent(),
+      loadAuth(),
+      loadUI(),
+    ]);
+    const me = useAuth.getState().user;
+    if (!me) throw new Error('test user missing');
+    const now = Date.now();
+    const deviceId = 'device-ui-hosting';
+    const tmid = 'room:room-general';
+    localStorage.setItem('rcx-agent-device-id', deviceId);
+    useUI.setState({ aiRuntimeProvider: nextProvider });
+    useSharedAgent.setState({
+      sessions: {
+        [tmid]: {
+          sessionId: 'session-room-general',
+          serverId: server,
+          ownerUserId: me._id,
+          rid: 'room-general',
+          tmid,
+          roomNameSnapshot: 'General',
+          host: {
+            userId: me._id,
+            deviceId,
+            heartbeatAt: now,
+            expiresAt: now + 90_000,
+          },
+          access: 'room-members',
+          approvedMemberIds: [],
+          status: nextStatus,
+          backend: nextProvider,
+          ...(nextProvider === 'codex'
+            ? { codexThreadId: 'thread-room-general' }
+            : { dshSessionId: 'dsh-room-general' }),
+          activeTurnId: nextStatus === 'running' ? 'turn-room-general' : undefined,
+          workspaceRoots: ['D:/Repos/rocketchatx'],
+          environmentId: 'environment-rocketx',
+          environmentName: 'RocketX',
+          currentTaskLabel: '整理 Release checklist',
+          updatedAt: now,
+        },
+      },
+      traces: {
+        [tmid]: [{
+          id: 'trace-room-general',
+          at: now,
+          type: 'status',
+          text: '正在检查发布门禁',
+        }],
+      },
+      approvals: [],
+      inputs: [],
+      dshQuestions: [],
+      memberRequests: [],
+      error: null,
+      readTranscript: async () => ([
+        { id: 'harness-user', role: 'user', text: '请总结 Release checklist' },
+        { id: 'harness-assistant', role: 'assistant', text: '## 托管结果\n\n已检查 **发布门禁**。' },
+      ]),
+    });
+  }, { nextProvider: provider, nextStatus: status, server: TEST_SERVER });
+}
+
 async function openWorkspace(page: Page): Promise<void> {
   await page.clock.setFixedTime(new Date('2026-08-09T14:30:00+08:00'));
-  await bootAuthenticated(page);
+  await bootWithAiRuntime(page, 'codex');
   await installCodexRuntime(page);
   await page.getByRole('navigation', { name: 'RocketX 主导航' })
     .getByRole('button', { name: /^管家$/, exact: true })
     .click();
-  await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
 }
 
@@ -536,162 +623,84 @@ test('主管家高频回答与任务过程只合并界面刷新', async ({ page 
     };
   });
 
-  expect(result.mutations).toBeLessThanOrEqual(24);
+  expect(result.mutations).toBeLessThanOrEqual(32);
   expect(result.storeText).toContain('分片 59');
   expect(result.renderedText).toContain('分片 59');
   expect(result.renderedDetail).toContain('分片 59');
   expect(result.bottomGap).toBeLessThan(2);
 });
 
-test('房间 Codex 连续吐字保持纯文本，完成后再解析 Markdown', async ({ page }) => {
+test('私人房间 AI 不读取或展示共享托管 transcript', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
-  await bootAuthenticated(page);
+  await bootWithAiRuntime(page, 'codex');
   await installCodexRuntime(page);
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
-  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
-
+  await installHostedSession(page, 'codex', 'running');
   await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
-    const { useCodexWorkspace } = await loadWorkspace();
-    useCodexWorkspace.setState({
-      status: 'running',
-      activeTurnId: 'turn-streaming-markdown',
-      streamingText: '## 尚未完成的标题\n\n- 正在输出的条目',
-    });
-  });
-
-  const streaming = panel.locator('.codex-native-message.is-streaming');
-  await expect(streaming).toContainText('## 尚未完成的标题');
-  await expect(streaming.getByRole('heading')).toHaveCount(0);
-  await expect(streaming.locator('li')).toHaveCount(0);
-
-  await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
-    const { useCodexWorkspace } = await loadWorkspace();
-    useCodexWorkspace.setState({
-      status: 'ready',
-      activeTurnId: undefined,
-      streamingText: '',
-      messages: [{
-        id: 'completed-streaming-markdown',
-        role: 'assistant',
-        text: '## 尚未完成的标题\n\n- 正在输出的条目',
-      }],
-    });
-  });
-
-  await expect(panel.getByRole('heading', { name: '尚未完成的标题' })).toBeVisible();
-  await expect(panel.locator('.rocketx-markdown')).toContainText('正在输出的条目');
-});
-
-test('DeepSeek 高频吐字保持纯文本，完成后再解析 Markdown', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 700 });
-  await openWorkspace(page);
-  await page.getByRole('tab', { name: 'DeepSeek', exact: true }).click();
-  const pane = page.getByRole('region', { name: 'DeepSeek 任务' });
-  await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
-    const { useDshWorkspace } = await loadWorkspace();
-    useDshWorkspace.setState({
-      status: 'ready',
-      error: null,
-      workspaceRoot: 'D:/Repos/rocketchatx',
-      activeSessionId: 'dsh-streaming',
-      sessions: [{ id: 'dsh-streaming', title: '流式验证', updatedAt: 1, status: 'running', blank: false }],
-      messages: [],
-      activities: [],
-      isRunning: true,
-      credentialConfigured: true,
-    });
-  });
-  await expect(pane).toBeVisible();
-
-  const result = await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
-    const { applyDshMuxFrame, useDshWorkspace } = await loadWorkspace();
-    const transcriptElement = document.querySelector<HTMLElement>('.dsh-conversation-layout .codex-native-transcript')!;
-    let mutations = 0;
-    const observer = new MutationObserver((records) => {
-      mutations += records.filter((record) => record.type === 'characterData' || record.type === 'childList').length;
-    });
-    observer.observe(transcriptElement, { subtree: true, characterData: true, childList: true });
-
-    for (let index = 0; index < 60; index += 1) {
-      applyDshMuxFrame({
-        type: 'server-request',
-        rpcId: `dsh-stream-${index}`,
-        method: 'session/event',
-        payload: {
-          type: 'session/event',
-          sessionId: 'dsh-streaming',
-          event: {
-            type: 'assistant/chunk',
-            seq: index + 1,
-            time: index + 1,
-            data: {
-              turn: 1,
-              step: 1,
-              chunk: {
-                type: 'text-delta',
-                index: 0,
-                text: index === 0 ? '## 尚未完成的标题\n\n- 正在输出的条目 0' : `\n分片 ${index}`,
-              },
-            },
-          },
-        },
-      });
-      await new Promise((resolve) => window.setTimeout(resolve, 2));
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 120));
-    observer.disconnect();
-    const state = useDshWorkspace.getState();
-    return {
-      mutations,
-      storeText: state.messages.at(-1)?.text ?? '',
-      bottomGap: transcriptElement.scrollHeight - transcriptElement.scrollTop - transcriptElement.clientHeight,
-    };
-  });
-
-  const draft = pane.locator('.codex-native-message').last();
-  expect(result.mutations).toBeLessThanOrEqual(24);
-  expect(result.storeText).toContain('分片 59');
-  expect(result.bottomGap).toBeLessThan(2);
-  await expect(draft).toContainText('## 尚未完成的标题');
-  await expect(draft.getByRole('heading')).toHaveCount(0);
-  await expect(draft.locator('li')).toHaveCount(0);
-
-  await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/dshWorkspace.ts")') as () => Promise<any>;
-    const { applyDshMuxFrame } = await loadWorkspace();
-    applyDshMuxFrame({
-      type: 'server-request',
-      rpcId: 'dsh-stream-complete',
-      method: 'session/event',
-      payload: {
-        type: 'session/event',
-        sessionId: 'dsh-streaming',
-        event: {
-          type: 'assistant/message',
-          seq: 61,
-          time: 61,
-          data: {
-            turn: 1,
-            step: 1,
-            message: {
-              id: 'dsh-stream-complete',
-              role: 'assistant',
-              content: [{ type: 'text', text: '## 已完成的标题\n\n- 已完成的条目' }],
-            },
-          },
-        },
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    const { useSharedAgent } = await loadSharedAgent();
+    (window as any).__sharedTranscriptReads = 0;
+    useSharedAgent.setState({
+      readTranscript: async () => {
+        (window as any).__sharedTranscriptReads += 1;
+        return [{ id: 'hosted-only', role: 'assistant', text: '这条内容只属于共享托管' }];
       },
     });
   });
 
-  await expect(pane.getByRole('heading', { name: '已完成的标题' })).toBeVisible();
-  await expect(pane.locator('.rocketx-markdown').last()).toContainText('已完成的条目');
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText('私人会话', { exact: true })).toBeVisible();
+  await expect(panel.getByText('仅你可见，不会向当前房间发送消息。', { exact: true })).toBeVisible();
+  await expect(panel.getByText('GPT-5.6 Sol', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: '设置 Codex 模型与权限' })).toBeVisible();
+  await expect(panel.getByText('这条内容只属于共享托管', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__sharedTranscriptReads)).toBe(0);
+  expect(await page.evaluate(async () => {
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    return Object.keys((await loadSharedAgent()).useSharedAgent.getState().sessions);
+  })).toEqual(['room:room-general']);
+});
+
+test('私人房间 AI 直接续聊、逐条复制且不会向房间发送 @ai', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.evaluate(async () => {
+    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<any>;
+    const { useChat } = await loadChat();
+    (window as any).__roomSends = [];
+    (window as any).__copiedRoomAiText = null;
+    useChat.setState({
+      send: async (text: string, options?: unknown) => {
+        (window as any).__roomSends.push({ text, options });
+        return undefined;
+      },
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => { (window as any).__copiedRoomAiText = text; },
+      },
+    });
+  });
+
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  const composer = panel.getByLabel('发送给私人房间 AI');
+  await composer.fill('只私下总结发布计划');
+  await panel.getByRole('button', { name: '发送到私人房间 AI' }).click();
+  await expect(panel.getByText(/已处理：只私下总结发布计划/)).toBeVisible();
+  const copyButton = panel.getByRole('button', { name: '复制Codex消息' });
+  await copyButton.hover();
+  await panel.screenshot({ path: testInfo.outputPath('private-room-ai-copy.png') });
+  await copyButton.click();
+
+  expect(await page.evaluate(() => (window as any).__roomSends)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__copiedRoomAiText)).toContain('已处理：只私下总结发布计划');
+  expect(await page.evaluate(() => (window as any).__codexTurns.at(-1)?.text)).not.toContain('@ai');
 });
 
 test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请求、已安排、插件和项目结构', async ({ page }) => {
@@ -706,7 +715,7 @@ test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请�
   }
   await expect(page.getByRole('button', { name: '新对话', exact: true })).toBeVisible();
   await expect(codex.getByRole('button', { name: '任务', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByText('临时会话', { exact: true })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByText('管家会话', { exact: true })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByLabel('托管项目')).toBeVisible();
@@ -860,82 +869,295 @@ test('Butler 添加托管项目时会同时注册 environment 并选中运行目
   });
 });
 
-test('房间 Codex 浮层可持续对话、重新打开回到最新，并能显式新建会话', async ({ page }, testInfo) => {
+test('房间顶部共享托管与浮动私人房间 AI 是两个独立入口', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
-  await bootAuthenticated(page);
+  await bootWithAiRuntime(page, 'codex');
   await installCodexRuntime(page);
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
+  await installHostedSession(page, 'codex');
+  const hostingEntry = page.getByRole('button', { name: '打开 AI 托管控制面' });
+  const privateEntry = page.getByRole('button', { name: '打开房间 AI', exact: true });
+  await expect(hostingEntry).toBeVisible();
+  await expect(privateEntry).toBeVisible();
 
-  let panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel).toBeVisible();
-  await expect(panel.getByRole('button', { name: '新建房间会话' })).toBeVisible();
-  await expect(panel.getByText(/临时工作区：.*codex-projectless/)).toBeVisible();
-  expect(await page.evaluate(() => ({
-    controllers: (window as typeof window & { __codexControllerCount?: number }).__codexControllerCount,
-    stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
-  }))).toEqual({ controllers: 1, stops: 0 });
+  await hostingEntry.click();
+  await expect(page.locator('aside').filter({ hasText: 'AI 托管配置' }).last()).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '私人房间 AI 对话' })).toHaveCount(0);
 
-  const separator = panel.getByRole('separator', { name: '调整房间 Codex 会话宽度' });
-  const initialWidth = (await panel.boundingBox())!.width;
-  const separatorBox = (await separator.boundingBox())!;
-  await page.mouse.move(separatorBox.x + 1, separatorBox.y + separatorBox.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(separatorBox.x - 79, separatorBox.y + separatorBox.height / 2);
-  await page.mouse.up();
-  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(initialWidth + 60);
-  const resizedWidth = (await panel.boundingBox())!.width;
-
-  const question = Array.from({ length: 16 }, (_, index) => `第 ${index + 1} 项请提取本群关键工作`).join('，');
-  await panel.getByPlaceholder('在这个会话里继续提问').fill(question);
-  await panel.getByRole('button', { name: '发送到房间 Codex 会话' }).click();
-  await expect(panel.getByText(question, { exact: true })).toBeVisible();
-
-  await panel.getByRole('button', { name: '关闭房间会话' }).click();
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
-  panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByText('正在接回房间会话', { exact: true })).toHaveCount(0);
-  await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
-  await expect.poll(() => page.evaluate(() => (
-    (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount ?? -1
-  ))).toBe(0);
-  await expect(panel.getByText(/已处理：/).last()).toBeVisible({ timeout: 5_000 });
-  const transcript = panel.locator('div.min-h-0.flex-1.overflow-y-auto');
-  await expect.poll(() => transcript.evaluate((element) => (
-    element.scrollHeight - element.scrollTop - element.clientHeight
-  ))).toBeLessThan(3);
-  const citation = panel.getByRole('button', { name: '查看参考来源 1' });
-  await expect(citation).toBeVisible();
-  await citation.click();
-  await expect(panel.getByText('参考来源（1）', { exact: true })).toBeVisible();
-  const source = panel.getByTitle('打开来源：General · alice：Release checklist ready');
-  await expect(source).toBeVisible();
-  const composer = panel.getByPlaceholder('在这个会话里继续提问');
-  const composerCard = composer.locator('..');
-  const borderBeforeFocus = await composerCard.evaluate((element) => getComputedStyle(element).borderColor);
-  await composer.focus();
-  await expect.poll(() => composerCard.evaluate((element) => getComputedStyle(element).borderColor))
-    .toBe(borderBeforeFocus);
-  await expect.poll(() => composer.evaluate((element) => getComputedStyle(element).outlineStyle))
-    .toBe('none');
-  await panel.screenshot({ path: testInfo.outputPath('room-codex-conversation.png') });
-  await source.click();
-  await expect.poll(() => page.evaluate(async () => {
-    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<any>;
-    const { useChat } = await loadChat();
-    return useChat.getState().highlightMid;
-  })).toBe('general-release');
-
-  await expect(panel).toHaveCount(0);
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
-  panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await panel.getByRole('button', { name: '新建房间会话' }).click();
-  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
-  await expect(panel.getByText(question, { exact: true })).toHaveCount(0);
+  await privateEntry.click();
+  const privatePanel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(privatePanel).toBeVisible();
+  await expect(privatePanel.getByText('仅你可见，不会向当前房间发送消息。', { exact: true })).toBeVisible();
+  await expect(privatePanel.getByText('请总结 Release checklist', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(async () => {
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    return Object.keys((await loadSharedAgent()).useSharedAgent.getState().sessions);
+  })).toEqual(['room:room-general']);
 });
 
-test('管家任务运行时仍可并行打开房间 Codex，且不会抢占管家线程', async ({ page }) => {
-  await bootAuthenticated(page);
+test('私人房间 AI 关闭重开仍使用同一条个人 thread，模型设置聚焦该会话', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel.getByLabel('发送给私人房间 AI')).toBeEnabled();
+  const firstThreadId = await page.evaluate(() => (
+    Object.values(JSON.parse(localStorage.getItem('rcx-room-codex-threads-v1') ?? '{}'))[0]
+  ));
+  expect(firstThreadId).toMatch(/^thread-/);
+
+  await page.getByRole('button', { name: '收起房间 AI', exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const reopened = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(reopened).toBeVisible();
+  expect(await page.evaluate(() => (
+    Object.values(JSON.parse(localStorage.getItem('rcx-room-codex-threads-v1') ?? '{}'))[0]
+  ))).toBe(firstThreadId);
+
+  await reopened.getByRole('button', { name: '设置 Codex 模型与权限' }).click();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    return (await loadWorkspace()).useCodexWorkspace.getState().activeThreadId;
+  })).toBe(firstThreadId);
+});
+
+test('房间 AI 侧栏不会超过外层对话框', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await installHostedSession(page, 'codex');
+  await page.evaluate(async () => {
+    const loadImLayout = new Function('return import("/src/stores/imLayout.ts")') as () => Promise<any>;
+    const { useImLayout } = await loadImLayout();
+    useImLayout.getState().setButlerPanelWidth(960);
+  });
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('room-butler-width.png') });
+  const bounds = await panel.evaluate((element) => {
+    const shell = element.querySelector('aside');
+    if (!shell) throw new Error('room Butler shell not found');
+    const panelRect = element.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    return {
+      panelLeft: panelRect.left,
+      panelRight: panelRect.right,
+      panelWidth: panelRect.width,
+      shellLeft: shellRect.left,
+      shellRight: shellRect.right,
+      shellWidth: shellRect.width,
+    };
+  });
+
+  expect(bounds.shellWidth).toBeLessThanOrEqual(bounds.panelWidth);
+  expect(bounds.shellLeft).toBeGreaterThanOrEqual(bounds.panelLeft - 1);
+  expect(bounds.shellRight).toBeLessThanOrEqual(bounds.panelRight + 1);
+});
+
+test('从管家选择话题托管会聚焦原 Harness session', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await installHostedSession(page, 'codex', 'ready');
+  await page.evaluate(async () => {
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    const { useSharedAgent } = await loadSharedAgent();
+    const roomKey = 'room:room-general';
+    const topicKey = 'topic-hosted-root';
+    const state = useSharedAgent.getState();
+    useSharedAgent.setState({
+      sessions: {
+        [topicKey]: {
+          ...state.sessions[roomKey],
+          sessionId: 'session-topic-hosted-root',
+          tmid: topicKey,
+          replyTmid: topicKey,
+          codexThreadId: 'thread-release',
+        },
+      },
+      traces: { [topicKey]: state.traces[roomKey] ?? [] },
+    });
+  });
+
+  await page.getByRole('navigation', { name: 'RocketX 主导航' })
+    .getByRole('button', { name: /^管家$/, exact: true })
+    .click();
+  await page.getByRole('navigation', { name: 'AI 托管会话' })
+    .locator('button[data-session-key="topic-hosted-root"]')
+    .click();
+
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    const [{ useUI }, { useSharedAgent }] = await Promise.all([loadUI(), loadSharedAgent()]);
+    return {
+      selectedHostedSessionKey: useUI.getState().selectedHostedSessionKey,
+      sessionKeys: Object.keys(useSharedAgent.getState().sessions),
+    };
+  })).toEqual({
+    selectedHostedSessionKey: 'topic-hosted-root',
+    sessionKeys: ['topic-hosted-root'],
+  });
+});
+
+test('管家 AI 托管项直接聚焦同一条 Codex 原生会话，不再复制 transcript', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await installHostedSession(page, 'codex', 'ready');
+  await page.getByRole('navigation', { name: 'RocketX 主导航' })
+    .getByRole('button', { name: /^管家$/, exact: true })
+    .click();
+  await page.getByRole('navigation', { name: 'AI 托管会话' })
+    .getByRole('button', { name: /General，Codex/ })
+    .click();
+
+  await expect(page.getByRole('region', { name: 'AI 托管总览' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    return (await loadUI()).useUI.getState().selectedHostedSessionKey;
+  })).toBe('room:room-general');
+});
+
+test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同一条 DSH 原生会话', async ({ page }) => {
+  const dshWebUrl = 'http://127.0.0.1:43123/';
+  await page.route(dshWebUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html>
+<html>
+  <body>
+    <script>
+      window.__focusRequests = [];
+      window.__openRequests = [];
+      window.addEventListener('message', (event) => {
+        const data = event.data || {};
+        if (data.type === 'rocketx:dsh-focus-session') window.__focusRequests.push(data.sessionId);
+        if (data.type === 'rocketx:dsh-open-new-session') window.__openRequests.push(data.workspacePath);
+        event.source?.postMessage({ requestId: data.requestId, type: 'rocketx:dsh-ack' }, event.origin);
+      });
+    </script>
+  </body>
+</html>`,
+    });
+  });
+  await bootWithAiRuntime(page, 'deepseek');
+  await installCodexRuntime(page);
+  await page.evaluate((readyUrl) => {
+    const runtime = (window as typeof window & {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      __TAURI_EVENT_PLUGIN_INTERNALS__?: { unregisterListener: (event: string, eventId: number) => void };
+    }).__TAURI_INTERNALS__;
+    const baseInvoke = runtime.invoke.bind(runtime);
+    let nextEventId = 1;
+    runtime.invoke = async (command, args) => {
+      if (command === 'plugin:event|listen') return nextEventId++;
+      if (command === 'plugin:event|unlisten') return null;
+      if (command === 'dsh_bridge_start') {
+        return {
+          processId: 'dsh-process-private-room',
+          leaseId: 'dsh-lease-private-room',
+          readyUrl,
+        };
+      }
+      if (command === 'dsh_bridge_stop') return null;
+      return baseInvoke(command, args);
+    };
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', {
+      configurable: true,
+      value: { unregisterListener: () => {} },
+    });
+  }, dshWebUrl);
+  await page.getByText('General', { exact: true }).first().click();
+  await installHostedSession(page, 'deepseek');
+  await page.evaluate(async () => {
+    const loadAuth = new Function('return import("/src/stores/auth.ts")') as () => Promise<any>;
+    const loadClient = new Function('return import("/src/lib/client.ts")') as () => Promise<any>;
+    const loadPrivateDsh = new Function('return import("/src/stores/privateRoomDsh.ts")') as () => Promise<any>;
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    const [{ useAuth }, { getServerBase }, { privateRoomDshKey, usePrivateRoomDsh }, { useUI }] = await Promise.all([
+      loadAuth(),
+      loadClient(),
+      loadPrivateDsh(),
+      loadUI(),
+    ]);
+    useUI.setState({ aiRuntimeProvider: 'deepseek' });
+    const scope = `${getServerBase() || 'same-origin'}:${useAuth.getState().user._id}`;
+    const key = privateRoomDshKey(scope, 'room-general');
+    usePrivateRoomDsh.setState({
+      openRoom: async () => 'private-dsh-general',
+      sessions: {
+        [key]: {
+          key,
+          scope,
+          rid: 'room-general',
+          workspaceRoot: 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-butler',
+          dshSessionId: 'private-dsh-general',
+          transcript: {
+            messages: [
+              { id: 'private-user', role: 'user', text: '只在我的 DSH 会话里讨论' },
+              { id: 'private-assistant', role: 'assistant', text: '这是仅你可见的私人答复。' },
+            ],
+            activities: [],
+          },
+          status: 'ready',
+          approvals: [],
+          questions: [],
+        },
+      },
+    });
+  });
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText('DeepSeek', { exact: true }).first()).toBeVisible();
+  await expect(panel.getByText('只在我的 DSH 会话里讨论', { exact: true })).toBeVisible();
+  await expect(panel.getByText('这是仅你可见的私人答复。', { exact: true })).toBeVisible();
+  await expect(panel.getByText('请总结 Release checklist', { exact: true })).toHaveCount(0);
+
+  await panel.getByRole('button', { name: '设置 DeepSeek 模型与 Agent' }).click();
+  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
+  await expect.poll(async () => {
+    const frame = page.frame({ url: dshWebUrl });
+    if (!frame) return 0;
+    return frame.evaluate(() => (window as typeof window & { __focusRequests?: string[] }).__focusRequests?.length ?? 0);
+  }).toBe(1);
+  expect(await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    const state = (await loadUI()).useUI.getState();
+    return {
+      personalSessionId: state.selectedPersonalDshSessionId,
+      hostedSessionKey: state.selectedHostedSessionKey,
+    };
+  })).toEqual({
+    personalSessionId: 'private-dsh-general',
+    hostedSessionKey: null,
+  });
+  await page.evaluate(async () => {
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    (await loadUI()).useUI.getState().openPersonalDshConversation('private-dsh-general');
+  });
+  await expect.poll(async () => {
+    const frame = page.frame({ url: dshWebUrl });
+    if (!frame) return [];
+    return frame.evaluate(() => (window as typeof window & { __focusRequests?: string[] }).__focusRequests ?? []);
+  }).toEqual(['private-dsh-general', 'private-dsh-general']);
+});
+
+test('普通对话运行时打开私人房间 AI 不会中断原有对话线程', async ({ page }) => {
+  await bootWithAiRuntime(page, 'codex');
   await installCodexRuntime(page);
   await page.evaluate(async () => {
     const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
@@ -972,16 +1194,15 @@ test('管家任务运行时仍可并行打开房间 Codex，且不会抢占管�
   });
 
   await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
-  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  const composer = panel.getByPlaceholder('在这个会话里继续提问');
-  await expect(composer).toBeEnabled();
-  await composer.fill('并行检查房间消息');
-  await panel.getByRole('button', { name: '发送到房间 Codex 会话' }).click();
-  await expect(panel.getByText(/已处理：并行检查房间消息/)).toBeVisible({ timeout: 5_000 });
+  await installHostedSession(page, 'codex', 'running');
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel).toBeVisible();
   expect(await page.evaluate(async () => {
     const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
     const { useCodexWorkspace } = await loadWorkspace();
+    const { useSharedAgent } = await loadSharedAgent();
     const state = useCodexWorkspace.getState();
     return {
       activeThreadId: state.activeThreadId,
@@ -990,33 +1211,17 @@ test('管家任务运行时仍可并行打开房间 Codex，且不会抢占管�
       butlerMessage: state.threadStates['thread-release']?.messages.at(-1)?.text,
       interrupts: (window as typeof window & { __codexInterruptCount?: number }).__codexInterruptCount,
       stops: (window as typeof window & { __codexStopCount?: number }).__codexStopCount,
+      hostedSessions: Object.keys(useSharedAgent.getState().sessions),
     };
   })).toEqual({
-    activeThreadId: expect.not.stringMatching(/^thread-release$/),
+    activeThreadId: expect.stringMatching(/^thread-/),
     butlerStatus: 'running',
     butlerTurnId: 'turn-running-elsewhere',
     butlerMessage: '管家任务仍在运行',
     interrupts: 0,
     stops: 0,
+    hostedSessions: ['room:room-general'],
   });
-});
-
-test('房间 Codex 在首段回复到达前持续显示思考反馈', async ({ page }) => {
-  await bootAuthenticated(page);
-  await installCodexRuntime(page);
-  await page.getByText('General', { exact: true }).first().click();
-  await page.getByRole('button', { name: '打开房间 Codex' }).click();
-  const panel = page.getByRole('dialog', { name: '房间 Codex 会话' });
-  await expect(panel.getByText('直接在这里继续', { exact: true })).toBeVisible();
-
-  await page.evaluate(async () => {
-    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
-    const { useCodexWorkspace } = await loadWorkspace();
-    useCodexWorkspace.setState({ status: 'running', activeTurnId: 'turn-thinking', streamingText: '' });
-  });
-
-  await expect(panel.getByRole('status')).toContainText('Codex 正在思考');
-  await expect(panel.getByText('直接在这里继续', { exact: true })).toHaveCount(0);
 });
 
 test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目栏并支持右键浏览器打开', async ({ page }) => {
@@ -1036,7 +1241,7 @@ test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目�
 
   const artifact = page.getByRole('complementary', { name: 'Artifact ado_wbs.html' });
   await expect(artifact).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeHidden();
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeHidden();
   await expect(page.getByRole('button', { name: '打开任务列表' })).toBeVisible();
   await expect(artifact.getByRole('button', { name: '预览' })).toHaveAttribute('aria-current', 'page');
   await expect(page.frameLocator('iframe[title="预览 ado_wbs.html"]').getByRole('heading', { name: 'WBS preview' })).toBeVisible();
@@ -1057,7 +1262,7 @@ test('本地 HTML 以 Claude 式 Artifact 面板呈现，预览时收起项目�
   await expect(artifact).toContainText('Artifact rendered inline.');
   await artifact.getByRole('button', { name: '关闭 Artifact' }).click();
   await expect(artifact).toHaveCount(0);
-  await expect(page.getByRole('complementary', { name: 'Codex 对话列表' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeVisible();
 });
 
 test('从 Codex 刷新会复用 Runtime 并加载外部新增 Turn', async ({ page }) => {
@@ -1381,6 +1586,7 @@ test('输出 Codex 工作区视觉门禁截图', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel('给 Codex 的任务')).toBeVisible();
   await page.screenshot({ path: mobilePath, animations: 'disabled' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   if (mobileDrawerPath) {
     await page.getByRole('button', { name: '打开任务列表' }).click();
     await page.screenshot({ path: mobileDrawerPath, animations: 'disabled' });

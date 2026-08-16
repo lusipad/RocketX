@@ -36,41 +36,38 @@ test('房间任务面板仍作为覆盖层，不收窄分组与会话列表', as
   assert.doesNotMatch(layout, /AVATAR_ONLY_CONVERSATION_WIDTH|avatarOnly/);
 });
 
-test('房间侧栏接回同一个 Codex 任务，并保留宽度与来源交互', async () => {
-  const [chatArea, butlerPanel, butlerSources, codexWorkspace] = await Promise.all([
+test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel 管理', async () => {
+  const [chatArea, butlerPanel, agentPanel] = await Promise.all([
     readFile(new URL('../../apps/web/src/components/ChatArea.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerPanel.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../../apps/web/src/components/ButlerSources.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../../apps/web/src/stores/codexWorkspace.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/components/AgentPanel.tsx', import.meta.url), 'utf8'),
   ]);
 
   assert.match(chatArea, /const butlerPanelOpen = rightPanel\?\.kind === 'butler';/);
   assert.match(chatArea, /registeredPanels\.find\(\(candidate\) => candidate\.id === 'butler'\)\?\.render/);
   assert.match(chatArea, /butlerPanelOpen && ButlerPanel/);
+  assert.match(chatArea, /id="room-butler-launcher"[\s\S]*onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
+  assert.match(chatArea, /aria-label="配置 AI 托管"/);
+  assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
+  assert.match(chatArea, /onClick=\{\(\) => setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)\}/);
 
-  assert.match(butlerPanel, /<h2 className="text-sm font-semibold text-ink">在 Codex 中处理<\/h2>/);
-  assert.match(butlerPanel, /aria-label="发送到房间 Codex 会话"/);
-  assert.match(butlerPanel, /data-composer-input/);
-  assert.match(butlerPanel, /aria-label="新建房间会话"/);
-  assert.match(butlerPanel, /ROOM_THREAD_STORAGE_KEY/);
-  assert.match(butlerPanel, /prepareRoomWorkspace/);
-  assert.match(butlerPanel, /setWorkspaceRoot\(defaultRoot, \{ reuseRuntime: true \}\)/);
-  assert.match(butlerPanel, /connect\(\{ refreshThreads: false \}\)/);
-  assert.match(butlerPanel, /current\.status === 'interrupted'/);
-  assert.match(butlerPanel, /runtimeReconnected \|\| current\.activeThreadId !== savedThreadId/);
-  assert.match(butlerPanel, /useStickToBottom/);
-  assert.match(butlerPanel, /await useCodexWorkspace\.getState\(\)\.send/);
-  assert.match(butlerPanel, /useUI\.getState\(\)\.openButlerConversation\(\)/);
-  assert.match(butlerPanel, /useImLayout/);
-  assert.match(butlerPanel, /aria-label="调整房间 Codex 会话宽度"/);
-  assert.match(butlerPanel, /setButlerPanelWidth/);
-  assert.match(butlerPanel, /resetButlerPanelWidth/);
-  assert.match(butlerPanel, /<ButlerSources sources=\{entry\.sources\} text=\{entry\.text\}>/);
-  assert.match(butlerSources, /参考来源（\{visibleSources\.length\}）/);
-  assert.match(butlerSources, /openSource\(source\)/);
-  assert.match(codexWorkspace, /sources\?: ButlerSource\[\]/);
-  assert.match(codexWorkspace, /extractButlerSources/);
-  assert.doesNotMatch(butlerPanel, /handoffToCodexTask/);
-  assert.doesNotMatch(butlerPanel, /useButler/);
-  assert.doesNotMatch(butlerPanel, /focus-within:border-primary/);
+  assert.match(butlerPanel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/);
+  assert.match(butlerPanel, /privateRoomDshKey\(scope, rid\)/);
+  assert.match(butlerPanel, /usePrivateRoomDsh/);
+  assert.match(butlerPanel, /useCodexWorkspace\.getState\(\)\.send/);
+  assert.match(butlerPanel, /<PanelShell[\s\S]*resizable/);
+  assert.match(butlerPanel, /aria-label="私人房间 AI 对话"/);
+  assert.match(butlerPanel, /私人会话/);
+  assert.match(butlerPanel, /仅你可见，不会向当前房间发送消息/);
+  assert.match(butlerPanel, /ConversationCopyButton/);
+  assert.match(butlerPanel, /navigator\.clipboard\.writeText\(text\)/);
+  assert.match(butlerPanel, /aria-label="设置 Codex 模型与权限"/);
+  assert.match(butlerPanel, /aria-label="设置 DeepSeek 模型与 Agent"/);
+  assert.doesNotMatch(butlerPanel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|send\(`?@ai/);
+
+  assert.match(agentPanel, /useSharedAgent/);
+  assert.match(agentPanel, /const tmid = sessionKey \?\?/);
+  assert.match(agentPanel, /resizable=\{resizable\}/);
+  assert.match(agentPanel, /openButlerConversation\(tmid\)/);
+  assert.match(agentPanel, /useStickToBottom\(\[sessionTraces\]\)/);
 });

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -14,12 +14,13 @@ use std::{
 };
 
 use flate2::read::GzDecoder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use tauri::{Emitter, Manager};
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MIN_NODE_22_MINOR: u64 = 19;
 const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const DSH_VERIFIED_VERSION: &str = "0.1.0-rc.6";
@@ -38,12 +39,27 @@ const DSH_BUNDLED_BRIDGE_ENTRY: &str = "dsh_bridge.mjs";
 #[derive(Clone)]
 struct ManagedDshBridge {
     process_id: String,
-    connection_id: String,
-    workspace_root: String,
     source_root: String,
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
+    running: Arc<AtomicBool>,
+    stopping: bool,
+    host_runtime_dir: PathBuf,
+    ready_url: Option<String>,
+    leases: HashMap<String, DshConnectionLease>,
+}
+
+#[derive(Clone)]
+struct DshConnectionLease {
+    connection_id: String,
+    workspace_root: String,
+    mode: DshBridgeMode,
     runtime_dir: PathBuf,
+}
+
+enum DshBridgeRelease {
+    Lease(PathBuf),
+    Process(ManagedDshBridge),
 }
 
 #[derive(Default)]
@@ -71,6 +87,55 @@ struct DshExitEvent {
 #[serde(rename_all = "camelCase")]
 pub struct DshBridgeInfo {
     process_id: String,
+    lease_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ready_url: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshRuntimeProbe {
+    ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DshAgentAttachmentMetadata {
+    connection_id: String,
+    lease_id: String,
+    relative_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshAgentAttachmentRuntimePath {
+    path: String,
+    root: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DshBridgeMode {
+    Controller,
+    Web,
+}
+
+impl DshBridgeMode {
+    fn from_arg(mode: Option<&str>) -> Result<Self, String> {
+        match mode.map(str::trim).filter(|value| !value.is_empty()) {
+            Some("controller") | None => Ok(Self::Controller),
+            Some("web") => Ok(Self::Web),
+            Some(other) => Err(format!("不支持的 DSH mode：{other}")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Controller => "controller",
+            Self::Web => "web",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -148,6 +213,42 @@ fn validate_connection_id(connection_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn safe_attachment_path(relative_path: &str) -> Result<PathBuf, String> {
+    if relative_path.is_empty() || relative_path.len() > 300 {
+        return Err("invalid Agent attachment path".to_string());
+    }
+    let path = Path::new(relative_path);
+    if !path
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("invalid Agent attachment path".to_string());
+    }
+    let sensitive = path.components().any(|component| {
+        let value = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+        value == ".env"
+            || value.starts_with(".env.")
+            || value == "auth.json"
+            || matches!(
+                value.as_str(),
+                "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519"
+            )
+            || matches!(
+                Path::new(&value)
+                    .extension()
+                    .and_then(|extension| extension.to_str()),
+                Some("pem" | "key" | "p12" | "pfx")
+            )
+            || value.starts_with("credentials.")
+            || value.starts_with("secret.")
+            || value.starts_with("secrets.")
+    });
+    if sensitive {
+        return Err("敏感文件不能加入 Agent 上下文".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
 fn canonical_directory(path: &str) -> Result<PathBuf, String> {
     let resolved =
         std::fs::canonicalize(path).map_err(|error| format!("DSH 工作区不可用：{error}"))?;
@@ -155,16 +256,6 @@ fn canonical_directory(path: &str) -> Result<PathBuf, String> {
         return Err("DSH 工作区必须是目录".to_string());
     }
     Ok(PathBuf::from(host_path(&resolved)))
-}
-
-fn debug_sibling_dsh_root() -> Option<PathBuf> {
-    if !cfg!(debug_assertions) {
-        return None;
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .map(|path| path.join("deepseek-harness"))
 }
 
 fn derive_source_root(candidate: &Path) -> PathBuf {
@@ -403,14 +494,7 @@ fn source_root_from_candidates(explicit: Option<&str>) -> Result<Option<PathBuf>
     if let Some(candidate) = explicit_or_env_source_candidate(explicit) {
         return resolve_source_root(&candidate).map(Some);
     }
-    let Some(candidate) = debug_sibling_dsh_root() else {
-        return Ok(None);
-    };
-    let root = derive_source_root(&candidate);
-    if !source_dsh_cli_entry(&root).is_file() {
-        return Ok(None);
-    }
-    resolve_source_root(&candidate).map(Some)
+    Ok(None)
 }
 
 fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
@@ -818,6 +902,20 @@ fn resolve_dsh_runtime(
     })
 }
 
+#[tauri::command]
+pub fn dsh_runtime_probe(app: tauri::AppHandle, source_path: Option<String>) -> DshRuntimeProbe {
+    match resolve_dsh_runtime(&app, source_path.as_deref()) {
+        Ok(_) => DshRuntimeProbe {
+            ready: true,
+            reason: None,
+        },
+        Err(reason) => DshRuntimeProbe {
+            ready: false,
+            reason: Some(reason),
+        },
+    }
+}
+
 fn encode_message(message: serde_json::Value) -> Result<Vec<u8>, String> {
     if !message.is_object() {
         return Err("DSH bridge message must be a JSON object".to_string());
@@ -831,6 +929,21 @@ fn encode_message(message: serde_json::Value) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn decode_attachment_request(bytes: &[u8]) -> Result<(DshAgentAttachmentMetadata, &[u8]), String> {
+    let metadata_size = bytes
+        .get(..4)
+        .and_then(|value| value.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or_else(|| "invalid Agent attachment request".to_string())?
+        as usize;
+    if metadata_size == 0 || metadata_size > 1_024 || bytes.len() < 4 + metadata_size {
+        return Err("invalid Agent attachment request".to_string());
+    }
+    let metadata = serde_json::from_slice(&bytes[4..4 + metadata_size])
+        .map_err(|_| "invalid Agent attachment metadata".to_string())?;
+    Ok((metadata, &bytes[4 + metadata_size..]))
+}
+
 fn graceful_shutdown_message() -> &'static [u8] {
     b"{\"kind\":\"shutdown\"}\n"
 }
@@ -839,9 +952,89 @@ fn yaml_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn percent_encode_file_url_path(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        let safe = matches!(
+            *byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'~'
+                | b'/'
+                | b':'
+        );
+        if safe {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    encoded
+}
+
+fn file_url_for_path(path: &Path) -> Result<String, String> {
+    let absolute = path
+        .canonicalize()
+        .map_err(|error| format!("无法解析 DSH 插件路径：{error}"))?;
+    let host = host_path(&absolute);
+    let normalized = host
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&host)
+        .replace('\\', "/");
+    let with_leading_slash = if normalized.starts_with('/') {
+        normalized
+    } else {
+        format!("/{normalized}")
+    };
+    Ok(format!(
+        "file://{}",
+        percent_encode_file_url_path(&with_leading_slash)
+    ))
+}
+
+fn dsh_focus_plugin_package_json() -> &'static str {
+    include_str!("dsh_focus_plugin/package.json")
+}
+
+fn dsh_focus_plugin_index() -> &'static str {
+    include_str!("dsh_focus_plugin/index.mjs")
+}
+
+fn dsh_focus_plugin_client() -> &'static str {
+    include_str!("dsh_focus_plugin/client.js")
+}
+
+fn write_dsh_focus_plugin(runtime_dir: &Path) -> Result<PathBuf, String> {
+    let plugin_dir = runtime_dir.join("dsh_focus_plugin");
+    std::fs::create_dir_all(&plugin_dir)
+        .map_err(|error| format!("无法准备 DSH focus 插件目录：{error}"))?;
+    std::fs::write(
+        plugin_dir.join("package.json"),
+        dsh_focus_plugin_package_json(),
+    )
+    .map_err(|error| format!("无法写入 DSH focus package.json：{error}"))?;
+    std::fs::write(plugin_dir.join("index.mjs"), dsh_focus_plugin_index())
+        .map_err(|error| format!("无法写入 DSH focus index.mjs：{error}"))?;
+    std::fs::write(plugin_dir.join("client.js"), dsh_focus_plugin_client())
+        .map_err(|error| format!("无法写入 DSH focus client.js：{error}"))?;
+    Ok(plugin_dir.join("index.mjs"))
+}
+
+fn focus_plugin_patch_text(plugin_url: &str) -> String {
+    format!(
+        concat!("    - id: {}\n", "      name: {}\n"),
+        yaml_quote("rocketx-dsh-focus-plugin"),
+        yaml_quote(plugin_url),
+    )
+}
+
 fn business_mcp_patch_text(
     patch_key: &str,
-    workspace_root: &str,
+    working_directory: &str,
     command: &str,
 ) -> Result<String, String> {
     let suffix = patch_key
@@ -889,7 +1082,7 @@ fn business_mcp_patch_text(
         yaml_quote(&format!("mcp-{patch_key}")),
         yaml_quote(&server_name),
         yaml_quote(command),
-        yaml_quote(workspace_root),
+        yaml_quote(working_directory),
     ))
 }
 
@@ -897,14 +1090,33 @@ fn cleanup_runtime_dir(runtime_dir: &Path) {
     let _ = std::fs::remove_dir_all(runtime_dir);
 }
 
-fn write_business_mcp_patch(
-    runtime_dir: &Path,
+fn dsh_patch_text(
     patch_key: &str,
-    workspace_root: &str,
-) -> Result<PathBuf, String> {
+    business_mcp_working_directory: &str,
+    command: &str,
+    focus_plugin_url: &str,
+) -> Result<String, String> {
+    let business = business_mcp_patch_text(patch_key, business_mcp_working_directory, command)?;
+    Ok(format!(
+        concat!("- insert:\n", "{}", "{}"),
+        business
+            .strip_prefix("- insert:\n")
+            .ok_or_else(|| "DSH patch 模板损坏".to_string())?,
+        focus_plugin_patch_text(focus_plugin_url),
+    ))
+}
+
+fn write_dsh_patch(runtime_dir: &Path, patch_key: &str) -> Result<PathBuf, String> {
     let command =
         std::env::current_exe().map_err(|error| format!("无法定位 RocketX 可执行文件：{error}"))?;
-    let patch = business_mcp_patch_text(patch_key, workspace_root, &host_path(&command))?;
+    let focus_plugin_entry = write_dsh_focus_plugin(runtime_dir)?;
+    let focus_plugin_url = file_url_for_path(&focus_plugin_entry)?;
+    let patch = dsh_patch_text(
+        patch_key,
+        &host_path(runtime_dir),
+        &host_path(&command),
+        &focus_plugin_url,
+    )?;
     let patch_path = runtime_dir.join("cordis.patch.yml");
     std::fs::write(&patch_path, patch).map_err(|error| format!("无法写入 DSH patch：{error}"))?;
     Ok(patch_path)
@@ -922,24 +1134,160 @@ fn runtime_directory(
     Ok(root)
 }
 
+fn host_runtime_directory(connections_root: &Path, instance_id: u64) -> Result<PathBuf, String> {
+    runtime_directory(connections_root, "_host", instance_id)
+}
+
+fn ready_url_from_line(line: &str) -> Option<String> {
+    let frame = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    match (
+        frame.get("kind").and_then(serde_json::Value::as_str),
+        frame.get("url").and_then(serde_json::Value::as_str),
+    ) {
+        (Some("ready"), Some(url)) => Some(url.to_string()),
+        _ => None,
+    }
+}
+
 fn process_is_running(process: &ManagedDshBridge) -> bool {
-    process
-        .child
+    process.running.load(Ordering::Acquire)
+}
+
+fn attach_connection_lease(
+    process: &mut ManagedDshBridge,
+    connections_root: &Path,
+    source_root: &str,
+    connection_id: String,
+    workspace_root: String,
+    mode: DshBridgeMode,
+    lease_instance: u64,
+) -> Result<DshBridgeInfo, String> {
+    if process.stopping {
+        return Err("DSH bridge 正在停止，请稍后重试".to_string());
+    }
+    let conflicts = process.source_root != source_root
+        || process
+            .leases
+            .values()
+            .filter(|lease| lease.connection_id == connection_id)
+            .any(|lease| lease.workspace_root != workspace_root || lease.mode != mode);
+    if conflicts {
+        return Err(
+            "DSH connectionId 已绑定到其他 workspace、sourcePath 或 mode；请先 stop 再重连"
+                .to_string(),
+        );
+    }
+
+    let lease_id = format!("lease-{lease_instance}");
+    let runtime_dir = runtime_directory(connections_root, &connection_id, lease_instance)?;
+    process.leases.insert(
+        lease_id.clone(),
+        DshConnectionLease {
+            connection_id,
+            workspace_root,
+            mode,
+            runtime_dir,
+        },
+    );
+    Ok(DshBridgeInfo {
+        process_id: process.process_id.clone(),
+        lease_id,
+        ready_url: process.ready_url.clone(),
+    })
+}
+
+fn release_connection_lease(
+    processes: &mut HashMap<String, ManagedDshBridge>,
+    process_id: &str,
+    lease_id: &str,
+) -> Result<DshBridgeRelease, String> {
+    let process = processes
+        .get_mut(process_id)
+        .ok_or_else(|| "DSH bridge 进程未运行".to_string())?;
+    if process.stopping {
+        return Err("DSH bridge 正在停止".to_string());
+    }
+    if !process.leases.contains_key(lease_id) {
+        return Err("DSH bridge lease 未运行".to_string());
+    }
+    if process.leases.len() > 1 {
+        let lease = process
+            .leases
+            .remove(lease_id)
+            .ok_or_else(|| "DSH bridge lease 未运行".to_string())?;
+        Ok(DshBridgeRelease::Lease(lease.runtime_dir))
+    } else {
+        process.stopping = true;
+        Ok(DshBridgeRelease::Process(process.clone()))
+    }
+}
+
+fn reconcile_process_stop(
+    processes: &mut HashMap<String, ManagedDshBridge>,
+    process_id: &str,
+    stop_succeeded: bool,
+) -> Option<ManagedDshBridge> {
+    let still_running = processes.get(process_id).is_some_and(process_is_running);
+    if stop_succeeded || !still_running {
+        return processes.remove(process_id);
+    }
+    if let Some(process) = processes.get_mut(process_id) {
+        process.stopping = false;
+    }
+    None
+}
+
+fn write_dsh_agent_attachment(
+    processes: &Arc<Mutex<HashMap<String, ManagedDshBridge>>>,
+    raw: &[u8],
+) -> Result<DshAgentAttachmentRuntimePath, String> {
+    let (metadata, bytes) = decode_attachment_request(raw)?;
+    validate_connection_id(&metadata.connection_id)?;
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err("Agent 单个附件不能超过 10 MB".to_string());
+    }
+    let relative = safe_attachment_path(&metadata.relative_path)?;
+    // Keep the registry locked until publication so stop/exit cleanup cannot
+    // remove the runtime directory between validation and the file write.
+    let processes = processes
         .lock()
-        .map(|mut child| matches!(child.try_wait(), Ok(None)))
-        .unwrap_or(false)
+        .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
+    let attachments_dir = processes
+        .values()
+        .find_map(|process| {
+            if process.stopping || !process_is_running(process) {
+                return None;
+            }
+            let lease = process.leases.get(&metadata.lease_id)?;
+            (lease.connection_id == metadata.connection_id
+                && lease.mode == DshBridgeMode::Controller)
+                .then(|| lease.runtime_dir.join("attachments"))
+        })
+        .ok_or_else(|| "Agent 会话未运行".to_string())?;
+    let target = attachments_dir.join(&relative);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "invalid Agent attachment path".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("无法准备 Agent 附件目录：{error}"))?;
+    std::fs::write(&target, bytes).map_err(|error| format!("无法写入 Agent 附件：{error}"))?;
+    Ok(DshAgentAttachmentRuntimePath {
+        path: host_path(&target),
+        root: host_path(&attachments_dir),
+    })
 }
 
 fn build_bridge_command(
     runtime: &ResolvedDshRuntime,
     workspace_root: &Path,
     patch_path: &Path,
+    mode: DshBridgeMode,
 ) -> Command {
     let mut command = hidden_command(&runtime.node_path);
     command
         .arg(&runtime.bridge_path)
         .arg(&runtime.cli_path)
         .arg(patch_path)
+        .arg(mode.as_str())
         .current_dir(workspace_root)
         .env("DSH_HOME", &runtime.home_root)
         .stdin(Stdio::piped())
@@ -950,6 +1298,7 @@ fn build_bridge_command(
 
 fn spawn_reader<R: std::io::Read + Send + 'static>(
     app: tauri::AppHandle,
+    state: Arc<Mutex<HashMap<String, ManagedDshBridge>>>,
     process_id: String,
     stream: &'static str,
     reader: R,
@@ -957,6 +1306,15 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
             let Ok(line) = line else { break };
+            if stream == "stdout" {
+                if let Some(url) = ready_url_from_line(&line) {
+                    if let Ok(mut processes) = state.lock() {
+                        if let Some(process) = processes.get_mut(&process_id) {
+                            process.ready_url = Some(url);
+                        }
+                    }
+                }
+            }
             let _ = app.emit(
                 "dsh-bridge-output",
                 DshOutputEvent {
@@ -993,6 +1351,13 @@ fn force_stop_process_tree(child: &mut Child) -> std::io::Result<()> {
     })
 }
 
+fn cleanup_managed_bridge_runtime(process: &ManagedDshBridge) {
+    cleanup_runtime_dir(&process.host_runtime_dir);
+    for lease in process.leases.values() {
+        cleanup_runtime_dir(&lease.runtime_dir);
+    }
+}
+
 fn stop_process(process: ManagedDshBridge) -> Result<(), String> {
     if let Ok(mut stdin) = process.stdin.lock() {
         let _ = stdin.write_all(graceful_shutdown_message());
@@ -1008,7 +1373,8 @@ fn stop_process(process: ManagedDshBridge) -> Result<(), String> {
             .try_wait()
             .map_err(|error| format!("无法检查 DSH bridge 退出状态：{error}"))?;
         if status.is_some() {
-            cleanup_runtime_dir(&process.runtime_dir);
+            process.running.store(false, Ordering::Release);
+            cleanup_managed_bridge_runtime(&process);
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -1024,7 +1390,8 @@ fn stop_process(process: ManagedDshBridge) -> Result<(), String> {
     force_stop_process_tree(&mut child)
         .map_err(|error| format!("failed to stop DSH bridge: {error}"))?;
     let _ = child.wait();
-    cleanup_runtime_dir(&process.runtime_dir);
+    process.running.store(false, Ordering::Release);
+    cleanup_managed_bridge_runtime(&process);
     Ok(())
 }
 
@@ -1033,6 +1400,7 @@ fn monitor_child(
     state: Arc<Mutex<HashMap<String, ManagedDshBridge>>>,
     process_id: String,
     child: Arc<Mutex<Child>>,
+    running: Arc<AtomicBool>,
 ) {
     thread::spawn(move || loop {
         let status = match child.lock() {
@@ -1041,12 +1409,13 @@ fn monitor_child(
         };
         match status {
             Ok(Some(status)) => {
+                running.store(false, Ordering::Release);
                 let process = state
                     .lock()
                     .ok()
                     .and_then(|mut processes| processes.remove(&process_id));
                 if let Some(process) = process {
-                    cleanup_runtime_dir(&process.runtime_dir);
+                    cleanup_managed_bridge_runtime(&process);
                 }
                 let _ = app.emit(
                     "dsh-bridge-exit",
@@ -1070,82 +1439,155 @@ fn start_dsh_bridge_blocking(
     connection_id: String,
     workspace_root: String,
     source_path: Option<String>,
+    mode: Option<String>,
 ) -> Result<DshBridgeInfo, String> {
     validate_connection_id(&connection_id)?;
     let workspace_root = canonical_directory(workspace_root.trim())?;
     let runtime = resolve_dsh_runtime(&app, source_path.as_deref())?;
+    let mode = DshBridgeMode::from_arg(mode.as_deref())?;
     let workspace_root_display = host_path(&workspace_root);
-
-    let existing = {
-        let mut processes = processes
-            .lock()
-            .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
-        let existing_id = processes
-            .values()
-            .find(|process| process.connection_id == connection_id)
-            .map(|process| process.process_id.clone());
-        if let Some(process_id) = existing_id {
-            if let Some(process) = processes.get(&process_id) {
-                if process_is_running(process)
-                    && (process.workspace_root != workspace_root_display
-                        || process.source_root != host_path(&runtime.source_root))
-                {
-                    return Err(
-                        "DSH connectionId 已绑定到其他 workspace 或 sourcePath；请先 stop 再重连"
-                            .to_string(),
-                    );
-                }
-            }
-            processes.remove(&process_id)
-        } else {
-            None
+    let connections_root = runtime.dsh_root.join(DSH_CONNECTIONS_SUBDIR);
+    let source_root = host_path(&runtime.source_root);
+    let mut registry = processes
+        .lock()
+        .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
+    let stale = registry
+        .iter()
+        .filter_map(|(process_id, process)| {
+            (!process.stopping && !process_is_running(process)).then_some(process_id.clone())
+        })
+        .collect::<Vec<_>>();
+    for process_id in stale {
+        if let Some(process) = registry.remove(&process_id) {
+            cleanup_managed_bridge_runtime(&process);
         }
-    };
-    if let Some(existing) = existing {
-        stop_process(existing)?;
+    }
+    if registry.values().any(|process| process.stopping) {
+        return Err("DSH bridge 正在停止，请稍后重试".to_string());
     }
 
-    let instance_id = next_id.fetch_add(1, Ordering::Relaxed);
-    let connections_root = runtime.dsh_root.join(DSH_CONNECTIONS_SUBDIR);
-    let runtime_dir = runtime_directory(&connections_root, &connection_id, instance_id)?;
-    let patch_key = format!("{connection_id}-{instance_id}");
-    let patch_path = write_business_mcp_patch(&runtime_dir, &patch_key, &workspace_root_display)?;
-    let mut child = build_bridge_command(&runtime, &workspace_root, &patch_path)
-        .spawn()
-        .map_err(|error| format!("无法启动 DSH bridge：{error}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "DSH bridge stdin 不可用".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "DSH bridge stdout 不可用".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "DSH bridge stderr 不可用".to_string())?;
-    let process_id = format!("dsh-{}-{instance_id}", child.id());
-    let child = Arc::new(Mutex::new(child));
-    let managed = ManagedDshBridge {
-        process_id: process_id.clone(),
-        connection_id: connection_id.clone(),
-        workspace_root: workspace_root_display.clone(),
-        source_root: host_path(&runtime.source_root),
-        child: Arc::clone(&child),
-        stdin: Arc::new(Mutex::new(stdin)),
-        runtime_dir: runtime_dir.clone(),
+    if let Some(active_process_id) = registry
+        .iter()
+        .find_map(|(process_id, process)| process_is_running(process).then_some(process_id.clone()))
+    {
+        let process = registry
+            .get_mut(&active_process_id)
+            .ok_or_else(|| "DSH bridge 进程注册表不可用".to_string())?;
+        let lease_instance = next_id.fetch_add(1, Ordering::Relaxed);
+        return attach_connection_lease(
+            process,
+            &connections_root,
+            &source_root,
+            connection_id,
+            workspace_root_display,
+            mode,
+            lease_instance,
+        );
+    }
+
+    let host_instance = next_id.fetch_add(1, Ordering::Relaxed);
+    let host_runtime_dir = host_runtime_directory(&connections_root, host_instance)?;
+    let patch_key = format!("host-{host_instance}");
+    let patch_path = write_dsh_patch(&host_runtime_dir, &patch_key)?;
+    let mut child = match build_bridge_command(
+        &runtime,
+        &workspace_root,
+        &patch_path,
+        DshBridgeMode::Controller,
+    )
+    .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            cleanup_runtime_dir(&host_runtime_dir);
+            return Err(format!("无法启动 DSH bridge：{error}"));
+        }
     };
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = force_stop_process_tree(&mut child);
+            let _ = child.wait();
+            cleanup_runtime_dir(&host_runtime_dir);
+            return Err("DSH bridge stdin 不可用".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = force_stop_process_tree(&mut child);
+            let _ = child.wait();
+            cleanup_runtime_dir(&host_runtime_dir);
+            return Err("DSH bridge stdout 不可用".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = force_stop_process_tree(&mut child);
+            let _ = child.wait();
+            cleanup_runtime_dir(&host_runtime_dir);
+            return Err("DSH bridge stderr 不可用".to_string());
+        }
+    };
+    let process_id = format!("dsh-{}-{host_instance}", child.id());
+    let lease_instance = next_id.fetch_add(1, Ordering::Relaxed);
+    let lease_id = format!("lease-{lease_instance}");
+    let lease_runtime_dir =
+        match runtime_directory(&connections_root, &connection_id, lease_instance) {
+            Ok(runtime_dir) => runtime_dir,
+            Err(error) => {
+                let _ = force_stop_process_tree(&mut child);
+                let _ = child.wait();
+                cleanup_runtime_dir(&host_runtime_dir);
+                return Err(error);
+            }
+        };
+    let child = Arc::new(Mutex::new(child));
+    let running = Arc::new(AtomicBool::new(true));
+    registry.insert(
+        process_id.clone(),
+        ManagedDshBridge {
+            process_id: process_id.clone(),
+            source_root,
+            child: Arc::clone(&child),
+            stdin: Arc::new(Mutex::new(stdin)),
+            running: Arc::clone(&running),
+            stopping: false,
+            host_runtime_dir,
+            ready_url: None,
+            leases: HashMap::from([(
+                lease_id.clone(),
+                DshConnectionLease {
+                    connection_id,
+                    workspace_root: workspace_root_display,
+                    mode,
+                    runtime_dir: lease_runtime_dir,
+                },
+            )]),
+        },
+    );
+    drop(registry);
     let info = DshBridgeInfo {
         process_id: process_id.clone(),
+        lease_id,
+        ready_url: None,
     };
-    processes
-        .lock()
-        .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?
-        .insert(process_id.clone(), managed);
-    spawn_reader(app.clone(), process_id.clone(), "stdout", stdout);
-    spawn_reader(app.clone(), process_id.clone(), "stderr", stderr);
-    monitor_child(app, processes, process_id, child);
+    spawn_reader(
+        app.clone(),
+        Arc::clone(&processes),
+        process_id.clone(),
+        "stdout",
+        stdout,
+    );
+    spawn_reader(
+        app.clone(),
+        Arc::clone(&processes),
+        process_id.clone(),
+        "stderr",
+        stderr,
+    );
+    monitor_child(app, processes, process_id, child, running);
     Ok(info)
 }
 
@@ -1156,6 +1598,7 @@ pub fn dsh_bridge_start(
     connection_id: String,
     workspace_root: String,
     source_path: Option<String>,
+    mode: Option<String>,
 ) -> Result<DshBridgeInfo, String> {
     start_dsh_bridge_blocking(
         app,
@@ -1164,6 +1607,7 @@ pub fn dsh_bridge_start(
         connection_id,
         workspace_root,
         source_path,
+        mode,
     )
 }
 
@@ -1182,6 +1626,9 @@ pub fn dsh_bridge_write(
         let process = processes
             .get(&process_id)
             .ok_or_else(|| "DSH bridge 进程未运行".to_string())?;
+        if process.stopping || !process_is_running(process) {
+            return Err("DSH bridge 进程未运行".to_string());
+        }
         Arc::clone(&process.stdin)
     };
     let mut stdin = stdin
@@ -1194,17 +1641,52 @@ pub fn dsh_bridge_write(
 }
 
 #[tauri::command]
+pub fn dsh_agent_attachment_write(
+    state: tauri::State<'_, DshBridgeState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<DshAgentAttachmentRuntimePath, String> {
+    let raw = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes,
+        _ => return Err("Agent attachment request must be binary".to_string()),
+    };
+    write_dsh_agent_attachment(&state.processes, raw)
+}
+
+#[tauri::command]
 pub fn dsh_bridge_stop(
     state: tauri::State<'_, DshBridgeState>,
     process_id: String,
+    lease_id: String,
 ) -> Result<(), String> {
-    let process = state
-        .processes
-        .lock()
-        .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?
-        .remove(&process_id)
-        .ok_or_else(|| "DSH bridge 进程未运行".to_string())?;
-    stop_process(process)
+    let release = {
+        let mut processes = state
+            .processes
+            .lock()
+            .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
+        release_connection_lease(&mut processes, &process_id, &lease_id)?
+    };
+    match release {
+        DshBridgeRelease::Lease(runtime_dir) => {
+            cleanup_runtime_dir(&runtime_dir);
+            Ok(())
+        }
+        DshBridgeRelease::Process(process) => {
+            let result = stop_process(process);
+            let removed = {
+                let mut processes = state
+                    .processes
+                    .lock()
+                    .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
+                reconcile_process_stop(&mut processes, &process_id, result.is_ok())
+            };
+            if result.is_err() {
+                if let Some(process) = removed {
+                    cleanup_managed_bridge_runtime(&process);
+                }
+            }
+            result
+        }
+    }
 }
 
 pub fn shutdown(app: &tauri::AppHandle) {
@@ -1227,18 +1709,33 @@ pub fn shutdown(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry, business_mcp_patch_text,
-        cleanup_runtime_dir, debug_sibling_dsh_root, development_bundled_runtime_archive,
-        development_bundled_runtime_root, dsh_version_is_compatible, encode_message,
-        graceful_shutdown_message, host_path, installed_dsh_cli_entry, installed_dsh_root,
-        node_runtime_candidates, node_version_is_compatible,
-        prepare_bundled_runtime_root_from_archive, resolve_bundled_runtime_root,
-        resolve_installed_dsh_cli, resolve_source_root, source_bridge_path, source_dsh_cli_entry,
-        source_root_from_candidates, validate_connection_id, ResolvedDshRuntime,
+        attach_connection_lease, build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry,
+        business_mcp_patch_text, cleanup_runtime_dir, development_bundled_runtime_archive,
+        development_bundled_runtime_root, dsh_focus_plugin_client, dsh_focus_plugin_index,
+        dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible, encode_message,
+        file_url_for_path, graceful_shutdown_message, hidden_command, host_path,
+        installed_dsh_cli_entry, installed_dsh_root, node_runtime_candidates,
+        node_version_is_compatible, prepare_bundled_runtime_root_from_archive,
+        reconcile_process_stop, release_connection_lease, resolve_bundled_runtime_root,
+        resolve_installed_dsh_cli, resolve_source_root, safe_attachment_path, source_bridge_path,
+        source_dsh_cli_entry, source_root_from_candidates, validate_connection_id,
+        write_dsh_agent_attachment, write_dsh_focus_plugin, write_dsh_patch, DshBridgeMode,
+        DshBridgeRelease, DshConnectionLease, ManagedDshBridge, ResolvedDshRuntime,
     };
     use flate2::{write::GzEncoder, Compression};
     use serde_json::json;
-    use std::{ffi::OsStr, fs, fs::File, path::PathBuf};
+    use std::{
+        collections::HashMap,
+        ffi::OsStr,
+        fs,
+        fs::File,
+        path::PathBuf,
+        process::{Child, ChildStdin, Stdio},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
+    };
     use tar::Builder;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -1246,6 +1743,185 @@ mod tests {
             "rocketx-dsh-tests-{label}-{}",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    fn encode_attachment_request(
+        connection_id: &str,
+        lease_id: &str,
+        relative_path: &str,
+        bytes: &[u8],
+    ) -> Vec<u8> {
+        let metadata = serde_json::json!({
+            "connectionId": connection_id,
+            "leaseId": lease_id,
+            "relativePath": relative_path,
+        });
+        let metadata = serde_json::to_vec(&metadata).unwrap();
+        let mut request = Vec::with_capacity(4 + metadata.len() + bytes.len());
+        request.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        request.extend_from_slice(&metadata);
+        request.extend_from_slice(bytes);
+        request
+    }
+
+    fn spawn_idle_bridge_child() -> (Arc<Mutex<Child>>, Arc<Mutex<ChildStdin>>) {
+        #[cfg(windows)]
+        let mut child = hidden_command("cmd")
+            .args(["/C", "more"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = hidden_command("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = Arc::new(Mutex::new(child.stdin.take().unwrap()));
+        (Arc::new(Mutex::new(child)), stdin)
+    }
+
+    fn managed_bridge_for_test(
+        connection_id: &str,
+        mode: DshBridgeMode,
+        runtime_dir: PathBuf,
+    ) -> ManagedDshBridge {
+        let (child, stdin) = spawn_idle_bridge_child();
+        let lease_id = format!("lease-{connection_id}");
+        ManagedDshBridge {
+            process_id: format!("test-{connection_id}-{}", uuid::Uuid::new_v4()),
+            source_root: "D:\\source".to_string(),
+            child,
+            stdin,
+            running: Arc::new(AtomicBool::new(true)),
+            stopping: false,
+            host_runtime_dir: runtime_dir.join("host"),
+            ready_url: None,
+            leases: HashMap::from([(
+                lease_id.clone(),
+                DshConnectionLease {
+                    connection_id: connection_id.to_string(),
+                    workspace_root: "D:\\workspace".to_string(),
+                    mode,
+                    runtime_dir,
+                },
+            )]),
+        }
+    }
+
+    fn stop_test_bridge(process: &ManagedDshBridge) {
+        if let Ok(mut child) = process.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        process.running.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn shared_host_attaches_distinct_connection_leases_and_replays_ready_url() {
+        let root = unique_temp_dir("shared-host-attach");
+        let first_runtime = root.join("first");
+        fs::create_dir_all(&first_runtime).unwrap();
+        let mut process =
+            managed_bridge_for_test("first", DshBridgeMode::Controller, first_runtime);
+        process.ready_url = Some("http://127.0.0.1:8123/".to_string());
+        let process_id = process.process_id.clone();
+        let source_root = process.source_root.clone();
+
+        let info = attach_connection_lease(
+            &mut process,
+            &root.join("connections"),
+            &source_root,
+            "second".to_string(),
+            "D:\\second-workspace".to_string(),
+            DshBridgeMode::Web,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(info.process_id, process_id);
+        assert_eq!(info.lease_id, "lease-2");
+        assert_eq!(info.ready_url.as_deref(), Some("http://127.0.0.1:8123/"));
+        assert_eq!(process.leases.len(), 2);
+        assert_eq!(
+            process.leases.get("lease-2").unwrap().mode,
+            DshBridgeMode::Web
+        );
+
+        let error = match attach_connection_lease(
+            &mut process,
+            &root.join("connections"),
+            &source_root,
+            "second".to_string(),
+            "D:\\other-workspace".to_string(),
+            DshBridgeMode::Web,
+            3,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("相同 connectionId 不能漂移 workspace"),
+        };
+        assert!(error.contains("请先 stop 再重连"));
+
+        stop_test_bridge(&process);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_host_stops_only_after_the_last_lease_is_released() {
+        let root = unique_temp_dir("shared-host-release");
+        let first_runtime = root.join("first");
+        fs::create_dir_all(&first_runtime).unwrap();
+        let mut process =
+            managed_bridge_for_test("first", DshBridgeMode::Controller, first_runtime.clone());
+        let process_id = process.process_id.clone();
+        let source_root = process.source_root.clone();
+        let second = attach_connection_lease(
+            &mut process,
+            &root.join("connections"),
+            &source_root,
+            "second".to_string(),
+            "D:\\second-workspace".to_string(),
+            DshBridgeMode::Controller,
+            2,
+        )
+        .unwrap();
+        let mut processes = HashMap::from([(process_id.clone(), process)]);
+
+        let first_release =
+            release_connection_lease(&mut processes, &process_id, "lease-first").unwrap();
+        match first_release {
+            DshBridgeRelease::Lease(runtime_dir) => assert_eq!(runtime_dir, first_runtime),
+            DshBridgeRelease::Process(_) => panic!("首个租约不应停止共享宿主"),
+        }
+        assert_eq!(processes.get(&process_id).unwrap().leases.len(), 1);
+
+        let final_release =
+            release_connection_lease(&mut processes, &process_id, &second.lease_id).unwrap();
+        let DshBridgeRelease::Process(_process) = final_release else {
+            panic!("最后一个租约必须移交宿主进程用于停止");
+        };
+        assert!(processes.get(&process_id).unwrap().stopping);
+        let duplicate_stop =
+            match release_connection_lease(&mut processes, &process_id, &second.lease_id) {
+                Err(error) => error,
+                Ok(_) => panic!("停止中的宿主不能再次释放"),
+            };
+        assert_eq!(duplicate_stop, "DSH bridge 正在停止");
+        assert!(reconcile_process_stop(&mut processes, &process_id, false).is_none());
+        assert!(!processes.get(&process_id).unwrap().stopping);
+
+        let final_retry =
+            release_connection_lease(&mut processes, &process_id, &second.lease_id).unwrap();
+        let DshBridgeRelease::Process(process) = final_retry else {
+            panic!("重试最后一个租约仍应移交宿主进程");
+        };
+        stop_test_bridge(&process);
+        assert!(reconcile_process_stop(&mut processes, &process_id, false).is_some());
+        assert!(processes.is_empty());
+        let _ = fs::remove_dir_all(root);
     }
 
     fn write_runtime_archive(
@@ -1340,6 +2016,64 @@ mod tests {
     }
 
     #[test]
+    fn file_url_for_path_encodes_windows_paths_for_dsh_plugin_patch() {
+        let root = unique_temp_dir("focus-plugin-url");
+        let file = root.join("with space").join("index.mjs");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, b"export function apply() {}").unwrap();
+        let url = file_url_for_path(&file).unwrap();
+        assert!(url.starts_with("file:///"));
+        assert!(url.contains("with%20space"));
+        assert!(url.ends_with("/index.mjs"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dsh_patch_includes_business_mcp_and_focus_plugin_rows() {
+        let patch = dsh_patch_text(
+            "conn-7",
+            r"C:\workspace",
+            r"C:\Program Files\RocketX\RocketX.exe",
+            "file:///C:/runtime/dsh_focus_plugin/index.mjs",
+        )
+        .unwrap();
+        assert!(patch.contains("@deepseek-ai/dsh-mcp-client"));
+        assert!(patch.contains("file:///C:/runtime/dsh_focus_plugin/index.mjs"));
+        assert!(patch.contains("rocketx-dsh-focus-plugin"));
+    }
+
+    #[test]
+    fn shared_host_uses_its_runtime_directory_for_business_mcp() {
+        let root = unique_temp_dir("business-mcp-cwd");
+        fs::create_dir_all(&root).unwrap();
+        let patch_path = write_dsh_patch(&root, "host-7").unwrap();
+        let patch = fs::read_to_string(patch_path).unwrap();
+        assert!(patch.contains(&format!("cwd: '{}'", host_path(&root))));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn focus_plugin_runtime_files_match_embedded_templates() {
+        let root = unique_temp_dir("focus-plugin-files");
+        fs::create_dir_all(&root).unwrap();
+        let entry = write_dsh_focus_plugin(&root).unwrap();
+        let plugin_dir = root.join("dsh_focus_plugin");
+        assert_eq!(
+            fs::read_to_string(plugin_dir.join("package.json")).unwrap(),
+            dsh_focus_plugin_package_json()
+        );
+        assert_eq!(
+            fs::read_to_string(&entry).unwrap(),
+            dsh_focus_plugin_index()
+        );
+        assert_eq!(
+            fs::read_to_string(plugin_dir.join("client.js")).unwrap(),
+            dsh_focus_plugin_client()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn node_compatibility_matches_dsh_source_contract() {
         assert!(node_version_is_compatible("v22.19.0"));
         assert!(node_version_is_compatible("v24.0.0"));
@@ -1403,6 +2137,7 @@ mod tests {
         unsafe {
             std::env::remove_var("ROCKETX_DSH_SOURCE");
         }
+        assert!(source_root_from_candidates(None).unwrap().is_none());
         let missing =
             source_root_from_candidates(Some(root.to_string_lossy().as_ref())).unwrap_err();
         assert!(missing.contains("apps/cli/lib/bin.js"));
@@ -1601,7 +2336,7 @@ mod tests {
             r"C:\Users\test\AppData\Roaming\RocketX\dsh\connections\abc\1\cordis.patch.yml",
         );
         let workspace = PathBuf::from(r"C:\workspace");
-        let command = build_bridge_command(&runtime, &workspace, &patch);
+        let command = build_bridge_command(&runtime, &workspace, &patch, DshBridgeMode::Controller);
         assert_eq!(
             command.get_program(),
             OsStr::new(r"C:\Program Files\nodejs\node.exe")
@@ -1614,8 +2349,88 @@ mod tests {
                 OsStr::new(
                     r"C:\Users\test\AppData\Roaming\RocketX\dsh\connections\abc\1\cordis.patch.yml"
                 ),
+                OsStr::new("controller"),
             ]
         );
+    }
+
+    #[test]
+    fn bridge_mode_parses_explicit_flag() {
+        assert_eq!(
+            DshBridgeMode::from_arg(Some("controller")).unwrap(),
+            DshBridgeMode::Controller
+        );
+        assert_eq!(
+            DshBridgeMode::from_arg(Some("web")).unwrap(),
+            DshBridgeMode::Web
+        );
+        assert_eq!(
+            DshBridgeMode::from_arg(None).unwrap(),
+            DshBridgeMode::Controller
+        );
+        assert!(DshBridgeMode::from_arg(Some("other")).is_err());
+    }
+
+    #[test]
+    fn dsh_attachment_write_only_uses_running_controller() {
+        let root = unique_temp_dir("attachments");
+        let controller_runtime = root.join("controller");
+        let web_runtime = root.join("web");
+        fs::create_dir_all(&controller_runtime).unwrap();
+        fs::create_dir_all(&web_runtime).unwrap();
+
+        let mut controller = managed_bridge_for_test(
+            "conn-123",
+            DshBridgeMode::Controller,
+            controller_runtime.clone(),
+        );
+        let source_root = controller.source_root.clone();
+        let second_runtime = root.join("connections").join("conn-123").join("2");
+        let second = attach_connection_lease(
+            &mut controller,
+            &root.join("connections"),
+            &source_root,
+            "conn-123".to_string(),
+            "D:\\workspace".to_string(),
+            DshBridgeMode::Controller,
+            2,
+        )
+        .unwrap();
+        let web = managed_bridge_for_test("conn-123", DshBridgeMode::Web, web_runtime.clone());
+
+        let processes = Arc::new(Mutex::new(HashMap::from([
+            (controller.process_id.clone(), controller.clone()),
+            (web.process_id.clone(), web.clone()),
+        ])));
+
+        let request = encode_attachment_request(
+            "conn-123",
+            &second.lease_id,
+            "message/notes.txt",
+            b"hello dsh",
+        );
+        let written = write_dsh_agent_attachment(&processes, &request).unwrap();
+        let attachments_root = second_runtime.join("attachments");
+        let expected_file = attachments_root.join("message/notes.txt");
+        assert_eq!(written.root, host_path(&attachments_root));
+        assert_eq!(written.path, host_path(&expected_file));
+        assert_eq!(fs::read(&expected_file).unwrap(), b"hello dsh");
+
+        stop_test_bridge(&controller);
+        let error = write_dsh_agent_attachment(&processes, &request).unwrap_err();
+        assert_eq!(error, "Agent 会话未运行");
+
+        stop_test_bridge(&web);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dsh_attachment_paths_reject_traversal_and_sensitive_files() {
+        assert!(safe_attachment_path("message/1-build.log").is_ok());
+        assert!(safe_attachment_path("../escape.txt").is_err());
+        assert!(safe_attachment_path("message/.env").is_err());
+        assert!(safe_attachment_path("message/credentials.json").is_err());
+        assert!(safe_attachment_path("message/private.pem").is_err());
     }
 
     #[test]
@@ -1640,6 +2455,7 @@ mod tests {
         assert!(main_rs.contains("mod dsh;"));
         assert!(main_rs.contains("dsh::dsh_bridge_start"));
         assert!(main_rs.contains("dsh::dsh_bridge_write"));
+        assert!(main_rs.contains("dsh::dsh_agent_attachment_write"));
         assert!(main_rs.contains("dsh::dsh_bridge_stop"));
         assert!(main_rs.contains(".manage(dsh::DshBridgeState::default())"));
         assert!(main_rs.contains("dsh::shutdown(app);"));
@@ -1647,9 +2463,10 @@ mod tests {
 
     #[test]
     fn different_runtime_inputs_must_not_be_reused_silently() {
-        let error =
-            "DSH connectionId 已绑定到其他 workspace 或 sourcePath；请先 stop 再重连".to_string();
+        let error = "DSH connectionId 已绑定到其他 workspace、sourcePath 或 mode；请先 stop 再重连"
+            .to_string();
         assert!(error.contains("请先 stop 再重连"));
+        assert!(error.contains("mode"));
     }
 
     #[test]
@@ -1659,20 +2476,5 @@ mod tests {
             host_path(&path).ends_with("src\\dsh_bridge.mjs")
                 || host_path(&path).ends_with("src/dsh_bridge.mjs")
         );
-    }
-
-    #[test]
-    fn debug_sibling_root_points_to_repo_sibling_not_nested_under_rocketchatx() {
-        let path = debug_sibling_dsh_root().expect("debug tests should resolve sibling DSH repo");
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let repository = manifest.ancestors().nth(3).expect("repository root");
-        assert_eq!(
-            path,
-            repository
-                .parent()
-                .expect("repository parent")
-                .join("deepseek-harness")
-        );
-        assert!(!path.starts_with(repository));
     }
 }

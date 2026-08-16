@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Blocks,
+  Bot,
   CalendarClock,
   ChevronRight,
   FolderMinus,
@@ -20,13 +21,19 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import {
+  HOSTED_SESSION_STATUS_LABEL,
+  useHostedSessionItems,
+} from '../lib/hostedSessions';
+import {
   environmentIsBusy,
   findEnvironmentByPath,
   normalizeEnvironmentPath,
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
 import { useAuth } from '../stores/auth';
+import { useChat } from '../stores/chat';
 import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
+import { useSharedAgent } from '../stores/sharedAgent';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import ButlerProjectConfigDialog, { type ButlerProjectConfigPatch } from './ButlerProjectConfigDialog';
@@ -57,9 +64,16 @@ function ageLabel(timestamp: number): string {
 export default function ButlerConversationHistory({ onNavigate }: { onNavigate?: () => void }) {
   const userId = useAuth((state) => state.user?._id);
   const activeView = useUI((state) => state.butlerView);
+  const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
   const setButlerView = useUI((state) => state.setButlerView);
+  const selectedHostedSessionKey = useUI((state) => state.selectedHostedSessionKey);
+  const setSelectedHostedSessionKey = useUI((state) => state.setSelectedHostedSessionKey);
   const setModule = useUI((state) => state.setModule);
   const setWorkbenchTab = useUI((state) => state.setWorkbenchTab);
+  const hostedSessionsByKey = useSharedAgent((state) => state.sessions);
+  const hostedRemoteCardsByKey = useSharedAgent((state) => state.remoteCards);
+  const rooms = useChat((state) => state.rooms);
+  const subscriptions = useChat((state) => state.subscriptions);
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const workspaceRoots = useCodexWorkspace((state) => state.workspaceRoots);
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
@@ -97,16 +111,19 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const [collapsedWorkspace, setCollapsedWorkspace] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const desktopRuntime = isTauriRuntime();
+  const codexRuntime = aiRuntimeProvider === 'codex';
+  const hostedSessions = useHostedSessionItems(hostedSessionsByKey, hostedRemoteCardsByKey);
+  const hostedSessionCount = hostedSessions.length;
 
   useEffect(() => {
-    if (!userId) return;
+    if (!codexRuntime || !userId) return;
     hydrate(`${getServerBase() || 'same-origin'}:${userId}`);
-  }, [hydrate, userId]);
+  }, [codexRuntime, hydrate, userId]);
 
   useEffect(() => {
-    if (!desktopRuntime || !workspaceRoot || status !== 'idle') return;
+    if (!codexRuntime || !desktopRuntime || !workspaceRoot || status !== 'idle') return;
     void connect().catch(() => undefined);
-  }, [connect, desktopRuntime, status, workspaceRoot]);
+  }, [codexRuntime, connect, desktopRuntime, status, workspaceRoot]);
 
   useEffect(() => {
     setHistoryExpanded(false);
@@ -406,8 +423,77 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     }
   };
 
+  const hostedSessionsNavigation = (
+    <div className="flex min-h-0 flex-1 flex-col border-t border-line-soft">
+      <div className="flex items-center gap-2 px-4 pt-3 pb-1 text-xs font-semibold tracking-wide text-ink-3">
+        <Bot size={13} aria-hidden="true" />
+        <span>AI 托管</span>
+        {hostedSessionCount > 0 ? <span className="ml-auto text-xs text-ink-3">{hostedSessionCount}</span> : null}
+      </div>
+      <nav aria-label="AI 托管会话" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {hostedSessions.length === 0 ? (
+          <p className="px-2 py-4 text-xs leading-5 text-ink-3">还没有房间托管会话。</p>
+        ) : hostedSessions.map((session) => {
+          const room = subscriptions[session.rid] ?? rooms[session.rid];
+          const name = session.roomNameSnapshot || room?.fname || room?.name || session.rid || '未知房间';
+          const selected = selectedHostedSessionKey === session.key
+            || (!selectedHostedSessionKey && session.key === hostedSessions[0]?.key);
+          return (
+            <button
+              key={session.key}
+              type="button"
+              data-session-key={session.key}
+              aria-current={selected ? 'page' : undefined}
+              aria-label={`${name}，${session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}，${HOSTED_SESSION_STATUS_LABEL[session.status]}`}
+              onClick={() => {
+                setButlerView('conversation');
+                setSelectedHostedSessionKey(session.key);
+                onNavigate?.();
+              }}
+              className="mb-1 flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2 text-left text-ink-2 hover:bg-fill-hover aria-[current=page]:bg-fill-active aria-[current=page]:text-ink"
+            >
+              <Bot size={14} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium">{name}</span>
+                <span className="mt-0.5 block truncate text-xs text-ink-3">{session.project} · {session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}</span>
+              </span>
+              <span className="shrink-0 text-xs text-ink-3">{HOSTED_SESSION_STATUS_LABEL[session.status]}</span>
+            </button>
+          );
+        })}
+      </nav>
+      <p className="border-t border-line-soft px-4 py-3 text-xs leading-5 text-ink-3">
+        房间里的 AI 托管控制面和这里引用同一条共享会话；私人房间 AI 使用独立的个人会话。
+      </p>
+    </div>
+  );
+
+  if (!codexRuntime) {
+    return (
+      <aside className="butler-conversation-history" aria-label="AI 管家导航">
+        <div className="butler-codex-product-switcher">
+          <button
+            type="button"
+            className="butler-codex-back-rocketx"
+            aria-label="返回 RocketX"
+            onClick={() => setModule('messages')}
+          >
+            <ArrowLeft size={16} aria-hidden="true" />
+          </button>
+          <div className="butler-codex-product-title"><strong>AI 管家</strong></div>
+        </div>
+        <div className="m-3 rounded-lg bg-fill-1 px-3 py-2 text-xs leading-5 text-ink-3">
+          {aiRuntimeProvider === 'deepseek'
+            ? '普通对话由 DSH 原生页面提供；私人房间 AI 会话同样仅你可见。'
+            : '当前未启用执行引擎；仍可查看房间托管记录。'}
+        </div>
+        {hostedSessionsNavigation}
+      </aside>
+    );
+  }
+
   return (
-    <aside className="butler-conversation-history" aria-label="Codex 对话列表">
+    <aside className="butler-conversation-history" aria-label="AI 管家导航">
       <div className="butler-codex-product-switcher">
         <button
           type="button"
@@ -418,7 +504,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <div className="butler-codex-product-title">
-          <strong>Codex</strong>
+          <strong>AI 管家</strong>
         </div>
         <button
           type="button"
@@ -491,6 +577,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           插件
         </button>
       </nav>
+
+      {hostedSessionsNavigation}
 
       <div className="butler-codex-thread-heading">
         <span>项目</span>

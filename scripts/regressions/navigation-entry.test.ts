@@ -24,7 +24,7 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.match(navRail, /const WORK_MODULE_IDS = new Set\(\['workbench', 'contacts'\]\);/);
   assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
   assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: '管家'/);
-  assert.doesNotMatch(navRail, /['"]codex['"]/);
+  assert.doesNotMatch(navRail, /管家执行引擎|taskProvider|setButlerTaskProvider/);
   assert.doesNotMatch(navRail, /['"]today['"]/);
   assert.doesNotMatch(navRail, /['"]ai-assistant['"]/);
 

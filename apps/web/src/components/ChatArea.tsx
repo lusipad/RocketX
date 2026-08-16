@@ -39,6 +39,7 @@ import ContextMenu from './ContextMenu';
 import { useKernelContributions } from '../kernel/registry';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
+import { agentSessionCardSupersedesLocal } from '../agent/card';
 
 function HeaderButton({
   icon: Icon,
@@ -108,7 +109,6 @@ export default function ChatArea({
   );
   const localAgent = useSharedAgent((s) => (agentSessionKey ? s.sessions[agentSessionKey] : undefined));
   const remoteAgent = useSharedAgent((s) => (agentSessionKey ? s.remoteCards[agentSessionKey] : undefined));
-  const endAgentSession = useSharedAgent((s) => s.endSession);
   const me = useAuth((s) => s.user);
   const openRoom = useChat((s) => s.openRoom);
   const joinRoom = useChat((s) => s.joinRoom);
@@ -126,7 +126,6 @@ export default function ChatArea({
         .map(([name]) => name)
     : [];
   const [dragging, setDragging] = useState(false);
-  const [stoppingHosting, setStoppingHosting] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [agentProjectMenu, setAgentProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const butlerPanelOpen = rightPanel?.kind === 'butler';
@@ -138,7 +137,7 @@ export default function ChatArea({
   const wasButlerPanelOpen = useRef(butlerPanelOpen);
 
   useEffect(() => {
-    if (!features.sharedAgent) return;
+    if (!features.sharedAgent || !features.ai) return;
     if (!activeRid) return;
     const sharedAgent = useSharedAgent.getState();
     const sessionKey = agentRoomSessionKey(activeRid);
@@ -196,10 +195,8 @@ export default function ChatArea({
   const memberCount = sub?.t !== 'd' || isMultiDM ? room?.usersCount : undefined;
   const prid = sub?.prid ?? room?.prid;
   const { requiresJoin, canCompose } = roomMembershipPolicy(!!sub, room);
-  const localAgentActive = localAgent && localAgent.status !== 'ended' ? localAgent : undefined;
-  const remoteAgentActive = remoteAgent && remoteAgent.status !== 'ended' && remoteAgent.leaseExpiresAt > Date.now()
-    ? remoteAgent
-    : undefined;
+  const remoteAgentActive = agentSessionCardSupersedesLocal(localAgent, remoteAgent) ? remoteAgent : undefined;
+  const localAgentActive = !remoteAgentActive && localAgent && localAgent.status !== 'ended' ? localAgent : undefined;
   const agentPresence = !features.sharedAgent
     ? undefined
     : localAgentActive
@@ -238,18 +235,6 @@ export default function ChatArea({
     if (!canCompose) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) requestUpload(files);
-  };
-
-  const stopHosting = async () => {
-    if (!localAgentActive || stoppingHosting) return;
-    setStoppingHosting(true);
-    try {
-      await endAgentSession(agentSessionKey);
-    } catch (error) {
-      toast.error(error, '退出 AI 托管失败');
-    } finally {
-      setStoppingHosting(false);
-    }
   };
 
   return (
@@ -310,7 +295,7 @@ export default function ChatArea({
                 <div className="flex h-7 shrink-0 overflow-hidden rounded-full border border-line bg-surface text-xs font-medium text-ink-2 transition hover:border-primary/40">
                   <button
                     aria-label="配置 AI 托管"
-                    title="选择后端和项目后开启 AI 托管"
+                    title="选择项目并配置共享 AI 托管"
                     onClick={() => setPanel({ kind: 'agent', tmid: agentSessionKey })}
                     className="flex items-center gap-1.5 px-2.5 transition hover:bg-primary-light hover:text-primary"
                   >
@@ -320,7 +305,7 @@ export default function ChatArea({
                   <button
                     type="button"
                     aria-label="选择 AI 托管项目"
-                    title="选择其他项目或打开托管设置"
+                    title="选择项目或打开托管设置"
                     onClick={(event) => {
                       const rect = event.currentTarget.getBoundingClientRect();
                       setAgentProjectMenu({ x: rect.right - 180, y: rect.bottom + 4 });
@@ -333,22 +318,19 @@ export default function ChatArea({
               ) : null}
               {features.sharedAgent && agentPresence ? (
                 <button
-                  aria-label={localAgentActive ? '关闭 AI 托管' : `@${agentPresence.username} 的 AI ${agentStatus}`}
-                  title={localAgentActive
-                    ? `点击退出 AI 托管 · ${stoppingHosting ? '正在关闭' : agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''}`
-                    : `@${agentPresence.username} 的 AI · ${agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''}`}
-                  disabled={!localAgentActive || stoppingHosting}
-                  onClick={() => void stopHosting()}
-                  className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface px-2.5 text-xs text-primary shadow-sm disabled:cursor-default"
+                  aria-label="打开 AI 托管控制面"
+                  title={`打开共享 AI 托管 · ${agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''} · 由 @${agentPresence.username} 托管`}
+                  onClick={() => setPanel({ kind: 'agent', tmid: agentSessionKey })}
+                  className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface px-2.5 text-xs text-primary shadow-sm transition hover:border-primary/50 hover:from-primary-light/90 hover:to-primary-light/50"
                 >
                   <span className="relative flex h-2 w-2 shrink-0">
                     {agentBusy ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-50" /> : null}
                     <span className={`relative inline-flex h-2 w-2 rounded-full ${agentPresence.status === 'interrupted' ? 'bg-ink-3' : agentPresence.status === 'waiting-approval' ? 'bg-warning' : 'bg-primary'}`} />
                   </span>
                   <Bot size={14} className="shrink-0" />
-                  <span className="shrink-0 font-semibold">@{agentPresence.username} 的 AI</span>
+                  <span className="shrink-0 font-semibold">AI 托管</span>
                   <span className="h-3 w-px shrink-0 bg-primary/25" />
-                  <span className="shrink-0 text-xs font-medium">{stoppingHosting ? '正在关闭' : agentStatus}</span>
+                  <span className="shrink-0 text-xs font-medium">{agentStatus}</span>
                   {agentPresence.environmentName ? (
                     <span className="hidden min-w-0 truncate border-l border-primary/20 pl-1.5 text-xs text-ink-3 2xl:inline">
                       {agentPresence.environmentName}
@@ -472,7 +454,7 @@ export default function ChatArea({
           {features.butler && butlerPanelOpen ? (
             <button
               type="button"
-              aria-label="关闭房间 Codex 浮层"
+              aria-label="关闭私人房间 AI 浮层"
               onClick={() => setPanel(null)}
               className="absolute inset-0 z-20 cursor-default bg-black/15 transition-opacity motion-reduce:transition-none"
             />
@@ -485,8 +467,8 @@ export default function ChatArea({
               type="button"
               aria-controls="room-butler-panel"
               aria-expanded={butlerPanelOpen}
-              aria-label={butlerPanelOpen ? '收起房间 Codex' : '打开房间 Codex'}
-              title={butlerPanelOpen ? '收起房间 Codex' : '打开房间 Codex'}
+              aria-label={butlerPanelOpen ? '收起房间 AI' : '打开房间 AI'}
+              title={butlerPanelOpen ? '收起房间 AI' : '打开房间 AI'}
               onClick={() => togglePanel({ kind: 'butler' })}
               className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
             >

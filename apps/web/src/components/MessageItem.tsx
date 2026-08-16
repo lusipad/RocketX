@@ -43,7 +43,7 @@ import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
-import { renderMarkdown, LinkifiedText } from '../lib/markdown';
+import { renderMarkdown, renderMarkdownDoc, LinkifiedText } from '../lib/markdown';
 import { assetUrl, rest } from '../lib/client';
 import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
@@ -52,7 +52,7 @@ import { usePrefs } from '../stores/prefs';
 import { useTodos } from '../stores/todos';
 import { useUI } from '../stores/ui';
 import { useUiPrefs } from '../stores/uiPrefs';
-import { runtimeFeatures } from '../lib/runtimeMode';
+import { getAiRuntimeProvider, runtimeFeatures } from '../lib/runtimeMode';
 import Avatar from './Avatar';
 import EmojiPicker from './EmojiPicker';
 import ContextMenu, { type MenuItem } from './ContextMenu';
@@ -80,6 +80,7 @@ import {
   collectStickerFromMessage,
   describeStickerImport,
 } from '../lib/stickerLibrary';
+import { parseRocketXStickerShortcodeMessage } from '../lib/stickerServerCompat';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -544,6 +545,23 @@ type MessageItemProps = {
   inThread?: boolean;
 };
 
+type HostedAgentAnswer = {
+  provider: 'Codex' | 'DeepSeek';
+  note?: string;
+  body: string;
+};
+
+function parseHostedAgentAnswer(text: string): HostedAgentAnswer | null {
+  const match = /^🤖\s*(Codex|DeepSeek)(?:（([^）\n]+)）)?[ \t]*\r?\n([\s\S]*)$/u.exec(text);
+  const body = match?.[3]?.trim();
+  if (!match || !body) return null;
+  return {
+    provider: match[1] as HostedAgentAnswer['provider'],
+    note: match[2],
+    body,
+  };
+}
+
 function MessageItem({ message, mine, grouped, inThread = false }: MessageItemProps) {
   const features = runtimeFeatures();
   const myUsername = useAuth((s) => s.user?.username);
@@ -664,6 +682,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const hostedAgentAnswer = messageRenderer ? null : parseHostedAgentAnswer(visibleText);
+  const rocketXSticker = messageRenderer || hostedAgentAnswer
+    ? null
+    : parseRocketXStickerShortcodeMessage(visibleText);
+  const richMarkdown = !hostedAgentAnswer && /(^|\n)(#{1,6}\s+|>\s?|```|\s*[-*+]\s+|\s*\d+[.)]\s+|\|.+\|)/.test(visibleText);
+  const visuallyMine = mine && !hostedAgentAnswer;
+  const visuallyGrouped = grouped && !hostedAgentAnswer;
   const replyThreadId = message.tmid;
   const agentSessionCard = parseAgentSessionCard(message.msg ?? '');
   const bareMedia =
@@ -758,7 +783,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onClick: () => void toggleStar(message),
     },
     { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
-    ...(features.ai
+    ...(features.ai && getAiRuntimeProvider() === 'codex'
       ? [
           {
             label: aiExtracting ? 'Codex 提取中…' : 'Codex 提取为待办',
@@ -772,7 +797,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           },
         ]
       : []),
-    ...(features.butler ? [{ label: '创建 Codex 任务', icon: Bot, onClick: () => handOverToButler() }] : []),
+    ...(features.butler ? [{ label: '交给 AI 管家', icon: Bot, onClick: () => handOverToButler() }] : []),
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,
@@ -810,8 +835,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onMouseLeave={onBarLeave}
       onClick={selectMode && !message.pending && !message.failed ? () => toggleSelectMid(message._id) : undefined}
       className={`group flex gap-2.5 rounded-lg px-1 transition-colors duration-500 ${
-        grouped ? 'mt-0.5' : 'mt-3'
-      } ${mine ? 'flex-row-reverse' : ''} ${
+        hostedAgentAnswer ? 'rocketx-agent-answer-row' : ''
+      } ${visuallyGrouped ? 'mt-0.5' : 'mt-3'} ${visuallyMine ? 'flex-row-reverse' : ''} ${
         selected ? 'bg-primary-light' : highlighted ? 'bg-primary-light' : ''
       } ${selectMode ? 'cursor-pointer' : ''}`}
     >
@@ -838,33 +863,54 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       {/* 头像列：分组消息用占位保持对齐；点击弹个人卡片。多选态下整条只响应「选中」 */}
       {showAvatars && (
         <div className={`w-9 shrink-0 ${selectMode ? 'pointer-events-none' : ''}`}>
-          {!grouped && (
-            <button onClick={() => setShowCard(true)} className="block cursor-pointer">
-              {/* 自己的消息不点在线状态点（意义不大且总是在线） */}
-              <Avatar
-                name={displayName}
-                username={message.u.username}
-                size={36}
-                status={mine ? undefined : senderStatus}
-              />
-            </button>
+          {!visuallyGrouped && (
+            hostedAgentAnswer ? (
+              <span className="rocketx-agent-answer-avatar" aria-hidden="true">
+                <Bot size={17} />
+              </span>
+            ) : (
+              <button onClick={() => setShowCard(true)} className="block cursor-pointer">
+                {/* 自己的消息不点在线状态点（意义不大且总是在线） */}
+                <Avatar
+                  name={displayName}
+                  username={message.u.username}
+                  size={36}
+                  status={mine ? undefined : senderStatus}
+                />
+              </button>
+            )
           )}
         </div>
       )}
 
       <div
-        className={`flex max-w-[68%] min-w-0 flex-col ${mine ? 'items-end' : 'items-start'} ${
+        className={`flex min-w-0 flex-col ${
+          hostedAgentAnswer
+            ? 'rocketx-agent-answer flex-1 items-stretch'
+            : `${richMarkdown ? 'w-full max-w-[42rem]' : 'max-w-[68%]'} ${visuallyMine ? 'items-end' : 'items-start'}`
+        } ${
           selectMode ? 'pointer-events-none' : ''
         }`}
       >
-        {!grouped && (
-          <div className={`mb-1 flex items-baseline gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
-            <span className="text-xs text-ink-2">{mine ? '' : displayName}</span>
+        {!visuallyGrouped && (
+          <div className={`mb-1 flex items-baseline gap-2 ${visuallyMine ? 'flex-row-reverse' : ''}`}>
+            {hostedAgentAnswer ? (
+              <>
+                <span className="rocketx-agent-answer-provider">{hostedAgentAnswer.provider}</span>
+                {hostedAgentAnswer.note && (
+                  <span className="rocketx-agent-answer-note">{hostedAgentAnswer.note}</span>
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-ink-2">{mine ? '' : displayName}</span>
+            )}
             <span className="text-xs text-ink-3">{time}</span>
           </div>
         )}
 
-        <div className={`relative flex items-end gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
+        <div className={`relative flex items-end gap-2 ${hostedAgentAnswer || richMarkdown ? 'w-full' : ''} ${
+          visuallyMine ? 'flex-row-reverse' : ''
+        }`}>
           {/* 悬浮操作栏：整体浮在气泡上方（bottom-full = 底边贴气泡顶边），不再盖住本条
               第一行文字（issue #6）。停留 HOVER_DELAY_MS 才出现（issue #18.4）；
               表情面板/菜单打开时保持显示，免得选到一半栏没了。 */}
@@ -875,7 +921,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             (hoverActions || !!picker || !!menu) && (
             <div
               className={`absolute bottom-full z-10 mb-0.5 flex ${
-                mine ? 'right-0' : 'left-0'
+                visuallyMine ? 'right-0' : 'left-0'
               }`}
             >
               <div className="relative flex items-center gap-0.5 rounded-lg bg-surface-4 shadow-raise p-0.5 shadow-[0_2px_8px_rgba(31,35,41,0.1)]">
@@ -931,10 +977,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
 
           {/* 纯图片消息不套气泡（飞书是裸图），有文字时才有气泡底 */}
           <div
-            className={`text-sm leading-relaxed break-words whitespace-pre-wrap ${
-              bareMedia
-                ? ''
-                : `rounded-lg px-3 py-2 ${mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'}`
+            className={`text-sm leading-relaxed break-words ${
+              hostedAgentAnswer
+                ? 'rocketx-agent-answer-body w-full'
+                  : `whitespace-pre-wrap ${richMarkdown ? 'w-full' : ''} ${
+                    bareMedia || rocketXSticker
+                      ? ''
+                      : `rounded-lg px-3 py-2 ${mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'}`
+                  }`
             }`}
           >
             {editing ? (
@@ -964,7 +1014,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     <ListTodo size={12} />
                   </button>
                 )}
-                {visibleText ? renderMarkdown(visibleText, myUsername) : null}
+                {hostedAgentAnswer
+                  ? renderMarkdownDoc(hostedAgentAnswer.body, myUsername)
+                  : rocketXSticker
+                    ? (
+                      <AuthImage
+                        path={`/emoji-custom/${encodeURIComponent(rocketXSticker.name)}.${rocketXSticker.format}`}
+                        alt={rocketXSticker.name}
+                        className="block h-[72px] w-[72px] object-contain"
+                        fallback={<span className="text-xs text-ink-3">[贴纸加载失败]</span>}
+                      />
+                    )
+                  : visibleText
+                    ? renderMarkdown(visibleText, myUsername)
+                    : null}
                 {!message.msg && !message.attachments?.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
@@ -986,7 +1049,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               </>
             )}
           </div>
-          {grouped && (
+          {visuallyGrouped && (
             <span className="pb-0.5 text-xs text-ink-3 opacity-0 transition group-hover:opacity-100">
               {time}
             </span>

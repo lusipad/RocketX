@@ -1,7 +1,7 @@
 import type { RcMessage } from '@rcx/rc-client';
 import { tsMs } from '@rcx/rc-client';
 import type { ComposerCommandContext } from './types';
-import { handoffToCodexTask } from '../lib/codexTaskHandoff';
+import { handoffToButlerTask } from '../lib/butlerTaskHandoff';
 import { stripQuotePrefix } from '../lib/messageText';
 import { stripAgentSessionMarker } from '../agent/card';
 import { useChat } from '../stores/chat';
@@ -54,7 +54,7 @@ function messagesTranscript(messages: readonly RcMessage[]): string {
 }
 
 function reportHandoffError(error: unknown): void {
-  toast.error(error, '无法创建 Codex 任务');
+  toast.error(error, '无法交给 AI 管家');
 }
 
 export function runButlerCommand({ rid, params }: ComposerCommandContext): void {
@@ -64,14 +64,15 @@ export function runButlerCommand({ rid, params }: ComposerCommandContext): void 
     return;
   }
   const room = roomNameOf(rid);
-  void handoffToCodexTask(
+  void handoffToButlerTask(
     `请在 Rocket.Chat 房间「${room}」（rid: ${rid}）的语境中处理以下任务：\n\n${question}`,
     `${room} · ${question}`,
+    { rid, preferRoomPanel: true },
   ).catch(reportHandoffError);
 }
 
 /**
- * 把指定消息连同来源上下文交给独立 Codex 任务。
+ * 把指定消息连同来源上下文交给当前 AI 运行时。
  */
 export function askButlerAboutMessages(
   rid: string,
@@ -80,7 +81,7 @@ export function askButlerAboutMessages(
 ): ButlerHandoffResult {
   if (!messages.length) return 'asked';
   const roomName = roomNameOf(rid);
-  void handoffToCodexTask(
+  void handoffToButlerTask(
     [
       `请处理 Rocket.Chat 房间「${roomName}」（rid: ${rid}）中用户选定的 ${messages.length} 条消息。`,
       `用户要求：${question}`,
@@ -88,13 +89,12 @@ export function askButlerAboutMessages(
       messagesTranscript(messages),
     ].join('\n\n'),
     `${roomName} · ${question}`,
+    { rid, preferRoomPanel: true },
   ).catch(reportHandoffError);
   return 'asked';
 }
 
-/**
- * 把指定 PR 连同真实链接交给独立 Codex 任务。
- */
+/** 把指定 PR 连同真实链接交给当前 AI 管家。 */
 export function askButlerAboutPullRequests(
   pullRequests: readonly PullRequest[],
   question: string,
@@ -105,7 +105,7 @@ export function askButlerAboutPullRequests(
     pr.project ? `项目：${pr.project}` : '',
     pr.webUrl ? `链接：${pr.webUrl}` : '',
   ].filter(Boolean).join('；')).join('\n');
-  void handoffToCodexTask(
+  void handoffToButlerTask(
     `请处理以下 Azure DevOps 拉取请求。\n\n用户要求：${question}\n\n${details}`,
     `ADO PR · ${question}`,
   ).catch(reportHandoffError);

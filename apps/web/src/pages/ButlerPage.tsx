@@ -1,10 +1,14 @@
 import { PanelLeft, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { agentBackend } from '../agent/session';
 import ButlerConversation from '../components/ButlerConversation';
 import ButlerConversationHistory from '../components/ButlerConversationHistory';
 import DshConversation from '../components/DshConversation';
 import ButlerPluginsPage from '../components/ButlerPluginsPage';
 import ButlerRoutines from '../components/ButlerRoutines';
+import { getAiRuntimeStartupResolution } from '../lib/aiRuntimeBootstrap';
+import { useSharedAgent } from '../stores/sharedAgent';
+import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
 
 function ManagedSurface({ children }: { children: ReactNode }) {
@@ -77,48 +81,82 @@ function ManagedSurface({ children }: { children: ReactNode }) {
   );
 }
 
-/** Codex 式三工作面：任务、已安排、插件。其余能力留在任务上下文中。 */
+function AiDisabledSurface() {
+  const startupResolution = getAiRuntimeStartupResolution();
+  const unavailableSelection = startupResolution.source === 'explicit-unavailable'
+    ? startupResolution.configured
+    : undefined;
+  return (
+    <section className="flex h-full items-center justify-center bg-surface" aria-label="普通对话">
+      <div className="max-w-sm rounded-xl border border-line bg-surface-3 p-6 text-center">
+        <div className="text-sm font-medium text-ink">
+          {unavailableSelection ? '所选 AI 执行引擎当前不可用' : '当前未启用 AI 执行引擎'}
+        </div>
+        <p className="mt-2 text-xs leading-5 text-ink-3">
+          {unavailableSelection
+            ? `已保留 ${unavailableSelection === 'codex' ? 'Codex' : 'DSH'} 选择，本次没有切换到其他引擎。${startupResolution.reason ? ` ${startupResolution.reason}` : ''}`
+            : '普通对话暂不可发送；已有托管记录仍可在托管状态里查看和结束。'}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/** 固定展示单一原生会话面；provider 只决定具体执行引擎。 */
 export default function ButlerPage() {
   const activeView = useUI((state) => state.butlerView);
-  const taskProvider = useUI((state) => state.butlerTaskProvider);
-  const setTaskProvider = useUI((state) => state.setButlerTaskProvider);
+  const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
+  const selectedHostedSessionKey = useUI((state) => state.selectedHostedSessionKey);
+  const hostedSessionsByKey = useSharedAgent((state) => state.sessions);
+  const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
+  const connect = useCodexWorkspace((state) => state.connect);
+  const resumeThread = useCodexWorkspace((state) => state.resumeThread);
+  const codexRuntime = aiRuntimeProvider === 'codex';
+  const focusedHostedSessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!codexRuntime || activeView !== 'conversation' || !selectedHostedSessionKey) return;
+    const session = hostedSessionsByKey[selectedHostedSessionKey];
+    if (!session || agentBackend(session) !== 'codex') return;
+    const workspaceRoot = session.workspaceRoots[0];
+    if (!workspaceRoot || !session.codexThreadId) return;
+    const focusKey = `${selectedHostedSessionKey}\u0000${workspaceRoot}\u0000${session.codexThreadId}`;
+    if (focusedHostedSessionRef.current === focusKey) return;
+    focusedHostedSessionRef.current = focusKey;
+    void (async () => {
+      try {
+        await setWorkspaceRoot(workspaceRoot);
+        await connect({ refreshThreads: false });
+        await resumeThread(session.codexThreadId!);
+      } catch {
+        if (focusedHostedSessionRef.current === focusKey) focusedHostedSessionRef.current = null;
+      }
+    })();
+  }, [
+    activeView,
+    codexRuntime,
+    connect,
+    hostedSessionsByKey,
+    resumeThread,
+    selectedHostedSessionKey,
+    setWorkspaceRoot,
+  ]);
 
   return (
     <div className="butler-workspace">
       <main className="butler-workspace-stage min-h-0 min-w-0 flex-1 overflow-hidden">
-        {activeView === 'routines' ? (
+        {aiRuntimeProvider === 'deepseek' ? (
+          <DshConversation />
+        ) : codexRuntime && activeView === 'routines' ? (
           <ManagedSurface><ButlerRoutines /></ManagedSurface>
-        ) : activeView === 'plugins' ? (
+        ) : codexRuntime && activeView === 'plugins' ? (
           <ManagedSurface><ButlerPluginsPage /></ManagedSurface>
+        ) : aiRuntimeProvider === 'none' ? (
+          <ManagedSurface><AiDisabledSurface /></ManagedSurface>
         ) : (
-          <section aria-label="任务" className="h-full min-h-0">
-            <div className="butler-task-provider-shell">
-              <header className="butler-task-provider-switcher" aria-label="任务执行视图">
-                <span>执行视图</span>
-                <div role="tablist" aria-label="任务执行视图切换">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={taskProvider === 'codex'}
-                    className={taskProvider === 'codex' ? 'is-active' : undefined}
-                    onClick={() => setTaskProvider('codex')}
-                  >
-                    Codex
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={taskProvider === 'deepseek'}
-                    className={taskProvider === 'deepseek' ? 'is-active' : undefined}
-                    onClick={() => setTaskProvider('deepseek')}
-                  >
-                    DeepSeek
-                  </button>
-                </div>
-              </header>
-              <div className="butler-task-provider-panel">
-                {taskProvider === 'deepseek' ? <DshConversation /> : <ButlerConversation embedded />}
-              </div>
+          <section aria-label="任务" className="butler-task-surface">
+            <div className="butler-task-content">
+              <ButlerConversation embedded />
             </div>
           </section>
         )}

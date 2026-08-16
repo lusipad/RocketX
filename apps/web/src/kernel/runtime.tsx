@@ -10,20 +10,6 @@ import { useWorkbench } from '../stores/workbench';
 import { toast } from '../stores/toast';
 import { installModuleValidator, useUI } from '../stores/ui';
 import { startRoutineScheduler } from '../stores/routines';
-import ContactsPage from '../pages/ContactsPage';
-import TodosPage from '../pages/TodosPage';
-import CalendarPage from '../pages/CalendarPage';
-import WorkbenchPage from '../pages/WorkbenchPage';
-import SettingsPage from '../pages/SettingsPage';
-import DownloadsPage from '../pages/DownloadsPage';
-import ThreadPanel from '../components/ThreadPanel';
-import PinPanel from '../components/PinPanel';
-import StarredPanel from '../components/StarredPanel';
-import MembersPanel from '../components/MembersPanel';
-import SearchPanel from '../components/SearchPanel';
-import RoomInfoPanel from '../components/RoomInfoPanel';
-import FilesPanel from '../components/FilesPanel';
-import MentionsPanel from '../components/MentionsPanel';
 import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
 import { BUNDLED_APPS } from './bundled';
 import { PermissionGate } from './permission';
@@ -34,7 +20,7 @@ import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
 import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
-import { runtimeFeatures } from '../lib/runtimeMode';
+import { getAiRuntimeProvider, runtimeFeatures } from '../lib/runtimeMode';
 import { kernelStore } from './store';
 import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
@@ -64,11 +50,29 @@ function lazyComponent(
 }
 
 const ButlerPage = lazyComponent(() => import('../pages/ButlerPage'));
+const ContactsPage = lazyComponent(() => import('../pages/ContactsPage'));
+const TodosPage = lazyComponent(() => import('../pages/TodosPage'));
+const CalendarPage = lazyComponent(() => import('../pages/CalendarPage'));
+const WorkbenchPage = lazyComponent(() => import('../pages/WorkbenchPage'));
+const SettingsPage = lazyComponent(() => import('../pages/SettingsPage'));
+const DownloadsPage = lazyComponent(() => import('../pages/DownloadsPage'));
+const ThreadPanel = lazyComponent(() => import('../components/ThreadPanel'));
+const PinPanel = lazyComponent(() => import('../components/PinPanel'));
+const StarredPanel = lazyComponent(() => import('../components/StarredPanel'));
+const MembersPanel = lazyComponent(() => import('../components/MembersPanel'));
+const SearchPanel = lazyComponent(() => import('../components/SearchPanel'));
+const RoomInfoPanel = lazyComponent(() => import('../components/RoomInfoPanel'));
+const FilesPanel = lazyComponent(() => import('../components/FilesPanel'));
+const MentionsPanel = lazyComponent(() => import('../components/MentionsPanel'));
 const SummaryPanel = lazyComponent(() => import('../components/SummaryPanel'));
 const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
 const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
 
 async function summarizeRoom(rid: string): Promise<void> {
+  if (getAiRuntimeProvider() === 'deepseek') {
+    runButlerCommand({ rid, params: '请总结当前会话的未读消息，并列出需要我跟进的事项。' });
+    return;
+  }
   const { useAiAssistant } = await import('../stores/aiAssistant');
   useChat.getState().setPanel({ kind: 'ai' });
   await useAiAssistant.getState().summarize(rid);
@@ -496,6 +500,7 @@ function WorkbenchModule() {
 
 function registerBuiltins(): void {
   const features = runtimeFeatures();
+  const aiRuntimeProvider = getAiRuntimeProvider();
   const modules = [
     ['workbench', '工作台', WorkbenchModule, undefined],
     ['butler-view', '管家', ButlerPage, Bell],
@@ -529,14 +534,18 @@ function registerBuiltins(): void {
     ['agent', AgentPanel],
   ] as const;
   for (const [id, render] of panels) {
-    if ((id === 'ai' && !features.ai) || (id === 'butler' && !features.butler) || (id === 'agent' && !features.sharedAgent)) continue;
+    if (
+      (id === 'ai' && (!features.ai || aiRuntimeProvider !== 'codex'))
+      || (id === 'butler' && !features.butler)
+      || (id === 'agent' && !features.sharedAgent)
+    ) continue;
     kernelRegistry.register('core', 'panel.right', { id, render });
   }
   if (features.ai) {
     kernelRegistry.register('core', 'composer.command', {
       id: 'summary',
       name: 'summary',
-      description: '用 Codex 总结当前会话未读消息',
+      description: '用 AI 管家总结当前会话未读消息',
       run: ({ rid }) => {
         void summarizeRoom(rid);
       },
@@ -544,11 +553,11 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'butler',
       name: 'ai',
-      description: '打开 Codex，可直接跟上问题',
+      description: '打开 AI 管家，可直接跟上问题',
       params: '问题（可选）',
       run: runButlerCommand,
     });
-    kernelRegistry.register('core', 'composer.trigger', {
+    if (aiRuntimeProvider === 'codex') kernelRegistry.register('core', 'composer.trigger', {
       id: 'codex',
       prefix: '$codex',
       run: async (context) => {
@@ -613,8 +622,6 @@ function registerBridgeEvents(): void {
 export async function initializeKernel(): Promise<void> {
   if (initialized) return;
   initialized = true;
-  if (runtimeFeatures().ai) {
-  }
   setActiveAppManager(installedApps);
   registerCapabilities();
   registerBuiltins();

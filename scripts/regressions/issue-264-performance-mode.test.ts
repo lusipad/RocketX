@@ -56,6 +56,46 @@ test('启动前先应用运行模式，再按模式决定是否初始化 kernel'
   assert.match(main, /applyRuntimeModeDocumentState\(\)/);
   assert.match(main, /if \(runtimeFeatures\(\)\.bootKernel\) \{\s*await initializeKernel\(\);?\s*\}/);
   assert.match(main, /ReactDOM\.createRoot/);
+  const render = main.indexOf('ReactDOM.createRoot');
+  const warmup = main.lastIndexOf('scheduleStartupWarmups();');
+  assert.ok(render >= 0 && warmup > render, '拼音预热必须移到首屏 render 之后');
+});
+
+test('首屏渲染后才在浏览器空闲阶段预加载拼音字典', () => {
+  const main = source('apps/web/src/main.tsx');
+  assert.match(main, /function scheduleStartupWarmups\(\)[\s\S]*preloadPinyin\(\)/);
+  assert.match(main, /const schedule = \(\) => window\.setTimeout\(run, 1_200\)/);
+  assert.match(main, /requestAnimationFrame\(\(\) => \{[\s\S]*requestIdleCallback\(schedule/);
+  assert.match(main, /window\.requestIdleCallback\(schedule, \{ timeout: 2_000 \}\)/);
+  assert.match(main, /schedule\(\);/);
+});
+
+test('非首屏页面和房间面板不进入 kernel 的静态依赖图', () => {
+  const runtime = source('apps/web/src/kernel/runtime.tsx');
+  const surfaces = [
+    ['ContactsPage', '../pages/ContactsPage'],
+    ['TodosPage', '../pages/TodosPage'],
+    ['CalendarPage', '../pages/CalendarPage'],
+    ['WorkbenchPage', '../pages/WorkbenchPage'],
+    ['SettingsPage', '../pages/SettingsPage'],
+    ['DownloadsPage', '../pages/DownloadsPage'],
+    ['ThreadPanel', '../components/ThreadPanel'],
+    ['PinPanel', '../components/PinPanel'],
+    ['StarredPanel', '../components/StarredPanel'],
+    ['MembersPanel', '../components/MembersPanel'],
+    ['SearchPanel', '../components/SearchPanel'],
+    ['RoomInfoPanel', '../components/RoomInfoPanel'],
+    ['FilesPanel', '../components/FilesPanel'],
+    ['MentionsPanel', '../components/MentionsPanel'],
+  ] as const;
+
+  for (const [name, path] of surfaces) {
+    assert.doesNotMatch(runtime, new RegExp(`import ${name} from ['\"]${path}['\"]`));
+    assert.match(
+      runtime,
+      new RegExp(`const ${name} = lazyComponent\\(\\(\\) => import\\(['\"]${path}['\"]\\)\\)`),
+    );
+  }
 });
 
 test('performance 模式不启动旧 polling bridge，仍屏蔽 AI 相关入口与副作用', () => {
@@ -76,6 +116,7 @@ test('performance 模式不启动旧 polling bridge，仍屏蔽 AI 相关入口�
   assert.match(mainPage, /runtimeFeatures\(\)\.runtimeProbes/);
   assert.match(chatArea, /(?:features|runtimeFeatures\(\))\.butler/);
   assert.match(quickSwitcher, /runtimeFeatures\(\)\.butler/);
-  assert.match(settings, /runtimeFeatures\(\)\.ai/);
+  assert.match(settings, /getRuntimeMode\(\) !== 'performance'/);
+  assert.match(settings, /SECTIONS\.filter\([\s\S]*?\),\s*\[aiSettingsVisible\]/);
   assert.match(lightbox, /runtimeFeatures\(\)\.ocr/);
 });

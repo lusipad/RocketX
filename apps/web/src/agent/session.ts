@@ -35,6 +35,7 @@ export interface AgentSession {
   tmid: string;
   /** 回复到消息线程时填写；Discussion 顶层会话留空。 */
   replyTmid?: string;
+  roomNameSnapshot?: string;
   host: AgentHostLease;
   access: 'room-members' | 'host-only';
   approvedMemberIds: string[];
@@ -52,6 +53,13 @@ export interface AgentSession {
   runtimeModel?: string;
   runtimeEffort?: string | null;
   runtimePermissionPreset?: CodexPermissionPreset;
+  dshModelSelection?: {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+  };
+  dshAgentPreset?: string;
+  dshPermissionPreset?: string;
   workspaceRoots: string[];
   environmentId?: string;
   environmentName?: string;
@@ -62,6 +70,7 @@ export interface AgentSession {
   };
   proposedBranch?: string;
   baseBranch?: string;
+  currentTaskLabel?: string;
   /** 最近一次仅属于本会话的失败；成功恢复或开始新一轮后清除。 */
   lastError?: string;
   updatedAt: number;

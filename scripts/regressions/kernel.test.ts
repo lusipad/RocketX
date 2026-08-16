@@ -134,7 +134,7 @@ test('trigger 可显式放行，让话题指令先成为普通 Rocket.Chat 消�
   }
 });
 
-test('/ai 命令仍注册到统一派发器，但实现已改为创建 Codex 任务', async () => {
+test('/ai 命令注册到统一派发器，并把任务交给当前 AI 运行时', async () => {
   const [runtime, butler] = await Promise.all([
     readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/kernel/butler.ts', import.meta.url), 'utf8'),
@@ -142,11 +142,11 @@ test('/ai 命令仍注册到统一派发器，但实现已改为创建 Codex 任
 
   assert.equal(typeof runButlerCommand, 'function');
   assert.match(runtime, /name: 'ai'/);
-  assert.match(runtime, /description: '打开 Codex，可直接跟上问题'/);
+  assert.match(runtime, /description: '打开 AI 管家，可直接跟上问题'/);
   assert.match(runtime, /run: runButlerCommand/);
-  assert.match(butler, /import \{ handoffToCodexTask \} from '\.\.\/lib\/codexTaskHandoff';/);
+  assert.match(butler, /import \{ handoffToButlerTask \} from '\.\.\/lib\/butlerTaskHandoff';/);
   assert.match(butler, /useUI\.getState\(\)\.openButlerConversation\(\);/);
-  assert.match(butler, /void handoffToCodexTask\(/);
+  assert.match(butler, /void handoffToButlerTask\(/);
   assert.doesNotMatch(butler, /useButler/);
 });
 

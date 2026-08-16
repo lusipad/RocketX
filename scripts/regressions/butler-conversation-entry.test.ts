@@ -8,13 +8,14 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
 
-  assert.match(page, /activeView === 'routines' \? \(/);
-  assert.match(page, /activeView === 'plugins' \? \(/);
+  assert.match(page, /codexRuntime && activeView === 'routines' \? \(/);
+  assert.match(page, /codexRuntime && activeView === 'plugins' \? \(/);
   assert.match(page, /<ButlerRoutines \/>/);
   assert.match(page, /<ButlerPluginsPage \/>/);
-  assert.match(page, /<section aria-label="任务" className="h-full min-h-0">/);
-  assert.match(page, /const taskProvider = useUI\(\(state\) => state\.butlerTaskProvider\)/);
-  assert.match(page, /const setTaskProvider = useUI\(\(state\) => state\.setButlerTaskProvider\)/);
+  assert.match(page, /<section aria-label="任务" className="butler-task-surface">/);
+  assert.match(page, /const aiRuntimeProvider = useUI\(\(state\) => state\.aiRuntimeProvider\)/);
+  assert.doesNotMatch(page, /butler-task-provider-mobile|管家执行引擎/);
+  assert.doesNotMatch(page, /任务执行视图|role="tab"/);
   assert.doesNotMatch(page, /localStorage/);
   assert.match(page, /<ButlerConversation embedded \/>/);
   assert.doesNotMatch(page, /ButlerSessionSwitcher|ButlerIdentityPage|ButlerConnectionsPanel|Today/);

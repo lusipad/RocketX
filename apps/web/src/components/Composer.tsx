@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { RcUser } from '@rcx/rc-client';
-import { AtSign, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
+import { AtSign, Bot, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { isTauri, rest } from '../lib/client';
 import { toast } from '../stores/toast';
@@ -29,14 +29,23 @@ import EmojiPicker from './EmojiPicker';
 import Avatar from './Avatar';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
 import {
-  MENTION_RE,
   canMentionInRoom,
+  insertMentionAtCursor,
   mentionQueryAtCursor,
   shouldSearchMentionDirectory,
 } from '../lib/mentions';
 import { stripAgentSessionMarker } from '../agent/card';
 import UploadConfirm from './UploadConfirm';
 import type { StickerEntry } from '../lib/stickerManifest';
+import {
+  builtinStickerServerEmojiAlias,
+  classifyServerEmojiCreateError,
+  pickComposerStickerWithServerCompat,
+  sendBuiltinStickerWithServerCompat,
+} from '../lib/stickerServerCompat';
+import { matchSharedAiMention, resolveSharedAiMentionTarget } from '../lib/aiMention';
+import { runtimeFeatures } from '../lib/runtimeMode';
+import { useSharedAgent } from '../stores/sharedAgent';
 
 // 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
 // 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
@@ -50,10 +59,22 @@ type StickerPickerProps = {
   className?: string;
 };
 
+type MentionCandidate = {
+  username: string;
+  name?: string;
+  isRemote?: boolean;
+  kind: 'agent' | 'broadcast' | 'user';
+  agentStatus?: 'active' | 'interrupted';
+};
+
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const canMention = canMentionInRoom(roomType);
+  const sharedAiStatus = useSharedAgent((s) => {
+    if (!activeRid || !runtimeFeatures().ai) return null;
+    return resolveSharedAiMentionTarget(activeRid, undefined, s.sessions, s.remoteCards)?.status ?? null;
+  });
   const send = useChat((s) => s.send);
   const loadMembers = useChat((s) => s.loadMembers);
   const inviteMembers = useChat((s) => s.inviteMembers);
@@ -166,10 +187,15 @@ export default function Composer() {
   const candidates = useMemo(() => {
     if (!canMention || mentionQuery === null) return [];
     const q = mentionQuery.trim();
-    const base: { username: string; name?: string; isRemote?: boolean }[] = [
-      { username: 'all', name: '通知所有人' },
-      { username: 'here', name: '通知在线成员' },
-      ...members,
+    const agent: MentionCandidate[] = sharedAiStatus && matchSharedAiMention(q)
+      ? [{ username: 'ai', name: 'AI 托管', kind: 'agent', agentStatus: sharedAiStatus }]
+      : [];
+    const base: MentionCandidate[] = [
+      { username: 'all', name: '通知所有人', kind: 'broadcast' },
+      { username: 'here', name: '通知在线成员', kind: 'broadcast' },
+      ...members
+        .filter((member) => agent.length === 0 || member.username !== 'ai')
+        .map((member) => ({ ...member, kind: 'user' as const })),
     ];
     // 支持拼音（zhangsan / zs → 张三）与备注名（给谁起了备注就按备注找谁）
     const label = (u: { username: string; name?: string }) =>
@@ -178,13 +204,13 @@ export default function Composer() {
       .filter((u) => pinyinMatch(q, aliases[`u:${u.username}`], u.name, u.username))
       .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)));
     // 群外用户：目录搜到的、不在群成员里的，标 isRemote 拼在本地结果后面
-    const memberNames = new Set(base.map((u) => u.username));
+    const memberNames = new Set([...agent, ...base].map((u) => u.username));
     const remote = remoteUsers
       .filter((u) => u.username && !memberNames.has(u.username))
-      .map((u) => ({ username: u.username, name: u.name, isRemote: true }));
-    return [...local, ...remote].slice(0, 8);
+      .map((u) => ({ username: u.username, name: u.name, isRemote: true, kind: 'user' as const }));
+    return [...agent, ...local, ...remote].slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [canMention, mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers]);
+  }, [canMention, mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -259,26 +285,25 @@ export default function Composer() {
     }
   };
 
-  const insertMention = (username: string) => {
+  const insertMention = (candidate: MentionCandidate) => {
     const el = textareaRef.current;
     const cursor = el?.selectionStart ?? text.length;
-    const before = text.slice(0, cursor).replace(MENTION_RE, (full) =>
-      full.startsWith('@') ? `@${username} ` : `${full[0]}@${username} `,
-    );
-    const next = before + text.slice(cursor);
-    setText(next);
-    persistDraft(next); // 同上（P2-g）
+    const inserted = insertMentionAtCursor(text, cursor, candidate.username);
+    setText(inserted.value);
+    persistDraft(inserted.value); // 同上（P2-g）
     // @ 的是群外的人 → 记下来，发送前拉进群（这样 TA 才收得到 @ 提醒）
-    const remote = remoteUsers.find((u) => u.username === username);
-    if (remote && !members.some((m) => m.username === username)) {
+    const remote = candidate.isRemote
+      ? remoteUsers.find((u) => u.username === candidate.username)
+      : undefined;
+    if (remote && !members.some((m) => m.username === candidate.username)) {
       setPendingInvites((prev) =>
-        prev.some((u) => u.username === username) ? prev : [...prev, remote],
+        prev.some((u) => u.username === candidate.username) ? prev : [...prev, remote],
       );
     }
     setMentionQuery(null);
     requestAnimationFrame(() => {
       el?.focus();
-      el?.setSelectionRange(before.length, before.length);
+      el?.setSelectionRange(inserted.cursor, inserted.cursor);
     });
   };
 
@@ -308,11 +333,63 @@ export default function Composer() {
   const pickSticker = async (sticker: StickerEntry) => {
     try {
       const { fetchStickerFile } = await import('../lib/stickerLoader');
-      const file = await fetchStickerFile(sticker);
-      requestUpload([file], text);
+      let filePromise: Promise<File> | null = null;
+      const ensureFile = () => {
+        filePromise ??= fetchStickerFile(sticker);
+        return filePromise;
+      };
+      await pickComposerStickerWithServerCompat(sticker, text, {
+        fetchStickerFile: ensureFile,
+        requestUpload: (files, caption) => requestUpload(files, caption),
+        sendBuiltinStickerWithServerCompat: async (candidate) => {
+          if (!activeRid) {
+            requestUpload([await ensureFile()], text);
+            return;
+          }
+          let collision = false;
+          await sendBuiltinStickerWithServerCompat(candidate, {
+            inspectServerEmoji: async (name) => {
+              const emoji = await rest.getCustomEmojiByName(name);
+              if (!emoji) return 'missing';
+              if (emoji.aliases.includes(builtinStickerServerEmojiAlias(name))) return 'owned';
+              collision = true;
+              return 'foreign';
+            },
+            createServerEmoji: async (_candidate, name) => {
+              try {
+                await rest.createCustomEmoji({
+                  name,
+                  file: await ensureFile(),
+                  fileName: sticker.fileName,
+                  aliases: [builtinStickerServerEmojiAlias(name)],
+                });
+                return 'created';
+              } catch (error) {
+                const kind = classifyServerEmojiCreateError(error);
+                if (kind === 'collision') collision = true;
+                if (kind) return kind;
+                throw error;
+              }
+            },
+            sendShortcodeMessage: async (shortcode) => {
+              const quote = replyTo;
+              if (quote) setReplyTo(null);
+              await send(shortcode, { rid: activeRid, ...(quote ? { quote } : {}) });
+            },
+            sendImageAttachmentFallback: async () => {
+              requestUpload([await ensureFile()], text);
+              toast.info(
+                collision
+                  ? '服务器里已有同名表情，已回退为图片附件发送。'
+                  : '当前账号不能注册服务器贴纸，已回退为图片附件发送。',
+              );
+            },
+          });
+        },
+      });
       setStickerPicker(false);
     } catch (err) {
-      toast.error(err, '加载贴纸失败');
+      toast.error(err, '发送贴纸失败');
     }
   };
 
@@ -442,7 +519,7 @@ export default function Composer() {
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        insertMention(candidates[mentionIndex].username);
+        insertMention(candidates[mentionIndex]);
         return;
       }
       if (e.key === 'Escape') {
@@ -527,20 +604,32 @@ export default function Composer() {
 
       {/* @ 成员补全弹层 */}
       {mentionQuery !== null && candidates.length > 0 && (
-        <div className="absolute bottom-full left-4 z-30 mb-1 w-64 overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop">
+        <div
+          id="composer-mention-list"
+          role="listbox"
+          aria-label="提及成员或共享 AI"
+          className="absolute bottom-full left-4 z-30 mb-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop"
+        >
           {candidates.map((u, i) => (
             <button
               key={u.username}
+              id={`composer-mention-option-${i}`}
+              role="option"
+              aria-selected={i === mentionIndex}
               onMouseDown={(e) => {
                 e.preventDefault();
-                insertMention(u.username);
+                insertMention(u);
               }}
               onMouseEnter={() => setMentionIndex(i)}
               className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
                 i === mentionIndex ? 'bg-primary-light' : ''
               }`}
             >
-              {u.username === 'all' || u.username === 'here' ? (
+              {u.kind === 'agent' ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary-light text-primary">
+                  <Bot size={14} />
+                </span>
+              ) : u.kind === 'broadcast' ? (
                 <span className="flex h-6 w-6 items-center justify-center rounded bg-primary-light text-primary">
                   <AtSign size={14} />
                 </span>
@@ -551,10 +640,22 @@ export default function Composer() {
                   size={24}
                 />
               )}
-              <span className="font-medium text-ink">
-                {personName(aliases, u.username, u.name || u.username, nameFormat)}
-              </span>
-              <span className="min-w-0 truncate text-xs text-ink-3">@{u.username}</span>
+              {u.kind === 'agent' ? (
+                <>
+                  <span className="font-medium text-ink">AI 托管</span>
+                  <span className="min-w-0 truncate text-xs text-ink-3">@ai</span>
+                  <span className="ml-auto shrink-0 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-3">
+                    {u.agentStatus === 'interrupted' ? '房间共享 · 已中断' : '房间共享'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-ink">
+                    {personName(aliases, u.username, u.name || u.username, nameFormat)}
+                  </span>
+                  <span className="min-w-0 truncate text-xs text-ink-3">@{u.username}</span>
+                </>
+              )}
               {u.isRemote && (
                 <span className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-xs text-ink-3">
                   非群成员
@@ -702,6 +803,14 @@ export default function Composer() {
           onPaste={onPaste}
           onClick={(e) =>
             refreshMention(text, (e.target as HTMLTextAreaElement).selectionStart ?? 0)
+          }
+          aria-autocomplete="list"
+          aria-controls={mentionQuery !== null && candidates.length > 0 ? 'composer-mention-list' : undefined}
+          aria-expanded={mentionQuery !== null && candidates.length > 0}
+          aria-activedescendant={
+            mentionQuery !== null && candidates.length > 0
+              ? `composer-mention-option-${mentionIndex}`
+              : undefined
           }
           rows={1}
           placeholder={

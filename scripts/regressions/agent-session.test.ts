@@ -86,8 +86,8 @@ test('AI 托管把运行时选择快照到会话，并沿用 AI 管家的权限�
     source,
     /function resolveSessionRuntime\([\s\S]*runtimeModel: selection\.model,[\s\S]*runtimeEffort: selection\.effort,[\s\S]*runtimePermissionPreset: selection\.permissionPreset/,
   );
-  assert.match(source, /workspace\.hostingModel/);
-  assert.match(source, /workspace\.hostingEffort/);
+  assert.match(source, /workspace\.selectedModel/);
+  assert.match(source, /workspace\.selectedEffort/);
   assert.match(source, /runtimePermissionPreset: workspace\.permissionPreset/);
   assert.match(source, /permissionPreset: session\?\.runtimePermissionPreset \?\? workspace\.permissionPreset/);
   assert.match(source, /const resolvedRuntime = resolveSessionRuntime\(session, catalog\)/);

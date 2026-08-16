@@ -3,6 +3,10 @@
     {
       "id": "twemoji",
       "manifest": "./twemoji/manifest.json"
+    },
+    {
+      "id": "noto-animated",
+      "manifest": "./noto-animated/manifest.json"
     }
   ]
 }
