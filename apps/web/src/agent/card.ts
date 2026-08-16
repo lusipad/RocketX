@@ -176,6 +176,14 @@ function parseVisibleAgentSessionCard(
   ) return null;
   const status = host[2] === '运行中' ? 'active' : host[2] === '已中断' ? 'interrupted' : 'ended';
   const backend = backendText === 'DeepSeek' ? 'deepseek' : 'codex';
+  const metadata = parseLeaseMetadata(message);
+  const tmid = message.tmid ?? `room:${message.rid}`;
+  const sessionId = metadata
+    && metadata.tmid === tmid
+    && metadata.hostUserId === message.u._id
+    && (metadata.backend === undefined || metadata.backend === backend)
+    ? metadata.sessionId
+    : message._id;
   const workItem = WORK_ITEM_HEADER.exec(text);
   const workItemId = workItem ? Number(workItem[1]) : undefined;
   const workItemTitle = singleLine(workItem?.[2]);
@@ -183,10 +191,10 @@ function parseVisibleAgentSessionCard(
   const proposedBranch = lineValue(text, '计划分支：')?.replace(/^`|`$/gu, '');
   return {
     version: 1,
-    sessionId: message._id,
+    sessionId,
     claimId: message._id,
     rid: message.rid,
-    tmid: message.tmid ?? `room:${message.rid}`,
+    tmid,
     hostUserId: message.u._id,
     hostUsername: message.u.username || host[1],
     hostDeviceId: message._id,

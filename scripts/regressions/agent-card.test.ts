@@ -112,13 +112,25 @@ test('纯可见状态卡默认只展示不仲裁，专用租约消息 id 或 cus
     _id: createAgentSessionLeaseMessageId(),
   }), 'lease-message-id');
   assert.equal(agentSessionCardAuthority(rendered, leaseMessage({
-    id: 'session-authority',
+    id: 'plain-message-with-metadata',
     rid: 'room-general',
     tmid: 'thread-authority',
     userId: 'user-1',
     username: 'alice',
     customFields: agentSessionLeaseCustomFields(card),
   })), 'custom-fields');
+  assert.deepEqual(parseAgentSessionCard(rendered, leaseMessage({
+    id: 'plain-message-with-metadata',
+    rid: 'room-general',
+    tmid: 'thread-authority',
+    userId: 'user-1',
+    username: 'alice',
+    customFields: agentSessionLeaseCustomFields(card),
+  })), {
+    ...card,
+    claimId: 'plain-message-with-metadata',
+    hostDeviceId: 'plain-message-with-metadata',
+  });
 });
 
 test('共享 Agent 状态卡用稳定可读字段向所有客户端展示执行引擎', () => {

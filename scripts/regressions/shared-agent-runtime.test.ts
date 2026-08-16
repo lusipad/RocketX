@@ -6,7 +6,12 @@ import type {
   CodexCatalog,
   CodexRuntimeSelection,
 } from '../../apps/web/src/agent/AppServerController';
-import { createAgentSessionLeaseMessageId, renderAgentSessionCard } from '../../apps/web/src/agent/card';
+import {
+  agentSessionCardAuthority,
+  agentSessionLeaseCustomFields,
+  createAgentSessionLeaseMessageId,
+  renderAgentSessionCard,
+} from '../../apps/web/src/agent/card';
 import type { AgentSession } from '../../apps/web/src/agent/session';
 import type { RcMessage } from '@rcx/rc-client';
 import type { HostedDshControllerOptions } from '../../apps/web/src/agent/dsh/HostedDshController';
@@ -459,6 +464,71 @@ test('普通成员发布的有效租约卡会成为权威 remote lease', { concu
   );
 });
 
+test('真实 sendLeaseCard 路径生成的 customFields 即使 sessionId 与 messageId 不同也能命中 authority', { concurrency: false }, async () => {
+  const {
+    useAuth,
+    useChat,
+    useSharedAgent,
+    useCodexWorkspace,
+    setSharedAgentControllerFactory,
+    clientModule,
+  } = await loadModules();
+  await prepareStore([]);
+  const rid = 'room-custom-fields-authority';
+  const tmid = 'thread-custom-fields-authority';
+  useAuth.setState({ user: { _id: 'plain-user', username: 'plain', roles: ['user'] } as never });
+  useChat.setState({
+    rooms: { [rid]: { _id: rid, t: 'p', fname: 'customFields 权威房间' } as never },
+    subscriptions: { [rid]: { rid, t: 'p' } as never },
+    roomRoles: { [rid]: [] },
+  });
+  useCodexWorkspace.setState({
+    scope: 'same-origin:plain-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+  });
+  setRuntimeSelection(useCodexWorkspace);
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      assert.equal(method, 'startThread');
+      return { id: 'plain-user-custom-fields-thread' };
+    });
+    return built.controller as never;
+  });
+  const originalSendMessageRaw = clientModule.rest.sendMessageRaw.bind(clientModule.rest);
+  let published: Record<string, unknown> | undefined;
+  clientModule.rest.sendMessageRaw = async (body) => {
+    published = body as Record<string, unknown>;
+    return { _id: body._id } as never;
+  };
+  try {
+    const started = await useSharedAgent.getState().startSession(rid, tmid, {
+      workspaceRoot: 'D:/Repos/example',
+    });
+    assert.ok(published);
+    assert.equal(typeof published?.msg, 'string');
+    assert.equal(
+      agentSessionCardAuthority(String(published?.msg), {
+        _id: String(published?._id),
+        rid,
+        tmid,
+        ts: new Date().toISOString(),
+        u: { _id: started.host.userId, username: 'plain', name: 'plain' },
+        customFields: published?.customFields as Record<string, unknown>,
+      }),
+      'custom-fields',
+    );
+    assert.equal(
+      JSON.parse(String((published?.customFields as Record<string, unknown>)?.rocketxAgentLeaseV1)).sessionId,
+      started.sessionId,
+    );
+    assert.notEqual(started.sessionId, published?._id);
+  } finally {
+    clientModule.rest.sendMessageRaw = originalSendMessageRaw;
+    restoreFactory();
+  }
+});
+
 test('纯手工复制的可见状态卡不会直接成为权威 remote lease', { concurrency: false }, async () => {
   const { useSharedAgent, useChat } = await loadModules();
   await prepareStore([]);
@@ -488,52 +558,100 @@ test('纯手工复制的可见状态卡不会直接成为权威 remote lease', {
   assert.equal(useSharedAgent.getState().remoteCards[tmid], undefined);
 });
 
-test('旧 marker 状态卡现在只做展示兼容，不再恢复权威 remote lease', { concurrency: false }, async () => {
-  const { useSharedAgent } = await loadModules();
+test('旧授权角色的 legacy 状态卡会临时参与仲裁，避免新版重复启动', { concurrency: false }, async () => {
+  const { useSharedAgent, clientModule } = await loadModules();
   await prepareStore([]);
   const rid = 'room-legacy-display-only';
   const tmid = 'thread-legacy-display-only';
+  const originalGetRoomRoles = clientModule.rest.getRoomRoles.bind(clientModule.rest);
+  const originalGetUserInfoById = clientModule.rest.getUserInfoById.bind(clientModule.rest);
+  clientModule.rest.getRoomRoles = async () => [{
+    u: { _id: 'leader-user', username: 'leader', name: 'leader' },
+    roles: ['leader'],
+  }] as never;
+  clientModule.rest.getUserInfoById = async () => ({ _id: 'leader-user', username: 'leader', roles: ['user'] }) as never;
   const legacy = `🤖 **AI 托管已开启**\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify({
     version: 1,
     sessionId: 'legacy-display-only',
     rid,
     tmid,
-    hostUserId: 'member-user',
-    hostUsername: 'member',
+    hostUserId: 'leader-user',
+    hostUsername: 'leader',
     hostDeviceId: 'legacy-device',
     leaseExpiresAt: Date.now() + 60_000,
     status: 'active',
   }))}-->`;
-  await useSharedAgent.getState().ingestCard(
-    leaseCardMessage(rid, tmid, 'member-user', 'member', legacy, { _id: 'plainLegacyCard01' }),
-  );
-  assert.equal(useSharedAgent.getState().remoteCards[tmid], undefined);
+  try {
+    await useSharedAgent.getState().ingestCard(
+      leaseCardMessage(rid, tmid, 'leader-user', 'leader', legacy, { _id: 'plainLegacyCard01' }),
+    );
+    assert.equal(useSharedAgent.getState().remoteCards[tmid]?.hostUsername, 'leader');
+    await assert.rejects(
+      useSharedAgent.getState().startSession(rid, tmid, { workspaceRoot: 'D:/Repos/example' }),
+      /由 @leader 的另一台设备托管/,
+    );
+  } finally {
+    clientModule.rest.getRoomRoles = originalGetRoomRoles;
+    clientModule.rest.getUserInfoById = originalGetUserInfoById;
+  }
 });
 
-test('旧 marker 的卡片宿主与消息作者不一致时仍会被拒绝', { concurrency: false }, async () => {
-  const { useSharedAgent } = await loadModules();
+test('旧普通成员 legacy 状态卡不会阻断新版重新开启', { concurrency: false }, async () => {
+  const {
+    useChat,
+    useSharedAgent,
+    useCodexWorkspace,
+    setSharedAgentControllerFactory,
+    clientModule,
+  } = await loadModules();
   await prepareStore([]);
   const rid = 'room-mismatched-host';
   const tmid = 'thread-mismatched-host';
+  useChat.setState({
+    rooms: { [rid]: { _id: rid, t: 'p', fname: '旧普通成员房间' } as never },
+    subscriptions: { [rid]: { rid, t: 'p' } as never },
+  });
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+  });
+  setRuntimeSelection(useCodexWorkspace);
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      assert.equal(method, 'startThread');
+      return { id: 'legacy-member-can-restart' };
+    });
+    return built.controller as never;
+  });
+  const originalSendMessageRaw = clientModule.rest.sendMessageRaw.bind(clientModule.rest);
+  clientModule.rest.sendMessageRaw = async () => ({ _id: createAgentSessionLeaseMessageId() }) as never;
   const legacy = `🤖 **AI 托管已开启**\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify({
     version: 1,
-    sessionId: 'mismatched-host-session',
+    sessionId: 'plain-member-session',
     rid,
     tmid,
-    hostUserId: 'other-user',
-    hostUsername: 'other',
-    hostDeviceId: 'other-device',
+    hostUserId: 'member-user',
+    hostUsername: 'member',
+    hostDeviceId: 'member-device',
     leaseExpiresAt: Date.now() + 60_000,
     status: 'active',
   }))}-->`;
-  await useSharedAgent.getState().ingestCard(
-    leaseCardMessage(rid, tmid, 'member-user', 'member', legacy),
-  );
-  assert.equal(useSharedAgent.getState().remoteCards[tmid], undefined);
+  try {
+    await useSharedAgent.getState().ingestCard(
+      leaseCardMessage(rid, tmid, 'member-user', 'member', legacy, { _id: 'plainLegacyCard02' }),
+    );
+    assert.equal(useSharedAgent.getState().remoteCards[tmid], undefined);
+    const started = await useSharedAgent.getState().startSession(rid, tmid, { workspaceRoot: 'D:/Repos/example' });
+    assert.equal(started.host.userId, 'host-user');
+  } finally {
+    clientModule.rest.sendMessageRaw = originalSendMessageRaw;
+    restoreFactory();
+  }
 });
 
-test('房间主持人发布的可见租约卡同样会成为权威 remote lease', { concurrency: false }, async () => {
-  const { useSharedAgent, useChat } = await loadModules();
+test('旧 visible 状态卡只有在服务端确认负责人角色时才参与仲裁', { concurrency: false }, async () => {
+  const { useSharedAgent, useChat, clientModule } = await loadModules();
   await prepareStore([]);
   const rid = 'room-moderated';
   const tmid = 'thread-moderated';
@@ -541,6 +659,13 @@ test('房间主持人发布的可见租约卡同样会成为权威 remote lease'
     rooms: { [rid]: { _id: rid, t: 'p', fname: '主持房间' } as never },
     subscriptions: { [rid]: { rid, t: 'p' } as never },
   });
+  const originalGetRoomRoles = clientModule.rest.getRoomRoles.bind(clientModule.rest);
+  const originalGetUserInfoById = clientModule.rest.getUserInfoById.bind(clientModule.rest);
+  clientModule.rest.getRoomRoles = async () => [{
+    u: { _id: 'mod-user', username: 'alice', name: 'alice' },
+    roles: ['moderator'],
+  }] as never;
+  clientModule.rest.getUserInfoById = async () => ({ _id: 'mod-user', username: 'alice', roles: ['user'] }) as never;
   const visible = renderAgentSessionCard({
     version: 1,
     sessionId: 'remote-session',
@@ -555,14 +680,19 @@ test('房间主持人发布的可见租约卡同样会成为权威 remote lease'
     environmentName: 'RocketX',
     currentTaskLabel: '处理中',
   });
-  await useSharedAgent.getState().ingestCard(
-    leaseCardMessage(rid, tmid, 'mod-user', 'alice', visible),
-  );
-  assert.equal(useSharedAgent.getState().remoteCards[tmid]?.hostUsername, 'alice');
-  await assert.rejects(
-    useSharedAgent.getState().startSession(rid, tmid, { workspaceRoot: 'D:/Repos/example' }),
-    /由 @alice 的另一台设备托管/,
-  );
+  try {
+    await useSharedAgent.getState().ingestCard(
+      leaseCardMessage(rid, tmid, 'mod-user', 'alice', visible, { _id: 'legacy-visible-card01' }),
+    );
+    assert.equal(useSharedAgent.getState().remoteCards[tmid]?.hostUsername, 'alice');
+    await assert.rejects(
+      useSharedAgent.getState().startSession(rid, tmid, { workspaceRoot: 'D:/Repos/example' }),
+      /由 @alice 的另一台设备托管/,
+    );
+  } finally {
+    clientModule.rest.getRoomRoles = originalGetRoomRoles;
+    clientModule.rest.getUserInfoById = originalGetUserInfoById;
+  }
 });
 
 test('超长未来租约即使来自房间成员也不会成为权威 remote lease', { concurrency: false }, async () => {
@@ -830,6 +960,66 @@ test('普通房间成员可以直接开启 AI 托管', { concurrency: false }, a
     assert.equal(started.leaseMessageId, leaseMessageId);
     assert.deepEqual(fake.calls.slice(0, 2), ['connect', 'startThread']);
   } finally {
+    clientModule.rest.sendMessageRaw = originalSendMessageRaw;
+    restoreFactory();
+  }
+});
+
+test('旧卡迁移角色查询失败时按非权威处理，不阻断新版开启', { concurrency: false }, async () => {
+  const {
+    useChat,
+    useSharedAgent,
+    clientModule,
+    useCodexWorkspace,
+    setSharedAgentControllerFactory,
+  } = await loadModules();
+  await prepareStore([]);
+  const rid = 'room-legacy-query-failed';
+  const tmid = 'thread-legacy-query-failed';
+  useChat.setState({
+    rooms: { [rid]: { _id: rid, t: 'p', fname: '旧卡查询失败房间' } as never },
+    subscriptions: { [rid]: { rid, t: 'p' } as never },
+  });
+  useCodexWorkspace.setState({
+    scope: 'same-origin:host-user',
+    defaultWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-projectless',
+    butlerWorkspaceRoot: 'C:/Users/test/AppData/Local/RocketX/codex-butler',
+  });
+  setRuntimeSelection(useCodexWorkspace);
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      assert.equal(method, 'startThread');
+      return { id: 'legacy-query-failed-can-restart' };
+    });
+    return built.controller as never;
+  });
+  const originalGetRoomRoles = clientModule.rest.getRoomRoles.bind(clientModule.rest);
+  const originalGetUserInfoById = clientModule.rest.getUserInfoById.bind(clientModule.rest);
+  const originalSendMessageRaw = clientModule.rest.sendMessageRaw.bind(clientModule.rest);
+  clientModule.rest.getRoomRoles = async () => { throw new Error('roles unavailable'); };
+  clientModule.rest.getUserInfoById = async () => { throw new Error('user info unavailable'); };
+  clientModule.rest.sendMessageRaw = async () => ({ _id: createAgentSessionLeaseMessageId() }) as never;
+  const legacy = `🤖 **AI 托管已开启**\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify({
+    version: 1,
+    sessionId: 'legacy-query-failed',
+    rid,
+    tmid,
+    hostUserId: 'member-user',
+    hostUsername: 'member',
+    hostDeviceId: 'legacy-device',
+    leaseExpiresAt: Date.now() + 60_000,
+    status: 'active',
+  }))}-->`;
+  try {
+    await useSharedAgent.getState().ingestCard(
+      leaseCardMessage(rid, tmid, 'member-user', 'member', legacy, { _id: 'plainLegacyCard03' }),
+    );
+    assert.equal(useSharedAgent.getState().remoteCards[tmid], undefined);
+    const started = await useSharedAgent.getState().startSession(rid, tmid, { workspaceRoot: 'D:/Repos/example' });
+    assert.equal(started.host.userId, 'host-user');
+  } finally {
+    clientModule.rest.getRoomRoles = originalGetRoomRoles;
+    clientModule.rest.getUserInfoById = originalGetUserInfoById;
     clientModule.rest.sendMessageRaw = originalSendMessageRaw;
     restoreFactory();
   }

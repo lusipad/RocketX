@@ -385,6 +385,14 @@ function agentCardMessage(referenceAt = Date.now()) {
   return `🤖 **AI 工作项会话：#128 Login failure**\n主持人：@alice · 状态：运行中\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify(card))}-->`;
 }
 
+const discussionAgentLeaseCard = {
+  _id: 'agent-lease-card',
+  rid: 'discussion-agent',
+  msg: agentCardMessage(),
+  ts: NOW,
+  u: ALICE,
+};
+
 const subscriptions = [
   {
     _id: 'sub-general',
@@ -461,13 +469,7 @@ const rooms = [
     fname: '#128 Login failure',
     usersCount: 2,
     lm: NOW,
-    lastMessage: {
-      _id: 'agent-lease-card',
-      rid: 'discussion-agent',
-      msg: agentCardMessage(),
-      ts: NOW,
-      u: ALICE,
-    },
+    lastMessage: discussionAgentLeaseCard,
   },
 ];
 
@@ -528,13 +530,7 @@ const histories: Record<string, unknown[]> = {
     },
   ],
   'discussion-agent': [
-    {
-      _id: 'agent-lease-card',
-      rid: 'discussion-agent',
-      msg: agentCardMessage(),
-      ts: NOW,
-      u: ALICE,
-    },
+    discussionAgentLeaseCard,
   ],
 };
 
@@ -2837,6 +2833,9 @@ test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）
 });
 
 test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'deepseek');
+  });
   const { pageErrors } = await bootAuthenticated(page);
   await activateAiRuntimeForTest(page, 'deepseek');
   await conversation(page, '#128 Login failure').click();

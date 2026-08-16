@@ -564,6 +564,21 @@ function cardLeaseMatchesAuthorityWindow(
   return card.leaseExpiresAt >= minLease && card.leaseExpiresAt <= maxLease;
 }
 
+const LEGACY_SHARED_AGENT_ROOM_ROLES = new Set(['owner', 'moderator', 'leader']);
+const LEGACY_SHARED_AGENT_GLOBAL_ROLES = new Set(['admin', 'bot']);
+
+async function hasLegacyLeaseAuthority(message: RcMessage): Promise<boolean> {
+  const roomRoles = await useChat.getState().loadRoomRoles(message.rid).catch(() => []);
+  const scopedRoles = roomRoles.find((entry) => entry.u._id === message.u._id)?.roles ?? [];
+  if (scopedRoles.some((role) => LEGACY_SHARED_AGENT_ROOM_ROLES.has(role))) return true;
+  try {
+    const user = await rest.getUserInfoById(message.u._id);
+    return (user.roles ?? []).some((role) => LEGACY_SHARED_AGENT_GLOBAL_ROLES.has(role));
+  } catch {
+    return false;
+  }
+}
+
 async function ingestLeaseCard(
   message: RcMessage,
   parsedCard: AgentSessionCard,
@@ -571,12 +586,17 @@ async function ingestLeaseCard(
 ): Promise<void> {
   if (sharedAgentScope() !== scope) return;
   const authority = agentSessionCardAuthority(message.msg, message, parsedCard);
-  if (authority !== 'custom-fields' && authority !== 'lease-message-id') return;
+  if (authority === 'none') return;
   const card = { ...parsedCard, claimId: message._id };
   if (message.u._id !== card.hostUserId || !agentSessionCardMatchesMessage(card, message)) return;
   if (!cardLeaseMatchesAuthorityWindow(card, message)) return;
   if (sharedAgentScope() !== scope) return;
   if (useSharedAgent.getState().sessions[card.tmid]?.leaseMessageId === message._id || card.hostDeviceId === agentDeviceId()) return;
+  if (
+    authority !== 'custom-fields'
+    && authority !== 'lease-message-id'
+    && !await hasLegacyLeaseAuthority(message)
+  ) return;
   const chat = useChat.getState();
   const room = chat.subscriptions[message.rid] ?? chat.rooms[message.rid];
   const enriched = {
