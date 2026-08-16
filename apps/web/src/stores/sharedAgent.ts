@@ -14,8 +14,11 @@ import {
 import type { ServerRequestPolicy } from '../agent/protocol';
 import { agentDeviceId } from '../agent/device';
 import {
+  agentSessionCardAuthority,
+  agentSessionLeaseCustomFields,
   agentSessionCardMatchesMessage,
   agentSessionCardSupersedesLocal,
+  createAgentSessionLeaseMessageId,
   parseAgentSessionCard,
   renderAgentSessionCard,
   stripAgentSessionMarker,
@@ -454,6 +457,27 @@ async function updateLeaseCard(session: AgentSession): Promise<void> {
   await rest.updateMessage(session.rid, session.leaseMessageId, renderAgentSessionCard(cardFor(session)));
 }
 
+async function sendLeaseCard(session: AgentSession): Promise<RcMessage> {
+  const card = cardFor(session);
+  const leaseMessageId = createAgentSessionLeaseMessageId();
+  const body = {
+    _id: leaseMessageId,
+    rid: session.rid,
+    msg: renderAgentSessionCard(card),
+    ...(replyTmid(session) ? { tmid: replyTmid(session) } : {}),
+  };
+  try {
+    return await rest.sendMessageRaw({
+      ...body,
+      customFields: agentSessionLeaseCustomFields(card),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!/custom fields/i.test(detail)) throw error;
+    return await rest.sendMessageRaw(body);
+  }
+}
+
 function updatePublishedSession(session: AgentSession): void {
   updateSession(session);
   void updateLeaseCard(session).catch(() => undefined);
@@ -546,6 +570,8 @@ async function ingestLeaseCard(
   scope: string,
 ): Promise<void> {
   if (sharedAgentScope() !== scope) return;
+  const authority = agentSessionCardAuthority(message.msg, message, parsedCard);
+  if (authority !== 'custom-fields' && authority !== 'lease-message-id') return;
   const card = { ...parsedCard, claimId: message._id };
   if (message.u._id !== card.hostUserId || !agentSessionCardMatchesMessage(card, message)) return;
   if (!cardLeaseMatchesAuthorityWindow(card, message)) return;
@@ -1514,7 +1540,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       }
       updateSession(session);
       trace(tmid, 'status', `${agentName(session)} 会话已启动`);
-      const leaseMessage = await rest.sendMessage(rid, renderAgentSessionCard(cardFor(session)), replyTmid(session));
+      const leaseMessage = await sendLeaseCard(session);
       session = { ...session, leaseMessageId: leaseMessage._id, updatedAt: Date.now() };
       updateSession(session);
       return session;

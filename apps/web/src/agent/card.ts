@@ -52,12 +52,27 @@ const LEGACY_MARKER = /<!--rocketx-agent:([^>]+)-->/;
 const INVISIBLE_MARKER = /\u2063\u2063([\uFE00-\uFE0F\u{E0100}-\u{E01EF}]+)\u2063/u;
 const WORK_ITEM_HEADER = /^🤖 \*\*AI 工作项会话：#(\d+) (.+)\*\*$/mu;
 const HOSTING_HEADER = /^🤖 \*\*AI 托管已开启\*\*$/mu;
+const LEASE_ID_CHARS = '23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz';
+const LEASE_ID_PREFIX = 'RXh';
+const LEASE_ID_BODY_LENGTH = 12;
+const LEASE_ID_TOTAL_LENGTH = 17;
+const LEASE_CUSTOM_FIELD = 'rocketxAgentLeaseV1';
 
 interface AgentSessionCardMessage {
   _id: string;
   rid: string;
   tmid?: string;
   u: { _id: string; username: string };
+  customFields?: Record<string, unknown>;
+}
+
+interface AgentSessionLeaseMetadata {
+  version: 1;
+  kind: 'shared-agent-lease';
+  sessionId: string;
+  tmid: string;
+  hostUserId: string;
+  backend?: AgentBackend;
 }
 
 function lineValue(text: string, label: string): string | undefined {
@@ -80,6 +95,65 @@ function decodeInvisibleMarker(value: string): string {
     throw new Error('Invalid invisible Agent marker');
   });
   return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+}
+
+function leaseChecksum(body: string): string {
+  let first = 0;
+  let second = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    const value = LEASE_ID_CHARS.indexOf(body[index]);
+    if (value < 0) throw new Error('Invalid Agent lease id body');
+    first = (first + value + index) % LEASE_ID_CHARS.length;
+    second = (second + first + value) % LEASE_ID_CHARS.length;
+  }
+  return `${LEASE_ID_CHARS[first]}${LEASE_ID_CHARS[second]}`;
+}
+
+function randomLeaseIdBody(): string {
+  let value = '';
+  for (let index = 0; index < LEASE_ID_BODY_LENGTH; index += 1) {
+    value += LEASE_ID_CHARS[Math.floor(Math.random() * LEASE_ID_CHARS.length)];
+  }
+  return value;
+}
+
+function parseLeaseMetadata(
+  message: AgentSessionCardMessage | undefined,
+): AgentSessionLeaseMetadata | null {
+  const value = message?.customFields?.[LEASE_CUSTOM_FIELD];
+  const raw = typeof value === 'string'
+    ? value
+    : value && typeof value === 'object'
+      ? JSON.stringify(value)
+      : null;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AgentSessionLeaseMetadata>;
+    if (
+      parsed.version !== 1 ||
+      parsed.kind !== 'shared-agent-lease' ||
+      typeof parsed.sessionId !== 'string' ||
+      typeof parsed.tmid !== 'string' ||
+      typeof parsed.hostUserId !== 'string' ||
+      (parsed.backend !== undefined && !['codex', 'deepseek'].includes(parsed.backend))
+    ) return null;
+    return parsed as AgentSessionLeaseMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function leaseMetadataMatchesCard(
+  metadata: AgentSessionLeaseMetadata,
+  card: AgentSessionCard,
+  message: AgentSessionCardMessage,
+): boolean {
+  return (
+    metadata.sessionId === card.sessionId &&
+    metadata.tmid === card.tmid &&
+    metadata.hostUserId === message.u._id &&
+    (metadata.backend === undefined || metadata.backend === (card.backend ?? 'codex'))
+  );
 }
 
 function parseVisibleAgentSessionCard(
@@ -130,6 +204,46 @@ function parseVisibleAgentSessionCard(
 
 export function stripAgentSessionMarker(text: string): string {
   return text.replace(INVISIBLE_MARKER, '').replace(LEGACY_MARKER, '').trimEnd();
+}
+
+export function createAgentSessionLeaseMessageId(): string {
+  const body = `${LEASE_ID_PREFIX}${randomLeaseIdBody()}`;
+  return `${body}${leaseChecksum(body)}`;
+}
+
+export function isAgentSessionLeaseMessageId(value: string): boolean {
+  if (value.length !== LEASE_ID_TOTAL_LENGTH || !value.startsWith(LEASE_ID_PREFIX)) return false;
+  const body = value.slice(0, LEASE_ID_TOTAL_LENGTH - 2);
+  return value === `${body}${leaseChecksum(body)}`;
+}
+
+export function agentSessionLeaseCustomFields(
+  card: Pick<AgentSessionCard, 'sessionId' | 'tmid' | 'hostUserId' | 'backend'>,
+): Record<string, string> {
+  return {
+    [LEASE_CUSTOM_FIELD]: JSON.stringify({
+      version: 1,
+      kind: 'shared-agent-lease',
+      sessionId: card.sessionId,
+      tmid: card.tmid,
+      hostUserId: card.hostUserId,
+      ...(card.backend ? { backend: card.backend } : {}),
+    } satisfies AgentSessionLeaseMetadata),
+  };
+}
+
+export function agentSessionCardAuthority(
+  text: string,
+  message: AgentSessionCardMessage | undefined,
+  parsedCard?: AgentSessionCard | null,
+): 'custom-fields' | 'lease-message-id' | 'legacy-marker' | 'visible' | 'none' {
+  const card = parsedCard ?? parseAgentSessionCard(text, message);
+  if (!card) return 'none';
+  const metadata = parseLeaseMetadata(message);
+  if (metadata && message && leaseMetadataMatchesCard(metadata, card, message)) return 'custom-fields';
+  if (message && isAgentSessionLeaseMessageId(message._id)) return 'lease-message-id';
+  if (LEGACY_MARKER.test(text) || INVISIBLE_MARKER.test(text)) return 'legacy-marker';
+  return 'visible';
 }
 
 export function renderAgentSessionCard(card: AgentSessionCard): string {
