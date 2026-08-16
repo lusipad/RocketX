@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  agentSessionCardAuthority,
+  agentSessionLeaseCustomFields,
+  createAgentSessionLeaseMessageId,
+  isAgentSessionLeaseMessageId,
   agentSessionCardSupersedesLocal,
   agentSessionCardMatchesMessage,
   parseAgentSessionCard,
@@ -14,12 +18,14 @@ function leaseMessage(input: {
   tmid?: string;
   userId: string;
   username: string;
+  customFields?: Record<string, unknown>;
 }) {
   return {
     _id: input.id,
     rid: input.rid,
     ...(input.tmid ? { tmid: input.tmid } : {}),
     u: { _id: input.userId, username: input.username },
+    ...(input.customFields ? { customFields: input.customFields } : {}),
   };
 }
 
@@ -68,6 +74,51 @@ test('共享 Agent 状态卡可由官方客户端阅读并由 RocketX 解析租�
   assert.doesNotMatch(rendered, /\p{Default_Ignorable_Code_Point}/u);
   assert.match(visible, /AI 托管已开启/);
   assert.doesNotMatch(visible, /rocketx-agent|hostDeviceId|%22/);
+});
+
+test('RocketX 专用租约消息 id 必须同时满足前缀和校验', () => {
+  const messageId = createAgentSessionLeaseMessageId();
+  assert.equal(isAgentSessionLeaseMessageId(messageId), true);
+  assert.equal(isAgentSessionLeaseMessageId(`plain${messageId.slice(5)}`), false);
+  assert.equal(isAgentSessionLeaseMessageId(`${messageId.slice(0, 16)}2`), false);
+});
+
+test('纯可见状态卡默认只展示不仲裁，专用租约消息 id 或 customFields 才可信', () => {
+  const card = {
+    version: 1 as const,
+    sessionId: 'session-authority',
+    rid: 'room-general',
+    tmid: 'thread-authority',
+    hostUserId: 'user-1',
+    hostUsername: 'alice',
+    hostDeviceId: 'device-1',
+    leaseExpiresAt: 1_800_000_000_000,
+    status: 'active' as const,
+    backend: 'deepseek' as const,
+    environmentName: 'RocketX',
+    currentTaskLabel: '检查权威边界',
+  };
+  const rendered = renderAgentSessionCard(card);
+  const plainVisible = leaseMessage({
+    id: 'plain-visible-message',
+    rid: 'room-general',
+    tmid: 'thread-authority',
+    userId: 'user-1',
+    username: 'alice',
+  });
+  assert.equal(agentSessionCardAuthority(rendered, plainVisible), 'visible');
+  assert.equal(agentSessionCardAuthority(rendered, {
+    ...plainVisible,
+    _id: createAgentSessionLeaseMessageId(),
+  }), 'lease-message-id');
+  assert.equal(agentSessionCardAuthority(rendered, leaseMessage({
+    id: 'session-authority',
+    rid: 'room-general',
+    tmid: 'thread-authority',
+    userId: 'user-1',
+    username: 'alice',
+    customFields: agentSessionLeaseCustomFields(card),
+  })), 'custom-fields');
 });
 
 test('共享 Agent 状态卡用稳定可读字段向所有客户端展示执行引擎', () => {
@@ -184,6 +235,7 @@ test('旧共享 Agent 状态卡缺少 backend 时仍按 Codex 兼容解析', () 
     status: 'active',
   });
   assert.equal(stripAgentSessionMarker(legacy), '🤖 **AI 托管已开启**');
+  assert.equal(agentSessionCardAuthority(legacy), 'legacy-marker');
 });
 
 test('短暂使用过的隐形状态标记只读兼容，新的状态卡不再写入', () => {
@@ -203,6 +255,7 @@ test('短暂使用过的隐形状态标记只读兼容，新的状态卡不再�
   assert.deepEqual(parseAgentSessionCard(historical), card);
   assert.equal(stripAgentSessionMarker(historical), '🤖 **AI 托管已开启**');
   assert.doesNotMatch(renderAgentSessionCard(card), /\p{Default_Ignorable_Code_Point}/u);
+  assert.equal(agentSessionCardAuthority(historical), 'legacy-marker');
 });
 
 test('消息 ID 作为租约 claim 时两个设备会选出同一个赢家', () => {
