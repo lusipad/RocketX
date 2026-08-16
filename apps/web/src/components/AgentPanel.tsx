@@ -175,6 +175,8 @@ export default function AgentPanel({
   const hostingAlreadyExists = !!(session && session.status !== 'ended')
     || agentSessionCardSupersedesLocal(session, remoteCard);
   const [transferring, setTransferring] = useState(false);
+  const [startFailure, setStartFailure] = useState('');
+  const [startingTmid, setStartingTmid] = useState<string | null>(null);
   const [resumingTmid, setResumingTmid] = useState<string | null>(null);
   const desktopRuntime = isTauriRuntime();
   // 托管运行时新过程不断追加：贴底跟随，滚上去查旧记录时不打扰（issue #90 同类）
@@ -196,6 +198,7 @@ export default function AgentPanel({
     setDshModelOverride(undefined);
     setDshAgentOverride(undefined);
     setDshPermissionOverride(undefined);
+    setStartFailure('');
   }, [rid, tmid]);
 
   useEffect(() => {
@@ -249,6 +252,7 @@ export default function AgentPanel({
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
   const remoteSession = agentSessionCardSupersedesLocal(session, remoteCard) ? remoteCard : undefined;
+  const starting = startingTmid === tmid;
   const resuming = resumingTmid === tmid;
   const visibleSession = remoteSession ? undefined : session;
   const error = visibleSession?.status !== 'ended'
@@ -310,6 +314,17 @@ export default function AgentPanel({
     : dshConfigurationStatus === 'error'
       ? '启动配置读取失败'
       : '正在读取 DSH 启动配置';
+  const startBlockReason = !selectedBackend
+    ? '当前未启用 AI，请在设置中选择 Codex 或 DSH 并重启应用。'
+    : !selectedProject
+      ? '这台设备尚未添加托管项目；项目目录是本机配置，不会随账号自动同步。'
+      : selectedBackend === 'codex' && !hostingModel
+        ? '尚未读取到可用 Codex 模型，请检查 Codex 配置或稍后重试。'
+        : selectedBackend === 'deepseek' && dshConfigurationStatus === 'error'
+          ? `DSH 启动配置尚未就绪：${dshConfigurationError || '读取模型、Agent 或权限失败'}`
+          : selectedBackend === 'deepseek' && dshConfigurationStatus !== 'ready'
+            ? 'DSH 启动配置尚未就绪，正在读取模型、Agent 和权限。'
+            : null;
   const activeDshRuntimeSummary = session
     ? `${session.dshModelSelection?.model ?? 'DSH 默认模型'} · ${
       session.dshAgentPreset ?? '默认 Agent'
@@ -626,13 +641,17 @@ export default function AgentPanel({
               </div>
               <button
                 disabled={
-                  !selectedProject
+                  starting
                   || !selectedBackend
-                  || (selectedBackend === 'codex' && !hostingModel)
-                  || (selectedBackend === 'deepseek' && dshConfigurationStatus !== 'ready')
+                  || (!!selectedProject && selectedBackend === 'codex' && !hostingModel)
+                  || (!!selectedProject && selectedBackend === 'deepseek' && dshConfigurationStatus !== 'ready')
                 }
                 onClick={() => {
-                  if (!selectedProject || !selectedBackend) return;
+                  if (!selectedProject) {
+                    openButlerConversation();
+                    return;
+                  }
+                  if (!selectedBackend) return;
                   const startOptions = {
                     workspaceRoot: selectedProject,
                     replyTmid: tmid.startsWith('room:') ? undefined : tmid,
@@ -651,16 +670,43 @@ export default function AgentPanel({
                     dshAgentPreset: dshAgentOverride,
                     dshPermissionPreset: dshPermissionOverride,
                   };
+                  setStartFailure('');
+                  setStartingTmid(tmid);
                   void start(rid, tmid, startOptions)
                     .then(() => {
                       if (tmid.startsWith('room:')) setRoomHostingWorkspace(rid, selectedProject);
                     })
-                    .catch(() => undefined);
+                    .catch((startError) => {
+                      setStartFailure(startError instanceof Error ? startError.message : String(startError));
+                      toast.error(startError, '开启 AI 托管失败');
+                    })
+                    .finally(() => setStartingTmid((current) => (current === tmid ? null : current)));
                 }}
+                title={startBlockReason ?? undefined}
                 className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Play size={14} /> 开启 AI 托管
+                {starting
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : selectedBackend && selectedProject
+                    ? <Play size={14} />
+                    : <Bot size={14} />}
+                {starting
+                  ? '正在开启…'
+                  : !selectedBackend
+                    ? '当前未启用 AI'
+                    : !selectedProject
+                      ? '去添加托管项目'
+                      : '开启 AI 托管'}
               </button>
+              {startFailure ? (
+                <div role="alert" className="w-full max-w-sm rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-left text-xs leading-5 text-danger">
+                  无法开启 AI 托管：{startFailure}
+                </div>
+              ) : startBlockReason ? (
+                <div role="status" className="w-full max-w-sm rounded-md border border-line bg-fill-1 px-3 py-2 text-left text-xs leading-5 text-ink-3">
+                  {startBlockReason}
+                </div>
+              ) : null}
             </>
           )}
           </div>

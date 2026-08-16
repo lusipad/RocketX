@@ -24,7 +24,7 @@ test('管家页保留普通对话与 AI 托管，并明确私人房间 AI 不属
   assert.match(history, /useSharedAgent/, '管家页左栏应读取 sharedAgent 托管会话');
   assert.match(history, /AI 托管/, '管家页应保留托管信息架构');
   assert.match(history, /aria-label="AI 托管会话"/, '托管会话应作为同一导航中的一段');
-  assert.match(history, /私人房间 AI 使用独立的个人会话/, '导航应明确个人对话与共享托管的边界');
+  assert.match(history, /私人房间 AI 会话同样仅你可见/, '导航应明确个人对话与共享托管的边界');
   assert.doesNotMatch(page, /ButlerHostingOverview/, '管家主区不应再渲染重复托管 transcript');
 });
 

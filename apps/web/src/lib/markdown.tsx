@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, memo, type ReactNode } from 'react';
 import MarkdownMath from '../components/MarkdownMath';
 import WorkItemLink from '../components/WorkItemLink';
 import AdoEntityLink from '../components/AdoEntityLink';
@@ -563,6 +563,189 @@ export function renderMarkdownDoc(
   renderLink?: MarkdownLinkRenderer,
 ): ReactNode {
   return renderWithCodeFences(text, me, 'doc', 'chip', renderLink);
+}
+
+type StableStreamingBlockMode = 'plain' | 'rich';
+
+export interface StableStreamingMarkdownBlock {
+  start: number;
+  text: string;
+  mode: StableStreamingBlockMode;
+  sealed: boolean;
+}
+
+function splitStreamingLines(text: string): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '\n') continue;
+    lines.push(text.slice(start, index + 1));
+    start = index + 1;
+  }
+  if (start < text.length) lines.push(text.slice(start));
+  return lines;
+}
+
+function lineBody(raw: string): string {
+  if (raw.endsWith('\n')) return raw.slice(0, -1).replace(/\r$/, '');
+  return raw.replace(/\r$/, '');
+}
+
+function openingFence(line: string): string | null {
+  const match = /^(`{3,}|~{3,})/.exec(line.trimStart());
+  return match?.[1] ?? null;
+}
+
+function closesFence(line: string, fence: string): boolean {
+  const trimmed = line.trimStart();
+  const char = fence[0] === '`' ? '`' : '~';
+  return new RegExp(`^\\${char}{${fence.length},}\\s*$`).test(trimmed);
+}
+
+function isSingleLineDisplayMath(line: string): boolean {
+  return /^\$\$.+\$\$$/.test(line) || /^\\\[.+\\\]$/.test(line);
+}
+
+export function splitStableStreamingMarkdown(text: string): StableStreamingMarkdownBlock[] {
+  if (!text) return [];
+
+  const boundaries: number[] = [];
+  let fence: string | null = null;
+  let blockMath: '$$' | '\\[' | null = null;
+  let offset = 0;
+
+  const sealAt = (end: number) => {
+    if (end > (boundaries.at(-1) ?? 0)) boundaries.push(end);
+  };
+
+  for (const rawLine of splitStreamingLines(text)) {
+    const lineStart = offset;
+    offset += rawLine.length;
+    const body = lineBody(rawLine);
+    const trimmed = body.trim();
+
+    if (fence) {
+      if (closesFence(body, fence)) {
+        fence = null;
+        sealAt(offset);
+      }
+      continue;
+    }
+
+    if (blockMath === '$$') {
+      if (trimmed === '$$') {
+        blockMath = null;
+        sealAt(offset);
+      }
+      continue;
+    }
+
+    if (blockMath === '\\[') {
+      if (trimmed === '\\]') {
+        blockMath = null;
+        sealAt(offset);
+      }
+      continue;
+    }
+
+    const nextFence = openingFence(body);
+    if (nextFence) {
+      if (text.slice(boundaries.at(-1) ?? 0, lineStart).trim()) sealAt(lineStart);
+      fence = nextFence;
+      continue;
+    }
+
+    if (trimmed === '$$') {
+      if (text.slice(boundaries.at(-1) ?? 0, lineStart).trim()) sealAt(lineStart);
+      blockMath = '$$';
+      continue;
+    }
+
+    if (trimmed === '\\[') {
+      if (text.slice(boundaries.at(-1) ?? 0, lineStart).trim()) sealAt(lineStart);
+      blockMath = '\\[';
+      continue;
+    }
+
+    if (!trimmed) {
+      sealAt(offset);
+      continue;
+    }
+
+    if (isSingleLineDisplayMath(trimmed)) sealAt(offset);
+  }
+
+  const blocks: StableStreamingMarkdownBlock[] = [];
+  let start = 0;
+  for (const end of boundaries) {
+    const blockText = text.slice(start, end);
+    if (blockText.trim()) {
+      blocks.push({ start, text: blockText, mode: 'rich', sealed: true });
+    }
+    start = end;
+  }
+  const tail = text.slice(start);
+  if (tail) {
+    blocks.push({
+      start,
+      text: tail,
+      mode: fence || blockMath ? 'plain' : 'rich',
+      sealed: false,
+    });
+  }
+  return blocks;
+}
+
+const StableMarkdownBlock = memo(function StableMarkdownBlock({
+  text,
+  me,
+  renderLink,
+  variant,
+  mode,
+}: {
+  text: string;
+  me?: string;
+  renderLink?: MarkdownLinkRenderer;
+  variant: 'chat' | 'doc';
+  mode: StableStreamingBlockMode;
+}) {
+  return (
+    <div className="rocketx-streaming-markdown-block" data-mode={mode}>
+      {mode === 'plain'
+        ? <div className="whitespace-pre-wrap break-words text-inherit">{text}</div>
+        : variant === 'doc'
+          ? renderMarkdownDoc(text, me, renderLink)
+          : renderMarkdown(text, me, renderLink)}
+    </div>
+  );
+});
+
+export function StableStreamingMarkdown({
+  text,
+  me,
+  renderLink,
+  variant = 'doc',
+}: {
+  text: string;
+  me?: string;
+  renderLink?: MarkdownLinkRenderer;
+  variant?: 'chat' | 'doc';
+}) {
+  const blocks = splitStableStreamingMarkdown(text);
+  return (
+    <div className="rocketx-streaming-markdown">
+      {blocks.map((block) => (
+        <StableMarkdownBlock
+          key={block.start}
+          text={block.text}
+          mode={block.mode}
+          me={me}
+          renderLink={renderLink}
+          variant={variant}
+        />
+      ))}
+    </div>
+  );
 }
 
 /** 纯 URL 链接化（附件卡片等场景用，不做其余 markdown） */

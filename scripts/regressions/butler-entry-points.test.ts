@@ -19,7 +19,8 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(history, /aria-label="Codex 工作区"/);
   assert.match(history, /AI 托管/);
   assert.match(history, /aria-label="AI 托管会话"/);
-  assert.match(history, />项目</);
+  assert.match(history, />系统工作区</);
+  assert.match(history, />个人项目</);
   assert.match(history, /Codex 对话历史/);
   assert.match(history, /setWorkbenchTab\('prs'\)/);
   assert.match(history, /拉取请求/);

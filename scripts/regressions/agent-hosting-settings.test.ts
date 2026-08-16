@@ -83,3 +83,22 @@ test('聊天托管面板展示独立托管配置，并提供管家统一管理�
   assert.match(chat, /setRoomHostingWorkspace\(activeRid, path\.path\)/);
   assert.doesNotMatch(chat, /butlerWorkspaceRoot|isSystemCodexWorkspace/);
 });
+
+test('开启托管会立即显示进度，并反馈跨设备前置检查失败', () => {
+  const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
+
+  assert.match(panel, /const startBlockReason/);
+  assert.match(panel, /当前未启用 AI，请在设置中选择 Codex 或 DSH 并重启应用/);
+  assert.match(panel, /这台设备尚未添加托管项目/);
+  assert.match(panel, /尚未读取到可用 Codex 模型/);
+  assert.match(panel, /DSH 启动配置尚未就绪/);
+  assert.match(panel, /if \(!selectedProject\) \{\s*openButlerConversation\(\);\s*return;\s*\}/);
+  assert.match(panel, /去添加托管项目/);
+  assert.match(panel, /setStartingTmid\(tmid\)/);
+  assert.match(panel, /setStartFailure/);
+  assert.match(panel, /正在开启…/);
+  assert.match(panel, /role="alert"/);
+  assert.match(panel, /role="status"/);
+  assert.match(panel, /\.catch\(\(startError\) => \{[\s\S]*toast\.error\(startError, '开启 AI 托管失败'\);[\s\S]*\}\)/);
+  assert.doesNotMatch(panel, /\.catch\(\(\) => undefined\)/);
+});

@@ -1,10 +1,11 @@
 import { ChevronRight, ExternalLink } from 'lucide-react';
-import { useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 import type { ButlerSource } from '../lib/butlerContext';
 import type { MarkdownLinkRenderer } from '../lib/markdown';
 import { openButlerSource as openSource } from '../lib/butlerSourceNavigation';
 
 const MARKDOWN_CITATION = /\[来源\]\((https?:\/\/[^\s)]+)\)/g;
+const NO_SOURCE_LINK: MarkdownLinkRenderer = () => undefined;
 
 function citedSources(text: string, sources: readonly ButlerSource[]): ButlerSource[] {
   const byUrl = new Map(
@@ -38,19 +39,22 @@ export default function ButlerSources({
     () => sources?.length ? citedSources(text, sources) : [],
     [sources, text],
   );
-  const visibleSources = matchedSources.length ? matchedSources : sources ?? [];
-  const citationNumbers = new Map(
+  const visibleSources = useMemo(
+    () => matchedSources.length ? matchedSources : sources ?? [],
+    [matchedSources, sources],
+  );
+  const citationNumbers = useMemo(() => new Map(
     visibleSources.flatMap((source, index) => (
       source.webUrl ? [[source.webUrl, index + 1] as const] : []
     )),
-  );
-  if (!sources?.length) return children?.(() => undefined) ?? null;
+  ), [visibleSources]);
+  if (!sources?.length) return children?.(NO_SOURCE_LINK) ?? null;
 
-  const revealSources = (index: number): void => {
+  const revealSources = useCallback((index: number): void => {
     if (detailsRef.current) detailsRef.current.open = true;
     requestAnimationFrame(() => sourceRefs.current[index]?.focus());
-  };
-  const renderLink: MarkdownLinkRenderer = (label, href) => {
+  }, []);
+  const renderLink = useCallback<MarkdownLinkRenderer>((label, href) => {
     if (label.trim() !== '来源') return undefined;
     const number = citationNumbers.get(href);
     if (!number || matchedSources.length === 0) return undefined;
@@ -65,7 +69,7 @@ export default function ButlerSources({
         <sup>{number}</sup>
       </button>
     );
-  };
+  }, [citationNumbers, matchedSources.length, revealSources]);
 
   return (
     <div role="group" aria-label="回答引用" className="contents">

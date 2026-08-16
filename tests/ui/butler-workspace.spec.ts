@@ -556,8 +556,8 @@ test('管家输出保持稳定文本流且输入区不常驻 AI 托管横幅（i
 
   const transcript = page.locator('.codex-native-transcript');
   const streaming = transcript.locator('.codex-native-message.is-streaming');
-  await expect(streaming).toContainText('## 尚未完成的标题');
-  await expect(streaming.getByRole('heading')).toHaveCount(0);
+  await expect(streaming.getByRole('heading', { name: '尚未完成的标题', level: 2 })).toBeVisible();
+  await expect(streaming.locator('.markdown-list-item')).toContainText('正在输出的条目');
   await expect.poll(() => transcript.evaluate((element) => getComputedStyle(element).overflowAnchor)).toBe('none');
   await expect(page.getByRole('region', { name: 'AI 托管设置' })).toHaveCount(0);
   await expect.poll(() => transcript.evaluate((element) => (
@@ -630,6 +630,81 @@ test('主管家高频回答与任务过程只合并界面刷新', async ({ page 
   expect(result.bottomGap).toBeLessThan(2);
 });
 
+test('主管家流式 Markdown 完成时复用同一条消息和已封口块', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openWorkspace(page);
+  const result = await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const answer = '## 渐进标题\n\n第一段已经完成。\n\n- 最后一项';
+    useCodexWorkspace.setState({
+      status: 'running',
+      activeTurnId: 'turn-stable-markdown',
+      messages: [{ id: 'stable-user', role: 'user', text: '请给出结构化结果' }],
+      streamingText: answer,
+      events: [{
+        id: 'stable-reasoning',
+        type: 'reasoning',
+        title: '思考',
+        status: 'running',
+      }],
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const transcript = document.querySelector<HTMLElement>('.codex-native-transcript')!;
+    const article = transcript.querySelector<HTMLElement>('.codex-native-message.is-streaming')!;
+    const firstBlock = article.querySelector<HTMLElement>('.rocketx-streaming-markdown-block')!;
+    let removedActiveMessage = false;
+    const observer = new MutationObserver((records) => {
+      removedActiveMessage ||= records.some((record) => (
+        [...record.removedNodes].some((node) => node === article || (node instanceof Element && node.contains(article)))
+      ));
+    });
+    observer.observe(transcript, { childList: true, subtree: true });
+
+    useCodexWorkspace.setState({
+      status: 'ready',
+      activeTurnId: undefined,
+      messages: [
+        { id: 'stable-user', role: 'user', text: '请给出结构化结果' },
+        { id: 'stable-assistant', role: 'assistant', text: answer },
+      ],
+      streamingText: '',
+      events: [{
+        id: 'stable-reasoning',
+        type: 'reasoning',
+        title: '思考',
+        status: 'completed',
+      }],
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    observer.disconnect();
+
+    const finalArticle = [...transcript.querySelectorAll<HTMLElement>('.codex-native-message[data-speaker="assistant"]')].at(-1)!;
+    const finalFirstBlock = finalArticle.querySelector<HTMLElement>('.rocketx-streaming-markdown-block')!;
+    return {
+      sameArticle: article === finalArticle,
+      sameFirstBlock: firstBlock === finalFirstBlock,
+      removedActiveMessage,
+      stillStreaming: finalArticle.classList.contains('is-streaming'),
+      heading: finalArticle.querySelector('h2')?.textContent,
+      list: finalArticle.querySelector('.markdown-list-item')?.textContent,
+      bottomGap: transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight,
+    };
+  });
+
+  expect(result).toEqual({
+    sameArticle: true,
+    sameFirstBlock: true,
+    removedActiveMessage: false,
+    stillStreaming: false,
+    heading: '渐进标题',
+    list: '•最后一项',
+    bottomGap: expect.any(Number),
+  });
+  expect(result.bottomGap).toBeLessThan(2);
+});
+
 test('私人房间 AI 不读取或展示共享托管 transcript', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
   await bootWithAiRuntime(page, 'codex');
@@ -661,6 +736,144 @@ test('私人房间 AI 不读取或展示共享托管 transcript', async ({ page 
     const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
     return Object.keys((await loadSharedAgent()).useSharedAgent.getState().sessions);
   })).toEqual(['room:room-general']);
+});
+
+test('私人房间 Codex 的流式 Markdown 完成时不替换消息节点', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel.getByLabel('发送给私人房间 AI')).toBeVisible();
+
+  const result = await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const answer = '## 房间结论\n\n第一段。\n\n- 私人结果';
+    const current = useCodexWorkspace.getState();
+    const threadId = current.activeThreadId as string;
+    const baseThread = current.threadStates[threadId];
+    const updateThread = (patch: Record<string, unknown>) => {
+      useCodexWorkspace.setState((state: any) => ({
+        threadStates: {
+          ...state.threadStates,
+          [threadId]: { ...state.threadStates[threadId], ...patch },
+        },
+      }));
+    };
+    updateThread({
+      ...baseThread,
+      status: 'running',
+      activeTurnId: 'room-turn-stable',
+      messages: [{ id: 'room-stable-user', role: 'user', text: '只在房间里回答' }],
+      streamingText: answer,
+      events: [],
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="私人房间 AI 对话"]')!;
+    const article = dialog.querySelector<HTMLElement>('.codex-native-message.is-streaming')!;
+    const firstBlock = article.querySelector<HTMLElement>('.rocketx-streaming-markdown-block')!;
+    updateThread({
+      status: 'ready',
+      activeTurnId: undefined,
+      messages: [
+        { id: 'room-stable-user', role: 'user', text: '只在房间里回答' },
+        { id: 'room-stable-assistant', role: 'assistant', text: answer },
+      ],
+      streamingText: '',
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const finalArticle = [...dialog.querySelectorAll<HTMLElement>('.codex-native-message[data-speaker="assistant"]')].at(-1)!;
+    return {
+      sameArticle: article === finalArticle,
+      sameFirstBlock: firstBlock === finalArticle.querySelector('.rocketx-streaming-markdown-block'),
+      heading: finalArticle.querySelector('h2')?.textContent,
+      list: finalArticle.querySelector('.markdown-list-item')?.textContent,
+    };
+  });
+
+  expect(result).toEqual({
+    sameArticle: true,
+    sameFirstBlock: true,
+    heading: '房间结论',
+    list: '•私人结果',
+  });
+});
+
+test('私人房间 AI 面板切换房间时不会短暂显示上一房间的会话', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel.getByLabel('发送给私人房间 AI')).toBeVisible();
+
+  const oldSecret = '只属于 General 的私人内容';
+  await page.evaluate(async (secret) => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    const current = useCodexWorkspace.getState();
+    const threadId = current.activeThreadId as string;
+    useCodexWorkspace.setState((state: any) => ({
+      messages: [
+        { id: 'general-private-user', role: 'user', text: 'General 私人问题' },
+        { id: 'general-private-answer', role: 'assistant', text: secret },
+      ],
+      threadStates: {
+        ...state.threadStates,
+        [threadId]: {
+          ...state.threadStates[threadId],
+          status: 'ready',
+          messages: [
+            { id: 'general-private-user', role: 'user', text: 'General 私人问题' },
+            { id: 'general-private-answer', role: 'assistant', text: secret },
+          ],
+          streamingText: '',
+        },
+      },
+    }));
+  }, oldSecret);
+  await expect(panel.getByText(oldSecret, { exact: true })).toBeVisible();
+
+  const result = await page.evaluate(async (secret) => {
+    const loadChat = new Function('return import("/src/stores/chat.ts")') as () => Promise<any>;
+    const { useChat } = await loadChat();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="私人房间 AI 对话"]')!;
+    let leakedAfterRoomSwitch = false;
+    const inspect = () => {
+      const text = dialog.textContent ?? '';
+      if (text.includes('房间 AI · Second') && text.includes(secret)) leakedAfterRoomSwitch = true;
+    };
+    const observer = new MutationObserver(inspect);
+    observer.observe(dialog, { childList: true, subtree: true, characterData: true });
+    useChat.setState((state: any) => {
+      const generalRoom = state.rooms['room-general'];
+      const generalSubscription = state.subscriptions['room-general'];
+      return {
+        activeRid: 'room-second',
+        rooms: {
+          ...state.rooms,
+          'room-second': { ...generalRoom, _id: 'room-second', rid: 'room-second', name: 'second', fname: 'Second' },
+        },
+        subscriptions: {
+          ...state.subscriptions,
+          'room-second': { ...generalSubscription, rid: 'room-second', name: 'second', fname: 'Second' },
+        },
+      };
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    inspect();
+    observer.disconnect();
+    return { leakedAfterRoomSwitch, text: dialog.textContent ?? '' };
+  }, oldSecret);
+
+  expect(result.leakedAfterRoomSwitch).toBe(false);
+  expect(result.text).toContain('房间 AI · Second');
+  expect(result.text).not.toContain(oldSecret);
 });
 
 test('私人房间 AI 直接续聊、逐条复制且不会向房间发送 @ai', async ({ page }, testInfo) => {
@@ -718,7 +931,7 @@ test('RocketX 保留外层导航，内层使用 Codex 的新对话、拉取请�
   await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByText('临时会话', { exact: true })).toBeVisible();
   await expect(page.getByLabel('项目目录').getByText('管家会话', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('项目目录').getByLabel('托管项目')).toBeVisible();
+  await expect(page.getByLabel('项目目录').getByLabel('工作项目')).toBeVisible();
   await expect(page.getByRole('button', { name: '移除项目：临时会话' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '移除项目：管家会话' })).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: 'Codex 对话历史' })).toContainText('候选版本准备');
@@ -990,6 +1203,12 @@ test('从管家选择话题托管会聚焦原 Harness session', async ({ page })
   await page.getByRole('navigation', { name: 'RocketX 主导航' })
     .getByRole('button', { name: /^管家$/, exact: true })
     .click();
+  await page.getByRole('region', { name: '共享 AI 托管' })
+    .getByRole('button', { name: /AI 托管，/ })
+    .click();
+  await page.getByRole('navigation', { name: 'AI 托管会话' })
+    .getByRole('button', { name: /RocketX，/ })
+    .click();
   await page.getByRole('navigation', { name: 'AI 托管会话' })
     .locator('button[data-session-key="topic-hosted-root"]')
     .click();
@@ -1017,6 +1236,12 @@ test('管家 AI 托管项直接聚焦同一条 Codex 原生会话，不再复制
   await page.getByRole('navigation', { name: 'RocketX 主导航' })
     .getByRole('button', { name: /^管家$/, exact: true })
     .click();
+  const hostingToggle = page.getByRole('region', { name: '共享 AI 托管' })
+    .getByRole('button', { name: /AI 托管，/ });
+  await hostingToggle.click();
+  await page.getByRole('navigation', { name: 'AI 托管会话' })
+    .getByRole('button', { name: /RocketX，/ })
+    .click();
   await page.getByRole('navigation', { name: 'AI 托管会话' })
     .getByRole('button', { name: /General，Codex/ })
     .click();
@@ -1027,6 +1252,97 @@ test('管家 AI 托管项直接聚焦同一条 Codex 原生会话，不再复制
     const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
     return (await loadUI()).useUI.getState().selectedHostedSessionKey;
   })).toBe('room:room-general');
+});
+
+test('AI 托管按项目折叠分组，项目历史不再重复同一条共享会话', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
+  await bootWithAiRuntime(page, 'codex');
+  await installCodexRuntime(page);
+  await installHostedSession(page, 'codex', 'running');
+  await page.evaluate(async () => {
+    const loadSharedAgent = new Function('return import("/src/stores/sharedAgent.ts")') as () => Promise<any>;
+    const { useSharedAgent } = await loadSharedAgent();
+    const current = useSharedAgent.getState();
+    const general = current.sessions['room:room-general'];
+    useSharedAgent.setState({
+      sessions: {
+        'room:room-general': {
+          ...general,
+          codexThreadId: 'thread-release',
+          status: 'running',
+          currentTaskLabel: '整理 Release checklist',
+        },
+        'room:room-release': {
+          ...general,
+          sessionId: 'session-room-release',
+          rid: 'room-release',
+          tmid: 'room:room-release',
+          roomNameSnapshot: 'Release',
+          codexThreadId: 'thread-hosted-release',
+          status: 'ended',
+          currentTaskLabel: '核对发布产物',
+          updatedAt: general.updatedAt - 1_000,
+        },
+        'room:room-cat': {
+          ...general,
+          sessionId: 'session-room-cat',
+          rid: 'room-cat',
+          tmid: 'room:room-cat',
+          roomNameSnapshot: 'Rocket.Cat',
+          codexThreadId: 'thread-hosted-cat',
+          status: 'ended',
+          workspaceRoots: ['D:/Repos/tmp'],
+          environmentId: 'environment-tmp',
+          environmentName: 'tmp',
+          currentTaskLabel: '托管已结束',
+          updatedAt: general.updatedAt - 2_000,
+        },
+      },
+      traces: current.traces,
+    });
+  });
+
+  await page.getByRole('navigation', { name: 'RocketX 主导航' })
+    .getByRole('button', { name: /^管家$/, exact: true })
+    .click();
+
+  const hosting = page.getByRole('region', { name: '共享 AI 托管' });
+  const hostingToggle = hosting.getByRole('button', { name: /AI 托管，/ });
+  await expect(hostingToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(hosting.getByRole('navigation', { name: 'AI 托管会话' })).toBeHidden();
+  await hostingToggle.click();
+  await expect(hostingToggle).toHaveAttribute('aria-expanded', 'true');
+
+  const navigation = hosting.getByRole('navigation', { name: 'AI 托管会话' });
+  const rocketx = navigation.getByRole('region', { name: '托管项目：RocketX' });
+  const tmp = navigation.getByRole('region', { name: '托管项目：tmp' });
+  await expect(rocketx.getByRole('button', { name: /RocketX，/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(tmp.getByRole('button', { name: /tmp，/ })).toHaveAttribute('aria-expanded', 'false');
+
+  if (process.env.BUTLER_HOSTING_VISUAL) {
+    await page.screenshot({ path: process.env.BUTLER_HOSTING_VISUAL, animations: 'disabled' });
+  }
+
+  await rocketx.getByRole('button', { name: /RocketX，/ }).click();
+  await expect(rocketx.getByRole('button', { name: /RocketX，/ })).toHaveAttribute('aria-expanded', 'true');
+  const general = rocketx.locator('button[data-session-key="room:room-general"]');
+  await expect(general).toContainText('General');
+  await expect(general).toContainText('整理 Release checklist');
+  await expect(general).not.toContainText('RocketX');
+  await expect(navigation.locator('button[data-session-key="room:room-cat"]')).toBeHidden();
+  await tmp.getByRole('button', { name: /tmp，/ }).click();
+  await expect(navigation.locator('button[data-session-key="room:room-cat"]')).toBeVisible();
+
+  const projectHistory = page.getByLabel('项目目录')
+    .getByRole('region', { name: '项目：rocketchatx' })
+    .getByRole('navigation', { name: 'Codex 对话历史' });
+  await expect(projectHistory).not.toContainText('候选版本准备');
+  await expect(projectHistory).toContainText('迭代计划');
+
+  await hostingToggle.click();
+  await expect(hostingToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(hosting.getByRole('navigation', { name: 'AI 托管会话' })).toBeHidden();
 });
 
 test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同一条 DSH 原生会话', async ({ page }) => {
@@ -1126,6 +1442,65 @@ test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同�
   await expect(panel.getByText('只在我的 DSH 会话里讨论', { exact: true })).toBeVisible();
   await expect(panel.getByText('这是仅你可见的私人答复。', { exact: true })).toBeVisible();
   await expect(panel.getByText('请总结 Release checklist', { exact: true })).toHaveCount(0);
+
+  const streamingContinuity = await page.evaluate(async () => {
+    const loadAuth = new Function('return import("/src/stores/auth.ts")') as () => Promise<any>;
+    const loadClient = new Function('return import("/src/lib/client.ts")') as () => Promise<any>;
+    const loadPrivateDsh = new Function('return import("/src/stores/privateRoomDsh.ts")') as () => Promise<any>;
+    const [{ useAuth }, { getServerBase }, { privateRoomDshKey, usePrivateRoomDsh }] = await Promise.all([
+      loadAuth(),
+      loadClient(),
+      loadPrivateDsh(),
+    ]);
+    const scope = `${getServerBase() || 'same-origin'}:${useAuth.getState().user._id}`;
+    const key = privateRoomDshKey(scope, 'room-general');
+    const answer = '## DeepSeek 结论\n\n已完成段落。\n\n- 私人结果';
+    const updateSession = (messages: any[], status: string) => {
+      usePrivateRoomDsh.setState((state: any) => ({
+        sessions: {
+          ...state.sessions,
+          [key]: {
+            ...state.sessions[key],
+            status,
+            transcript: { ...state.sessions[key].transcript, messages },
+          },
+        },
+      }));
+    };
+    const history = [
+      { id: 'private-user', role: 'user', text: '只在我的 DSH 会话里讨论' },
+      { id: 'private-assistant', role: 'assistant', text: '这是仅你可见的私人答复。' },
+      { id: 'private-follow-up', role: 'user', text: '继续输出 Markdown' },
+    ];
+    updateSession([
+      ...history,
+      { id: 'private-dsh-general:draft:2:1', role: 'assistant', text: answer, streaming: true },
+    ], 'running');
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="私人房间 AI 对话"]')!;
+    const article = dialog.querySelector<HTMLElement>('.codex-native-message.is-streaming')!;
+    const firstBlock = article.querySelector<HTMLElement>('.rocketx-streaming-markdown-block')!;
+    updateSession([
+      ...history,
+      { id: 'private-dsh-completed-2-1', role: 'assistant', text: answer },
+    ], 'ready');
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const finalArticle = [...dialog.querySelectorAll<HTMLElement>('.codex-native-message[data-speaker="assistant"]')].at(-1)!;
+    return {
+      sameArticle: article === finalArticle,
+      sameFirstBlock: firstBlock === finalArticle.querySelector('.rocketx-streaming-markdown-block'),
+      heading: finalArticle.querySelector('h2')?.textContent,
+      list: finalArticle.querySelector('.markdown-list-item')?.textContent,
+    };
+  });
+  expect(streamingContinuity).toEqual({
+    sameArticle: true,
+    sameFirstBlock: true,
+    heading: 'DeepSeek 结论',
+    list: '•私人结果',
+  });
 
   await panel.getByRole('button', { name: '设置 DeepSeek 模型与 Agent' }).click();
   await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
@@ -1526,6 +1901,59 @@ test('390px 下任务列表用抽屉打开，输入区没有横向溢出', async
   await page.getByRole('button', { name: '关闭任务列表' }).last().click();
   await expect(page.getByLabel('给 Codex 的任务')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('输出流式 Markdown 完成前后视觉门禁截图', async ({ page }) => {
+  const streamingPath = process.env.STREAMING_MARKDOWN_VISUAL;
+  const completedPath = process.env.COMPLETED_MARKDOWN_VISUAL;
+  test.skip(!streamingPath || !completedPath, '仅在流式 Markdown 视觉门禁任务中输出截图');
+
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
+  await openWorkspace(page);
+  const answer = [
+    '## 发布检查结论',
+    '',
+    '当前输出会按段落逐步稳定，不再在完成时重建整篇内容。',
+    '',
+    '- [x] 已完成段落保持格式',
+    '- [x] 代码与数学块闭合后局部定型',
+    '- [ ] 等待最后一项完成',
+  ].join('\n');
+  await page.evaluate((text) => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    void loadWorkspace().then(({ useCodexWorkspace }) => {
+      useCodexWorkspace.setState({
+        status: 'running',
+        activeTurnId: 'turn-streaming-visual',
+        messages: [{ id: 'streaming-visual-user', role: 'user', text: '检查输出稳定性' }],
+        streamingText: text,
+        events: [{ id: 'streaming-visual-event', type: 'reasoning', title: '思考', status: 'running' }],
+      });
+    });
+  }, answer);
+  const article = page.locator('.codex-native-message.is-streaming');
+  await expect(article.getByRole('heading', { name: '发布检查结论' })).toBeVisible();
+  await article.screenshot({ path: streamingPath!, animations: 'disabled' });
+
+  await page.evaluate((text) => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    void loadWorkspace().then(({ useCodexWorkspace }) => {
+      useCodexWorkspace.setState({
+        status: 'ready',
+        activeTurnId: undefined,
+        messages: [
+          { id: 'streaming-visual-user', role: 'user', text: '检查输出稳定性' },
+          { id: 'streaming-visual-answer', role: 'assistant', text },
+        ],
+        streamingText: '',
+        events: [{ id: 'streaming-visual-event', type: 'reasoning', title: '思考', status: 'completed' }],
+      });
+    });
+  }, answer);
+  const completed = page.locator('.codex-native-message[data-speaker="assistant"]').last();
+  await expect(completed).not.toHaveClass(/is-streaming/);
+  await completed.screenshot({ path: completedPath!, animations: 'disabled' });
 });
 
 test('输出 Codex 工作区视觉门禁截图', async ({ page }) => {

@@ -385,6 +385,14 @@ function agentCardMessage(referenceAt = Date.now()) {
   return `🤖 **AI 工作项会话：#128 Login failure**\n主持人：@alice · 状态：运行中\n<!--rocketx-agent:${encodeURIComponent(JSON.stringify(card))}-->`;
 }
 
+const discussionAgentLeaseCard = {
+  _id: 'agent-lease-card',
+  rid: 'discussion-agent',
+  msg: agentCardMessage(),
+  ts: NOW,
+  u: ALICE,
+};
+
 const subscriptions = [
   {
     _id: 'sub-general',
@@ -461,13 +469,7 @@ const rooms = [
     fname: '#128 Login failure',
     usersCount: 2,
     lm: NOW,
-    lastMessage: {
-      _id: 'agent-lease-card',
-      rid: 'discussion-agent',
-      msg: agentCardMessage(),
-      ts: NOW,
-      u: ALICE,
-    },
+    lastMessage: discussionAgentLeaseCard,
   },
 ];
 
@@ -528,13 +530,7 @@ const histories: Record<string, unknown[]> = {
     },
   ],
   'discussion-agent': [
-    {
-      _id: 'agent-lease-card',
-      rid: 'discussion-agent',
-      msg: agentCardMessage(),
-      ts: NOW,
-      u: ALICE,
-    },
+    discussionAgentLeaseCard,
   ],
 };
 
@@ -2837,6 +2833,9 @@ test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）
 });
 
 test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('rocketx.butler.task-provider', 'deepseek');
+  });
   const { pageErrors } = await bootAuthenticated(page);
   await activateAiRuntimeForTest(page, 'deepseek');
   await conversation(page, '#128 Login failure').click();
@@ -2928,6 +2927,81 @@ test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', 
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
   await page.getByRole('button', { name: /RocketChat X - 主目录/ }).click();
   await expect(page.getByText('AI 托管配置')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('新设备没有托管项目时引导到 AI 管家添加', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
+  await conversation(page, 'General').click();
+
+  await page.getByRole('button', { name: '配置 AI 托管' }).click();
+  const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
+  await expect(panel.getByText(/这台设备尚未添加托管项目/)).toBeVisible();
+  const addProject = panel.getByRole('button', { name: '去添加托管项目' });
+  await expect(addProject).toBeEnabled();
+  await addProject.click();
+
+  await expect(page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('AI 托管开启失败时在面板内保留明确原因', async ({ page }) => {
+  await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('rcx-agent-environments', JSON.stringify({
+      version: 1,
+      environments: [{
+        id: 'environment-hosting-error',
+        name: 'RocketX 托管项目',
+        path: 'D:\\Repos\\rocketchatx',
+        adoProjects: [],
+        defaultBaseBranch: 'main',
+        branchPrefix: 'ai/',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      bindings: [],
+      lastEnvironmentByProject: {},
+    }));
+  });
+  const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
+  await page.evaluate(async () => {
+    const [{ useCodexWorkspace }, { useSharedAgent }] = await Promise.all([
+      import('/src/stores/codexWorkspace.ts'),
+      import('/src/stores/sharedAgent.ts'),
+    ]);
+    useCodexWorkspace.setState({
+      workspaceRoot: 'D:\\Repos\\rocketchatx',
+      selectedModel: 'gpt-test',
+      models: [{
+        id: 'gpt-test',
+        model: 'gpt-test',
+        displayName: 'GPT Test',
+        description: '测试模型',
+        hidden: false,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null,
+        isDefault: true,
+      }],
+    } as never);
+    useSharedAgent.setState({
+      startSession: async () => {
+        throw new Error('Codex 运行时启动失败，请检查本机安装');
+      },
+    });
+  });
+  await conversation(page, 'General').click();
+
+  await page.getByRole('button', { name: '配置 AI 托管' }).click();
+  const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
+  await panel.getByRole('button', { name: '开启 AI 托管' }).click();
+
+  await expect(panel.getByRole('alert')).toContainText('无法开启 AI 托管：Codex 运行时启动失败，请检查本机安装');
+  await expect(panel.getByRole('button', { name: '开启 AI 托管' })).toBeEnabled();
   expect(pageErrors).toEqual([]);
 });
 
@@ -3282,7 +3356,7 @@ test('托管项目归入管家，AI 设置按启动运行时展示 Codex 配置'
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   const projects = page.getByLabel('项目目录');
-  await expect(projects.getByLabel('托管项目')).toBeVisible();
+  await expect(projects.getByLabel('工作项目')).toBeVisible();
   await expect(projects.getByRole('region', { name: '项目：RocketChat X - 主目录' })).toBeVisible();
   await expect(page.getByRole('button', { name: '项目配置：RocketChat X - 主目录' })).toBeVisible();
   expect(pageErrors).toEqual([]);

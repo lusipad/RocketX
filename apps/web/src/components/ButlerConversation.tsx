@@ -21,7 +21,7 @@ import {
   type CodexArtifact,
 } from '../lib/codexArtifacts';
 import { isTauriRuntime } from '../lib/client';
-import { renderMarkdownDoc, type MarkdownLinkRenderer } from '../lib/markdown';
+import { renderMarkdownDoc, StableStreamingMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useCodexStreamingView } from '../lib/useCodexStreamingText';
 import type { CodexHostInput } from '../agent/codexHostInput';
@@ -216,15 +216,25 @@ function Activity({ event }: { event: CodexWorkspaceEvent }) {
 function ConversationMessage({
   entry,
   renderLink,
+  progressive = false,
+  streaming = false,
 }: {
   entry: CodexWorkspaceMessage;
   renderLink: MarkdownLinkRenderer;
+  progressive?: boolean;
+  streaming?: boolean;
 }) {
   return (
-    <article data-speaker={entry.role} className="codex-native-message">
+    <article data-speaker={entry.role} className={`codex-native-message${streaming ? ' is-streaming' : ''}`}>
       <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
       <div className="butler-conversation-markdown">
-        {entry.text ? (entry.role === 'assistant' ? renderMarkdownDoc(entry.text, undefined, renderLink) : entry.text) : null}
+        {entry.text
+          ? entry.role === 'assistant'
+            ? progressive
+              ? <StableStreamingMarkdown text={entry.text} renderLink={renderLink} />
+              : renderMarkdownDoc(entry.text, undefined, renderLink)
+            : entry.text
+          : null}
         <CodexImageAttachments attachments={entry.attachments} />
         <CodexGeneratedImages images={entry.generatedImages} />
       </div>
@@ -302,10 +312,13 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
   const running = status === 'running' || status === 'waiting-input';
   const latestActivity = events.at(-1);
-  const completedMessage = !running && events.length > 0 && messages.at(-1)?.role === 'assistant'
+  const completedMessage = !running && messages.at(-1)?.role === 'assistant'
     ? messages.at(-1)
     : undefined;
   const visibleMessages = completedMessage ? messages.slice(0, -1) : messages;
+  const activeAssistantMessage: CodexWorkspaceMessage | undefined = streamingText
+    ? { id: 'active-assistant', role: 'assistant', text: streamingText, pending: true }
+    : completedMessage;
   const activityStatus = running
     ? '正在工作'
     : status === 'interrupted' || error === 'Codex 本轮已中断'
@@ -662,13 +675,14 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                 ? <ApprovalCard key={request.id} request={request} />
                 : <InputCard key={request.id} request={request} />)}
 
-              {completedMessage ? <ConversationMessage entry={completedMessage} renderLink={renderArtifactLink} /> : null}
-
-              {streamingText ? (
-                <article data-speaker="assistant" className="codex-native-message is-streaming">
-                  <span>Codex</span>
-                  <div className="butler-conversation-markdown">{streamingText}</div>
-                </article>
+              {activeAssistantMessage ? (
+                <ConversationMessage
+                  key="active-assistant"
+                  entry={activeAssistantMessage}
+                  renderLink={renderArtifactLink}
+                  progressive
+                  streaming={Boolean(streamingText)}
+                />
               ) : null}
 
               {queuedMessages.length > 0 ? (
