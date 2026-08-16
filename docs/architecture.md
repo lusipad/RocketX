@@ -185,5 +185,5 @@ Vite HMR 会导致 store 模块分叉（`window.__chat` 与界面里的 store �
   客服（Omnichannel）、管理后台、邀请链接、批量清理消息（prune）；
 - 单聊 / 多人聊天没有群管理能力（这是 RC 的模型限制：它们都是 `t='d'`）；
 - 分组、备注名、待办只存本机（见上方「本地数据」）。
-- 管家与共享 Agent 当前只在桌面端运行；Codex 路径要求兼容且已登录的本机 Codex，DeepSeek 路径要求系统里已安装且可运行的 DSH，或者 Windows full 私有运行时，再加已配置密钥。原生 Memory、Skills/Plugins/Apps、已安排执行仍只属于 Codex；网页版没有远端执行面。
+- 管家与共享 Agent 当前只在桌面端承载本地执行；Codex 路径要求兼容且已登录的本机 Codex，DeepSeek 路径要求系统里已安装且可运行的 DSH，或者 Windows full 私有运行时，再加已配置密钥。原生 Memory、Skills/Plugins/Apps、已安排执行仍只属于 Codex；网页版不能成为执行宿主，但可投影有效远端托管状态并使用 `@ai` 向桌面宿主提问。
 - 已安排任务不是操作系统或云端常驻调度，RocketX 真正退出、电脑关机或休眠时不执行。

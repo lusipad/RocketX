@@ -52,7 +52,7 @@ RocketX `v0.43.1` desktop line is split. Default slim installers do not bundle D
 | DSH missing or unavailable | DeepSeek backend is unavailable in slim mode; Codex and deterministic surfaces keep their own availability |
 | DeepSeek API key missing | DSH configuration and history remain visible, but sending fails closed until the key is stored through DSH credentials |
 | Private full DSH runtime missing or incomplete | RocketX refuses to start that backend, then uses a verified available Codex runtime or no AI instead of downloading an unpinned runtime |
-| Web client | No local DSH transport; messaging and deterministic work surfaces remain usable |
+| Web client | No local DSH transport or hosting; messaging and deterministic work surfaces remain usable, and an active desktop-hosted lease stays visible and reachable through `@ai` |
 
 An upstream DSH upgrade is a full runtime upgrade for the Windows full package: change the exact version in `apps/dsh-runtime/package.json`, update `pnpm-lock.yaml`, run `pnpm prepare:dsh-runtime`, and repeat bridge, Host API, native dependency, session/configuration, approval, and packaging checks. Slim builds only track external installation discovery and do not carry the private runtime. RocketX does not maintain a compatibility shim for multiple DSH wire contracts, so newer system DSH builds stay unsupported until this exact upgrade path lands.
 
