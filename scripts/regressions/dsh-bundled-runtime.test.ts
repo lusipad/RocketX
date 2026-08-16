@@ -102,6 +102,25 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
     dshRs,
     /if use_private_node \{\s*bundled\s*\} else \{\s*system\.into_iter\(\)\.collect\(\)/,
   );
-  assert.match(dshRs, /pnpm prepare:dsh-runtime/u);
+  assert.match(dshRs, /Slim 安装包不内置 DSH/u);
+  assert.match(dshRs, /npm install -g @deepseek-ai\/dsh@\{DSH_VERIFIED_VERSION\}/u);
+  assert.match(dshRs, /RocketX Full 安装包/u);
+  assert.match(dshRs, /pnpm_global_dsh_cli_candidates/u);
   assert.match(dshRs, /DSH 运行需要 22\.19\+ 或 24\+/u);
+});
+
+test('Windows 安装与换装只清理 RocketX 私有运行时，不卸载系统全局 DSH', async () => {
+  const [slimHooks, fullHooks] = await Promise.all([
+    readFile('apps/desktop/src-tauri/windows/slim-installer-hooks.nsh', 'utf8'),
+    readFile('apps/desktop/src-tauri/windows/full-installer-hooks.nsh', 'utf8'),
+  ]);
+  const installerHooks = `${slimHooks}\n${fullHooks}`;
+
+  assert.match(slimHooks, /\$LOCALAPPDATA\\RocketX\\resources/u);
+  assert.match(fullHooks, /\$LOCALAPPDATA\\RocketX\\resources/u);
+  assert.doesNotMatch(installerHooks, /\$APPDATA\\(?:npm|pnpm)/iu);
+  assert.doesNotMatch(installerHooks, /\$LOCALAPPDATA\\pnpm/iu);
+  assert.doesNotMatch(installerHooks, /\$PNPM_HOME/iu);
+  assert.doesNotMatch(installerHooks, /node_modules\\@deepseek-ai\\dsh/iu);
+  assert.doesNotMatch(installerHooks, /(?:npm|pnpm)\s+(?:uninstall|remove).*@deepseek-ai\/dsh/iu);
 });

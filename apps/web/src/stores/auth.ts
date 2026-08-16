@@ -11,13 +11,14 @@ import { getServerBase, loadStoredAuth, realtime, rest, saveAuth, setAuthLostHan
 import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope } from '../lib/accountScope';
 import { restoreTrayAttention } from '../lib/tray';
-import { loginFailureMessage } from '../lib/loginDiagnostic';
+import type { LoginFailureDisplay } from '../lib/loginDiagnostic';
+import { writeLoginDiagnostic } from '../lib/loginDiagnostic';
 import { startupPresence } from '../lib/presencePreference';
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
   user: RcUser | null;
-  error: string | null;
+  error: LoginFailureDisplay | null;
   /**
    * 自己头像的版本号，换头像后 +1。
    *
@@ -160,7 +161,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
     } catch (err) {
       await clearBusinessMcpSession();
-      set({ status: 'guest', error: loginFailureMessage(err) });
+      set({ status: 'guest', error: await writeLoginDiagnostic(err, 'login') });
     }
   },
 
@@ -206,6 +207,16 @@ export const useAuth = create<AuthState>((set, get) => ({
     void import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime());
     saveAuth(null);
     void clearBusinessMcpSession();
-    set({ status: 'guest', user: null, error: '登录已失效，请重新登录' });
+    set({
+      status: 'guest',
+      user: null,
+      error: {
+        kind: 'session_expired',
+        stage: 'login',
+        summary: '登录已失效，请重新登录',
+        detail: null,
+        diagnostic: 'stage=login kind=session_expired detail=session invalidated locally',
+      },
+    });
   },
 }));

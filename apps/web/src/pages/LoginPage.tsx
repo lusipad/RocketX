@@ -3,7 +3,8 @@ import { Building2, Rocket } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { autostartAvailable } from '../lib/autostart';
 import { getServerBase, isTauri, setServerBase } from '../lib/client';
-import { loginFailureMessage, probeRocketChat } from '../lib/loginDiagnostic';
+import type { LoginFailureDisplay } from '../lib/loginDiagnostic';
+import { probeRocketChat, writeLoginDiagnostic } from '../lib/loginDiagnostic';
 import {
   hasExistingRocketXUserState,
   loadFirstRunState,
@@ -23,7 +24,7 @@ export default function LoginPage() {
   );
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [serverError, setServerError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<LoginFailureDisplay | null>(null);
   const [checking, setChecking] = useState(false);
   const [firstRun, setFirstRun] = useState(() => {
     const storage = typeof localStorage === 'undefined' ? undefined : localStorage;
@@ -63,7 +64,13 @@ export default function LoginPage() {
     if (busy) return;
     const trimmed = server.trim();
     if (isTauri && !trimmed) {
-      setServerError('桌面端必须填写服务器地址');
+      setServerError({
+        kind: 'invalid_address',
+        stage: 'probe',
+        summary: '桌面端必须填写服务器地址',
+        detail: null,
+        diagnostic: 'stage=probe kind=invalid_address detail=missing server base',
+      });
       return;
     }
     if (trimmed) {
@@ -71,7 +78,13 @@ export default function LoginPage() {
         const url = new URL(trimmed);
         if (!url.hostname || !['http:', 'https:'].includes(url.protocol)) throw new Error();
       } catch {
-        setServerError('服务器地址无效，请填写以 http:// 或 https:// 开头的完整地址');
+        setServerError({
+          kind: 'invalid_address',
+          stage: 'probe',
+          summary: '服务器地址无效，请填写以 http:// 或 https:// 开头的完整地址',
+          detail: null,
+          diagnostic: 'stage=probe kind=invalid_address detail=client-side URL validation failed',
+        });
         return;
       }
     }
@@ -81,9 +94,7 @@ export default function LoginPage() {
     try {
       await probeRocketChat(trimmed);
     } catch (err) {
-      // 分类文案面向用户；原始错误进控制台，排查连接问题时不至于无迹可循
-      console.warn('[Login] 服务器探活失败', err);
-      setServerError(loginFailureMessage(err));
+      setServerError(await writeLoginDiagnostic(err, 'probe'));
       setChecking(false);
       return;
     }
@@ -125,7 +136,12 @@ export default function LoginPage() {
                   更换服务器
                 </button>
               </div>
-              {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
+              {serverError && (
+                <div className="mt-1 text-xs text-danger">
+                  <div>{serverError.summary}</div>
+                  {serverError.detail && <div className="mt-1 text-xs text-danger/80">{serverError.detail}</div>}
+                </div>
+              )}
             </div>
           ) : (
             <div>
@@ -137,7 +153,12 @@ export default function LoginPage() {
                 className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary-light"
                 placeholder={isTauri ? 'https://chat.example.com' : '留空使用当前站点'}
               />
-              {serverError && <div className="mt-1 text-xs text-danger">{serverError}</div>}
+              {serverError && (
+                <div className="mt-1 text-xs text-danger">
+                  <div>{serverError.summary}</div>
+                  {serverError.detail && <div className="mt-1 text-xs text-danger/80">{serverError.detail}</div>}
+                </div>
+              )}
             </div>
           )}
           <div>
@@ -162,7 +183,12 @@ export default function LoginPage() {
               placeholder="请输入密码"
             />
           </div>
-          {error && <div className="text-sm text-danger">{error}</div>}
+          {error && (
+            <div className="text-sm text-danger">
+              <div>{error.summary}</div>
+              {error.detail && <div className="mt-1 text-xs text-danger/80">{error.detail}</div>}
+            </div>
+          )}
           <button
             type="submit"
             disabled={busy || !username || !password}

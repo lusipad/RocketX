@@ -1133,6 +1133,40 @@ test('登录后进入主界面', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('登录页同时显示友好结论和脱敏后的详细连接原因', async ({ page }) => {
+  const { pageErrors } = await installRocketChatMock(page);
+  await page.unroute('**/api/info');
+  await page.route('**/api/info', (route) => fulfillJson(route, { error: 'gateway unavailable' }, 502));
+
+  await page.goto('/');
+  await page.getByPlaceholder('留空使用当前站点').fill(SERVER);
+  await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
+  await page.getByPlaceholder('请输入密码').fill('password');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+
+  await expect(page.getByText('服务器检查失败，请稍后重试')).toBeVisible();
+  await expect(page.getByText('服务器返回 HTTP 502：HTTP 502')).toBeVisible();
+  await expect(page.getByText('General', { exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('登录接口返回 unreadable 时改为可操作的中文原因', async ({ page }) => {
+  const { pageErrors } = await installRocketChatMock(page);
+  await page.unroute('**/api/v1/**');
+  await page.route('**/api/v1/login', (route) => fulfillJson(route, { error: 'unreadable' }, 500));
+
+  await page.goto('/');
+  await page.getByPlaceholder('留空使用当前站点').fill(SERVER);
+  await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
+  await page.getByPlaceholder('请输入密码').fill('password');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+
+  await expect(page.getByText('登录请求没有成功发出，请检查地址、网络、VPN 或桌面端访问权限')).toBeVisible();
+  await expect(page.getByText(/桌面网络通道没有读取到可用响应/)).toBeVisible();
+  await expect(page.getByText(/unreadable/i)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('文件面板在严格沙箱中预览 HTML，并为常见视频显示原生控件（issue #318）', async ({ page }) => {
   await bootAuthenticated(page);
   await conversation(page, 'General').click();

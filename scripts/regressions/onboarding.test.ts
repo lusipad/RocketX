@@ -10,6 +10,7 @@ import {
 } from '../../apps/web/src/lib/onboarding';
 import {
   classifyLoginFailure,
+  describeLoginFailure,
   loginFailureMessage,
 } from '../../apps/web/src/lib/loginDiagnostic';
 
@@ -65,8 +66,41 @@ test('跳过首用清单会持久标记不再提醒且保持幂等', () => {
 test('登录失败能区分地址、网络、服务类型、凭据和会话失效', () => {
   assert.equal(classifyLoginFailure(new Error('invalid_address')), 'invalid_address');
   assert.equal(classifyLoginFailure(new Error('Failed to fetch')), 'unreachable');
+  assert.equal(classifyLoginFailure(new Error('unreachable')), 'unreachable');
+  assert.equal(classifyLoginFailure(new Error('unreadable')), 'unreachable');
+  assert.equal(classifyLoginFailure(new Error('getaddrinfo ENOTFOUND chat.example.com')), 'dns');
+  assert.equal(classifyLoginFailure(new Error('certificate verify failed for https://u:p@example.com')), 'tls');
+  assert.equal(classifyLoginFailure(new Error('proxy connect aborted with status 407')), 'proxy');
+  assert.equal(classifyLoginFailure(new Error('request timed out after 30s')), 'timeout');
+  assert.equal(classifyLoginFailure(new Error('URL not allowed by remote scope')), 'scope');
+  assert.equal(classifyLoginFailure(new Error('HTTP 502')), 'http_status');
   assert.equal(classifyLoginFailure(new Error('HTTP 404')), 'not_rocket_chat');
   assert.equal(classifyLoginFailure(new Error('Unauthorized')), 'credentials');
   assert.equal(classifyLoginFailure(new Error('session expired')), 'session_expired');
   assert.match(loginFailureMessage(new Error('HTTP 404')), /Rocket.Chat/);
+});
+
+test('登录失败描述保留阶段、友好主文案与脱敏细节', () => {
+  const failure = describeLoginFailure(
+    new Error('certificate verify failed for https://admin:secret@example.com/api/v1/login?token=abc'),
+    'probe',
+  );
+  assert.equal(failure.stage, 'probe');
+  assert.equal(failure.kind, 'tls');
+  assert.match(failure.summary, /检查服务器|证书/i);
+  assert.match(failure.detail ?? '', /证书|TLS/i);
+  assert.doesNotMatch(failure.detail ?? '', /secret|token=abc/i);
+  assert.match(failure.detail ?? '', /\[REDACTED\]/);
+});
+
+test('未知登录错误不再直接回显裸英文', () => {
+  const failure = describeLoginFailure(new Error('opaque backend explosion'), 'login');
+  assert.equal(failure.kind, 'unknown');
+  assert.match(failure.summary, /登录失败/);
+  assert.match(failure.detail ?? '', /opaque backend explosion/);
+
+  const unreadable = describeLoginFailure(new Error('unreadable'), 'login');
+  assert.equal(unreadable.kind, 'unreachable');
+  assert.doesNotMatch(`${unreadable.summary} ${unreadable.detail}`, /unreadable/i);
+  assert.match(unreadable.detail ?? '', /代理|网关|证书/);
 });

@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.43.2"
+version = "0.43.3"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -16,7 +16,14 @@ zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 [dependencies]
 # tray-icon：关闭到系统托盘 + 托盘菜单（issue #3）
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-http = "2"
+tauri-plugin-http = { version = "2", default-features = false, features = [
+  "rustls-tls-native-roots",
+  "http2",
+  "charset",
+  "macos-system-configuration",
+  "cookies",
+  "unsafe-headers",
+] }
 tauri-plugin-opener = "2"
 # 文件下载：webview 不认 <a download> + blob，必须走原生保存对话框 + 文件写入
 tauri-plugin-dialog = "2"
