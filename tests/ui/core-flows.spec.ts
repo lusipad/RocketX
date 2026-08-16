@@ -2,8 +2,20 @@ import { expect, test, type Locator, type Page, type Route } from '@playwright/t
 import { readFileSync } from 'node:fs';
 import { sandboxDocument } from '../../apps/web/src/kernel/sandbox/iframe';
 
-const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
-const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
+const ME = {
+  _id: 'user-me',
+  username: 'tester',
+  name: 'Test User',
+  status: 'online',
+  roles: ['admin'],
+};
+const ALICE = {
+  _id: 'user-alice',
+  username: 'alice',
+  name: 'Alice',
+  status: 'online',
+  roles: ['user'],
+};
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 const RELEASE_DESKTOP_E2E = process.env.PLAYWRIGHT_RELEASE_MODE === '1';
@@ -356,7 +368,7 @@ async function installFullTauriMock(page: Page) {
   });
 }
 
-function agentCardMessage() {
+function agentCardMessage(referenceAt = Date.now()) {
   const card = {
     version: 1,
     sessionId: 'session-agent-room',
@@ -364,7 +376,7 @@ function agentCardMessage() {
     hostUserId: ALICE._id,
     hostUsername: ALICE.username,
     hostDeviceId: 'device-alice',
-    leaseExpiresAt: Date.now() + 3_600_000,
+    leaseExpiresAt: referenceAt + 60_000,
     environmentName: 'RocketChat X',
     workItem: { id: 128, project: 'RocketChatX', title: 'Login failure' },
     proposedBranch: 'ai/128-login-failure',
@@ -962,7 +974,8 @@ async function installRocketChatMock(
       return fulfillJson(route, { ...ME, status: ownStatus, settings: { preferences: {} } });
     }
     if (endpoint === 'users.info') {
-      return fulfillJson(route, { user: { ...ME, status: ownStatus, settings: { preferences: {} } } });
+      const user = url.searchParams.get('userId') === ALICE._id ? ALICE : ME;
+      return fulfillJson(route, { user: { ...user, status: ownStatus, settings: { preferences: {} } } });
     }
     if (endpoint === 'users.presence') {
       return fulfillJson(route, { users: [{ ...ME, status: ownStatus }, ALICE] });
@@ -985,7 +998,15 @@ async function installRocketChatMock(
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
-      const messages = options.historyOverrides?.[rid] ?? histories[rid] ?? [];
+      const history = options.historyOverrides?.[rid] ?? histories[rid] ?? [];
+      const messages = rid === 'discussion-agent'
+        ? history.map((message) => {
+          const referenceAt = Date.now();
+          return message._id === 'agent-lease-card'
+            ? { ...message, msg: agentCardMessage(referenceAt), ts: new Date(referenceAt).toISOString() }
+            : message;
+        })
+        : history;
       return fulfillJson(route, {
         messages: options.includeStickerFixture && rid === 'room-general'
           ? [...messages, stickerMessageFixture]
@@ -1019,7 +1040,19 @@ async function installRocketChatMock(
       });
     }
     if (endpoint === 'chat.getMessage') return fulfillJson(route, { message: null }, 404);
-    if (endpoint.endsWith('.roles')) return fulfillJson(route, { roles: [] });
+    if (endpoint.endsWith('.roles')) {
+      const rid = url.searchParams.get('roomId');
+      return fulfillJson(route, {
+        roles: rid === 'discussion-agent'
+          ? [{
+            _id: 'role-discussion-agent-alice',
+            rid,
+            u: ALICE,
+            roles: ['moderator'],
+          }]
+          : [],
+      });
+    }
     return fulfillJson(route, { success: true });
   });
 
@@ -1071,6 +1104,20 @@ async function bootAuthenticated(
     await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   }
   return state;
+}
+
+async function activateAiRuntimeForTest(
+  page: Page,
+  provider: 'codex' | 'deepseek' | 'none',
+): Promise<void> {
+  await page.evaluate(async (nextProvider) => {
+    const [{ activateAiRuntimeProvider }, { useUI }] = await Promise.all([
+      import('/src/lib/runtimeMode.ts'),
+      import('/src/stores/ui.ts'),
+    ]);
+    activateAiRuntimeProvider(nextProvider);
+    useUI.setState({ aiRuntimeProvider: nextProvider });
+  }, provider);
 }
 
 function conversation(page: Page, name: string) {
@@ -1573,6 +1620,7 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
 
 test('打开管家页后可返回消息', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'deepseek');
   const navigation = page.getByRole('navigation');
   await expect(navigation.getByRole('button', { name: '今日', exact: true })).toHaveCount(0);
   await expect(navigation.getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
@@ -1597,6 +1645,7 @@ test('打开管家页后可返回消息', async ({ page }) => {
 test('DeepSeek 视图在 Web 端提示使用桌面端 DSH Web', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'deepseek');
   const navigation = page.getByRole('navigation');
   await navigation.getByRole('region', { name: '管家' }).getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByText('DSH 原生会话仅支持 RocketX 桌面端')).toBeVisible();
@@ -1607,6 +1656,7 @@ test('DeepSeek 视图在 Web 端提示使用桌面端 DSH Web', async ({ page })
 
 test('AI 运行时三选一只在重启后生效，无 AI 只禁用执行能力', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'deepseek');
   const navigation = page.getByRole('navigation', { name: 'RocketX 主导航' });
   await navigation.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
@@ -2626,6 +2676,7 @@ test('DSH 全局搜索任务复制提示词并打开官方 DSH Web', async ({ pa
     });
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'deepseek');
   await page.keyboard.press('Control+Shift+F');
   const search = page.getByRole('dialog', { name: '全局搜索' });
   await search.getByPlaceholder(/搜索会话、消息/).fill('检查发布风险');
@@ -2653,6 +2704,7 @@ test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
@@ -2786,6 +2838,7 @@ test('看板工作项可直接排给 AI，且默认不写回 ADO（issue #292）
 
 test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', async ({ page }, testInfo) => {
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'deepseek');
   await conversation(page, '#128 Login failure').click();
   const badge = page.getByLabel('打开 AI 托管控制面');
   await expect(badge).toBeVisible();
@@ -2827,6 +2880,7 @@ test('普通会话同时提供私人房间 AI 和共享托管配置', async ({ p
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
     const { useAgentEnvironments } = await import('/src/stores/agentEnvironments.ts');
@@ -2868,6 +2922,7 @@ test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', 
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
   await conversation(page, 'General').click();
 
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
@@ -2898,6 +2953,7 @@ test('开启 Codex 群托管时选择本次模型、推理和权限，不改管�
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
     useCodexWorkspace.setState({

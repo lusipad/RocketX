@@ -66,7 +66,7 @@ pnpm dev
 覆盖。可直接复制 [`配置示例`](docs/examples/rcx.workspace.sample.json)，字段与安全规则见
 [`团队配置说明`](docs/proposal-config-provisioning.md)。
 
-登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。AI 设置里只能在 Codex、DSH 和无 AI 之间三选一；保存后要重启 RocketX 才生效，当前进程不会热切换，也不会同时启动两个后端。这个全局选择会同时影响管家、房间侧栏 AI、AI 托管、`/ai` 和消息交接。Codex 继续复用原生 Thread、模型、权限、Skills、Plugins、Apps、本地 Memory 以及 Codex 专属的 routines/runtime probes；DSH 会在管家中启动官方 DSH Web，并把返回的本地 loopback URL 以 iframe 嵌入，RocketX 只保留主导航、房间侧栏和托管的 controller/host 路径以及 DSH 进程生命周期。官方 DSH Web 负责模型、Agent preset、权限、审批、提问和凭据配置；无 AI 时 RocketX 会隐藏或禁用 AI 入口，但设置页仍保留，方便重启后重新选择运行时。当前桌面官方包拆成 slim 与 Windows full：slim 只探测系统里已安装的 Codex / DSH，不随包携带这两个运行时；Windows full 会把固定的 Codex 0.144.4、DSH 0.1.0-rc.6、私有 Node 和 OCR 装到 `%LOCALAPPDATA%\RocketX\resources`，并由 full 安装包管理这些私有资源。DeepSeek API Key 仍由用户在官方 DSH Web 中配置，DSH rc.6 将它保存在 RocketX 私有 `DSH_HOME/.credentials.yaml`；RocketX 外壳不读取、不复制也不回显密钥。网页版可正常使用消息和确定性工作界面，但没有本地 AI 执行通道。具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
+登录后，消息、工作台、待办和日历继续承载确定性的事实、计划与状态。AI 设置里只能在 Codex、DSH 和无 AI 之间三选一；保存后要重启 RocketX 才生效，当前进程不会热切换，也不会同时启动两个后端。这个全局选择会同时决定管家本地执行、私人房间 AI、新开或恢复 AI 托管、`/ai` 和消息交接使用哪一个后端。Codex 继续复用原生 Thread、模型、权限、Skills、Plugins、Apps、本地 Memory 以及 Codex 专属的 routines/runtime probes；DSH 会在管家中启动官方 DSH Web，并把返回的本地 loopback URL 以 iframe 嵌入，RocketX 只保留主导航、房间侧栏和托管的 controller/host 路径以及 DSH 进程生命周期。官方 DSH Web 负责模型、Agent preset、权限、审批、提问和凭据配置。选择无 AI 时不会启动本地执行器，但管家入口和既有共享托管记录仍保留；如果另一台设备正在托管，房间成员仍能看到状态并使用 `@ai`，本机的新开、恢复和执行动作保持禁用。设置页也会保留，方便下次重启前重新选择运行时。当前桌面官方包拆成 slim 与 Windows full：slim 只探测系统里已安装的 Codex / DSH，不随包携带这两个运行时；Windows full 会把固定的 Codex 0.144.4、DSH 0.1.0-rc.6、私有 Node 和 OCR 装到 `%LOCALAPPDATA%\RocketX\resources`，并由 full 安装包管理这些私有资源。DeepSeek API Key 仍由用户在官方 DSH Web 中配置，DSH rc.6 将它保存在 RocketX 私有 `DSH_HOME/.credentials.yaml`；RocketX 外壳不读取、不复制也不回显密钥。网页版没有本地 AI 执行通道，但会保留桌面宿主已公开的共享托管状态，房间成员可以继续向该宿主发送 `@ai`；消息和确定性工作界面照常可用。具体边界见[`能力矩阵`](docs/specs/capability-matrix.md)。
 
 随 Windows 发布包提供的「飞鸽 / IPMSG」官方插件默认关闭，可随时禁用。协议、GBK 编码、UDP/TCP `2425`、消息和普通文件传输都在插件自己的 Rust Sidecar 中，RocketX 核心只提供通用进程桥。标准 IPMSG/飞鸽支持消息与文件；原版内网通仅支持 `1@shiyeline` 的 2425 发现和文本，不实现私有 `9011`。该旧协议能力不等同于 RocketX 的认证 LAN 通道。
 
@@ -108,7 +108,7 @@ RC_BASE_URL=http://chat.example.com pnpm smoke   # 默认 localhost:3300，admin
 
 ## 桌面客户端
 
-当前候选版本是 `v0.43.0`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
+当前候选版本是 `v0.43.1`。`v0.34.5` 已恢复 Windows x64、macOS universal 与 Linux x64
 三平台正式安装包，从 `v0.35.0` 起受保护工作流会在完整校验后将新版本设为 GitHub Latest：
 
 - **正式发版**：推送 `release/vX.Y.Z` 临时分支 → workflow 自动创建同名标签、删除临时分支，

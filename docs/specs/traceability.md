@@ -90,6 +90,7 @@
 | `AGT-AC-06` | 中断恢复与环境释放 | `agent-session.test.ts`、`shared-agent-runtime.test.ts` | 进程崩溃 INT |
 | `AGT-AC-07` | 产品/规格门禁 | 文档与入口审查 | 独立委托未实现 |
 | `AGT-AC-08`、`AGT-AC-09` | `stores/sharedAgent.ts`、`components/AgentPanel.tsx`、`agent/dsh/HostedDshController.ts` | `agent-hosting-backend.test.ts`、`hosted-dsh-controller.test.ts`、`shared-agent-runtime.test.ts` | 共享 Agent 继承全局启动级运行时的真实房间 INT |
+| `AGT-AC-10`、`AGT-AC-11` | `stores/sharedAgent.ts`、`lib/runtimeMode.ts`、`components/AgentPanel.tsx`、`components/Composer.tsx`、`components/ThreadPanel.tsx` | `agent-card.test.ts`、`shared-agent-runtime.test.ts`、`butler-hosting-session-identity.test.ts`、`tests/ui/core-flows.spec.ts`、`tests/ui/ai-mention.spec.ts` | 两设备与 Web 实服 INT |
 | `PERM-AC-01`、`PERM-AC-02` | `permissionSettings`、`components/ButlerConversation.tsx` | `app-server-controller.test.ts`、`codex-workspace.test.ts` | 上游 Profile 版本变化 |
 | `PERM-AC-03`、`PERM-AC-04`、`PERM-AC-05`、`PERM-AC-06` | Server Request 路由、审批与输入卡 | `tests/ui/butler-host-input.regression-1.spec.ts` | 真实命令/MCP 请求 INT |
 | `PERM-AC-07` | `agent/codexAutomation.ts` | `routines.test.ts` | 真实无人值守审批 INT |

@@ -2,7 +2,13 @@ import type { Page, Route } from '@playwright/test';
 
 export const TEST_SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 
-const ME = { _id: 'user-me', username: 'tester', name: 'Test User', status: 'online' };
+const ME = {
+  _id: 'user-me',
+  username: 'tester',
+  name: 'Test User',
+  status: 'online',
+  roles: ['admin'],
+};
 const ALICE = { _id: 'user-alice', username: 'alice', name: 'Alice', status: 'online' };
 const NOW = '2026-07-21T08:00:00.000Z';
 
@@ -133,5 +139,24 @@ export async function bootAuthenticated(page: Page): Promise<RocketChatMockState
     );
   }, { server: TEST_SERVER, userId: ME._id });
   await page.goto('/');
+  await page.getByRole('navigation', { name: 'RocketX 主导航' }).waitFor();
   return state;
+}
+
+/** 组件级桌面场景在 Web 测试壳启动后显式选择本轮执行引擎。 */
+export async function activateAiRuntimeForTest(
+  page: Page,
+  provider: 'codex' | 'deepseek' | 'none',
+): Promise<void> {
+  await page.evaluate(async (nextProvider) => {
+    const loadRuntime = new Function('return import("/src/lib/runtimeMode.ts")') as () => Promise<{
+      activateAiRuntimeProvider: (provider: typeof nextProvider) => void;
+    }>;
+    const loadUi = new Function('return import("/src/stores/ui.ts")') as () => Promise<{
+      useUI: { setState: (state: { aiRuntimeProvider: typeof nextProvider }) => void };
+    }>;
+    const [{ activateAiRuntimeProvider }, { useUI }] = await Promise.all([loadRuntime(), loadUi()]);
+    activateAiRuntimeProvider(nextProvider);
+    useUI.setState({ aiRuntimeProvider: nextProvider });
+  }, provider);
 }
