@@ -296,6 +296,76 @@ fn installed_dsh_cli_entry(node_modules_root: &Path) -> PathBuf {
         })
 }
 
+fn pnpm_global_dsh_cli_candidates(pnpm_home: &Path) -> Vec<PathBuf> {
+    let mut pnpm_roots = vec![pnpm_home.to_path_buf()];
+    if pnpm_home
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("bin"))
+    {
+        if let Some(parent) = pnpm_home.parent() {
+            pnpm_roots.push(parent.to_path_buf());
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for pnpm_root in pnpm_roots {
+        let Ok(generations) = std::fs::read_dir(pnpm_root.join("global")) else {
+            continue;
+        };
+        let mut generations = generations
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        generations.sort();
+        for generation in generations {
+            let candidate = installed_dsh_cli_entry(&generation.join("node_modules"));
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn windows_dsh_shim_cli_candidates(shim: &Path) -> Vec<PathBuf> {
+    let Some(shim_dir) = shim.parent() else {
+        return Vec::new();
+    };
+    let mut candidates = vec![installed_dsh_cli_entry(&shim_dir.join("node_modules"))];
+    let Ok(contents) = std::fs::read_to_string(shim) else {
+        return candidates;
+    };
+    let normalized = contents.replace('\\', "/");
+    let suffix = "node_modules/@deepseek-ai/dsh/lib/bin.js";
+    for line in normalized.lines() {
+        let Some(suffix_start) = line.find(suffix) else {
+            continue;
+        };
+        let end = suffix_start + suffix.len();
+        let before = &line[..end];
+        let start = before.rfind('"').map(|index| index + 1).unwrap_or_else(|| {
+            before
+                .rfind(char::is_whitespace)
+                .map_or(0, |index| index + 1)
+        });
+        let raw = before[start..].trim();
+        let relative = ["%dp0%", "%~dp0", "$basedir"]
+            .into_iter()
+            .find_map(|prefix| raw.strip_prefix(prefix));
+        let candidate = if let Some(relative) = relative {
+            shim_dir.join(relative.trim_start_matches('/'))
+        } else {
+            PathBuf::from(raw)
+        };
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
 fn source_bridge_path() -> PathBuf {
     DSH_BRIDGE_ENTRY.iter().fold(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
@@ -499,6 +569,9 @@ fn source_root_from_candidates(explicit: Option<&str>) -> Result<Option<PathBuf>
 
 fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
     let mut paths = Vec::new();
+    if let Some(pnpm_home) = std::env::var_os("PNPM_HOME") {
+        paths.extend(pnpm_global_dsh_cli_candidates(&PathBuf::from(pnpm_home)));
+    }
     #[cfg(windows)]
     {
         if let Some(app_data) = std::env::var_os("APPDATA") {
@@ -511,21 +584,14 @@ fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
                 &PathBuf::from(prefix).join("node_modules"),
             ));
         }
-        if let Some(pnpm_home) = std::env::var_os("PNPM_HOME") {
-            for generation in ["5", "6"] {
-                paths.push(installed_dsh_cli_entry(
-                    &PathBuf::from(&pnpm_home)
-                        .join("global")
-                        .join(generation)
-                        .join("node_modules"),
-                ));
-            }
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            paths.extend(pnpm_global_dsh_cli_candidates(
+                &PathBuf::from(local_app_data).join("pnpm"),
+            ));
         }
         for shim_name in ["dsh.cmd", "dsh.ps1", "dsh"] {
             if let Some(shim) = find_program(shim_name) {
-                if let Some(prefix) = shim.parent() {
-                    paths.push(installed_dsh_cli_entry(&prefix.join("node_modules")));
-                }
+                paths.extend(windows_dsh_shim_cli_candidates(&shim));
             }
         }
     }
@@ -542,6 +608,12 @@ fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
                     .join(".npm-global")
                     .join("lib")
                     .join("node_modules"),
+            ));
+            paths.extend(pnpm_global_dsh_cli_candidates(
+                &PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("pnpm"),
             ));
         }
         for root in ["/usr/local/lib/node_modules", "/usr/lib/node_modules"] {
@@ -621,7 +693,9 @@ fn resolve_bundled_runtime_archive(candidates: &[PathBuf]) -> Result<PathBuf, St
             .map_err(|error| format!("DSH 运行时归档不可用：{error}"))?;
         return Ok(PathBuf::from(host_path(&archive)));
     }
-    Err("未找到随 RocketX 分发的 DSH 运行时归档；请先运行 pnpm prepare:dsh-runtime，并确认 dsh-runtime.tar.gz 资源已随安装包分发".to_string())
+    Err(format!(
+        "未检测到兼容的 DSH {DSH_VERIFIED_VERSION}。Slim 安装包不内置 DSH；请运行 npm install -g @deepseek-ai/dsh@{DSH_VERIFIED_VERSION} 后重启 RocketX，或改用 RocketX Full 安装包。若当前已是 Full 安装包，请重新安装以恢复内置运行时。"
+    ))
 }
 
 fn prepare_bundled_runtime_root_from_archive(
@@ -2192,6 +2266,55 @@ mod tests {
                     .canonicalize()
                     .unwrap()
             ))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pnpm_global_candidates_accept_bin_home_and_any_generation() {
+        let root = unique_temp_dir("pnpm-global-runtime");
+        let pnpm_root = root.join("pnpm");
+        let cli = installed_dsh_cli_entry(&pnpm_root.join("global").join("9").join("node_modules"));
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::create_dir_all(pnpm_root.join("bin")).unwrap();
+        fs::write(&cli, b"console.log('pnpm-installed')").unwrap();
+
+        let candidates = super::pnpm_global_dsh_cli_candidates(&pnpm_root.join("bin"));
+        assert!(candidates.contains(&cli));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shim_candidates_follow_the_real_pnpm_cli_entry() {
+        let root = unique_temp_dir("pnpm-shim-runtime");
+        let shim = root.join("dsh.cmd");
+        let cli = root
+            .join("global")
+            .join("9")
+            .join(".pnpm")
+            .join("@deepseek-ai+dsh@0.1.0-rc.6")
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh")
+            .join("lib")
+            .join("bin.js");
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(&cli, b"console.log('pnpm-installed')").unwrap();
+        fs::write(
+            &shim,
+            r#"@ECHO off
+node "%dp0%\global\9\.pnpm\@deepseek-ai+dsh@0.1.0-rc.6\node_modules\@deepseek-ai\dsh\lib\bin.js" %*
+"#,
+        )
+        .unwrap();
+
+        let candidates = super::windows_dsh_shim_cli_candidates(&shim);
+        assert!(candidates.contains(&cli));
+        assert_eq!(
+            resolve_installed_dsh_cli(&candidates).unwrap(),
+            PathBuf::from(host_path(&cli.canonicalize().unwrap()))
         );
         let _ = fs::remove_dir_all(root);
     }
