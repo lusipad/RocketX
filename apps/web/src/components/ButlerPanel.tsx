@@ -9,13 +9,15 @@ import {
   Settings,
   Square,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { DshMessage } from '../agent/dsh/project';
 import { getServerBase, isTauriRuntime } from '../lib/client';
-import { renderMarkdownDoc } from '../lib/markdown';
+import { renderMarkdownDoc, StableStreamingMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { useCoalescedStoreProjection } from '../lib/useCodexStreamingText';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
-import { useCodexWorkspace } from '../stores/codexWorkspace';
+import { type CodexWorkspaceMessage, useCodexWorkspace } from '../stores/codexWorkspace';
 import { privateRoomDshKey, usePrivateRoomDsh } from '../stores/privateRoomDsh';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
@@ -89,6 +91,64 @@ function visibleUserText(text: string): string {
   return marker >= 0 ? text.slice(marker + ROOM_MESSAGE_SEPARATOR.length).trim() : text;
 }
 
+function useRoomCodexThreadProjection(threadId: string | undefined) {
+  const select = useCallback((state: ReturnType<typeof useCodexWorkspace.getState>) => ({
+    activeThreadId: state.activeThreadId,
+    globalStatus: state.status,
+    globalError: state.error,
+    globalMessages: state.messages,
+    thread: threadId ? state.threadStates[threadId] : undefined,
+  }), [threadId]);
+  const changed = useCallback((
+    state: ReturnType<typeof useCodexWorkspace.getState>,
+    previous: ReturnType<typeof useCodexWorkspace.getState>,
+  ) => (
+    state.activeThreadId !== previous.activeThreadId
+    || state.status !== previous.status
+    || state.error !== previous.error
+    || state.messages !== previous.messages
+    || (threadId ? state.threadStates[threadId] !== previous.threadStates[threadId] : false)
+  ), [threadId]);
+  const settled = useCallback((state: ReturnType<typeof useCodexWorkspace.getState>) => {
+    const thread = threadId ? state.threadStates[threadId] : undefined;
+    const status = thread?.status ?? (state.activeThreadId === threadId ? state.status : 'connecting');
+    return !thread?.streamingText && status !== 'running' && status !== 'waiting-input';
+  }, [threadId]);
+  const immediate = useCallback((
+    state: ReturnType<typeof useCodexWorkspace.getState>,
+    previous: ReturnType<typeof useCodexWorkspace.getState>,
+  ) => state.activeThreadId !== previous.activeThreadId, []);
+  return useCoalescedStoreProjection(
+    useCodexWorkspace,
+    select,
+    changed,
+    settled,
+    immediate,
+  );
+}
+
+function usePrivateRoomDshProjection(key: string) {
+  const select = useCallback(
+    (state: ReturnType<typeof usePrivateRoomDsh.getState>) => state.sessions[key],
+    [key],
+  );
+  const changed = useCallback((
+    state: ReturnType<typeof usePrivateRoomDsh.getState>,
+    previous: ReturnType<typeof usePrivateRoomDsh.getState>,
+  ) => state.sessions[key] !== previous.sessions[key], [key]);
+  const settled = useCallback((state: ReturnType<typeof usePrivateRoomDsh.getState>) => {
+    const session = state.sessions[key];
+    const streaming = session?.transcript.messages.some((entry) => entry.streaming) ?? false;
+    return !streaming && session?.status !== 'running' && session?.status !== 'waiting-input';
+  }, [key]);
+  return useCoalescedStoreProjection(
+    usePrivateRoomDsh,
+    select,
+    changed,
+    settled,
+  );
+}
+
 function PrivateNote() {
   return <p className="mt-2 text-xs text-ink-3">仅你可见，不会向当前房间发送消息。</p>;
 }
@@ -125,23 +185,95 @@ function ConversationCopyButton({
   );
 }
 
+function CodexRoomMessage({
+  entry,
+  progressive = false,
+  streaming = false,
+}: {
+  entry: CodexWorkspaceMessage;
+  progressive?: boolean;
+  streaming?: boolean;
+}) {
+  return (
+    <article
+      data-speaker={entry.role}
+      className={`codex-native-message group relative${streaming ? ' is-streaming' : ''}`}
+    >
+      <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
+      <div className="butler-conversation-markdown">
+        {entry.text
+          ? entry.role === 'assistant'
+            ? (
+                <ButlerSources sources={entry.sources} text={entry.text}>
+                  {(renderLink) => progressive
+                    ? <StableStreamingMarkdown text={entry.text} renderLink={renderLink} />
+                    : renderMarkdownDoc(entry.text, undefined, renderLink)}
+                </ButlerSources>
+              )
+            : visibleUserText(entry.text)
+          : null}
+        <CodexImageAttachments attachments={entry.attachments} />
+        <CodexGeneratedImages images={entry.generatedImages} />
+      </div>
+      {entry.text && !streaming ? (
+        <ConversationCopyButton
+          text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
+          speaker={entry.role === 'assistant' ? 'Codex' : '你的'}
+          align={entry.role === 'user' ? 'right' : 'left'}
+        />
+      ) : null}
+    </article>
+  );
+}
+
+function DshRoomMessage({
+  entry,
+  progressive = false,
+}: {
+  entry: DshMessage;
+  progressive?: boolean;
+}) {
+  const streaming = Boolean(entry.streaming);
+  return (
+    <article
+      data-speaker={entry.role}
+      className={`codex-native-message group relative${streaming ? ' is-streaming' : ''}`}
+    >
+      <span>{entry.role === 'assistant' ? 'DeepSeek' : entry.role === 'user' ? '你' : '系统'}</span>
+      <div className="butler-conversation-markdown">
+        {entry.role === 'assistant'
+          ? progressive
+            ? <StableStreamingMarkdown text={entry.text} />
+            : renderMarkdownDoc(entry.text)
+          : entry.role === 'user'
+            ? visibleUserText(entry.text)
+            : entry.text}
+      </div>
+      {entry.text && !streaming && entry.role !== 'system' ? (
+        <ConversationCopyButton
+          text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
+          speaker={entry.role === 'assistant' ? 'DeepSeek' : '你的'}
+          align={entry.role === 'user' ? 'right' : 'left'}
+        />
+      ) : null}
+    </article>
+  );
+}
+
 function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
   const desktopRuntime = isTauriRuntime();
-  const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
-  const globalStatus = useCodexWorkspace((state) => state.status);
-  const globalError = useCodexWorkspace((state) => state.error);
-  const globalMessages = useCodexWorkspace((state) => state.messages);
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const models = useCodexWorkspace((state) => state.models);
   const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const [threadId, setThreadId] = useState(() => roomThreadId(scope, rid));
-  const thread = useCodexWorkspace((state) => threadId ? state.threadStates[threadId] : undefined);
-  const messages = thread?.messages ?? (activeThreadId === threadId ? globalMessages : []);
-  const status = thread?.status ?? (activeThreadId === threadId ? globalStatus : 'connecting');
+  const threadView = useRoomCodexThreadProjection(threadId);
+  const thread = threadView.thread;
+  const messages = thread?.messages ?? (threadView.activeThreadId === threadId ? threadView.globalMessages : []);
+  const status = thread?.status ?? (threadView.activeThreadId === threadId ? threadView.globalStatus : 'connecting');
   const streamingText = thread?.streamingText ?? '';
   const pendingRequests = thread?.pendingRequests ?? [];
-  const runtimeError = thread?.error ?? (activeThreadId === threadId ? globalError : null);
+  const runtimeError = thread?.error ?? (threadView.activeThreadId === threadId ? threadView.globalError : null);
   const modelId = thread?.runtimeSelection?.model || selectedModel;
   const modelLabel = models.find((model) => model.model === modelId || model.id === modelId)?.displayName
     || modelId
@@ -150,6 +282,13 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [roomError, setRoomError] = useState<string>();
   const running = status === 'running' || status === 'waiting-input';
+  const completedMessage = !running && messages.at(-1)?.role === 'assistant'
+    ? messages.at(-1)
+    : undefined;
+  const visibleMessages = completedMessage ? messages.slice(0, -1) : messages;
+  const activeAssistantMessage: CodexWorkspaceMessage | undefined = streamingText
+    ? { id: 'active-room-assistant', role: 'assistant', text: streamingText, pending: true }
+    : completedMessage;
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     rid,
     messages,
@@ -323,36 +462,14 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
           </div>
         ) : (
           <div className="codex-native-transcript-inner" aria-live="polite">
-            {messages.map((entry) => (
-              <article key={entry.id} data-speaker={entry.role} className="codex-native-message group relative">
-                <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
-                <div className="butler-conversation-markdown">
-                  {entry.text
-                    ? entry.role === 'assistant'
-                      ? (
-                          <ButlerSources sources={entry.sources} text={entry.text}>
-                            {(renderLink) => renderMarkdownDoc(entry.text, undefined, renderLink)}
-                          </ButlerSources>
-                        )
-                      : visibleUserText(entry.text)
-                    : null}
-                  <CodexImageAttachments attachments={entry.attachments} />
-                  <CodexGeneratedImages images={entry.generatedImages} />
-                </div>
-                {entry.text ? (
-                  <ConversationCopyButton
-                    text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
-                    speaker={entry.role === 'assistant' ? 'Codex' : '你的'}
-                    align={entry.role === 'user' ? 'right' : 'left'}
-                  />
-                ) : null}
-              </article>
-            ))}
-            {streamingText ? (
-              <article data-speaker="assistant" className="codex-native-message is-streaming">
-                <span>Codex</span>
-                <div className="butler-conversation-markdown">{streamingText}</div>
-              </article>
+            {visibleMessages.map((entry) => <CodexRoomMessage key={entry.id} entry={entry} />)}
+            {activeAssistantMessage ? (
+              <CodexRoomMessage
+                key="active-room-assistant"
+                entry={activeAssistantMessage}
+                progressive
+                streaming={Boolean(streamingText)}
+              />
             ) : running ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
                 <span>Codex</span>
@@ -420,7 +537,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
   const key = privateRoomDshKey(scope, rid);
-  const session = usePrivateRoomDsh((state) => state.sessions[key]);
+  const session = usePrivateRoomDshProjection(key);
   const openRoom = usePrivateRoomDsh((state) => state.openRoom);
   const newRoomSession = usePrivateRoomDsh((state) => state.newRoomSession);
   const prompt = usePrivateRoomDsh((state) => state.prompt);
@@ -431,6 +548,11 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
   const [opening, setOpening] = useState(true);
   const workspaceRoot = butlerWorkspaceRoot || defaultWorkspaceRoot;
   const running = session?.status === 'running' || session?.status === 'waiting-input';
+  const transcriptMessages = session?.transcript.messages ?? [];
+  const activeAssistantMessage = transcriptMessages.at(-1)?.role === 'assistant'
+    ? transcriptMessages.at(-1)
+    : undefined;
+  const visibleMessages = activeAssistantMessage ? transcriptMessages.slice(0, -1) : transcriptMessages;
   const { scrollRef, onScroll, stickToBottom } = useStickToBottom([
     rid,
     session?.transcript.messages,
@@ -573,7 +695,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
               重试
             </button>
           </div>
-        ) : !session || session.transcript.messages.length === 0 ? (
+        ) : !session || transcriptMessages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-light text-primary">
               <MessageCircle size={21} aria-hidden="true" />
@@ -585,26 +707,14 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
           </div>
         ) : (
           <div className="codex-native-transcript-inner" aria-live="polite">
-            {session.transcript.messages.map((entry) => (
-              <article key={entry.id} data-speaker={entry.role} className={`codex-native-message group relative ${entry.streaming ? 'is-streaming' : ''}`}>
-                <span>{entry.role === 'assistant' ? 'DeepSeek' : entry.role === 'user' ? '你' : '系统'}</span>
-                <div className="butler-conversation-markdown">
-                  {entry.role === 'assistant' && !entry.streaming
-                    ? renderMarkdownDoc(entry.text)
-                    : entry.role === 'user'
-                      ? visibleUserText(entry.text)
-                      : entry.text}
-                </div>
-                {entry.text && !entry.streaming && entry.role !== 'system' ? (
-                  <ConversationCopyButton
-                    text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
-                    speaker={entry.role === 'assistant' ? 'DeepSeek' : '你的'}
-                    align={entry.role === 'user' ? 'right' : 'left'}
-                  />
-                ) : null}
-              </article>
-            ))}
-            {running && !session.transcript.messages.some((entry) => entry.streaming) ? (
+            {visibleMessages.map((entry) => <DshRoomMessage key={entry.id} entry={entry} />)}
+            {activeAssistantMessage ? (
+              <DshRoomMessage
+                key="active-room-assistant"
+                entry={activeAssistantMessage}
+                progressive
+              />
+            ) : running ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
                 <span>DeepSeek</span>
                 <div className="flex items-center gap-2 text-ink-3">
@@ -750,9 +860,9 @@ export default function ButlerPanel() {
         {!scope || provider === 'none' ? (
           <DisabledRoomConversation />
         ) : provider === 'deepseek' ? (
-          <DeepSeekRoomConversation rid={rid} roomName={name} scope={scope} />
+          <DeepSeekRoomConversation key={`deepseek:${scope}:${rid}`} rid={rid} roomName={name} scope={scope} />
         ) : (
-          <CodexRoomConversation rid={rid} roomName={name} scope={scope} />
+          <CodexRoomConversation key={`codex:${scope}:${rid}`} rid={rid} roomName={name} scope={scope} />
         )}
       </PanelShell>
     </div>

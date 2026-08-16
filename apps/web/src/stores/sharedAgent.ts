@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
-import { tsMs, type RcMessage, type RcRoomRole, type RoomType } from '@rcx/rc-client';
+import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauriRuntime, rest } from '../lib/client';
 import { getAiRuntimeProvider } from '../lib/runtimeMode';
 import { useAuth } from './auth';
@@ -94,8 +94,6 @@ const LEASE_MS = 90_000;
 const ORPHAN_SESSION_MS = 30 * 60_000;
 const TRACE_LIMIT = 200;
 const LEASE_CLOCK_SKEW_MS = 15_000;
-const AUTHORIZED_GLOBAL_ROLES = new Set(['admin', 'bot']);
-const AUTHORIZED_ROOM_ROLES = new Set(['owner', 'moderator', 'leader']);
 
 export interface AgentTrace {
   id: string;
@@ -188,11 +186,6 @@ const dshApprovalRequests = new Map<string, { tmid: string; request: DshPendingA
 const dshQuestionRequests = new Map<string, { tmid: string; request: DshPendingQuestion }>();
 const processedMessages = new Set<string>();
 const startingSessions = new Map<string, Promise<AgentSession>>();
-const AUTH_CACHE_TTL_MS = LEASE_MS;
-const verifiedUserRoleCache = new Map<string, { expiresAt: number; roles: ReadonlySet<string> }>();
-const verifiedRoomRoleCache = new Map<string, { expiresAt: number; roles: ReadonlyMap<string, ReadonlySet<string>> }>();
-const userRoleInflight = new Map<string, Promise<ReadonlySet<string>>>();
-const roomRoleInflight = new Map<string, Promise<ReadonlyMap<string, ReadonlySet<string>>>>();
 const ingestSequences = new Map<string, Promise<void>>();
 const controllers = new Map<string, SharedAgentController>();
 const controllerStarts = new Map<string, Promise<{ controller: SharedAgentController; catalog: CodexCatalog }>>();
@@ -525,21 +518,9 @@ function taskLabelSnapshot(text: string | undefined): string | undefined {
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
-function roomTypeOfRid(rid: string): RoomType {
-  return useChat.getState().subscriptions[rid]?.t ?? useChat.getState().rooms[rid]?.t ?? 'p';
-}
-
-function scopeCacheKey(kind: 'user' | 'room', id: string): string {
-  return `${getServerBase() || 'same-origin'}\u0000${kind}\u0000${id}`;
-}
-
 function sharedAgentScope(): string {
   const userId = useAuth.getState().user?._id ?? '';
   return `${getServerBase() || 'same-origin'}:${userId}`;
-}
-
-function hasAuthorizedGlobalRole(roles: readonly string[] | undefined): boolean {
-  return !!roles?.some((role) => AUTHORIZED_GLOBAL_ROLES.has(role));
 }
 
 function messageAuthorityTimestamp(
@@ -559,69 +540,15 @@ function cardLeaseMatchesAuthorityWindow(
   return card.leaseExpiresAt >= minLease && card.leaseExpiresAt <= maxLease;
 }
 
-async function verifiedUserGlobalRoles(userId: string): Promise<ReadonlySet<string>> {
-  const current = useAuth.getState().user;
-  if (current?._id === userId) return new Set(current.roles ?? []);
-  const cacheKey = scopeCacheKey('user', userId);
-  const cached = verifiedUserRoleCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.roles;
-  const pending = userRoleInflight.get(cacheKey);
-  if (pending) return pending;
-  const loading = rest.getUserInfoById(userId)
-    .then((user) => {
-      const roles = new Set(user._id === userId ? user.roles ?? [] : []);
-      verifiedUserRoleCache.set(cacheKey, { expiresAt: Date.now() + AUTH_CACHE_TTL_MS, roles });
-      return roles;
-    })
-    .catch(() => new Set<string>())
-    .finally(() => {
-      userRoleInflight.delete(cacheKey);
-    });
-  userRoleInflight.set(cacheKey, loading);
-  return loading;
-}
-
-function roomRoleIndex(roles: readonly RcRoomRole[]): ReadonlyMap<string, ReadonlySet<string>> {
-  return new Map(roles.map((entry) => [entry.u._id, new Set(entry.roles)]));
-}
-
-async function verifiedRoomRoles(rid: string): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
-  const type = roomTypeOfRid(rid);
-  if (type === 'd') return new Map();
-  const cacheKey = scopeCacheKey('room', rid);
-  const cached = verifiedRoomRoleCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.roles;
-  const pending = roomRoleInflight.get(cacheKey);
-  if (pending) return pending;
-  const loading = (async () => {
-    const loaded = await useChat.getState().loadRoomRoles(rid);
-    const roles = roomRoleIndex(loaded);
-    verifiedRoomRoleCache.set(cacheKey, { expiresAt: Date.now() + AUTH_CACHE_TTL_MS, roles });
-    return roles;
-  })().catch(() => new Map<string, ReadonlySet<string>>()).finally(() => {
-    roomRoleInflight.delete(cacheKey);
-  });
-  roomRoleInflight.set(cacheKey, loading);
-  return loading;
-}
-
-async function canHostSharedAgent(userId: string, rid: string): Promise<boolean> {
-  if (hasAuthorizedGlobalRole(Array.from(await verifiedUserGlobalRoles(userId)))) return true;
-  const roles = (await verifiedRoomRoles(rid)).get(userId);
-  return !!roles && Array.from(roles).some((role) => AUTHORIZED_ROOM_ROLES.has(role));
-}
-
-async function assertSharedAgentHostAuthority(rid: string, userId: string): Promise<void> {
-  if (await canHostSharedAgent(userId, rid)) return;
-  throw new Error('只有全局管理员、机器人账号、群主、群管理员或负责人才能开启 AI 托管');
-}
-
-async function ingestLeaseCard(message: RcMessage, parsedCard: AgentSessionCard): Promise<void> {
-  const scope = sharedAgentScope();
+async function ingestLeaseCard(
+  message: RcMessage,
+  parsedCard: AgentSessionCard,
+  scope: string,
+): Promise<void> {
+  if (sharedAgentScope() !== scope) return;
   const card = { ...parsedCard, claimId: message._id };
   if (message.u._id !== card.hostUserId || !agentSessionCardMatchesMessage(card, message)) return;
   if (!cardLeaseMatchesAuthorityWindow(card, message)) return;
-  if (!(await canHostSharedAgent(message.u._id, message.rid))) return;
   if (sharedAgentScope() !== scope) return;
   if (useSharedAgent.getState().sessions[card.tmid]?.leaseMessageId === message._id || card.hostDeviceId === agentDeviceId()) return;
   const chat = useChat.getState();
@@ -1375,9 +1302,10 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   ingestCard: (message) => {
     const card = parseAgentSessionCard(message.msg, message);
     if (!card) return Promise.resolve();
-    const sequenceKey = `${sharedAgentScope()}\u0000${card.tmid}`;
+    const scope = sharedAgentScope();
+    const sequenceKey = `${scope}\u0000${card.tmid}`;
     const queued = (ingestSequences.get(sequenceKey) ?? Promise.resolve())
-      .then(() => ingestLeaseCard(message, card));
+      .then(() => ingestLeaseCard(message, card, scope));
     const settled = queued.catch(() => undefined);
     ingestSequences.set(sequenceKey, settled);
     void settled.finally(() => {
@@ -1427,10 +1355,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   restore: async () => {
     const user = useAuth.getState().user;
     if (!user) {
-      verifiedUserRoleCache.clear();
-      verifiedRoomRoleCache.clear();
-      userRoleInflight.clear();
-      roomRoleInflight.clear();
       ingestSequences.clear();
       restoreGeneration += 1;
       restoredScope = '';
@@ -1442,10 +1366,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     if (restoredScope === scope) return;
     const generation = ++restoreGeneration;
     restoredScope = scope;
-    verifiedUserRoleCache.clear();
-    verifiedRoomRoleCache.clear();
-    userRoleInflight.clear();
-    roomRoleInflight.clear();
     ingestSequences.clear();
     set(emptySharedAgentScope());
     let stored: AgentSession[];
@@ -1490,7 +1410,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
 
   startSession: async (rid, tmid, options = {}) => {
     if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
-    await assertSharedAgentHostAuthority(rid, actor().userId);
     const authoritativeRemote = remoteSessionControls(tmid);
     if (authoritativeRemote) {
       throw new Error(`该话题由 @${authoritativeRemote.hostUsername} 的另一台设备托管，请等待租约超时`);

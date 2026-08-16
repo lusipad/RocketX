@@ -22,6 +22,7 @@ import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import {
   HOSTED_SESSION_STATUS_LABEL,
+  type HostedSessionItem,
   useHostedSessionItems,
 } from '../lib/hostedSessions';
 import {
@@ -40,6 +41,15 @@ import ButlerProjectConfigDialog, { type ButlerProjectConfigPatch } from './Butl
 import { ConfirmDialog } from './Dialog';
 
 const THREAD_PREVIEW_LIMIT = 5;
+
+interface HostedSessionGroup {
+  key: string;
+  label: string;
+  projectPath?: string;
+  sessions: HostedSessionItem[];
+  lastUpdated: number;
+  activeCount: number;
+}
 
 function threadTitle(name: string | null, preview: string): string {
   return name?.trim() || preview.trim() || '新对话';
@@ -110,10 +120,15 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const [workspaceToConfigure, setWorkspaceToConfigure] = useState<string | null>(null);
   const [collapsedWorkspace, setCollapsedWorkspace] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [hostedSectionExpandedOverride, setHostedSectionExpandedOverride] = useState<boolean | null>(null);
+  const [expandedHostedGroups, setExpandedHostedGroups] = useState<Record<string, boolean>>({});
   const desktopRuntime = isTauriRuntime();
   const codexRuntime = aiRuntimeProvider === 'codex';
   const hostedSessions = useHostedSessionItems(hostedSessionsByKey, hostedRemoteCardsByKey);
   const hostedSessionCount = hostedSessions.length;
+  const hostedActiveSessionCount = hostedSessions.filter((session) => session.status !== 'ended').length;
+  const hostedSectionExpandedDefault = hostedSessionCount === 0 || selectedHostedSessionKey !== null;
+  const hostedSectionExpanded = hostedSectionExpandedOverride ?? hostedSectionExpandedDefault;
 
   useEffect(() => {
     if (!codexRuntime || !userId) return;
@@ -128,6 +143,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   useEffect(() => {
     setHistoryExpanded(false);
   }, [workspaceRoot]);
+
+  useEffect(() => {
+    if (selectedHostedSessionKey) setHostedSectionExpandedOverride(null);
+  }, [selectedHostedSessionKey]);
 
   useEffect(() => {
     if (!menuThreadId && !renamingThreadId) return;
@@ -145,9 +164,16 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     };
   }, [menuThreadId, renamingThreadId]);
 
+  const hostedCodexThreadIds = useMemo(() => new Set(hostedSessions.flatMap((session) => (
+    session.local?.codexThreadId ? [session.local.codexThreadId] : []
+  ))), [hostedSessions]);
+  const personalThreads = useMemo(
+    () => threads.filter((thread) => !hostedCodexThreadIds.has(thread.id)),
+    [hostedCodexThreadIds, threads],
+  );
   const currentWorkspaceThreads = useMemo(
-    () => threads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(workspaceRoot)),
-    [threads, workspaceRoot],
+    () => personalThreads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(workspaceRoot)),
+    [personalThreads, workspaceRoot],
   );
   const systemWorkspaceRoots = useMemo(() => workspaceRoots.filter((path) => isSystemCodexWorkspace(
     path,
@@ -165,8 +191,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   }, [butlerWorkspaceRoot, defaultWorkspaceRoot, environments, workspaceRoot]);
   const threadCounts = useMemo(() => new Map([...systemWorkspaceRoots, ...hostingProjectPaths].map((path) => [
     path,
-    threads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(path)).length,
-  ])), [hostingProjectPaths, systemWorkspaceRoots, threads]);
+    personalThreads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(path)).length,
+  ])), [hostingProjectPaths, personalThreads, systemWorkspaceRoots]);
   const visibleThreads = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('zh-CN');
     if (!normalized) return currentWorkspaceThreads;
@@ -223,7 +249,37 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     systemWorkspaceRoots,
   ]);
   const firstHostingProjectIndex = projectEntries.findIndex((entry) => entry.kind === 'hosting');
+  const hostedSessionGroups = useMemo(() => {
+    const groups = new Map<string, HostedSessionGroup>();
 
+    for (const session of hostedSessions) {
+      const projectPath = session.projectPath?.trim();
+      const key = projectPath
+        ? `path:${workspaceKey(projectPath)}`
+        : `name:${session.project.trim().toLocaleLowerCase('zh-CN') || '未指定项目'}`;
+      const label = session.project.trim() || session.projectPath?.split(/[\\/]/).filter(Boolean).at(-1) || '未指定项目';
+      const group = groups.get(key);
+      if (group) {
+        group.sessions.push(session);
+        group.lastUpdated = Math.max(group.lastUpdated, session.updatedAt);
+        if (session.status !== 'ended') group.activeCount += 1;
+        continue;
+      }
+      groups.set(key, {
+        key,
+        label,
+        projectPath,
+        sessions: [session],
+        lastUpdated: session.updatedAt,
+        activeCount: session.status === 'ended' ? 0 : 1,
+      });
+    }
+
+    return [...groups.values()].sort((left, right) => (
+      Number(right.activeCount > 0) - Number(left.activeCount > 0)
+      || right.lastUpdated - left.lastUpdated
+    ));
+  }, [hostedSessions]);
   const renderThreadHistory = () => (
     <nav
       aria-label="Codex 对话历史"
@@ -424,48 +480,95 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   };
 
   const hostedSessionsNavigation = (
-    <div className="flex min-h-0 flex-1 flex-col border-t border-line-soft">
-      <div className="flex items-center gap-2 px-4 pt-3 pb-1 text-xs font-semibold tracking-wide text-ink-3">
-        <Bot size={13} aria-hidden="true" />
+    <section
+      className={`butler-hosted-sessions${codexRuntime ? '' : ' is-standalone'}`}
+      aria-label="共享 AI 托管"
+    >
+      <button
+        type="button"
+        className="butler-hosted-section-toggle"
+        aria-expanded={hostedSectionExpanded}
+        aria-label={`AI 托管，${hostedActiveSessionCount > 0 ? `${hostedActiveSessionCount} 条活动，` : ''}${hostedSessionCount} 条会话`}
+        onClick={() => setHostedSectionExpandedOverride((current) => !(current ?? hostedSectionExpandedDefault))}
+      >
+        <ChevronRight size={13} className={hostedSectionExpanded ? 'is-expanded' : undefined} aria-hidden="true" />
+        <Bot size={14} aria-hidden="true" />
         <span>AI 托管</span>
-        {hostedSessionCount > 0 ? <span className="ml-auto text-xs text-ink-3">{hostedSessionCount}</span> : null}
-      </div>
-      <nav aria-label="AI 托管会话" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {hostedSessions.length === 0 ? (
-          <p className="px-2 py-4 text-xs leading-5 text-ink-3">还没有房间托管会话。</p>
-        ) : hostedSessions.map((session) => {
-          const room = subscriptions[session.rid] ?? rooms[session.rid];
-          const name = session.roomNameSnapshot || room?.fname || room?.name || session.rid || '未知房间';
-          const selected = selectedHostedSessionKey === session.key
-            || (!selectedHostedSessionKey && session.key === hostedSessions[0]?.key);
-          return (
-            <button
-              key={session.key}
-              type="button"
-              data-session-key={session.key}
-              aria-current={selected ? 'page' : undefined}
-              aria-label={`${name}，${session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}，${HOSTED_SESSION_STATUS_LABEL[session.status]}`}
-              onClick={() => {
-                setButlerView('conversation');
-                setSelectedHostedSessionKey(session.key);
-                onNavigate?.();
-              }}
-              className="mb-1 flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2 text-left text-ink-2 hover:bg-fill-hover aria-[current=page]:bg-fill-active aria-[current=page]:text-ink"
-            >
-              <Bot size={14} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium">{name}</span>
-                <span className="mt-0.5 block truncate text-xs text-ink-3">{session.project} · {session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}</span>
-              </span>
-              <span className="shrink-0 text-xs text-ink-3">{HOSTED_SESSION_STATUS_LABEL[session.status]}</span>
-            </button>
-          );
-        })}
-      </nav>
-      <p className="border-t border-line-soft px-4 py-3 text-xs leading-5 text-ink-3">
-        房间里的 AI 托管控制面和这里引用同一条共享会话；私人房间 AI 使用独立的个人会话。
-      </p>
-    </div>
+        <small>{hostedActiveSessionCount > 0 ? `${hostedActiveSessionCount} 活动 · ${hostedSessionCount}` : hostedSessionCount}</small>
+      </button>
+      {hostedSectionExpanded ? (
+        <nav aria-label="AI 托管会话" className="butler-hosted-session-list">
+          {hostedSessionGroups.length === 0 ? (
+            <p className="butler-hosted-session-empty">还没有房间托管会话。</p>
+          ) : hostedSessionGroups.map((group) => {
+            const defaultExpanded = group.sessions.some((session) => session.key === selectedHostedSessionKey);
+            const expanded = expandedHostedGroups[group.key] ?? defaultExpanded;
+            const groupSummary = group.activeCount > 0
+              ? `${group.activeCount} 活动 · ${group.sessions.length} 条`
+              : `${group.sessions.length} 条 · 已结束`;
+            return (
+              <section
+                key={group.key}
+                className="butler-hosted-session-group"
+                aria-label={`托管项目：${group.label}`}
+              >
+                <button
+                  type="button"
+                  className="butler-hosted-session-group-toggle"
+                  aria-expanded={expanded}
+                  aria-label={`${group.label}，${groupSummary}托管会话`}
+                  title={group.projectPath}
+                  onClick={() => {
+                    setExpandedHostedGroups((current) => ({
+                      ...current,
+                      [group.key]: !(current[group.key] ?? defaultExpanded),
+                    }));
+                  }}
+                >
+                  <ChevronRight size={13} className={expanded ? 'is-expanded' : undefined} aria-hidden="true" />
+                  <FolderOpen size={14} aria-hidden="true" />
+                  <span>{group.label}</span>
+                  <small>{groupSummary}</small>
+                </button>
+                {expanded ? (
+                  <ul className="butler-hosted-session-items">
+                    {group.sessions.map((session) => {
+                      const room = subscriptions[session.rid] ?? rooms[session.rid];
+                      const name = session.roomNameSnapshot || room?.fname || room?.name || session.rid || '未知房间';
+                      const selected = selectedHostedSessionKey === session.key
+                        || (!selectedHostedSessionKey && session.key === hostedSessions[0]?.key);
+                      return (
+                        <li key={session.key}>
+                          <button
+                            type="button"
+                            data-session-key={session.key}
+                            aria-current={selected ? 'page' : undefined}
+                            aria-label={`${name}，${session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}，${HOSTED_SESSION_STATUS_LABEL[session.status]}，${session.task}`}
+                            onClick={() => {
+                              setButlerView('conversation');
+                              setSelectedHostedSessionKey(session.key);
+                              onNavigate?.();
+                            }}
+                            className="butler-hosted-session-row"
+                          >
+                            <span className={`butler-hosted-session-dot is-${session.status}`} aria-hidden="true" />
+                            <span className="butler-hosted-session-row-main">
+                              <span className="butler-hosted-session-room">{name}</span>
+                              <span className="butler-hosted-session-task" title={session.task}>{session.task}</span>
+                            </span>
+                            <span className="butler-hosted-session-status">{HOSTED_SESSION_STATUS_LABEL[session.status]}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
+              </section>
+            );
+          })}
+        </nav>
+      ) : null}
+    </section>
   );
 
   if (!codexRuntime) {
@@ -581,7 +684,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       {hostedSessionsNavigation}
 
       <div className="butler-codex-thread-heading">
-        <span>项目</span>
+        <span>系统工作区</span>
         <button
           type="button"
           aria-label="添加托管项目"
@@ -600,7 +703,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           return (
             <Fragment key={entry.path}>
               {index === firstHostingProjectIndex ? (
-                <div className="butler-codex-project-kind" aria-label="托管项目">托管项目</div>
+                <div className="butler-codex-project-kind" aria-label="工作项目">个人项目</div>
               ) : null}
               <section aria-label={`项目：${entry.label}`} data-workspace-kind={entry.kind}>
                 <div className="butler-codex-workspace-row" data-actions={entry.configurable ? '2' : undefined}>
@@ -653,7 +756,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         })}
         {hostingProjectPaths.length === 0 ? (
           <>
-            <div className="butler-codex-project-kind" aria-label="托管项目">托管项目</div>
+            <div className="butler-codex-project-kind" aria-label="工作项目">个人项目</div>
             <button
               type="button"
               className="butler-codex-workspace-picker is-empty"
