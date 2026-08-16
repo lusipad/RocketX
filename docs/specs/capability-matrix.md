@@ -1,6 +1,6 @@
 # RocketX 能力矩阵
 
-> 基线：工作树 `2026-08-16`，应用版本 `0.43.0`
+> 基线：工作树 `2026-08-16`，应用版本 `0.43.1`
 > 判断口径：只记录当前可观察行为；未来目标见各能力域的“已知差距与目标”。
 
 ## 1. 场景定义
@@ -69,7 +69,7 @@ RocketX 当前桌面安装包采用 slim/full 分层。默认 slim 不捆绑 Cod
 | Windows full 私有 `@deepseek-ai/dsh@0.1.0-rc.6` 运行时 | 可启动 DSH bridge，并打开官方 DSH Web 的本地 loopback 页面；AI 托管/共享 Agent 仍通过 controller/host 原生 RPC 交互 |
 | DSH 不可用 | DeepSeek 后端不可用并显示诊断；不影响 Codex 与确定性界面 |
 | DeepSeek API Key 未配置 | 可以查看 DSH 状态和配置，但发送前 fail-closed 并提示配置 |
-| 随包资源缺失/不完整 | 拒绝启动，不在运行时下载或猜测兼容版本 |
+| 随包 DSH 资源缺失/不完整 | 拒绝启动该后端，不在运行时下载或猜测兼容版本；继续使用通过探测的 Codex，均不可用时以无 AI 启动 |
 | DSH bridge 退出 | 清理旧审批/问题/队列，把运行 Session 标为中断；重连后从原生历史恢复 |
 
 正式安装包采用 slim/full 分层：slim 只做系统探测，系统 DSH 必须先通过 RocketX 的 `0.1.0-rc.6` 验证；Windows full 另带私有 DSH 生产运行树和私有 Node。开发环境可通过 `sourcePath` 或 `ROCKETX_DSH_SOURCE` 显式覆盖源码构建；正式运行默认不依赖兄弟源码仓库。

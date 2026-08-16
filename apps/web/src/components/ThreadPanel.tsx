@@ -36,7 +36,7 @@ export default function ThreadPanel() {
   const prefsLoaded = usePrefs((s) => s.loaded);
   const canMention = canMentionInRoom(roomType);
   const sharedAiStatus = useSharedAgent((s) => {
-    if (!rid || !rootId || !runtimeFeatures().ai) return null;
+    if (!rid || !rootId || !runtimeFeatures().sharedAgent) return null;
     return resolveSharedAiMentionTarget(rid, rootId, s.sessions, s.remoteCards)?.status ?? null;
   });
 

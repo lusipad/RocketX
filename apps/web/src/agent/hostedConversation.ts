@@ -56,7 +56,7 @@ export function projectHostedConversation(
         belongsToSession(message, session) &&
         !message.pending &&
         !message.failed &&
-        !parseAgentSessionCard(message.msg),
+        !parseAgentSessionCard(message.msg, message),
     )
     .sort((left, right) => tsMs(left.ts) - tsMs(right.ts))
     .flatMap<HostedConversationLine>((message) => {

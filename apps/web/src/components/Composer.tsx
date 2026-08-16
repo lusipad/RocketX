@@ -72,7 +72,7 @@ export default function Composer() {
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const canMention = canMentionInRoom(roomType);
   const sharedAiStatus = useSharedAgent((s) => {
-    if (!activeRid || !runtimeFeatures().ai) return null;
+    if (!activeRid || !runtimeFeatures().sharedAgent) return null;
     return resolveSharedAiMentionTarget(activeRid, undefined, s.sessions, s.remoteCards)?.status ?? null;
   });
   const send = useChat((s) => s.send);

@@ -690,7 +690,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const visuallyMine = mine && !hostedAgentAnswer;
   const visuallyGrouped = grouped && !hostedAgentAnswer;
   const replyThreadId = message.tmid;
-  const agentSessionCard = parseAgentSessionCard(message.msg ?? '');
+  const agentSessionCard = parseAgentSessionCard(message.msg ?? '', message);
   const bareMedia =
     !visibleText &&
     !message.pinned &&

@@ -1,11 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
-import { bootAuthenticated } from './support/rocket-chat-mock';
+import { activateAiRuntimeForTest, bootAuthenticated } from './support/rocket-chat-mock';
 
 async function openNativeTask(page: Page): Promise<string[]> {
   await page.addInitScript(() => {
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
   });
   const { pageErrors } = await bootAuthenticated(page);
+  await activateAiRuntimeForTest(page, 'codex');
   await page.evaluate(async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
