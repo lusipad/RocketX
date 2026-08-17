@@ -33,6 +33,8 @@ test('Butler DeepSeek 视图改为官方 DSH Web iframe host，并移除自绘�
   assert.match(conversation, /selectedHostedSessionKey && !selectedPersonalDshSessionId && !focusSessionId/);
   assert.match(conversation, /requestKey: `personal:\$\{selectedPersonalDshSessionId\}:\$\{selectedPersonalDshFocusNonce\}`/);
   assert.match(conversation, /const focusRequestKey = focusTarget\?\.requestKey \?\? null/);
+  assert.match(conversation, /if \(!desktopRuntime \|\| !frameLoaded \|\| status !== 'ready' \|\| !url \|\| bootComplete\) return;/);
+  assert.match(conversation, /\[\s*bootComplete,\s*bootNonce,\s*desktopRuntime,\s*focusRequestKey,/);
   assert.match(conversation, /已打开你的私人房间会话/);
   assert.match(conversation, /不会新建另一条会话/);
   assert.match(conversation, /type:\s*'rocketx:dsh-ack'/);

@@ -110,7 +110,7 @@ async function checkCustomSource(): Promise<void> {
 
 export default function UpdaterBridge() {
   useEffect(() => {
-    if (!isTauri || checked) return;
+    if (import.meta.env.DEV || !isTauri || checked) return;
     checked = true;
 
     void takeUpdateResult()

@@ -98,7 +98,9 @@ test('私人房间 AI 与共享托管保留独立入口，并支持显式自动�
   ]);
 
   assert.match(chatArea, /id="room-butler-launcher"/);
-  assert.match(chatArea, /aria-label=\{butlerPanelOpen \? '收起房间 AI' : '打开房间 AI'\}/);
+  assert.match(chatArea, /features\.butler && !butlerPanelOpen/);
+  assert.match(chatArea, /aria-label="打开房间 AI"/);
+  assert.doesNotMatch(chatArea, /收起房间 AI/);
   assert.match(chatArea, /aria-label="配置 AI 托管"/);
   assert.match(chatArea, /title="选择项目或打开托管设置"/);
   assert.match(chatArea, /setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)/);

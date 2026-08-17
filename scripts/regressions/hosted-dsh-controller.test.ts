@@ -275,7 +275,7 @@ function options(runtime: DshControllerRuntime, sink: {
   };
 }
 
-test('hosted DSH controller connects, validates credentials, manages sessions, and waits for prompt completion', async () => {
+test('hosted DSH controller connects, manages sessions, and waits for prompt completion', async () => {
   const runtime = createRuntime();
   const sink = {
     approvals: [] as DshPendingApproval[],
@@ -632,7 +632,7 @@ test('hosted DSH controller rejects missing or empty permission command results 
 
   await assert.rejects(
     () => controller.createSession({ permissionPreset: 'workspace-write' }),
-    /DeepSeek 权限切换失败/,
+    /DSH 权限切换失败/,
   );
 });
 
@@ -662,34 +662,37 @@ test('hosted DSH controller fails closed on host agent errors', async () => {
     payload: {
       type: 'host/agent-error',
       sessionId: 'session-1',
-      message: 'DeepSeek 执行失败',
+      message: 'DSH 执行失败',
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(sink.interrupted[0]?.message, 'DeepSeek 执行失败');
-  await assert.rejects(() => controller.createSession(), /DeepSeek 执行失败/);
+  assert.equal(sink.interrupted[0]?.message, 'DSH 执行失败');
+  await assert.rejects(() => controller.createSession(), /DSH 执行失败/);
   assert.deepEqual(runtime.stops, ['process-hosted-error']);
 });
 
-test('hosted DSH controller rejects connect when DeepSeek credential is missing', async () => {
+test('hosted DSH controller does not impose a DeepSeek credential gate on other providers', async () => {
   const runtime = createRuntime();
-  runtime.setCallResponse('credentials.describe', [(_rpcId) => okServerResponse('ignored', {
-    credentials: {
-      DEEPSEEK_API_KEY: { configured: false, writable: true },
-    },
-  })]);
+  runtime.setCallResponse('credentials.describe', [() => {
+    throw new Error('DSH connect must not query a provider-specific credential');
+  }]);
   const controller = new HostedDshController(
     'D:/Repos/rocketchatx',
-    'hosted-room-9',
+    'hosted-room-no-deepseek-key',
     { runtime },
   );
 
   const connecting = controller.connect();
   runtime.startBridge('process-hosted-missing-key');
+  await connecting;
 
-  await assert.rejects(connecting, /请先在 DSH 中配置 DeepSeek API Key/);
-  assert.deepEqual(runtime.stops, ['process-hosted-missing-key']);
+  assert.deepEqual(
+    runtime.calls.filter((call) => call.kind === 'call').map((call) => call.message.method),
+    ['host.describe'],
+  );
+  assert.deepEqual(runtime.stops, []);
+  await controller.stop();
 });
 
 test('hosted DSH controller rejects errored turns even if DSH streamed partial text and filters invalid question options', async () => {

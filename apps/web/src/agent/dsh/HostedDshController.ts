@@ -16,12 +16,7 @@ import type {
   DshQuestionAnswer,
 } from './types';
 
-const DEEPSEEK_API_KEY_REF = 'DEEPSEEK_API_KEY';
 const HISTORY_PAGE_SIZE = 200;
-
-interface DshCredentialDescribeResponse {
-  credentials?: Record<string, { configured?: unknown; writable?: unknown }>;
-}
 
 interface DshModelGroupResponse {
   groups?: Array<{
@@ -219,7 +214,7 @@ function requireCommandSuccess(response: unknown): void {
   const result = record(payload?.result);
   if (result?.kind === 'success') return;
   const message = asString(result?.text);
-  throw new Error(message ?? 'DeepSeek 权限切换失败');
+  throw new Error(message ?? 'DSH 权限切换失败');
 }
 
 function asSessionEvent(value: unknown): DshSessionEvent | null {
@@ -243,7 +238,7 @@ function turnErrorMessage(event: DshSessionEvent): string | undefined {
   const reason = record(record(event.data)?.reason);
   if (reason?.kind !== 'error') return undefined;
   const error = record(reason.error);
-  return asString(error?.message) ?? 'DeepSeek 执行失败';
+  return asString(error?.message) ?? 'DSH 执行失败';
 }
 
 function assistantTextSince(sessionId: string, events: Iterable<DshSessionEvent>, baselineSeq: number): string {
@@ -338,13 +333,6 @@ export class HostedDshController {
       try {
         await controller.start();
         await controller.call('host.describe');
-        const described = await controller.call<DshCredentialDescribeResponse>('credentials.describe', {
-          refs: [DEEPSEEK_API_KEY_REF],
-        });
-        const credential = record(described.credentials)?.[DEEPSEEK_API_KEY_REF];
-        if (record(credential)?.configured !== true) {
-          throw new Error('请先在 DSH 中配置 DeepSeek API Key');
-        }
       } catch (reason) {
         const error = reason instanceof Error ? reason : new Error(String(reason));
         await controller.stop().catch(() => undefined);
@@ -672,7 +660,7 @@ export class HostedDshController {
     }
 
     if (frame.type === 'host/agent-error') {
-      const message = asString(frame.message) ?? 'DeepSeek 执行失败';
+      const message = asString(frame.message) ?? 'DSH 执行失败';
       void this.interrupt(new Error(message), generation);
     }
   }

@@ -2006,7 +2006,7 @@ test('聊天消息渲染块公式、行内公式和可访问 MathML（issue #218
 });
 
 test('普通消息完整渲染标题、列表、引用、代码块和表格（issue #319）', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1800, height: 900 });
+  await page.setViewportSize({ width: 2400, height: 900 });
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
   await page.evaluate(async () => {
@@ -2036,10 +2036,10 @@ test('普通消息完整渲染标题、列表、引用、代码块和表格（is
               '',
               '> 保持反馈清晰可读。',
               '',
-              '| 门禁 | 状态 |',
-              '| --- | --- |',
-              '| Typecheck | 通过 |',
-              '| UI | 通过 |',
+              '| 门禁 | Windows | macOS | Linux | 发布产物 | 状态 |',
+              '| --- | --- | --- | --- | --- | --- |',
+              '| Typecheck | x64 slim + full | universal application bundle | AppImage + deb + rpm | signed update archives | 通过 |',
+              '| UI | Chromium | WebKit | Firefox | screenshots | 通过 |',
               '',
               '```ts',
               'const release = true;',
@@ -2063,14 +2063,39 @@ test('普通消息完整渲染标题、列表、引用、代码块和表格（is
   await expect(markdown.locator('blockquote')).toContainText('保持反馈清晰可读');
   await expect(markdown.locator('table')).toContainText('Typecheck');
   await expect(markdown.locator('pre')).toContainText('const release = true;');
-  const markdownWidth = await markdown.evaluate((element) => element.getBoundingClientRect().width);
-  expect(markdownWidth).toBeGreaterThan(960);
+  const markdownLayout = await markdown.evaluate((element) => ({
+    markdownWidth: element.getBoundingClientRect().width,
+    paragraphWidth: element.querySelector('p')?.getBoundingClientRect().width ?? 0,
+    tableViewportWidth: element.querySelector<HTMLElement>('.markdown-table-wrap')?.clientWidth ?? 0,
+    bubbleBackground: getComputedStyle(element.parentElement!).backgroundColor,
+    messageViewportWidth: element.closest('[data-testid="message-scroll"]')?.getBoundingClientRect().width ?? 0,
+  }));
+  expect(markdownLayout.markdownWidth).toBeGreaterThan(markdownLayout.messageViewportWidth * 0.8);
+  expect(markdownLayout.paragraphWidth).toBeGreaterThan(520);
+  expect(markdownLayout.paragraphWidth).toBeLessThan(800);
+  expect(markdownLayout.tableViewportWidth).toBeGreaterThan(markdownLayout.messageViewportWidth * 0.8);
+  expect(markdownLayout.bubbleBackground).toBe('rgba(0, 0, 0, 0)');
   await message.screenshot({ path: testInfo.outputPath('markdown-message-319.png') });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrowLayout = await markdown.evaluate((element) => {
+    const tableWrap = element.querySelector<HTMLElement>('.markdown-table-wrap')!;
+    return {
+      overflowX: getComputedStyle(tableWrap).overflowX,
+      viewportWidth: tableWrap.clientWidth,
+      scrollWidth: tableWrap.scrollWidth,
+      pageWidth: document.documentElement.scrollWidth,
+      windowWidth: window.innerWidth,
+    };
+  });
+  expect(narrowLayout.overflowX).toBe('auto');
+  expect(narrowLayout.scrollWidth).toBeGreaterThan(narrowLayout.viewportWidth);
+  expect(narrowLayout.pageWidth).toBeLessThanOrEqual(narrowLayout.windowWidth);
   expect(pageErrors).toEqual([]);
 });
 
 test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1800, height: 900 });
+  await page.setViewportSize({ width: 2400, height: 900 });
   await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -2141,14 +2166,15 @@ test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, te
       paragraphWidth: paragraphRect?.width ?? 0,
       tableViewportWidth: tableWrap?.clientWidth ?? 0,
       tableScrollWidth: tableWrap?.scrollWidth ?? 0,
+      messageViewportWidth: element.closest('[data-testid="message-scroll"]')?.getBoundingClientRect().width ?? 0,
     };
   });
-  expect(layout.answerWidth).toBeGreaterThan(980);
+  expect(layout.answerWidth).toBeGreaterThan(layout.messageViewportWidth * 0.8);
   expect(layout.background).toBe('rgba(0, 0, 0, 0)');
   expect(layout.headingFontSize).toBe(17);
   expect(layout.paragraphWidth).toBeGreaterThan(520);
   expect(layout.paragraphWidth).toBeLessThan(880);
-  expect(layout.tableViewportWidth).toBeGreaterThan(980);
+  expect(layout.tableViewportWidth).toBeGreaterThan(layout.messageViewportWidth * 0.8);
   expect(layout.tableScrollWidth).toBeGreaterThanOrEqual(layout.tableViewportWidth);
   expect(pageErrors).toEqual([]);
 });

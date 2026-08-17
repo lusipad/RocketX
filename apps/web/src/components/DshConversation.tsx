@@ -202,7 +202,7 @@ export default function DshConversation() {
   }, [attempt, desktopRuntime, personalConversationRequested]);
 
   useEffect(() => {
-    if (!desktopRuntime || !frameLoaded || status !== 'ready' || !url) return;
+    if (!desktopRuntime || !frameLoaded || status !== 'ready' || !url || bootComplete) return;
     let cancelled = false;
     setBootComplete(false);
     if (selectedHostedSessionKey && !selectedPersonalDshSessionId && !focusSessionId) {
@@ -253,8 +253,10 @@ export default function DshConversation() {
       cancelled = true;
     };
   }, [
+    bootComplete,
     bootNonce,
     desktopRuntime,
+    focusRequestKey,
     focusSessionId,
     focusUnavailableMessage,
     frameLoaded,

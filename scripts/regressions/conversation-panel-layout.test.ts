@@ -37,16 +37,18 @@ test('房间任务面板仍作为覆盖层，不收窄分组与会话列表', as
 });
 
 test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel 管理', async () => {
-  const [chatArea, butlerPanel, agentPanel] = await Promise.all([
+  const [chatArea, butlerPanel, panelShell, agentPanel] = await Promise.all([
     readFile(new URL('../../apps/web/src/components/ChatArea.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/ButlerPanel.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/components/PanelShell.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../../apps/web/src/components/AgentPanel.tsx', import.meta.url), 'utf8'),
   ]);
 
   assert.match(chatArea, /const butlerPanelOpen = rightPanel\?\.kind === 'butler';/);
   assert.match(chatArea, /registeredPanels\.find\(\(candidate\) => candidate\.id === 'butler'\)\?\.render/);
   assert.match(chatArea, /butlerPanelOpen && ButlerPanel/);
-  assert.match(chatArea, /id="room-butler-launcher"[\s\S]*onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
+  assert.match(chatArea, /!butlerPanelOpen[\s\S]*id="room-butler-launcher"[\s\S]*onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
+  assert.doesNotMatch(chatArea, /aria-label="关闭私人房间 AI 浮层"/);
   assert.match(chatArea, /aria-label="配置 AI 托管"/);
   assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
   assert.match(chatArea, /onClick=\{\(\) => setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)\}/);
@@ -62,11 +64,14 @@ test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel �
   assert.match(butlerPanel, /ConversationCopyButton/);
   assert.match(butlerPanel, /navigator\.clipboard\.writeText\(text\)/);
   assert.match(butlerPanel, /aria-label="设置 Codex 模型与权限"/);
-  assert.match(butlerPanel, /aria-label="设置 DeepSeek 模型与 Agent"/);
+  assert.match(butlerPanel, /aria-label="设置 DSH 模型与 Agent"/);
   assert.match(butlerPanel, /const workspaceRoot = defaultWorkspaceRoot \|\| butlerWorkspaceRoot/);
   assert.match(butlerPanel, /在 DSH 中配置/);
   assert.match(butlerPanel, /openPersonalDshConversation\(null\)/);
+  assert.doesNotMatch(butlerPanel, /shadow-\[0_24px_64px/);
   assert.doesNotMatch(butlerPanel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|send\(`?@ai/);
+
+  assert.match(panelShell, /aria-label="关闭侧栏"/);
 
   assert.match(agentPanel, /useSharedAgent/);
   assert.match(agentPanel, /const tmid = sessionKey \?\?/);

@@ -203,3 +203,36 @@ test('显式 clientId 的 failed 或 unknown toast 不提供普通重试动作',
   assert.equal(lastToast?.message, 'Forbidden');
   assert.equal(lastToast?.action, undefined);
 });
+
+test('preserveWhitespace=true 时 optimistic message 与 sendMessageRaw payload 都保留前导缩进', async () => {
+  reset();
+  const payloads: Array<{ _id: string; rid: string; msg: string }> = [];
+  rest.getReadReceipts = (async () => []) as typeof rest.getReadReceipts;
+  rest.sendMessageRaw = (async (payload) => {
+    payloads.push(payload);
+    return sentMessage(payload._id, payload.msg);
+  }) as typeof rest.sendMessageRaw;
+
+  const text = '  - nested item';
+  const result = await useChat.getState().send(text, { rid, clientId, preserveWhitespace: true });
+
+  assert.deepEqual(result, { id: clientId, delivery: 'server' });
+  assert.deepEqual(payloads.map((payload) => payload.msg), [text]);
+  assert.equal(useChat.getState().messages[rid]?.[0]?.msg, text);
+});
+
+test('preserveWhitespace=true 但正文纯空白时仍拒绝发送', async () => {
+  reset();
+  const payloads: Array<{ _id: string; rid: string; msg: string }> = [];
+  rest.getReadReceipts = (async () => []) as typeof rest.getReadReceipts;
+  rest.sendMessageRaw = (async (payload) => {
+    payloads.push(payload);
+    return sentMessage(payload._id, payload.msg);
+  }) as typeof rest.sendMessageRaw;
+
+  const result = await useChat.getState().send('   \n\t', { rid, clientId, preserveWhitespace: true });
+
+  assert.equal(result, undefined);
+  assert.deepEqual(payloads, []);
+  assert.equal(useChat.getState().messages[rid], undefined);
+});

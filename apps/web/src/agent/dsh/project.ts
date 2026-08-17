@@ -73,7 +73,7 @@ function failureMessage(value: unknown): string | null {
   const reason = record(value);
   if (reason?.kind !== 'error') return null;
   const error = record(reason.error);
-  return typeof error?.message === 'string' ? error.message : 'DeepSeek 执行失败';
+  return typeof error?.message === 'string' ? error.message : 'DSH 执行失败';
 }
 
 export function projectDshTranscript(sessionId: string, sourceEvents: Iterable<DshSessionEvent>): DshTranscript {
@@ -134,7 +134,7 @@ export function projectDshTranscript(sessionId: string, sourceEvents: Iterable<D
       if (message) {
         activities.set(`turn:${String(data?.turn ?? event.seq)}`, {
           id: `turn:${String(data?.turn ?? event.seq)}`,
-          title: 'DeepSeek 执行失败',
+          title: 'DSH 执行失败',
           summary: message,
           status: 'failed',
         });

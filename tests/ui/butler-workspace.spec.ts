@@ -706,7 +706,7 @@ test('主管家流式 Markdown 完成时复用同一条消息和已封口块', a
 });
 
 test('主管家宽屏对话为 Markdown 表格保留完整阅读宽度', async ({ page }) => {
-  await page.setViewportSize({ width: 1800, height: 900 });
+  await page.setViewportSize({ width: 2400, height: 900 });
   await openWorkspace(page);
   await page.evaluate(async () => {
     const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
@@ -744,10 +744,10 @@ test('主管家宽屏对话为 Markdown 表格保留完整阅读宽度', async (
     };
   });
 
-  expect(layout.innerWidth).toBeGreaterThan(1000);
+  expect(layout.innerWidth).toBeGreaterThan(layout.transcriptWidth - 80);
   expect(layout.innerWidth).toBeLessThanOrEqual(layout.transcriptWidth);
   expect(layout.tableOverflowX).toBe('auto');
-  expect(layout.tableViewportWidth).toBeGreaterThan(1000);
+  expect(layout.tableViewportWidth).toBeGreaterThan(layout.transcriptWidth - 80);
   expect(layout.tableScrollWidth).toBeGreaterThanOrEqual(layout.tableViewportWidth);
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1140,7 +1140,7 @@ test('Butler 添加托管项目时会同时注册 environment 并选中运行目
   });
 });
 
-test('房间顶部共享托管与浮动私人房间 AI 是两个独立入口', async ({ page }) => {
+test('房间顶部共享托管与私人房间 AI 是两个独立入口', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
   await bootWithAiRuntime(page, 'codex');
   await installCodexRuntime(page);
@@ -1158,6 +1158,8 @@ test('房间顶部共享托管与浮动私人房间 AI 是两个独立入口', a
   await privateEntry.click();
   const privatePanel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
   await expect(privatePanel).toBeVisible();
+  await expect(page.getByRole('button', { name: '关闭私人房间 AI 浮层' })).toHaveCount(0);
+  await expect(page.locator('#room-butler-launcher')).toHaveCount(0);
   await expect(privatePanel.getByText('仅你可见，不会向当前房间发送消息。', { exact: true })).toBeVisible();
   await expect(privatePanel.getByText('请总结 Release checklist', { exact: true })).toHaveCount(0);
   expect(await page.evaluate(async () => {
@@ -1180,8 +1182,9 @@ test('私人房间 AI 关闭重开仍使用同一条个人 thread，模型设置
   ));
   expect(firstThreadId).toMatch(/^thread-/);
 
-  await page.getByRole('button', { name: '收起房间 AI', exact: true }).click();
+  await panel.getByRole('button', { name: '关闭侧栏', exact: true }).click();
   await expect(panel).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '打开房间 AI', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
   const reopened = page.getByRole('dialog', { name: '私人房间 AI 对话' });
   await expect(reopened).toBeVisible();
@@ -1403,7 +1406,7 @@ test('AI 托管按项目折叠分组，项目历史不再重复同一条共享�
   await expect(hosting.getByRole('navigation', { name: 'AI 托管会话' })).toBeHidden();
 });
 
-test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同一条 DSH 原生会话', async ({ page }) => {
+test('DSH 私人房间会话与共享托管隔离，模型配置回到同一条 DSH 原生会话', async ({ page }) => {
   const dshWebUrl = 'http://127.0.0.1:43123/';
   await page.route(dshWebUrl, async (route) => {
     await route.fulfill({
@@ -1496,7 +1499,7 @@ test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同�
 
   const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
   await expect(panel).toBeVisible();
-  await expect(panel.getByText('DeepSeek', { exact: true }).first()).toBeVisible();
+  await expect(panel.getByText('DSH', { exact: true }).first()).toBeVisible();
   await expect(panel.getByText('只在我的 DSH 会话里讨论', { exact: true })).toBeVisible();
   await expect(panel.getByText('这是仅你可见的私人答复。', { exact: true })).toBeVisible();
   await expect(panel.getByText('请总结 Release checklist', { exact: true })).toHaveCount(0);
@@ -1560,7 +1563,7 @@ test('DeepSeek 私人房间会话与共享托管隔离，模型配置回到同�
     list: '•私人结果',
   });
 
-  await panel.getByRole('button', { name: '设置 DeepSeek 模型与 Agent' }).click();
+  await panel.getByRole('button', { name: '设置 DSH 模型与 Agent' }).click();
   await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
   await expect.poll(async () => {
     const frame = page.frame({ url: dshWebUrl });
@@ -1961,7 +1964,7 @@ test('390px 下任务列表用抽屉打开，输入区没有横向溢出', async
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('私人房间 DeepSeek 缺少凭据时可直接打开 DSH 配置', async ({ page }) => {
+test('私人房间 DSH provider 错误时可直接打开 DSH 配置', async ({ page }) => {
   const dshWebUrl = 'http://127.0.0.1:43124/';
   await page.route(dshWebUrl, async (route) => {
     await route.fulfill({
@@ -2028,7 +2031,7 @@ test('私人房间 DeepSeek 缺少凭据时可直接打开 DSH 配置', async ({
     useUI.setState({ aiRuntimeProvider: 'deepseek' });
     const scope = `${getServerBase() || 'same-origin'}:${useAuth.getState().user._id}`;
     const key = privateRoomDshKey(scope, 'room-general');
-    const error = '请先在 DSH 中配置 DeepSeek API Key';
+    const error = '当前模型提供商不可用，请在 DSH 中检查 provider 与凭据';
     usePrivateRoomDsh.setState({
       openRoom: async () => { throw new Error(error); },
       sessions: {
@@ -2049,7 +2052,7 @@ test('私人房间 DeepSeek 缺少凭据时可直接打开 DSH 配置', async ({
 
   await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
   const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
-  await expect(panel.getByText('请先在 DSH 中配置 DeepSeek API Key', { exact: true })).toBeVisible();
+  await expect(panel.getByText('当前模型提供商不可用，请在 DSH 中检查 provider 与凭据', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '在 DSH 中配置' }).click();
 
   await expect(panel).toHaveCount(0);

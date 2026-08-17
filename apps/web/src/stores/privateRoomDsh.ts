@@ -199,7 +199,6 @@ function controllerOptions(identity: string): HostedDshControllerOptions {
       };
     }),
     onInterrupted: (error) => {
-      if (controllerIdentity !== identity) return;
       usePrivateRoomDsh.setState((state) => ({
         sessions: Object.fromEntries(Object.entries(state.sessions).map(([key, session]) => {
           if (`${session.scope}\u0000${session.workspaceRoot}` !== identity || !activeSessionStatus(session)) {
@@ -214,8 +213,10 @@ function controllerOptions(identity: string): HostedDshControllerOptions {
           }];
         })),
       }));
-      controller = null;
-      controllerRequest = null;
+      if (controllerIdentity === identity) {
+        controller = null;
+        controllerRequest = null;
+      }
     },
   };
 }

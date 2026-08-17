@@ -1189,6 +1189,337 @@ test('AI 托管在执行期间先向房间发送持续可见的思考反馈', { 
   }
 });
 
+test('AI 托管通过机器人发送长回复时会按服务器上限分段', { concurrency: false }, async () => {
+  const target = interruptedSession('chunked-bot-reply', {
+    status: 'ready',
+    activeTurnId: undefined,
+  });
+  const { useSharedAgent, setSharedAgentControllerFactory, setSharedAgentMessageSizeProviderForTests } = await loadModules();
+  const { toSendableMessageChunks } = await import('../../apps/web/src/lib/messageChunks');
+  await prepareStore([target]);
+  const restoreMessageSize = setSharedAgentMessageSizeProviderForTests(async () => 24);
+  const invocations = installInvokeRecorder();
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'startTurn') return 'turn-chunked-bot-reply';
+      return { id: target.codexThreadId! };
+    });
+    fake = built.state;
+    return built.controller as never;
+  });
+
+  try {
+    const handling = useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host', 'chunked-bot-command'),
+    );
+    await waitFor(() => fake?.calls.includes('startTurn') === true);
+    fake.options.onNotification?.('item/agentMessage/delta', {
+      threadId: target.codexThreadId,
+      turnId: 'turn-chunked-bot-reply',
+      delta: 'alpha alpha\n\nbeta beta\n\ngamma',
+    });
+    fake.options.onNotification?.('turn/completed', {
+      threadId: target.codexThreadId,
+      turn: { id: 'turn-chunked-bot-reply', status: 'completed' },
+    });
+    await handling;
+    const expectedChunks = toSendableMessageChunks('🤖 Codex\nalpha alpha\n\nbeta beta\n\ngamma', 24);
+    assert.deepEqual(
+      recordedReplies(invocations),
+      expectedChunks.map((text) => ({ rid: target.rid, tmid: target.tmid, text })),
+    );
+  } finally {
+    restoreMessageSize();
+    restoreFactory();
+  }
+});
+
+test('机器人不可用时宿主 fallback 会跳过纯空白 chunk，并保留 Markdown 缩进与尾段顺序', { concurrency: false }, async () => {
+  const target = interruptedSession('chunked-host-fallback', {
+    status: 'ready',
+    activeTurnId: undefined,
+  });
+  const { useSharedAgent, setSharedAgentControllerFactory, setSharedAgentMessageSizeProviderForTests } = await loadModules();
+  const { toSendableMessageChunks } = await import('../../apps/web/src/lib/messageChunks');
+  const chat = await import('../../apps/web/src/stores/chat');
+  await prepareStore([target]);
+  const restoreMessageSize = setSharedAgentMessageSizeProviderForTests(async () => 24);
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {
+      invoke: async () => null,
+    },
+  });
+  const sends: string[] = [];
+  const sendOptions: Array<{ preserveWhitespace?: boolean }> = [];
+  const originalSend = chat.useChat.getState().send;
+  chat.useChat.setState({
+    send: (async (text: string, opts?: { preserveWhitespace?: boolean }) => {
+      sends.push(text);
+      sendOptions.push({ preserveWhitespace: opts?.preserveWhitespace });
+      return { id: `fallback-${sends.length}`, delivery: 'server' as const };
+    }) as typeof originalSend,
+  });
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'startTurn') return 'turn-chunked-host-fallback';
+      return { id: target.codexThreadId! };
+    });
+    fake = built.state;
+    return built.controller as never;
+  });
+
+  try {
+    const handling = useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host', 'chunked-host-command'),
+    );
+    await waitFor(() => fake?.calls.includes('startTurn') === true);
+    const spacedDelta = `        \n\n  - nested item`;
+    fake.options.onNotification?.('item/agentMessage/delta', {
+      threadId: target.codexThreadId,
+      turnId: 'turn-chunked-host-fallback',
+      delta: spacedDelta,
+    });
+    fake.options.onNotification?.('turn/completed', {
+      threadId: target.codexThreadId,
+      turn: { id: 'turn-chunked-host-fallback', status: 'completed' },
+    });
+    await handling;
+    const expectedChunks = toSendableMessageChunks(`🤖 Codex\n${spacedDelta}`, 24);
+    assert.deepEqual(
+      sends.filter((text) => text !== '🤖 Codex 已收到，正在思考…'),
+      expectedChunks,
+    );
+    assert.equal(sendOptions.every((entry) => entry.preserveWhitespace === true), true);
+  } finally {
+    restoreMessageSize();
+    chat.useChat.setState({ send: originalSend });
+    restoreFactory();
+  }
+});
+
+for (const fallbackMode of ['null', 'throw'] as const) {
+  test(`机器人首段成功后第二区块${fallbackMode === 'null' ? '返回 null' : '抛错'}时会中止后续发送并进入失败收尾`, { concurrency: false }, async () => {
+    const target = interruptedSession(`chunked-midstream-bot-fallback-${fallbackMode}`, {
+      status: 'ready',
+      activeTurnId: undefined,
+    });
+    const { useSharedAgent, setSharedAgentControllerFactory, setSharedAgentMessageSizeProviderForTests } = await loadModules();
+    const { toSendableMessageChunks } = await import('../../apps/web/src/lib/messageChunks');
+    const chat = await import('../../apps/web/src/stores/chat');
+    await prepareStore([target]);
+    const restoreMessageSize = setSharedAgentMessageSizeProviderForTests(async () => 24);
+    const invocations: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    let replyAttempt = 0;
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {
+        invoke: async (command: string, args?: Record<string, unknown>) => {
+          invocations.push({ command, args });
+          if (command !== 'agent_bot_send') return [];
+          if (args?.text === '🤖 Codex 已收到，正在思考…') return [];
+          replyAttempt += 1;
+          if (replyAttempt === 1) return [];
+          if (fallbackMode === 'null') return null;
+          throw new Error('second bot chunk failed');
+        },
+      },
+    });
+    const sends: string[] = [];
+    const originalSend = chat.useChat.getState().send;
+    chat.useChat.setState({
+      send: (async (text: string) => {
+        sends.push(text);
+        return { id: `fallback-${sends.length}`, delivery: 'server' as const };
+      }) as typeof originalSend,
+    });
+    let fake!: FakeClientState;
+    const restoreFactory = setSharedAgentControllerFactory((options) => {
+      const built = fakeController(options, async (method) => {
+        if (method === 'startTurn') return `turn-midstream-bot-fallback-${fallbackMode}`;
+        return { id: target.codexThreadId! };
+      });
+      fake = built.state;
+      return built.controller as never;
+    });
+
+    try {
+      const handling = useSharedAgent.getState().handleMessage(
+        commandMessage(target.tmid, target.host.userId, 'host', `chunked-midstream-command-${fallbackMode}`),
+      );
+      await waitFor(() => fake?.calls.includes('startTurn') === true);
+      const delta = 'alpha alpha\n\nbeta beta\n\ngamma gamma\n\ndelta';
+      fake.options.onNotification?.('item/agentMessage/delta', {
+        threadId: target.codexThreadId,
+        turnId: `turn-midstream-bot-fallback-${fallbackMode}`,
+        delta,
+      });
+      fake.options.onNotification?.('turn/completed', {
+        threadId: target.codexThreadId,
+        turn: { id: `turn-midstream-bot-fallback-${fallbackMode}`, status: 'completed' },
+      });
+      await handling;
+      const expectedChunks = toSendableMessageChunks(`🤖 Codex\n${delta}`, 24);
+      const replyInvocations = recordedReplies(invocations);
+      assert.deepEqual(
+        replyInvocations.slice(0, 2).map((entry) => entry.text),
+        expectedChunks.slice(0, 2),
+      );
+      const replySends = sends.filter((text) => text !== '🤖 Codex 已收到，正在思考…');
+      assert.equal(replySends.includes(expectedChunks[1]!), false);
+      assert.equal(replySends.includes(expectedChunks[2]!), false);
+      assert.equal(replySends.some((text) => text.includes('执行失败')), true);
+      assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+      assert.equal(
+        useSharedAgent.getState().sessions[target.tmid]?.lastError,
+        fallbackMode === 'null' ? 'Bot 发送在分段中途失败，已停止本轮回复' : 'second bot chunk failed',
+      );
+    } finally {
+      restoreMessageSize();
+      chat.useChat.setState({ send: originalSend });
+      restoreFactory();
+    }
+  });
+}
+
+test('分段发送任一 chunk 失败时会停止后续发送并让当前会话失败', { concurrency: false }, async () => {
+  const target = interruptedSession('chunked-host-stop-on-error', {
+    status: 'ready',
+    activeTurnId: undefined,
+  });
+  const { useSharedAgent, setSharedAgentControllerFactory, setSharedAgentMessageSizeProviderForTests } = await loadModules();
+  const { toSendableMessageChunks } = await import('../../apps/web/src/lib/messageChunks');
+  const chat = await import('../../apps/web/src/stores/chat');
+  await prepareStore([target]);
+  const restoreMessageSize = setSharedAgentMessageSizeProviderForTests(async () => 24);
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {
+      invoke: async () => null,
+    },
+  });
+  const expectedChunks = toSendableMessageChunks('🤖 Codex\nalpha alpha\n\nbeta beta\n\ngamma gamma\n\ndelta', 24);
+  const sends: string[] = [];
+  const originalSend = chat.useChat.getState().send;
+  chat.useChat.setState({
+    send: (async (text: string) => {
+      sends.push(text);
+      const replyIndex = sends.filter((item) => item !== '🤖 Codex 已收到，正在思考…').length;
+      if (replyIndex === 2) throw new Error('second chunk failed');
+      return { id: `fallback-${sends.length}`, delivery: 'server' as const };
+    }) as typeof originalSend,
+  });
+  let fake!: FakeClientState;
+  const restoreFactory = setSharedAgentControllerFactory((options) => {
+    const built = fakeController(options, async (method) => {
+      if (method === 'startTurn') return 'turn-chunked-host-stop-on-error';
+      return { id: target.codexThreadId! };
+    });
+    fake = built.state;
+    return built.controller as never;
+  });
+
+  try {
+    const handling = useSharedAgent.getState().handleMessage(
+      commandMessage(target.tmid, target.host.userId, 'host', 'chunked-error-command'),
+    );
+    await waitFor(() => fake?.calls.includes('startTurn') === true);
+    fake.options.onNotification?.('item/agentMessage/delta', {
+      threadId: target.codexThreadId,
+      turnId: 'turn-chunked-host-stop-on-error',
+      delta: 'alpha alpha\n\nbeta beta\n\ngamma gamma\n\ndelta',
+    });
+    fake.options.onNotification?.('turn/completed', {
+      threadId: target.codexThreadId,
+      turn: { id: 'turn-chunked-host-stop-on-error', status: 'completed' },
+    });
+    await handling;
+    const replySends = sends.filter((text) => text !== '🤖 Codex 已收到，正在思考…');
+    assert.deepEqual(replySends.slice(0, 2), expectedChunks.slice(0, 2));
+    assert.equal(replySends.includes(expectedChunks[2]!), false);
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+    assert.equal(useSharedAgent.getState().sessions[target.tmid]?.lastError, 'second chunk failed');
+  } finally {
+    restoreMessageSize();
+    chat.useChat.setState({ send: originalSend });
+    restoreFactory();
+  }
+});
+
+for (const failedDelivery of ['failed', 'unknown'] as const) {
+  test(`宿主发送返回 delivery:'${failedDelivery}' 时会停止后续 chunk、透传 reason 并进入失败收尾`, { concurrency: false }, async () => {
+    const target = interruptedSession(`chunked-host-delivery-${failedDelivery}`, {
+      status: 'ready',
+      activeTurnId: undefined,
+    });
+    const { useSharedAgent, setSharedAgentControllerFactory, setSharedAgentMessageSizeProviderForTests } = await loadModules();
+    const { toSendableMessageChunks } = await import('../../apps/web/src/lib/messageChunks');
+    const chat = await import('../../apps/web/src/stores/chat');
+    await prepareStore([target]);
+    const restoreMessageSize = setSharedAgentMessageSizeProviderForTests(async () => 24);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {
+        invoke: async () => null,
+      },
+    });
+    const expectedChunks = toSendableMessageChunks('🤖 Codex\nalpha alpha\n\nbeta beta\n\ngamma gamma\n\ndelta', 24);
+    const sends: string[] = [];
+    const originalSend = chat.useChat.getState().send;
+    chat.useChat.setState({
+      send: (async (text: string) => {
+        sends.push(text);
+        const replyIndex = sends.filter((item) => item !== '🤖 Codex 已收到，正在思考…').length;
+        if (replyIndex === 2) {
+          return {
+            id: `failed-${failedDelivery}`,
+            delivery: failedDelivery,
+            reason: `host ${failedDelivery} reason`,
+          } as const;
+        }
+        return { id: `fallback-${sends.length}`, delivery: 'server' as const };
+      }) as typeof originalSend,
+    });
+    let fake!: FakeClientState;
+    const restoreFactory = setSharedAgentControllerFactory((options) => {
+      const built = fakeController(options, async (method) => {
+        if (method === 'startTurn') return `turn-host-delivery-${failedDelivery}`;
+        return { id: target.codexThreadId! };
+      });
+      fake = built.state;
+      return built.controller as never;
+    });
+
+    try {
+      const handling = useSharedAgent.getState().handleMessage(
+        commandMessage(target.tmid, target.host.userId, 'host', `chunked-host-delivery-${failedDelivery}`),
+      );
+      await waitFor(() => fake?.calls.includes('startTurn') === true);
+      fake.options.onNotification?.('item/agentMessage/delta', {
+        threadId: target.codexThreadId,
+        turnId: `turn-host-delivery-${failedDelivery}`,
+        delta: 'alpha alpha\n\nbeta beta\n\ngamma gamma\n\ndelta',
+      });
+      fake.options.onNotification?.('turn/completed', {
+        threadId: target.codexThreadId,
+        turn: { id: `turn-host-delivery-${failedDelivery}`, status: 'completed' },
+      });
+      await handling;
+      const replySends = sends.filter((text) => text !== '🤖 Codex 已收到，正在思考…');
+      assert.deepEqual(replySends.slice(0, 2), expectedChunks.slice(0, 2));
+      assert.equal(replySends.includes(expectedChunks[2]!), false);
+      assert.equal(useSharedAgent.getState().sessions[target.tmid]?.status, 'ready');
+      assert.equal(useSharedAgent.getState().sessions[target.tmid]?.lastError, `host ${failedDelivery} reason`);
+    } finally {
+      restoreMessageSize();
+      chat.useChat.setState({ send: originalSend });
+      restoreFactory();
+    }
+  });
+}
+
 test('共享 Agent 在 Controller connect 失败后离开 starting，并保留同一线程供显式重试', { concurrency: false }, async () => {
   const target = interruptedSession('client-start-failed');
   const other = interruptedSession('client-start-other', { activeTurnId: undefined });
