@@ -2006,6 +2006,7 @@ test('聊天消息渲染块公式、行内公式和可访问 MathML（issue #218
 });
 
 test('普通消息完整渲染标题、列表、引用、代码块和表格（issue #319）', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
   await page.evaluate(async () => {
@@ -2063,13 +2064,13 @@ test('普通消息完整渲染标题、列表、引用、代码块和表格（is
   await expect(markdown.locator('table')).toContainText('Typecheck');
   await expect(markdown.locator('pre')).toContainText('const release = true;');
   const markdownWidth = await markdown.evaluate((element) => element.getBoundingClientRect().width);
-  expect(markdownWidth).toBeGreaterThan(400);
+  expect(markdownWidth).toBeGreaterThan(960);
   await message.screenshot({ path: testInfo.outputPath('markdown-message-319.png') });
   expect(pageErrors).toEqual([]);
 });
 
 test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setViewportSize({ width: 1800, height: 900 });
   await page.addInitScript(() => localStorage.setItem('rcx-theme', 'dark'));
   const { pageErrors } = await bootAuthenticated(page);
   await conversation(page, 'General').click();
@@ -2104,6 +2105,10 @@ test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, te
               '1. 历史消息批量导入与引用验证',
               '2. Markdown 标题、列表、表格、代码块与附件验证',
               '3. 自动化测试和聊天记录转发',
+              '',
+              '| 门禁 | Windows | macOS | Linux | 发布产物 | 结果 |',
+              '| --- | --- | --- | --- | --- | --- |',
+              '| 桌面构建 | x64 slim + full | universal | AppImage + deb + rpm | SHA256SUMS | 全部通过 |',
             ].join('\n'),
             ts: '2026-08-16T08:00:00.000Z',
             u: me,
@@ -2120,22 +2125,31 @@ test('AI 托管完整回答使用 Codex 式宽版文档流', async ({ page }, te
   await expect(row.getByText('DeepSeek', { exact: true })).toBeVisible();
   const answer = row.locator('.rocketx-agent-answer');
   const body = row.locator('.rocketx-agent-answer-body');
+  const tableWrap = body.locator('.markdown-table-wrap');
   await expect(body.getByRole('heading', { name: '房间概览', level: 2 })).toBeVisible();
   await expect(body).not.toContainText('🤖 DeepSeek');
+  await expect(tableWrap.getByRole('table')).toContainText('SHA256SUMS');
 
   const layout = await answer.evaluate((element) => {
     const paragraph = element.querySelector('p');
     const paragraphRect = paragraph?.getBoundingClientRect();
+    const tableWrap = element.querySelector<HTMLElement>('.markdown-table-wrap');
     return {
+      answerWidth: element.getBoundingClientRect().width,
       background: getComputedStyle(element.querySelector('.rocketx-agent-answer-body')!).backgroundColor,
       headingFontSize: Number.parseFloat(getComputedStyle(element.querySelector('h2')!).fontSize),
       paragraphWidth: paragraphRect?.width ?? 0,
+      tableViewportWidth: tableWrap?.clientWidth ?? 0,
+      tableScrollWidth: tableWrap?.scrollWidth ?? 0,
     };
   });
+  expect(layout.answerWidth).toBeGreaterThan(980);
   expect(layout.background).toBe('rgba(0, 0, 0, 0)');
   expect(layout.headingFontSize).toBe(17);
-  expect(layout.paragraphWidth).toBeGreaterThan(460);
-  expect(layout.paragraphWidth).toBeLessThan(760);
+  expect(layout.paragraphWidth).toBeGreaterThan(520);
+  expect(layout.paragraphWidth).toBeLessThan(880);
+  expect(layout.tableViewportWidth).toBeGreaterThan(980);
+  expect(layout.tableScrollWidth).toBeGreaterThanOrEqual(layout.tableViewportWidth);
   expect(pageErrors).toEqual([]);
 });
 

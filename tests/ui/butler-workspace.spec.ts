@@ -705,6 +705,64 @@ test('主管家流式 Markdown 完成时复用同一条消息和已封口块', a
   expect(result.bottomGap).toBeLessThan(2);
 });
 
+test('主管家宽屏对话为 Markdown 表格保留完整阅读宽度', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'ready',
+      messages: [{
+        id: 'wide-markdown-table',
+        role: 'assistant',
+        text: [
+          '## 跨平台发布矩阵',
+          '',
+          '| 门禁 | Windows | macOS | Linux | 发布产物 | 校验 |',
+          '| --- | --- | --- | --- | --- | --- |',
+          '| 桌面构建 | x64 slim + full installer | universal application bundle | AppImage + deb + rpm | signed update archives | SHA256SUMS |',
+        ].join('\n'),
+      }],
+      streamingText: '',
+    });
+  });
+
+  const transcript = page.locator('.codex-native-transcript');
+  const inner = transcript.locator('.codex-native-transcript-inner');
+  const tableWrap = inner.locator('.markdown-table-wrap');
+  await expect(tableWrap.getByRole('table')).toContainText('signed update archives');
+  const layout = await transcript.evaluate((element) => {
+    const inner = element.querySelector<HTMLElement>('.codex-native-transcript-inner')!;
+    const tableWrap = element.querySelector<HTMLElement>('.markdown-table-wrap')!;
+    return {
+      transcriptWidth: element.clientWidth,
+      innerWidth: inner.getBoundingClientRect().width,
+      tableOverflowX: getComputedStyle(tableWrap).overflowX,
+      tableViewportWidth: tableWrap.clientWidth,
+      tableScrollWidth: tableWrap.scrollWidth,
+    };
+  });
+
+  expect(layout.innerWidth).toBeGreaterThan(1000);
+  expect(layout.innerWidth).toBeLessThanOrEqual(layout.transcriptWidth);
+  expect(layout.tableOverflowX).toBe('auto');
+  expect(layout.tableViewportWidth).toBeGreaterThan(1000);
+  expect(layout.tableScrollWidth).toBeGreaterThanOrEqual(layout.tableViewportWidth);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrowLayout = await tableWrap.evaluate((element) => ({
+    overflowX: getComputedStyle(element).overflowX,
+    viewportWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    pageWidth: document.documentElement.scrollWidth,
+    windowWidth: window.innerWidth,
+  }));
+  expect(narrowLayout.overflowX).toBe('auto');
+  expect(narrowLayout.scrollWidth).toBeGreaterThan(narrowLayout.viewportWidth);
+  expect(narrowLayout.pageWidth).toBeLessThanOrEqual(narrowLayout.windowWidth);
+});
+
 test('私人房间 AI 不读取或展示共享托管 transcript', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
   await bootWithAiRuntime(page, 'codex');

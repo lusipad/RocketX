@@ -989,7 +989,7 @@ body {
 .butler-conversation-markdown,
 .rocketx-markdown {
   --markdown-content-max-width: 42rem;
-  --markdown-wide-block-max-width: 52rem;
+  --markdown-wide-block-max-width: 64rem;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -1288,9 +1288,9 @@ body {
 }
 
 .rocketx-agent-answer {
-  flex: 0 1 800px;
+  flex: 0 1 76rem;
   width: 100%;
-  max-width: 800px;
+  max-width: 76rem;
 }
 
 .rocketx-agent-answer-provider {
@@ -1305,6 +1305,8 @@ body {
 }
 
 .rocketx-agent-answer-body {
+  --markdown-content-max-width: 48rem;
+  --markdown-wide-block-max-width: 76rem;
   border-radius: 0;
   background: transparent;
   padding: 1px 6px 10px 0;
@@ -3914,7 +3916,9 @@ body {
 }
 
 .codex-native-transcript-inner {
-  width: min(100%, 820px);
+  --markdown-content-max-width: 48rem;
+  --markdown-wide-block-max-width: 76rem;
+  width: min(100%, 76rem);
   min-height: 100%;
   margin: 0 auto;
 }
@@ -4824,7 +4828,7 @@ details.codex-native-activity {
 }
 
 .butler-conversation-layout.has-artifact .codex-native-transcript-inner {
-  width: min(100%, 720px);
+  width: min(100%, 76rem);
 }
 
 .codex-artifact-link {
