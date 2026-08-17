@@ -44,13 +44,13 @@ See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, an
 
 ## DeepSeek Harness runtime compatibility
 
-RocketX `v0.43.4` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, the current verified compatibility line is exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Newer DSH versions stay unavailable until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.1.0-rc.6` plus a private Node payload into the application data directory. When DSH is selected, RocketX embeds the official DSH Web for private conversations and reuses one native Host/controller path for room AI and shared hosting. A separate `deepseek-harness` source checkout is never a release prerequisite. The Web client cannot start the local DSH process.
+RocketX `v0.43.5` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, the current verified compatibility line is exactly `@deepseek-ai/dsh@0.1.0-rc.6`. Newer DSH versions stay unavailable until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.1.0-rc.6` plus a private Node payload into the application data directory. When DSH is selected, RocketX embeds the official DSH Web for private conversations and reuses one native Host/controller path for room AI and shared hosting. Provider, model, Agent, permission, and credential configuration remain owned by DSH rather than being duplicated in RocketX. A separate `deepseek-harness` source checkout is never a release prerequisite. The Web client cannot start the local DSH process.
 
 | DSH condition | RocketX behavior |
 | --- | --- |
-| Installed compatible DSH `0.1.0-rc.6` or Windows full private runtime, API key configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DeepSeek AI hosting are available |
-| DSH missing or unavailable | DeepSeek backend is unavailable in slim mode; Codex and deterministic surfaces keep their own availability |
-| DeepSeek API key missing | DSH configuration and history remain visible, but sending fails closed until the key is stored through DSH credentials |
+| Installed compatible DSH `0.1.0-rc.6` or Windows full private runtime, selected provider credentials configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DSH AI hosting are available |
+| DSH missing or unavailable | DSH backend is unavailable in slim mode; Codex and deterministic surfaces keep their own availability |
+| Selected provider credentials missing or invalid | DSH configuration and history remain visible; sending fails closed with the provider's diagnostic until credentials are corrected in DSH |
 | Private full DSH runtime missing or incomplete | RocketX refuses to start that backend, then uses a verified available Codex runtime or no AI instead of downloading an unpinned runtime |
 | Web client | No local DSH transport or hosting; messaging and deterministic work surfaces remain usable, and an active desktop-hosted lease stays visible and reachable through `@ai` |
 
