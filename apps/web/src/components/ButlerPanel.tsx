@@ -546,7 +546,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
   const respondQuestion = usePrivateRoomDsh((state) => state.respondQuestion);
   const [input, setInput] = useState('');
   const [opening, setOpening] = useState(true);
-  const workspaceRoot = butlerWorkspaceRoot || defaultWorkspaceRoot;
+  const workspaceRoot = defaultWorkspaceRoot || butlerWorkspaceRoot;
   const running = session?.status === 'running' || session?.status === 'waiting-input';
   const transcriptMessages = session?.transcript.messages ?? [];
   const activeAssistantMessage = transcriptMessages.at(-1)?.role === 'assistant'
@@ -564,7 +564,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
   const prepare = async (): Promise<string> => {
     await ensureDefaultWorkspace();
     const latest = useCodexWorkspace.getState();
-    const root = latest.butlerWorkspaceRoot || latest.defaultWorkspaceRoot;
+    const root = latest.defaultWorkspaceRoot || latest.butlerWorkspaceRoot;
     if (!root) throw new Error('系统管家工作区尚未准备好');
     return root;
   };
@@ -620,9 +620,13 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
   };
 
   const openNativeConversation = (): void => {
-    if (!session?.dshSessionId) return;
+    if (session?.dshSessionId) {
+      useChat.getState().setPanel(null);
+      useUI.getState().openPersonalDshConversation(session.dshSessionId);
+      return;
+    }
     useChat.getState().setPanel(null);
-    useUI.getState().openPersonalDshConversation(session.dshSessionId);
+    useUI.getState().openPersonalDshConversation(null);
   };
 
   const retry = async (): Promise<void> => {
@@ -646,7 +650,6 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              disabled={!session?.dshSessionId}
               onClick={openNativeConversation}
               aria-label="设置 DeepSeek 模型与 Agent"
               title="在 DSH 中设置当前私人会话的模型、Agent 和权限"
@@ -668,7 +671,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
           </button>
         </div>
         <div className="mt-1.5 truncate text-ink-3" title={session?.workspaceRoot || workspaceRoot}>
-          {session?.workspaceRoot || workspaceRoot || '系统管家目录'}
+          {session?.workspaceRoot || workspaceRoot || '私人会话目录'}
         </div>
       </div>
 
@@ -687,13 +690,22 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
             <CircleAlert size={22} className="text-danger" aria-hidden="true" />
             <h3 className="mt-3 text-sm font-semibold text-ink">私人 DeepSeek 会话连接失败</h3>
             <p className="mt-1 max-w-sm text-xs leading-5 text-danger">{session.error}</p>
-            <button
-              type="button"
-              onClick={() => void retry()}
-              className="mt-3 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
-            >
-              重试
-            </button>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={openNativeConversation}
+                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                在 DSH 中配置
+              </button>
+              <button
+                type="button"
+                onClick={() => void retry()}
+                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                重试
+              </button>
+            </div>
           </div>
         ) : !session || transcriptMessages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">

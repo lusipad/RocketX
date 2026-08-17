@@ -63,6 +63,9 @@ test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel �
   assert.match(butlerPanel, /navigator\.clipboard\.writeText\(text\)/);
   assert.match(butlerPanel, /aria-label="设置 Codex 模型与权限"/);
   assert.match(butlerPanel, /aria-label="设置 DeepSeek 模型与 Agent"/);
+  assert.match(butlerPanel, /const workspaceRoot = defaultWorkspaceRoot \|\| butlerWorkspaceRoot/);
+  assert.match(butlerPanel, /在 DSH 中配置/);
+  assert.match(butlerPanel, /openPersonalDshConversation\(null\)/);
   assert.doesNotMatch(butlerPanel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|send\(`?@ai/);
 
   assert.match(agentPanel, /useSharedAgent/);

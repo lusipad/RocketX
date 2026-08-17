@@ -603,17 +603,12 @@ fn installed_dsh_cli_candidates() -> Vec<PathBuf> {
             ));
         }
         if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
             paths.push(installed_dsh_cli_entry(
-                &PathBuf::from(home)
-                    .join(".npm-global")
-                    .join("lib")
-                    .join("node_modules"),
+                &home.join(".npm-global").join("lib").join("node_modules"),
             ));
             paths.extend(pnpm_global_dsh_cli_candidates(
-                &PathBuf::from(home)
-                    .join(".local")
-                    .join("share")
-                    .join("pnpm"),
+                &home.join(".local").join("share").join("pnpm"),
             ));
         }
         for root in ["/usr/local/lib/node_modules", "/usr/lib/node_modules"] {

@@ -343,7 +343,7 @@ export class HostedDshController {
         });
         const credential = record(described.credentials)?.[DEEPSEEK_API_KEY_REF];
         if (record(credential)?.configured !== true) {
-          throw new Error('请先在管家 → DeepSeek 选择工作区并配置 DeepSeek API Key');
+          throw new Error('请先在 DSH 中配置 DeepSeek API Key');
         }
       } catch (reason) {
         const error = reason instanceof Error ? reason : new Error(String(reason));

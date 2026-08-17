@@ -688,7 +688,7 @@ test('hosted DSH controller rejects connect when DeepSeek credential is missing'
   const connecting = controller.connect();
   runtime.startBridge('process-hosted-missing-key');
 
-  await assert.rejects(connecting, /请先在管家 → DeepSeek 选择工作区并配置 DeepSeek API Key/);
+  await assert.rejects(connecting, /请先在 DSH 中配置 DeepSeek API Key/);
   assert.deepEqual(runtime.stops, ['process-hosted-missing-key']);
 });
 

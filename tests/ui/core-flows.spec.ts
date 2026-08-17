@@ -2964,8 +2964,12 @@ test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', 
   expect(pageErrors).toEqual([]);
 });
 
-test('新设备没有托管项目时引导到 AI 管家添加', async ({ page }) => {
+test('新设备没有托管项目时可在托管面板直接添加', async ({ page }) => {
   await installFullTauriMock(page);
+  await page.addInitScript(() => {
+    (window as Window & { __dialogOpenResponses?: Array<string | string[] | null> })
+      .__dialogOpenResponses = ['D:\\Repos\\rocketchatx'];
+  });
   const { pageErrors } = await bootAuthenticated(page);
   await activateAiRuntimeForTest(page, 'codex');
   await conversation(page, 'General').click();
@@ -2973,11 +2977,12 @@ test('新设备没有托管项目时引导到 AI 管家添加', async ({ page })
   await page.getByRole('button', { name: '配置 AI 托管' }).click();
   const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
   await expect(panel.getByText(/这台设备尚未添加托管项目/)).toBeVisible();
-  const addProject = panel.getByRole('button', { name: '去添加托管项目' });
+  const addProject = panel.getByRole('button', { name: '添加托管项目' });
   await expect(addProject).toBeEnabled();
   await addProject.click();
 
-  await expect(page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' })).toBeVisible();
+  await expect(panel.getByLabel('AI 托管项目')).toHaveValue('D:\\Repos\\rocketchatx');
+  await expect(panel.getByRole('button', { name: '开启 AI 托管' })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

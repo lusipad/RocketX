@@ -1,3 +1,4 @@
+import { open } from '@tauri-apps/plugin-dialog';
 import { Bot, Check, ChevronLeft, Copy, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { agentSessionCardSupersedesLocal, type AgentSessionCard } from '../agent/card';
@@ -335,6 +336,22 @@ export default function AgentPanel({
     : currentBackend === 'codex'
       ? (session ? activeCodexRuntimeSummary : nextCodexRuntimeSummary)
       : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。';
+
+  const addHostingProject = async (): Promise<void> => {
+    const path = await open({ directory: true, multiple: false, title: '选择 AI 托管项目' });
+    if (typeof path !== 'string') return;
+    const environmentState = useAgentEnvironments.getState();
+    const environment = environmentState.ensureEnvironment({ path });
+    if (environmentIsBusy(environment.id, environmentState.bindings)) {
+      throw new Error('这个项目正被活动讨论使用，请先结束对应的 AI 托管');
+    }
+    if (!environment.enabled) {
+      useAgentEnvironments.getState().updateEnvironment(environment.id, { enabled: true });
+    }
+    setProjectOverride(environment.path);
+    setStartFailure('');
+  };
+
   return (
     <PanelShell
       resizable={resizable}
@@ -648,7 +665,7 @@ export default function AgentPanel({
                 }
                 onClick={() => {
                   if (!selectedProject) {
-                    openButlerConversation();
+                    void addHostingProject().catch((reason) => toast.error(reason, '无法添加托管项目'));
                     return;
                   }
                   if (!selectedBackend) return;
@@ -695,7 +712,7 @@ export default function AgentPanel({
                   : !selectedBackend
                     ? '当前未启用 AI'
                     : !selectedProject
-                      ? '去添加托管项目'
+                      ? '添加托管项目'
                       : '开启 AI 托管'}
               </button>
               {startFailure ? (

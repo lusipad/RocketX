@@ -176,7 +176,7 @@ interface UIState {
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
   openButlerConversation: (focusSessionKey?: string) => void;
-  openPersonalDshConversation: (sessionId: string) => void;
+  openPersonalDshConversation: (sessionId: string | null) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
   setSelectedHostedSessionKey: (sessionKey: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
