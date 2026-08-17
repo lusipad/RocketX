@@ -887,7 +887,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         className={`flex min-w-0 flex-col ${
           hostedAgentAnswer
             ? 'rocketx-agent-answer flex-1 items-stretch'
-            : `${richMarkdown ? 'w-full max-w-[64rem]' : 'max-w-[68%]'} ${visuallyMine ? 'items-end' : 'items-start'}`
+            : `${richMarkdown ? 'w-full' : 'max-w-[68%]'} ${visuallyMine ? 'items-end' : 'items-start'}`
         } ${
           selectMode ? 'pointer-events-none' : ''
         }`}
@@ -980,8 +980,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             className={`text-sm leading-relaxed break-words ${
               hostedAgentAnswer
                 ? 'rocketx-agent-answer-body w-full'
-                  : `whitespace-pre-wrap ${richMarkdown ? 'w-full' : ''} ${
-                    bareMedia || rocketXSticker
+                  : `whitespace-pre-wrap ${richMarkdown ? 'w-full px-3 py-2 text-ink' : ''} ${
+                    bareMedia || rocketXSticker || richMarkdown
                       ? ''
                       : `rounded-lg px-3 py-2 ${mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'}`
                   }`

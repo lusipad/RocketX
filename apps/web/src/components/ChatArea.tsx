@@ -451,38 +451,23 @@ export default function ChatArea({
             rid={activeRid}
             transaction={messageScrollTransaction?.rid === activeRid ? messageScrollTransaction : null}
           />
-          {features.butler && butlerPanelOpen ? (
-            <button
-              type="button"
-              aria-label="关闭私人房间 AI 浮层"
-              onClick={() => setPanel(null)}
-              className="absolute inset-0 z-20 cursor-default bg-black/15 transition-opacity motion-reduce:transition-none"
-            />
-          ) : null}
           {features.butler && butlerPanelOpen && ButlerPanel ? <ButlerPanel /> : null}
-          {features.butler ? (
+          {features.butler && !butlerPanelOpen ? (
             <button
               ref={butlerLauncherRef}
               id="room-butler-launcher"
               type="button"
               aria-controls="room-butler-panel"
-              aria-expanded={butlerPanelOpen}
-              aria-label={butlerPanelOpen ? '收起房间 AI' : '打开房间 AI'}
-              title={butlerPanelOpen ? '收起房间 AI' : '打开房间 AI'}
+              aria-expanded="false"
+              aria-label="打开房间 AI"
+              title="打开房间 AI"
               onClick={() => togglePanel({ kind: 'butler' })}
               className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
             >
-              {butlerPanelOpen ? (
-                <ChevronDown
-                  size={22}
-                  className="transition-transform duration-150 group-hover:translate-y-0.5 motion-reduce:transition-none"
-                />
-              ) : (
-                <Bot
-                  size={21}
-                  className="transition-transform duration-150 group-hover:-rotate-6 motion-reduce:transition-none"
-                />
-              )}
+              <Bot
+                size={21}
+                className="transition-transform duration-150 group-hover:-rotate-6 motion-reduce:transition-none"
+              />
             </button>
           ) : null}
         </div>

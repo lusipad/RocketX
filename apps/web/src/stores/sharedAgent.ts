@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauriRuntime, rest } from '../lib/client';
+import { toSendableMessageChunks } from '../lib/messageChunks';
 import { getAiRuntimeProvider } from '../lib/runtimeMode';
 import { useAuth } from './auth';
 import { useChat } from './chat';
@@ -297,6 +298,10 @@ let sharedAgentControllerFactory: SharedAgentControllerFactory = (options) => ne
 let sharedDshControllerFactory: SharedDshControllerFactory = (workspaceRoot, connectionId, options) => (
   new HostedDshController(workspaceRoot, connectionId, options)
 );
+let sharedAgentMessageSizeProvider = async (): Promise<unknown> => {
+  const clientModule = await import('../lib/client');
+  return clientModule.getPublicSetting('Message_MaxAllowedSize');
+};
 
 function emptySharedAgentScope() {
   return {
@@ -484,18 +489,51 @@ function updatePublishedSession(session: AgentSession): void {
 }
 
 async function sendAgentReply(session: AgentSession, text: string): Promise<void> {
-  try {
-    const sent = await invoke<unknown | null>('agent_bot_send', {
-      serverUrl: getServerBase(),
+  const maxAllowedSize = await sharedAgentMessageSizeProvider().catch(() => undefined);
+  const chunks = toSendableMessageChunks(text, maxAllowedSize);
+  let useHostFallback = false;
+  let botDelivered = false;
+  for (const chunk of chunks) {
+    if (!useHostFallback) {
+      try {
+        const sent = await invoke<unknown | null>('agent_bot_send', {
+          serverUrl: getServerBase(),
+          rid: session.rid,
+          tmid: replyTmid(session) ?? null,
+          text: chunk,
+        });
+        if (sent !== null) {
+          botDelivered = true;
+          continue;
+        }
+        if (botDelivered) throw new Error('Bot 发送在分段中途失败，已停止本轮回复');
+        useHostFallback = true;
+      } catch (error) {
+        if (botDelivered) throw error;
+        useHostFallback = true;
+        trace(session.tmid, 'warning', `Bot 发送失败，已由宿主代发：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const sent = await useChat.getState().send(chunk, {
       rid: session.rid,
-      tmid: replyTmid(session) ?? null,
-      text,
+      tmid: replyTmid(session),
+      preserveWhitespace: true,
     });
-    if (sent !== null) return;
-  } catch (error) {
-    trace(session.tmid, 'warning', `Bot 发送失败，已由宿主代发：${error instanceof Error ? error.message : String(error)}`);
+    if (
+      !sent ||
+      typeof sent !== 'object' ||
+      !('delivery' in sent) ||
+      (sent.delivery !== 'server' && sent.delivery !== 'lan')
+    ) {
+      const detail = (
+        sent &&
+        typeof sent === 'object' &&
+        'reason' in sent &&
+        typeof sent.reason === 'string'
+      ) ? sent.reason : '消息发送失败';
+      throw new Error(detail);
+    }
   }
-  await useChat.getState().send(text, { rid: session.rid, tmid: replyTmid(session) });
 }
 
 function trace(tmid: string, kind: AgentTrace['kind'], text: string): void {
@@ -721,7 +759,8 @@ function onNotification(tmid: string, method: string, paramsValue: unknown): voi
 
 async function completeTurn(session: AgentSession, turnId: string, status: string): Promise<void> {
   const turnKey = scopedTurnKey(session.tmid, turnId);
-  const text = turnBuffers.get(turnKey)?.trim() ?? '';
+  const buffered = turnBuffers.get(turnKey) ?? '';
+  const text = buffered.trim() ? buffered.replace(/\s+$/u, '') : '';
   turnBuffers.delete(turnKey);
   try {
     if (text) {
@@ -1907,6 +1946,16 @@ export function setSharedAgentDshControllerFactory(factory: SharedDshControllerF
   sharedDshControllerFactory = factory;
   return () => {
     sharedDshControllerFactory = previous;
+  };
+}
+
+export function setSharedAgentMessageSizeProviderForTests(
+  provider: typeof sharedAgentMessageSizeProvider,
+): () => void {
+  const previous = sharedAgentMessageSizeProvider;
+  sharedAgentMessageSizeProvider = provider;
+  return () => {
+    sharedAgentMessageSizeProvider = previous;
   };
 }
 

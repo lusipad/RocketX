@@ -75,7 +75,9 @@ test('聊天托管面板展示独立托管配置，并提供管家统一管理�
   assert.match(chat, /aria-label="打开 AI 托管控制面"/);
   assert.match(chat, /setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)/);
   assert.match(chat, /id="room-butler-launcher"/);
-  assert.match(chat, /aria-label=\{butlerPanelOpen \? '收起房间 AI' : '打开房间 AI'\}/);
+  assert.match(chat, /features\.butler && !butlerPanelOpen/);
+  assert.match(chat, /aria-label="打开房间 AI"/);
+  assert.doesNotMatch(chat, /收起房间 AI/);
   assert.match(chat, /onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
   assert.match(chat, /setRoomHostingWorkspace\(activeRid, path\.path\);[\s\S]*setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\);/);
   assert.match(chat, /在 AI 管家中管理项目/);

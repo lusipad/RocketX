@@ -226,7 +226,10 @@ interface ChatState {
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
   loadMembers: (rid: string) => Promise<RcUser[]>;
-  send: (text: string, opts?: { rid?: string; tmid?: string; quote?: RcMessage; clientId?: string }) => Promise<ChatSendResult | undefined>;
+  send: (
+    text: string,
+    opts?: { rid?: string; tmid?: string; quote?: RcMessage; clientId?: string; preserveWhitespace?: boolean },
+  ) => Promise<ChatSendResult | undefined>;
   /** 执行斜杠命令。tmid 有值时在话题里执行 */
   runSlash: (command: string, params: string, tmid?: string) => Promise<void>;
 
@@ -1549,9 +1552,10 @@ export const useChat = create<ChatState>((set, get) => ({
 
   send: async (text, opts) => {
     const rid = opts?.rid ?? get().activeRid;
-    const trimmed = text.trim();
+    const preserveWhitespace = opts?.preserveWhitespace === true;
+    const normalized = preserveWhitespace ? text : text.trim();
     const me = useAuth.getState().user;
-    if (!rid || !trimmed || !me) return undefined;
+    if (!rid || !normalized.trim() || !me) return undefined;
     const explicitClientId = opts?.clientId;
     const clientId = safeMessageId(explicitClientId);
     if (explicitClientId !== undefined && !clientId) {
@@ -1566,8 +1570,8 @@ export const useChat = create<ChatState>((set, get) => ({
     // 必须 await 到服务端真正的 Site_Url——缓存没热时 siteUrlSync 会回退到
     // getServerBase()，与服务端 Site_Url 不一致就不展开（issue #9）。
     const fullText = opts?.quote
-      ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + trimmed
-      : trimmed;
+      ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + normalized
+      : normalized;
     const expectsAgentReply = agentReplyNotificationTracker.expect(rid, fullText);
 
     // 乐观上屏：秒回显，pending 状态等服务器确认。

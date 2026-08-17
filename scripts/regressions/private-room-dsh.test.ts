@@ -118,6 +118,8 @@ test('私人 DSH 中断仅影响当前 controller 会话，并清空待处理审
   const storage = new MemoryStorage();
   const transcripts = new Map<string, DshTranscript>();
   const controllers = new Map<string, HostedDshControllerOptions>();
+  const respondedApprovals: Array<[string, boolean]> = [];
+  const respondedQuestions: Array<[string, number]> = [];
   let sequence = 0;
 
   const restoreStorage = setPrivateRoomDshStorageForTests(storage);
@@ -140,8 +142,12 @@ test('私人 DSH 中断仅影响当前 controller 会话，并清空待处理审
         return { turnId: 'turn-1', text: 'ok' };
       },
       async cancel() {},
-      async respondApproval() {},
-      async respondQuestion() {},
+      async respondApproval(approval, approved) {
+        respondedApprovals.push([approval.approvalId, approved]);
+      },
+      async respondQuestion(question, answers) {
+        respondedQuestions.push([question.rpcId, answers.length]);
+      },
       async stop() {},
     };
   });
@@ -194,9 +200,15 @@ test('私人 DSH 中断仅影响当前 controller 会话，并清空待处理审
     });
 
     firstController.onInterrupted?.(new Error('旧 controller 已断开'));
-    assert.equal(usePrivateRoomDsh.getState().sessions[firstKey]?.status, 'waiting-input');
-    assert.equal(usePrivateRoomDsh.getState().sessions[secondKey]?.status, 'waiting-input');
+    assert.equal(usePrivateRoomDsh.getState().sessions[firstKey]?.status, 'error');
+    assert.equal(usePrivateRoomDsh.getState().sessions[secondKey]?.status, 'error');
+    assert.equal(usePrivateRoomDsh.getState().sessions[firstKey]?.approvals.length, 0);
+    assert.equal(usePrivateRoomDsh.getState().sessions[secondKey]?.questions.length, 0);
     assert.equal(usePrivateRoomDsh.getState().sessions[otherKey]?.status, 'ready');
+    await usePrivateRoomDsh.getState().respondApproval(firstKey, 'approval-1', true);
+    await usePrivateRoomDsh.getState().respondQuestion(secondKey, 'question-1', [{ id: 'q-1', selected: [], custom: '继续' }]);
+    assert.deepEqual(respondedApprovals, []);
+    assert.deepEqual(respondedQuestions, []);
 
     const secondController = controllerForWorkspace('https://chat.example:u2');
     assert.ok(secondController, '应记录第二条 controller 的回调');
@@ -215,8 +227,8 @@ test('私人 DSH 中断仅影响当前 controller 会话，并清空待处理审
     assert.equal(usePrivateRoomDsh.getState().sessions[otherKey]?.error, '当前 controller 已断开');
     assert.equal(usePrivateRoomDsh.getState().sessions[otherKey]?.approvals.length, 0);
     assert.equal(usePrivateRoomDsh.getState().sessions[otherKey]?.questions.length, 0);
-    assert.equal(usePrivateRoomDsh.getState().sessions[firstKey]?.status, 'waiting-input');
-    assert.equal(usePrivateRoomDsh.getState().sessions[secondKey]?.status, 'waiting-input');
+    assert.equal(usePrivateRoomDsh.getState().sessions[firstKey]?.status, 'error');
+    assert.equal(usePrivateRoomDsh.getState().sessions[secondKey]?.status, 'error');
   } finally {
     await resetPrivateRoomDshForTests();
     restoreFactory();

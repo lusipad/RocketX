@@ -99,6 +99,8 @@ export default function PanelShell({
           <span className="min-w-0 flex-1 text-base font-semibold text-ink">{title}</span>
           <button
             onClick={() => setPanel(null)}
+            aria-label="关闭侧栏"
+            title="关闭侧栏"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
           >
             <X size={16} />

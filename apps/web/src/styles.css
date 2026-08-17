@@ -989,7 +989,7 @@ body {
 .butler-conversation-markdown,
 .rocketx-markdown {
   --markdown-content-max-width: 42rem;
-  --markdown-wide-block-max-width: 64rem;
+  --markdown-wide-block-max-width: 100%;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -1022,7 +1022,17 @@ body {
   max-width: min(100%, var(--markdown-content-max-width));
 }
 
+.rocketx-markdown--chat > :is(p, blockquote, hr, h1, h2, h3, h4, h5, h6, .markdown-list-item) {
+  width: min(100%, var(--markdown-content-max-width));
+  max-width: min(100%, var(--markdown-content-max-width));
+}
+
 .rocketx-markdown--doc > :is(pre, div:has(> table)) {
+  width: min(100%, var(--markdown-wide-block-max-width));
+  max-width: min(100%, var(--markdown-wide-block-max-width));
+}
+
+.rocketx-markdown--chat > :is(pre, div:has(> table)) {
   width: min(100%, var(--markdown-wide-block-max-width));
   max-width: min(100%, var(--markdown-wide-block-max-width));
 }
@@ -1288,9 +1298,10 @@ body {
 }
 
 .rocketx-agent-answer {
-  flex: 0 1 76rem;
+  min-width: 0;
+  flex: 1 1 0;
   width: 100%;
-  max-width: 76rem;
+  max-width: none;
 }
 
 .rocketx-agent-answer-provider {
@@ -1306,7 +1317,7 @@ body {
 
 .rocketx-agent-answer-body {
   --markdown-content-max-width: 48rem;
-  --markdown-wide-block-max-width: 76rem;
+  --markdown-wide-block-max-width: 100%;
   border-radius: 0;
   background: transparent;
   padding: 1px 6px 10px 0;
@@ -3917,8 +3928,8 @@ body {
 
 .codex-native-transcript-inner {
   --markdown-content-max-width: 48rem;
-  --markdown-wide-block-max-width: 76rem;
-  width: min(100%, 76rem);
+  --markdown-wide-block-max-width: 100%;
+  width: 100%;
   min-height: 100%;
   margin: 0 auto;
 }
@@ -4828,7 +4839,7 @@ details.codex-native-activity {
 }
 
 .butler-conversation-layout.has-artifact .codex-native-transcript-inner {
-  width: min(100%, 76rem);
+  width: 100%;
 }
 
 .codex-artifact-link {

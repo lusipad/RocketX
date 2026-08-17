@@ -239,7 +239,7 @@ function DshRoomMessage({
       data-speaker={entry.role}
       className={`codex-native-message group relative${streaming ? ' is-streaming' : ''}`}
     >
-      <span>{entry.role === 'assistant' ? 'DeepSeek' : entry.role === 'user' ? '你' : '系统'}</span>
+      <span>{entry.role === 'assistant' ? 'DSH' : entry.role === 'user' ? '你' : '系统'}</span>
       <div className="butler-conversation-markdown">
         {entry.role === 'assistant'
           ? progressive
@@ -252,7 +252,7 @@ function DshRoomMessage({
       {entry.text && !streaming && entry.role !== 'system' ? (
         <ConversationCopyButton
           text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
-          speaker={entry.role === 'assistant' ? 'DeepSeek' : '你的'}
+          speaker={entry.role === 'assistant' ? 'DSH' : '你的'}
           align={entry.role === 'user' ? 'right' : 'left'}
         />
       ) : null}
@@ -531,7 +531,7 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
   );
 }
 
-function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
+function DshRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
   const desktopRuntime = isTauriRuntime();
   const ensureDefaultWorkspace = useCodexWorkspace((state) => state.ensureDefaultWorkspace);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
@@ -580,7 +580,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
     void prepare()
       .then((root) => openRoom({ scope, rid, workspaceRoot: root }))
       .catch((reason) => {
-        if (!cancelled) toast.error(reason, '无法打开私人 DeepSeek 会话');
+        if (!cancelled) toast.error(reason, '无法打开私人 DSH 会话');
       })
       .finally(() => {
         if (!cancelled) setOpening(false);
@@ -599,7 +599,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
       setInput('');
       stickToBottom.current = true;
     } catch (reason) {
-      toast.error(reason, '无法新建私人 DeepSeek 会话');
+      toast.error(reason, '无法新建私人 DSH 会话');
     } finally {
       setOpening(false);
     }
@@ -635,7 +635,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
       const root = await prepare();
       await openRoom({ scope, rid, workspaceRoot: root });
     } catch (reason) {
-      toast.error(reason, '无法重新连接私人 DeepSeek 会话');
+      toast.error(reason, '无法重新连接私人 DSH 会话');
     } finally {
       setOpening(false);
     }
@@ -651,11 +651,11 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
             <button
               type="button"
               onClick={openNativeConversation}
-              aria-label="设置 DeepSeek 模型与 Agent"
+              aria-label="设置 DSH 模型与 Agent"
               title="在 DSH 中设置当前私人会话的模型、Agent 和权限"
               className="flex min-w-0 items-center gap-1 rounded bg-surface px-2 py-0.5 text-ink-2 hover:bg-fill-hover disabled:opacity-40"
             >
-              <Settings size={11} className="shrink-0" aria-hidden="true" /> DeepSeek
+              <Settings size={11} className="shrink-0" aria-hidden="true" /> DSH
             </button>
             <span className="shrink-0 whitespace-nowrap rounded bg-surface px-2 py-0.5 text-ink-2">私人会话</span>
           </div>
@@ -663,7 +663,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
             type="button"
             disabled={opening || running}
             onClick={() => void createConversation()}
-            aria-label="新建私人 DeepSeek 会话"
+            aria-label="新建私人 DSH 会话"
             title={running ? '当前回复完成后再新建会话' : '新建私人会话'}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -679,7 +679,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
         {opening || session?.status === 'connecting' ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            正在接回私人 DeepSeek 会话
+            正在接回私人 DSH 会话
           </div>
         ) : !desktopRuntime ? (
           <div className="rounded-xl border border-line bg-fill-1 p-4 text-sm leading-6 text-ink-2">
@@ -688,7 +688,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
         ) : session?.status === 'error' ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
             <CircleAlert size={22} className="text-danger" aria-hidden="true" />
-            <h3 className="mt-3 text-sm font-semibold text-ink">私人 DeepSeek 会话连接失败</h3>
+            <h3 className="mt-3 text-sm font-semibold text-ink">私人 DSH 会话连接失败</h3>
             <p className="mt-1 max-w-sm text-xs leading-5 text-danger">{session.error}</p>
             <div className="mt-3 flex flex-wrap justify-center gap-2">
               <button
@@ -728,10 +728,10 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
               />
             ) : running ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
-                <span>DeepSeek</span>
+                <span>DSH</span>
                 <div className="flex items-center gap-2 text-ink-3">
                   <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  {activeActivity?.title || 'DeepSeek 正在思考…'}
+                  {activeActivity?.title || 'DSH 正在思考…'}
                 </div>
               </article>
             ) : null}
@@ -743,7 +743,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
         <>
           {session.approvals.map((approval) => (
             <div key={approval.approvalId} className="mx-4 mb-2 rounded-lg border border-warning/30 bg-warning-light p-3 text-xs text-ink-2">
-              <strong className="block text-ink">DeepSeek 请求执行：{approval.toolName}</strong>
+              <strong className="block text-ink">DSH 请求执行：{approval.toolName}</strong>
               {approval.reason ? <p className="mt-1 leading-5">{approval.reason}</p> : null}
               <div className="mt-2 flex justify-end gap-2">
                 <button type="button" onClick={() => void respondApproval(key, approval.approvalId, false)} className="rounded border border-line px-2.5 py-1 hover:bg-fill-hover">拒绝</button>
@@ -776,7 +776,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
                 void submit();
               }}
               aria-label="发送给私人房间 AI"
-              placeholder={running ? 'DeepSeek 正在处理当前消息…' : '给你的房间 AI 发消息…'}
+              placeholder={running ? 'DSH 正在处理当前消息…' : '给你的房间 AI 发消息…'}
               rows={1}
               autoFocus
               className="min-h-8 max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-5 text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
@@ -784,7 +784,7 @@ function DeepSeekRoomConversation({ rid, roomName, scope }: { rid: string; roomN
             {running && session?.status !== 'waiting-input' ? (
               <button
                 type="button"
-                onClick={() => void cancel(key).catch((reason) => toast.error(reason, '无法停止 DeepSeek'))}
+                onClick={() => void cancel(key).catch((reason) => toast.error(reason, '无法停止 DSH'))}
                 aria-label="停止私人房间 AI"
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-danger text-white hover:opacity-90"
               >
@@ -858,7 +858,7 @@ export default function ButlerPanel() {
       role="dialog"
       aria-modal="false"
       aria-label="私人房间 AI 对话"
-      className="absolute top-4 right-3 bottom-28 left-3 z-30 flex justify-end overflow-hidden rounded-xl shadow-[0_24px_64px_-24px_rgba(0,0,0,0.78)]"
+      className="absolute inset-y-0 right-0 z-30 flex max-w-full justify-end overflow-hidden"
     >
       <PanelShell
         resizable
@@ -872,7 +872,7 @@ export default function ButlerPanel() {
         {!scope || provider === 'none' ? (
           <DisabledRoomConversation />
         ) : provider === 'deepseek' ? (
-          <DeepSeekRoomConversation key={`deepseek:${scope}:${rid}`} rid={rid} roomName={name} scope={scope} />
+          <DshRoomConversation key={`dsh:${scope}:${rid}`} rid={rid} roomName={name} scope={scope} />
         ) : (
           <CodexRoomConversation key={`codex:${scope}:${rid}`} rid={rid} roomName={name} scope={scope} />
         )}
