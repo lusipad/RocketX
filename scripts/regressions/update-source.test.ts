@@ -79,6 +79,12 @@ test('原生 updater 即使返回同版本或旧版本也不得提示更新（is
   assert.equal(isNewerNativeUpdate(null), false);
 });
 
+test('Debug 构建不自动弹出正式版更新提示', () => {
+  const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
+
+  assert.match(bridge, /import\.meta\.env\.DEV \|\| !isTauri \|\| checked/);
+});
+
 test('共享目录更新：helper 接管安装、单流程并由 Rust 完成交接退出（issue #304）', () => {
   const updateSource = readFileSync('apps/web/src/lib/updateSource.ts', 'utf8');
   const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
