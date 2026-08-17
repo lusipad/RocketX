@@ -15,11 +15,15 @@ function normalizeWorkspaceRoot(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
-async function resolveWorkspaceRoot(): Promise<string> {
+async function resolveWorkspaceRoot(personalConversationRequested: boolean): Promise<string> {
   const workspace = useCodexWorkspace.getState();
   await workspace.ensureDefaultWorkspace();
   const latest = useCodexWorkspace.getState();
-  return normalizeWorkspaceRoot(latest.butlerWorkspaceRoot) || normalizeWorkspaceRoot(latest.defaultWorkspaceRoot);
+  const defaultWorkspaceRoot = normalizeWorkspaceRoot(latest.defaultWorkspaceRoot);
+  const butlerWorkspaceRoot = normalizeWorkspaceRoot(latest.butlerWorkspaceRoot);
+  return personalConversationRequested
+    ? defaultWorkspaceRoot || butlerWorkspaceRoot
+    : butlerWorkspaceRoot || defaultWorkspaceRoot;
 }
 
 type DshFrameRequest =
@@ -48,6 +52,7 @@ export default function DshConversation() {
   const selectedHostedSessionKey = useUI((state) => state.selectedHostedSessionKey);
   const selectedPersonalDshSessionId = useUI((state) => state.selectedPersonalDshSessionId);
   const selectedPersonalDshFocusNonce = useUI((state) => state.selectedPersonalDshFocusNonce);
+  const personalConversationRequested = selectedPersonalDshFocusNonce > 0;
   const hostedSessionsByKey = useSharedAgent((state) => state.sessions);
   const desktopRuntime = isTauriRuntime();
   const selectedHostedSession = selectedHostedSessionKey
@@ -148,7 +153,7 @@ export default function DshConversation() {
 
     void (async () => {
       try {
-        const nextWorkspaceRoot = await resolveWorkspaceRoot();
+        const nextWorkspaceRoot = await resolveWorkspaceRoot(personalConversationRequested);
         if (!nextWorkspaceRoot) throw new Error('未找到可用的 DSH 工作区');
         if (disposed) return;
 
@@ -194,7 +199,7 @@ export default function DshConversation() {
       }
       void activeController?.stop().catch(() => undefined);
     };
-  }, [attempt, desktopRuntime]);
+  }, [attempt, desktopRuntime, personalConversationRequested]);
 
   useEffect(() => {
     if (!desktopRuntime || !frameLoaded || status !== 'ready' || !url) return;

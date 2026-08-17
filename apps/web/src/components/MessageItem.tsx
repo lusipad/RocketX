@@ -887,7 +887,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         className={`flex min-w-0 flex-col ${
           hostedAgentAnswer
             ? 'rocketx-agent-answer flex-1 items-stretch'
-            : `${richMarkdown ? 'w-full max-w-[42rem]' : 'max-w-[68%]'} ${visuallyMine ? 'items-end' : 'items-start'}`
+            : `${richMarkdown ? 'w-full max-w-[64rem]' : 'max-w-[68%]'} ${visuallyMine ? 'items-end' : 'items-start'}`
         } ${
           selectMode ? 'pointer-events-none' : ''
         }`}

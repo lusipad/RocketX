@@ -705,6 +705,64 @@ test('主管家流式 Markdown 完成时复用同一条消息和已封口块', a
   expect(result.bottomGap).toBeLessThan(2);
 });
 
+test('主管家宽屏对话为 Markdown 表格保留完整阅读宽度', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await openWorkspace(page);
+  await page.evaluate(async () => {
+    const loadWorkspace = new Function('return import("/src/stores/codexWorkspace.ts")') as () => Promise<any>;
+    const { useCodexWorkspace } = await loadWorkspace();
+    useCodexWorkspace.setState({
+      status: 'ready',
+      messages: [{
+        id: 'wide-markdown-table',
+        role: 'assistant',
+        text: [
+          '## 跨平台发布矩阵',
+          '',
+          '| 门禁 | Windows | macOS | Linux | 发布产物 | 校验 |',
+          '| --- | --- | --- | --- | --- | --- |',
+          '| 桌面构建 | x64 slim + full installer | universal application bundle | AppImage + deb + rpm | signed update archives | SHA256SUMS |',
+        ].join('\n'),
+      }],
+      streamingText: '',
+    });
+  });
+
+  const transcript = page.locator('.codex-native-transcript');
+  const inner = transcript.locator('.codex-native-transcript-inner');
+  const tableWrap = inner.locator('.markdown-table-wrap');
+  await expect(tableWrap.getByRole('table')).toContainText('signed update archives');
+  const layout = await transcript.evaluate((element) => {
+    const inner = element.querySelector<HTMLElement>('.codex-native-transcript-inner')!;
+    const tableWrap = element.querySelector<HTMLElement>('.markdown-table-wrap')!;
+    return {
+      transcriptWidth: element.clientWidth,
+      innerWidth: inner.getBoundingClientRect().width,
+      tableOverflowX: getComputedStyle(tableWrap).overflowX,
+      tableViewportWidth: tableWrap.clientWidth,
+      tableScrollWidth: tableWrap.scrollWidth,
+    };
+  });
+
+  expect(layout.innerWidth).toBeGreaterThan(1000);
+  expect(layout.innerWidth).toBeLessThanOrEqual(layout.transcriptWidth);
+  expect(layout.tableOverflowX).toBe('auto');
+  expect(layout.tableViewportWidth).toBeGreaterThan(1000);
+  expect(layout.tableScrollWidth).toBeGreaterThanOrEqual(layout.tableViewportWidth);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrowLayout = await tableWrap.evaluate((element) => ({
+    overflowX: getComputedStyle(element).overflowX,
+    viewportWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    pageWidth: document.documentElement.scrollWidth,
+    windowWidth: window.innerWidth,
+  }));
+  expect(narrowLayout.overflowX).toBe('auto');
+  expect(narrowLayout.scrollWidth).toBeGreaterThan(narrowLayout.viewportWidth);
+  expect(narrowLayout.pageWidth).toBeLessThanOrEqual(narrowLayout.windowWidth);
+});
+
 test('私人房间 AI 不读取或展示共享托管 transcript', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 700 });
   await bootWithAiRuntime(page, 'codex');
@@ -1901,6 +1959,124 @@ test('390px 下任务列表用抽屉打开，输入区没有横向溢出', async
   await page.getByRole('button', { name: '关闭任务列表' }).last().click();
   await expect(page.getByLabel('给 Codex 的任务')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('私人房间 DeepSeek 缺少凭据时可直接打开 DSH 配置', async ({ page }) => {
+  const dshWebUrl = 'http://127.0.0.1:43124/';
+  await page.route(dshWebUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html>
+<html>
+  <body>
+    <script>
+      window.__openRequests = [];
+      window.addEventListener('message', (event) => {
+        const data = event.data || {};
+        if (data.type === 'rocketx:dsh-open-new-session') window.__openRequests.push(data.workspacePath);
+        event.source?.postMessage({ requestId: data.requestId, type: 'rocketx:dsh-ack' }, event.origin);
+      });
+    </script>
+  </body>
+</html>`,
+    });
+  });
+  await bootWithAiRuntime(page, 'deepseek');
+  await installCodexRuntime(page);
+  await page.evaluate((readyUrl) => {
+    const testWindow = window as typeof window & {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      __TAURI_EVENT_PLUGIN_INTERNALS__?: { unregisterListener: (event: string, eventId: number) => void };
+      __dshBridgeWorkspaces?: string[];
+    };
+    testWindow.__dshBridgeWorkspaces = [];
+    const runtime = testWindow.__TAURI_INTERNALS__;
+    const baseInvoke = runtime.invoke.bind(runtime);
+    let nextEventId = 1;
+    runtime.invoke = async (command, args) => {
+      if (command === 'plugin:event|listen') return nextEventId++;
+      if (command === 'plugin:event|unlisten') return null;
+      if (command === 'dsh_bridge_start') {
+        testWindow.__dshBridgeWorkspaces!.push(String(args?.workspaceRoot ?? ''));
+        return {
+          processId: 'dsh-process-private-setup',
+          leaseId: 'dsh-lease-private-setup',
+          readyUrl,
+        };
+      }
+      if (command === 'dsh_bridge_stop') return null;
+      return baseInvoke(command, args);
+    };
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', {
+      configurable: true,
+      value: { unregisterListener: () => {} },
+    });
+  }, dshWebUrl);
+  await page.getByText('General', { exact: true }).first().click();
+  await page.evaluate(async () => {
+    const loadAuth = new Function('return import("/src/stores/auth.ts")') as () => Promise<any>;
+    const loadClient = new Function('return import("/src/lib/client.ts")') as () => Promise<any>;
+    const loadPrivateDsh = new Function('return import("/src/stores/privateRoomDsh.ts")') as () => Promise<any>;
+    const loadUI = new Function('return import("/src/stores/ui.ts")') as () => Promise<any>;
+    const [{ useAuth }, { getServerBase }, { privateRoomDshKey, usePrivateRoomDsh }, { useUI }] = await Promise.all([
+      loadAuth(),
+      loadClient(),
+      loadPrivateDsh(),
+      loadUI(),
+    ]);
+    useUI.setState({ aiRuntimeProvider: 'deepseek' });
+    const scope = `${getServerBase() || 'same-origin'}:${useAuth.getState().user._id}`;
+    const key = privateRoomDshKey(scope, 'room-general');
+    const error = '请先在 DSH 中配置 DeepSeek API Key';
+    usePrivateRoomDsh.setState({
+      openRoom: async () => { throw new Error(error); },
+      sessions: {
+        [key]: {
+          key,
+          scope,
+          rid: 'room-general',
+          workspaceRoot: 'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless',
+          transcript: { messages: [], activities: [] },
+          status: 'error',
+          error,
+          approvals: [],
+          questions: [],
+        },
+      },
+    });
+  });
+
+  await page.getByRole('button', { name: '打开房间 AI', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '私人房间 AI 对话' });
+  await expect(panel.getByText('请先在 DSH 中配置 DeepSeek API Key', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: '在 DSH 中配置' }).click();
+
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => {
+    const { useUI } = await import('/src/stores/ui.ts');
+    const state = useUI.getState();
+    return {
+      module: state.module,
+      sessionId: state.selectedPersonalDshSessionId,
+      personalRequest: state.selectedPersonalDshFocusNonce > 0,
+    };
+  })).toEqual({
+    module: 'butler-view',
+    sessionId: null,
+    personalRequest: true,
+  });
+  expect(await page.evaluate(() => (
+    window as typeof window & { __dshBridgeWorkspaces?: string[] }
+  ).__dshBridgeWorkspaces)).toEqual([
+    'C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless',
+  ]);
+  await expect.poll(async () => {
+    const frame = page.frame({ url: dshWebUrl });
+    if (!frame) return [];
+    return frame.evaluate(() => (window as typeof window & { __openRequests?: string[] }).__openRequests ?? []);
+  }).toEqual(['C:/Users/tester/AppData/Local/com.lusipad.rocketx/codex-projectless']);
 });
 
 test('输出流式 Markdown 完成前后视觉门禁截图', async ({ page }) => {
