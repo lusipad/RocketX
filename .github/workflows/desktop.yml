@@ -193,4 +193,5 @@ jobs:
           cd ..
           node scripts/release-notes.mjs --tag "$GITHUB_REF_NAME" > RELEASE_NOTES.md
           gh release upload "$GITHUB_REF_NAME" release-assets/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --notes-file RELEASE_NOTES.md
+          test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true"

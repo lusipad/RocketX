@@ -111,6 +111,8 @@ test('发布工作流先验证 main 上的注解标签再执行标签代码', as
   const prepareRelease = desktopWorkflow.match(/prepare-release:[\s\S]*$/)?.[0] ?? '';
   assert.match(prepareRelease, /核验三平台产物并准备草稿 Release/);
   assert.match(prepareRelease, /pnpm\/action-setup@v5[\s\S]*pnpm package:plugins/);
+  assert.match(prepareRelease, /gh release edit[^\n]*--draft[^\n]*--notes-file RELEASE_NOTES\.md/);
+  assert.equal((prepareRelease.match(/test "\$\(gh release view[^\n]*--json isDraft[^\n]*\)" = "true"/g) ?? []).length, 2);
   assert.match(tagWorkflow, /git config user\.name/);
   assert.match(tagWorkflow, /github-actions\[bot\]@users\.noreply\.github\.com/);
 });
