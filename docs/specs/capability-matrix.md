@@ -1,6 +1,6 @@
 # RocketX 能力矩阵
 
-> 基线：工作树 `2026-08-17`，应用版本 `0.43.4`
+> 基线：工作树 `2026-08-17`，应用版本 `0.43.5`
 > 判断口径：只记录当前可观察行为；未来目标见各能力域的“已知差距与目标”。
 
 ## 1. 场景定义
@@ -9,7 +9,7 @@
 | --- | --- |
 | 桌面端 + 兼容 Codex | Tauri 桌面端可解析已登录的 Codex，`app-server` 探测和版本门禁通过 |
 | 桌面端，无可用 Codex | 未安装、未登录、版本被阻止，或 `app-server` 探测失败 |
-| 桌面端 + 可用 DSH | slim 可连接已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH；Windows full 则使用同样锁定为 `0.1.0-rc.6` 的私有固定 DSH 运行时；发送时已配置 DeepSeek API Key |
+| 桌面端 + 可用 DSH | slim 可连接已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH；Windows full 则使用同样锁定为 `0.1.0-rc.6` 的私有固定 DSH 运行时；发送时已配置当前所选 provider 需要的凭据 |
 | 网页版 | 浏览器访问 RocketX，不具备 Tauri 本地进程与文件能力 |
 | 性能模式 | 用户主动关闭 Codex、DSH、例行任务、共享 Agent、本地 OCR 等高开销能力 |
 
@@ -34,7 +34,7 @@
 | 待办、日历、通讯录 | 已实现 | 已实现 | 已实现 | 已实现 | 待办和日历以本机数据为主；通讯录来自 Rocket.Chat |
 | 启动级 AI 运行时选择 | 已实现 | 已实现 | 已实现 | 已实现 | 在设置里选择 Codex / DSH / 无 AI；保存后重启生效，不热切换，不同时启动两个后端；performance 模式隐藏这一入口 |
 | 管家 Codex 原生任务 | 已实现 | 不可用 | 不可用 | 不适用 | 仅在启动级选择为 Codex 时可用；桌面端本地 `app-server` 传输 |
-| 管家 DeepSeek 原生任务 | 受限 | 受限 | 不可用 | 不适用 | 仅在启动级选择为 DSH 时可用；slim 依赖已安装且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH，Windows full 依赖同版本私有 DSH 运行时；DeepSeek 视图会启动官方 DSH Web 并把本地 loopback URL 以 iframe 嵌入，AI 托管和共享 Agent 仍走 controller/host 路径，再配合 DeepSeek API Key |
+| 管家 DSH 原生任务 | 受限 | 受限 | 不可用 | 不适用 | 仅在启动级选择为 DSH 时可用；slim 依赖已安装且已被 RocketX 验证为 `0.1.0-rc.6` 的系统 DSH，Windows full 依赖同版本私有 DSH 运行时；DSH 视图会启动官方 DSH Web 并把本地 loopback URL 以 iframe 嵌入，AI 托管和共享 Agent 仍走 controller/host 路径，并沿用 DSH 当前 provider 及其凭据 |
 | DSH 模型 / Provider / 推理 / Agent / 权限配置 | 受限 | 受限 | 不可用 | 不适用 | 私人会话由官方 DSH Web 配置；共享托管开启页从 DSH 原生目录读取本次模型、推理、Agent 与权限，不复制持久配置或自绘管理台 |
 | 管家与 Codex App 接续 | 受限 | 不可用 | 不可用 | 不适用 | 仅在启动级选择为 Codex 时可用；支持打开和手动刷新；同一线程顺序接续，不同任务线程可在共享 Runtime 中并行 |
 | Skills / Plugins / Apps 目录 | 已实现 | 不可用 | 不可用 | 不适用 | 目录和动作来自当前 Codex `app-server` |
@@ -67,8 +67,8 @@ RocketX 当前桌面安装包采用 slim/full 分层。默认 slim 不捆绑 Cod
 | --- | --- |
 | 官方 slim 发现到可运行的系统 DSH | 可启动 DSH bridge，并打开官方 DSH Web 的本地 loopback 页面；AI 托管/共享 Agent 仍通过 controller/host 原生 RPC 交互 |
 | Windows full 私有 `@deepseek-ai/dsh@0.1.0-rc.6` 运行时 | 可启动 DSH bridge，并打开官方 DSH Web 的本地 loopback 页面；AI 托管/共享 Agent 仍通过 controller/host 原生 RPC 交互 |
-| DSH 不可用 | DeepSeek 后端不可用并显示诊断；不影响 Codex 与确定性界面 |
-| DeepSeek API Key 未配置 | 可以查看 DSH 状态和配置，但发送前 fail-closed 并提示配置 |
+| DSH 不可用 | DSH 后端不可用并显示诊断；不影响 Codex 与确定性界面 |
+| 当前 DSH provider 的凭据未配置或无效 | 可以查看 DSH 状态和配置；发送会 fail-closed，并展示 provider 返回的诊断与 DSH 配置入口 |
 | 随包 DSH 资源缺失/不完整 | 拒绝启动该后端，不在运行时下载或猜测兼容版本；继续使用通过探测的 Codex，均不可用时以无 AI 启动 |
 | DSH bridge 退出 | 清理旧审批/问题/队列，把运行 Session 标为中断；重连后从原生历史恢复 |
 
