@@ -10,6 +10,7 @@ import { loadWorkbenchConfig } from '../lib/ado';
 import { getServerBase, loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
 import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope } from '../lib/accountScope';
+import { useAliases } from './aliases';
 import { restoreTrayAttention } from '../lib/tray';
 import type { LoginFailureDisplay } from '../lib/loginDiagnostic';
 import { writeLoginDiagnostic } from '../lib/loginDiagnostic';
@@ -139,6 +140,8 @@ export const useAuth = create<AuthState>((set, get) => ({
         return;
       }
       set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
+      // 登录后把服务端备注名合并进本地缓存（首次登录则把本机数据迁移上传），失败不阻塞登录
+      void useAliases.getState().sync();
     } catch {
       saveAuth(null);
       await clearBusinessMcpSession();
@@ -159,6 +162,8 @@ export const useAuth = create<AuthState>((set, get) => ({
         return;
       }
       set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
+      // 登录后把服务端备注名合并进本地缓存（首次登录则把本机数据迁移上传），失败不阻塞登录
+      void useAliases.getState().sync();
     } catch (err) {
       await clearBusinessMcpSession();
       set({ status: 'guest', error: await writeLoginDiagnostic(err, 'login') });

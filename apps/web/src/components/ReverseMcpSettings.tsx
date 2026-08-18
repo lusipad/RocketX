@@ -82,7 +82,7 @@ export default function ReverseMcpSettings() {
               <div>
                 <div className="text-sm font-medium text-ink">让外部 Agent 读取聊天上下文</div>
                 <div className="mt-1 text-xs leading-5 text-ink-3">
-                  只暴露会话列表、房间历史和话题消息三个只读工具；访问范围等同当前 Rocket.Chat 账号。
+                  只暴露会话列表、房间历史、话题消息和附件原图四个只读工具；访问范围等同当前 Rocket.Chat 账号。
                 </div>
               </div>
               <button

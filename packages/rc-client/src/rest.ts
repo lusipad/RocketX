@@ -224,16 +224,28 @@ export class RcRestClient {
   /**
    * 只返回用户**显式保存过**的偏好。
    *
-   * users.info 里的 settings.preferences 只有用户自己设过的键，
-   * 没设过的不会出现 —— 客户端的默认值才能生效。
+   * 主路径是 `users.getPreferences`：它返回 settings.preferences 原文（只含显式键），
+   * 且从很老的 RC 版本就存在。不能用 `users.info` 当主路径——RC 8.x 起 users.info
+   * 的字段表里根本没有 settings（getFullUserData 不投影它），恒读不到偏好；
+   * 仅在 getPreferences 不可用时（更老的版本/代理裁剪）回退 users.info。
    */
   async getExplicitPreferences(): Promise<RcPreferences> {
     const userId = this.currentUserId();
     if (!userId) return {};
-    const res = await this.request<{
-      user?: { settings?: { preferences?: RcPreferences } };
-    }>('GET', 'users.info', undefined, { userId });
-    return res.user?.settings?.preferences ?? {};
+    try {
+      const res = await this.request<{ preferences?: RcPreferences }>(
+        'GET',
+        'users.getPreferences',
+        undefined,
+        { userId },
+      );
+      return res.preferences ?? {};
+    } catch {
+      const res = await this.request<{
+        user?: { settings?: { preferences?: RcPreferences } };
+      }>('GET', 'users.info', undefined, { userId });
+      return res.user?.settings?.preferences ?? {};
+    }
   }
 
   /** 当前登录用户 id（authProvider 模式下 this.userId 为空，需实时取） */
@@ -241,6 +253,12 @@ export class RcRestClient {
     return this.authProvider?.()?.userId ?? this.userId;
   }
 
+  /**
+   * REST 写偏好。注意：RC 8.x 的 users.setPreferences 是 schema 校验端点
+   * （additionalProperties:false），RocketX 自定义键（rcxAliases/rcxNameFormat）
+   * 会被 invalid-params 整体拒绝——含自定义键的写入请用 apps/web 侧的
+   * savePreferences（DDP saveUserPreferences 优先，本方法只是它的回退路径）。
+   */
   async setPreferences(data: Partial<RcPreferences>): Promise<void> {
     const userId = this.currentUserId();
     if (!userId) throw new Error('未登录');

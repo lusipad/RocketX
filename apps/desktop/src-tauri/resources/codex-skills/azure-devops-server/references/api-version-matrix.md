@@ -15,7 +15,8 @@ Microsoft's REST API versioning guidance lists:
 - Azure DevOps Server 2022: supports `1.0` through `7.0`
 - Azure DevOps Server 2020: supports `1.0` through `6.0`
 - Azure DevOps Server 2019: supports `1.0` through `5.0`
-- TFS 2018: supports `1.0` through `4.0`
+- TFS 2018: supports `1.0` through `4.1`
+- TFS 2017: supports `1.0` through `3.0`
 
 ## Skill Default
 
@@ -25,6 +26,9 @@ This skill defaults to:
 - `7.0` when the server hint is `2022`
 - `6.0` when the server hint is `2020` or unspecified
 - `5.0` when the server hint maps to `legacy`
+- `4.1` when the server hint is `2018` (not verified against a real TFS 2018 server; follows the Microsoft support matrix)
+- `3.0` when the server hint is `2017` (not verified against a real TFS 2017 server; follows the Microsoft support matrix)
+- `1.0` when the server hint is `2015` (TFS 2015 rejects every 2.0-6.0 version with HTTP 400)
 
 Rationale:
 
@@ -66,7 +70,7 @@ Accepted values:
 - `2015`
 - `legacy`
 
-The helper maps `2019`, `2018`, `2017`, and `2015` to `legacy` for best-effort behavior. It does not claim to auto-detect every server build.
+The helper maps `2019` to `legacy` for best-effort behavior, gives `2018` (`4.1`) and `2017` (`3.0`) their own buckets (these two mappings follow the Microsoft support matrix and have not been verified against real TFS 2017/2018 servers), and `2015` to its own first-class bucket (`1.0`). It does not claim to auto-detect every server build.
 
 ## Upgrade Rules
 
@@ -74,6 +78,8 @@ The helper maps `2019`, `2018`, `2017`, and `2015` to `legacy` for best-effort b
 - use `7.1` for a confirmed current/20.0 or 2022.1 target
 - do not assume stable `7.2` support from the product major version alone; probe the deployment before overriding to `7.2`
 - use `5.0` for explicit legacy hints unless the target proves it needs something else
+- use `4.1` for TFS 2018 targets and `3.0` for TFS 2017 targets; both mappings are unverified against real servers, so probe the deployment before relying on them
+- use `1.0` for TFS 2015 targets; do not lower `2015` into the legacy bucket
 - prefer explicit overrides over silent guessing
 - if older TFS behavior appears, report that the target is outside first-class support
 

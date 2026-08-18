@@ -27,6 +27,8 @@ const SCOPED_KEYS = [
   'rcx-favorites',
   'rcx-recent-emojis',
   'rcx-avatar-version',
+  // 通知等偏好的本地镜像（issue #351），跟着账号走，不串账号
+  'rcx-prefs-cache',
   // ADO 配置含账号(直连模式还可能有凭据缓存),同样不能跨账号共享
   'rcx-workbench',
   'rcx-ado-web',
@@ -70,5 +72,34 @@ export function ensureAccountScope(userId: string): 'ok' | 'switched' {
   } catch {
     // 存储不可用时无从隔离,也不该拦住登录
     return 'ok';
+  }
+}
+
+/**
+ * 列出某个受隔离 key 的所有归档（`<key>#<owner>` 形式），不含裸 key 本身。
+ * 用于「找回换服务器地址前留下的数据」这类导入入口（见 stores/aliases.ts）。
+ */
+export function listArchivedEntries(scopedKey: string): { owner: string; raw: string }[] {
+  try {
+    const prefix = `${scopedKey}#`;
+    const out: { owner: string; raw: string }[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      const raw = localStorage.getItem(k);
+      if (raw !== null) out.push({ owner: k.slice(prefix.length), raw });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** 删除一条归档（导入完成后调用） */
+export function removeArchivedEntry(scopedKey: string, owner: string): void {
+  try {
+    localStorage.removeItem(`${scopedKey}#${owner}`);
+  } catch {
+    /* 存储不可用 */
   }
 }

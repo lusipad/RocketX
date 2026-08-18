@@ -191,8 +191,6 @@ export interface RcPreferences {
   sendOnEnter?: 'normal' | 'alternative' | 'desktop';
   autoImageLoad?: boolean;
   useEmojis?: boolean;
-  convertAsciiEmoji?: boolean;
-  hideUsernames?: boolean;
   showThreadsInMainChannel?: boolean;
   displayAvatars?: boolean;
   // 通知
@@ -203,6 +201,11 @@ export interface RcPreferences {
   enableAutoAway?: boolean;
   idleTimeLimit?: number;
   themeAppearence?: 'auto' | 'light' | 'dark';
+  // ---- RocketX 自定义键：RC 不认识它们，但 users.setPreferences 会原样存取，可跨设备同步 ----
+  /** 备注名（`u:<username>` 给人、`r:<rid>` 给会话），见 apps/web/src/stores/aliases.ts */
+  rcxAliases?: Record<string, string>;
+  /** 名字显示格式：只显示备注名 / 备注名（原名） */
+  rcxNameFormat?: 'alias' | 'aliasWithReal';
 }
 
 /** 服务器提供的斜杠命令 */

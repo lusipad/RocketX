@@ -19,6 +19,13 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+/// 二进制响应：给附件原图下载用，保留原始字节和响应 Content-Type。
+pub struct BinaryHttpResponse {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 15_000;
 const RESOLVE_TIMEOUT_MS: u32 = 2_000;
 const CONNECT_TIMEOUT_MS: u32 = 3_000;
@@ -139,8 +146,8 @@ impl RequestDeadline {
 #[cfg(windows)]
 mod imp {
     use super::{
-        DeadlinePhase, HttpResponse, RequestDeadline, CONNECT_TIMEOUT_MS, RECEIVE_TIMEOUT_MS,
-        RESOLVE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+        BinaryHttpResponse, DeadlinePhase, HttpResponse, RequestDeadline, CONNECT_TIMEOUT_MS,
+        RECEIVE_TIMEOUT_MS, RESOLVE_TIMEOUT_MS, SEND_TIMEOUT_MS,
     };
     use std::ptr;
     use windows::core::{PCWSTR, PWSTR};
@@ -206,6 +213,29 @@ mod imp {
             .map_err(|e| format!("读取状态码失败：{e}"))?;
         }
         Ok(code as u16)
+    }
+
+    /// 读响应 Content-Type；服务器没给时返回空串，由调用方决定怎么兜底
+    fn query_content_type(request: *mut core::ffi::c_void) -> String {
+        let mut buf = [0u16; 256];
+        let mut len = (buf.len() * std::mem::size_of::<u16>()) as u32;
+        let mut index: u32 = 0;
+        let result = unsafe {
+            WinHttpQueryHeaders(
+                request,
+                WINHTTP_QUERY_CONTENT_TYPE,
+                PCWSTR::null(),
+                Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+                &mut len,
+                &mut index,
+            )
+        };
+        if result.is_err() {
+            return String::new();
+        }
+        let chars = (len as usize / std::mem::size_of::<u16>()).min(buf.len());
+        let end = buf[..chars].iter().position(|&c| c == 0).unwrap_or(chars);
+        String::from_utf16_lossy(&buf[..end])
     }
 
     fn set_timeouts(
@@ -281,10 +311,10 @@ mod imp {
         )
     }
 
-    fn read_body(
+    fn read_body_bytes(
         request: *mut core::ffi::c_void,
         deadline: Option<&RequestDeadline>,
-    ) -> Result<String, String> {
+    ) -> Result<Vec<u8>, String> {
         let mut buf: Vec<u8> = Vec::new();
         loop {
             if let Some(deadline) = deadline {
@@ -324,7 +354,7 @@ mod imp {
                 break;
             }
         }
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        Ok(buf)
     }
 
     /// 发一次请求（不含认证重试）
@@ -368,6 +398,7 @@ mod imp {
         Ok(())
     }
 
+    /// 返回 (状态码, 响应 Content-Type, 原始响应字节)
     fn request_inner(
         url: &str,
         method: &str,
@@ -376,7 +407,7 @@ mod imp {
         extra_headers: &str,
         integrated_auth: bool,
         timeout_ms: Option<u64>,
-    ) -> Result<HttpResponse, String> {
+    ) -> Result<(u16, String, Vec<u8>), String> {
         let deadline = timeout_ms
             .map(|ms| RequestDeadline::from_timeout_ms(Some(ms)))
             .transpose()?;
@@ -499,8 +530,9 @@ mod imp {
             status = query_status(request.0)?;
         }
 
-        let body = read_body(request.0, deadline.as_ref())?;
-        Ok(HttpResponse { status, body })
+        let response_content_type = query_content_type(request.0);
+        let body = read_body_bytes(request.0, deadline.as_ref())?;
+        Ok((status, response_content_type, body))
     }
 
     pub fn request(
@@ -510,7 +542,7 @@ mod imp {
         content_type: &str,
         timeout_ms: Option<u64>,
     ) -> Result<HttpResponse, String> {
-        request_inner(
+        let (status, _response_content_type, body) = request_inner(
             url,
             method,
             body,
@@ -518,16 +550,14 @@ mod imp {
             "",
             true,
             Some(timeout_ms.unwrap_or(super::DEFAULT_REQUEST_TIMEOUT_MS)),
-        )
+        )?;
+        Ok(HttpResponse {
+            status,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        })
     }
 
-    pub fn token_request(
-        url: &str,
-        method: &str,
-        user_id: &str,
-        token: &str,
-        body: Option<&str>,
-    ) -> Result<HttpResponse, String> {
+    fn validate_token_credentials(user_id: &str, token: &str) -> Result<(), String> {
         if user_id.is_empty()
             || token.is_empty()
             || user_id.len() > 512
@@ -537,8 +567,42 @@ mod imp {
         {
             return Err("Rocket.Chat credentials are invalid".to_string());
         }
+        Ok(())
+    }
+
+    pub fn token_request(
+        url: &str,
+        method: &str,
+        user_id: &str,
+        token: &str,
+        body: Option<&str>,
+    ) -> Result<HttpResponse, String> {
+        validate_token_credentials(user_id, token)?;
         let headers = format!("X-User-Id: {user_id}\r\nX-Auth-Token: {token}\r\n");
-        request_inner(url, method, body, "application/json", &headers, false, None)
+        let (status, _response_content_type, body) =
+            request_inner(url, method, body, "application/json", &headers, false, None)?;
+        Ok(HttpResponse {
+            status,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        })
+    }
+
+    /// 带 X-Auth-Token/X-User-Id 拉站内文件（附件原图）的字节版本：
+    /// 图片不能走 from_utf8_lossy，否则二进制内容会被破坏。
+    pub fn token_request_bytes(
+        url: &str,
+        user_id: &str,
+        token: &str,
+    ) -> Result<BinaryHttpResponse, String> {
+        validate_token_credentials(user_id, token)?;
+        let headers = format!("X-User-Id: {user_id}\r\nX-Auth-Token: {token}\r\n");
+        let (status, content_type, body) =
+            request_inner(url, "GET", None, "application/json", &headers, false, None)?;
+        Ok(BinaryHttpResponse {
+            status,
+            content_type,
+            body,
+        })
     }
 
     // PWSTR 只在个别 API 里需要，这里显式引用一下避免未使用告警
@@ -548,7 +612,7 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    use super::HttpResponse;
+    use super::{BinaryHttpResponse, HttpResponse};
 
     pub fn request(
         _url: &str,
@@ -567,6 +631,14 @@ mod imp {
         _token: &str,
         _body: Option<&str>,
     ) -> Result<HttpResponse, String> {
+        Err("RocketX reverse MCP currently requires Windows".into())
+    }
+
+    pub fn token_request_bytes(
+        _url: &str,
+        _user_id: &str,
+        _token: &str,
+    ) -> Result<BinaryHttpResponse, String> {
         Err("RocketX reverse MCP currently requires Windows".into())
     }
 }
@@ -589,6 +661,15 @@ pub fn blocking_token_request(
     body: Option<&str>,
 ) -> Result<HttpResponse, String> {
     imp::token_request(url, method, user_id, token, body)
+}
+
+/// 同步二进制版本：反向 MCP 读附件原图用（issue #347）。
+pub fn blocking_token_request_bytes(
+    url: &str,
+    user_id: &str,
+    token: &str,
+) -> Result<BinaryHttpResponse, String> {
+    imp::token_request_bytes(url, user_id, token)
 }
 
 /// 用 Windows 当前登录用户的凭据发一次 HTTP 请求（NTLM / Negotiate 自动握手）。

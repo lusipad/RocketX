@@ -1,4 +1,4 @@
-import { RcRestClient, RcRealtimeClient } from '@rcx/rc-client';
+import { RcRestClient, RcRealtimeClient, type RcPreferences } from '@rcx/rc-client';
 
 const STORAGE_KEY = 'rcx-auth';
 
@@ -216,3 +216,25 @@ export const rest = new RcRestClient({
   onAuthError: () => authLostHandler?.(),
 });
 export const realtime = new RcRealtimeClient(wsUrlFor(getServerBase()));
+
+/**
+ * 写用户偏好：优先走 DDP `saveUserPreferences`。
+ *
+ * RC 8.x 的 REST users.setPreferences 是 schema 校验端点（additionalProperties:false），
+ * RocketX 自定义键（rcxAliases/rcxNameFormat）会被 invalid-params 整体拒绝；
+ * DDP 方法是 Match.ObjectIncluding，放行额外键（saveUserPreferences 是很老的接口，
+ * 旧服务器同样存在；未来版本移除时 call 会报错，自然落到 REST 回退）。
+ * 实时连接未就绪（status !== 'connected'，此时 WS 尚未完成 login）直接用 REST，
+ * 避免 call 投不出去干等 15s 超时。
+ */
+export async function savePreferences(data: Partial<RcPreferences>): Promise<void> {
+  if (realtime.status === 'connected') {
+    try {
+      await realtime.call('saveUserPreferences', data);
+      return;
+    } catch {
+      /* 方法不可用或连接刚好断开：回退 REST */
+    }
+  }
+  await rest.setPreferences(data);
+}

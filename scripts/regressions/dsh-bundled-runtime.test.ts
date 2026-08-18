@@ -96,7 +96,14 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.match(dshRs, /archive\s*\.\s*unpack\(&staging_root\)/);
   assert.match(dshRs, /bundled_runtime_marker_matches/);
   assert.match(dshRs, /if let Some\(bundled_root\) = resolve_debug_bundled_runtime_root\(\)\?/);
+  // bundled 运行时仍精确 pin 到验证版本；系统安装的 DSH 放开为 semver >= 最低验证版本（issue #352）
   assert.match(dshRs, /verify_installed_dsh_version\(&node_path, &cli_path\)/);
+  assert.doesNotMatch(dshRs, /version\.trim\(\) == DSH_VERIFIED_VERSION/);
+  assert.match(dshRs, /fn parse_dsh_version\(raw: &str\) -> Option<DshVersion>/);
+  assert.match(dshRs, /version >= minimum/);
+  assert.match(dshRs, /dsh_version_is_unverified_newer/);
+  assert.match(dshRs, /低于最低支持版本 \{DSH_VERIFIED_VERSION\}/u);
+  assert.match(dshRs, /尚未经过完整验证/u);
   assert.match(dshRs, /resolve_node_runtime\(app, use_private_node\)/);
   assert.match(
     dshRs,

@@ -38,6 +38,7 @@ import ShortcutHelpDialog from '../components/ShortcutHelpDialog';
 import { useAuth } from '../stores/auth';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { desktopNotify } from '../lib/notify';
+import { playNotificationSound } from '../lib/notificationSound';
 import {
   initialGroupFilterPanelState,
   nextGroupFilterPanelState,
@@ -48,6 +49,7 @@ import {
 } from '../lib/conversationPanelLayout';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { useCodexRuntime } from '../stores/codexRuntime';
+import { startAutoAway } from '../lib/autoAway';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -104,6 +106,9 @@ export default function MainPage() {
     if (runtimeFeatures().runtimeProbes) void useCodexRuntime.getState().probe();
   }, [init, loadPrefs]);
 
+  // 自动离开：无操作超时置 away，活动后恢复 online；监听器/计时器随卸载清理
+  useEffect(() => startAutoAway(), []);
+
   useEffect(() => {
     if (!userId) return;
     useNotificationAggregation.getState().hydrate(userId);
@@ -125,6 +130,8 @@ export default function MainPage() {
         }).then((shown) => {
           const current = useNotificationAggregation.getState();
           const phase = current.state?.metrics.activePhase;
+          // 聚合通知弹出时同样按音量发声
+          if (shown) playNotificationSound(usePrefs.getState().prefs.notificationsSoundVolume);
           if (shown && phase) current.recordPopup(phase, Date.now(), 'aggregate');
         }).catch(() => {});
       }

@@ -1,5 +1,15 @@
 Set-StrictMode -Version Latest
 
+# Windows PowerShell 5.1 does not preload System.Net.Http; the error path uses
+# `-is [System.Net.Http.HttpResponseMessage]`, which would otherwise throw and
+# hide the real server error. PowerShell 7+ already has the type, so tolerate
+# a load failure there.
+try {
+    Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+}
+catch {
+}
+
 $script:AreaPolicies = [ordered]@{
     core        = "required"
     git         = "required"
@@ -56,6 +66,11 @@ function Resolve-AzureDevOpsServerApiVersion {
         switch ($ServerVersionHint) {
             { $_ -in @("current", "20.0", "2022.1") } { "7.1"; break }
             "2022" { "7.0"; break }
+            # TFS 2018 最高只认 4.1，TFS 2017 最高只认 3.0；两者未经真实服务器验证，按微软支持矩阵单独成档。
+            "2018" { "4.1"; break }
+            "2017" { "3.0"; break }
+            # TFS 2015 只认 1.0（2.0-6.0 一律 400），必须单独成档，不能落进 legacy 的 5.0。
+            "2015" { "1.0"; break }
             "legacy" { "5.0"; break }
             default { "6.0" }
         }
@@ -85,9 +100,9 @@ function Resolve-AzureDevOpsServerVersionHint {
         "2022" { return "2022" }
         "2020" { return "2020" }
         "2019" { return "legacy" }
-        "2018" { return "legacy" }
-        "2017" { return "legacy" }
-        "2015" { return "legacy" }
+        "2018" { return "2018" }
+        "2017" { return "2017" }
+        "2015" { return "2015" }
         "legacy" { return "legacy" }
         default {
             throw "Unsupported server version hint '$ServerVersionHint'. Use current, 20.0, 2022.1, 2022, 2020, 2019, 2018, 2017, 2015, or legacy."

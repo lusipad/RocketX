@@ -7,6 +7,8 @@ mod butler_db;
 mod diagnostics;
 mod dsh;
 mod lan;
+#[cfg(test)]
+mod live_e2e;
 mod mcp;
 mod native_service;
 mod ocr;
@@ -681,9 +683,7 @@ fn main() {
             butler_db::butler_todo_add,
             butler_db::butler_todo_update,
             butler_db::butler_todo_delete,
-            butler_db::butler_todo_get,
             butler_db::butler_todo_list,
-            butler_db::butler_todo_overdue,
             butler_db::butler_todo_migrate_from_json,
             proc::codex_runtime_probe,
             proc::codex_app_server_start,
@@ -694,7 +694,6 @@ fn main() {
             proc::codex_artifact_reveal,
             proc::codex_default_workspace,
             proc::codex_butler_workspace,
-            proc::codex_agent_workspace,
             proc::codex_automation_list,
             proc::codex_automation_write,
             proc::codex_automation_delete,
@@ -725,7 +724,6 @@ fn main() {
             native_service::native_service_start,
             native_service::native_service_call,
             native_service::native_service_stop,
-            lan::lan_identity_get,
             lan::lan_service_start,
             lan::lan_service_stop,
             lan::lan_trust_replace,

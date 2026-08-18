@@ -1,6 +1,7 @@
 use std::io::{BufRead, Write};
 use std::sync::Mutex;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -195,6 +196,20 @@ fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+        },
+        {
+            "name": "rocketx_read_attachment",
+            "title": "Read a Rocket.Chat attachment image",
+            "description": "Read the original image of an attachment by its site-relative path (the title_link or image_url starting with /file-upload/). Returns MCP image content; non-image attachments are rejected.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Site-relative attachment path, e.g. /file-upload/<fileId>/<fileName>"}
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
         }
     ]})
 }
@@ -215,6 +230,65 @@ fn count_arg(args: &Value, default: u64) -> Result<u64, String> {
     } else {
         Err("count must be between 1 and 200".to_string())
     }
+}
+
+/// 附件大小上限：10MB，避免把超大文件整个塞进 MCP 响应。
+pub(crate) const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+
+/// 校验附件路径：只允许站内 /file-upload/ 相对路径。
+/// 拒绝绝对 URL（防把凭据发到外站）和目录穿越（含百分号编码与反斜杠变体，
+/// 因为服务器端路由可能先解码再匹配）。
+fn validate_attachment_path(path: &str) -> Result<&str, String> {
+    if !path.starts_with("/file-upload/") {
+        return Err("path must be a site-relative path starting with /file-upload/".to_string());
+    }
+    let lowered = path.to_ascii_lowercase();
+    if lowered.contains("..")
+        || lowered.contains("%2e")
+        || path.contains('\\')
+        || path
+            .chars()
+            .any(|c| char::is_control(c) || c.is_whitespace())
+    {
+        return Err("path must not contain directory traversal or control characters".to_string());
+    }
+    Ok(path)
+}
+
+/// 带 keychain 里的凭据下载附件原图，Content-Type 是图片时返回 MCP image content。
+fn read_attachment(config: &McpConfig, args: &Value) -> Result<Value, String> {
+    let path = validate_attachment_path(string_arg(args, "path")?)?;
+    let url = format!("{}{}", config.server_url, path);
+    let response =
+        winauth::blocking_token_request_bytes(&url, &config.user_id, &config.auth_token)?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!("Rocket.Chat returned HTTP {}", response.status));
+    }
+    if response.body.len() > MAX_ATTACHMENT_BYTES {
+        return Err("attachment exceeds the 10 MB size limit".to_string());
+    }
+    let mime = response
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !mime.starts_with("image/") {
+        return Err(format!(
+            "attachment is not an image (Content-Type: {})",
+            if response.content_type.is_empty() {
+                "unknown"
+            } else {
+                &response.content_type
+            }
+        ));
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(&response.body);
+    Ok(json!({
+        "content": [{"type": "image", "data": data, "mimeType": mime}],
+        "isError": false
+    }))
 }
 
 fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
@@ -246,6 +320,7 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
                 ],
             )?
         }
+        "rocketx_read_attachment" => return read_attachment(&config, args),
         _ => return Err(format!("unknown tool: {name}")),
     };
     Ok(json!({
@@ -333,7 +408,7 @@ pub fn run_stdio() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle, percent_encode, tools};
+    use super::{handle, percent_encode, tools, validate_attachment_path};
     use serde_json::json;
 
     #[test]
@@ -341,12 +416,232 @@ mod tests {
         let initialized =
             handle(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})).unwrap();
         assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(tools()["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(tools()["tools"].as_array().unwrap().len(), 4);
         assert_eq!(initialized["jsonrpc"], "2.0");
     }
 
     #[test]
     fn mcp_query_values_are_percent_encoded() {
         assert_eq!(percent_encode("a/b c"), "a%2Fb%20c");
+    }
+
+    #[test]
+    fn attachment_path_accepts_site_relative_file_upload() {
+        assert_eq!(
+            validate_attachment_path("/file-upload/abc123/photo.png").unwrap(),
+            "/file-upload/abc123/photo.png"
+        );
+        assert!(validate_attachment_path("/file-upload/abc123/photo.png?rc_uid=x").is_ok());
+    }
+
+    #[test]
+    fn attachment_path_rejects_absolute_urls_and_other_prefixes() {
+        for path in [
+            "https://chat.example.com/file-upload/abc/photo.png",
+            "http://evil.example.com/file-upload/abc/photo.png",
+            "//evil.example.com/file-upload/abc/photo.png",
+            "/api/v1/channels.history",
+            "file-upload/abc/photo.png",
+        ] {
+            assert!(
+                validate_attachment_path(path).is_err(),
+                "must reject {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_path_rejects_directory_traversal_variants() {
+        for path in [
+            "/file-upload/../etc/passwd",
+            "/file-upload/..%2fetc/passwd",
+            "/file-upload/%2e%2e/etc/passwd",
+            "/file-upload/%2E%2E/etc/passwd",
+            "/file-upload/..\\windows\\win.ini",
+            "/file-upload/abc/p\r\nhot	o.png",
+        ] {
+            assert!(
+                validate_attachment_path(path).is_err(),
+                "must reject {path}"
+            );
+        }
+    }
+
+    // Live 端到端（issue #347）：连接 http://127.0.0.1:3300 的真实 Rocket.Chat 8.6
+    // （admin/rcxdev123），走真实 handle() → keychain → winauth 下载链路。
+    // 默认不跑；运行：cargo test -- --ignored live_reverse_mcp_reads_real_attachment
+    // keychain 与测试房间均由 guard 自动备份/恢复、清理；秘密不打印。
+    #[test]
+    #[ignore = "live：需要 127.0.0.1:3300 的 Rocket.Chat（admin/rcxdev123）"]
+    fn live_reverse_mcp_reads_real_attachment() {
+        use crate::live_e2e as live;
+        use base64::Engine as _;
+
+        if !live::rc_server_reachable() {
+            eprintln!("跳过：127.0.0.1:3300 上没有可用的 Rocket.Chat");
+            return;
+        }
+        let session = live::rc_login().expect("REST 登录应成功");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let room_id = live::rc_create_channel(&session, &format!("rcx-live-mcp-{unique}"))
+            .expect("channels.create 应成功");
+        let _room_cleanup = live::RcRoomCleanup::new(&session, &room_id);
+
+        let png = live::sample_png();
+        let path = live::rc_upload_png(&session, &room_id, &png).expect("rooms.media 上传应成功");
+        assert!(path.starts_with("/file-upload/"));
+
+        let config = json!({
+            "serverUrl": live::RC_BASE,
+            "userId": session.user_id,
+            "authToken": session.auth_token,
+        });
+        let _keychain =
+            live::KeychainGuard::install("com.lusipad.rocketx.mcp", "active", &config.to_string())
+                .expect("写入测试 keychain 配置应成功");
+
+        let initialized =
+            handle(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})).unwrap();
+        assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+        let listed = handle(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4, "反向 MCP 应暴露 4 个只读工具");
+        assert!(tools
+            .iter()
+            .any(|tool| tool["name"] == "rocketx_read_attachment"));
+
+        let called = handle(json!({
+            "jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"rocketx_read_attachment","arguments":{"path": path}}
+        }))
+        .unwrap();
+        assert_eq!(
+            called["result"]["isError"], false,
+            "rocketx_read_attachment 不应报错"
+        );
+        let content = &called["result"]["content"][0];
+        assert_eq!(content["type"], "image");
+        assert_eq!(content["mimeType"], "image/png");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(content["data"].as_str().unwrap())
+            .expect("image content 应是合法 base64");
+        assert_eq!(decoded, png, "下载字节必须与上传原图一致");
+
+        // 负路径：站外 URL 与目录穿越必须被拒绝（真实 handle 链路）
+        for bad in [
+            "https://evil.example.com/file-upload/abc/photo.png",
+            "/file-upload/../etc/passwd",
+        ] {
+            let rejected = handle(json!({
+                "jsonrpc":"2.0","id":4,"method":"tools/call",
+                "params":{"name":"rocketx_read_attachment","arguments":{"path": bad}}
+            }))
+            .unwrap();
+            assert_eq!(
+                rejected["result"]["isError"], true,
+                "必须拒绝非法路径 {bad}"
+            );
+        }
+        eprintln!(
+            "live ok：rocketx_read_attachment 从真实服务器取回 {} 字节 PNG 且字节一致",
+            decoded.len()
+        );
+    }
+
+    // Live stdio 全链路（issue #347）：spawn 真实 rocketx.exe --mcp，
+    // 走 stdin/stdout 的 initialize → tools/list → tools/call JSON-RPC。
+    // 需要先 cargo build（target/debug/rocketx.exe 必须存在），其余前置同上。
+    // 运行：cargo test -- --ignored live_reverse_mcp_stdio_roundtrip
+    #[test]
+    #[ignore = "live：需要 127.0.0.1:3300 的 Rocket.Chat 且已 cargo build"]
+    fn live_reverse_mcp_stdio_roundtrip() {
+        use crate::live_e2e as live;
+        use base64::Engine as _;
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Command, Stdio};
+
+        let exe = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("debug")
+            .join("rocketx.exe");
+        if !exe.is_file() {
+            eprintln!("跳过：{} 不存在，请先 cargo build", exe.display());
+            return;
+        }
+        if !live::rc_server_reachable() {
+            eprintln!("跳过：127.0.0.1:3300 上没有可用的 Rocket.Chat");
+            return;
+        }
+        let session = live::rc_login().expect("REST 登录应成功");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let room_id = live::rc_create_channel(&session, &format!("rcx-live-stdio-{unique}"))
+            .expect("channels.create 应成功");
+        let _room_cleanup = live::RcRoomCleanup::new(&session, &room_id);
+
+        let png = live::sample_png();
+        let path = live::rc_upload_png(&session, &room_id, &png).expect("rooms.media 上传应成功");
+        let config = json!({
+            "serverUrl": live::RC_BASE,
+            "userId": session.user_id,
+            "authToken": session.auth_token,
+        });
+        let _keychain =
+            live::KeychainGuard::install("com.lusipad.rocketx.mcp", "active", &config.to_string())
+                .expect("写入测试 keychain 配置应成功");
+
+        let mut child = Command::new(&exe)
+            .arg("--mcp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("应能启动 rocketx.exe --mcp");
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let requests = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+                   "params":{"name":"rocketx_read_attachment","arguments":{"path": path}}}),
+        ];
+        for request in &requests {
+            writeln!(stdin, "{request}").expect("写入 MCP 请求应成功");
+        }
+        stdin.flush().unwrap();
+        drop(stdin); // EOF 让 run_stdio 正常退出
+
+        let mut lines = stdout.lines().map(|line| line.unwrap());
+        let initialized: serde_json::Value =
+            serde_json::from_str(&lines.next().expect("应有 initialize 响应")).unwrap();
+        assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+        let listed: serde_json::Value =
+            serde_json::from_str(&lines.next().expect("应有 tools/list 响应")).unwrap();
+        assert_eq!(
+            listed["result"]["tools"].as_array().unwrap().len(),
+            4,
+            "stdio 链路应列出 4 个工具"
+        );
+        let called: serde_json::Value =
+            serde_json::from_str(&lines.next().expect("应有 tools/call 响应")).unwrap();
+        assert_eq!(called["result"]["isError"], false);
+        let content = &called["result"]["content"][0];
+        assert_eq!(content["type"], "image");
+        assert_eq!(content["mimeType"], "image/png");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(content["data"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, png, "stdio 链路下载字节必须与上传原图一致");
+        let status = child.wait().expect("应能等待 MCP 子进程退出");
+        assert!(status.success(), "rocketx.exe --mcp 应正常退出：{status}");
+        eprintln!(
+            "live ok：exe --mcp stdio 全链路取回 {} 字节 PNG 且字节一致",
+            decoded.len()
+        );
     }
 }

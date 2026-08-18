@@ -245,31 +245,12 @@ pub async fn butler_todo_delete(db: tauri::State<'_, ButlerDb>, id: String) -> R
 }
 
 #[tauri::command]
-pub async fn butler_todo_get(
-    db: tauri::State<'_, ButlerDb>,
-    id: String,
-) -> Result<Option<Todo>, String> {
-    run_db(db.connection(), move |connection| get_todo(connection, &id)).await
-}
-
-#[tauri::command]
 pub async fn butler_todo_list(
     db: tauri::State<'_, ButlerDb>,
     filter: TodoFilter,
 ) -> Result<Vec<Todo>, String> {
     run_db(db.connection(), move |connection| {
         list_todos(connection, filter)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn butler_todo_overdue(
-    db: tauri::State<'_, ButlerDb>,
-    today: String,
-) -> Result<Vec<Todo>, String> {
-    run_db(db.connection(), move |connection| {
-        overdue_todos(connection, &today)
     })
     .await
 }
@@ -480,23 +461,6 @@ fn list_todos(connection: &Connection, filter: TodoFilter) -> Result<Vec<Todo>, 
         statement
             .query_map(params_from_iter(values.iter()), row_to_todo)
             .map_err(|error| format!("无法查询待办列表：{error}"))?,
-    );
-    todos
-}
-
-fn overdue_todos(connection: &Connection, today: &str) -> Result<Vec<Todo>, String> {
-    validate_date(today)?;
-    let mut statement = connection
-        .prepare(&format!(
-            "SELECT {TODO_COLUMNS} FROM todos \
-             WHERE done = 0 AND due IS NOT NULL AND due < ?1 \
-             ORDER BY due ASC, created_at DESC"
-        ))
-        .map_err(|error| format!("无法准备逾期待办查询：{error}"))?;
-    let todos = collect_todos(
-        statement
-            .query_map(params![today], row_to_todo)
-            .map_err(|error| format!("无法查询逾期待办：{error}"))?,
     );
     todos
 }
@@ -720,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_crud_filters_overdue_and_preserves_omitted_patch_fields() {
+    fn todo_crud_filters_and_preserves_omitted_patch_fields() {
         let connection = connection();
         let first = add_todo(&connection, new_todo("发发布说明", Some("2026-07-26")))
             .expect("add first todo");
@@ -748,9 +712,6 @@ mod tests {
         .expect("list committed todos");
         assert_eq!(committed.len(), 2);
 
-        let overdue = overdue_todos(&connection, "2026-07-27").expect("list overdue todos");
-        assert_eq!(overdue.len(), 1);
-        assert_eq!(overdue[0].id, first.id);
         assert_eq!(
             get_todo(&connection, &first.id)
                 .expect("get todo")

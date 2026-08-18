@@ -55,7 +55,7 @@ import { loadWorkbenchConfig, loadWorkbenchConfigIssue, type WorkbenchConfig } f
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
-import { useAliases } from '../stores/aliases';
+import { listArchivedAliases, useAliases, type ArchivedAliases } from '../stores/aliases';
 import { useUiPrefs } from '../stores/uiPrefs';
 import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
@@ -168,6 +168,13 @@ function AccountSection() {
   const [pwError, setPwError] = useState<string | null>(null);
 
   useEffect(() => setName(user?.name ?? ''), [user?.name]);
+
+  // 自动离开等外部变化直接写 auth store（applyLocalStatus），不经过本组件的 useState，
+  // 状态只靠初始化读一次就会滞后高亮——订阅 user.status 同步进来。
+  // 手动操作的乐观更新/失败回滚不受影响：applyStatus 先改本地，refreshUser 落地后这里再确认一遍。
+  useEffect(() => {
+    if (isPresenceStatus(user?.status)) setStatus(user.status);
+  }, [user?.status]);
 
   const applyStatus = async (next: PresenceStatus, text?: string) => {
     const prev = status;
@@ -765,6 +772,10 @@ function SidebarSection() {
   const update = usePrefs((s) => s.update);
   const nameFormat = useAliases((s) => s.nameFormat);
   const setNameFormat = useAliases((s) => s.setNameFormat);
+  const importArchived = useAliases((s) => s.importArchived);
+  // 换过服务器地址（如 IP 变了）前的备注被账号隔离机制归档，提供找回入口
+  const [archives, setArchives] = useState<ArchivedAliases[]>(() => listArchivedAliases());
+  const [importResult, setImportResult] = useState<string | null>(null);
 
   return (
     <>
@@ -791,7 +802,7 @@ function SidebarSection() {
         />
       </Row>
 
-      <Row label="备注名显示" hint="给联系人起了备注后，名字怎么显示（本机设置，不跨设备）">
+      <Row label="备注名显示" hint="给联系人起了备注后，名字怎么显示（随账号同步）">
         <RadioGroup
           value={nameFormat}
           onChange={(v) => setNameFormat(v)}
@@ -801,6 +812,35 @@ function SidebarSection() {
           ]}
         />
       </Row>
+
+      {/* importResult 留在条件里：导入成功后归档被消费、archives 清空，结果提示仍需可见 */}
+      {(archives.length > 0 || importResult) && (
+        <Row label="导入历史备注" hint="换过服务器地址（如 IP 变化）前的备注还留在本机，可合并回来（已有的同名备注不会被覆盖）">
+          <div className="flex max-w-md flex-col gap-2">
+            {archives.map((a) => (
+              <div
+                key={a.owner}
+                className="flex items-center justify-between gap-3 rounded-md border border-line px-3 py-2"
+              >
+                <span className="min-w-0 truncate text-sm text-ink-2">
+                  来自旧地址 {a.serverBase} 的 {a.count} 条备注
+                </span>
+                <button
+                  onClick={async () => {
+                    const added = await importArchived(a.owner);
+                    setImportResult(`已从 ${a.serverBase} 导入 ${added} 条备注`);
+                    setArchives(listArchivedAliases());
+                  }}
+                  className="h-7 shrink-0 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover"
+                >
+                  导入
+                </button>
+              </div>
+            ))}
+            {importResult && <div className="text-xs text-ink-3">{importResult}</div>}
+          </div>
+        </Row>
+      )}
 
       <Row label="按类型分区" hint="把会话分成 收藏 / 团队 / 讨论 / 频道 / 私聊 几个可折叠的分区" inline>
         <Toggle

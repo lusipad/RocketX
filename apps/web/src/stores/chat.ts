@@ -20,9 +20,14 @@ import {
   siteUrlSync,
 } from '../lib/client';
 import { emojify } from '../lib/emoji';
+import {
+  normalizeMessageMaxAllowedSize,
+  toSendableMessageChunks,
+} from '../lib/messageChunks';
 import { findCommand } from '../lib/slash';
 import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
+import { playNotificationSound } from '../lib/notificationSound';
 import { flashTaskbar } from '../lib/taskbar';
 import {
   forwardFileName,
@@ -678,6 +683,31 @@ function isUncertainSendError(error: unknown): boolean {
   return !(error instanceof RcApiError) || error.status >= 500;
 }
 
+// Message_MaxAllowedSize 是公开设置且不常变，拉一次缓存起来，避免每次发送都多一次请求。
+let chatMessageSizeProvider: () => Promise<unknown> = () => getPublicSetting('Message_MaxAllowedSize');
+let messageMaxAllowedSizeCache: number | undefined;
+
+async function messageMaxAllowedSize(): Promise<number> {
+  if (messageMaxAllowedSizeCache !== undefined) return messageMaxAllowedSizeCache;
+  const value = await chatMessageSizeProvider().catch(() => undefined);
+  const size = normalizeMessageMaxAllowedSize(value);
+  messageMaxAllowedSizeCache = size;
+  return size;
+}
+
+/** 测试用：替换长度上限来源并清掉缓存，返回还原函数 */
+export function setChatMessageSizeProviderForTests(
+  provider: () => Promise<unknown>,
+): () => void {
+  const previous = chatMessageSizeProvider;
+  chatMessageSizeProvider = provider;
+  messageMaxAllowedSizeCache = undefined;
+  return () => {
+    chatMessageSizeProvider = previous;
+    messageMaxAllowedSizeCache = undefined;
+  };
+}
+
 function findMessageById(
   messages: Record<string, RcMessage[]>,
   messageId: string,
@@ -1001,6 +1031,8 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
       void useChat.getState().jumpToMessage(msg._id, rid);
     },
   }).then((shown) => {
+    // 提示音跟着通知走：真正弹出来才发声（免打扰/聚合分支到不了这里，权限被拒 shown=false 也不发声）
+    if (shown) playNotificationSound(prefs.notificationsSoundVolume);
     if (shown && phase) useNotificationAggregation.getState().recordPopup(phase, Date.now(), 'passthrough');
   }).catch(() => {});
 }
@@ -1574,15 +1606,50 @@ export const useChat = create<ChatState>((set, get) => ({
       : normalized;
     const expectsAgentReply = agentReplyNotificationTracker.expect(rid, fullText);
 
+    // 超长消息按服务端 Message_MaxAllowedSize 自动分段发送，而不是整条被 400 拒绝
+    // （issue #349）。引用前缀已经在 fullText 里，拆分后自然只落在第一段；
+    // 不超长时 chunks[0] === fullText，走原有路径零行为变化。
+    const chunks = toSendableMessageChunks(fullText, await messageMaxAllowedSize());
+    const firstChunk = chunks[0] ?? fullText;
+
     // 乐观上屏：秒回显，pending 状态等服务器确认。
     // _id 由客户端生成并随请求提交 —— WS 回声先到时同 id 被 upsert 合并，
     // 不会「同一条显示两遍」；504 但服务端已落库时重试同 id 也不会发出第二条。
     const resolvedClientId = clientId ?? randomMessageId();
+
+    const sendRemainingChunks = async (): Promise<string | null> => {
+      // 后续分段：各自生成新 id 顺序发送，WS 回声按 id 合并不会重复上屏。
+      // 中途失败即停止：已发出的段不回滚，剩余段不再发送（issue #349）。
+      for (let index = 1; index < chunks.length; index += 1) {
+        const chunkId = randomMessageId();
+        rememberLocalMessage(chunkId);
+        try {
+          const chunkMessage = await rest.sendMessageRaw({
+            _id: chunkId,
+            rid,
+            msg: chunks[index] ?? '',
+            ...(opts?.tmid ? { tmid: opts.tmid } : {}),
+          });
+          set({
+            messages: {
+              ...get().messages,
+              [rid]: upsertMessage(get().messages[rid] ?? [], chunkMessage),
+            },
+          });
+        } catch (chunkError) {
+          const reason = `消息过长已分段发送，第 ${index + 1}/${chunks.length} 段失败，后续段已停止：${humanError(chunkError, '消息发送失败')}`;
+          toast.show({ kind: 'error', message: reason });
+          return reason;
+        }
+      }
+      return null;
+    };
+
     rememberLocalMessage(resolvedClientId);
     const temp: RcMessage = {
       _id: resolvedClientId,
       rid,
-      msg: fullText,
+      msg: firstChunk,
       ts: new Date().toISOString(),
       u: { _id: me._id, username: me.username, name: me.name },
       ...(opts?.tmid ? { tmid: opts.tmid } : {}),
@@ -1600,11 +1667,15 @@ export const useChat = create<ChatState>((set, get) => ({
       const msg = await rest.sendMessageRaw({
         _id: resolvedClientId,
         rid,
-        msg: fullText,
+        msg: firstChunk,
         ...(opts?.tmid ? { tmid: opts.tmid } : {}),
       });
       set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
       useOnboarding.getState().markChecklist('sentMessage');
+      const remainingFailure = await sendRemainingChunks();
+      if (remainingFailure) {
+        return { id: resolvedClientId, delivery: 'failed' as const, reason: remainingFailure };
+      }
       scheduleReceiptRefresh(rid);
       return { id: resolvedClientId, delivery: 'server' as const };
     } catch (err) {
@@ -1618,7 +1689,7 @@ export const useChat = create<ChatState>((set, get) => ({
         // 又转成 LAN 离线消息或未知态。
         try {
           const existing = await rest.getMessage(resolvedClientId);
-          if (existing.rid === rid && existing.msg === fullText) {
+          if (existing.rid === rid && existing.msg === firstChunk) {
             set({
               messages: {
                 ...get().messages,
@@ -1626,9 +1697,14 @@ export const useChat = create<ChatState>((set, get) => ({
               },
             });
             useOnboarding.getState().markChecklist('sentMessage');
+            const remainingFailure = await sendRemainingChunks();
+            if (remainingFailure) {
+              return { id: resolvedClientId, delivery: 'failed' as const, reason: remainingFailure };
+            }
+            scheduleReceiptRefresh(rid);
             return { id: resolvedClientId, delivery: 'server' as const };
           }
-          if (existing.rid === rid && existing.msg !== fullText) {
+          if (existing.rid === rid && existing.msg !== firstChunk) {
             delivery = 'failed';
             reason = '原会话里同一消息 ID 已存在不同内容，请检查原会话后重试';
           } else if (existing.rid !== rid) {
@@ -1650,7 +1726,7 @@ export const useChat = create<ChatState>((set, get) => ({
               messageId: resolvedClientId,
               roomId: rid,
               originalTs,
-              text: fullText,
+              text: firstChunk,
             }),
           ),
         );
@@ -1693,8 +1769,13 @@ export const useChat = create<ChatState>((set, get) => ({
       const stillPending = cur.some((m) => m._id === resolvedClientId && m.pending);
       if (!stillPending) {
         const currentMessage = findMessageById(get().messages, resolvedClientId);
-        if (currentMessage?.rid === rid && currentMessage.msg === fullText) {
+        if (currentMessage?.rid === rid && currentMessage.msg === firstChunk) {
           useOnboarding.getState().markChecklist('sentMessage');
+          const remainingFailure = await sendRemainingChunks();
+          if (remainingFailure) {
+            return { id: resolvedClientId, delivery: 'failed' as const, reason: remainingFailure };
+          }
+          scheduleReceiptRefresh(rid);
           return { id: resolvedClientId, delivery: 'server' as const };
         }
         delivery = currentMessage ? 'failed' : 'unknown';

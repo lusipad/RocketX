@@ -23,6 +23,8 @@ const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MIN_NODE_22_MINOR: u64 = 19;
 const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
+// 最低验证版本：系统安装的 DSH 只要 semver >= 此版本即可使用（issue #352），
+// 更高版本仅提示未经完整验证，不阻断。bundled 运行时仍精确 pin 到该版本。
 const DSH_VERIFIED_VERSION: &str = "0.1.0-rc.6";
 const DSH_ROOT_DIR: &str = "dsh";
 const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";
@@ -892,14 +894,141 @@ fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<(),
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !dsh_version_is_compatible(&version) {
         return Err(format!(
-            "已安装的 DSH 版本 {version} 不兼容；RocketX 当前验证版本为 {DSH_VERIFIED_VERSION}"
+            "已安装的 DSH 版本 {version} 低于最低支持版本 {DSH_VERIFIED_VERSION}；请运行 npm install -g @deepseek-ai/dsh@{DSH_VERIFIED_VERSION} 升级后重试"
         ));
+    }
+    if dsh_version_is_unverified_newer(&version) {
+        log::warn!(
+            "已安装的 DSH 版本 {version} 高于 RocketX 完整验证版本 {DSH_VERIFIED_VERSION}，尚未经过完整验证；如遇到兼容问题请回退到验证版本"
+        );
     }
     Ok(())
 }
 
+// 最小化 semver：够用即可（major.minor.patch + 点分预发布段），不引入 semver crate。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DshVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: Vec<DshPrereleasePart>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DshPrereleasePart {
+    Numeric(u64),
+    Text(String),
+}
+
+impl Ord for DshVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.major, self.minor, self.patch)
+            .cmp(&(other.major, other.minor, other.patch))
+            .then_with(|| compare_prerelease(&self.prerelease, &other.prerelease))
+    }
+}
+
+impl PartialOrd for DshVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn compare_prerelease(
+    left: &[DshPrereleasePart],
+    right: &[DshPrereleasePart],
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering as CmpOrdering;
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => CmpOrdering::Equal,
+        // 正式版高于同 core 的任何预发布版
+        (true, false) => CmpOrdering::Greater,
+        (false, true) => CmpOrdering::Less,
+        (false, false) => {
+            for (left_part, right_part) in left.iter().zip(right.iter()) {
+                let ordering = match (left_part, right_part) {
+                    (DshPrereleasePart::Numeric(a), DshPrereleasePart::Numeric(b)) => a.cmp(b),
+                    // semver 规则：数字标识符低于字母标识符
+                    (DshPrereleasePart::Numeric(_), DshPrereleasePart::Text(_)) => {
+                        CmpOrdering::Less
+                    }
+                    (DshPrereleasePart::Text(_), DshPrereleasePart::Numeric(_)) => {
+                        CmpOrdering::Greater
+                    }
+                    (DshPrereleasePart::Text(a), DshPrereleasePart::Text(b)) => a.cmp(b),
+                };
+                if ordering != CmpOrdering::Equal {
+                    return ordering;
+                }
+            }
+            left.len().cmp(&right.len())
+        }
+    }
+}
+
+// 解析 `dsh --version` 输出；兼容 "1.0.0rcalpha07" 这类无连字符预发布写法，
+// 规范化为 1.0.0-rcalpha07（patch 数字结束后紧跟的字母段视为预发布）再解析。
+fn parse_dsh_version(raw: &str) -> Option<DshVersion> {
+    let text = raw.trim();
+    let text = text.strip_prefix(['v', 'V']).unwrap_or(text);
+    let text = text.split('+').next().unwrap_or(text);
+    let (core, prerelease) = match text.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => {
+            let core_len = text
+                .char_indices()
+                .take_while(|(_, ch)| ch.is_ascii_digit() || *ch == '.')
+                .map(|(index, ch)| index + ch.len_utf8())
+                .last()
+                .unwrap_or(0);
+            let (core, rest) = text.split_at(core_len);
+            (core, if rest.is_empty() { None } else { Some(rest) })
+        }
+    };
+    let mut core_parts = core.split('.');
+    let major = core_parts.next()?.parse().ok()?;
+    let minor = core_parts.next()?.parse().ok()?;
+    let patch = core_parts.next()?.parse().ok()?;
+    if core_parts.next().is_some() {
+        return None;
+    }
+    let prerelease = prerelease
+        .filter(|pre| !pre.is_empty())
+        .map(|pre| {
+            pre.split('.')
+                .map(|part| match part.parse::<u64>() {
+                    Ok(number) => DshPrereleasePart::Numeric(number),
+                    Err(_) => DshPrereleasePart::Text(part.to_string()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(DshVersion {
+        major,
+        minor,
+        patch,
+        prerelease,
+    })
+}
+
 fn dsh_version_is_compatible(version: &str) -> bool {
-    version.trim() == DSH_VERIFIED_VERSION
+    let Some(version) = parse_dsh_version(version) else {
+        return false;
+    };
+    let Some(minimum) = parse_dsh_version(DSH_VERIFIED_VERSION) else {
+        return false;
+    };
+    version >= minimum
+}
+
+fn dsh_version_is_unverified_newer(version: &str) -> bool {
+    let Some(version) = parse_dsh_version(version) else {
+        return false;
+    };
+    let Some(verified) = parse_dsh_version(DSH_VERIFIED_VERSION) else {
+        return false;
+    };
+    version > verified
 }
 
 fn dsh_root_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
@@ -1781,15 +1910,16 @@ mod tests {
         attach_connection_lease, build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry,
         business_mcp_patch_text, cleanup_runtime_dir, development_bundled_runtime_archive,
         development_bundled_runtime_root, dsh_focus_plugin_client, dsh_focus_plugin_index,
-        dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible, encode_message,
-        file_url_for_path, graceful_shutdown_message, hidden_command, host_path,
-        installed_dsh_cli_entry, installed_dsh_root, node_runtime_candidates,
-        node_version_is_compatible, prepare_bundled_runtime_root_from_archive,
-        reconcile_process_stop, release_connection_lease, resolve_bundled_runtime_root,
-        resolve_installed_dsh_cli, resolve_source_root, safe_attachment_path, source_bridge_path,
-        source_dsh_cli_entry, source_root_from_candidates, validate_connection_id,
-        write_dsh_agent_attachment, write_dsh_focus_plugin, write_dsh_patch, DshBridgeMode,
-        DshBridgeRelease, DshConnectionLease, ManagedDshBridge, ResolvedDshRuntime,
+        dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible,
+        dsh_version_is_unverified_newer, encode_message, file_url_for_path,
+        graceful_shutdown_message, hidden_command, host_path, installed_dsh_cli_entry,
+        installed_dsh_root, node_runtime_candidates, node_version_is_compatible,
+        prepare_bundled_runtime_root_from_archive, reconcile_process_stop,
+        release_connection_lease, resolve_bundled_runtime_root, resolve_installed_dsh_cli,
+        resolve_source_root, safe_attachment_path, source_bridge_path, source_dsh_cli_entry,
+        source_root_from_candidates, validate_connection_id, write_dsh_agent_attachment,
+        write_dsh_focus_plugin, write_dsh_patch, DshBridgeMode, DshBridgeRelease,
+        DshConnectionLease, ManagedDshBridge, ResolvedDshRuntime,
     };
     use flate2::{write::GzEncoder, Compression};
     use serde_json::json;
@@ -2153,11 +2283,26 @@ mod tests {
     }
 
     #[test]
-    fn installed_dsh_requires_the_verified_version() {
+    fn installed_dsh_accepts_semver_range_above_minimum() {
+        assert!(!dsh_version_is_compatible("0.1.0-rc.5"));
         assert!(dsh_version_is_compatible("0.1.0-rc.6"));
         assert!(dsh_version_is_compatible(" 0.1.0-rc.6\n"));
-        assert!(!dsh_version_is_compatible("0.1.0-rc.5"));
-        assert!(!dsh_version_is_compatible("0.1.0-rc.7"));
+        assert!(dsh_version_is_compatible("0.1.0-rc.7"));
+        assert!(dsh_version_is_compatible("1.0.0-rc.1"));
+        // 无连字符预发布格式规范化为 1.0.0-rcalpha07 后参与比较
+        assert!(dsh_version_is_compatible("1.0.0rcalpha07"));
+        assert!(dsh_version_is_compatible("1.0.0"));
+        assert!(!dsh_version_is_compatible("0.0.9"));
+        assert!(!dsh_version_is_compatible("nightly"));
+    }
+
+    #[test]
+    fn installed_dsh_flags_unverified_newer_versions() {
+        assert!(!dsh_version_is_unverified_newer("0.1.0-rc.5"));
+        assert!(!dsh_version_is_unverified_newer("0.1.0-rc.6"));
+        assert!(dsh_version_is_unverified_newer("0.1.0-rc.7"));
+        assert!(dsh_version_is_unverified_newer("1.0.0rcalpha07"));
+        assert!(!dsh_version_is_unverified_newer("nightly"));
     }
 
     #[test]
@@ -2594,5 +2739,40 @@ node "%dp0%\global\9\.pnpm\@deepseek-ai+dsh@0.1.0-rc.6\node_modules\@deepseek-ai
             host_path(&path).ends_with("src\\dsh_bridge.mjs")
                 || host_path(&path).ends_with("src/dsh_bridge.mjs")
         );
+    }
+
+    // Live 端到端（issue #352）：走真实 verify_installed_dsh_version（node 跑
+    // `dsh --version`）。默认不跑；运行：cargo test -- --ignored live_dsh_version_gate
+    // 前置：系统 npm 全局装有 dsh >= 0.1.0-rc.6，且 node 在 PATH。
+    // shim 是临时目录里的假 CLI（node 脚本），不触碰用户安装，结束后删除。
+    #[test]
+    #[ignore = "live：需要系统已装 dsh 与 node"]
+    fn live_dsh_version_gate_accepts_system_and_shimmed_versions() {
+        let node = super::find_program("node").expect("PATH 上应有 node");
+
+        // 真实系统安装（0.1.0-rc.6）必须通过版本门禁
+        let system_cli = resolve_installed_dsh_cli(&super::installed_dsh_cli_candidates())
+            .expect("应能解析到系统安装的 dsh CLI");
+        super::verify_installed_dsh_version(&node, &system_cli)
+            .expect("系统 dsh 版本应通过最低版本校验");
+
+        // shim：无连字符预发布写法 1.0.0rcalpha07 规范化后必须接受
+        let root = unique_temp_dir("live-version-gate");
+        fs::create_dir_all(&root).unwrap();
+        let shim = root.join("fake-dsh.js");
+        fs::write(&shim, "console.log('1.0.0rcalpha07');\n").unwrap();
+        super::verify_installed_dsh_version(&node, &shim).expect("1.0.0rcalpha07 规范化后应被接受");
+
+        // shim：低于最低版本的 0.1.0-rc.5 必须被拒绝
+        fs::write(&shim, "console.log('0.1.0-rc.5');\n").unwrap();
+        let error = super::verify_installed_dsh_version(&node, &shim).unwrap_err();
+        assert!(error.contains("0.1.0-rc.5"), "错误应指出实际版本：{error}");
+        assert!(
+            error.contains(super::DSH_VERIFIED_VERSION),
+            "错误应指出最低支持版本：{error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        eprintln!("live ok：系统 dsh 通过校验；shim 1.0.0rcalpha07 接受、0.1.0-rc.5 拒绝");
     }
 }

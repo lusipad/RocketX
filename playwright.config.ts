@@ -11,6 +11,8 @@ process.env.PLAYWRIGHT_BASE_URL = baseURL;
 
 export default defineConfig({
   testDir: './tests/ui',
+  // live-issues.spec.ts 走独立配置 playwright.live.config.ts（连真实服务器，RC_LIVE=1 才跑）
+  testIgnore: 'live-issues.spec.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

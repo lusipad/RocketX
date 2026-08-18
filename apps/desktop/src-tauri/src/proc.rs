@@ -2476,20 +2476,6 @@ pub fn codex_app_server_stop(
 }
 
 #[tauri::command]
-pub fn codex_agent_workspace(app: tauri::AppHandle, session_id: String) -> Result<String, String> {
-    validate_session_id(&session_id)?;
-    let path = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| format!("failed to resolve app cache directory: {error}"))?
-        .join("agent-workspaces")
-        .join(session_id);
-    std::fs::create_dir_all(&path)
-        .map_err(|error| format!("failed to prepare Agent workspace: {error}"))?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-#[tauri::command]
 pub async fn butler_azure_devops_server_read(
     app: tauri::AppHandle,
     request: ButlerAzureDevOpsServerReadRequest,

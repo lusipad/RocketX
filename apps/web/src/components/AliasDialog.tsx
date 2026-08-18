@@ -4,7 +4,7 @@ import { toast } from '../stores/toast';
 
 /**
  * 设置备注名。
- * 备注只存在本机——Rocket.Chat 没有这个字段，说清楚免得用户以为换台电脑还在。
+ * 备注会同步到服务端（RC 偏好的自定义键），换设备/重装后登录即可找回。
  */
 export default function AliasDialog({
   title,
@@ -31,7 +31,7 @@ export default function AliasDialog({
   return (
     <Dialog
       title={title}
-      hint={`原名：${originalName}。备注只保存在本机，换设备需要重新设置。`}
+      hint={`原名：${originalName}。备注会同步到你的账号，换设备登录后依然有效。`}
       onClose={onClose}
       footer={
         <>

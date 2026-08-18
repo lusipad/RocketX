@@ -316,34 +316,6 @@ fn load_or_create_identity(server_url: &str, user_id: &str) -> Result<StoredIden
     }
 }
 
-#[tauri::command]
-pub fn lan_identity_get(
-    lock: tauri::State<'_, LanKeychainLock>,
-    server_url: String,
-    user_id: String,
-    device_name: String,
-) -> Result<LanIdentityInfo, String> {
-    if device_name.chars().any(char::is_control) {
-        return Err("invalid device name".to_string());
-    }
-    let device_name = device_name.trim();
-    if device_name.is_empty() || device_name.len() > 128 {
-        return Err("invalid device name".to_string());
-    }
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| "LAN identity keychain lock is unavailable".to_string())?;
-    let record = load_or_create_identity(&server_url, &user_id)?;
-    let signing_key = decode_secret(&record)?;
-    Ok(LanIdentityInfo {
-        device_id: record.device_id,
-        device_name: device_name.to_string(),
-        public_key: URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
-        protocol_version: PROTOCOL_VERSION,
-    })
-}
-
 fn append_transcript_field(output: &mut Vec<u8>, value: &str) {
     output.extend_from_slice(&(value.len() as u32).to_be_bytes());
     output.extend_from_slice(value.as_bytes());

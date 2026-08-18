@@ -1,8 +1,11 @@
 // @ 前允许中文（中文输入习惯不加空格：'你好@zhang'）
 export const MENTION_RE = /(?:^|[\s一-鿿，。！？；：、])@([\w.\-]*)$/;
 
-export function canMentionInRoom(roomType?: string): boolean {
-  return roomType !== 'd';
+// issue #251 曾刻意排除 DM（当时一对一参与者已确定，@ 被视为多余）；
+// issue #353 重新放开：DM 的成员拉取（im.members）与消息内 @ 高亮均已可用，
+// 对所有房型返回 true。
+export function canMentionInRoom(_roomType?: string): boolean {
+  return true;
 }
 
 export function mentionQueryAtCursor(
@@ -18,7 +21,8 @@ export function shouldSearchMentionDirectory(
   mentionQuery: string | null,
   roomType?: string,
 ): boolean {
-  return canMentionInRoom(roomType) && !!mentionQuery?.trim();
+  // DM 不能拉新人进群，目录搜索（找群外的人）无意义，保持关闭
+  return roomType !== 'd' && !!mentionQuery?.trim();
 }
 
 export function insertMentionAtCursor(

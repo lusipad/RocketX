@@ -191,8 +191,13 @@ export default function Composer() {
       ? [{ username: 'ai', name: 'AI 托管', kind: 'agent', agentStatus: sharedAiStatus }]
       : [];
     const base: MentionCandidate[] = [
-      { username: 'all', name: '通知所有人', kind: 'broadcast' },
-      { username: 'here', name: '通知在线成员', kind: 'broadcast' },
+      // 一对一私聊没有“通知所有人/在线成员”的语境，DM 候选里不出现广播项（issue #353）
+      ...(roomType === 'd'
+        ? []
+        : [
+            { username: 'all', name: '通知所有人', kind: 'broadcast' as const },
+            { username: 'here', name: '通知在线成员', kind: 'broadcast' as const },
+          ]),
       ...members
         .filter((member) => agent.length === 0 || member.username !== 'ai')
         .map((member) => ({ ...member, kind: 'user' as const })),
@@ -210,7 +215,7 @@ export default function Composer() {
       .map((u) => ({ username: u.username, name: u.name, isRemote: true, kind: 'user' as const }));
     return [...agent, ...local, ...remote].slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [canMention, mentionQuery, members, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
+  }, [canMention, mentionQuery, roomType, members, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),

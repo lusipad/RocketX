@@ -14,6 +14,7 @@ import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } fro
 import { BUNDLED_APPS } from './bundled';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
+import { postBridgeMessage } from './postMessage';
 import { BridgeHost } from './bridge';
 import { kernelRegistry } from './registry';
 import { AppModule, AppPanel } from './AppFrame';
@@ -141,14 +142,12 @@ function registerCapabilities(): void {
     return (chat.messages[rid] ?? []).slice(-count).map(plainMessage);
   });
   capabilityBus.register('chat.postMessage', 'chat:write', async (params) => {
-    const chat = useChat.getState();
-    const rid = stringParam(params, 'rid', chat.activeRid ?? '');
-    const text = stringParam(params, 'text').trim();
+    const rid = stringParam(params, 'rid', useChat.getState().activeRid ?? '');
+    const text = stringParam(params, 'text');
     const tmid = stringParam(params, 'tmid') || undefined;
-    if (!rid || !chat.subscriptions[rid]) throw new Error('只能向已加入的会话发送消息');
-    if (!text || text.length > 20_000) throw new Error('消息为空或过长');
-    await chat.send(text, { rid, ...(tmid ? { tmid } : {}) });
-    return { ok: true };
+    // 长度上限与输入框统一：超长文本由 chat.send 按 Message_MaxAllowedSize
+    // 分段顺序发送（issue #349），不再用固定 20k 上限整条拒绝；空文本仍报错。
+    return postBridgeMessage(rid, text, tmid);
   });
   capabilityBus.register('rooms.list', 'rooms:list', () => {
     const chat = useChat.getState();

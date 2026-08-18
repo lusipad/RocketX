@@ -9,6 +9,34 @@ export interface MenuItem {
   onClick: () => void;
 }
 
+/**
+ * 挂「用户主动关闭」监听：点击菜单外、Esc、用户主动滚动（滚轮/触摸滑动）。
+ * 故意不监听 scroll 事件：会话列表因 presence/未读刷新、scrollIntoView 等产生的
+ * 程序化滚动同样派发（且 isTrusted 的）scroll 事件，会把刚弹出的菜单瞬关
+ * （live 复现：菜单弹出毫秒级即被列表自滚的 trailing scroll 关掉）。
+ * wheel/touchmove 只来自用户输入手势，保持「用户滚动关菜单」的原语义。
+ */
+export function listenUserDismiss(
+  target: Pick<Document, 'addEventListener' | 'removeEventListener'>,
+  onClose: () => void,
+): () => void {
+  const close = () => onClose();
+  const onEsc = (e: Event) => {
+    if ((e as KeyboardEvent).key === 'Escape') onClose();
+  };
+  // 用 mousedown 而不是 click：点击菜单项本身由按钮 onClick 先处理
+  target.addEventListener('mousedown', close);
+  target.addEventListener('keydown', onEsc);
+  target.addEventListener('wheel', close, true);
+  target.addEventListener('touchmove', close, true);
+  return () => {
+    target.removeEventListener('mousedown', close);
+    target.removeEventListener('keydown', onEsc);
+    target.removeEventListener('wheel', close, true);
+    target.removeEventListener('touchmove', close, true);
+  };
+}
+
 /** 飞书式右键菜单：跟随鼠标位置，自动避开视口边缘 */
 export default function ContextMenu({
   x,
@@ -35,21 +63,7 @@ export default function ContextMenu({
     });
   }, [x, y]);
 
-  useEffect(() => {
-    const close = () => onClose();
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    // 用 mousedown 而不是 click：点击菜单项本身由按钮 onClick 先处理
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', onEsc);
-    document.addEventListener('scroll', close, true);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', onEsc);
-      document.removeEventListener('scroll', close, true);
-    };
-  }, [onClose]);
+  useEffect(() => listenUserDismiss(document, onClose), [onClose]);
 
   return createPortal(
     <div

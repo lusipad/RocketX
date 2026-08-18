@@ -973,4 +973,175 @@ mod tests {
             "local_policy"
         );
     }
+
+    // Live 端到端（issue #309 业务 MCP）：真实连接 http://127.0.0.1:3300 的
+    // Rocket.Chat 与一台 Azure DevOps Server。默认不跑；
+    // 运行：cargo test -- --ignored live_business_mcp
+    // 环境变量（均可选）：
+    //   ADO_LIVE_URL          collection URL，默认 http://localhost:8081/DefaultCollection
+    //                         （本机 on-prem，NTLM；注意 /tfs 只是虚拟目录，集合在根下）
+    //   ADO_LIVE_AUTH         "ntlm"（默认；写库时映射为 default-credentials，走 WinHTTP
+    //                         Windows 集成认证）或 "pat"（需同时设置 ADO_PAT，绝不打印）
+    //   ADO_LIVE_API_VERSION  可选；显式指定 ADO REST api-version。不指定时改传
+    //                         serverVersionHint "2015"，走 hint→api-version 的真实
+    //                         映射链路（psm1 应解析为 1.0；本机 TFS 2015 只认 1.0）
+    //   ADO_PROJECT           可选；若存在于该 collection 则用它做 WIQL，否则用项目列表第一项
+    // keychain 两个条目都由 guard 备份/恢复。
+    #[test]
+    #[ignore = "live：需要 RC 127.0.0.1:3300 与可用的 Azure DevOps Server"]
+    fn live_business_mcp_reads_azure_devops_and_rocket_chat() {
+        use crate::live_e2e as live;
+
+        if !live::rc_server_reachable() {
+            eprintln!("跳过：127.0.0.1:3300 上没有可用的 Rocket.Chat");
+            return;
+        }
+        let auth = std::env::var("ADO_LIVE_AUTH").unwrap_or_else(|_| "ntlm".to_string());
+        let base_url = std::env::var("ADO_LIVE_URL")
+            .unwrap_or_else(|_| "http://localhost:8081/DefaultCollection".to_string());
+        // 显式 apiVersion 优先；不指定时用 serverVersionHint "2015"，验证 hint 映射链路。
+        let version_args = match std::env::var("ADO_LIVE_API_VERSION") {
+            Ok(value) => json!({"apiVersion": value}),
+            Err(_) => json!({"serverVersionHint": "2015"}),
+        };
+        // 注意：keychain 里只能存 default-credentials/pat；"ntlm" 是设置层的写法，
+        // 入库时被 normalize_azure_auth 映射为 default-credentials。
+        let ado_config = match auth.as_str() {
+            "ntlm" | "default-credentials" => json!({
+                "collectionUrl": base_url,
+                "authMode": "default-credentials",
+                "allowInsecureAdoHttp": false,
+            }),
+            "pat" => {
+                let pat =
+                    std::env::var("ADO_PAT").expect("ADO_LIVE_AUTH=pat 时需要 ADO_PAT 环境变量");
+                json!({
+                    "collectionUrl": base_url,
+                    "authMode": "pat",
+                    "allowInsecureAdoHttp": false,
+                    "pat": pat,
+                })
+            }
+            other => panic!("ADO_LIVE_AUTH 只支持 ntlm/pat，收到 {other}"),
+        };
+
+        let session = live::rc_login().expect("REST 登录应成功");
+        let rc_config = json!({
+            "serverUrl": live::RC_BASE,
+            "userId": session.user_id,
+            "authToken": session.auth_token,
+        });
+        let _rc_guard = live::KeychainGuard::install(
+            super::ROCKET_CHAT_KEYCHAIN_SERVICE,
+            "active",
+            &rc_config.to_string(),
+        )
+        .expect("写入 Rocket.Chat 测试配置应成功");
+        let _ado_guard = live::KeychainGuard::install(
+            super::AZURE_DEVOPS_KEYCHAIN_SERVICE,
+            "active",
+            &ado_config.to_string(),
+        )
+        .expect("写入 Azure DevOps 测试配置应成功");
+
+        let listed = handle(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap();
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
+
+        // Rocket.Chat 工具真实连通：列出会话
+        let conversations = handle(json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"rocketx_list_conversations","arguments":{}}
+        }))
+        .unwrap();
+        assert_eq!(
+            conversations["result"]["isError"], false,
+            "rocketx_list_conversations 不应报错"
+        );
+        assert!(
+            conversations["result"]["structuredContent"]["update"].is_array(),
+            "subscriptions.get 应返回 update 数组"
+        );
+
+        // Azure DevOps 工具真实连通：先列项目（集合级 GET，NTLM 走 winauth/WinHTTP）
+        let mut projects_args = json!({"method":"GET","resource":"projects"});
+        projects_args
+            .as_object_mut()
+            .unwrap()
+            .extend(version_args.as_object().unwrap().clone());
+        let projects = handle(json!({
+            "jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"rocketx_azure_devops_server_read","arguments":projects_args}
+        }))
+        .unwrap();
+        assert_eq!(
+            projects["result"]["isError"],
+            false,
+            "ADO 项目列表不应报错：{}",
+            projects["result"]["structuredContent"]["message"]
+                .as_str()
+                .unwrap_or("（无 message）")
+        );
+        let project_values = projects["result"]["structuredContent"]["value"]
+            .as_array()
+            .expect("projects 响应应包含 value 数组");
+        assert!(
+            !project_values.is_empty(),
+            "ADO collection 应至少有一个项目"
+        );
+        let names: Vec<&str> = project_values
+            .iter()
+            .filter_map(|project| project["name"].as_str())
+            .collect();
+        assert_eq!(names.len(), project_values.len(), "每个项目都应有名称");
+
+        // 选项目：优先 ADO_PROJECT（若存在），否则取列表第一项
+        let wanted = std::env::var("ADO_PROJECT").unwrap_or_default();
+        let project = if !wanted.is_empty() && names.contains(&wanted.as_str()) {
+            wanted
+        } else {
+            names[0].to_string()
+        };
+
+        // WIQL 只读查询工作项（POST wit/wiql 在 adapter 白名单内）
+        let wiql =
+            format!("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{project}'");
+        let mut wiql_args = json!({
+            "method":"POST",
+            "area":"wit",
+            "resource":"wiql",
+            "project": project,
+            "body":{"query": wiql}
+        });
+        wiql_args
+            .as_object_mut()
+            .unwrap()
+            .extend(version_args.as_object().unwrap().clone());
+        let response = handle(json!({
+            "jsonrpc":"2.0","id":4,"method":"tools/call",
+            "params":{"name":"rocketx_azure_devops_server_read","arguments":wiql_args}
+        }))
+        .unwrap();
+        assert_eq!(
+            response["result"]["isError"],
+            false,
+            "ADO WIQL 查询不应报错：{}",
+            response["result"]["structuredContent"]["message"]
+                .as_str()
+                .unwrap_or("（无 message）")
+        );
+        let structured = &response["result"]["structuredContent"];
+        assert!(
+            structured.get("workItems").is_some() || structured.get("queryType").is_some(),
+            "WIQL 响应应包含 workItems/queryType"
+        );
+        let count = structured["workItems"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(usize::from(structured.get("workItems").is_some()));
+        eprintln!(
+            "live ok：business MCP 列出 6 个工具，RC 会话可读；ADO（{auth} 模式）{base_url} \
+             返回 {} 个项目，对 '{project}' 的 WIQL 返回 {count} 个工作项",
+            names.len()
+        );
+    }
 }

@@ -1,10 +1,13 @@
 import { create } from 'zustand';
+import { getServerBase, loadStoredAuth, rest, savePreferences } from '../lib/client';
+import { listArchivedEntries, removeArchivedEntry } from '../lib/accountScope';
 
 /**
  * 备注名。
  *
  * Rocket.Chat 没有「给别人起备注」这个数据模型（它只有 name / username），
- * 所以存在本机，跨设备不同步——和自定义分组同样的取舍。
+ * 所以借 users.setPreferences 的自定义键（rcxAliases / rcxNameFormat）存到服务端，
+ * 重装/换设备后登录即可找回；localStorage 只作为本机缓存，保证离线可用、启动即见。
  *
  * 两类 key：
  * - `u:<username>` 给人起的备注（在通讯录、@ 补全、单聊会话名里生效）
@@ -43,8 +46,14 @@ function loadFormat(): NameFormat {
 
 interface AliasState {
   aliases: AliasMap;
-  /** 名字显示格式（本地存，不走 RC prefs——备注本身就是本机数据） */
+  /** 名字显示格式（与服务端 rcxNameFormat 同步，本地缓存保证离线可用） */
   nameFormat: NameFormat;
+  /**
+   * 登录后从服务端拉取备注合并进 store（服务端优先）。
+   * 服务端为空而本机有数据时（首次登录/老版本升级）改为把本机数据迁移上传，
+   * 避免服务端的空值把本地盖掉。
+   */
+  sync: () => Promise<void>;
   /** 给用户起备注（传空字符串即清除） */
   setUserAlias: (username: string, alias: string) => void;
   /** 给会话起备注（多人直聊、频道都可以） */
@@ -52,19 +61,126 @@ interface AliasState {
   setNameFormat: (f: NameFormat) => void;
   userAlias: (username?: string) => string | undefined;
   roomAlias: (rid: string) => string | undefined;
+  /**
+   * 导入一条旧服务器地址留下的归档备注：合并进当前备注（当前已有的键优先，
+   * 归档只补缺不覆盖），写回服务端后删除归档，返回实际补入的条数。
+   */
+  importArchived: (owner: string) => Promise<number>;
+}
+
+/** 一条可导入的历史归档（换服务器地址后被账号隔离机制归档的备注） */
+export interface ArchivedAliases {
+  /** 归档 owner 串：`<userId>@<serverBase>` */
+  owner: string;
+  serverBase: string;
+  count: number;
+}
+
+function currentOwner(): string | null {
+  const auth = loadStoredAuth();
+  if (!auth) return null;
+  return `${auth.userId}@${getServerBase() || 'same-origin'}`;
+}
+
+function parseAliasMap(raw: string): AliasMap | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as AliasMap;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 扫描 localStorage 里的 rcx-aliases 归档。当前账号的归档登录时已还原成裸 key，
+ * 理论上不存在，仍容错排除；JSON 损坏的跳过并告警。
+ */
+export function listArchivedAliases(): ArchivedAliases[] {
+  const current = currentOwner();
+  const out: ArchivedAliases[] = [];
+  for (const { owner, raw } of listArchivedEntries(KEY)) {
+    if (owner === current) continue;
+    const map = parseAliasMap(raw);
+    if (!map) {
+      console.warn(`[aliases] 归档 ${owner} 数据损坏，已跳过`);
+      continue;
+    }
+    const count = Object.keys(map).length;
+    if (count === 0) continue;
+    out.push({ owner, serverBase: owner.slice(owner.indexOf('@') + 1), count });
+  }
+  return out;
+}
+
+/**
+ * 写回失败不回滚本地：备注先在本机生效，下次登录再以服务端为准收敛。
+ * 但失败不能无声无息——live 验证曾发现 RC 8.6 REST 校验拒绝自定义键、
+ * 界面毫无感知的问题；至少留下诊断日志。
+ */
+function pushToServer(data: { rcxAliases?: AliasMap; rcxNameFormat?: NameFormat }): Promise<boolean> {
+  return savePreferences(data).then(
+    () => true,
+    (err) => {
+      console.warn('[aliases] 备注名写回服务端失败，已保留本机缓存，下次登录再同步：', err);
+      return false;
+    },
+  );
+}
+
+/** 正在飞的那次同步。并发调用共用它，不会重复拉 users.info */
+let inflight: Promise<void> | null = null;
+
+function persistFormat(f: NameFormat): void {
+  try {
+    localStorage.setItem(FORMAT_KEY, f);
+  } catch {
+    /* 存储满/无痕 */
+  }
 }
 
 export const useAliases = create<AliasState>((set, get) => ({
   aliases: load(),
   nameFormat: loadFormat(),
 
+  sync: () => {
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        const explicit = await rest.getExplicitPreferences();
+        const serverAliases = explicit.rcxAliases;
+        const local = get().aliases;
+        if (serverAliases && Object.keys(serverAliases).length > 0) {
+          // 服务端优先合并：重装/换设备后把服务端备注拉回本地缓存；
+          // 本地多出来的键保留（可能还没来得及上传）
+          const merged = { ...local, ...serverAliases };
+          set({ aliases: merged });
+          persist(merged);
+        } else if (Object.keys(local).length > 0) {
+          // 服务端还没有备注：把本机数据迁移上传。
+          // 服务端已有格式偏好时（别的设备清空过备注）不要顺手盖掉它
+          await savePreferences({
+            rcxAliases: local,
+            ...(explicit.rcxNameFormat ? {} : { rcxNameFormat: get().nameFormat }),
+          });
+        }
+        if (explicit.rcxNameFormat && explicit.rcxNameFormat !== get().nameFormat) {
+          persistFormat(explicit.rcxNameFormat);
+          set({ nameFormat: explicit.rcxNameFormat });
+        }
+      } catch {
+        // 同步失败不阻塞使用：localStorage 缓存仍在，下次登录再同步
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
+  },
+
   setNameFormat: (f) => {
-    try {
-      localStorage.setItem(FORMAT_KEY, f);
-    } catch {
-      /* 存储满/无痕 */
-    }
+    persistFormat(f);
     set({ nameFormat: f });
+    pushToServer({ rcxNameFormat: f });
   },
 
   setUserAlias: (username, alias) => {
@@ -74,6 +190,7 @@ export const useAliases = create<AliasState>((set, get) => ({
     else delete next[key];
     set({ aliases: next });
     persist(next);
+    pushToServer({ rcxAliases: next });
   },
 
   setRoomAlias: (rid, alias) => {
@@ -83,10 +200,30 @@ export const useAliases = create<AliasState>((set, get) => ({
     else delete next[key];
     set({ aliases: next });
     persist(next);
+    pushToServer({ rcxAliases: next });
   },
 
   userAlias: (username) => (username ? get().aliases[`u:${username}`] : undefined),
   roomAlias: (rid) => get().aliases[`r:${rid}`],
+
+  importArchived: async (owner) => {
+    const entry = listArchivedEntries(KEY).find((e) => e.owner === owner);
+    if (!entry) return 0;
+    const archived = parseAliasMap(entry.raw);
+    if (!archived) {
+      console.warn(`[aliases] 归档 ${owner} 数据损坏，无法导入`);
+      return 0;
+    }
+    const current = get().aliases;
+    // 当前已有的键优先：归档只补缺，不覆盖
+    const merged = { ...archived, ...current };
+    const added = Object.keys(archived).filter((k) => !(k in current)).length;
+    set({ aliases: merged });
+    persist(merged);
+    // 只有服务端确认写入成功后才删除归档；否则保留归档，避免离线导入时丢失可恢复数据。
+    if (await pushToServer({ rcxAliases: merged })) removeArchivedEntry(KEY, owner);
+    return added;
+  },
 }));
 
 /**

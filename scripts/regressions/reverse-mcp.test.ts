@@ -2,14 +2,23 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('反向 MCP 只暴露三个只读聊天上下文工具', async () => {
+test('反向 MCP 只暴露四个只读聊天上下文工具', async () => {
   const source = await readFile('apps/desktop/src-tauri/src/mcp.rs', 'utf8');
   assert.match(source, /rocketx_list_conversations/);
   assert.match(source, /rocketx_get_thread_context/);
   assert.match(source, /rocketx_get_room_history/);
+  assert.match(source, /rocketx_read_attachment/);
   assert.match(source, /"readOnlyHint": true/);
   assert.doesNotMatch(source, /chat\.sendMessage|chat\.delete|chat\.update/);
   assert.match(source, /MCP_PROTOCOL_VERSION: &str = "2025-06-18"/);
+});
+
+test('附件原图工具只接受站内 /file-upload/ 相对路径并有 10MB 上限', async () => {
+  const source = await readFile('apps/desktop/src-tauri/src/mcp.rs', 'utf8');
+  assert.match(source, /starts_with\("\/file-upload\/"\)/);
+  assert.match(source, /MAX_ATTACHMENT_BYTES: usize = 10 \* 1024 \* 1024/);
+  assert.match(source, /blocking_token_request_bytes/);
+  assert.match(source, /"type": "image"/);
 });
 
 test('反向 MCP 与 Bot 凭据只进系统凭据库，不进入启动参数或前端存储', async () => {
