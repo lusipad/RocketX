@@ -1,6 +1,6 @@
 # 功能规格追踪索引
 
-> 基线：工作树 `2026-08-16`
+> 基线：工作树 `2026-08-18`
 > 用途：从验收 ID 定位当前实现、自动化证据和仍需真实验证的部分。
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
@@ -84,7 +84,7 @@
 | `SCH-AC-05`、`SCH-AC-06` | 自动化预检与 Server Request 策略 | `routines.test.ts`、`codex-workspace.test.ts` | 真实审批请求 INT |
 | `SCH-AC-07` | 本机 Storage 与页面文案 | `routines.test.ts`、`tests/ui/butler-workspace.spec.ts` | 双设备 MAN |
 | `AGT-AC-01` | `stores/sharedAgent.ts` | `shared-agent-runtime.test.ts` | 无 Runtime MAN |
-| `AGT-AC-02` | `stores/agentEnvironments.ts` | `agent-environments.test.ts` | 两会话真实竞争 |
+| `AGT-AC-02` | `stores/agentEnvironments.ts`、`components/ButlerProjectConfigDialog.tsx` | `agent-environments.test.ts` | 两会话真实竞争 |
 | `AGT-AC-03`、`AGT-AC-04` | `components/AgentPanel.tsx`、`components/ChatArea.tsx`、请求路由 | `agent-session.test.ts`、`agent-context.test.ts`、`tests/ui/core-flows.spec.ts` | 真实房间 INT |
 | `AGT-AC-05` | 共享 Agent 租约逻辑 | `shared-agent-runtime.test.ts` | 两设备 INT |
 | `AGT-AC-06` | 中断恢复与环境释放 | `agent-session.test.ts`、`shared-agent-runtime.test.ts` | 进程崩溃 INT |

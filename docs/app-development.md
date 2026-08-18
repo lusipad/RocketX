@@ -21,7 +21,7 @@ node packages/create-rcx-app/dist/rcx-cli.js validate my-app
 node packages/create-rcx-app/dist/rcx-cli.js dev my-app
 ```
 
-The available templates are `hello`, `kanban`, `poll`, and `oncall`. The development server binds to `127.0.0.1`, defaults to port `4174`, supplies a mock Bridge for preview, and reloads after source changes. It does not replace validation inside the real RocketX sandbox.
+The available templates are `hello`, `kanban`, `poll`, and `oncall`. The development server binds to `127.0.0.1`, defaults to port `4174`, supplies a mock Bridge for preview, and reloads after source changes. It does not replace validation inside the real RocketX sandbox. The mock Bridge currently implements `storage.get/set/delete/list`, `chat.current`, `chat.postMessage`, `rooms.list`, `users.read`, and `ui.notify`; other capabilities such as `chat.history`, `net.fetch`, `files.pick`, and `native.call` are not mocked and will throw `Unsupported mock capability` in preview.
 
 To choose another local port:
 
@@ -51,7 +51,7 @@ A minimal iframe application uses this shape:
 Important rules enforced by `@lusipad/rocketx`:
 
 - `id` uses reverse-domain form and lowercase letters, digits, dots, or hyphens.
-- `version` is SemVer.
+- `version` is a SemVer subset: `MAJOR.MINOR.PATCH` with an optional pre-release suffix (`-...`); build metadata (`+...`) is not accepted.
 - `iframe` and `worker` entries are strings; directory iframe applications use a local HTML entry.
 - Unknown and duplicate permissions are rejected.
 - `net:fetch` requires an explicit `netAllow` list of HTTP(S) origins.

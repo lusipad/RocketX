@@ -114,7 +114,7 @@
 
 - 实现：`apps/web/src/stores/sharedAgent.ts`、`apps/web/src/components/AgentPanel.tsx`
 - 实现：`apps/web/src/components/ChatArea.tsx`、`apps/web/src/components/CreateWorkItemDiscussionDialog.tsx`
-- 实现：`apps/web/src/stores/agentEnvironments.ts`、`apps/web/src/components/LocalAgentEnvironmentsSettings.tsx`
+- 实现：`apps/web/src/stores/agentEnvironments.ts`、`apps/web/src/components/ButlerProjectConfigDialog.tsx`
 - 自动化：`scripts/regressions/shared-agent-runtime.test.ts`、`scripts/regressions/agent-session.test.ts`
 - 自动化：`scripts/regressions/agent-hosting-backend.test.ts`、`hosted-dsh-controller.test.ts`
 - 自动化：`scripts/regressions/agent-context.test.ts`、`scripts/regressions/agent-environments.test.ts`
