@@ -80,7 +80,10 @@ test('RocketX 专用租约消息 id 必须同时满足前缀和校验', () => {
   const messageId = createAgentSessionLeaseMessageId();
   assert.equal(isAgentSessionLeaseMessageId(messageId), true);
   assert.equal(isAgentSessionLeaseMessageId(`plain${messageId.slice(5)}`), false);
-  assert.equal(isAgentSessionLeaseMessageId(`${messageId.slice(0, 16)}2`), false);
+  // 篡改校验位时必须换一个不同的字符：原来直接拼 '2'，当真实校验位恰好是 '2'
+  // 时反例等于原值，约 1/56 概率误判通过（flaky）。
+  const tampered = `${messageId.slice(0, 16)}${messageId[16] === '2' ? '3' : '2'}`;
+  assert.equal(isAgentSessionLeaseMessageId(tampered), false);
 });
 
 test('纯可见状态卡默认只展示不仲裁，专用租约消息 id 或 customFields 才可信', () => {
