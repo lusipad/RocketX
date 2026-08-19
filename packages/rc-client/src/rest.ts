@@ -726,11 +726,13 @@ export class RcRestClient {
         `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
     );
     const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
-    const fileBytes = new Uint8Array(await file.arrayBuffer());
-    const body = new Uint8Array(head.length + fileBytes.length + tail.length);
-    body.set(head, 0);
-    body.set(fileBytes, head.length);
-    body.set(tail, head.length + fileBytes.length);
+    /**
+     * body 直接拼 Blob 分段，不再 arrayBuffer + Uint8Array 整体拷贝：
+     * 大文件上传时浏览器 fetch 可直接消费 Blob（零拷贝），内存峰值不再翻倍
+     * （issue #355）。桌面端 Tauri plugin-http 内部仍会物化 body（其 fetch
+     * 走 `new Request(...).arrayBuffer()`），但至少省掉这里的两次全量拷贝。
+     */
+    const body = new Blob([head, file, tail]);
 
     const auth =
       this.authProvider?.() ??

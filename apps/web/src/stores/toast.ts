@@ -70,6 +70,11 @@ export function humanError(err: unknown, fallback = '操作失败'): string {
   if (status === 401 || /unauthorized|not authorized/i.test(raw)) {
     return '没有权限执行此操作';
   }
+  // 文件超出服务器上传上限：RC 报 error-file-too-large（HTTP 413），给出明确指向（issue #355）
+  const errorType = (err as { errorType?: unknown } | null | undefined)?.errorType;
+  if (errorType === 'error-file-too-large' || status === 413) {
+    return '文件超过服务器允许的大小上限，请压缩或拆分后再发';
+  }
   if (/not enough permission/i.test(raw)) return '权限不足（需要管理员授权）';
   if (/enterprise/i.test(raw)) return '该功能需要 Rocket.Chat 企业版';
   if (/rate limit|too many/i.test(raw)) return '操作过于频繁，请稍后再试';

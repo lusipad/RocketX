@@ -708,6 +708,27 @@ export function setChatMessageSizeProviderForTests(
   };
 }
 
+// FileUpload_MaxFileSize 同为公开设置；上传前预检超限文件，不打过去再被服务器拒（issue #355）。
+let uploadSizeLimitProvider: () => Promise<unknown> = () =>
+  getPublicSetting('FileUpload_MaxFileSize');
+
+/** 服务器文件上传上限（字节）；读取失败或设置缺失时返回 0，表示不预检 */
+async function uploadMaxFileSize(): Promise<number> {
+  const value = await uploadSizeLimitProvider().catch(() => undefined);
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** 测试用：替换上传上限来源，返回还原函数 */
+export function setUploadSizeLimitProviderForTests(
+  provider: () => Promise<unknown>,
+): () => void {
+  const previous = uploadSizeLimitProvider;
+  uploadSizeLimitProvider = provider;
+  return () => {
+    uploadSizeLimitProvider = previous;
+  };
+}
+
 function findMessageById(
   messages: Record<string, RcMessage[]>,
   messageId: string,
@@ -2600,6 +2621,19 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid, message) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return false;
+    // 客户端预检：超服务器上限的文件直接拦下报错，不浪费流量发出去再被拒
+    // （issue #355）。逐个检查，多文件里有一个超限就整体不发。放在消费引用
+    // （replyTo）之前，预检失败时输入区的引用草稿不会被吞掉。
+    const maxBytes = await uploadMaxFileSize();
+    if (maxBytes > 0) {
+      const oversized = files.find((file) => file.size > maxBytes);
+      if (oversized) {
+        toast.error(
+          `「${oversized.name}」超过服务器文件大小上限 ${Math.round(maxBytes / 1024 / 1024)} MB`,
+        );
+        return false;
+      }
+    }
     // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
     // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
     const quote = !tmid ? get().replyTo : null;
