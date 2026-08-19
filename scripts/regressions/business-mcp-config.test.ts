@@ -74,7 +74,7 @@ test('business MCP failure leaves ordinary Codex config usable', async () => {
   }
 });
 
-test('Rocket.Chat account switch fails closed when credential sync fails', async () => {
+test('Rocket.Chat account switch keeps tools when sync fails but credentials are cleared', async () => {
   const calls: string[] = [];
   let failRocketChatSync = false;
   const restoreLaunch = setBusinessMcpLaunchConfigProvider(async () => launch);
@@ -103,7 +103,11 @@ test('Rocket.Chat account switch fails closed when credential sync fails', async
       userId: 'account-b',
       authToken: 'token-b',
     }), false);
-    assert.equal(await businessMcpThreadConfig(), undefined);
+    // 清空成功代表 keychain 无残留凭据：工具面保持注入，按能力降级
+    assert.deepEqual(
+      (await businessMcpThreadConfig())?.mcp_servers,
+      { rocketx_business: launch },
+    );
     assert.deepEqual(calls.slice(-2), [
       'business_mcp_sync_rocket_chat',
       'business_mcp_clear_rocket_chat',
@@ -114,7 +118,42 @@ test('Rocket.Chat account switch fails closed when credential sync fails', async
   }
 });
 
-test('Azure DevOps connection switch fails closed when credential sync fails', async () => {
+test('Rocket.Chat account switch fails closed only when credentials cannot be cleared', async () => {
+  let failRocketChat = false;
+  const restoreLaunch = setBusinessMcpLaunchConfigProvider(async () => launch);
+  const restoreInvoker = setBusinessMcpCommandInvoker(async (command) => {
+    if (failRocketChat && command.startsWith('business_mcp_sync_rocket_chat')) {
+      throw new Error('keychain unavailable');
+    }
+    if (failRocketChat && command === 'business_mcp_clear_rocket_chat') {
+      throw new Error('keychain unavailable');
+    }
+    return true;
+  });
+  try {
+    assert.equal(await syncBusinessMcpRocketChat({
+      serverUrl: 'https://chat.example.test',
+      userId: 'account-a',
+      authToken: 'token-a',
+    }), true);
+    assert.equal(await syncBusinessMcpAzureDevOps({}), true);
+    assert.ok((await businessMcpThreadConfig())?.mcp_servers);
+
+    // 同步与清空都失败：可能残留上一个账号的凭据，必须保持关闭
+    failRocketChat = true;
+    assert.equal(await syncBusinessMcpRocketChat({
+      serverUrl: 'https://chat.example.test',
+      userId: 'account-b',
+      authToken: 'token-b',
+    }), false);
+    assert.equal(await businessMcpThreadConfig(), undefined);
+  } finally {
+    restoreInvoker();
+    restoreLaunch();
+  }
+});
+
+test('Azure DevOps sync failure with cleared credentials no longer hides room tools', async () => {
   const calls: string[] = [];
   let failAzureSync = false;
   const restoreLaunch = setBusinessMcpLaunchConfigProvider(async () => launch);
@@ -144,7 +183,11 @@ test('Azure DevOps connection switch fails closed when credential sync fails', a
       authMode: 'pat',
       pat: 'pat-b',
     }), false);
-    assert.equal(await businessMcpThreadConfig(), undefined);
+    // ADO 配置无效但已清空：房间数据工具不应被一并挡住（issue #309）
+    assert.deepEqual(
+      (await businessMcpThreadConfig())?.mcp_servers,
+      { rocketx_business: launch },
+    );
     assert.deepEqual(calls.slice(-2), [
       'business_mcp_sync_azure_devops',
       'business_mcp_clear_azure_devops',

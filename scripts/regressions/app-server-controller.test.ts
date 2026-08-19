@@ -9,6 +9,12 @@ import {
   type CodexTransport,
 } from '../../apps/web/src/agent/protocol';
 import { registerScheduledTaskAdapter } from '../../apps/web/src/agent/scheduledTaskBridge';
+import {
+  setBusinessMcpCommandInvoker,
+  setBusinessMcpLaunchConfigProvider,
+  syncBusinessMcpAzureDevOps,
+  syncBusinessMcpRocketChat,
+} from '../../apps/web/src/agent/businessMcp';
 import { useTodos } from '../../apps/web/src/stores/todos';
 
 class FakeTransport implements CodexTransport {
@@ -232,6 +238,40 @@ test('新任务先启用原生 Memory，再更新设置和开始 Turn', async ()
   assert.deepEqual(turnParams.runtimeWorkspaceRoots, ['D:/workspace', 'C:/runtime-attachments']);
   assert.equal('sandbox' in turnParams, false);
   assert.equal(await turn, 'turn-1');
+});
+
+test('凭据就绪时新任务把 rocketx_business MCP 注入 Codex 线程配置', async () => {
+  const launch = { command: 'C:/Program Files/RocketX/rocketx.exe', args: ['--business-mcp'] };
+  const restoreLaunch = setBusinessMcpLaunchConfigProvider(async () => launch);
+  const restoreInvoker = setBusinessMcpCommandInvoker(async () => true);
+  try {
+    assert.equal(await syncBusinessMcpRocketChat({
+      serverUrl: 'https://chat.example.test',
+      userId: 'account-a',
+      authToken: 'token-a',
+    }), true);
+    assert.equal(await syncBusinessMcpAzureDevOps({}), true);
+
+    const transport = new FakeTransport();
+    const controller = new AppServerController({ transportFactory: () => transport });
+    await connectController(controller, transport);
+
+    const starting = controller.startThread({ model: 'gpt-test', effort: 'medium', permissionPreset: 'auto' });
+    const startRequest = await answerLatest(transport, 'thread/start', { thread: { id: 'thread-mcp' } });
+    const startParams = startRequest.params as Record<string, unknown>;
+    // 注入只携带 exe 路径与参数，凭据留在 keychain，由 --business-mcp 进程自取
+    assert.deepEqual(startParams.config, {
+      features: { memories: true },
+      mcp_servers: { rocketx_business: launch },
+    });
+    assert.equal(JSON.stringify(startParams.config).includes('token-a'), false);
+    await answerLatest(transport, 'thread/memoryMode/set', {});
+    await answerLatest(transport, 'thread/settings/update', {});
+    await starting;
+  } finally {
+    restoreInvoker();
+    restoreLaunch();
+  }
 });
 
 test('外部线程可通过原生 fork 继承历史、权限和 Memory 后继续', async () => {

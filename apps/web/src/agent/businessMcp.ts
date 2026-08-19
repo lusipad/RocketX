@@ -145,12 +145,16 @@ export async function syncBusinessMcpRocketChat(input: {
 }): Promise<boolean> {
   updateCredentialState('rocket-chat', false);
   const synced = await invokeBestEffort('business_mcp_sync_rocket_chat', input);
-  if (!synced) {
-    await invokeBestEffort('business_mcp_clear_rocket_chat');
-    return false;
+  if (synced) {
+    updateCredentialState('rocket-chat', true);
+    return true;
   }
-  updateCredentialState('rocket-chat', true);
-  return true;
+  // 同步失败后尽力清空 keychain：清空成功说明没有残留凭据，可以安全注入
+  // （各工具按能力返回 not_configured）；只有清空也失败才保持关闭，
+  // 避免上一个账号的残留凭据被新会话误用。
+  const cleared = await invokeBestEffort('business_mcp_clear_rocket_chat');
+  updateCredentialState('rocket-chat', cleared);
+  return false;
 }
 
 export async function clearBusinessMcpRocketChat(): Promise<boolean> {
@@ -185,12 +189,15 @@ export async function syncBusinessMcpAzureDevOps(input: {
     pat: input.pat,
     allowInsecureAdoHttp: input.allowInsecureAdoHttp === true,
   });
-  if (!synced) {
-    await invokeBestEffort('business_mcp_clear_azure_devops');
-    return false;
+  if (synced) {
+    updateCredentialState('azure-devops', true);
+    return true;
   }
-  updateCredentialState('azure-devops', true);
-  return true;
+  // 与 Rocket.Chat 侧一致：同步失败但清空成功即为干净状态，不因此把
+  // rocketx_* 房间数据工具一并挡在会话外。
+  const cleared = await invokeBestEffort('business_mcp_clear_azure_devops');
+  updateCredentialState('azure-devops', cleared);
+  return false;
 }
 
 export function businessMcpCredentialRevision(): number {
