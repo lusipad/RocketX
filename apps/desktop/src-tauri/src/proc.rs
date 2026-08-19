@@ -3165,15 +3165,15 @@ fn acquire_update_flow_lock(path: &Path) -> Result<UpdateFlowLock, String> {
     }
 }
 
+/// 更新 helper 的固定文件名。NSIS 安装器的 CheckIfAppIsRunning 按映像名查杀进程，
+/// helper 若沿用主程序文件名（如 RocketX.exe）会被安装器误杀，导致安装 Abort（退出码 1）。
+const UPDATE_HELPER_EXE_NAME: &str = "rocketx-update-helper.exe";
+
 fn copy_update_helper_binary() -> Result<PathBuf, String> {
     let current_exe = std::env::current_exe()
         .map_err(|error| format!("无法定位当前 RocketX 可执行文件：{error}"))?;
     let helper_dir = create_unique_temp_dir("update-helper")?;
-    let helper = helper_dir.join(
-        current_exe
-            .file_name()
-            .ok_or_else(|| "当前 RocketX 可执行文件缺少文件名".to_string())?,
-    );
+    let helper = helper_dir.join(UPDATE_HELPER_EXE_NAME);
     if let Err(error) = std::fs::copy(&current_exe, &helper) {
         let _ = std::fs::remove_dir_all(&helper_dir);
         return Err(format!(
@@ -3276,6 +3276,52 @@ fn installer_exit_code_is_success(installer_kind: WindowsInstallerKind, code: Op
     }
 }
 
+/// PowerShell 脚本在 Start-Process 抛错（如用户取消 UAC 授权）时返回的占位退出码，
+/// 用于与安装器自身的真实退出码区分，避免统一误报为「安装器退出码异常：1」。
+const INSTALLER_LAUNCH_FAILURE_EXIT_CODE: i32 = 242;
+
+/// 截取安装器输出摘要，避免把过长的 stdout/stderr 塞进错误消息。
+fn summarize_installer_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    trimmed.chars().take(200).collect()
+}
+
+/// 把安装失败归因成两类：PowerShell 没能拉起安装器（UAC 取消/权限不足），
+/// 或安装器自身返回了非零退出码（附输出摘要）。
+fn silent_install_failure_message(
+    installer_kind: WindowsInstallerKind,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
+    let stderr = summarize_installer_output(stderr);
+    if code == Some(INSTALLER_LAUNCH_FAILURE_EXIT_CODE) {
+        let mut message = "无法启动安装程序（可能取消了管理员授权）".to_string();
+        if !stderr.is_empty() {
+            message.push_str(&format!("：{stderr}"));
+        }
+        return message;
+    }
+    let mut message = format!(
+        "{} 安装器退出码异常：{}",
+        installer_kind.label(),
+        code.unwrap_or_default()
+    );
+    let stdout = summarize_installer_output(stdout);
+    let mut details = Vec::new();
+    if !stderr.is_empty() {
+        details.push(format!("stderr：{stderr}"));
+    }
+    if !stdout.is_empty() {
+        details.push(format!("stdout：{stdout}"));
+    }
+    if !details.is_empty() {
+        message.push_str(&format!("（{}）", details.join("；")));
+    }
+    message
+}
+
 fn run_silent_installer(
     installer: &Path,
     installer_kind: WindowsInstallerKind,
@@ -3287,7 +3333,7 @@ fn run_silent_installer(
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "$process = Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length-1)] -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $process.ExitCode",
+            "try { $process = Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length-1)] -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop; exit $process.ExitCode } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 242 }",
         ])
         .arg(program)
         .args(args);
@@ -3296,17 +3342,17 @@ fn run_silent_installer(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let status = command
-        .status()
+    let output = command
+        .output()
         .map_err(|error| format!("无法启动安装包：{error}"))?;
-    let code = status.code();
-    if installer_exit_code_is_success(installer_kind, code) {
+    if installer_exit_code_is_success(installer_kind, output.status.code()) {
         Ok(())
     } else {
-        Err(format!(
-            "{} 安装器退出码异常：{}",
-            installer_kind.label(),
-            code.unwrap_or_default()
+        Err(silent_install_failure_message(
+            installer_kind,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
         ))
     }
 }
@@ -3516,6 +3562,8 @@ fn run_update_helper(args: UpdateHelperArgs) -> Result<(), String> {
 }
 
 pub fn maybe_run_update_helper(args: &[String]) -> Result<bool, String> {
+    // helper 模式按 --apply-update-helper 参数识别，与 helper 可执行文件名无关，
+    // 因此 copy_update_helper_binary 改名后这里无需同步调整。
     let Some(flag_index) = args
         .iter()
         .position(|argument| argument == "--apply-update-helper")
@@ -3664,22 +3712,24 @@ mod tests {
     use super::ResolvedCodex;
     use super::{
         app_server_args_for_help, classify_codex_version, codex_runtime_probe_from_candidates_with,
-        decode_attachment_request, encode_message, host_path, installer_exit_code_is_success,
-        installer_kind_from_bundle_type, matching_installer_paths,
+        copy_update_helper_binary, decode_attachment_request, encode_message, host_path,
+        installer_exit_code_is_success, installer_kind_from_bundle_type, matching_installer_paths,
         normalize_unc_workspace_config_path, normalize_update_version,
         normalize_update_version_text, parse_codex_cli_version, parse_semantic_version,
         parse_update_helper_args, probe_resolve_codex_from_candidates_with_probe,
         read_codex_artifact, redact_json_secret, resolve_codex_from_candidates_with_probe,
         resolve_update_package_with_kind, run_business_azure_devops_server_read_with,
         run_butler_azure_devops_server_read, safe_attachment_path, sha256_file,
-        silent_install_invocation, standalone_azure_devops_server_adapter_path,
+        silent_install_failure_message, silent_install_invocation,
+        standalone_azure_devops_server_adapter_path, summarize_installer_output,
         validate_butler_azure_devops_server_read_request, validate_session_id,
         verify_update_package, verify_update_package_identity, ButlerAzureDevOpsServerReadRequest,
         CodexCompatibilityStatus, CodexProcessInfo, CodexRuntimeCandidate,
         CodexRuntimeCandidateOutcome, CodexRuntimeProbe, CodexRuntimeReasonCode,
         CodexRuntimeSource, UpdateResult, UpdateResultStatus, WindowsInstallerKind,
         AZURE_DEVOPS_SERVER_BODY_LIMIT, AZURE_DEVOPS_SERVER_HOST_ADAPTER, CODEX_MINIMUM_CANDIDATE,
-        CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS, UPDATER_PUBLIC_KEY,
+        CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS, INSTALLER_LAUNCH_FAILURE_EXIT_CODE,
+        UPDATER_PUBLIC_KEY, UPDATE_HELPER_EXE_NAME,
     };
     #[cfg(windows)]
     use super::{
@@ -3951,6 +4001,56 @@ mod tests {
             msi.1,
             vec!["/i", "\"C:\\RocketX\\RocketX.msi\"", "/qn", "/norestart"]
         );
+    }
+
+    #[test]
+    fn update_helper_binary_uses_fixed_alias_file_name() {
+        // helper 必须改名：NSIS 的 CheckIfAppIsRunning 按映像名查杀，同名 helper 会被误杀。
+        let helper = copy_update_helper_binary().unwrap();
+        assert_eq!(
+            helper.file_name().and_then(|name| name.to_str()),
+            Some(UPDATE_HELPER_EXE_NAME)
+        );
+        assert!(helper.is_file());
+        let _ = fs::remove_dir_all(helper.parent().unwrap());
+    }
+
+    #[test]
+    fn silent_install_failure_distinguishes_launch_failure_from_installer_exit_code() {
+        // Start-Process 抛错（如用户取消 UAC）时 PowerShell 脚本返回占位退出码。
+        let launch_error = silent_install_failure_message(
+            WindowsInstallerKind::Nsis,
+            Some(INSTALLER_LAUNCH_FAILURE_EXIT_CODE),
+            b"",
+            "The operation was canceled by the user.".as_bytes(),
+        );
+        assert!(launch_error.contains("无法启动安装程序（可能取消了管理员授权）"));
+        assert!(launch_error.contains("canceled by the user"));
+        assert!(!launch_error.contains("退出码异常"));
+
+        // 安装器自身的真实非零退出码才报退出码，并附带输出摘要。
+        let install_error = silent_install_failure_message(
+            WindowsInstallerKind::Nsis,
+            Some(1),
+            "stdout detail".as_bytes(),
+            "stderr detail".as_bytes(),
+        );
+        assert!(install_error.contains("NSIS 安装器退出码异常：1"));
+        assert!(install_error.contains("stderr：stderr detail"));
+        assert!(install_error.contains("stdout：stdout detail"));
+        assert!(!install_error.contains("无法启动安装程序"));
+
+        // 无输出时错误消息不附带空摘要。
+        let quiet_error =
+            silent_install_failure_message(WindowsInstallerKind::Msi, Some(5), b"", b"");
+        assert_eq!(quiet_error, "MSI 安装器退出码异常：5");
+    }
+
+    #[test]
+    fn installer_output_summary_is_trimmed_and_truncated() {
+        assert_eq!(summarize_installer_output(b"  hello \n"), "hello");
+        assert_eq!(summarize_installer_output(b""), "");
+        assert_eq!(summarize_installer_output(&[b'a'; 300]).len(), 200);
     }
 
     #[test]
