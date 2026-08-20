@@ -1,3 +1,24 @@
+; 卸载/安装前清扫仍从安装目录运行的进程。与 slim-installer-hooks.nsh 中的
+; 同名宏保持同步（NSIS 的相对 !include 在 bundler 临时目录下不可靠，故不抽公共文件）。
+!macro ROCKETX_SWEEP_INSTDIR_PROCESSES
+  !if "${INSTALLMODE}" == "currentUser"
+    nsis_tauri_utils::KillProcessCurrentUser "rocketx.exe"
+  !else
+    nsis_tauri_utils::KillProcess "rocketx.exe"
+  !endif
+  Pop $R8
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d = $'$INSTDIR$'.TrimEnd([char]92) + [char]92; $$end = (Get-Date).AddSeconds(10); do { $$p = @(Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$d, [System.StringComparison]::OrdinalIgnoreCase) }); $$p | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; if ($$p.Count -eq 0) { break }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $$end)"'
+  Pop $R8
+!macroend
+
+!macro NSIS_HOOK_PREINSTALL
+  !insertmacro ROCKETX_SWEEP_INSTDIR_PROCESSES
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro ROCKETX_SWEEP_INSTDIR_PROCESSES
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   RMDir /r "$LOCALAPPDATA\RocketX\resources.__staging"
   CreateDirectory "$LOCALAPPDATA\RocketX\resources.__staging"
