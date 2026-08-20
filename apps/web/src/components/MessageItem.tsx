@@ -1,6 +1,7 @@
 import {
   memo,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -32,6 +33,7 @@ import {
   Sparkles,
   Trash2,
   CalendarPlus,
+  FolderOpen,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
@@ -44,7 +46,7 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, renderMarkdownDoc, LinkifiedText } from '../lib/markdown';
-import { assetUrl, rest } from '../lib/client';
+import { assetUrl, isTauri, rest } from '../lib/client';
 import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
@@ -81,6 +83,7 @@ import {
   describeStickerImport,
 } from '../lib/stickerLibrary';
 import { parseRocketXStickerShortcodeMessage } from '../lib/stickerServerCompat';
+import { extractUncPaths, uncHostOf } from '../lib/uncPath';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -503,6 +506,56 @@ function ConfirmDeleteDialog({
   );
 }
 
+/** 打开 UNC 共享路径前的确认：点击即触发 SMB 连接，必须用户明确确认。 */
+function UncOpenDialog({
+  path,
+  onConfirm,
+  onCancel,
+}: {
+  path: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const dialogRef = useDialogBehavior(onCancel);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="打开局域网共享路径"
+        tabIndex={-1}
+        className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
+      >
+        <div className="text-base font-semibold text-ink">打开局域网共享路径</div>
+        <div className="mt-2 break-all text-sm text-ink-2">{path}</div>
+        <div className="mt-2 text-xs text-ink-3">
+          将用系统默认程序打开，并连接局域网主机「{uncHostOf(path)}」。请只对可信主机执行此操作。
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:opacity-90"
+          >
+            打开
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }) {
   const editMessage = useChat((s) => s.editMessage);
   // 只编辑可见文本；引用链接前缀保存时原样带回
@@ -599,6 +652,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [forwarding, setForwarding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [uncOpen, setUncOpen] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
@@ -732,6 +786,26 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
 
   const collectibleSticker = canCollectMessageSticker(message);
 
+  // LAN 直传文件从未上过服务器：引用、转发、置顶、复制消息链接等依赖服务端
+  // 消息/附件的操作都不开放；多选合并转发会静默丢附件，同样排除。
+  const isLanFile = Boolean(message.rocketxLanHash);
+
+  // 消息文本里的 UNC 共享路径（\\host\share\...），渲染成可点击卡片；
+  // 点击后弹确认框，再用系统默认程序打开（blueprint §5.3）。
+  const uncPaths = useMemo(() => extractUncPaths(message.msg ?? ''), [message.msg]);
+  const openUncPath = async (path: string): Promise<void> => {
+    if (!isTauri) {
+      toast.info('局域网共享路径仅桌面端可打开');
+      return;
+    }
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(path);
+    } catch (error) {
+      toast.error(error, '打开共享路径失败');
+    }
+  };
+
   const menuItems: MenuItem[] = [
     { label: '回复', icon: Reply, onClick: () => setReplyTo(message) },
     ...(!inThread
@@ -833,7 +907,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onContextMenu={onContextMenu}
       onMouseEnter={onBarEnter}
       onMouseLeave={onBarLeave}
-      onClick={selectMode && !message.pending && !message.failed ? () => toggleSelectMid(message._id) : undefined}
+      onClick={selectMode && !isLanFile && !message.pending && !message.failed ? () => toggleSelectMid(message._id) : undefined}
       className={`group flex gap-2.5 rounded-lg px-1 transition-colors duration-500 ${
         hostedAgentAnswer ? 'rocketx-agent-answer-row' : ''
       } ${visuallyGrouped ? 'mt-0.5' : 'mt-3'} ${visuallyMine ? 'flex-row-reverse' : ''} ${
@@ -841,7 +915,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       } ${selectMode ? 'cursor-pointer' : ''}`}
     >
       {/* 多选合并转发：勾选框（issue #16） */}
-      {selectMode && (
+      {selectMode && !isLanFile && (
         <button
           type="button"
           aria-label={selected ? '取消选择消息' : '选择消息'}
@@ -946,10 +1020,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   <SmilePlus size={14} />
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
-                <button title="回复" className={hoverBtn} onClick={() => setReplyTo(message)}>
+                <button
+                  title="回复"
+                  className={isLanFile ? 'hidden' : hoverBtn}
+                  onClick={() => setReplyTo(message)}
+                >
                   <Reply size={14} />
                 </button>
-                {!inThread && (
+                {!inThread && !isLanFile && (
                   <button
                     title="在话题中回复"
                     className={hoverBtn}
@@ -958,7 +1036,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     <MessageSquareText size={14} />
                   </button>
                 )}
-                <button title="转发" className={hoverBtn} onClick={() => setForwarding(true)}>
+                <button
+                  title="转发"
+                  className={isLanFile ? 'hidden' : hoverBtn}
+                  onClick={() => setForwarding(true)}
+                >
                   <Share2 size={14} />
                 </button>
                 <button
@@ -1043,6 +1125,18 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   ?.filter((u) => u.meta && Object.keys(u.meta).length > 0)
                   .slice(0, 2)
                   .map((u, i) => <UrlPreviewCard key={i} url={u.url} meta={u.meta!} />)}
+                {uncPaths.map((uncPath) => (
+                  <button
+                    key={uncPath}
+                    type="button"
+                    title={isTauri ? '打开局域网共享路径' : '局域网共享路径仅桌面端可打开'}
+                    onClick={() => setUncOpen(uncPath)}
+                    className="mt-1 flex max-w-full items-center gap-1.5 rounded-md border border-line px-2 py-1 text-left text-xs text-ink-2 transition hover:bg-fill-hover"
+                  >
+                    <FolderOpen size={12} className="shrink-0 text-ink-3" />
+                    <span className="truncate">{uncPath}</span>
+                  </button>
+                ))}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
                   </>
                 )}
@@ -1061,11 +1155,17 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           {message.rocketxOffline && !message.pending && !message.failed && (
             <span
               className="mb-0.5 shrink-0 text-xs text-ink-3"
-              title="已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次"
+              title={
+                message.rocketxLanHash
+                  ? '文件经局域网直传，只保留在双方本机；引用、转发、置顶等依赖服务器的操作不可用'
+                  : '已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次'
+              }
             >
               {message.rocketxLanBytesPerSecond
                 ? `局域网直传 · ${fmtSize(message.rocketxLanBytesPerSecond)}/s`
-                : '局域网已送达 · 待补发'}
+                : message.rocketxLanHash
+                  ? '局域网直传 · 仅本机'
+                  : '局域网已送达 · 待补发'}
             </span>
           )}
           {message.failed && (
@@ -1140,7 +1240,23 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           onClose={() => setPicker(null)}
         />
       )}
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={
+            isLanFile
+              ? menuItems.filter(
+                  (item) =>
+                    !['回复', '在话题中回复', '转发', '多选', '创建讨论', '复制消息链接', '置顶'].includes(
+                      item.label,
+                    ),
+                )
+              : menuItems
+          }
+          onClose={() => setMenu(null)}
+        />
+      )}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
       {calendarOpen && (
         <CalendarEventDialog
@@ -1188,6 +1304,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <UserCard
           user={{ username: message.u.username, name: message.u.name }}
           onClose={() => setShowCard(false)}
+        />
+      )}
+      {uncOpen && (
+        <UncOpenDialog
+          path={uncOpen}
+          onCancel={() => setUncOpen(null)}
+          onConfirm={() => {
+            setUncOpen(null);
+            void openUncPath(uncOpen);
+          }}
         />
       )}
       {confirmDelete && (

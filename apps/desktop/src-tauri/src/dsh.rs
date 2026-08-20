@@ -499,6 +499,36 @@ fn compute_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+/// 归档校验哈希的缓存键：归档位于安装目录（Program Files，需管理员权限才能改写），
+/// 这里的哈希只用于「检测归档变化以触发重新解包」，不是防篡改边界，因此用
+/// 文件大小 + mtime 做缓存键是安全的。归档一旦被替换（升级安装），mtime/大小
+/// 变化会触发重新哈希与解包。
+fn archive_sha256_cached(archive_path: &Path, dsh_root: &Path) -> Result<String, String> {
+    let metadata = std::fs::metadata(archive_path)
+        .map_err(|error| format!("无法读取 DSH 运行时归档信息：{error}"))?;
+    let size = metadata.len();
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let cache_path = dsh_root.join("dsh-runtime-archive.sha256-cache");
+    if let Ok(content) = std::fs::read_to_string(&cache_path) {
+        let mut parts = content.trim().splitn(3, ' ');
+        if parts.next() == Some(size.to_string().as_str())
+            && parts.next() == Some(mtime_ms.to_string().as_str())
+        {
+            if let Some(sha) = parts.next().filter(|value| !value.is_empty()) {
+                return Ok(sha.to_string());
+            }
+        }
+    }
+    let sha = compute_sha256(archive_path)?;
+    let _ = std::fs::write(&cache_path, format!("{size} {mtime_ms} {sha}\n"));
+    Ok(sha)
+}
+
 fn validate_bundled_runtime_root(root: &Path) -> Result<(), String> {
     let cli = bundled_dsh_cli_entry(root);
     if !cli.is_file() {
@@ -699,7 +729,7 @@ fn prepare_bundled_runtime_root_from_archive(
     archive_path: &Path,
     dsh_root: &Path,
 ) -> Result<PathBuf, String> {
-    let archive_sha = compute_sha256(archive_path)?;
+    let archive_sha = archive_sha256_cached(archive_path, dsh_root)?;
     let runtime_root = bundled_runtime_cache_root(dsh_root);
     if bundled_runtime_is_current(&runtime_root, &archive_sha) {
         return canonicalize_bundled_runtime_root(&runtime_root);
@@ -1101,17 +1131,26 @@ fn resolve_dsh_runtime(
 }
 
 #[tauri::command]
-pub fn dsh_runtime_probe(app: tauri::AppHandle, source_path: Option<String>) -> DshRuntimeProbe {
-    match resolve_dsh_runtime(&app, source_path.as_deref()) {
-        Ok(_) => DshRuntimeProbe {
-            ready: true,
-            reason: None,
-        },
-        Err(reason) => DshRuntimeProbe {
-            ready: false,
-            reason: Some(reason),
-        },
-    }
+pub async fn dsh_runtime_probe(app: tauri::AppHandle, source_path: Option<String>) -> DshRuntimeProbe {
+    // 探测包含归档校验与外部进程 spawn，耗时且不定时；必须离开主线程，
+    // 否则探测期间整个窗口事件循环被冻结（启动卡顿的直接来源）。
+    tauri::async_runtime::spawn_blocking(move || {
+        match resolve_dsh_runtime(&app, source_path.as_deref()) {
+            Ok(_) => DshRuntimeProbe {
+                ready: true,
+                reason: None,
+            },
+            Err(reason) => DshRuntimeProbe {
+                ready: false,
+                reason: Some(reason),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|error| DshRuntimeProbe {
+        ready: false,
+        reason: Some(format!("DSH 运行时探测任务失败：{error}")),
+    })
 }
 
 fn encode_message(message: serde_json::Value) -> Result<Vec<u8>, String> {
@@ -1907,8 +1946,9 @@ pub fn shutdown(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_connection_lease, build_bridge_command, bundled_bridge_path, bundled_dsh_cli_entry,
-        business_mcp_patch_text, cleanup_runtime_dir, development_bundled_runtime_archive,
+        archive_sha256_cached, attach_connection_lease, build_bridge_command, bundled_bridge_path,
+        bundled_dsh_cli_entry, business_mcp_patch_text, cleanup_runtime_dir, compute_sha256,
+        development_bundled_runtime_archive,
         development_bundled_runtime_root, dsh_focus_plugin_client, dsh_focus_plugin_index,
         dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible,
         dsh_version_is_unverified_newer, encode_message, file_url_for_path,
@@ -1934,6 +1974,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
             Arc, Mutex,
         },
+        time::UNIX_EPOCH,
     };
     use tar::Builder;
 
@@ -1942,6 +1983,41 @@ mod tests {
             "rocketx-dsh-tests-{label}-{}",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    #[test]
+    fn archive_sha256_is_cached_by_size_and_mtime() {
+        let root = unique_temp_dir("archive-sha-cache");
+        let dsh_root = root.join("dsh");
+        std::fs::create_dir_all(&dsh_root).unwrap();
+        let archive = root.join("dsh-runtime.tar.gz");
+        std::fs::write(&archive, b"archive-v1").unwrap();
+
+        let first = archive_sha256_cached(&archive, &dsh_root).unwrap();
+        assert_eq!(first, compute_sha256(&archive).unwrap());
+
+        // 用正确的 size+mtime 配上假哈希写缓存：命中缓存会原样返回假值，
+        // 证明元数据不变时不再对归档做全量哈希。
+        let metadata = std::fs::metadata(&archive).unwrap();
+        let mtime_ms = metadata
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        std::fs::write(
+            dsh_root.join("dsh-runtime-archive.sha256-cache"),
+            format!("{} {} deadbeef\n", metadata.len(), mtime_ms),
+        )
+        .unwrap();
+        assert_eq!(archive_sha256_cached(&archive, &dsh_root).unwrap(), "deadbeef");
+
+        // 内容变化（大小或 mtime 变化）后重新计算
+        std::fs::write(&archive, b"archive-v2-longer").unwrap();
+        let updated = archive_sha256_cached(&archive, &dsh_root).unwrap();
+        assert_eq!(updated, compute_sha256(&archive).unwrap());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn encode_attachment_request(

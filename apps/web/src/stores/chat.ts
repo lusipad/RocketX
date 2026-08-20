@@ -20,6 +20,7 @@ import {
   siteUrlSync,
 } from '../lib/client';
 import { emojify } from '../lib/emoji';
+import { fmtSize } from '../lib/format';
 import {
   normalizeMessageMaxAllowedSize,
   toSendableMessageChunks,
@@ -74,6 +75,7 @@ import {
   recordLanIncoming,
   recordLanOutgoing,
 } from '../lan/outbox';
+import { shouldTryLanFileTransfer } from '../lan/routing';
 import { stripAgentSessionMarker } from '../agent/card';
 import { agentReplyNotificationTracker } from '../agent/replyNotification';
 import {
@@ -2686,34 +2688,54 @@ export const useChat = create<ChatState>((set, get) => ({
       for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
-        if (!tmid && !firstMessage) {
+        // 引用/说明文字必须走服务器消息（引用附件带不过 LAN），这种场景不尝试直传。
+        const canUseLan = !tmid && !firstMessage;
+        const tryLanSend = async (): Promise<boolean> => {
+          if (!canUseLan) return false;
           const recipients = await lanRecipientIds(rid).catch(() => []);
-          if (recipients.length === 1) {
-            const messageId = randomMessageId();
-            const originalTs = Date.now();
-            try {
-              const receipt = await sendLanFile(recipients[0], path, {
-                messageId,
-                roomId: rid,
-                originalTs,
-              });
-              insertLanFileMessage(
-                localLanFileMessage(
-                  {
-                    ...receipt,
-                    roomId: rid,
-                    originalTs,
-                    localPath: path,
-                  },
-                  me,
-                  receipt.bytesPerSecond,
-                ),
+          if (recipients.length !== 1) return false;
+          const messageId = randomMessageId();
+          const originalTs = Date.now();
+          try {
+            const receipt = await sendLanFile(recipients[0], path, {
+              messageId,
+              roomId: rid,
+              originalTs,
+            });
+            insertLanFileMessage(
+              localLanFileMessage(
+                {
+                  ...receipt,
+                  roomId: rid,
+                  originalTs,
+                  localPath: path,
+                },
+                me,
+                receipt.bytesPerSecond,
+              ),
+            );
+            // 首次直传成功给一次性说明（之后静默自动路由），并持久化标记。
+            const prefs = useUiPrefs.getState();
+            if (!prefs.lanP2pExplained) {
+              prefs.markLanP2pExplained();
+              toast.info(
+                `已通过局域网直传发送（${fmtSize(receipt.bytesPerSecond)}/s），可在设置中调整触发阈值`,
               );
-              sentOverLan = true;
-            } catch {
-              // 未发现可信单一对端、连接中断或校验失败时静默回退 Rocket.Chat。
             }
+            return true;
+          } catch {
+            // 未发现可信单一对端、连接中断或校验失败时静默回退 Rocket.Chat。
+            return false;
           }
+        };
+        if (canUseLan) {
+          // 小文件走 P2P 的握手开销不划算：低于阈值（默认 50 MiB，可在设置中
+          // 调整）先走 Rocket.Chat 上传。stat 失败按 0 处理，回退路径会重新 stat。
+          const minBytes = useUiPrefs.getState().lanFileMinBytes;
+          const size = await stat(path)
+            .then((metadata) => metadata.size)
+            .catch(() => 0);
+          if (shouldTryLanFileTransfer(size, minBytes)) sentOverLan = await tryLanSend();
         }
         if (!sentOverLan) {
           const [metadata, configuredLimit] = await Promise.all([
@@ -2724,19 +2746,34 @@ export const useChat = create<ChatState>((set, get) => ({
             typeof configuredLimit === 'number' && Number.isFinite(configuredLimit)
               ? configuredLimit
               : 0;
-          if (maxBytes > 0 && metadata.size > maxBytes) {
-            throw new Error(
-              `可信局域网传输不可用，且 Rocket.Chat 上传上限为 ${Math.round(
-                maxBytes / 1024 / 1024,
-              )} MiB`,
-            );
+          const overServerLimit = maxBytes > 0 && metadata.size > maxBytes;
+          let rcFailure: unknown = null;
+          if (!overServerLimit) {
+            try {
+              const bytes = await readFile(path);
+              await rest.uploadMedia(rid, new Blob([bytes]), {
+                tmid,
+                fileName,
+                ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
+              });
+            } catch (error) {
+              rcFailure = error;
+            }
           }
-          const bytes = await readFile(path);
-          await rest.uploadMedia(rid, new Blob([bytes]), {
-            tmid,
-            fileName,
-            ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
-          });
+          if (overServerLimit || rcFailure) {
+            // 服务器路径不可用（断网/5xx/超上传上限）时无视阈值用 LAN 兜底：
+            // 阈值只管在线时的选路，不挡离线兜底。
+            if (!(await tryLanSend())) {
+              throw (
+                rcFailure ??
+                new Error(
+                  `可信局域网传输不可用，且 Rocket.Chat 上传上限为 ${Math.round(
+                    maxBytes / 1024 / 1024,
+                  )} MiB`,
+                )
+              );
+            }
+          }
         }
         set({ uploading: Math.max(0, get().uploading - 1) });
       }

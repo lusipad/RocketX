@@ -51,7 +51,7 @@ test('用图片/文件回复时引用跟随第一个上传发出，话题上传�
   assert.equal(chat.match(/const firstMessage = quoteMsg/gu)?.length, 2);
   assert.equal(chat.match(/index === 0 && firstMessage \? \{ msg: firstMessage \}/gu)?.length, 2);
   // 挂着引用或正文时不走局域网直传（那条链路带不了引用和文件说明）
-  assert.match(chat, /if \(!tmid && !firstMessage\) \{/);
+  assert.match(chat, /const canUseLan = !tmid && !firstMessage;/);
   // 发送确认弹窗要让用户知道这是一条回复
   const dialog = readFileSync('apps/web/src/components/UploadConfirm.tsx', 'utf8');
   assert.match(dialog, /将作为回复发送/);

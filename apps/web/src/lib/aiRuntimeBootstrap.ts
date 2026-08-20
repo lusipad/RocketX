@@ -130,7 +130,12 @@ export async function initializeStartupAiRuntimeProvider({
     // 旧版或损坏的包形态命令按 slim 处理，由实际运行时探测决定是否启用 AI。
   }
   if (profile === 'full') {
-    const deepseekProbe = await probeRuntime(invokeRuntime, 'dsh_runtime_probe', { sourcePath: null });
+    // full 版的探测包含归档校验与外部进程 spawn，两个探测必须并行，
+    // 串行会把首屏延迟翻倍（slim 路径早已并行）。
+    const [deepseekProbe, codexProbe] = await Promise.all([
+      probeRuntime(invokeRuntime, 'dsh_runtime_probe', { sourcePath: null }),
+      probeRuntime(invokeRuntime, 'codex_runtime_probe', { manualPath: manualCodexPath }),
+    ]);
     if (deepseekProbe.ready) {
       return applyStartupResolution({
         active: 'deepseek',
@@ -138,7 +143,6 @@ export async function initializeStartupAiRuntimeProvider({
         source: 'full-default',
       });
     }
-    const codexProbe = await probeRuntime(invokeRuntime, 'codex_runtime_probe', { manualPath: manualCodexPath });
     const active = selectStartupAiRuntimeProvider(undefined, {
       deepseek: false,
       codex: codexProbe.ready,

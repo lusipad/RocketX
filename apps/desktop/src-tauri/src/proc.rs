@@ -1088,32 +1088,54 @@ fn app_server_launch_args(resolved: &ResolvedCodex) -> Result<Vec<&'static str>,
 }
 
 #[tauri::command]
-pub fn codex_runtime_probe(
+pub async fn codex_runtime_probe(
     app: tauri::AppHandle,
-    config: tauri::State<'_, CodexRuntimeConfig>,
     manual_path: Option<String>,
 ) -> CodexRuntimeProbe {
-    if let Err(reason) = set_manual_codex_path(&config, manual_path) {
-        return CodexRuntimeProbe::new(
+    {
+        // State 借用在 await 之前取到并释放：带引用入参的 async command 必须返回
+        // Result，保持现有前端契约（探测失败是 ready:false 而不是 invoke  reject）
+        // 就不能把 State 放在签名里。
+        let config = app.state::<CodexRuntimeConfig>();
+        if let Err(reason) = set_manual_codex_path(&config, manual_path) {
+            return CodexRuntimeProbe::new(
+                false,
+                None,
+                None,
+                None,
+                CodexCompatibilityStatus::Blocked,
+                Some(CodexRuntimeReasonCode::ManualPath),
+                Some(reason),
+                Vec::new(),
+            );
+        }
+    }
+    // 探测要对每个候选串行 spawn 多个外部进程（--version / app-server --help /
+    // login status），耗时以秒计；离开主线程执行，避免冻结窗口事件循环。
+    tauri::async_runtime::spawn_blocking(move || {
+        codex_runtime_probe_from_candidates_with(
+            configured_manual_codex_path(&app).as_deref(),
+            &system_codex_paths(),
+            &standard_codex_paths(),
+            &bundled_codex_paths(&app),
+            codex_cli_version,
+            |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
+            |resolved| codex_command_succeeds(resolved, &["login", "status"]),
+        )
+    })
+    .await
+    .unwrap_or_else(|error| {
+        CodexRuntimeProbe::new(
             false,
             None,
             None,
             None,
             CodexCompatibilityStatus::Blocked,
-            Some(CodexRuntimeReasonCode::ManualPath),
-            Some(reason),
+            Some(CodexRuntimeReasonCode::Unavailable),
+            Some(format!("Codex 运行时探测任务失败：{error}")),
             Vec::new(),
-        );
-    }
-    codex_runtime_probe_from_candidates_with(
-        configured_manual_codex_path(&app).as_deref(),
-        &system_codex_paths(),
-        &standard_codex_paths(),
-        &bundled_codex_paths(&app),
-        codex_cli_version,
-        |resolved| codex_command_succeeds(resolved, &["app-server", "--help"]),
-        |resolved| codex_command_succeeds(resolved, &["login", "status"]),
-    )
+        )
+    })
 }
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {

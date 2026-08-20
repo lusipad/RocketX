@@ -83,6 +83,7 @@ import { resetFirstRun } from '../lib/firstRun';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
+import { LAN_FILE_MIN_BYTES_OPTIONS } from '../lan/routing';
 import { lanOutboxCapability } from '../lan/outbox';
 import { fmtSize } from '../lib/format';
 import { getRuntimeMode, persistRuntimeMode, type RuntimeMode } from '../lib/runtimeMode';
@@ -551,6 +552,8 @@ function DesktopSection() {
   const [scaleChanging, setScaleChanging] = useState(false);
   const uiScale = useUiPrefs((s) => s.uiScale);
   const setUiScale = useUiPrefs((s) => s.setUiScale);
+  const lanFileMinBytes = useUiPrefs((s) => s.lanFileMinBytes);
+  const setLanFileMinBytes = useUiPrefs((s) => s.setLanFileMinBytes);
 
   useEffect(() => {
     if (!autostartAvailable) return;
@@ -747,6 +750,34 @@ function DesktopSection() {
           )}
         </div>
       </Row>
+      {isTauri && (
+        <Row
+          label="局域网直传阈值"
+          hint="达到该大小的文件才尝试 P2P 直传，小文件直接走服务器；对端不可信或传输失败时始终回退 Rocket.Chat"
+        >
+          <div role="radiogroup" aria-label="局域网直传阈值" className="flex flex-wrap gap-3">
+            {LAN_FILE_MIN_BYTES_OPTIONS.map((option) => {
+              const selected = option.value === lanFileMinBytes;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setLanFileMinBytes(option.value)}
+                  className={`min-w-24 rounded-lg border px-3 py-2.5 text-left text-sm transition ${
+                    selected
+                      ? 'border-primary/70 bg-primary-light/60 font-medium text-primary'
+                      : 'border-line text-ink hover:border-ink-3 hover:bg-fill-hover'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+      )}
       <Row
         label="导出诊断日志"
         hint="包含应用版本、连接状态和脱敏后的近期错误；不会包含密码、PAT、令牌或消息正文"

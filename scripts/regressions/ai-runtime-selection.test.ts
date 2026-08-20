@@ -126,7 +126,9 @@ test('full 首次启动先验证内置 DSH；成功时保持完整包默认值',
         return { ready: true } as T;
       },
     }), 'deepseek');
-    assert.deepEqual(calls, ['desktop_distribution_profile', 'dsh_runtime_probe']);
+    // full 路径的两个运行时探测并行发起（性能要求），DSH 就绪时优先保持完整包默认值
+    assert.deepEqual(calls[0], 'desktop_distribution_profile');
+    assert.ok(calls.includes('dsh_runtime_probe'));
     assert.deepEqual(getAiRuntimeStartupResolution(), {
       active: 'deepseek',
       profile: 'full',
@@ -240,7 +242,7 @@ test('显式选择只探测所选运行时；不可用时不换脑并以无 AI �
   }
 });
 
-test('启动探测在内核初始化前完成，并由桌面端提供只读 DSH 可用性命令', () => {
+test('启动探测不阻塞首屏，在内核初始化前完成，并由桌面端提供只读 DSH 可用性命令', () => {
   const bootstrap = readFileSync('apps/web/src/main.tsx', 'utf8');
   const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
   const desktop = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
@@ -249,13 +251,20 @@ test('启动探测在内核初始化前完成，并由桌面端提供只读 DSH 
   const slimInstaller = readFileSync('apps/desktop/src-tauri/windows/slim-installer-hooks.nsh', 'utf8');
   const fullInstaller = readFileSync('apps/desktop/src-tauri/windows/full-installer-hooks.nsh', 'utf8');
 
-  const selection = bootstrap.indexOf('await initializeStartupAiRuntimeProvider');
+  // 顺序锁定：探测发起 → 首屏渲染 → 探测结果应用 → 内核初始化。
+  // 渲染不等待探测（full 版探测含归档校验与进程 spawn，是启动卡顿根因）；
+  // 内核等待探测结果，因为例行任务调度依赖最终 provider。
+  const selection = bootstrap.indexOf('initializeStartupAiRuntimeProvider({');
+  const render = bootstrap.indexOf('ReactDOM.createRoot');
+  const apply = bootstrap.indexOf('await aiRuntimeProviderReady');
   const kernel = bootstrap.indexOf('await initializeKernel');
-  assert.ok(selection >= 0 && selection < kernel);
+  assert.ok(selection >= 0 && selection < render && render < apply && apply < kernel);
   assert.match(bootstrap, /useUI\.setState\(\{ aiRuntimeProvider/);
   assert.match(settings, /readConfiguredAiRuntimeProvider\(\) \?\? getAiRuntimeProvider\(\)/);
   assert.match(settings, /选择已保留.*本次未启用/s);
-  assert.match(dsh, /pub fn dsh_runtime_probe/);
+  // 探测命令必须离开主线程（async + spawn_blocking），否则探测期间窗口事件循环冻结
+  assert.match(dsh, /pub async fn dsh_runtime_probe/);
+  assert.match(dsh, /spawn_blocking/);
   assert.match(desktop, /dsh::dsh_runtime_probe/);
   assert.match(desktop, /desktop_distribution_profile/);
   assert.match(desktop, /desktop_distribution_profile[\s\S]*executable_is_local_build/);
