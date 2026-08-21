@@ -51,11 +51,18 @@ import {
   updateAutostartEnabled,
 } from '../lib/autostart';
 import { exportDiagnostics } from '../lib/diagnostics';
+import { saveTextFile } from '../lib/exportText';
 import { loadWorkbenchConfig, loadWorkbenchConfigIssue, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
-import { listArchivedAliases, useAliases, type ArchivedAliases } from '../stores/aliases';
+import {
+  buildAliasExport,
+  listArchivedAliases,
+  parseAliasExport,
+  useAliases,
+  type ArchivedAliases,
+} from '../stores/aliases';
 import { useUiPrefs } from '../stores/uiPrefs';
 import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
@@ -804,9 +811,42 @@ function SidebarSection() {
   const nameFormat = useAliases((s) => s.nameFormat);
   const setNameFormat = useAliases((s) => s.setNameFormat);
   const importArchived = useAliases((s) => s.importArchived);
+  const importAliases = useAliases((s) => s.importAliases);
   // 换过服务器地址（如 IP 变了）前的备注被账号隔离机制归档，提供找回入口
   const [archives, setArchives] = useState<ArchivedAliases[]>(() => listArchivedAliases());
   const [importResult, setImportResult] = useState<string | null>(null);
+  const aliasFileRef = useRef<HTMLInputElement>(null);
+  const [fileResult, setFileResult] = useState<string | null>(null);
+  // 导出只含人的备注（u: 键）；会话备注（r: 键）走账号同步，不进导出文件
+  const userAliasCount = useAliases(
+    (s) => Object.keys(s.aliases).filter((k) => k.startsWith('u:')).length,
+  );
+
+  const exportAliases = async () => {
+    const text = buildAliasExport(useAliases.getState().aliases);
+    const saved = await saveTextFile(text, `rcx-aliases-${new Date().toISOString().slice(0, 10)}.json`, {
+      filterName: 'JSON',
+      extension: 'json',
+      mimeType: 'application/json',
+    });
+    if (saved) setFileResult(`已导出 ${userAliasCount} 条联系人备注`);
+  };
+
+  const importAliasFile = async (file: File) => {
+    const parsed = parseAliasExport(await file.text());
+    if (!parsed) {
+      setFileResult('文件格式不对：需要本应用导出的备注 JSON');
+      return;
+    }
+    const added = await importAliases(parsed.aliases);
+    const skipped =
+      parsed.skippedRooms > 0 ? `；跳过 ${parsed.skippedRooms} 条会话备注（随账号同步，不从文件导入）` : '';
+    setFileResult(
+      added > 0
+        ? `已导入 ${added} 条备注（已有的同名备注保持不动）${skipped}`
+        : `没有可导入的新备注：文件里的备注本机都已有${skipped}`,
+    );
+  };
 
   return (
     <>
@@ -842,6 +882,38 @@ function SidebarSection() {
             { key: 'aliasWithReal', label: '备注名（原名）' },
           ]}
         />
+      </Row>
+
+      <Row label="导入 / 导出备注" hint="把联系人（人）的备注导出成 JSON 备份或迁到别的设备；会话备注随账号同步，不含在文件里。导入只补缺，不覆盖已有备注">
+        <div className="flex max-w-md flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void exportAliases()}
+              disabled={userAliasCount === 0}
+              className="h-7 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover disabled:opacity-40"
+            >
+              导出为 JSON
+            </button>
+            <button
+              onClick={() => aliasFileRef.current?.click()}
+              className="h-7 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover"
+            >
+              从文件导入
+            </button>
+            <input
+              ref={aliasFileRef}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void importAliasFile(file);
+                e.target.value = '';
+              }}
+            />
+          </div>
+          {fileResult && <div className="text-xs text-ink-3">{fileResult}</div>}
+        </div>
       </Row>
 
       {/* importResult 留在条件里：导入成功后归档被消费、archives 清空，结果提示仍需可见 */}
@@ -1071,6 +1143,27 @@ function MessageSection() {
           ]}
         />
       </Row>
+
+      <Row label="折叠超长消息" hint="特别长的消息只显示预览，点「展开全部」看全文（随账号同步）" inline>
+        <Toggle
+          checked={prefs.rcxCollapseLongMessages}
+          onChange={(v) => void update({ rcxCollapseLongMessages: v })}
+        />
+      </Row>
+
+      {prefs.rcxCollapseLongMessages && (
+        <Row label="折叠时机" hint="消息超过多长才折叠成预览（随账号同步）">
+          <RadioGroup
+            value={prefs.rcxLongMessageFoldAt}
+            onChange={(v) => void update({ rcxLongMessageFoldAt: v })}
+            options={[
+              { key: 'half', label: '超过半屏', hint: '默认' },
+              { key: 'one', label: '超过一屏' },
+              { key: 'two', label: '超过两屏' },
+            ]}
+          />
+        </Row>
+      )}
 
       <Row label="自动加载图片" hint="关闭后图片需要点击才加载（省流量）" inline>
         <Toggle

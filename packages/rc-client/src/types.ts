@@ -206,6 +206,10 @@ export interface RcPreferences {
   rcxAliases?: Record<string, string>;
   /** 名字显示格式：只显示备注名 / 备注名（原名） */
   rcxNameFormat?: 'alias' | 'aliasWithReal';
+  /** 超长消息折叠：特别长的消息只显示预览，点「展开全部」查看（默认开启） */
+  rcxCollapseLongMessages?: boolean;
+  /** 折叠时机：消息超过多少屏才折叠（默认半屏） */
+  rcxLongMessageFoldAt?: 'half' | 'one' | 'two';
 }
 
 /** 服务器提供的斜杠命令 */

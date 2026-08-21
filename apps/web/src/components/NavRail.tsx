@@ -12,6 +12,7 @@ import {
   Plus,
   Search,
   Settings,
+  Timer,
   Users,
   UsersRound,
 } from 'lucide-react';
@@ -20,11 +21,13 @@ import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
+import { useFocus } from '../stores/focus';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
 import { ConfirmDialog } from './Dialog';
+import FocusDialog, { formatRemaining, useNow } from './FocusDialog';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 
 const MODULE_META: Record<string, {
@@ -97,6 +100,10 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const [plusMenu, setPlusMenu] = useState(false);
   const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
+  // 专注模式一级入口（daily-loop 规格 v1）
+  const [focusDialog, setFocusDialog] = useState(false);
+  const focusSession = useFocus((s) => s.session);
+  const focusNow = useNow(!!focusSession);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const plusButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -224,6 +231,19 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
         搜索 (Ctrl+K)
       </button>
 
+      {/* 专注模式入口：进行中显示倒计时（daily-loop 规格 v1） */}
+      <button
+        onClick={() => setFocusDialog(true)}
+        className={`mb-3 flex h-8 items-center gap-2 rounded-md px-2.5 text-xs transition ${
+          focusSession
+            ? 'bg-primary/10 font-medium text-primary'
+            : 'bg-surface-2 text-ink-3 hover:bg-fill-hover'
+        }`}
+      >
+        <Timer size={14} />
+        {focusSession ? `专注中 ${formatRemaining(focusSession.endsAt, focusNow)}` : '专注'}
+      </button>
+
       {/* 模块列表 */}
       <div className="flex flex-1 flex-col gap-0.5">
         {moduleSections.map((section, sectionIndex) => (
@@ -328,6 +348,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       {(dialog === 'group' || dialog === 'team') && (
         <CreateGroupDialog kind={dialog} onClose={closeCreateDialog} />
       )}
+      {focusDialog && <FocusDialog onClose={() => setFocusDialog(false)} />}
       {selfCard && user && (
         <UserCard
           user={{ username: user.username, name: user.name, status: user.status }}

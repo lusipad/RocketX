@@ -198,7 +198,7 @@ test('提示音只在真正弹通知的分支之后发声（chat.ts 路由顺序
     'utf8',
   );
   const policyReturn = source.indexOf('if (!policy.showDesktopNotification) return;');
-  const aggregateRoute = source.indexOf("routeNotification(candidate, aggregationState.config).mode === 'aggregate'");
+  const aggregateRoute = source.indexOf("routeNotification(candidate, routeConfig).mode === 'aggregate'");
   const soundCall = source.indexOf('playNotificationSound(');
   assert.ok(policyReturn >= 0, '通知策略抑制分支必须存在');
   assert.ok(aggregateRoute >= 0, '聚合路由分支必须存在');

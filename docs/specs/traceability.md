@@ -118,7 +118,16 @@
 | `PLAT-AC-11` | `apps/desktop/src-tauri/src/main.rs`、WebView2 官方内存目标 | `webview-memory.test.ts`、Windows Release 前后进程采样 | macOS/Linux 系统 WebView 不适用；Windows 长时间驻留观察 |
 | `PLAT-AC-12` | Tauri DSH resource、`scripts/prepare-dsh-runtime.mjs`、`apps/desktop/src-tauri/src/dsh.rs` | `dsh-bundled-runtime.test.ts`、`official-plugins.test.ts`、桌面 Rust tests | 三平台 Release matrix 资源与启动 MAN |
 
-## 8. 发布候选门禁
+## 8. 每日工作循环
+
+| 验收 ID | 主要实现 | 自动化证据 | 仍需验证 |
+| --- | --- | --- | --- |
+| `LOOP-AC-01` | `stores/focus.ts`、`components/FocusDialog.tsx`、`components/FocusDigestCard.tsx`、`components/NavRail.tsx`、`stores/chat.ts` 通知路由 | `focus-mode.test.ts`、`notification-sound.test.ts` 路由顺序锁定 | 真实登录下专注全链路 UI/INT；三平台状态切换 MAN |
+| `LOOP-AC-02`、`LOOP-AC-03` | 未实现（v3 通知瀑布重组） | — | — |
+| `LOOP-AC-04`、`LOOP-AC-06` | 部分：消化卡与统计（v2 消化清单未实现） | `focus-mode.test.ts` | 消化清单批处理 UI |
+| `LOOP-AC-05` | 未实现（v4 消息待办自动消解） | — | — |
+
+## 9. 发布候选门禁
 
 规格状态要提升为“已实现”前，至少满足：
 
@@ -128,7 +137,7 @@
 4. [能力矩阵](capability-matrix.md)、对应规格与本追踪表一致。
 5. 测试失败或尚未执行时，在实施记录中如实保留，不以旧截图代替。
 
-## 9. 不再接受的历史证据
+## 10. 不再接受的历史证据
 
 - 依赖已删除自建 Butler Memory 的测试，不能证明当前 Codex 原生 Memory。
 - 依赖已删除“派出去”界面的测试，不能证明独立委托存在。

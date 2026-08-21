@@ -66,6 +66,71 @@ interface AliasState {
    * 归档只补缺不覆盖），写回服务端后删除归档，返回实际补入的条数。
    */
   importArchived: (owner: string) => Promise<number>;
+  /**
+   * 从导出文件导入备注：与归档导入同一语义——当前已有的键优先，文件只补缺不覆盖，
+   * 合并后写回服务端，返回实际补入的条数。
+   */
+  importAliases: (map: AliasMap) => Promise<number>;
+}
+
+/** 导出文件的包装结构：带版本与时间戳，便于日后演进。只含人的备注（`u:` 键） */
+export interface AliasExportFile {
+  version: 1;
+  exportedAt: string;
+  aliases: AliasMap;
+}
+
+/**
+ * 把备注打包成可下载的 JSON 文本。只导出人的备注（`u:<username>`）：
+ * 用户名跨设备稳定、文件可读可手工编辑；会话备注（`r:<rid>`）的 rid 换服务器即失效，
+ * 它走账号同步通道，不进导出文件。
+ */
+export function buildAliasExport(aliases: AliasMap): string {
+  const userAliases = Object.fromEntries(
+    Object.entries(aliases).filter(([key]) => key.startsWith('u:')),
+  );
+  const file: AliasExportFile = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    aliases: userAliases,
+  };
+  return JSON.stringify(file, null, 2);
+}
+
+/** 解析结果：人的备注 + 被跳过的会话备注条数（用于提示） */
+export interface ParsedAliasExport {
+  aliases: AliasMap;
+  skippedRooms: number;
+}
+
+/**
+ * 解析导出的备注文件；兼容手写的裸「key → 备注」映射。
+ * 只收 `u:<username>` 键；旧版导出文件里的 `r:<rid>` 会话备注跳过并计数；
+ * 其他键或值不是字符串视为格式非法返回 null；空白备注按未设置处理直接丢弃。
+ */
+export function parseAliasExport(text: string): ParsedAliasExport | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const raw = (parsed as Partial<AliasExportFile>).aliases ?? parsed;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: AliasMap = {};
+  let skippedRooms = 0;
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== 'string') return null;
+    if (key.startsWith('r:')) {
+      skippedRooms += 1;
+      continue;
+    }
+    if (!/^u:.+/.test(key)) return null;
+    const alias = value.trim();
+    if (alias) out[key] = alias;
+  }
+  return { aliases: out, skippedRooms };
 }
 
 /** 一条可导入的历史归档（换服务器地址后被账号隔离机制归档的备注） */
@@ -222,6 +287,18 @@ export const useAliases = create<AliasState>((set, get) => ({
     persist(merged);
     // 只有服务端确认写入成功后才删除归档；否则保留归档，避免离线导入时丢失可恢复数据。
     if (await pushToServer({ rcxAliases: merged })) removeArchivedEntry(KEY, owner);
+    return added;
+  },
+
+  importAliases: async (map) => {
+    const current = get().aliases;
+    // 当前已有的键优先：文件只补缺，不覆盖
+    const merged = { ...map, ...current };
+    const added = Object.keys(map).filter((k) => !(k in current)).length;
+    if (added === 0) return 0;
+    set({ aliases: merged });
+    persist(merged);
+    await pushToServer({ rcxAliases: merged });
     return added;
   },
 }));

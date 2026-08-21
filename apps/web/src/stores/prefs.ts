@@ -49,6 +49,13 @@ const DEFAULTS = {
   sidebarDisplayAvatar: true,
   sendOnEnter: 'normal',
   autoImageLoad: true,
+  /**
+   * 超长消息默认折叠成预览：一条刷屏的长消息会把后面的对话顶出视野。
+   * 想始终看全文的人可以在 设置 → 消息 里关掉。
+   */
+  rcxCollapseLongMessages: true,
+  /** 超过半屏才折叠；想在消息流里看更长全文的人可在 设置 → 消息 里放宽到一屏/两屏 */
+  rcxLongMessageFoldAt: 'half',
   useEmojis: true,
   showThreadsInMainChannel: false,
   displayAvatars: true,

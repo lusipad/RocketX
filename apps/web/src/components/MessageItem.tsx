@@ -41,6 +41,7 @@ import { saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
 import { humanError, toast } from '../stores/toast';
 import { messagesToMarkdown } from '../lib/messageOutput';
+import { isLongMessage } from '../lib/longMessage';
 import ImageLightbox from './ImageLightbox';
 import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
@@ -637,6 +638,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const enterSelectMode = useChat((s) => s.enterSelectMode);
   const toggleSelectMid = useChat((s) => s.toggleSelectMid);
   const showAvatars = usePrefs((s) => s.prefs.displayAvatars);
+  const collapseLong = usePrefs((s) => s.prefs.rcxCollapseLongMessages);
+  const longMessageFoldAt = usePrefs((s) => s.prefs.rcxLongMessageFoldAt);
   const highlighted = useChat((s) => s.highlightMid === message._id);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -648,6 +651,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   }, [highlighted]);
 
   const [editing, setEditing] = useState(false);
+  // 超长消息默认折叠成预览（设置 → 消息 可关）；展开状态只影响本机本次展示
+  const [expanded, setExpanded] = useState(false);
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [forwarding, setForwarding] = useState(false);
@@ -741,6 +746,10 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     ? null
     : parseRocketXStickerShortcodeMessage(visibleText);
   const richMarkdown = !hostedAgentAnswer && /(^|\n)(#{1,6}\s+|>\s?|```|\s*[-*+]\s+|\s*\d+[.)]\s+|\|.+\|)/.test(visibleText);
+  // 插件 renderer 接管整条消息的展示，折叠不介入；阈值按当前窗口与设置的折叠时机预估
+  const longMessage =
+    collapseLong && !messageRenderer && isLongMessage(visibleText, window.innerHeight, longMessageFoldAt);
+  const collapsed = longMessage && !expanded && !editing;
   const visuallyMine = mine && !hostedAgentAnswer;
   const visuallyGrouped = grouped && !hostedAgentAnswer;
   const replyThreadId = message.tmid;
@@ -1077,6 +1086,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   messageRenderer.render({ message })
                 ) : (
                   <>
+                <div className={collapsed ? 'max-h-60 overflow-hidden' : undefined}>
                 {message.pinned && (
                   <span className="mr-1 inline-flex items-center text-primary" title="已置顶">
                     <Pin size={12} />
@@ -1138,6 +1148,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   </button>
                 ))}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
+                </div>
+                {longMessage && !editing && (
+                  <button
+                    onClick={() => setExpanded((v) => !v)}
+                    className="mt-1 text-xs text-primary hover:underline"
+                  >
+                    {expanded ? '收起' : `展开全部（共 ${visibleText.length} 字）`}
+                  </button>
+                )}
                   </>
                 )}
               </>

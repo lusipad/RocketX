@@ -20,6 +20,7 @@ import GroupFilter from '../components/GroupFilter';
 import ConversationList from '../components/ConversationList';
 import ChatArea from '../components/ChatArea';
 import QuickSwitcher from '../components/QuickSwitcher';
+import FocusDigestCard from '../components/FocusDigestCard';
 import SettingsPage from './SettingsPage';
 import { StartDMDialog } from '../components/NewChatDialogs';
 import { useImLayout } from '../stores/imLayout';
@@ -426,6 +427,7 @@ export default function MainPage() {
       )}
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
       {shortcutsOpen && <ShortcutHelpDialog onClose={() => setShortcutsOpen(false)} />}
+      <FocusDigestCard />
     </div>
   );
 }

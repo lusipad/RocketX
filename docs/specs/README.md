@@ -27,6 +27,7 @@
 | [权限、审批与用户输入](approvals-and-permissions.md) | Codex 权限档、DSH permission preset、审批、提问、拒绝和作用域 |
 | [Codex Runtime](codex-runtime.md) | CLI 发现、版本、登录、app-server、恢复和降级 |
 | [平台与桌面集成](platform-and-desktop.md) | Web/Tauri、性能模式、通知、托盘、开机启动、更新与 OCR |
+| [每日工作循环](daily-loop.md) | 专注模式、通知瀑布、消化清单：GTD 与注意力保护的整合枢纽（分期落地中） |
 
 ## 状态词
 

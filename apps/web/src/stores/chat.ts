@@ -58,6 +58,7 @@ import { useOnboarding } from './onboarding';
 import { humanError, toast } from './toast';
 import { useUI } from './ui';
 import { routeNotification, type NotificationAggregationInput } from '../lib/notificationAggregation';
+import { focusAggregationConfig, useFocus } from './focus';
 import { useNotificationAggregation } from './notificationAggregation';
 import { isLanControlMessage } from '../lan/protocol';
 import {
@@ -1012,7 +1013,8 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     muteFocusedConversations: prefs.muteFocusedConversations ?? true,
     taskbarFlash: useUiPrefs.getState().taskbarFlash,
   });
-  if (policy.flashTaskbar) void flashTaskbar();
+  // 专注期间停任务栏闪烁：闪烁也是打断
+  if (policy.flashTaskbar && !useFocus.getState().session) void flashTaskbar();
   if (!policy.showDesktopNotification) return;
 
   const title = msg.u.name || msg.u.username;
@@ -1035,12 +1037,17 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     broadcastMention,
     priority: /(^|\s|[\[【])P1(?=$|\s|[\]】:：])/i.test(body) ? 1 : undefined,
   };
+  const focus = useFocus.getState();
+  // 专注期间强制走聚合规则（穿透白名单照常生效）；聚合存储未就绪时不丢通知，降级为直通
+  const routeConfig = focus.session ? focusAggregationConfig(aggregationState?.config ?? null) : aggregationState?.config;
   const phase = aggregationState?.metrics.activePhase;
   if (phase) aggregation.recordCandidate(phase, candidate.timestamp);
-  if (aggregationState && routeNotification(candidate, aggregationState.config).mode === 'aggregate') {
+  if (aggregationState && routeConfig && routeNotification(candidate, routeConfig).mode === 'aggregate') {
     aggregation.addAggregate(candidate);
+    focus.noteAggregated(candidate);
     return;
   }
+  focus.notePassthrough(candidate);
   // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
   void desktopNotify({
     title,
