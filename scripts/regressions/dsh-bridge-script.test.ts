@@ -454,7 +454,7 @@ import http from 'node:http'
 
 const args = process.argv.slice(2)
 await writeFile(process.env.DSH_BRIDGE_ARGV_LOG, JSON.stringify(args), 'utf8')
-const expected = ['--profile', 'web', '--patch', args[3], '--host', '127.0.0.1', '--port', '0']
+const expected = ['--profile', 'web', '--patch', args[3], '--host', '127.0.0.1', '--port', '0', '--no-open']
 if (args.length !== expected.length || args.some((value, index) => value !== expected[index])) {
   console.error('unexpected argv', args)
   process.exit(2)
@@ -515,7 +515,7 @@ process.on('SIGINT', () => { void shutdown() })
   await writeFile(patchPath, '# fixture patch\n', 'utf8');
   await writeFile(cliPath, fixtureScript, 'utf8');
 
-  const child = spawn(process.execPath, [bridgeScript, cliPath, patchPath, 'web'], {
+  const child = spawn(process.execPath, [bridgeScript, cliPath, patchPath, 'web', '--no-open'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -566,7 +566,7 @@ process.on('SIGINT', () => { void shutdown() })
 
     assert.deepEqual(
       JSON.parse(await readFile(argvLogPath, 'utf8')) as string[],
-      ['--profile', 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', '0'],
+      ['--profile', 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', '0', '--no-open'],
     );
     const serverLogText = await readFile(serverLogPath, 'utf8').catch(() => '');
     const serverLog = serverLogText

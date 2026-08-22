@@ -256,6 +256,29 @@ fn open_local_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
         .map_err(|error| format!("无法使用系统应用打开局域网文件：{error}"))
 }
 
+fn resolve_unc_path(path: &str) -> Result<&str, String> {
+    if path.is_empty() || path.len() > 32_768 || path.chars().any(char::is_control) {
+        return Err("局域网共享路径无效".to_string());
+    }
+    if !path.starts_with(r"\\") || path.contains('/') || path.starts_with(r"\\?\") {
+        return Err("局域网共享路径必须是 UNC 路径".to_string());
+    }
+    let mut segments = path[2..].split('\\');
+    let host = segments.next().unwrap_or_default();
+    let share = segments.next().unwrap_or_default();
+    if host.is_empty() || share.is_empty() || host == "." {
+        return Err("局域网共享路径必须包含主机和共享名".to_string());
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn open_unc_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .open_path(resolve_unc_path(&path)?, None::<&str>)
+        .map_err(|error| format!("无法使用系统应用打开局域网共享路径：{error}"))
+}
+
 #[tauri::command]
 fn download_history_reveal(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let target = resolve_download_history_path(&path)?;
@@ -484,7 +507,8 @@ mod tray_icon_tests {
     use super::{
         autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
         launch_opens_main_window, normalize_desktop_distribution_profile, normalize_http_origin,
-        refresh_autostart_registration_with, resolve_download_history_path, validate_external_url,
+        refresh_autostart_registration_with, resolve_download_history_path, resolve_unc_path,
+        validate_external_url,
     };
     use std::{cell::Cell, path::Path};
     use tauri::image::Image;
@@ -627,6 +651,18 @@ mod tray_icon_tests {
             resolve_download_history_path(std::env::temp_dir().to_string_lossy().as_ref()).is_err()
         );
     }
+
+    #[test]
+    fn unc_path_requires_a_host_and_share_without_device_or_mixed_paths() {
+        assert_eq!(
+            resolve_unc_path(r"\\fileserver\share\folder\file.txt").unwrap(),
+            r"\\fileserver\share\folder\file.txt"
+        );
+        assert!(resolve_unc_path(r"C:\Users\file.txt").is_err());
+        assert!(resolve_unc_path(r"\\fileserver").is_err());
+        assert!(resolve_unc_path(r"\\?\UNC\fileserver\share").is_err());
+        assert!(resolve_unc_path(r"\\fileserver/share/file.txt").is_err());
+    }
 }
 
 fn main() {
@@ -680,6 +716,7 @@ fn main() {
             set_autostart_enabled,
             download_history_open,
             open_local_file,
+            open_unc_path,
             download_history_reveal,
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,

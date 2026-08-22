@@ -167,6 +167,13 @@ export async function openLocalPath(path: string): Promise<void> {
   await invoke('open_local_file', { path });
 }
 
+/** 通过桌面原生命令打开消息正文里的 UNC 共享路径。 */
+export async function openUncPath(path: string): Promise<void> {
+  if (!isTauri || !path) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_unc_path', { path });
+}
+
 /**
  * 全局拦截 <a> 点击：桌面端一律走系统浏览器。
  * 挂一次即可覆盖所有链接（消息正文、卡片、预览…）。

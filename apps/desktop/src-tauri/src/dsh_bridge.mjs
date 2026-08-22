@@ -564,9 +564,9 @@ function watchLines(stream, name, onLine) {
 }
 
 async function start() {
-  const [, , dshCliArg, patchArg, modeArg] = process.argv
+  const [, , dshCliArg, patchArg, modeArg, ...bridgeArgs] = process.argv
   if (dshCliArg === undefined || patchArg === undefined) {
-    throw new Error('usage: node dsh_bridge.mjs <dsh-cli> <patch> [controller|web]')
+    throw new Error('usage: node dsh_bridge.mjs <dsh-cli> <patch> [controller|web] [--no-open]')
   }
 
   const dshCli = resolve(dshCliArg)
@@ -574,11 +574,14 @@ async function start() {
   if (modeArg !== undefined && modeArg !== 'controller' && modeArg !== 'web') {
     throw new Error(`unsupported DSH bridge mode: ${modeArg}`)
   }
+  if (bridgeArgs.some((arg) => arg !== '--no-open') || bridgeArgs.length > 1) {
+    throw new Error(`unsupported DSH bridge arguments: ${bridgeArgs.join(' ')}`)
+  }
   const mode = modeArg ?? 'controller'
 
   await repairIncompatibleSessionFrames()
 
-  child = spawn(process.execPath, [dshCli, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0'], {
+  child = spawn(process.execPath, [dshCli, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0', ...bridgeArgs], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })

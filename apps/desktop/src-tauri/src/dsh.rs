@@ -26,6 +26,8 @@ const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 // 最低验证版本：系统安装的 DSH 只要 semver >= 此版本即可使用（issue #352），
 // 更高版本仅提示未经完整验证，不阻断。bundled 运行时仍精确 pin 到该版本。
 const DSH_VERIFIED_VERSION: &str = "0.1.0-rc.6";
+// dsh-web-app 从 rc.7 开始支持 --no-open；rc.6 会把它判为未知参数。
+const DSH_NO_OPEN_VERSION: &str = "0.1.0-rc.7";
 const DSH_ROOT_DIR: &str = "dsh";
 const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";
 const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime.tar.gz";
@@ -148,6 +150,7 @@ struct ResolvedDshRuntime {
     bridge_path: PathBuf,
     dsh_root: PathBuf,
     home_root: PathBuf,
+    supports_no_open: bool,
 }
 
 fn hidden_command(program: impl AsRef<OsStr>) -> Command {
@@ -904,7 +907,7 @@ fn resolve_node_runtime(
     Err(failure.unwrap_or_else(|| "未找到兼容的 Node.js 运行时".to_string()))
 }
 
-fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<(), String> {
+fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<bool, String> {
     let output = hidden_command(node_path)
         .arg(cli_path)
         .arg("--version")
@@ -932,7 +935,7 @@ fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<(),
             "已安装的 DSH 版本 {version} 高于 RocketX 完整验证版本 {DSH_VERIFIED_VERSION}，尚未经过完整验证；如遇到兼容问题请回退到验证版本"
         );
     }
-    Ok(())
+    Ok(dsh_version_supports_no_open(&version))
 }
 
 // 最小化 semver：够用即可（major.minor.patch + 点分预发布段），不引入 semver crate。
@@ -1061,6 +1064,16 @@ fn dsh_version_is_unverified_newer(version: &str) -> bool {
     version > verified
 }
 
+fn dsh_version_supports_no_open(version: &str) -> bool {
+    let Some(version) = parse_dsh_version(version) else {
+        return false;
+    };
+    let Some(minimum) = parse_dsh_version(DSH_NO_OPEN_VERSION) else {
+        return false;
+    };
+    version >= minimum
+}
+
 fn dsh_root_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
     let dsh_root = app
         .path()
@@ -1117,9 +1130,11 @@ fn resolve_dsh_runtime(
     ));
     let bridge_path = resolve_packaged_bridge(app)?;
     let (node_path, _) = resolve_node_runtime(app, use_private_node)?;
-    if verify_installed_version {
-        verify_installed_dsh_version(&node_path, &cli_path)?;
-    }
+    let supports_no_open = if verify_installed_version {
+        verify_installed_dsh_version(&node_path, &cli_path)?
+    } else {
+        false
+    };
     Ok(ResolvedDshRuntime {
         source_root,
         cli_path,
@@ -1127,6 +1142,7 @@ fn resolve_dsh_runtime(
         bridge_path,
         dsh_root,
         home_root,
+        supports_no_open,
     })
 }
 
@@ -1524,7 +1540,11 @@ fn build_bridge_command(
         .arg(&runtime.bridge_path)
         .arg(&runtime.cli_path)
         .arg(patch_path)
-        .arg(mode.as_str())
+        .arg(mode.as_str());
+    if runtime.supports_no_open {
+        command.arg("--no-open");
+    }
+    command
         .current_dir(workspace_root)
         .env("DSH_HOME", &runtime.home_root)
         .stdin(Stdio::piped())
@@ -1951,7 +1971,8 @@ mod tests {
         development_bundled_runtime_archive,
         development_bundled_runtime_root, dsh_focus_plugin_client, dsh_focus_plugin_index,
         dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible,
-        dsh_version_is_unverified_newer, encode_message, file_url_for_path,
+        dsh_version_is_unverified_newer, dsh_version_supports_no_open, encode_message,
+        file_url_for_path,
         graceful_shutdown_message, hidden_command, host_path, installed_dsh_cli_entry,
         installed_dsh_root, node_runtime_candidates, node_version_is_compatible,
         prepare_bundled_runtime_root_from_archive, reconcile_process_stop,
@@ -2382,6 +2403,14 @@ mod tests {
     }
 
     #[test]
+    fn installed_dsh_no_open_capability_matches_cli_version() {
+        assert!(!dsh_version_supports_no_open("0.1.0-rc.6"));
+        assert!(dsh_version_supports_no_open("0.1.0-rc.7"));
+        assert!(dsh_version_supports_no_open("1.0.0"));
+        assert!(!dsh_version_supports_no_open("nightly"));
+    }
+
+    #[test]
     fn dsh_runtime_sources_do_not_mix_node_candidates() {
         let system = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
         let private = PathBuf::from(r"C:\Users\test\AppData\Local\RocketX\resources\node\node.exe");
@@ -2670,6 +2699,7 @@ node "%dp0%\global\9\.pnpm\@deepseek-ai+dsh@0.1.0-rc.6\node_modules\@deepseek-ai
             bridge_path: source_bridge_path(),
             dsh_root: PathBuf::from(r"C:\Users\test\AppData\Roaming\RocketX\dsh"),
             home_root: PathBuf::from(r"C:\Users\test\AppData\Roaming\RocketX\dsh\home"),
+            supports_no_open: false,
         };
         let patch = PathBuf::from(
             r"C:\Users\test\AppData\Roaming\RocketX\dsh\connections\abc\1\cordis.patch.yml",
@@ -2690,6 +2720,16 @@ node "%dp0%\global\9\.pnpm\@deepseek-ai+dsh@0.1.0-rc.6\node_modules\@deepseek-ai
                 ),
                 OsStr::new("controller"),
             ]
+        );
+
+        let runtime = ResolvedDshRuntime {
+            supports_no_open: true,
+            ..runtime
+        };
+        let command = build_bridge_command(&runtime, &workspace, &patch, DshBridgeMode::Web);
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>().last(),
+            Some(&OsStr::new("--no-open"))
         );
     }
 
