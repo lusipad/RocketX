@@ -20,6 +20,18 @@ const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 const RELEASE_DESKTOP_E2E = process.env.PLAYWRIGHT_RELEASE_MODE === '1';
 
+async function readStoredTodos(page: Page): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(() => {
+    const parsed: unknown = JSON.parse(localStorage.getItem('rcx-todos') ?? '[]');
+    if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>;
+    if (parsed && typeof parsed === 'object' && 'data' in parsed) {
+      const data = (parsed as { data?: unknown }).data;
+      if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
+    }
+    return [];
+  });
+}
+
 async function installTauriMock(page: Page, workspaceConfig?: Record<string, unknown>) {
   await page.addInitScript(({ config }) => {
     let responseUrl = '';
@@ -2449,14 +2461,14 @@ test('消息待办可记录承诺对象，并保留在确定性的待办界面',
   await committedTo.fill('张三');
   await expect(waitingFor).toHaveValue('');
   await page.getByRole('button', { name: '加入待办' }).click();
-  const [saved] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
+  const [saved] = await readStoredTodos(page);
   expect(saved).toMatchObject({ committedTo: '张三' });
   await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
   await expect(page.getByText('待办 · 1 项', { exact: true })).toBeVisible();
   await expect(page.getByText('Welcome to General', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '标记为完成' }).click();
   await expect(page.getByText('待办 · 0 项', { exact: true })).toBeVisible();
-  const [completed] = await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-todos') ?? '[]'));
+  const [completed] = await readStoredTodos(page);
   expect(completed).toMatchObject({ done: true, committedTo: '张三' });
   expect(pageErrors).toEqual([]);
 });
@@ -2479,9 +2491,7 @@ test('编辑旧双值承诺待办时归一化为单一方向', async ({ page }) 
   await page.getByTitle('编辑').click();
   await page.getByRole('button', { name: '保存' }).click();
 
-  const [saved] = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('rcx-todos') ?? '[]') as Array<Record<string, unknown>>,
-  );
+  const [saved] = await readStoredTodos(page);
   expect(saved?.committedTo).toBe('张三');
   expect(saved).not.toHaveProperty('waitingFor');
   expect(pageErrors).toEqual([]);

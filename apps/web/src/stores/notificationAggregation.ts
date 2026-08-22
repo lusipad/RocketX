@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getServerBase } from '../lib/client';
+import { readLocalData, writeLocalData } from '../lib/localDataContract';
 import {
   addToNotificationBuckets,
   beginAttentionMeasurement,
@@ -7,7 +8,7 @@ import {
   flushNotificationBuckets,
   normalizeNotificationAggregationConfig,
   notificationAggregationStorageKey,
-  parseNotificationAggregationState,
+  parseNotificationAggregationValue,
   recordNotificationCandidate,
   recordNotificationPopup,
   type AttentionMeasurementPhase,
@@ -43,9 +44,11 @@ function persist(
   state: NotificationAggregationStateV1,
 ): void {
   try {
-    localStorage.setItem(
+    writeLocalData(
       notificationAggregationStorageKey(server, ownerId),
-      JSON.stringify(state),
+      state.version,
+      state,
+      { scope: `${server}\n${ownerId}` },
     );
   } catch {
     /* 无痕模式或存储已满时仅保留当前会话状态 */
@@ -72,8 +75,12 @@ export const useNotificationAggregation = create<NotificationAggregationStore>((
       if (get().ownerId === userId && get().ownerServer === server && get().state) return;
       let state: NotificationAggregationStateV1 | null = null;
       try {
-        state = parseNotificationAggregationState(
-          localStorage.getItem(notificationAggregationStorageKey(server, userId)),
+        state = readLocalData(
+          notificationAggregationStorageKey(server, userId),
+          1,
+          null,
+          parseNotificationAggregationValue,
+          { scope: `${server}\n${userId}` },
         );
       } catch {
         /* 使用默认状态 */

@@ -192,9 +192,9 @@ test('没有 WebAudio 的环境（老 WebView / node）静默返回', () => {
   assert.doesNotThrow(() => playNotificationSound(100));
 });
 
-test('提示音只在真正弹通知的分支之后发声（chat.ts 路由顺序锁定）', async () => {
+test('提示音只在真正弹通知的分支之后发声（notificationCoordinator 路由顺序锁定）', async () => {
   const source = await readFile(
-    new URL('../../apps/web/src/stores/chat.ts', import.meta.url),
+    new URL('../../apps/web/src/chat/notificationCoordinator.ts', import.meta.url),
     'utf8',
   );
   const policyReturn = source.indexOf('if (!policy.showDesktopNotification) return;');
@@ -205,7 +205,7 @@ test('提示音只在真正弹通知的分支之后发声（chat.ts 路由顺序
   assert.ok(soundCall > policyReturn, '提示音必须在策略抑制 return 之后——被抑制时不发声');
   assert.ok(soundCall > aggregateRoute, '提示音必须在聚合路由之后——进聚合桶的消息不发声');
   assert.ok(
-    source.includes('if (shown) playNotificationSound('),
+    source.includes('if (shown) deps.playNotificationSound('),
     '提示音跟着 desktopNotify 的 shown 结果走——权限被拒不发声',
   );
 });

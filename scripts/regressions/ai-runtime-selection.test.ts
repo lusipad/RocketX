@@ -247,18 +247,24 @@ test('启动探测不阻塞首屏，在内核初始化前完成，并由桌面�
   const settings = readFileSync('apps/web/src/components/AiSettings.tsx', 'utf8');
   const desktop = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
   const dsh = readFileSync('apps/desktop/src-tauri/src/dsh.rs', 'utf8');
+  const startup = readFileSync('apps/web/src/lib/startup.ts', 'utf8');
   const desktopConfig = readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8');
   const slimInstaller = readFileSync('apps/desktop/src-tauri/windows/slim-installer-hooks.nsh', 'utf8');
   const fullInstaller = readFileSync('apps/desktop/src-tauri/windows/full-installer-hooks.nsh', 'utf8');
 
-  // 顺序锁定：探测发起 → 首屏渲染 → 探测结果应用 → 内核初始化。
+  // 顺序锁定：探测发起 → 启动协调器（只发起、不等待）→ 首屏渲染 → 等待协调器；
+  // 协调器内部再应用探测结果并初始化内核。
   // 渲染不等待探测（full 版探测含归档校验与进程 spawn，是启动卡顿根因）；
   // 内核等待探测结果，因为例行任务调度依赖最终 provider。
   const selection = bootstrap.indexOf('initializeStartupAiRuntimeProvider({');
   const render = bootstrap.indexOf('ReactDOM.createRoot');
-  const apply = bootstrap.indexOf('await aiRuntimeProviderReady');
-  const kernel = bootstrap.indexOf('await initializeKernel');
-  assert.ok(selection >= 0 && selection < render && render < apply && apply < kernel);
+  const coordinator = bootstrap.indexOf('startupCoordinator ??= createCoordinator');
+  const start = bootstrap.indexOf('const startupPromise = startupCoordinator.start()');
+  const awaitStart = bootstrap.indexOf('await startupPromise');
+  const apply = startup.indexOf('await withTimeout((signal) => steps.initializeRuntime(signal)');
+  const kernel = startup.indexOf('await withTimeout((signal) => steps.initializeKernel(signal)');
+  assert.ok(selection >= 0 && selection < coordinator && coordinator < start && start < render && render < awaitStart);
+  assert.ok(apply >= 0 && apply < kernel);
   assert.match(bootstrap, /useUI\.setState\(\{ aiRuntimeProvider/);
   assert.match(settings, /readConfiguredAiRuntimeProvider\(\) \?\? getAiRuntimeProvider\(\)/);
   assert.match(settings, /选择已保留.*本次未启用/s);

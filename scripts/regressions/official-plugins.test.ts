@@ -8,6 +8,10 @@ const entryText = readFile(new URL('index.html', pluginRoot), 'utf8');
 const sidecarText = readFile(new URL('native/src/runtime.rs', pluginRoot), 'utf8');
 const sidecarMainText = readFile(new URL('native/src/main.rs', pluginRoot), 'utf8');
 const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
+const hostCapabilityText = readFile(
+  new URL('../../apps/web/src/kernel/capabilities/host.ts', import.meta.url),
+  'utf8',
+);
 const nativeHostText = readFile(new URL('../../apps/desktop/src-tauri/src/native_service.rs', import.meta.url), 'utf8');
 const desktopMainText = readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8');
 const bundledAppsText = readFile(new URL('../../apps/web/src/kernel/bundled.ts', import.meta.url), 'utf8');
@@ -47,7 +51,7 @@ test('飞鸽插件以 iframe 加签名 native service 运行并声明最小权�
     assert.doesNotThrow(() => new Function(script[1]));
   }
   const methods = [...html.matchAll(/\bcall\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
-  const methodPermissions = capabilityContract(await runtimeText);
+  const methodPermissions = capabilityContract(`${await runtimeText}\n${await hostCapabilityText}`);
   for (const method of methods) {
     const permission = methodPermissions.get(method);
     assert.ok(permission, `插件调用了未知 capability: ${method}`);
@@ -74,7 +78,7 @@ test('启停生命周期只经过通用 native service 宿主', async () => {
   assert.match(runtime, /bridgeHost\.emit\(payload\.appId, 'native\.event'/);
   assert.match(desktop, /native_service::native_service_start/);
   assert.match(desktop, /native_service::native_service_call/);
-  assert.match(desktop, /native_service::shutdown\(app\)/);
+  assert.match(desktop, /native::host::NativeHost/);
   assert.doesNotMatch(runtime, /ipmsg|feiq|shiyeline|2425|9011/i);
   assert.doesNotMatch(desktop, /ipmsg|feiq|shiyeline|2425|9011/i);
   assert.match(await bundledAppsText, /plugins\/intranet-link\/rcx\.app\.json\?raw/);

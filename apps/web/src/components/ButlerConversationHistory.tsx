@@ -1,4 +1,3 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import {
   Archive,
   ArrowLeft,
@@ -20,6 +19,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
+import { openDesktopDialog } from '../platform/desktopDialog';
 import {
   HOSTED_SESSION_STATUS_LABEL,
   type HostedSessionItem,
@@ -389,7 +389,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
   const chooseWorkspace = async (): Promise<boolean> => {
     if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
-    const path = await open({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
     if (typeof path !== 'string') return false;
     ensureEnvironment({ path });
     await setWorkspaceRoot(path);

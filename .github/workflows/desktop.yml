@@ -106,7 +106,11 @@ jobs:
 
       - name: Rust 单元测试
         run: |
+          cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo fmt --check --manifest-path plugins/intranet-link/native/Cargo.toml
+          cargo check --locked --manifest-path plugins/intranet-link/native/Cargo.toml
           cargo test --locked --manifest-path plugins/intranet-link/native/Cargo.toml
 
       - name: 构建桌面客户端

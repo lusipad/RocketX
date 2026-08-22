@@ -3,7 +3,6 @@ import {
   RcApiError,
   tsMs,
   type RcMessage,
-  type RcMessageAttachment,
   type RcRoom,
   type RcRoomRole,
   type RcSlashCommand,
@@ -19,7 +18,6 @@ import {
   rest,
   siteUrlSync,
 } from '../lib/client';
-import { emojify } from '../lib/emoji';
 import { fmtSize } from '../lib/format';
 import {
   normalizeMessageMaxAllowedSize,
@@ -36,7 +34,7 @@ import {
   mergedForwardAttachments,
   protectedFilePath,
 } from '../lib/forward';
-import { QUOTE_LINK_RE, quoteMessagePrefix, stripQuotePrefix } from '../lib/messageText';
+import { quoteMessagePrefix, stripQuotePrefix } from '../lib/messageText';
 import {
   canApplyRetainedRoomResult,
   omitRoomEntries,
@@ -57,8 +55,7 @@ import { usePrefs } from './prefs';
 import { useOnboarding } from './onboarding';
 import { humanError, toast } from './toast';
 import { useUI } from './ui';
-import { routeNotification, type NotificationAggregationInput } from '../lib/notificationAggregation';
-import { focusAggregationConfig, useFocus } from './focus';
+import { useFocus } from './focus';
 import { useNotificationAggregation } from './notificationAggregation';
 import { isLanControlMessage } from '../lan/protocol';
 import {
@@ -70,7 +67,6 @@ import {
   type LanMessageEvent,
 } from '../lan/runtime';
 import {
-  decorateLanMessage,
   flushLanOutbox,
   hydrateLanOutbox,
   recordLanIncoming,
@@ -83,57 +79,20 @@ import {
   enqueueAttachmentArchives,
   scheduleAttachmentArchiveCleanup,
 } from '../lib/attachmentArchiveRuntime';
-
-export interface Conversation {
-  rid: string;
-  name: string;
-  type: RcSubscription['t'];
-  unread: number;
-  alert: boolean;
-  /** 被 @ 我的次数 */
-  userMentions: number;
-  /** 置顶会话 */
-  favorite: boolean;
-  /** 免打扰 */
-  muted: boolean;
-  /** 已从常用会话列表隐藏 */
-  hidden: boolean;
-  /** 讨论（Discussion，父房间的子会话） */
-  isDiscussion: boolean;
-  /** 多人直聊：RC 里 t 仍是 'd'，但成员多于两人——对用户来说是群聊 */
-  isMultiDM: boolean;
-  /** 讨论所属的父会话名 */
-  parentName?: string;
-  /** Team 主频道 */
-  isTeam: boolean;
-  /** 属于某个 Team 的子频道 */
-  teamId?: string;
-  lastTs: number;
-  lastPreview: string;
-  /** DM 用对方用户名取头像 */
-  avatarUsername?: string;
-}
-
-/** 侧栏分区（对齐 Rocket.Chat 官方的 sidebarSectionsOrder） */
-export type SectionKey =
-  | 'unread'
-  | 'favorites'
-  | 'teams'
-  | 'discussions'
-  | 'channels'
-  /** 多人聊天：临时拉起来的、没有名字的群聊 */
-  | 'multi'
-  | 'direct';
-
-export const SECTION_LABELS: Record<SectionKey, string> = {
-  unread: '未读',
-  favorites: '收藏',
-  teams: '团队',
-  discussions: '讨论',
-  channels: '频道与群组',
-  multi: '多人聊天',
-  direct: '私聊',
-};
+import {
+  localQuoteAttachment,
+  messageTime,
+  shouldUseLanFallback,
+  upsertMessage,
+} from '../chat/messageProjection';
+import {
+  type Conversation,
+} from '../chat/roomDirectory';
+import { notifyChatMessage, rememberLocalMessage } from '../chat/notificationCoordinator';
+import {
+  conversationIsActivelyViewed,
+} from '../chat/notificationPolicy';
+import { readDesktopFile, statDesktopFile } from '../platform/desktopFs';
 
 /** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
@@ -155,18 +114,6 @@ const HISTORY_PAGE = 50;
 const INACTIVE_ROOM_MESSAGE_LIMIT = 60;
 const RECENT_INACTIVE_ROOM_LIMIT = 8;
 const DRAFTS_KEY = 'rcx-drafts';
-
-export function roomMembershipPolicy(
-  hasSubscription: boolean,
-  room: Pick<RcRoom, 't' | 'prid'> | undefined,
-): { requiresJoin: boolean; canCompose: boolean } {
-  const requiresJoin = !hasSubscription && !!room && (room.t === 'c' || !!room.prid);
-  return {
-    requiresJoin,
-    // Rocket.Chat 允许父房间成员在未订阅讨论时查看和发送消息；加入只负责订阅通知。
-    canCompose: !requiresJoin || !!room?.prid,
-  };
-}
 
 function loadDrafts(): Record<string, string> {
   try {
@@ -327,42 +274,6 @@ export interface ChatSendResult {
   reason?: string;
 }
 
-/**
- * chat.sendMessage 的即时响应可能早于服务端引用展开，不带 attachments。
- * 同 id 的乐观/WS 消息已有引用卡时，不能被这个半成品响应覆盖。
- */
-export function mergeMessageUpdate(current: RcMessage, incoming: RcMessage): RcMessage {
-  const quote = current.attachments?.find((attachment) => attachment.message_link);
-  const incomingHasQuote = incoming.attachments?.some((attachment) => attachment.message_link);
-  if (quote && !incomingHasQuote && QUOTE_LINK_RE.test(incoming.msg)) {
-    return {
-      ...incoming,
-      attachments: [quote, ...(incoming.attachments ?? [])],
-    };
-  }
-  return incoming;
-}
-
-function upsertMessage(list: RcMessage[], msg: RcMessage): RcMessage[] {
-  if (isLanControlMessage(msg.msg)) return list;
-  msg = decorateLanMessage(msg);
-  const idx = list.findIndex((m) => m._id === msg._id);
-  if (idx >= 0) {
-    const next = list.slice();
-    next[idx] = mergeMessageUpdate(list[idx], msg);
-    return next;
-  }
-  return [...list, msg];
-}
-
-function messageTime(message: RcMessage): number {
-  return message.rocketxOriginalTs ?? tsMs(message.ts);
-}
-
-export function shouldUseLanFallback(error: unknown, tmid?: string): boolean {
-  return !tmid && (!(error instanceof RcApiError) || error.status >= 500);
-}
-
 async function lanRecipientIds(rid: string): Promise<string[]> {
   const state = useChat.getState();
   const me = useAuth.getState().user?._id;
@@ -477,19 +388,6 @@ async function acceptLanFile(event: LanFileEvent): Promise<void> {
   const message = localLanFileMessage(event, author);
   insertLanFileMessage(message);
   void notifyIfNeeded(message, event.roomId, state);
-}
-
-function messagePreview(msg: RcMessage | undefined): string {
-  if (!msg) return '';
-  if (isLanControlMessage(msg.msg)) return '';
-  const who = msg.u?.name || msg.u?.username || '';
-  if (msg.t) return '[系统消息]';
-  // 预览是纯文本，不走 markdown 渲染，所以 :smile: 得在这里换成表情
-  const text = emojify(stripAgentSessionMarker(msg.msg ?? '').replace(QUOTE_LINK_RE, ''));
-  if (text) return who ? `${who}: ${text}` : text;
-  if (msg.file?.name) return who ? `${who}: [文件] ${msg.file.name}` : `[文件] ${msg.file.name}`;
-  if (msg.attachments?.length) return who ? `${who}: [图片/附件]` : '[图片/附件]';
-  return '';
 }
 
 /** 新建 DM/群组后刷新订阅与房间（新条目要出现在会话列表里） */
@@ -850,26 +748,26 @@ export function permalinkOf(rid: string, mid: string): string {
 }
 
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
-export function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
-  const image = quoted.attachments?.find((attachment) => !!attachment.image_url);
-  return {
-    message_link: `local-quote`,
-    author_name: quoted.u.name || quoted.u.username,
-    text: stripQuotePrefix(stripAgentSessionMarker(quoted.msg)) || quoted.attachments?.[0]?.title || '[卡片消息]',
-    ts: quoted.ts,
-    ...(image
-      ? {
-          image_url: image.image_url,
-          image_dimensions: image.image_dimensions,
-          title: image.title,
-          title_link: image.title_link,
-        }
-      : {}),
-  };
-}
-
 /** 消息文本开头的引用链接（渲染与预览时隐藏） */
 export { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
+
+export {
+  localQuoteAttachment,
+  mergeMessageUpdate,
+  messagePreview,
+  messageTime,
+  shouldUseLanFallback,
+  upsertMessage,
+} from '../chat/messageProjection';
+export {
+  conversationIsActivelyViewed,
+  messageIsFromCurrentUser,
+  messageIsNotificationCandidate,
+  notificationAttentionPolicy,
+  threadReplyShouldNotify,
+} from '../chat/notificationPolicy';
+export { buildConversations, buildSections, roomMembershipPolicy, SECTION_LABELS, sectionOf } from '../chat/roomDirectory';
+export type { Conversation, SectionKey } from '../chat/roomDirectory';
 
 // 开发调试：控制台可通过 window.__chat 检查 store 状态
 declare global {
@@ -878,193 +776,29 @@ declare global {
   }
 }
 
-// 已处理过通知的消息 id：__my_messages__ 全局流和房间订阅流可能各送一次同一条消息，
-// 不去重的话桌面通知会弹两遍（浏览器端有 tag 去重，Tauri 通知插件没有）
-const notifiedMids = new Set<string>();
-const locallySentMids = new Set<string>();
-
-function rememberLocalMessage(mid: string): void {
-  locallySentMids.add(mid);
-  if (locallySentMids.size <= 800) return;
-  for (const id of locallySentMids) {
-    locallySentMids.delete(id);
-    if (locallySentMids.size <= 400) break;
-  }
-}
-
-export function messageIsFromCurrentUser(
-  sender: Pick<RcMessage['u'], '_id' | 'username'>,
-  authUserId: string,
-  currentUser?: Pick<RcUser, '_id' | 'username'> | null,
-): boolean {
-  if (sender._id === authUserId || sender._id === currentUser?._id) return true;
-  return !!currentUser?.username &&
-    sender.username.toLocaleLowerCase() === currentUser.username.toLocaleLowerCase();
-}
-
-export function messageIsNotificationCandidate(
-  message: Pick<RcMessage, 't' | 'attachments'>,
-): boolean {
-  if (message.t) return false;
-  return !message.attachments?.some((attachment) => attachment.type === 'removed-file');
-}
-
-function messageMentionsCurrentUser(
-  message: Pick<RcMessage, 'msg' | 'mentions'>,
-  currentUser: Pick<RcUser, '_id' | 'username'> | null | undefined,
-): boolean {
-  if (!currentUser) return false;
-  const username = currentUser.username.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
-  return !!message.mentions?.some(
-    (mention) => mention._id === currentUser._id || mention.username === currentUser.username,
-  ) || new RegExp(`@(${username}|all|here)\\b`, 'i').test(message.msg ?? '');
-}
-
-export function threadReplyShouldNotify(
-  message: Pick<RcMessage, 'tmid' | 'msg' | 'mentions'>,
-  root: Pick<RcMessage, 'u' | 'replies' | 'tcount'> | undefined,
-  currentUser: Pick<RcUser, '_id' | 'username'> | null | undefined,
-): boolean {
-  if (!message.tmid) return true;
-  if (messageMentionsCurrentUser(message, currentUser)) return true;
-  if (!root || !currentUser) return false;
-  if (root.replies?.includes(currentUser._id)) return true;
-  return !root.tcount && root.u._id === currentUser._id;
-}
-
-export function notificationAttentionPolicy(input: {
-  subscribed: boolean;
-  muted: boolean;
-  mentioned: boolean;
-  focused: boolean;
-  isGroupish: boolean;
-  desktopNotifications: 'all' | 'mentions' | 'nothing';
-  muteFocusedConversations: boolean;
-  taskbarFlash: boolean;
-}): { flashTaskbar: boolean; showDesktopNotification: boolean } {
-  if (!input.subscribed) {
-    return { flashTaskbar: false, showDesktopNotification: false };
-  }
-  const muted = input.muted && !input.mentioned;
-  return {
-    // 任务栏是未读注意力信号，不受桌面通知内容偏好控制。
-    flashTaskbar: input.taskbarFlash && !muted && !input.focused,
-    showDesktopNotification:
-      !muted &&
-      input.desktopNotifications !== 'nothing' &&
-      (input.desktopNotifications !== 'mentions' || !input.isGroupish || input.mentioned) &&
-      (!input.focused || !input.muteFocusedConversations),
-  };
-}
-
-export function conversationIsActivelyViewed(
-  activeRid: string | null,
-  rid: string,
-  documentHasFocus: boolean,
-): boolean {
-  return activeRid === rid && documentHasFocus;
-}
-
 async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
-  const auth = loadStoredAuth();
-  if (!auth || !messageIsNotificationCandidate(msg)) return;
-  const currentUser = useAuth.getState().user;
-  const expectedAgentReply = agentReplyNotificationTracker.consume(rid, msg.msg ?? '');
-  if (locallySentMids.has(msg._id) || messageIsFromCurrentUser(msg.u, auth.userId, currentUser)) return;
-  const subscription = state.subscriptions[rid];
-  if (!subscription) return;
-  if (notifiedMids.has(msg._id)) return;
-  notifiedMids.add(msg._id);
-  if (notifiedMids.size > 800) {
-    for (const id of notifiedMids) {
-      notifiedMids.delete(id);
-      if (notifiedMids.size <= 400) break;
-    }
-  }
-  if (expectedAgentReply) return;
-
-  let threadRoot = msg.tmid
-    ? state.messages[rid]?.find((message) => message._id === msg.tmid)
-    : undefined;
-  if (msg.tmid && !threadReplyShouldNotify(msg, threadRoot, currentUser)) {
-    if (threadRoot) return;
-    try {
-      threadRoot = await rest.getMessage(msg.tmid);
-    } catch {
-      return;
-    }
-    if (!threadReplyShouldNotify(msg, threadRoot, currentUser)) return;
-  }
-
-  const mentioned = messageMentionsCurrentUser(msg, currentUser);
-
-  const prefs = usePrefs.getState().prefs;
-  const roomType = subscription.t ?? state.rooms[rid]?.t;
-  const dmSize = state.rooms[rid]?.uids?.length ?? state.rooms[rid]?.usersCount;
-  const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
-  const focused = conversationIsActivelyViewed(state.activeRid, rid, document.hasFocus());
-  const policy = notificationAttentionPolicy({
-    subscribed: true,
-    muted: !!subscription.disableNotifications,
-    mentioned,
-    focused,
-    isGroupish,
-    desktopNotifications: prefs.desktopNotifications,
-    muteFocusedConversations: prefs.muteFocusedConversations ?? true,
-    taskbarFlash: useUiPrefs.getState().taskbarFlash,
+  await notifyChatMessage(msg, rid, state, {
+    loadAuth: loadStoredAuth,
+    currentUser: () => useAuth.getState().user,
+    consumeExpectedAgentReply: (roomId, text) => agentReplyNotificationTracker.consume(roomId, text),
+    getPrefs: () => usePrefs.getState().prefs,
+    taskbarFlash: () => useUiPrefs.getState().taskbarFlash,
+    focus: () => useFocus.getState(),
+    aggregation: () => useNotificationAggregation.getState(),
+    fetchMessage: (messageId) => rest.getMessage(messageId),
+    flashTaskbar,
+    showDesktopNotification: (options) => desktopNotify({
+      ...options,
+      onClick: () => {
+        window.focus();
+        useUI.getState().setModule('messages');
+        options.onClick();
+      },
+    }),
+    playNotificationSound,
+    navigateToMessage: (mid, roomId) => void useChat.getState().jumpToMessage(mid, roomId),
+    documentHasFocus: () => document.hasFocus(),
   });
-  // 专注期间停任务栏闪烁：闪烁也是打断
-  if (policy.flashTaskbar && !useFocus.getState().session) void flashTaskbar();
-  if (!policy.showDesktopNotification) return;
-
-  const title = msg.u.name || msg.u.username;
-  const body = stripAgentSessionMarker(msg.msg) || (msg.attachments?.length ? '[卡片/文件]' : '');
-  const directMention = !!currentUser && !!msg.mentions?.some((mention) =>
-    mention._id === currentUser._id || mention.username === currentUser.username,
-  );
-  const broadcastMention = /@(all|here)\b/i.test(msg.msg ?? '');
-  const aggregation = useNotificationAggregation.getState();
-  const aggregationState = aggregation.state;
-  const candidate: NotificationAggregationInput = {
-    id: msg._id,
-    roomId: rid,
-    roomName: subscription.fname || subscription.name || state.rooms[rid]?.fname || state.rooms[rid]?.name || '会话',
-    senderName: title,
-    text: body,
-    timestamp: tsMs(msg.ts),
-    directMessage: !isGroupish,
-    directMention,
-    broadcastMention,
-    priority: /(^|\s|[\[【])P1(?=$|\s|[\]】:：])/i.test(body) ? 1 : undefined,
-  };
-  const focus = useFocus.getState();
-  // 专注期间强制走聚合规则（穿透白名单照常生效）；聚合存储未就绪时不丢通知，降级为直通
-  const routeConfig = focus.session ? focusAggregationConfig(aggregationState?.config ?? null) : aggregationState?.config;
-  const phase = aggregationState?.metrics.activePhase;
-  if (phase) aggregation.recordCandidate(phase, candidate.timestamp);
-  if (aggregationState && routeConfig && routeNotification(candidate, routeConfig).mode === 'aggregate') {
-    aggregation.addAggregate(candidate);
-    focus.noteAggregated(candidate);
-    return;
-  }
-  focus.notePassthrough(candidate);
-  // 桌面端走系统通知插件、浏览器走 Web Notification（权限判断在 desktopNotify 内部）
-  void desktopNotify({
-    title,
-    body: body.slice(0, 120),
-    tag: msg._id,
-    rid,
-    mid: msg._id,
-    onClick: () => {
-      window.focus();
-      useUI.getState().setModule('messages');
-      void useChat.getState().jumpToMessage(msg._id, rid);
-    },
-  }).then((shown) => {
-    // 提示音跟着通知走：真正弹出来才发声（免打扰/聚合分支到不了这里，权限被拒 shown=false 也不发声）
-    if (shown) playNotificationSound(prefs.notificationsSoundVolume);
-    if (shown && phase) useNotificationAggregation.getState().recordPopup(phase, Date.now(), 'passthrough');
-  }).catch(() => {});
 }
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -2691,7 +2425,6 @@ export const useChat = create<ChatState>((set, get) => ({
         : undefined;
       const caption = message?.trim();
       const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
-      const { readFile, stat } = await import('@tauri-apps/plugin-fs');
       for (const [index, path] of paths.entries()) {
         const fileName = path.split(/[\\/]/).pop() || 'file';
         let sentOverLan = false;
@@ -2739,14 +2472,14 @@ export const useChat = create<ChatState>((set, get) => ({
           // 小文件走 P2P 的握手开销不划算：低于阈值（默认 50 MiB，可在设置中
           // 调整）先走 Rocket.Chat 上传。stat 失败按 0 处理，回退路径会重新 stat。
           const minBytes = useUiPrefs.getState().lanFileMinBytes;
-          const size = await stat(path)
+          const size = await statDesktopFile(path)
             .then((metadata) => metadata.size)
             .catch(() => 0);
           if (shouldTryLanFileTransfer(size, minBytes)) sentOverLan = await tryLanSend();
         }
         if (!sentOverLan) {
           const [metadata, configuredLimit] = await Promise.all([
-            stat(path),
+            statDesktopFile(path),
             getPublicSetting('FileUpload_MaxFileSize'),
           ]);
           const maxBytes =
@@ -2757,7 +2490,7 @@ export const useChat = create<ChatState>((set, get) => ({
           let rcFailure: unknown = null;
           if (!overServerLimit) {
             try {
-              const bytes = await readFile(path);
+              const bytes = await readDesktopFile(path);
               await rest.uploadMedia(rid, new Blob([bytes]), {
                 tmid,
                 fileName,
@@ -2798,139 +2531,3 @@ export const useChat = create<ChatState>((set, get) => ({
 }));
 
 if (typeof window !== 'undefined') window.__chat = useChat;
-
-/** 派生会话列表：订阅 + 房间信息合并，按最新消息时间排序（配合 useMemo 使用） */
-export function buildConversations(
-  subscriptions: Record<string, RcSubscription>,
-  rooms: Record<string, RcRoom>,
-  includeHidden = false,
-): Conversation[] {
-  const items: Conversation[] = [];
-  for (const sub of Object.values(subscriptions)) {
-    const hidden = sub.open === false;
-    if (hidden && !includeHidden) continue;
-    const room = rooms[sub.rid];
-    /**
-     * 只认「真实的最后一条消息时间」。
-     * 早先这里还兜底取了 sub._updatedAt，可打开会话本身就会更新订阅（清未读、写 ls），
-     * _updatedAt 变成此刻 → 会话直接窜到列表顶部，看起来像「点谁谁置顶」。
-     * 没有任何消息的空会话拿不到时间，排在最后即可。
-     */
-    const lastTs = Math.max(tsMs(room?.lm), tsMs(room?.lastMessage?.ts));
-    const prid = sub.prid ?? room?.prid;
-    const parent = prid ? rooms[prid] : undefined;
-    /**
-     * 多人直聊：Rocket.Chat 里它的 t 仍然是 'd'，只是成员多于两人
-     * （fname 形如「Rocket.Cat, 张三」）。对用户来说这是群聊，不该混进「单聊」。
-     * room 还没加载时退化用名字里的逗号判断。
-     */
-    const dmSize = room?.uids?.length ?? room?.usersCount;
-    const isMultiDM =
-      sub.t === 'd' && (dmSize !== undefined ? dmSize > 2 : (sub.fname ?? sub.name).includes(','));
-    items.push({
-      rid: sub.rid,
-      name: sub.fname || sub.name,
-      type: sub.t,
-      unread: sub.unread,
-      alert: sub.alert,
-      userMentions: sub.userMentions ?? 0,
-      favorite: !!sub.f,
-      muted: !!sub.disableNotifications,
-      hidden,
-      isDiscussion: !!prid,
-      isMultiDM,
-      parentName: parent ? parent.fname || parent.name : undefined,
-      // Team 标记在 room 对象上（订阅里没有）
-      isTeam: !!(room?.teamMain ?? sub.teamMain),
-      teamId: room?.teamId ?? sub.teamId,
-      lastTs,
-      lastPreview: messagePreview(room?.lastMessage),
-      // 多人直聊没有「对方」，不能拿某个人的头像顶上
-      avatarUsername: sub.t === 'd' && !isMultiDM ? sub.name : undefined,
-    });
-  }
-  // 置顶会话在前，其余按最新消息时间
-  items.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.lastTs - a.lastTs);
-  return items;
-}
-
-/** 会话归入哪个分区（顺序即优先级，与 RC 官方一致） */
-export function sectionOf(conv: Conversation): SectionKey {
-  if (conv.favorite) return 'favorites';
-  if (conv.isTeam) return 'teams';
-  if (conv.isDiscussion) return 'discussions';
-  // 多人聊天独立成区：它没有名字、没有主题，和「general-test」这种有名有姓的
-  // 频道是两码事，混在一起用户根本分不清哪个是哪个
-  if (conv.isMultiDM) return 'multi';
-  if (conv.type === 'd') return 'direct';
-  return 'channels';
-}
-
-/**
- * 把会话切分成分区。
- * showUnread: 未读单独置顶成一个分区
- * showFavorites: 收藏独立成区（否则收藏会话仍留在原类型分区里，只是排前面）
- * groupByType: 关闭时不分区，全部混在一起
- */
-export function buildSections(
-  convs: Conversation[],
-  opts: {
-    groupByType: boolean;
-    showUnread: boolean;
-    showFavorites: boolean;
-    sortBy: 'activity' | 'alphabetical';
-  },
-): { key: SectionKey | 'all'; label: string; items: Conversation[] }[] {
-  const sortFn = (a: Conversation, b: Conversation) =>
-    opts.sortBy === 'alphabetical'
-      ? a.name.localeCompare(b.name, 'zh-CN')
-      : b.lastTs - a.lastTs;
-
-  const rest = [...convs];
-  const sections: { key: SectionKey | 'all'; label: string; items: Conversation[] }[] = [];
-
-  if (opts.showUnread) {
-    const unread = rest.filter((c) => c.unread > 0 || c.alert);
-    if (unread.length > 0) {
-      sections.push({ key: 'unread', label: SECTION_LABELS.unread, items: unread.sort(sortFn) });
-      for (const c of unread) rest.splice(rest.indexOf(c), 1);
-    }
-  }
-
-  if (!opts.groupByType) {
-    const favorites = opts.showFavorites ? rest.filter((c) => c.favorite) : [];
-    if (favorites.length > 0) {
-      sections.push({
-        key: 'favorites',
-        label: SECTION_LABELS.favorites,
-        items: favorites.sort(sortFn),
-      });
-      for (const c of favorites) rest.splice(rest.indexOf(c), 1);
-    }
-    sections.push({ key: 'all', label: '会话', items: rest.sort(sortFn) });
-    return sections;
-  }
-
-  const order: SectionKey[] = [
-    'favorites',
-    'teams',
-    'discussions',
-    'channels',
-    'multi',
-    'direct',
-  ];
-  const buckets = new Map<SectionKey, Conversation[]>();
-  for (const c of rest) {
-    const key = opts.showFavorites ? sectionOf(c) : sectionOf({ ...c, favorite: false });
-    const list = buckets.get(key) ?? [];
-    list.push(c);
-    buckets.set(key, list);
-  }
-  for (const key of order) {
-    const items = buckets.get(key);
-    if (items?.length) {
-      sections.push({ key, label: SECTION_LABELS[key], items: items.sort(sortFn) });
-    }
-  }
-  return sections;
-}

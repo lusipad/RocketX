@@ -1,4 +1,3 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertCircle,
   Bell,
@@ -22,6 +21,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { BUTLER_ABILITY_TEMPLATES, type ButlerAbilityTemplate } from '../lib/butlerAbilityTemplates';
 import { isTauriRuntime } from '../lib/client';
+import { openDesktopDialog } from '../platform/desktopDialog';
 import { describeRrule } from '../lib/codexSchedule';
 import { renderMarkdownDoc } from '../lib/markdown';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
@@ -149,7 +149,7 @@ export default function ButlerRoutines() {
     try {
       if (!desktopRuntime) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
       if (!workspaceRoot) {
-        const path = await open({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+        const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
         if (typeof path !== 'string') return;
         await setWorkspaceRoot(path);
         await connect();

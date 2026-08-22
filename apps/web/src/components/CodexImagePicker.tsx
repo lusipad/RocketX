@@ -7,13 +7,13 @@ import {
   type CodexImageInput,
 } from '../lib/codexImages';
 import { isTauriRuntime } from '../lib/client';
+import { openDesktopPath, revealDesktopPath } from '../platform/desktopOpener';
 import { toast } from '../stores/toast';
 
 async function openGeneratedImage(image: CodexGeneratedImage): Promise<void> {
   if (isTauriRuntime() && image.savedPath) {
     try {
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(image.savedPath);
+      await openDesktopPath(image.savedPath);
       return;
     } catch (reason) {
       toast.error(reason, '无法打开生成图片');
@@ -29,8 +29,7 @@ async function openGeneratedImage(image: CodexGeneratedImage): Promise<void> {
 async function revealGeneratedImage(image: CodexGeneratedImage): Promise<void> {
   if (!image.savedPath) return;
   try {
-    const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
-    await revealItemInDir(image.savedPath);
+    await revealDesktopPath(image.savedPath);
   } catch (reason) {
     toast.error(reason, '无法定位生成图片');
   }

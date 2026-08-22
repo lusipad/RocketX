@@ -24,6 +24,10 @@ export class CapabilityBus {
     return () => this.handlers.delete(method);
   }
 
+  clear(): void {
+    this.handlers.clear();
+  }
+
   async call(method: string, params: unknown, context: CapabilityContext): Promise<unknown> {
     const registration = this.handlers.get(method);
     if (!registration) {

@@ -9,6 +9,7 @@ import {
   takeUpdateResult,
 } from '../lib/updateSource';
 import { humanError, toast } from '../stores/toast';
+import { relaunchDesktop } from '../platform/desktopProcess';
 
 declare const __APP_VERSION__: string;
 
@@ -36,8 +37,7 @@ async function checkGithubSource(): Promise<void> {
                 toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
               }
             });
-            const { relaunch } = await import('@tauri-apps/plugin-process');
-            await relaunch();
+            await relaunchDesktop();
           } catch (error) {
             toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
           }
@@ -67,8 +67,7 @@ async function checkCustomSource(): Promise<void> {
             try {
               await freshUpdate.downloadAndInstall();
               toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
-              const { relaunch } = await import('@tauri-apps/plugin-process');
-              await relaunch();
+              await relaunchDesktop();
             } catch (error) {
               toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
             }

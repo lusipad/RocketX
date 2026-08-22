@@ -1,7 +1,7 @@
 {
   "name": "rocketchatx",
   "private": true,
-  "version": "0.43.12",
+  "version": "0.43.13",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "dev": "pnpm --filter @rcx/web dev",
@@ -12,6 +12,7 @@
     "spike:rc-offline-contract": "tsx scripts/spike-rc-offline-contract.ts",
     "test:pure": "tsx scripts/test-pure.ts",
     "test:regression": "pnpm --filter @lusipad/rocketx build && tsx --test scripts/regressions/*.test.ts",
+    "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "test:ui": "playwright test",
     "test:ui:release": "playwright test --config playwright.release.config.ts --grep @release-desktop",
     "test:ecosystem": "node scripts/test-app-ecosystem.mjs",
@@ -21,6 +22,7 @@
     "smoke:codex-app-server:system": "tsx scripts/smoke-codex-app-server.mjs --runtime system",
     "smoke:codex-lifecycle": "tsx scripts/smoke-codex-lifecycle.ts --runtime pinned",
     "smoke:codex-lifecycle:system": "tsx scripts/smoke-codex-lifecycle.ts --runtime system",
+    "smoke:native-lifecycle": "tsx scripts/smoke-native-lifecycle.ts",
     "spike:codex-shell-contract": "tsx scripts/spike-codex-shell-contract.ts",
     "spike:codex-mcp-config": "tsx scripts/spike-codex-mcp-config.ts",
     "spike:business-mcp-runtime": "tsx scripts/spike-business-mcp-runtime.ts",

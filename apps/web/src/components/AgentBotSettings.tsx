@@ -1,15 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
 import { Bot, Loader2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getServerBase, isTauri } from '../lib/client';
+import {
+  deleteAgentBotConfig,
+  readAgentBotConfig,
+  saveAgentBotConfig,
+  type AgentBotConfigStatus,
+} from '../platform/desktopCommands';
 import { toast } from '../stores/toast';
 
-interface BotStatus {
-  enabled: boolean;
-  serverUrl?: string;
-  userId?: string;
-  username?: string;
-}
+type BotStatus = AgentBotConfigStatus;
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -26,7 +26,7 @@ export default function AgentBotSettings() {
       setBusy(false);
       return;
     }
-    invoke<BotStatus>('agent_bot_config_status')
+    readAgentBotConfig()
       .then((value) => {
         setStatus(value);
         setUserId(value.userId ?? '');
@@ -40,7 +40,7 @@ export default function AgentBotSettings() {
     setBusy(true);
     try {
       if (!token.trim()) throw new Error('请输入 Bot auth token');
-      await invoke('agent_bot_config_set', {
+      await saveAgentBotConfig({
         serverUrl: getServerBase(),
         userId: userId.trim(),
         username: username.trim(),
@@ -59,7 +59,7 @@ export default function AgentBotSettings() {
   const remove = async () => {
     setBusy(true);
     try {
-      await invoke('agent_bot_config_delete');
+      await deleteAgentBotConfig();
       setStatus({ enabled: false });
       setToken('');
       toast.success('Bot 已删除，之后用你自己的账号代发');

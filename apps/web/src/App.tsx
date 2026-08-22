@@ -1,9 +1,7 @@
-import { useEffect } from 'react';
 import { useAuth } from './stores/auth';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
 import { useOnboarding } from './stores/onboarding';
-import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
 import { useDownloadHistory } from './stores/downloadHistory';
 import DesktopUiScaleBridge from './components/DesktopUiScaleBridge';
@@ -13,36 +11,18 @@ import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
 import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
-import { getServerBase } from './lib/client';
-import { useCodexWorkspace } from './stores/codexWorkspace';
+import { useUI } from './stores/ui';
 
 export default function App() {
   const status = useAuth((s) => s.status);
-  const resume = useAuth((s) => s.resume);
   const userId = useAuth((s) => s.user?._id);
   const onboardingOwnerId = useOnboarding((s) => s.ownerId);
   const onboarding = useOnboarding((s) => s.state);
-  const hydrateOnboarding = useOnboarding((s) => s.hydrate);
-  const hydrateImLayout = useImLayout((s) => s.hydrate);
   const fileIndexOwnerId = useFileIndex((s) => s.ownerId);
-  const hydrateFileIndex = useFileIndex((s) => s.hydrate);
   const downloadHistoryOwnerId = useDownloadHistory((s) => s.ownerId);
-  const hydrateDownloadHistory = useDownloadHistory((s) => s.hydrate);
-  const hydrateCodexWorkspace = useCodexWorkspace((s) => s.hydrate);
-
-  useEffect(() => {
-    void resume();
-  }, [resume]);
-
-  useEffect(() => {
-    if (status === 'authed' && userId) {
-      hydrateOnboarding(userId);
-      hydrateImLayout(userId);
-      hydrateFileIndex(userId);
-      hydrateDownloadHistory(userId);
-      hydrateCodexWorkspace(`${getServerBase() || 'same-origin'}:${userId}`);
-    }
-  }, [hydrateCodexWorkspace, hydrateDownloadHistory, hydrateFileIndex, hydrateImLayout, hydrateOnboarding, status, userId]);
+  const startupStage = useUI((s) => s.startupStage);
+  const startupError = useUI((s) => s.startupError);
+  const retryStartup = useUI((s) => s.retryStartup);
 
   let content;
   if (status === 'boot') {
@@ -53,6 +33,22 @@ export default function App() {
     );
   } else if (status !== 'authed') {
     content = <LoginPage />;
+  } else if (startupStage === 'error') {
+    content = (
+      <div className="flex h-full flex-col items-center justify-center gap-3 bg-fill-2 px-6 text-center">
+        <div className="text-lg font-medium text-ink">启动没有完成</div>
+        <div className="max-w-md text-sm text-ink-3">
+          {startupError?.message || '应用初始化失败，请重试。'}
+        </div>
+        <button
+          type="button"
+          onClick={() => void retryStartup()}
+          className="h-10 rounded-md bg-primary px-5 text-sm font-medium text-white transition hover:bg-primary-hover active:bg-primary-active"
+        >
+          重试
+        </button>
+      </div>
+    );
   } else if (
     !userId ||
     onboardingOwnerId !== userId ||
@@ -63,6 +59,12 @@ export default function App() {
     content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
         正在加载个人设置…
+      </div>
+    );
+  } else if (startupStage !== 'background-ready') {
+    content = (
+      <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
+        正在启动 RocketX…
       </div>
     );
   } else {

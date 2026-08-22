@@ -10,9 +10,15 @@ use std::{
         Arc, Mutex, OnceLock,
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crate::native::dsh::DshBridgeMode;
+use crate::native::dsh_runtime as dsh_runtime_policy;
+use crate::native::process::{hidden_command, wait_for_exit};
+use crate::native::supervisor::{
+    now_ms as supervisor_now_ms, observe_exit, RuntimeStatus, RuntimeSupervisor,
+};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,7 +27,6 @@ use tauri::{Emitter, Manager};
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-const MIN_NODE_22_MINOR: u64 = 19;
 const DSH_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 // 最低验证版本：系统安装的 DSH 只要 semver >= 此版本即可使用（issue #352），
 // 更高版本仅提示未经完整验证，不阻断。bundled 运行时仍精确 pin 到该版本。
@@ -47,10 +52,12 @@ struct ManagedDshBridge {
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     running: Arc<AtomicBool>,
+    stop_requested: Arc<AtomicBool>,
     stopping: bool,
     host_runtime_dir: PathBuf,
     ready_url: Option<String>,
     leases: HashMap<String, DshConnectionLease>,
+    supervisor: Arc<Mutex<RuntimeSupervisor>>,
 }
 
 #[derive(Clone)]
@@ -69,6 +76,7 @@ enum DshBridgeRelease {
 #[derive(Default)]
 pub struct DshBridgeState {
     processes: Arc<Mutex<HashMap<String, ManagedDshBridge>>>,
+    supervisors: Arc<Mutex<HashMap<String, Arc<Mutex<RuntimeSupervisor>>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -85,6 +93,9 @@ struct DshOutputEvent {
 struct DshExitEvent {
     process_id: String,
     code: Option<i32>,
+    status: RuntimeStatus,
+    failures: u32,
+    restart_after_ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -119,29 +130,6 @@ pub struct DshAgentAttachmentRuntimePath {
     root: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DshBridgeMode {
-    Controller,
-    Web,
-}
-
-impl DshBridgeMode {
-    fn from_arg(mode: Option<&str>) -> Result<Self, String> {
-        match mode.map(str::trim).filter(|value| !value.is_empty()) {
-            Some("controller") | None => Ok(Self::Controller),
-            Some("web") => Ok(Self::Web),
-            Some(other) => Err(format!("不支持的 DSH mode：{other}")),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Controller => "controller",
-            Self::Web => "web",
-        }
-    }
-}
-
 #[derive(Clone)]
 struct ResolvedDshRuntime {
     source_root: PathBuf,
@@ -151,16 +139,6 @@ struct ResolvedDshRuntime {
     dsh_root: PathBuf,
     home_root: PathBuf,
     supports_no_open: bool,
-}
-
-fn hidden_command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    command
 }
 
 #[cfg(windows)]
@@ -804,24 +782,21 @@ fn prepare_bundled_runtime_root(
     prepare_bundled_runtime_root_from_archive(&archive, dsh_root)
 }
 
-fn parse_node_version(value: &str) -> Option<(u64, u64, u64)> {
-    let version = value.trim().trim_start_matches('v');
-    let core = version.split(['-', '+']).next()?;
-    let mut parts = core.split('.');
-    let parsed = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-    );
-    parts.next().is_none().then_some(parsed)
+fn node_version_is_compatible(value: &str) -> bool {
+    dsh_runtime_policy::node_version_is_compatible(value)
 }
 
-fn node_version_is_compatible(value: &str) -> bool {
-    match parse_node_version(value) {
-        Some((22, minor, _)) => minor >= MIN_NODE_22_MINOR,
-        Some((major, _, _)) => major >= 24,
-        None => false,
-    }
+fn incompatible_node_message(version: &str) -> String {
+    // Keep the user-facing contract visible at the command facade.
+    format!("Node.js 版本 {version} 不兼容；DSH 运行需要 22.19+ 或 24+")
+}
+
+// Compatibility facade kept for source-level contract tests and old callers;
+// parsing policy lives in native::dsh_runtime.
+type DshVersion = dsh_runtime_policy::DshVersion;
+
+fn parse_dsh_version(raw: &str) -> Option<DshVersion> {
+    dsh_runtime_policy::parse_dsh_version(raw)
 }
 
 fn bundled_node_paths(app: &tauri::AppHandle) -> Vec<PathBuf> {
@@ -864,9 +839,7 @@ fn probe_node_runtime(program: &Path) -> Result<(PathBuf, String), String> {
     }
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !node_version_is_compatible(&version) {
-        return Err(format!(
-            "Node.js 版本 {version} 不兼容；DSH 运行需要 22.19+ 或 24+"
-        ));
+        return Err(incompatible_node_message(&version));
     }
     Ok((PathBuf::from(host_path(&program)), version))
 }
@@ -938,140 +911,34 @@ fn verify_installed_dsh_version(node_path: &Path, cli_path: &Path) -> Result<boo
     Ok(dsh_version_supports_no_open(&version))
 }
 
-// 最小化 semver：够用即可（major.minor.patch + 点分预发布段），不引入 semver crate。
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DshVersion {
-    major: u64,
-    minor: u64,
-    patch: u64,
-    prerelease: Vec<DshPrereleasePart>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum DshPrereleasePart {
-    Numeric(u64),
-    Text(String),
-}
-
-impl Ord for DshVersion {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.major, self.minor, self.patch)
-            .cmp(&(other.major, other.minor, other.patch))
-            .then_with(|| compare_prerelease(&self.prerelease, &other.prerelease))
-    }
-}
-
-impl PartialOrd for DshVersion {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn compare_prerelease(
-    left: &[DshPrereleasePart],
-    right: &[DshPrereleasePart],
-) -> std::cmp::Ordering {
-    use std::cmp::Ordering as CmpOrdering;
-    match (left.is_empty(), right.is_empty()) {
-        (true, true) => CmpOrdering::Equal,
-        // 正式版高于同 core 的任何预发布版
-        (true, false) => CmpOrdering::Greater,
-        (false, true) => CmpOrdering::Less,
-        (false, false) => {
-            for (left_part, right_part) in left.iter().zip(right.iter()) {
-                let ordering = match (left_part, right_part) {
-                    (DshPrereleasePart::Numeric(a), DshPrereleasePart::Numeric(b)) => a.cmp(b),
-                    // semver 规则：数字标识符低于字母标识符
-                    (DshPrereleasePart::Numeric(_), DshPrereleasePart::Text(_)) => {
-                        CmpOrdering::Less
-                    }
-                    (DshPrereleasePart::Text(_), DshPrereleasePart::Numeric(_)) => {
-                        CmpOrdering::Greater
-                    }
-                    (DshPrereleasePart::Text(a), DshPrereleasePart::Text(b)) => a.cmp(b),
-                };
-                if ordering != CmpOrdering::Equal {
-                    return ordering;
-                }
-            }
-            left.len().cmp(&right.len())
-        }
-    }
-}
-
-// 解析 `dsh --version` 输出；兼容 "1.0.0rcalpha07" 这类无连字符预发布写法，
-// 规范化为 1.0.0-rcalpha07（patch 数字结束后紧跟的字母段视为预发布）再解析。
-fn parse_dsh_version(raw: &str) -> Option<DshVersion> {
-    let text = raw.trim();
-    let text = text.strip_prefix(['v', 'V']).unwrap_or(text);
-    let text = text.split('+').next().unwrap_or(text);
-    let (core, prerelease) = match text.split_once('-') {
-        Some((core, pre)) => (core, Some(pre)),
-        None => {
-            let core_len = text
-                .char_indices()
-                .take_while(|(_, ch)| ch.is_ascii_digit() || *ch == '.')
-                .map(|(index, ch)| index + ch.len_utf8())
-                .last()
-                .unwrap_or(0);
-            let (core, rest) = text.split_at(core_len);
-            (core, if rest.is_empty() { None } else { Some(rest) })
-        }
-    };
-    let mut core_parts = core.split('.');
-    let major = core_parts.next()?.parse().ok()?;
-    let minor = core_parts.next()?.parse().ok()?;
-    let patch = core_parts.next()?.parse().ok()?;
-    if core_parts.next().is_some() {
-        return None;
-    }
-    let prerelease = prerelease
-        .filter(|pre| !pre.is_empty())
-        .map(|pre| {
-            pre.split('.')
-                .map(|part| match part.parse::<u64>() {
-                    Ok(number) => DshPrereleasePart::Numeric(number),
-                    Err(_) => DshPrereleasePart::Text(part.to_string()),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    Some(DshVersion {
-        major,
-        minor,
-        patch,
-        prerelease,
-    })
-}
-
 fn dsh_version_is_compatible(version: &str) -> bool {
-    let Some(version) = parse_dsh_version(version) else {
-        return false;
-    };
-    let Some(minimum) = parse_dsh_version(DSH_VERIFIED_VERSION) else {
-        return false;
-    };
-    version >= minimum
+    match (
+        parse_dsh_version(version),
+        parse_dsh_version(DSH_VERIFIED_VERSION),
+    ) {
+        (Some(version), Some(minimum)) => version >= minimum,
+        _ => false,
+    }
 }
 
 fn dsh_version_is_unverified_newer(version: &str) -> bool {
-    let Some(version) = parse_dsh_version(version) else {
-        return false;
-    };
-    let Some(verified) = parse_dsh_version(DSH_VERIFIED_VERSION) else {
-        return false;
-    };
-    version > verified
+    match (
+        parse_dsh_version(version),
+        parse_dsh_version(DSH_VERIFIED_VERSION),
+    ) {
+        (Some(version), Some(verified)) => version > verified,
+        _ => false,
+    }
 }
 
 fn dsh_version_supports_no_open(version: &str) -> bool {
-    let Some(version) = parse_dsh_version(version) else {
-        return false;
-    };
-    let Some(minimum) = parse_dsh_version(DSH_NO_OPEN_VERSION) else {
-        return false;
-    };
-    version >= minimum
+    match (
+        parse_dsh_version(version),
+        parse_dsh_version(DSH_NO_OPEN_VERSION),
+    ) {
+        (Some(version), Some(minimum)) => version >= minimum,
+        _ => false,
+    }
 }
 
 fn dsh_root_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
@@ -1147,7 +1014,10 @@ fn resolve_dsh_runtime(
 }
 
 #[tauri::command]
-pub async fn dsh_runtime_probe(app: tauri::AppHandle, source_path: Option<String>) -> DshRuntimeProbe {
+pub async fn dsh_runtime_probe(
+    app: tauri::AppHandle,
+    source_path: Option<String>,
+) -> DshRuntimeProbe {
     // 探测包含归档校验与外部进程 spawn，耗时且不定时；必须离开主线程，
     // 否则探测期间整个窗口事件循环被冻结（启动卡顿的直接来源）。
     tauri::async_runtime::spawn_blocking(move || {
@@ -1616,37 +1486,35 @@ fn cleanup_managed_bridge_runtime(process: &ManagedDshBridge) {
 }
 
 fn stop_process(process: ManagedDshBridge) -> Result<(), String> {
+    process.stop_requested.store(true, Ordering::Release);
+    if let Ok(mut supervisor) = process.supervisor.lock() {
+        supervisor.request_stop();
+    }
     if let Ok(mut stdin) = process.stdin.lock() {
         let _ = stdin.write_all(graceful_shutdown_message());
         let _ = stdin.flush();
-    }
-
-    let deadline = Instant::now() + DSH_SHUTDOWN_GRACE_PERIOD;
-    loop {
-        let status = process
-            .child
-            .lock()
-            .map_err(|_| "DSH bridge 进程不可用".to_string())?
-            .try_wait()
-            .map_err(|error| format!("无法检查 DSH bridge 退出状态：{error}"))?;
-        if status.is_some() {
-            process.running.store(false, Ordering::Release);
-            cleanup_managed_bridge_runtime(&process);
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
     }
 
     let mut child = process
         .child
         .lock()
         .map_err(|_| "DSH bridge 进程不可用".to_string())?;
+    let exited = wait_for_exit(
+        &mut child,
+        DSH_SHUTDOWN_GRACE_PERIOD,
+        Duration::from_millis(50),
+    )
+    .map_err(|error| format!("无法检查 DSH bridge 退出状态：{error}"))?;
+    if exited.is_some() {
+        process.running.store(false, Ordering::Release);
+        cleanup_managed_bridge_runtime(&process);
+        return Ok(());
+    }
     force_stop_process_tree(&mut child)
         .map_err(|error| format!("failed to stop DSH bridge: {error}"))?;
-    let _ = child.wait();
+    child
+        .wait()
+        .map_err(|error| format!("failed to wait for DSH bridge: {error}"))?;
     process.running.store(false, Ordering::Release);
     cleanup_managed_bridge_runtime(&process);
     Ok(())
@@ -1658,6 +1526,8 @@ fn monitor_child(
     process_id: String,
     child: Arc<Mutex<Child>>,
     running: Arc<AtomicBool>,
+    supervisor: Arc<Mutex<RuntimeSupervisor>>,
+    stop_requested: Arc<AtomicBool>,
 ) {
     thread::spawn(move || loop {
         let status = match child.lock() {
@@ -1667,6 +1537,9 @@ fn monitor_child(
         match status {
             Ok(Some(status)) => {
                 running.store(false, Ordering::Release);
+                let now_ms = supervisor_now_ms();
+                let intentional = stop_requested.load(Ordering::Acquire);
+                let snapshot = observe_exit(&supervisor, now_ms, intentional);
                 let process = state
                     .lock()
                     .ok()
@@ -1679,6 +1552,11 @@ fn monitor_child(
                     DshExitEvent {
                         process_id,
                         code: status.code(),
+                        status: snapshot.status,
+                        failures: snapshot.failures,
+                        restart_after_ms: snapshot
+                            .restart_after
+                            .map(|duration| duration.as_millis() as u64),
                     },
                 );
                 return;
@@ -1692,6 +1570,7 @@ fn monitor_child(
 fn start_dsh_bridge_blocking(
     app: tauri::AppHandle,
     processes: Arc<Mutex<HashMap<String, ManagedDshBridge>>>,
+    supervisors: Arc<Mutex<HashMap<String, Arc<Mutex<RuntimeSupervisor>>>>>,
     next_id: Arc<AtomicU64>,
     connection_id: String,
     workspace_root: String,
@@ -1746,6 +1625,35 @@ fn start_dsh_bridge_blocking(
     let host_runtime_dir = host_runtime_directory(&connections_root, host_instance)?;
     let patch_key = format!("host-{host_instance}");
     let patch_path = write_dsh_patch(&host_runtime_dir, &patch_key)?;
+    let supervisor = {
+        let mut supervisors = supervisors
+            .lock()
+            .map_err(|_| "DSH supervisor registry is unavailable".to_string())?;
+        let supervisor = Arc::clone(
+            supervisors
+                .entry("dsh-host".to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(RuntimeSupervisor::default()))),
+        );
+        let mut value = supervisor
+            .lock()
+            .map_err(|_| "DSH supervisor is unavailable".to_string())?;
+        if let Err(error) = value.begin_start(supervisor_now_ms()) {
+            cleanup_runtime_dir(&host_runtime_dir);
+            return Err(match error {
+                crate::native::supervisor::StartError::Backoff(delay) => {
+                    format!("DSH bridge 最近崩溃，请在 {} ms 后重试", delay.as_millis())
+                }
+                crate::native::supervisor::StartError::Blocked => {
+                    "DSH bridge 已连续崩溃，已暂时阻止启动；请重启 RocketX 后重试".to_string()
+                }
+                crate::native::supervisor::StartError::Stopping => {
+                    "DSH bridge 正在停止，请稍后重试".to_string()
+                }
+            });
+        }
+        drop(value);
+        supervisor
+    };
     let mut child = match build_bridge_command(
         &runtime,
         &workspace_root,
@@ -1756,6 +1664,9 @@ fn start_dsh_bridge_blocking(
     {
         Ok(child) => child,
         Err(error) => {
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
             cleanup_runtime_dir(&host_runtime_dir);
             return Err(format!("无法启动 DSH bridge：{error}"));
         }
@@ -1765,6 +1676,9 @@ fn start_dsh_bridge_blocking(
         None => {
             let _ = force_stop_process_tree(&mut child);
             let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
             cleanup_runtime_dir(&host_runtime_dir);
             return Err("DSH bridge stdin 不可用".to_string());
         }
@@ -1774,6 +1688,9 @@ fn start_dsh_bridge_blocking(
         None => {
             let _ = force_stop_process_tree(&mut child);
             let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
             cleanup_runtime_dir(&host_runtime_dir);
             return Err("DSH bridge stdout 不可用".to_string());
         }
@@ -1783,6 +1700,9 @@ fn start_dsh_bridge_blocking(
         None => {
             let _ = force_stop_process_tree(&mut child);
             let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
             cleanup_runtime_dir(&host_runtime_dir);
             return Err("DSH bridge stderr 不可用".to_string());
         }
@@ -1796,12 +1716,19 @@ fn start_dsh_bridge_blocking(
             Err(error) => {
                 let _ = force_stop_process_tree(&mut child);
                 let _ = child.wait();
+                if let Ok(mut value) = supervisor.lock() {
+                    value.mark_exit(supervisor_now_ms(), false);
+                }
                 cleanup_runtime_dir(&host_runtime_dir);
                 return Err(error);
             }
         };
     let child = Arc::new(Mutex::new(child));
     let running = Arc::new(AtomicBool::new(true));
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    if let Ok(mut value) = supervisor.lock() {
+        value.mark_running(supervisor_now_ms());
+    }
     registry.insert(
         process_id.clone(),
         ManagedDshBridge {
@@ -1810,6 +1737,7 @@ fn start_dsh_bridge_blocking(
             child: Arc::clone(&child),
             stdin: Arc::new(Mutex::new(stdin)),
             running: Arc::clone(&running),
+            stop_requested: Arc::clone(&stop_requested),
             stopping: false,
             host_runtime_dir,
             ready_url: None,
@@ -1822,6 +1750,7 @@ fn start_dsh_bridge_blocking(
                     runtime_dir: lease_runtime_dir,
                 },
             )]),
+            supervisor: Arc::clone(&supervisor),
         },
     );
     drop(registry);
@@ -1844,7 +1773,15 @@ fn start_dsh_bridge_blocking(
         "stderr",
         stderr,
     );
-    monitor_child(app, processes, process_id, child, running);
+    monitor_child(
+        app,
+        processes,
+        process_id,
+        child,
+        running,
+        supervisor,
+        stop_requested,
+    );
     Ok(info)
 }
 
@@ -1860,6 +1797,7 @@ pub fn dsh_bridge_start(
     start_dsh_bridge_blocking(
         app,
         Arc::clone(&state.processes),
+        Arc::clone(&state.supervisors),
         Arc::clone(&state.next_id),
         connection_id,
         workspace_root,
@@ -1928,6 +1866,8 @@ pub fn dsh_bridge_stop(
             Ok(())
         }
         DshBridgeRelease::Process(process) => {
+            let supervisor = Arc::clone(&process.supervisor);
+            let stop_requested = Arc::clone(&process.stop_requested);
             let result = stop_process(process);
             let removed = {
                 let mut processes = state
@@ -1936,7 +1876,23 @@ pub fn dsh_bridge_stop(
                     .map_err(|_| "DSH bridge 进程注册表不可用".to_string())?;
                 reconcile_process_stop(&mut processes, &process_id, result.is_ok())
             };
+            if result.is_ok() {
+                if let Ok(mut supervisors) = state.supervisors.lock() {
+                    supervisors.remove("dsh-host");
+                }
+            }
             if result.is_err() {
+                let still_registered = state
+                    .processes
+                    .lock()
+                    .map(|processes| processes.contains_key(&process_id))
+                    .unwrap_or(false);
+                if still_registered {
+                    stop_requested.store(false, Ordering::Release);
+                    if let Ok(mut value) = supervisor.lock() {
+                        value.mark_running(supervisor_now_ms());
+                    }
+                }
                 if let Some(process) = removed {
                     cleanup_managed_bridge_runtime(&process);
                 }
@@ -1961,6 +1917,9 @@ pub fn shutdown(app: &tauri::AppHandle) {
     for process in processes {
         let _ = stop_process(process);
     }
+    if let Ok(mut supervisors) = state.supervisors.lock() {
+        supervisors.clear();
+    };
 }
 
 #[cfg(test)]
@@ -1968,13 +1927,12 @@ mod tests {
     use super::{
         archive_sha256_cached, attach_connection_lease, build_bridge_command, bundled_bridge_path,
         bundled_dsh_cli_entry, business_mcp_patch_text, cleanup_runtime_dir, compute_sha256,
-        development_bundled_runtime_archive,
-        development_bundled_runtime_root, dsh_focus_plugin_client, dsh_focus_plugin_index,
-        dsh_focus_plugin_package_json, dsh_patch_text, dsh_version_is_compatible,
-        dsh_version_is_unverified_newer, dsh_version_supports_no_open, encode_message,
-        file_url_for_path,
-        graceful_shutdown_message, hidden_command, host_path, installed_dsh_cli_entry,
-        installed_dsh_root, node_runtime_candidates, node_version_is_compatible,
+        development_bundled_runtime_archive, development_bundled_runtime_root,
+        dsh_focus_plugin_client, dsh_focus_plugin_index, dsh_focus_plugin_package_json,
+        dsh_patch_text, dsh_version_is_compatible, dsh_version_is_unverified_newer,
+        dsh_version_supports_no_open, encode_message, file_url_for_path, graceful_shutdown_message,
+        hidden_command, host_path, installed_dsh_cli_entry, installed_dsh_root,
+        node_runtime_candidates, node_version_is_compatible,
         prepare_bundled_runtime_root_from_archive, reconcile_process_stop,
         release_connection_lease, resolve_bundled_runtime_root, resolve_installed_dsh_cli,
         resolve_source_root, safe_attachment_path, source_bridge_path, source_dsh_cli_entry,
@@ -1982,6 +1940,7 @@ mod tests {
         write_dsh_focus_plugin, write_dsh_patch, DshBridgeMode, DshBridgeRelease,
         DshConnectionLease, ManagedDshBridge, ResolvedDshRuntime,
     };
+    use crate::native::supervisor::RuntimeSupervisor;
     use flate2::{write::GzEncoder, Compression};
     use serde_json::json;
     use std::{
@@ -2031,7 +1990,10 @@ mod tests {
             format!("{} {} deadbeef\n", metadata.len(), mtime_ms),
         )
         .unwrap();
-        assert_eq!(archive_sha256_cached(&archive, &dsh_root).unwrap(), "deadbeef");
+        assert_eq!(
+            archive_sha256_cached(&archive, &dsh_root).unwrap(),
+            "deadbeef"
+        );
 
         // 内容变化（大小或 mtime 变化）后重新计算
         std::fs::write(&archive, b"archive-v2-longer").unwrap();
@@ -2093,6 +2055,7 @@ mod tests {
             child,
             stdin,
             running: Arc::new(AtomicBool::new(true)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
             stopping: false,
             host_runtime_dir: runtime_dir.join("host"),
             ready_url: None,
@@ -2105,6 +2068,7 @@ mod tests {
                     runtime_dir,
                 },
             )]),
+            supervisor: Arc::new(Mutex::new(RuntimeSupervisor::default())),
         }
     }
 
@@ -2837,7 +2801,7 @@ node "%dp0%\global\9\.pnpm\@deepseek-ai+dsh@0.1.0-rc.6\node_modules\@deepseek-ai
         assert!(main_rs.contains("dsh::dsh_agent_attachment_write"));
         assert!(main_rs.contains("dsh::dsh_bridge_stop"));
         assert!(main_rs.contains(".manage(dsh::DshBridgeState::default())"));
-        assert!(main_rs.contains("dsh::shutdown(app);"));
+        assert!(main_rs.contains("native::host::NativeHost"));
     }
 
     #[test]

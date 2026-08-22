@@ -10,6 +10,7 @@ mod lan;
 #[cfg(test)]
 mod live_e2e;
 mod mcp;
+mod native;
 mod native_service;
 mod ocr;
 mod proc;
@@ -778,6 +779,7 @@ fn main() {
             lan::lan_send_file
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
+        .manage(native::host::NativeHost::default())
         .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
         .manage(dsh::DshBridgeState::default())
@@ -901,9 +903,7 @@ fn main() {
         .expect("error while building RocketX")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                native_service::shutdown(app);
-                proc::shutdown(app);
-                dsh::shutdown(app);
+                app.state::<native::host::NativeHost>().shutdown(app);
             }
         });
 }

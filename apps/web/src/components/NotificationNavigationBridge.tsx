@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { isTauri } from '../lib/http';
+import { listenDesktopEvent } from '../platform/desktopEvents';
 import {
   NOTIFICATION_OPEN_ROOM_EVENT,
   notificationDestination,
@@ -16,9 +17,7 @@ export default function NotificationNavigationBridge() {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
 
-    void import('@tauri-apps/api/event')
-      .then(({ listen }) =>
-        listen<unknown>(NOTIFICATION_OPEN_ROOM_EVENT, ({ payload }) => {
+    void listenDesktopEvent<unknown>(NOTIFICATION_OPEN_ROOM_EVENT, ({ payload }) => {
           const target = notificationTarget(payload);
           if (!target || useAuth.getState().status !== 'authed') return;
           if (notificationDestination(target) === 'butler-view') {
@@ -31,8 +30,7 @@ export default function NotificationNavigationBridge() {
             .getState()
             .jumpToMessage(target.mid, target.rid)
             .catch((err) => toast.error(err, '无法打开通知对应的会话'));
-        }),
-      )
+        })
       .then((release) => {
         if (cancelled) release();
         else unlisten = release;

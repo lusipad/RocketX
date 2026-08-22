@@ -1,4 +1,3 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import { Bot, Check, ChevronLeft, Copy, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { agentSessionCardSupersedesLocal, type AgentSessionCard } from '../agent/card';
@@ -12,6 +11,7 @@ import {
   setRoomHostingWorkspace,
 } from '../lib/agentHosting';
 import { isTauriRuntime } from '../lib/client';
+import { openDesktopDialog } from '../platform/desktopDialog';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
@@ -338,7 +338,7 @@ export default function AgentPanel({
       : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。';
 
   const addHostingProject = async (): Promise<void> => {
-    const path = await open({ directory: true, multiple: false, title: '选择 AI 托管项目' });
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 AI 托管项目' });
     if (typeof path !== 'string') return;
     const environmentState = useAgentEnvironments.getState();
     const environment = environmentState.ensureEnvironment({ path });

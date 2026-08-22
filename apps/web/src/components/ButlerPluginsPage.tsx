@@ -1,4 +1,3 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   Blocks,
   Check,
@@ -12,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppInfo, PluginDetail, PluginSummary, SkillMetadata } from '../agent/protocol/generated/v2';
 import { isTauriRuntime } from '../lib/client';
+import { desktopAssetUrl } from '../platform/desktopOpener';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 
@@ -34,7 +34,7 @@ function assetUrl(value: string | null | undefined): string | undefined {
   const source = value?.trim();
   if (!source) return undefined;
   if (/^(?:https?:|data:|blob:|asset:)/iu.test(source)) return source;
-  return isTauriRuntime() ? convertFileSrc(source) : undefined;
+  return isTauriRuntime() ? desktopAssetUrl(source) : undefined;
 }
 
 function firstAsset(assets: Record<string, string | undefined> | null): string | undefined {

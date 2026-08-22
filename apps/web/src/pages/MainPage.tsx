@@ -48,8 +48,6 @@ import {
   COMPACT_CONVERSATION_WIDTH,
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
-import { runtimeFeatures } from '../lib/runtimeMode';
-import { useCodexRuntime } from '../stores/codexRuntime';
 import { startAutoAway } from '../lib/autoAway';
 
 const NARROW_LAYOUT_WIDTH = 1180;
@@ -60,7 +58,6 @@ const COLLAPSED_GROUP_WIDTH = 48;
 const RESIZER_WIDTH = 6;
 
 export default function MainPage() {
-  const init = useChat((s) => s.init);
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -73,7 +70,6 @@ export default function MainPage() {
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
   const userId = useAuth((s) => s.user?._id);
 
-  const loadPrefs = usePrefs((s) => s.load);
   const unreadAlert = usePrefs((s) => s.prefs.unreadAlert);
   const switcherTab = useRef<'messages' | undefined>(undefined);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -100,12 +96,6 @@ export default function MainPage() {
   const setGroupCollapsed = useImLayout((s) => s.setGroupCollapsed);
   const ActiveModule = registeredModules.find((candidate) => candidate.id === module)?.render;
   const wasLayoutPanelOpen = useRef(layoutPanelOpen);
-
-  useEffect(() => {
-    void init();
-    void loadPrefs(); // 侧栏/消息/通知偏好（服务端持久化，跨设备同步）
-    if (runtimeFeatures().runtimeProbes) void useCodexRuntime.getState().probe();
-  }, [init, loadPrefs]);
 
   // 自动离开：无操作超时置 away，活动后恢复 online；监听器/计时器随卸载清理
   useEffect(() => startAutoAway(), []);

@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import {
   AppServerController,
@@ -31,16 +30,27 @@ import {
   type CodexImageAttachment,
   type CodexImageInput,
 } from '../lib/codexImages';
-import {
-  extractButlerSources,
-  mergeButlerSources,
-  type ButlerSource,
-} from '../lib/butlerContext';
+import type { ButlerSource } from '../lib/butlerContext';
 import { isTauriRuntime } from '../lib/client';
 import { useAgentEnvironments } from './agentEnvironments';
-
-const STORAGE_PREFIX = 'rcx-codex-workspace-v1';
-const MAX_EVENT_DETAIL = 64 * 1024;
+import {
+  boundedDetail,
+  eventFromItem as projectEventFromItem,
+  messagesFromTurns as projectMessagesFromTurns,
+} from '../codex/workspaceProjection';
+import {
+  isSystemCodexWorkspace,
+  readCodexWorkspaceProfile,
+  workspacePathKey,
+  writeCodexWorkspaceProfile,
+} from '../codex/workspaceProfile';
+import {
+  openCodexArtifact,
+  readCodexArtifact,
+  readCodexButlerWorkspace,
+  readCodexDefaultWorkspace,
+  revealCodexArtifact,
+} from '../platform/desktopCommands';
 
 export type CodexWorkspaceStatus =
   | 'idle'
@@ -99,15 +109,6 @@ export interface CodexThreadState {
   streamingText: string;
   pendingRequests: CodexPendingRequest[];
   queuedMessages: Array<{ id: string; text: string; images: CodexImageInput[] }>;
-}
-
-interface PersistedWorkspace {
-  workspaceRoot?: string;
-  workspaceRoots?: string[];
-  selectedModel?: string;
-  selectedEffort?: string | null;
-  permissionPreset?: CodexPermissionPreset;
-  followUpMode?: CodexFollowUpMode;
 }
 
 interface CodexWorkspaceState {
@@ -235,13 +236,8 @@ function continuationName(thread: Thread): string {
   return base.endsWith('· RocketX 继续') ? base : `${base} · RocketX 继续`;
 }
 
-function storageKey(scope: string): string {
-  return `${STORAGE_PREFIX}:${scope}`;
-}
-
 function persist(state: CodexWorkspaceState): void {
-  if (!state.scope || typeof localStorage === 'undefined') return;
-  const value: PersistedWorkspace = {
+  const value = {
     workspaceRoot: state.workspaceRoot || undefined,
     workspaceRoots: state.workspaceRoots.length > 0 ? state.workspaceRoots : undefined,
     selectedModel: state.selectedModel || undefined,
@@ -249,7 +245,7 @@ function persist(state: CodexWorkspaceState): void {
     permissionPreset: state.permissionPreset,
     followUpMode: state.followUpMode,
   };
-  localStorage.setItem(storageKey(state.scope), JSON.stringify(value));
+  writeCodexWorkspaceProfile(state.scope, value);
 }
 
 function selection(state = useCodexWorkspace.getState()): CodexRuntimeSelection {
@@ -276,22 +272,7 @@ function defaultSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
   return { selectedModel: model.model, selectedEffort: effort };
 }
 
-function workspacePathKey(path: string): string {
-  const normalized = path.trim().replaceAll('\\', '/').replace(/\/+$/u, '');
-  return /^[a-z]:\//iu.test(normalized) ? normalized.toLocaleLowerCase('en-US') : normalized;
-}
-
-export function isSystemCodexWorkspace(
-  path: string,
-  defaultWorkspaceRoot: string,
-  butlerWorkspaceRoot: string,
-): boolean {
-  const key = workspacePathKey(path);
-  return Boolean(key) && (
-    key === workspacePathKey(defaultWorkspaceRoot)
-    || key === workspacePathKey(butlerWorkspaceRoot)
-  );
-}
+export { isSystemCodexWorkspace } from '../codex/workspaceProfile';
 
 function threadWorkspaceRoots(state: CodexWorkspaceState): string[] {
   const roots = [
@@ -310,225 +291,12 @@ function threadWorkspaceRoots(state: CodexWorkspaceState): string[] {
   });
 }
 
-function textFromUserInput(input: unknown): string {
-  const value = record(input);
-  return value.type === 'text' && typeof value.text === 'string' ? value.text : '';
-}
-
-function attachmentFromUserInput(input: unknown): CodexImageAttachment | null {
-  const value = record(input);
-  if (value.type !== 'localImage' && value.type !== 'image') return null;
-  const source = typeof value.path === 'string'
-    ? value.path
-    : typeof value.url === 'string'
-      ? value.url
-      : '';
-  const name = source.split(/[\\/]/).filter(Boolean).at(-1) ?? '图片';
-  return { name, type: 'image' };
-}
-
-function generatedImageFromItem(
-  item: Extract<ThreadItem, { type: 'imageGeneration' }>,
-): CodexGeneratedImage | null {
-  if (!item.result) return null;
-  const name = item.savedPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? `${item.id}.png`;
-  return {
-    id: item.id,
-    name,
-    dataUrl: item.result.startsWith('data:') ? item.result : `data:image/png;base64,${item.result}`,
-    savedPath: item.savedPath,
-    alt: item.revisedPrompt?.trim() || 'Codex 生成的图片',
-  };
-}
-
-function boundedDetail(value: string): string {
-  return value.length <= MAX_EVENT_DETAIL
-    ? value
-    : `${value.slice(value.length - MAX_EVENT_DETAIL)}\n… 输出过长，仅显示最后 64 KiB`;
-}
-
-function jsonDetail(value: unknown): string {
-  try {
-    return boundedDetail(JSON.stringify(value, null, 2));
-  } catch {
-    return String(value);
-  }
-}
-
-function durationSummary(durationMs: number | null): string | null {
-  if (durationMs === null) return null;
-  return durationMs < 1_000 ? `${durationMs} ms` : `${(durationMs / 1_000).toFixed(1)} s`;
-}
-
-function completedStatus(
-  itemStatus: string | undefined,
-  fallback: CodexWorkspaceEvent['status'],
-): CodexWorkspaceEvent['status'] {
-  return itemStatus === 'failed' || itemStatus === 'declined' ? 'failed' : fallback;
-}
-
-function sourceText(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  const text = record(value).text;
-  if (typeof text === 'string') return text;
-  try {
-    return value === null ? null : JSON.stringify(value);
-  } catch {
-    return null;
-  }
-}
-
-function sourcesFromToolItem(item: ThreadItem): ButlerSource[] {
-  if (item.type !== 'dynamicToolCall' && item.type !== 'mcpToolCall') return [];
-  const contents = item.type === 'dynamicToolCall'
-    ? (item.contentItems ?? []).flatMap((content) => (
-      content.type === 'inputText' ? [content.text] : []
-    ))
-    : item.result
-      ? [item.result.structuredContent, ...item.result.content]
-        .map(sourceText)
-        .filter((content): content is string => content !== null)
-      : [];
-  const suffix = item.tool.split(/__|[./:]/).filter(Boolean).at(-1);
-  const toolNames = suffix && suffix !== item.tool ? [item.tool, suffix] : [item.tool];
-  return mergeButlerSources(...toolNames.flatMap((toolName) => (
-    contents.map((content) => extractButlerSources(toolName, content))
-  )));
-}
-
 export function messagesFromTurns(turns: readonly Turn[]): CodexWorkspaceMessage[] {
-  return turns.flatMap((turn) => {
-    const messages: CodexWorkspaceMessage[] = [];
-    const generatedImages: CodexGeneratedImage[] = [];
-    let pendingSources: ButlerSource[] = [];
-    for (const item of turn.items) {
-      if (item.type === 'userMessage') {
-        const text = item.content.map(textFromUserInput).filter(Boolean).join('\n');
-        const attachments = item.content.map(attachmentFromUserInput).filter((entry) => entry !== null);
-        if (text || attachments.length > 0) messages.push({ id: item.id, role: 'user', text, attachments });
-      } else if (item.type === 'agentMessage' && item.text.trim()) {
-        const sources = item.phase === 'commentary' ? [] : pendingSources;
-        messages.push({
-          id: item.id,
-          role: 'assistant',
-          text: item.text,
-          ...(sources.length > 0 ? { sources } : {}),
-        });
-        if (item.phase !== 'commentary') pendingSources = [];
-      } else if (item.type === 'dynamicToolCall' || item.type === 'mcpToolCall') {
-        pendingSources = mergeButlerSources(pendingSources, sourcesFromToolItem(item));
-      } else if (item.type === 'imageGeneration') {
-        const image = generatedImageFromItem(item);
-        if (image) generatedImages.push(image);
-      }
-    }
-    if (generatedImages.length > 0) {
-      let assistantIndex = messages.length - 1;
-      while (assistantIndex >= 0 && messages[assistantIndex].role !== 'assistant') assistantIndex -= 1;
-      if (assistantIndex >= 0) {
-        messages[assistantIndex] = { ...messages[assistantIndex], generatedImages };
-      } else {
-        messages.push({
-          id: `generated-images-${turn.id}`,
-          role: 'assistant',
-          text: '',
-          generatedImages,
-        });
-      }
-    }
-    return messages;
-  });
+  return projectMessagesFromTurns(turns);
 }
 
 function eventFromItem(item: ThreadItem, status: CodexWorkspaceEvent['status']): CodexWorkspaceEvent | null {
-  if (item.type === 'commandExecution') {
-    const metadata = [
-      item.exitCode === null ? null : `退出码 ${item.exitCode}`,
-      durationSummary(item.durationMs),
-    ].filter(Boolean).join(' · ');
-    return {
-      id: item.id,
-      type: item.type,
-      title: '运行命令',
-      summary: item.command,
-      detail: boundedDetail([item.aggregatedOutput, metadata].filter(Boolean).join('\n\n')) || undefined,
-      status: completedStatus(item.status, status),
-    };
-  }
-  if (item.type === 'fileChange') {
-    return {
-      id: item.id,
-      type: item.type,
-      title: '修改文件',
-      summary: item.changes.map((change) => change.path).join('、'),
-      status: completedStatus(item.status, status),
-    };
-  }
-  if (item.type === 'mcpToolCall') {
-    return {
-      id: item.id,
-      type: item.type,
-      title: item.tool,
-      summary: item.server,
-      detail: item.error?.message ?? (item.result ? jsonDetail(item.result) : undefined),
-      status: completedStatus(item.status, status),
-    };
-  }
-  if (item.type === 'dynamicToolCall') {
-    return {
-      id: item.id,
-      type: item.type,
-      title: item.tool,
-      summary: item.namespace ?? undefined,
-      detail: item.contentItems ? jsonDetail(item.contentItems) : undefined,
-      status: completedStatus(item.status, status),
-    };
-  }
-  if (item.type === 'plan') {
-    return { id: item.id, type: item.type, title: '更新计划', detail: item.text, status };
-  }
-  if (item.type === 'reasoning') {
-    return {
-      id: item.id,
-      type: item.type,
-      title: '思考',
-      detail: boundedDetail([...item.summary, ...item.content].join('\n')) || undefined,
-      status,
-    };
-  }
-  if (item.type === 'collabAgentToolCall') {
-    return {
-      id: item.id,
-      type: item.type,
-      title: '协作代理',
-      summary: item.tool,
-      detail: item.prompt ?? (item.receiverThreadIds.join('、') || undefined),
-      status: completedStatus(item.status, status),
-    };
-  }
-  if (item.type === 'subAgentActivity') {
-    return { id: item.id, type: item.type, title: '协作代理', summary: item.agentPath, detail: item.kind, status };
-  }
-  if (item.type === 'webSearch') {
-    const value = record(item);
-    return { id: item.id, type: item.type, title: '搜索网络', summary: typeof value.query === 'string' ? value.query : undefined, status };
-  }
-  if (item.type === 'imageView') {
-    return { id: item.id, type: item.type, title: '查看图片', summary: item.path, status };
-  }
-  if (item.type === 'imageGeneration') {
-    return { id: item.id, type: item.type, title: '生成图片', status };
-  }
-  if (item.type === 'sleep') {
-    return { id: item.id, type: item.type, title: '等待', summary: durationSummary(item.durationMs) ?? undefined, status };
-  }
-  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
-    return { id: item.id, type: item.type, title: item.type === 'enteredReviewMode' ? '进入审查' : '完成审查', detail: item.review, status };
-  }
-  if (item.type === 'contextCompaction') {
-    return { id: item.id, type: item.type, title: '压缩上下文', status };
-  }
-  return null;
+  return projectEventFromItem(item, status);
 }
 
 function emptyThreadState(status: CodexWorkspaceStatus = 'ready'): CodexThreadState {
@@ -1094,14 +862,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     void controller?.stop();
     controller = undefined;
     rejectPendingRequests('账号已切换');
-    let saved: PersistedWorkspace = {};
-    try {
-      saved = typeof localStorage === 'undefined'
-        ? {}
-        : JSON.parse(localStorage.getItem(storageKey(scope)) ?? '{}') as PersistedWorkspace;
-    } catch {
-      saved = {};
-    }
+    const saved = readCodexWorkspaceProfile(scope);
     const workspaceRoot = typeof saved.workspaceRoot === 'string' ? saved.workspaceRoot : '';
     const workspaceRoots = Array.isArray(saved.workspaceRoots)
       ? saved.workspaceRoots.filter((root): root is string => typeof root === 'string' && Boolean(root.trim()))
@@ -1147,7 +908,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (current.defaultWorkspaceRoot && current.butlerWorkspaceRoot) return current.defaultWorkspaceRoot;
     if (!current.scope || !isTauriRuntime()) return '';
     const scope = current.scope;
-    defaultWorkspaceRequest ??= invoke<string>('codex_default_workspace')
+    defaultWorkspaceRequest ??= readCodexDefaultWorkspace()
       .then((value) => {
         if (typeof value !== 'string' || !value.trim()) throw new Error('默认工作区路径不可用');
         return value;
@@ -1156,7 +917,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         defaultWorkspaceRequest = undefined;
         throw error;
       });
-    butlerWorkspaceRequest ??= invoke<string>('codex_butler_workspace')
+    butlerWorkspaceRequest ??= readCodexButlerWorkspace()
       .then((value) => {
         if (typeof value !== 'string' || !value.trim()) throw new Error('管家工作区路径不可用');
         return value;
@@ -1867,19 +1628,19 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   readFile: async (path) => {
     const workspaceRoot = get().workspaceRoot;
     if (!workspaceRoot) throw new Error('请先选择工作区');
-    return invoke<string>('codex_artifact_read', { workspaceRoot, path });
+    return readCodexArtifact(workspaceRoot, path);
   },
 
   openArtifact: async (path) => {
     const workspaceRoot = get().workspaceRoot;
     if (!workspaceRoot) throw new Error('请先选择工作区');
-    return invoke<void>('codex_artifact_open', { workspaceRoot, path });
+    return openCodexArtifact(workspaceRoot, path);
   },
 
   revealArtifact: async (path) => {
     const workspaceRoot = get().workspaceRoot;
     if (!workspaceRoot) throw new Error('请先选择工作区');
-    return invoke<void>('codex_artifact_reveal', { workspaceRoot, path });
+    return revealCodexArtifact(workspaceRoot, path);
   },
 
   setSkillEnabled: async (path, enabled) => {

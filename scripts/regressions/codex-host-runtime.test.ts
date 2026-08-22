@@ -63,8 +63,8 @@ test('桌面端自动准备临时会话与管家会话目录，并把用户目�
   assert.match(main, /proc::codex_default_workspace/);
   assert.match(main, /proc::codex_butler_workspace/);
   assert.match(workspace, /ensureDefaultWorkspace/);
-  assert.match(workspace, /invoke<string>\('codex_default_workspace'\)/);
-  assert.match(workspace, /invoke<string>\('codex_butler_workspace'\)/);
+  assert.match(workspace, /readCodexDefaultWorkspace\(\)/);
+  assert.match(workspace, /readCodexButlerWorkspace\(\)/);
   assert.match(workspace, /defaultWorkspaceRoot/);
   assert.match(workspace, /butlerWorkspaceRoot/);
   assert.match(history, /临时会话/);
@@ -84,7 +84,8 @@ test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版�
   // 按 app-server --help 是否列出 --stdio 决定传不传
   assert.match(proc, /fn app_server_args_for_help\(help: &str\)/);
   assert.match(proc, /help\.contains\("--stdio"\)/);
-  assert.match(proc, /let launch_args = app_server_launch_args\(&resolved\)\?;/);
+  assert.match(proc, /let launch_args = match app_server_launch_args\(&resolved\)/);
+  assert.match(proc, /app_server_launch_args\(&resolved\)[\s\S]*?mark_exit\(supervisor_now_ms\(\), false\)/);
   // 不能再无条件传 --stdio
   assert.doesNotMatch(proc, /args\(\["app-server", "--stdio"\]\)/);
 });

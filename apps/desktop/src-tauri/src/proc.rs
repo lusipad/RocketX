@@ -5,13 +5,20 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+use crate::native::codex::parse_semantic_version;
+use crate::native::codex_runtime as codex_runtime_policy;
+use crate::native::process::{hidden_command, kill_and_wait};
+use crate::native::supervisor::{
+    now_ms as supervisor_now_ms, observe_exit, RuntimeStatus, RuntimeSupervisor,
+};
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
@@ -52,11 +59,14 @@ struct ManagedCodex {
     workspace_root: String,
     version: String,
     runtime_source: CodexRuntimeSource,
+    supervisor: Arc<Mutex<RuntimeSupervisor>>,
+    stopping: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 pub struct CodexAppServerState {
     processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
+    supervisors: Arc<Mutex<HashMap<String, Arc<Mutex<RuntimeSupervisor>>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -176,16 +186,9 @@ struct CodexOutputEvent {
 struct CodexExitEvent {
     process_id: String,
     code: Option<i32>,
-}
-
-fn hidden_command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    command
+    status: RuntimeStatus,
+    failures: u32,
+    restart_after_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -370,36 +373,24 @@ fn system_codex_paths() -> Vec<PathBuf> {
     }
 }
 
-fn parse_semantic_version(version: &str) -> Option<(u64, u64, u64)> {
-    let core = version.split(['-', '+']).next()?;
-    let mut parts = core.split('.');
-    let parsed = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-    );
-    parts.next().is_none().then_some(parsed)
-}
-
 fn classify_codex_version(version: &str) -> Result<CodexCompatibilityStatus, String> {
-    let actual = parse_semantic_version(version)
-        .ok_or_else(|| format!("Codex 返回了无法识别的版本 {version}"))?;
-    if CODEX_VERIFIED_VERSIONS.contains(&version) {
-        return Ok(CodexCompatibilityStatus::Verified);
-    }
-    let baseline =
-        parse_semantic_version(CODEX_PROTOCOL_BASELINE).expect("Codex protocol baseline is valid");
-    if actual < baseline || (actual == baseline && version.contains('-')) {
-        return Ok(CodexCompatibilityStatus::Blocked);
-    }
-    Ok(CodexCompatibilityStatus::UntestedNewer)
+    Ok(
+        match codex_runtime_policy::classify_version(
+            version,
+            CODEX_PROTOCOL_BASELINE,
+            CODEX_VERIFIED_VERSIONS,
+        )? {
+            codex_runtime_policy::Compatibility::Verified => CodexCompatibilityStatus::Verified,
+            codex_runtime_policy::Compatibility::UntestedNewer => {
+                CodexCompatibilityStatus::UntestedNewer
+            }
+            codex_runtime_policy::Compatibility::Blocked => CodexCompatibilityStatus::Blocked,
+        },
+    )
 }
 
 fn unsupported_codex_version_message(version: &str) -> String {
-    format!(
-        "找到 Codex {version}，但低于 RocketX 所需的协议基线 \
-         {CODEX_PROTOCOL_BASELINE}；请升级后重新检测"
-    )
+    codex_runtime_policy::unsupported_version_message(version, CODEX_PROTOCOL_BASELINE)
 }
 
 fn probe_display_path(path: &Path) -> String {
@@ -949,43 +940,8 @@ fn resolve_codex(app: &tauri::AppHandle) -> Result<ResolvedCodex, String> {
     )
 }
 
-fn version_token(token: &str) -> Option<&str> {
-    let token = token.strip_prefix('v').unwrap_or(token);
-    if !token
-        .chars()
-        .next()
-        .is_some_and(|value| value.is_ascii_digit())
-        || !token.contains('.')
-    {
-        return None;
-    }
-    token
-        .chars()
-        .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '+'))
-        .then_some(token)
-}
-
 fn parse_codex_cli_version(output: &str, require_codex_prefix: bool) -> Option<String> {
-    let mut fallback = None;
-    for line in output.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let Some((first, rest)) = tokens.split_first() else {
-            continue;
-        };
-        if first.eq_ignore_ascii_case("codex-cli") || first.eq_ignore_ascii_case("codex") {
-            if let Some(version) = rest.iter().copied().find_map(version_token) {
-                return Some(version.to_string());
-            }
-        }
-        if !require_codex_prefix && fallback.is_none() {
-            fallback = tokens
-                .iter()
-                .copied()
-                .find_map(version_token)
-                .map(ToOwned::to_owned);
-        }
-    }
-    fallback
+    codex_runtime_policy::parse_cli_version(output, require_codex_prefix)
 }
 
 fn output_preview(value: &str) -> String {
@@ -2092,6 +2048,8 @@ fn monitor_child(
     state: Arc<Mutex<HashMap<String, ManagedCodex>>>,
     process_id: String,
     child: Arc<Mutex<Child>>,
+    supervisor: Arc<Mutex<RuntimeSupervisor>>,
+    stopping: Arc<AtomicBool>,
 ) {
     thread::spawn(move || loop {
         let status = match child.lock() {
@@ -2100,6 +2058,9 @@ fn monitor_child(
         };
         match status {
             Ok(Some(status)) => {
+                let now_ms = supervisor_now_ms();
+                let intentional = stopping.load(Ordering::Acquire);
+                let snapshot = observe_exit(&supervisor, now_ms, intentional);
                 let process = state
                     .lock()
                     .ok()
@@ -2112,6 +2073,11 @@ fn monitor_child(
                     CodexExitEvent {
                         process_id,
                         code: status.code(),
+                        status: snapshot.status,
+                        failures: snapshot.failures,
+                        restart_after_ms: snapshot
+                            .restart_after
+                            .map(|duration| duration.as_millis() as u64),
                     },
                 );
                 return;
@@ -2141,6 +2107,8 @@ struct StartedCodexProcess {
     child: Arc<Mutex<Child>>,
     stdout: ChildStdout,
     stderr: ChildStderr,
+    supervisor: Arc<Mutex<RuntimeSupervisor>>,
+    stopping: Arc<AtomicBool>,
 }
 
 enum CodexAppServerStartResult {
@@ -2151,6 +2119,7 @@ enum CodexAppServerStartResult {
 fn start_codex_app_server_blocking(
     app: tauri::AppHandle,
     processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
+    supervisors: Arc<Mutex<HashMap<String, Arc<Mutex<RuntimeSupervisor>>>>>,
     next_id: Arc<AtomicU64>,
     session_id: String,
     workspace_root: String,
@@ -2181,7 +2150,51 @@ fn start_codex_app_server_blocking(
         }));
     }
 
-    let launch_args = app_server_launch_args(&resolved)?;
+    let supervisor = {
+        let mut registry = supervisors
+            .lock()
+            .map_err(|_| "Codex supervisor registry is unavailable".to_string())?;
+        let supervisor = Arc::clone(
+            registry
+                .entry(session_id.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(RuntimeSupervisor::default()))),
+        );
+        let mut value = supervisor
+            .lock()
+            .map_err(|_| "Codex supervisor is unavailable".to_string())?;
+        if let Err(error) = value.begin_start(supervisor_now_ms()) {
+            let message = match error {
+                crate::native::supervisor::StartError::Backoff(delay) => {
+                    format!(
+                        "Codex app-server 最近崩溃，请在 {} ms 后重试",
+                        delay.as_millis()
+                    )
+                }
+                crate::native::supervisor::StartError::Blocked => {
+                    "Codex app-server 已连续崩溃，已暂时阻止启动；请重启 RocketX 后重试".to_string()
+                }
+                crate::native::supervisor::StartError::Stopping => {
+                    "Codex app-server 正在停止，请稍后重试".to_string()
+                }
+            };
+            drop(value);
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err(message);
+        }
+        drop(value);
+        supervisor
+    };
+
+    let launch_args = match app_server_launch_args(&resolved) {
+        Ok(args) => args,
+        Err(error) => {
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err(error);
+        }
+    };
     let mut command = resolved.command();
     command
         .args(&launch_args)
@@ -2189,27 +2202,62 @@ fn start_codex_app_server_blocking(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("无法在所选本地目录启动 Codex app-server：{error}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Codex app-server stdin is unavailable".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Codex app-server stdout is unavailable".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Codex app-server stderr is unavailable".to_string())?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err(format!("无法在所选本地目录启动 Codex app-server：{error}"));
+        }
+    };
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err("Codex app-server stdin is unavailable".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err("Codex app-server stdout is unavailable".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(mut value) = supervisor.lock() {
+                value.mark_exit(supervisor_now_ms(), false);
+            }
+            let _ = std::fs::remove_dir_all(&attachments_dir);
+            return Err("Codex app-server stderr is unavailable".to_string());
+        }
+    };
     let process_id = format!(
         "codex-{}-{}",
         child.id(),
         next_id.fetch_add(1, Ordering::Relaxed)
     );
     let child = Arc::new(Mutex::new(child));
+    let stopping = Arc::new(AtomicBool::new(false));
+    if let Ok(mut value) = supervisor.lock() {
+        value.mark_running(supervisor_now_ms());
+    }
     let managed = ManagedCodex {
         process_id: process_id.clone(),
         session_id,
@@ -2219,6 +2267,8 @@ fn start_codex_app_server_blocking(
         workspace_root: workspace_root.clone(),
         version: version.clone(),
         runtime_source: resolved.source,
+        supervisor: Arc::clone(&supervisor),
+        stopping: Arc::clone(&stopping),
     };
     processes.insert(process_id.clone(), managed);
     Ok(CodexAppServerStartResult::Started(StartedCodexProcess {
@@ -2233,6 +2283,8 @@ fn start_codex_app_server_blocking(
         child,
         stdout,
         stderr,
+        supervisor,
+        stopping,
     }))
 }
 
@@ -2244,12 +2296,14 @@ pub async fn codex_app_server_start(
     workspace_root: String,
 ) -> Result<CodexProcessInfo, String> {
     let processes = Arc::clone(&state.processes);
+    let supervisors = Arc::clone(&state.supervisors);
     let next_id = Arc::clone(&state.next_id);
     let blocking_app = app.clone();
     let start_result = tauri::async_runtime::spawn_blocking(move || {
         start_codex_app_server_blocking(
             blocking_app,
             processes,
+            supervisors,
             next_id,
             session_id,
             workspace_root,
@@ -2277,6 +2331,8 @@ pub async fn codex_app_server_start(
                 Arc::clone(&state.processes),
                 started.process_id.clone(),
                 started.child,
+                started.supervisor,
+                started.stopping,
             );
             Ok(started.info)
         }
@@ -2479,21 +2535,37 @@ pub fn codex_app_server_stop(
         .processes
         .lock()
         .map_err(|_| "Codex process registry is unavailable".to_string())?
-        .remove(&process_id)
+        .get(&process_id)
+        .cloned()
         .ok_or_else(|| "Codex app-server process is not active".to_string())?;
-    let mut child = process
-        .child
-        .lock()
-        .map_err(|_| "Codex app-server process is unavailable".to_string())?;
-    child
-        .kill()
-        .or_else(|error| match child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            _ => Err(error),
-        })
-        .map_err(|error| format!("failed to stop Codex app-server: {error}"))?;
-    let _ = child.wait();
+    let session_id = process.session_id.clone();
+    process.stopping.store(true, Ordering::Release);
+    if let Ok(mut supervisor) = process.supervisor.lock() {
+        supervisor.request_stop();
+    }
+    let stop_result = (|| -> Result<(), String> {
+        let mut child = process
+            .child
+            .lock()
+            .map_err(|_| "Codex app-server process is unavailable".to_string())?;
+        kill_and_wait(&mut child)
+            .map_err(|error| format!("failed to wait for Codex app-server: {error}"))?;
+        Ok(())
+    })();
+    if let Err(error) = stop_result {
+        process.stopping.store(false, Ordering::Release);
+        if let Ok(mut supervisor) = process.supervisor.lock() {
+            supervisor.mark_running(supervisor_now_ms());
+        }
+        return Err(error);
+    }
+    if let Ok(mut processes) = state.processes.lock() {
+        processes.remove(&process_id);
+    }
     let _ = std::fs::remove_dir_all(&process.attachments_dir);
+    if let Ok(mut supervisors) = state.supervisors.lock() {
+        supervisors.remove(&session_id);
+    }
     Ok(())
 }
 
@@ -3402,7 +3474,7 @@ fn run_silent_installer(
 }
 
 fn normalize_update_version(version: &str) -> Option<(u64, u64, u64)> {
-    normalize_update_version_text(version).and_then(|value| parse_semantic_version(&value))
+    codex_runtime_policy::normalize_update_version(version, normalize_update_version_text)
 }
 
 fn query_cli_version(path: &Path) -> Result<Option<String>, String> {
@@ -3777,11 +3849,18 @@ pub fn shutdown(app: &tauri::AppHandle) {
         })
         .unwrap_or_default();
     for process in processes {
+        process.stopping.store(true, Ordering::Release);
+        if let Ok(mut supervisor) = process.supervisor.lock() {
+            supervisor.request_stop();
+        }
         if let Ok(mut child) = process.child.lock() {
             let _ = child.kill();
             let _ = child.wait();
         }
     }
+    if let Ok(mut supervisors) = state.supervisors.lock() {
+        supervisors.clear();
+    };
 }
 
 #[cfg(test)]

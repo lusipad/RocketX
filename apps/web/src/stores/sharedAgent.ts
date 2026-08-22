@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauriRuntime, rest } from '../lib/client';
@@ -93,6 +92,7 @@ import {
   type DshStartConfiguration,
   type HostedDshControllerOptions,
 } from '../agent/dsh/HostedDshController';
+import { sendAgentBotMessage } from '../platform/desktopCommands';
 
 const LEASE_MS = 90_000;
 const ORPHAN_SESSION_MS = 30 * 60_000;
@@ -208,6 +208,7 @@ const dshControllers = new Map<string, SharedDshController>();
 const dshControllerStarts = new Map<string, Promise<SharedDshController>>();
 const dshControllerIdentities = new Map<string, string>();
 const dshControllerStartIdentities = new Map<string, string>();
+let sharedAgentBridgeCleanup: (() => void) | null = null;
 const preparedDshControllers = new Map<string, {
   workspaceRoot: string;
   controller: SharedDshController;
@@ -496,7 +497,7 @@ async function sendAgentReply(session: AgentSession, text: string): Promise<void
   for (const chunk of chunks) {
     if (!useHostFallback) {
       try {
-        const sent = await invoke<unknown | null>('agent_bot_send', {
+        const sent = await sendAgentBotMessage({
           serverUrl: getServerBase(),
           rid: session.rid,
           tmid: replyTmid(session) ?? null,
@@ -1089,6 +1090,19 @@ export async function prepareSharedDshStartConfiguration(
 
 export async function releaseSharedDshStartConfiguration(tmid: string): Promise<void> {
   await stopPreparedDshController(tmid);
+}
+
+export async function shutdownSharedAgentRuntime(): Promise<void> {
+  sharedAgentBridgeCleanup?.();
+  const tmids = new Set([
+    ...controllers.keys(),
+    ...controllerStarts.keys(),
+    ...dshControllers.keys(),
+    ...dshControllerStarts.keys(),
+    ...preparedDshControllers.keys(),
+    ...preparedDshStarts.keys(),
+  ]);
+  await Promise.all([...tmids].map((tmid) => stopController(tmid).catch(() => undefined)));
 }
 
 async function promotePreparedDshController(session: AgentSession): Promise<void> {
@@ -1959,8 +1973,9 @@ export function setSharedAgentMessageSizeProviderForTests(
   };
 }
 
-export function startSharedAgentBridge(): () => void {
-  void useSharedAgent.getState().restore();
+export async function startSharedAgentBridge(): Promise<() => void> {
+  if (sharedAgentBridgeCleanup) return sharedAgentBridgeCleanup;
+  const restore = useSharedAgent.getState().restore();
   const unsubscribeAuth = useAuth.subscribe((state, previous) => {
     if (state.user?._id !== previous.user?._id) void useSharedAgent.getState().restore();
   });
@@ -1994,9 +2009,18 @@ export function startSharedAgentBridge(): () => void {
       void updateLeaseCard(useSharedAgent.getState().sessions[session.tmid]).catch(() => undefined);
     }
   }, LEASE_MS / 3);
-  return () => {
+  const cleanup = () => {
+    if (sharedAgentBridgeCleanup !== cleanup) return;
+    sharedAgentBridgeCleanup = null;
     unsubscribeAuth();
     unsubscribeChat();
     clearInterval(heartbeat);
   };
+  sharedAgentBridgeCleanup = cleanup;
+  await restore;
+  return cleanup;
+}
+
+export function stopSharedAgentBridge(): void {
+  sharedAgentBridgeCleanup?.();
 }

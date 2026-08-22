@@ -1,4 +1,5 @@
 import type { RcPreferences } from '@rcx/rc-client';
+import { getLocalDataSchema, readLocalData, writeLocalData } from './localDataContract';
 
 /**
  * 通知等偏好的本地镜像（issue #351）。
@@ -14,24 +15,22 @@ import type { RcPreferences } from '@rcx/rc-client';
  * （SCOPED_KEYS 里有它），不串账号。
  */
 export const PREFS_CACHE_KEY = 'rcx-prefs-cache';
+const PREFS_CACHE_VERSION = getLocalDataSchema('preferences').version;
+
+function decodePrefs(value: unknown): Partial<RcPreferences> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Partial<RcPreferences>;
+}
 
 /** 读本地镜像。任何损坏/存储不可用都按空镜像处理，不影响主流程。 */
 export function loadPrefsCache(): Partial<RcPreferences> {
-  try {
-    const raw = localStorage.getItem(PREFS_CACHE_KEY);
-    if (!raw) return {};
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    return value as Partial<RcPreferences>;
-  } catch {
-    return {};
-  }
+  return readLocalData(PREFS_CACHE_KEY, PREFS_CACHE_VERSION, {}, decodePrefs);
 }
 
 /** 把一次成功写入服务端的 patch 追加进镜像（同键覆盖，未动的键保留）。 */
 export function mergePrefsCache(patch: Partial<RcPreferences>): void {
   try {
-    localStorage.setItem(PREFS_CACHE_KEY, JSON.stringify({ ...loadPrefsCache(), ...patch }));
+    writeLocalData(PREFS_CACHE_KEY, PREFS_CACHE_VERSION, { ...loadPrefsCache(), ...patch });
   } catch {
     // 无痕模式或存储不可用时，服务端已经生效，镜像只是兜底，丢了不阻塞。
   }

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
+    net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,8 +12,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::native::lan::{safe_file_name, transfer_paths};
+use crate::native::lan_identity as lan_identity_policy;
+#[cfg(test)]
+use crate::native::lan_identity::validate_scope as validate_identity_scope;
+#[cfg(test)]
+use crate::native::lan_protocol::MAX_CONTROL_FRAME_BYTES;
+use crate::native::lan_protocol::PROTOCOL_VERSION;
+pub(crate) use crate::native::lan_protocol::{
+    read_control_frame, sign_transcript, verify_transcript, write_control_frame, ControlFrame,
+    HandshakePeer, HandshakeTranscript,
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -21,10 +32,7 @@ use tauri::{Emitter, Manager};
 use zeroize::Zeroizing;
 
 const KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.lan";
-const PROTOCOL_CONTEXT: &[u8] = b"rocketx-lan-handshake-v1";
-pub const PROTOCOL_VERSION: u16 = 1;
 pub const CHUNK_BYTES: u32 = 1024 * 1024;
-pub const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
 const SERVICE_TYPE: &str = "_rcx._tcp.local.";
 const UDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 82, 67);
 const UDP_PORT: u16 = 45_826;
@@ -48,6 +56,7 @@ struct LanRuntime {
     trusted: SharedTrusted,
     identity: Arc<RuntimeIdentity>,
     threads: Vec<JoinHandle<()>>,
+    connection_threads: SharedConnectionThreads,
 }
 
 struct RuntimeIdentity {
@@ -61,6 +70,35 @@ type PeerKey = (String, String);
 type SharedPeers = Arc<RwLock<HashMap<PeerKey, LanPeer>>>;
 type SharedTrusted = Arc<RwLock<HashMap<PeerKey, String>>>;
 type SharedTransfers = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
+struct ConnectionThread {
+    stream: TcpStream,
+    handle: JoinHandle<()>,
+}
+
+type SharedConnectionThreads = Arc<Mutex<Vec<ConnectionThread>>>;
+
+fn reap_finished_connection_threads(shared: &SharedConnectionThreads) {
+    let finished = shared
+        .lock()
+        .map(|mut connections| {
+            let mut finished = Vec::new();
+            let mut active = Vec::with_capacity(connections.len());
+            for connection in connections.drain(..) {
+                if connection.handle.is_finished() {
+                    finished.push(connection);
+                } else {
+                    active.push(connection);
+                }
+            }
+            *connections = active;
+            finished
+        })
+        .unwrap_or_default();
+    for connection in finished {
+        let _ = connection.handle.join();
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,104 +207,12 @@ struct StoredIdentity {
     secret_key: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct HandshakePeer {
-    pub user_id: String,
-    pub device_id: String,
-    pub public_key: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct HandshakeTranscript {
-    pub server_fingerprint: String,
-    pub initiator: HandshakePeer,
-    pub responder: HandshakePeer,
-    pub initiator_nonce: String,
-    pub responder_nonce: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum ControlFrame {
-    Hello {
-        version: u16,
-        peer: HandshakePeer,
-        nonce: String,
-    },
-    Proof {
-        signature: String,
-    },
-    Chat {
-        message_id: String,
-        room_id: String,
-        original_ts: i64,
-        text: String,
-    },
-    FileOffer {
-        transfer_id: String,
-        message_id: String,
-        room_id: String,
-        original_ts: i64,
-        file_name: String,
-        size: u64,
-        chunk_bytes: u32,
-        chunk_count: u64,
-        blake3: String,
-    },
-    MissingChunks {
-        transfer_id: String,
-        indexes: Vec<u64>,
-    },
-    FileChunk {
-        transfer_id: String,
-        index: u64,
-        length: u32,
-        blake3: String,
-    },
-    FileComplete {
-        transfer_id: String,
-    },
-    Ack {
-        id: String,
-    },
-    Error {
-        code: String,
-        message: String,
-    },
-}
-
-fn validate_identity_scope<'a, 'b>(
-    server_url: &'a str,
-    user_id: &'b str,
-) -> Result<(&'a str, &'b str), String> {
-    if server_url.chars().any(char::is_control) || user_id.chars().any(char::is_control) {
-        return Err("LAN identity scope contains control characters".to_string());
-    }
-    let server_url = server_url.trim();
-    let user_id = user_id.trim();
-    if server_url.is_empty() || server_url.len() > 2048 {
-        return Err("invalid Rocket.Chat server URL".to_string());
-    }
-    if user_id.is_empty() || user_id.len() > 256 {
-        return Err("invalid Rocket.Chat user id".to_string());
-    }
-    Ok((server_url, user_id))
-}
-
 pub fn server_fingerprint(server_url: &str) -> Result<String, String> {
-    let (server_url, _) = validate_identity_scope(server_url, "fingerprint")?;
-    Ok(blake3::hash(server_url.as_bytes()).to_hex().to_string())
+    lan_identity_policy::server_fingerprint(server_url)
 }
 
 fn identity_account(server_url: &str, user_id: &str) -> Result<String, String> {
-    let (server_url, user_id) = validate_identity_scope(server_url, user_id)?;
-    let mut input = Vec::with_capacity(server_url.len() + user_id.len() + 1);
-    input.extend_from_slice(server_url.as_bytes());
-    input.push(0);
-    input.extend_from_slice(user_id.as_bytes());
-    Ok(format!("identity-{}", blake3::hash(&input).to_hex()))
+    lan_identity_policy::account_key(server_url, user_id)
 }
 
 fn keychain_entry(server_url: &str, user_id: &str) -> Result<keyring::Entry, String> {
@@ -314,59 +260,6 @@ fn load_or_create_identity(server_url: &str, user_id: &str) -> Result<StoredIden
         }
         Err(error) => Err(format!("failed to read LAN identity: {error}")),
     }
-}
-
-fn append_transcript_field(output: &mut Vec<u8>, value: &str) {
-    output.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    output.extend_from_slice(value.as_bytes());
-}
-
-fn transcript_bytes(transcript: &HandshakeTranscript) -> Vec<u8> {
-    let mut output = Vec::with_capacity(512);
-    output.extend_from_slice(PROTOCOL_CONTEXT);
-    for value in [
-        &transcript.server_fingerprint,
-        &transcript.initiator.user_id,
-        &transcript.initiator.device_id,
-        &transcript.initiator.public_key,
-        &transcript.responder.user_id,
-        &transcript.responder.device_id,
-        &transcript.responder.public_key,
-        &transcript.initiator_nonce,
-        &transcript.responder_nonce,
-    ] {
-        append_transcript_field(&mut output, value);
-    }
-    output
-}
-
-pub fn sign_transcript(signing_key: &SigningKey, transcript: &HandshakeTranscript) -> String {
-    URL_SAFE_NO_PAD.encode(signing_key.sign(&transcript_bytes(transcript)).to_bytes())
-}
-
-pub fn verify_transcript(
-    pinned_public_key: &str,
-    transcript: &HandshakeTranscript,
-    signature: &str,
-) -> Result<(), String> {
-    let public_key: [u8; 32] = URL_SAFE_NO_PAD
-        .decode(pinned_public_key)
-        .map_err(|_| "peer public key is not valid base64".to_string())?
-        .try_into()
-        .map_err(|_| "peer public key has invalid length".to_string())?;
-    let signature: [u8; 64] = URL_SAFE_NO_PAD
-        .decode(signature)
-        .map_err(|_| "peer signature is not valid base64".to_string())?
-        .try_into()
-        .map_err(|_| "peer signature has invalid length".to_string())?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key)
-        .map_err(|_| "peer public key is invalid".to_string())?;
-    verifying_key
-        .verify_strict(
-            &transcript_bytes(transcript),
-            &Signature::from_bytes(&signature),
-        )
-        .map_err(|_| "peer challenge response was rejected".to_string())
 }
 
 fn now_ms() -> u64 {
@@ -555,35 +448,6 @@ fn connect_handshake(
     verify_transcript(&pinned, &transcript, &read_proof(stream)?)
 }
 
-pub fn write_control_frame(writer: &mut impl Write, frame: &ControlFrame) -> Result<(), String> {
-    let payload = serde_json::to_vec(frame)
-        .map_err(|error| format!("failed to encode LAN control frame: {error}"))?;
-    if payload.len() > MAX_CONTROL_FRAME_BYTES {
-        return Err("LAN control frame exceeds size limit".to_string());
-    }
-    writer
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .and_then(|_| writer.write_all(&payload))
-        .map_err(|error| format!("failed to write LAN control frame: {error}"))
-}
-
-pub fn read_control_frame(reader: &mut impl Read) -> Result<ControlFrame, String> {
-    let mut length = [0_u8; 4];
-    reader
-        .read_exact(&mut length)
-        .map_err(|error| format!("failed to read LAN control frame length: {error}"))?;
-    let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_CONTROL_FRAME_BYTES {
-        return Err("LAN control frame has invalid length".to_string());
-    }
-    let mut payload = vec![0_u8; length];
-    reader
-        .read_exact(&mut payload)
-        .map_err(|error| format!("failed to read LAN control frame: {error}"))?;
-    serde_json::from_slice(&payload)
-        .map_err(|error| format!("LAN control frame is invalid: {error}"))
-}
-
 fn trusted_map(devices: Vec<TrustedDevice>) -> Result<HashMap<PeerKey, String>, String> {
     let mut trusted = HashMap::new();
     for device in devices {
@@ -746,29 +610,8 @@ fn valid_transfer_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn safe_file_name(value: &str) -> Result<String, String> {
-    if value.is_empty() || value.len() > 255 || value.chars().any(char::is_control) {
-        return Err("LAN file name is invalid".to_string());
-    }
-    let name = Path::new(value)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "LAN file name is invalid".to_string())?;
-    if name != value || matches!(name, "." | "..") {
-        return Err("LAN file name is invalid".to_string());
-    }
-    Ok(name.to_string())
-}
-
 fn valid_blake3(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn transfer_paths(root: &Path, transfer_id: &str) -> (PathBuf, PathBuf) {
-    (
-        root.join(format!("{transfer_id}.part")),
-        root.join(format!("{transfer_id}.json")),
-    )
 }
 
 fn transfer_lock(transfers: &SharedTransfers, transfer_id: &str) -> Result<Arc<Mutex<()>>, String> {
@@ -1151,22 +994,40 @@ fn spawn_tcp_listener(
     trusted: SharedTrusted,
     transfers: SharedTransfers,
     stop: Arc<AtomicBool>,
+    connection_threads: SharedConnectionThreads,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
+            reap_finished_connection_threads(&connection_threads);
             match listener.accept() {
                 Ok((stream, _)) => {
+                    let shutdown_stream = match stream.try_clone() {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            log::warn!("LAN connection cannot be tracked for shutdown: {error}");
+                            continue;
+                        }
+                    };
                     let app = app.clone();
                     let identity = identity.clone();
                     let trusted = trusted.clone();
                     let transfers = transfers.clone();
-                    thread::spawn(move || {
+                    let connection = thread::spawn(move || {
                         if let Err(error) =
                             handle_incoming(app, stream, identity, trusted, transfers)
                         {
                             log::warn!("LAN connection rejected: {error}");
                         }
                     });
+                    if let Ok(mut threads) = connection_threads.lock() {
+                        threads.push(ConnectionThread {
+                            stream: shutdown_stream,
+                            handle: connection,
+                        });
+                    } else {
+                        let _ = shutdown_stream.shutdown(Shutdown::Both);
+                        let _ = connection.join();
+                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
@@ -1242,6 +1103,7 @@ pub fn lan_service_start(
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let transfers = Arc::new(Mutex::new(HashMap::new()));
     let stop = Arc::new(AtomicBool::new(false));
+    let connection_threads = Arc::new(Mutex::new(Vec::new()));
 
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
         .map_err(|error| format!("failed to bind LAN listener: {error}"))?;
@@ -1295,6 +1157,7 @@ pub fn lan_service_start(
             trusted.clone(),
             transfers,
             stop.clone(),
+            connection_threads.clone(),
         ),
         spawn_mdns_browser(
             receiver,
@@ -1322,6 +1185,7 @@ pub fn lan_service_start(
         trusted,
         identity,
         threads,
+        connection_threads,
     });
     Ok(LanServiceInfo {
         identity: identity_info,
@@ -1339,13 +1203,38 @@ pub fn lan_service_stop(runtime: tauri::State<'_, LanRuntimeState>) -> Result<()
     let Some(current) = current else {
         return Ok(());
     };
+    stop_runtime(current);
+    Ok(())
+}
+
+fn stop_runtime(current: LanRuntime) {
     current.stop.store(true, Ordering::Relaxed);
     let _ = current.mdns.unregister(&current.service_fullname);
     let _ = current.mdns.shutdown();
     for thread in current.threads {
         let _ = thread.join();
     }
-    Ok(())
+    let connections = current
+        .connection_threads
+        .lock()
+        .map(|mut connections| connections.drain(..).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for connection in connections {
+        let _ = connection.stream.shutdown(Shutdown::Both);
+        let _ = connection.handle.join();
+    }
+}
+
+pub fn shutdown(app: &tauri::AppHandle) {
+    let current = app
+        .state::<LanRuntimeState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|mut runtime| runtime.take());
+    if let Some(current) = current {
+        stop_runtime(current);
+    }
 }
 
 #[tauri::command]

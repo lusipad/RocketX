@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { isTauri } from '../lib/http';
+import { showMainWindow } from '../platform/desktopCommands';
+import { registerDesktopShortcut, unregisterDesktopShortcut } from '../platform/desktopShortcut';
 import { useGlobalShortcut } from '../stores/globalShortcut';
 import { useUI } from '../stores/ui';
 
@@ -24,21 +26,16 @@ export default function GlobalShortcutBridge() {
 
     let cancelled = false;
     let registered = false;
-    let unregister: ((shortcut: string) => Promise<void>) | null = null;
     setRuntimeStatus('registering');
 
     const registration = (async () => {
       await pendingUnregister;
       if (cancelled) return;
       try {
-        const plugin = await import('@tauri-apps/plugin-global-shortcut');
-        if (cancelled) return;
-        unregister = plugin.unregister;
-        await plugin.register(shortcut, (event) => {
+        await registerDesktopShortcut(shortcut, (event) => {
           if (event.state !== 'Pressed') return;
           void (async () => {
-            const { invoke } = await import('@tauri-apps/api/core');
-            await invoke('show_main_window');
+            await showMainWindow();
             useUI.getState().openCommandCenter();
           })();
         });
@@ -59,9 +56,8 @@ export default function GlobalShortcutBridge() {
       cancelled = true;
       pendingUnregister = pendingUnregister.then(async () => {
         await registration.catch(() => {});
-        if (!registered || !unregister) return;
-        const release = unregister;
-        await release(shortcut).catch(() => {});
+        if (!registered) return;
+        await unregisterDesktopShortcut(shortcut).catch(() => {});
       });
     };
   }, [enabled, setRuntimeStatus, shortcut]);

@@ -1,4 +1,9 @@
-import { useChat } from '../stores/chat';
+import { createDefaultKernelChatPostPort } from '../lib/kernelChatPostMessage';
+
+export interface KernelChatPostPort {
+  isMember(rid: string): boolean;
+  send(rid: string, text: string, tmid?: string): Promise<unknown>;
+}
 
 /**
  * App 桥 chat.postMessage 的发送实现。
@@ -7,14 +12,19 @@ import { useChat } from '../stores/chat';
  * toSendableMessageChunks + getPublicSetting 路径），超长文本不再被误拒。
  * capability 层只保留入参校验：未加入会话 / 空文本仍报错。
  */
-export async function postBridgeMessage(
+export async function postBridgeMessageForPort(
+  port: KernelChatPostPort,
   rid: string,
   text: string,
   tmid?: string,
 ): Promise<{ ok: true }> {
-  const chat = useChat.getState();
-  if (!rid || !chat.subscriptions[rid]) throw new Error('只能向已加入的会话发送消息');
+  if (!rid || !port.isMember(rid)) throw new Error('只能向已加入的会话发送消息');
   if (!text.trim()) throw new Error('消息不能为空');
-  await chat.send(text, { rid, ...(tmid ? { tmid } : {}) });
+  await port.send(rid, text, tmid);
   return { ok: true };
+}
+
+/** Backward-compatible entry point for callers outside the injected Kernel host. */
+export function postBridgeMessage(rid: string, text: string, tmid?: string): Promise<{ ok: true }> {
+  return postBridgeMessageForPort(createDefaultKernelChatPostPort(), rid, text, tmid);
 }

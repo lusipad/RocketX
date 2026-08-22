@@ -78,7 +78,7 @@ test('全局快捷键重注册会等待上一轮注册完成并释放', () => {
   assert.match(bridge, /const registration = \(async \(\) =>/);
   assert.match(
     bridge,
-    /pendingUnregister = pendingUnregister\.then\(async \(\) => \{[\s\S]*await registration[\s\S]*release\(shortcut\)/,
+    /pendingUnregister = pendingUnregister\.then\(async \(\) => \{[\s\S]*await registration[\s\S]*unregisterDesktopShortcut\(shortcut\)/,
   );
 });
 

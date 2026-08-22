@@ -4,6 +4,10 @@ import test from 'node:test';
 
 const EXAMPLES = ['hello-app', 'kanban-app', 'poll-app', 'oncall-app'] as const;
 const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
+const hostCapabilityText = readFile(
+  new URL('../../apps/web/src/kernel/capabilities/host.ts', import.meta.url),
+  'utf8',
+);
 
 function capabilityContract(source: string): Map<string, string> {
   return new Map(
@@ -31,7 +35,7 @@ for (const example of EXAMPLES) {
     }
 
     const methods = [...html.matchAll(/\bcall\(\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
-    const methodPermissions = capabilityContract(await runtimeText);
+    const methodPermissions = capabilityContract(`${await runtimeText}\n${await hostCapabilityText}`);
     for (const method of methods) {
       const permission = methodPermissions.get(method);
       assert.ok(permission, `${example} 调用了未知 capability: ${method}`);
