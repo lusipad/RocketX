@@ -28,7 +28,7 @@ test('插件页读取原生插件、Skill、App 目录，并通过 AppServerCont
   assert.match(page, /selectedItem\.kind === 'plugin'/);
   assert.match(page, /selectedItem\.kind === 'skill'/);
   assert.match(page, /kind: 'app', app/);
-  assert.match(page, /convertFileSrc/);
+  assert.match(page, /desktopAssetUrl/);
   assert.match(page, /function CatalogIcon/);
   assert.match(page, /plugin\.interface\?\.composerIcon/);
   assert.match(page, /plugin\.interface\?\.composerIconUrl/);

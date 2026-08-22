@@ -14,6 +14,14 @@ import type {
   RcUser,
   RoomType,
 } from './types';
+import {
+  createRocketChatCapabilities,
+  type RocketChatCapabilities,
+} from './capabilities';
+import {
+  createRocketChatDomainFacades,
+  type RocketChatDomainFacades,
+} from './domains';
 
 /**
  * SHA-256 十六进制。改密码时服务端要的是哈希，不是明文。
@@ -113,15 +121,81 @@ export class RcRestClient {
   baseUrl: string;
   authToken: string | null = null;
   userId: string | null = null;
+  domains: RocketChatDomainFacades;
   private authProvider?: RcRestOptions['authProvider'];
   private fetchImpl?: typeof fetch;
   private onAuthError?: () => void;
+  private _capabilities: RocketChatCapabilities;
 
   constructor(options: RcRestOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
     this.authProvider = options.authProvider;
     this.fetchImpl = options.fetchImpl;
     this.onAuthError = options.onAuthError;
+    this._capabilities = createRocketChatCapabilities();
+    this.domains = createRocketChatDomainFacades(this);
+  }
+
+  get capabilities(): RocketChatCapabilities {
+    return this._capabilities;
+  }
+
+  /**
+   * 轻量能力协商只访问公开 info，不改变认证状态。
+   * 服务器不支持该端点时保留默认合同，调用方仍可继续使用兼容路径。
+   */
+  async negotiateCapabilities(): Promise<RocketChatCapabilities> {
+    try {
+      const doFetch = this.fetchImpl ?? fetch;
+      const response = await doFetch(`${this.baseUrl}/api/info`, { method: 'GET' });
+      type RocketChatInfo = {
+        version?: unknown;
+        apiVersion?: unknown;
+        error?: unknown;
+        message?: unknown;
+      };
+      let data: RocketChatInfo | null = null;
+      try {
+        data = (await response.json()) as RocketChatInfo;
+      } catch {
+        // 能力协商失败时保留默认合同。
+      }
+      if (!response.ok) {
+        const message = typeof data?.error === 'string'
+          ? data.error
+          : typeof data?.message === 'string'
+            ? data.message
+            : `HTTP ${response.status}`;
+        throw new RcApiError(
+          message,
+          response.status,
+        );
+      }
+      this.setCapabilities({
+        source: 'server',
+        serverVersion: typeof data?.version === 'string' ? data.version : undefined,
+        apiVersion: typeof data?.apiVersion === 'string' ? data.apiVersion : undefined,
+      });
+    } catch {
+      // 能力协商是增强路径，网络/旧服务端失败不能阻断登录。
+    }
+    return this._capabilities;
+  }
+
+  /** 更新服务端能力快照；网络请求和错误合同仍由原 client 负责。 */
+  setCapabilities(input: Partial<RocketChatCapabilities>): void {
+    this._capabilities = createRocketChatCapabilities({
+      ...this._capabilities,
+      ...input,
+      endpoint: { ...this._capabilities.endpoint, ...(input.endpoint ?? {}) },
+      authentication: { ...this._capabilities.authentication, ...(input.authentication ?? {}) },
+      fileTransfer: { ...this._capabilities.fileTransfer, ...(input.fileTransfer ?? {}) },
+      realtime: { ...this._capabilities.realtime, ...(input.realtime ?? {}) },
+      settings: { ...this._capabilities.settings, ...(input.settings ?? {}) },
+      features: { ...this._capabilities.features, ...(input.features ?? {}) },
+      updatedAt: Date.now(),
+    });
+    this.domains = createRocketChatDomainFacades(this);
   }
 
   setAuth(authToken: string | null, userId: string | null): void {
@@ -135,7 +209,8 @@ export class RcRestClient {
     body?: unknown,
     query?: Record<string, string | number | undefined>,
   ): Promise<T> {
-    let url = `${this.baseUrl}/api/v1/${path}`;
+    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
+    let url = `${this.baseUrl}${restBasePath}/${path}`;
     if (query) {
       const qs = new URLSearchParams();
       for (const [k, v] of Object.entries(query)) {
@@ -740,7 +815,8 @@ export class RcRestClient {
         ? { authToken: this.authToken, userId: this.userId }
         : null);
     const doFetch = this.fetchImpl ?? fetch;
-    const res = await doFetch(`${this.baseUrl}/api/v1/rooms.media/${rid}`, {
+    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
+    const res = await doFetch(`${this.baseUrl}${restBasePath}/rooms.media/${rid}`, {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
@@ -966,7 +1042,8 @@ export class RcRestClient {
         ? { authToken: this.authToken, userId: this.userId }
         : null);
     const doFetch = this.fetchImpl ?? fetch;
-    const res = await doFetch(`${this.baseUrl}/api/v1/${path}`, {
+    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
+    const res = await doFetch(`${this.baseUrl}${restBasePath}/${path}`, {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,

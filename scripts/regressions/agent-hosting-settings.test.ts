@@ -94,7 +94,7 @@ test('开启托管会立即显示进度，并反馈跨设备前置检查失败',
   assert.match(panel, /这台设备尚未添加托管项目/);
   assert.match(panel, /尚未读取到可用 Codex 模型/);
   assert.match(panel, /DSH 启动配置尚未就绪/);
-  assert.match(panel, /open\(\{ directory: true, multiple: false, title: '选择 AI 托管项目' \}\)/);
+  assert.match(panel, /openDesktopDialog\(\{ directory: true, multiple: false, title: '选择 AI 托管项目' \}\)/);
   assert.match(panel, /ensureEnvironment\(\{ path \}\)/);
   assert.match(panel, /environmentIsBusy\(environment\.id, environmentState\.bindings\)/);
   assert.match(panel, /updateEnvironment\(environment\.id, \{ enabled: true \}\)/);

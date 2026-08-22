@@ -1,20 +1,14 @@
 import { lazy, Suspense, type ComponentType } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
 import { Bell, Blocks, Download } from 'lucide-react';
-import { getServerBase, httpFetch, isTauri, rest } from '../lib/client';
+import { getServerBase, httpFetch, isTauri } from '../lib/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useAuth } from '../stores/auth';
-import { useChat } from '../stores/chat';
-import { useWorkbench } from '../stores/workbench';
-import { toast } from '../stores/toast';
-import { installModuleValidator, useUI } from '../stores/ui';
-import { startRoutineScheduler } from '../stores/routines';
 import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
 import { BUNDLED_APPS } from './bundled';
 import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
-import { postBridgeMessage } from './postMessage';
+import { registerHostCapabilities } from './capabilities/host';
 import { BridgeHost } from './bridge';
 import { kernelRegistry } from './registry';
 import { AppModule, AppPanel } from './AppFrame';
@@ -23,19 +17,25 @@ import { createSandboxedWorker } from './sandbox/worker';
 import { ensureHttpOrigin } from '../lib/http';
 import { getAiRuntimeProvider, runtimeFeatures } from '../lib/runtimeMode';
 import { kernelStore } from './store';
-import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
 import { runButlerCommand } from './butler';
 import { handoffToCodexTask } from '../lib/codexTaskHandoff';
+import { createDefaultKernelHost } from '../lib/kernelHost';
+import type { KernelHost } from './host';
 
-export { kernelStore } from './store';
+export { ensureKernelStoreReady, kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
 export const capabilityBus = new CapabilityBus(permissionGate);
 export const bridgeHost = new BridgeHost(capabilityBus);
 export const installedApps = new AppManager(kernelStore);
 
 let initialized = false;
+let initializing: Promise<void> | null = null;
+let setupComplete = false;
 let bridgeEventsStarted = false;
+let bridgeEventCleanups: Array<() => void | Promise<void>> = [];
 const nativeServiceStarts = new Map<string, Promise<void>>();
+const defaultKernelHost = createDefaultKernelHost();
+let activeKernelHost: KernelHost = defaultKernelHost;
 
 function lazyComponent(
   loader: () => Promise<{ default: ComponentType<any> }>,
@@ -74,23 +74,20 @@ async function summarizeRoom(rid: string): Promise<void> {
     runButlerCommand({ rid, params: '请总结当前会话的未读消息，并列出需要我跟进的事项。' });
     return;
   }
-  const { useAiAssistant } = await import('../stores/aiAssistant');
-  useChat.getState().setPanel({ kind: 'ai' });
-  await useAiAssistant.getState().summarize(rid);
+  activeKernelHost.navigation.setPanel('ai');
+  await activeKernelHost.ai.summarize(rid);
 }
 
 async function endSharedAgentSession(tmid: string): Promise<void> {
-  const { useSharedAgent } = await import('../stores/sharedAgent');
-  await useSharedAgent.getState().endSession(tmid);
+  await activeKernelHost.agent.endSession(tmid);
 }
 
 async function runSharedAgentBridge(): Promise<void> {
-  const { startSharedAgentBridge } = await import('../stores/sharedAgent');
-  startSharedAgentBridge();
+  await activeKernelHost.agent.startBridge();
 }
 
 function scopedAppId(appId: string): string {
-  const userId = useAuth.getState().user?._id ?? 'guest';
+  const userId = activeKernelHost.identity.userId() ?? 'guest';
   return `${userId}@${getServerBase() || 'same-origin'}:${appId}`;
 }
 
@@ -125,103 +122,8 @@ async function startNativeService(app: InstalledApp): Promise<void> {
   });
 }
 
-function registerCapabilities(): void {
-  capabilityBus.register('chat.current', 'chat:read', () => {
-    const chat = useChat.getState();
-    const rid = chat.activeRid;
-    return {
-      rid,
-      messages: rid ? (chat.messages[rid] ?? []).slice(-50).map(plainMessage) : [],
-    };
-  });
-  capabilityBus.register('chat.history', 'chat:history', (params) => {
-    const chat = useChat.getState();
-    const rid = stringParam(params, 'rid', chat.activeRid ?? '');
-    const count = Math.min(200, Math.max(1, Number((params as { count?: unknown } | undefined)?.count) || 50));
-    if (!rid || (!chat.subscriptions[rid] && rid !== chat.activeRid)) throw new Error('无权读取这个会话');
-    return (chat.messages[rid] ?? []).slice(-count).map(plainMessage);
-  });
-  capabilityBus.register('chat.postMessage', 'chat:write', async (params) => {
-    const rid = stringParam(params, 'rid', useChat.getState().activeRid ?? '');
-    const text = stringParam(params, 'text');
-    const tmid = stringParam(params, 'tmid') || undefined;
-    // 长度上限与输入框统一：超长文本由 chat.send 按 Message_MaxAllowedSize
-    // 分段顺序发送（issue #349），不再用固定 20k 上限整条拒绝；空文本仍报错。
-    return postBridgeMessage(rid, text, tmid);
-  });
-  capabilityBus.register('rooms.list', 'rooms:list', () => {
-    const chat = useChat.getState();
-    return Object.values(chat.subscriptions).map((subscription) => ({
-      rid: subscription.rid,
-      name: subscription.fname || subscription.name,
-      type: subscription.t,
-      unread: subscription.unread ?? 0,
-    }));
-  });
-  capabilityBus.register('users.read', 'users:read', () => {
-    const chat = useChat.getState();
-    const rid = chat.activeRid;
-    return rid
-      ? (chat.members[rid] ?? []).map((user) => ({
-          _id: user._id,
-          username: user.username,
-          name: user.name,
-          status: user.status,
-        }))
-      : [];
-  });
-  capabilityBus.register('files.list', 'files:read', async (params) => {
-    const chat = useChat.getState();
-    const rid = stringParam(params, 'rid', chat.activeRid ?? '');
-    const type = chat.subscriptions[rid]?.t;
-    if (!rid || !type) throw new Error('只能读取已加入会话的文件');
-    return rest.getRoomFiles(rid, type, 50);
-  });
-  capabilityBus.register('files.read', 'files:read', async (params) => {
-    const path = stringParam(params, 'path');
-    const server = getServerBase();
-    if (!path.startsWith('/') && !(server && path.startsWith(`${server}/`))) {
-      throw new Error('只能读取当前 Rocket.Chat 服务器的文件');
-    }
-    const blob = await rest.fetchFile(path);
-    if (blob.size > 10 * 1024 * 1024) throw new Error('Bridge 单次文件读取上限为 10 MB');
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    let binary = '';
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-    }
-    return { type: blob.type, size: blob.size, base64: btoa(binary) };
-  });
-  capabilityBus.register('lan.peers', 'lan:discover', () =>
-    redactedLanPeers(currentLanPeers()),
-  );
-  capabilityBus.register('lan.send', 'lan:transfer', async (params) => {
-    const object = params as Record<string, unknown> | undefined;
-    const userId = stringParam(params, 'userId');
-    const roomId = stringParam(params, 'roomId');
-    const text = stringParam(params, 'text');
-    const chat = useChat.getState();
-    if (!roomId || !chat.subscriptions[roomId]) throw new Error('只能向已加入的会话发送 LAN 数据');
-    const memberIds = new Set([
-      ...(chat.rooms[roomId]?.uids ?? []),
-      ...(chat.members[roomId] ?? []).map((user) => user._id),
-    ]);
-    if (!userId || !memberIds.has(userId)) {
-      throw new Error('LAN 接收方必须是当前会话成员');
-    }
-    if (!text || text.length > 48 * 1024) throw new Error('LAN 数据为空或超过 48 KiB');
-    const messageId =
-      typeof object?.messageId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(object.messageId)
-        ? object.messageId
-        : crypto.randomUUID().replace(/-/g, '').slice(0, 17);
-    await sendLanChat(userId, {
-      messageId,
-      roomId,
-      originalTs: Date.now(),
-      text,
-    });
-    return { ok: true, messageId };
-  });
+function registerCapabilities(host: KernelHost): void {
+  registerHostCapabilities(capabilityBus, host, { serverBase: getServerBase });
   capabilityBus.register('files.pick', 'files:read', async () => {
     if (!isTauri) throw new Error('文件选择仅支持桌面客户端');
     const { open } = await import('@tauri-apps/plugin-dialog');
@@ -274,9 +176,9 @@ function registerCapabilities(): void {
       throw new Error('M6 的 rcx/requestUI 只支持 notify');
     }
     const message = props.message.slice(0, 500);
-    if (props.level === 'error') toast.error(message);
-    else if (props.level === 'success') toast.success(message);
-    else toast.info(message);
+    if (props.level === 'error') activeKernelHost.notifications.error(message);
+    else if (props.level === 'success') activeKernelHost.notifications.success(message);
+    else activeKernelHost.notifications.info(message);
     return { ok: true };
   });
   capabilityBus.register('net.fetch', 'net:fetch', async (params, context) => {
@@ -322,14 +224,14 @@ function openAppSurface(appId: string): void {
     .get('nav.module')
     .find((candidate) => kernelRegistry.ownerOf('nav.module', candidate) === appId);
   if (module) {
-    useUI.getState().setModule(module.id);
+    activeKernelHost.navigation.setModule(module.id);
     return;
   }
   const panel = kernelRegistry
     .get('panel.right')
     .find((candidate) => kernelRegistry.ownerOf('panel.right', candidate) === appId);
   if (panel && panel.id.startsWith('app:')) {
-    useChat.getState().setPanel({ kind: panel.id as `app:${string}` });
+    activeKernelHost.navigation.setPanel(panel.id);
   }
 }
 
@@ -344,7 +246,7 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
   if (app.manifest.service && app.granted.includes('native:service')) {
     const start = startNativeService(app);
     nativeServiceStarts.set(app.manifest.id, start);
-    void start.catch((error) => toast.error(error, `${app.manifest.name} 后台服务启动失败`));
+    void start.catch((error) => activeKernelHost.notifications.error(error, `${app.manifest.name} 后台服务启动失败`));
     cleanups.push(async () => {
       nativeServiceStarts.delete(app.manifest.id);
       await start.catch(() => {});
@@ -408,7 +310,7 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
                   const module = kernelRegistry
                     .get('nav.module')
                     .find((candidate) => kernelRegistry.ownerOf('nav.module', candidate) === app.manifest.id);
-                  if (module) useUI.getState().setModule(module.id);
+                  if (module) activeKernelHost.navigation.setModule(module.id);
                 }}
                 className="my-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-left text-xs text-primary"
               >
@@ -484,16 +386,15 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
     for (const cleanup of cleanups.reverse()) await cleanup();
     bridgeHost.clearApp(app.manifest.id);
     permissionGate.revokeApp(app.manifest.id);
-    const module = useUI.getState().module;
-    if (module.startsWith(`app:${app.manifest.id}:`)) useUI.getState().setModule('messages');
-    const panel = useChat.getState().rightPanel;
-    if (panel?.kind.startsWith(`app:${app.manifest.id}:`)) useChat.getState().setPanel(null);
+    const module = activeKernelHost.navigation.currentModule();
+    if (module.startsWith(`app:${app.manifest.id}:`)) activeKernelHost.navigation.setModule('messages');
+    const panel = activeKernelHost.navigation.currentPanel();
+    if (panel?.startsWith(`app:${app.manifest.id}:`)) activeKernelHost.navigation.setPanel(null);
   };
 }
 
 function WorkbenchModule() {
-  const config = useWorkbench((state) => state.config);
-  const connected = !!config?.adoBase;
+  const connected = activeKernelHost.workbench.useConnected();
   return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
 }
 
@@ -567,7 +468,7 @@ function registerBuiltins(): void {
           if (!prompt) throw new Error('$codex 后面需要写任务');
           await handoffToCodexTask(prompt, '来自聊天的 Codex 任务');
         } catch (error) {
-          toast.error(error, 'Codex 任务创建失败');
+          activeKernelHost.notifications.error(error, 'Codex 任务创建失败');
         }
       },
     });
@@ -585,22 +486,24 @@ function registerBuiltins(): void {
   }
 }
 
-function registerBridgeEvents(): void {
+async function registerBridgeEvents(host: KernelHost): Promise<void> {
   if (bridgeEventsStarted) return;
   bridgeEventsStarted = true;
+  const cleanups: Array<() => void | Promise<void>> = [];
   if (runtimeFeatures().sharedAgent) {
-    void runSharedAgentBridge().catch((error) => toast.error(error, '共享 Agent 通道启动失败'));
+    await runSharedAgentBridge();
   }
   if (isTauri) {
-    void listen<{ appId: string; event: string; payload: unknown }>(
+    const unlisten = await listen<{ appId: string; event: string; payload: unknown }>(
       'rocketx://native-service-event',
       ({ payload }) => bridgeHost.emit(payload.appId, 'native.event', {
         event: payload.event,
         payload: payload.payload,
       }),
     );
+    cleanups.push(unlisten);
   }
-  useChat.subscribe((state, previous) => {
+  cleanups.push(host.events.subscribeChat((state, previous) => {
     if (state.activeRid !== previous.activeRid) {
       bridgeHost.emitAll('room.changed', { rid: state.activeRid });
     }
@@ -611,30 +514,73 @@ function registerBridgeEvents(): void {
     if (latest && latest._id !== previousLatest?._id) {
       bridgeHost.emitAll('message.received', plainMessage(latest));
     }
-  });
+  }));
   const root = document.documentElement;
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     bridgeHost.emitAll('theme.changed', { theme: root.dataset.theme ?? 'light' });
-  }).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  });
+  observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  cleanups.push(() => observer.disconnect());
+  bridgeEventCleanups = cleanups;
 }
 
-export async function initializeKernel(): Promise<void> {
+export async function initializeKernel(
+  host: KernelHost = defaultKernelHost,
+  signal?: AbortSignal,
+): Promise<void> {
   if (initialized) return;
-  initialized = true;
-  setActiveAppManager(installedApps);
-  registerCapabilities();
-  registerBuiltins();
-  installModuleValidator(
-    (module) =>
-      module === 'messages' ||
-      module === 'settings' ||
-      kernelRegistry.get('nav.module').some((candidate) => candidate.id === module),
-  );
-  registerBridgeEvents();
-  installedApps.setActivator(activateApp);
-  bridgeHost.start();
-  if (runtimeFeatures().routines) {
-    startRoutineScheduler();
-  }
-  void installedApps.hydrate(BUNDLED_APPS).catch((error) => toast.error(error, '加载扩展应用失败'));
+  if (initializing) return initializing;
+  initializing = (async () => {
+    if (signal?.aborted) throw new Error('扩展内核启动已取消');
+    activeKernelHost = host;
+    setActiveAppManager(installedApps);
+    if (!setupComplete) {
+      registerCapabilities(host);
+      registerBuiltins();
+      activeKernelHost.navigation.installModuleValidator(
+        (module) =>
+          module === 'messages' ||
+          module === 'settings' ||
+          kernelRegistry.get('nav.module').some((candidate) => candidate.id === module),
+      );
+      await registerBridgeEvents(host);
+      installedApps.setActivator(activateApp);
+      bridgeHost.start();
+      if (runtimeFeatures().routines) activeKernelHost.background.startRoutines();
+      setupComplete = true;
+    }
+    await installedApps.hydrate(BUNDLED_APPS);
+    if (signal?.aborted) {
+      throw new Error('扩展内核启动已取消');
+    }
+    initialized = true;
+  })()
+    .catch(async (error) => {
+      initialized = false;
+      await teardownKernel().catch(() => undefined);
+      throw error;
+    })
+    .finally(() => {
+      initializing = null;
+    });
+  return initializing;
+}
+
+async function teardownKernel(): Promise<void> {
+  await installedApps.deactivateAll();
+  await Promise.resolve(activeKernelHost.agent.stopBridge()).catch(() => undefined);
+  await Promise.all(bridgeEventCleanups.map((cleanup) => Promise.resolve(cleanup()).catch(() => undefined)));
+  bridgeEventCleanups = [];
+  bridgeHost.stop();
+  capabilityBus.clear();
+  kernelRegistry.clear();
+  bridgeEventsStarted = false;
+  setupComplete = false;
+  initialized = false;
+  activeKernelHost = defaultKernelHost;
+}
+
+export async function shutdownKernel(): Promise<void> {
+  await initializing?.catch(() => undefined);
+  await teardownKernel();
 }

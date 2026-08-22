@@ -12,6 +12,7 @@ import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Bot, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { isTauri, rest } from '../lib/client';
+import { openDesktopDialog } from '../platform/desktopDialog';
 import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { usePrefs } from '../stores/prefs';
@@ -548,8 +549,7 @@ export default function Composer() {
   };
 
   const chooseNativeFiles = async (imagesOnly: boolean) => {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const selected = await open({
+    const selected = await openDesktopDialog({
       multiple: true,
       title: imagesOnly ? '选择图片' : '选择文件',
       ...(imagesOnly

@@ -34,8 +34,8 @@ test('调度仍由共同 App Server 侧的 routines scheduler 直接启动', () 
   const runtime = readFileSync('apps/web/src/kernel/runtime.tsx', 'utf8');
   const routines = readFileSync('apps/web/src/stores/routines.ts', 'utf8');
 
-  assert.match(runtime, /import \{ startRoutineScheduler \} from '\.\.\/stores\/routines';/);
-  assert.match(runtime, /startRoutineScheduler\(\);/);
+  assert.match(runtime, /activeKernelHost\.background\.startRoutines\(\)/);
+  assert.match(readFileSync('apps/web/src/lib/kernelHost.ts', 'utf8'), /background: \{ startRoutines: startRoutineScheduler \}/);
   assert.match(routines, /const ROUTINES_KEY = 'rcx-codex-automations-v1:routines';/);
   assert.doesNotMatch(routines, /rcx-butler-v1:routines/);
 });

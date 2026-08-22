@@ -1,15 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
 import { Check, Copy, Loader2, Unplug, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { getServerBase, isTauri, loadStoredAuth } from '../lib/client';
+import {
+  disableReverseMcp,
+  enableReverseMcp,
+  readReverseMcpConfig,
+  type ReverseMcpConfigStatus,
+} from '../platform/desktopCommands';
 import { toast } from '../stores/toast';
 
-interface McpStatus {
-  enabled: boolean;
-  serverUrl?: string;
-  userId?: string;
-  command?: string;
-}
+type McpStatus = ReverseMcpConfigStatus;
 
 export default function ReverseMcpSettings() {
   const [status, setStatus] = useState<McpStatus>({ enabled: false });
@@ -20,7 +20,7 @@ export default function ReverseMcpSettings() {
       setBusy(false);
       return;
     }
-    invoke<McpStatus>('mcp_config_status')
+    readReverseMcpConfig()
       .then(setStatus)
       .catch((error) => toast.error(error, '读取让外部 AI 工具读你的聊天 状态失败'))
       .finally(() => setBusy(false));
@@ -42,14 +42,14 @@ export default function ReverseMcpSettings() {
     setBusy(true);
     try {
       if (status.enabled) {
-        await invoke('mcp_config_disable');
+        await disableReverseMcp();
         setStatus((current) => ({ ...current, enabled: false, serverUrl: undefined, userId: undefined }));
         toast.success('已关闭，凭据已从系统里删除');
       } else {
         const auth = loadStoredAuth();
         const serverUrl = getServerBase();
         if (!auth || !serverUrl) throw new Error('需要先登录桌面端 Rocket.Chat');
-        await invoke('mcp_config_enable', {
+        await enableReverseMcp({
           serverUrl,
           userId: auth.userId,
           authToken: auth.authToken,

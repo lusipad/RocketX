@@ -54,7 +54,7 @@ test('运行模式可由 query 覆盖 localStorage，缺省回退 standard', () 
 test('启动前先应用运行模式，再按模式决定是否初始化 kernel', () => {
   const main = source('apps/web/src/main.tsx');
   assert.match(main, /applyRuntimeModeDocumentState\(\)/);
-  assert.match(main, /if \(runtimeFeatures\(\)\.bootKernel\) \{\s*await initializeKernel\(\);?\s*\}/);
+  assert.match(main, /if \(runtimeFeatures\(\)\.bootKernel\)\s*await initializeKernel\(undefined, signal\);/);
   assert.match(main, /ReactDOM\.createRoot/);
   const render = main.indexOf('ReactDOM.createRoot');
   const warmup = main.lastIndexOf('scheduleStartupWarmups();');
@@ -100,6 +100,7 @@ test('非首屏页面和房间面板不进入 kernel 的静态依赖图', () => 
 
 test('performance 模式不启动旧 polling bridge，仍屏蔽 AI 相关入口与副作用', () => {
   const runtime = source('apps/web/src/kernel/runtime.tsx');
+  const main = source('apps/web/src/main.tsx');
   const app = source('apps/web/src/App.tsx');
   const mainPage = source('apps/web/src/pages/MainPage.tsx');
   const chatArea = source('apps/web/src/components/ChatArea.tsx');
@@ -110,10 +111,11 @@ test('performance 模式不启动旧 polling bridge，仍屏蔽 AI 相关入口�
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.ai\)/);
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.sharedAgent\)/);
   assert.match(runtime, /if \((?:features|runtimeFeatures\(\))\.routines\)/);
-  assert.match(runtime, /startRoutineScheduler\(\)/);
+  assert.match(runtime, /activeKernelHost\.background\.startRoutines\(\)/);
   assert.doesNotMatch(runtime, /ButlerPollerBridge|startButlerPoller|poller bridge/i);
   assert.doesNotMatch(app, /ButlerPollerBridge/);
-  assert.match(mainPage, /runtimeFeatures\(\)\.runtimeProbes/);
+  assert.match(main, /runtimeFeatures\(\)\.runtimeProbes/);
+  assert.doesNotMatch(mainPage, /runtimeFeatures|useCodexRuntime|\.probe\(/);
   assert.match(chatArea, /(?:features|runtimeFeatures\(\))\.butler/);
   assert.match(quickSwitcher, /runtimeFeatures\(\)\.butler/);
   assert.match(settings, /getRuntimeMode\(\) !== 'performance'/);

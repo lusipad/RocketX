@@ -1,4 +1,3 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import {
   ArrowUpRight,
   Bot,
@@ -21,6 +20,7 @@ import {
   type CodexArtifact,
 } from '../lib/codexArtifacts';
 import { isTauriRuntime } from '../lib/client';
+import { openDesktopDialog } from '../platform/desktopDialog';
 import { renderMarkdownDoc, StableStreamingMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useCodexStreamingView } from '../lib/useCodexStreamingText';
@@ -426,7 +426,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
 
   const chooseWorkspace = async (): Promise<void> => {
     if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
-    const path = await open({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
     if (typeof path !== 'string') return;
     await setWorkspaceRoot(path);
     await connect();

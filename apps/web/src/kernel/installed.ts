@@ -166,6 +166,10 @@ export class AppManager {
     for (const app of this.apps.values()) this.activate(app);
   }
 
+  async deactivateAll(): Promise<void> {
+    for (const appId of [...this.cleanups.keys()]) await this.deactivate(appId);
+  }
+
   async hydrate(bundledApps: readonly BundledAppPackage[] = []): Promise<void> {
     const records = await this.store.apps.list<InstalledApp>();
     for (const { value } of records) {
@@ -341,6 +345,7 @@ export class AppManager {
 
   private activate(app: InstalledApp): void {
     if (!app.enabled || !this.activator) return;
+    if (this.cleanups.has(app.manifest.id)) return;
     const cleanup = this.activator(app);
     if (cleanup) this.cleanups.set(app.manifest.id, cleanup);
   }

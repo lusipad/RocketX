@@ -74,6 +74,7 @@ import {
   type GlobalShortcutValue,
 } from '../lib/globalShortcut';
 import { humanError, toast } from '../stores/toast';
+import { relaunchDesktop } from '../platform/desktopProcess';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
@@ -2096,8 +2097,7 @@ function UpdateSourceRow() {
         try {
           await found.downloadAndInstall();
           toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
-          const { relaunch } = await import('@tauri-apps/plugin-process');
-          await relaunch();
+          await relaunchDesktop();
         } catch (error) {
           toast.update(toastId, { kind: 'error', message: humanError(error, '更新失败') });
         }

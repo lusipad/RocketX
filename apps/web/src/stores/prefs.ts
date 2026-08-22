@@ -102,7 +102,7 @@ export const usePrefs = create<PrefsState>((set, get) => ({
       set({ error: null });
       try {
         // 服务器不响应时不能无限转圈——超时后给出可见的错误和重试入口
-        const explicit = await withTimeout(rest.getExplicitPreferences(), 8000);
+        const explicit = await withTimeout(rest.domains.preferences.getExplicitPreferences(), 8000);
         // 合并顺序：默认值 ← 本地镜像 ← 服务端显式值。镜像填「服务端还没同步下来」的坑
         // （上次写完服务端就没再连上过），服务端显式值始终是最终裁决（跨设备同步以它为准）。
         set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...explicit }, loaded: true, error: null });

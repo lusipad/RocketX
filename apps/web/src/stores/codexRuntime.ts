@@ -1,8 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { sanitizeDiagnosticText, type DiagnosticLevel, writeDiagnostic } from '../lib/diagnostics';
 import { isTauri } from '../lib/http';
 import { toast } from './toast';
+import { probeDesktopCodexRuntime } from '../platform/desktopRuntime';
 
 export type CodexRuntimePhase = 'idle' | 'checking' | 'ready' | 'unavailable' | 'web';
 export type CodexCompatibilityStatus = 'verified' | 'untested-newer' | 'blocked';
@@ -64,7 +64,10 @@ const browserStorage: CodexRuntimeStorage = {
 };
 
 let runtimeStorage = browserStorage;
-let runtimeInvoke: RuntimeInvoker = (command, args) => invoke(command, args);
+let runtimeInvoke: RuntimeInvoker = (command, args) => {
+  if (command !== 'codex_runtime_probe') throw new Error(`不支持的 Codex Runtime 命令：${command}`);
+  return probeDesktopCodexRuntime(args ?? {});
+};
 let desktopAvailable = () => isTauri;
 let probeRevision = 0;
 let lastUnavailableSignature: string | undefined;

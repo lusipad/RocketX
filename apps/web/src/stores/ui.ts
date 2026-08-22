@@ -7,6 +7,7 @@ import {
   runtimeFeatures,
   type AiRuntimeProvider,
 } from '../lib/runtimeMode';
+import type { StartupFailure, StartupStage } from '../lib/startup';
 
 export type ModuleKey = string;
 export type ButlerTaskProvider = AiRuntimeProvider;
@@ -169,6 +170,9 @@ interface UIState {
   prTab: 'review' | 'mine';
   /** 构建页「只看失败」开关，切走保持 */
   buildsFailedOnly: boolean;
+  startupStage: StartupStage;
+  startupError: StartupFailure | null;
+  retryStartup: () => Promise<void>;
   setModule: (m: ModuleKey) => void;
   setConvFilter: (f: ConvFilter) => void;
   setActiveFolder: (id: string | null) => void;
@@ -201,6 +205,9 @@ export const useUI = create<UIState>((set) => ({
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',
   buildsFailedOnly: false,
+  startupStage: 'idle',
+  startupError: null,
+  retryStartup: async () => {},
   setModule: (m) => {
     if (moduleValidator(m)) {
       persistUIState({ module: m });

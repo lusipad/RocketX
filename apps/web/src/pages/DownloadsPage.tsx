@@ -4,6 +4,7 @@ import { useDownloadHistory } from '../stores/downloadHistory';
 import { toast } from '../stores/toast';
 import { ConfirmDialog } from '../components/Dialog';
 import { isAbsoluteLocalPath } from '../lib/downloadHistory';
+import { openDownloadedPath } from '../platform/desktopCommands';
 
 function completedAtLabel(value: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -28,8 +29,7 @@ export default function DownloadsPage() {
     }
     setBusy(`${id}:${reveal ? 'reveal' : 'open'}`);
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke(reveal ? 'download_history_reveal' : 'download_history_open', { path });
+      await openDownloadedPath(path, reveal);
     } catch (error) {
       toast.error(error, reveal ? '无法打开所在文件夹' : '无法打开文件');
     } finally {

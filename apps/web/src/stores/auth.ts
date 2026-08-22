@@ -101,6 +101,15 @@ async function clearBusinessMcpSession(): Promise<void> {
   ]);
 }
 
+async function shutdownUserRuntime(): Promise<void> {
+  await Promise.all([
+    import('../kernel/runtime').then(({ shutdownKernel }) => shutdownKernel()),
+    import('./codexWorkspace').then(({ useCodexWorkspace }) => useCodexWorkspace.getState().shutdown()),
+    import('./sharedAgent').then(({ shutdownSharedAgentRuntime }) => shutdownSharedAgentRuntime()),
+    import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime()),
+  ].map((operation) => operation.catch(() => undefined)));
+}
+
 async function applyStartupPresence(user: RcUser, userId: string): Promise<RcUser> {
   const status = startupPresence(getServerBase(), userId);
   if (user.status === status) return user;
@@ -136,6 +145,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 本地数据换主人了（换账号/首次升级）→ 搬移后重载，让各 store 重新加载
       if (ensureAccountScope(data.userId) === 'switched') {
+        await shutdownUserRuntime();
         location.reload();
         return;
       }
@@ -158,6 +168,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 同一台机器换账号登录：先把上一个人的本地数据搬走、还原自己的,再重载
       if (ensureAccountScope(data.userId) === 'switched') {
+        await shutdownUserRuntime();
         location.reload();
         return;
       }
@@ -171,8 +182,8 @@ export const useAuth = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    await shutdownUserRuntime();
     realtime.close();
-    await import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime()).catch(() => {});
     saveAuth(null);
     await clearBusinessMcpSession();
     try {
@@ -208,8 +219,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     // 幂等：只在真的处于登录态时处理，避免重复触发（401 会一批一起来）
     const st = get();
     if (st.status !== 'authed' && st.status !== 'authing') return;
+    void shutdownUserRuntime();
     realtime.close();
-    void import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime());
     saveAuth(null);
     void clearBusinessMcpSession();
     set({

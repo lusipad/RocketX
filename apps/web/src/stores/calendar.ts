@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ButlerSource } from '../lib/butlerContext';
+import { getLocalDataSchema, readLocalData, writeLocalData } from '../lib/localDataContract';
 
 export interface RepeatRule {
   type: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'weekday' | 'custom';
@@ -45,6 +46,7 @@ export interface CalendarEvent {
 export type CalendarView = 'month' | 'week' | 'day';
 
 const KEY = 'rcx-calendar';
+const CALENDAR_SCHEMA_VERSION = getLocalDataSchema('calendar').version;
 
 const COLORS = [
   '#3370ff', '#00b96b', '#7f3bf5', '#f54a45', '#ff8800',
@@ -52,16 +54,14 @@ const COLORS = [
 ];
 
 function load(): CalendarEvent[] {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]') as CalendarEvent[];
-  } catch {
-    return [];
-  }
+  return readLocalData(KEY, CALENDAR_SCHEMA_VERSION, [], (value) =>
+    Array.isArray(value) ? value as CalendarEvent[] : undefined,
+  );
 }
 
 function persist(events: CalendarEvent[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(events));
+    writeLocalData(KEY, CALENDAR_SCHEMA_VERSION, events);
   } catch { /* quota */ }
 }
 

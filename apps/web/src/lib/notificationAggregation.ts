@@ -1,4 +1,6 @@
-export const NOTIFICATION_AGGREGATION_VERSION = 1 as const;
+import { getLocalDataSchema } from './localDataContract';
+
+export const NOTIFICATION_AGGREGATION_VERSION = getLocalDataSchema('attention').version as 1;
 
 export interface NotificationUrgentRules {
   directMessages: boolean;
@@ -242,6 +244,27 @@ export function defaultNotificationAggregationState(): NotificationAggregationSt
   };
 }
 
+export function parseNotificationAggregationValue(value: unknown): NotificationAggregationStateV1 | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const state = value as Partial<NotificationAggregationStateV1>;
+  if (state.version !== NOTIFICATION_AGGREGATION_VERSION) return null;
+  return {
+    version: NOTIFICATION_AGGREGATION_VERSION,
+    config: normalizeNotificationAggregationConfig(state.config),
+    metrics: {
+      activePhase:
+        state.metrics?.activePhase === 'baseline' || state.metrics?.activePhase === 'dogfood'
+          ? state.metrics.activePhase
+          : null,
+      baseline: parsePeriod(state.metrics?.baseline),
+      dogfood: parsePeriod(state.metrics?.dogfood),
+    },
+    buckets: Array.isArray(state.buckets)
+      ? state.buckets.map(parseBucket).filter((bucket): bucket is NotificationBucket => !!bucket)
+      : [],
+  };
+}
+
 function validDateKey(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -463,23 +486,17 @@ export function parseNotificationAggregationState(
 ): NotificationAggregationStateV1 | null {
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as Partial<NotificationAggregationStateV1>;
-    if (value.version !== NOTIFICATION_AGGREGATION_VERSION) return null;
-    return {
-      version: NOTIFICATION_AGGREGATION_VERSION,
-      config: normalizeNotificationAggregationConfig(value.config),
-      metrics: {
-        activePhase:
-          value.metrics?.activePhase === 'baseline' || value.metrics?.activePhase === 'dogfood'
-            ? value.metrics.activePhase
-            : null,
-        baseline: parsePeriod(value.metrics?.baseline),
-        dogfood: parsePeriod(value.metrics?.dogfood),
-      },
-      buckets: Array.isArray(value.buckets)
-        ? value.buckets.map(parseBucket).filter((bucket): bucket is NotificationBucket => !!bucket)
-        : [],
-    };
+    const value: unknown = JSON.parse(raw);
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      'data' in value &&
+      'version' in value
+    ) {
+      return parseNotificationAggregationValue((value as { data?: unknown }).data);
+    }
+    return parseNotificationAggregationValue(value);
   } catch {
     return null;
   }

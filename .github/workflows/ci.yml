@@ -33,6 +33,9 @@ jobs:
       - name: 类型检查
         run: pnpm -r typecheck
 
+      - name: 架构边界检查
+        run: pnpm check:architecture
+
       - name: 纯函数测试（拼音检索、日期格式）
         run: pnpm test:pure
 
@@ -71,5 +74,11 @@ jobs:
 
       - name: Windows 桌面端单元与协议测试
         run: |
+          cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml native::process::tests
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml native::lan::tests
+          cargo fmt --check --manifest-path plugins/intranet-link/native/Cargo.toml
+          cargo check --locked --manifest-path plugins/intranet-link/native/Cargo.toml
           cargo test --locked --manifest-path plugins/intranet-link/native/Cargo.toml

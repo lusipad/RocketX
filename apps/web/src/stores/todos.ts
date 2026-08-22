@@ -1,6 +1,14 @@
-import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { isTauri } from '../lib/http';
+import { getLocalDataSchema, readLocalData, writeLocalData } from '../lib/localDataContract';
+import {
+  addNativeTodo,
+  deleteNativeTodo,
+  listNativeTodos,
+  migrateNativeTodos,
+  updateNativeTodo,
+  type NativeTodoRecord,
+} from '../platform/desktopCommands';
 
 /**
  * 待办（TODO）。
@@ -36,50 +44,53 @@ export interface Todo {
   waitingFor?: string;
 }
 
-interface NativeTodo {
-  id: string;
-  source: 'manual' | 'message' | 'ado';
-  rid: string | null;
-  mid: string | null;
-  adoWorkItemId: number | null;
-  adoProject: string | null;
-  title: string;
-  note: string | null;
-  roomName: string | null;
-  author: string | null;
-  done: boolean;
-  priority: number;
-  due: string | null;
-  createdAt: number;
-  doneAt: number | null;
-  updatedAt: number;
-  committedTo: string | null;
-  waitingFor: string | null;
-}
+type NativeTodo = NativeTodoRecord;
 
 type NewTodo = Omit<Todo, 'id' | 'done' | 'createdAt'>;
 type TodoUpdate = Partial<Pick<Todo, 'note' | 'due' | 'committedTo' | 'waitingFor'>>;
 
 const KEY = 'rcx-todos';
+const TODO_SCHEMA_VERSION = getLocalDataSchema('todo').version;
 const pendingAdds = new Set<string>();
 const desktopIds = new Map<string, string>();
 let desktopReady: Promise<void> = Promise.resolve();
 let desktopQueue: Promise<void> = Promise.resolve();
 
 function load(): Todo[] {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]') as Todo[];
-  } catch {
-    return [];
-  }
+  return readLocalData(KEY, TODO_SCHEMA_VERSION, [], (value) =>
+    Array.isArray(value) ? value as Todo[] : undefined,
+  );
 }
 
 function persist(todos: Todo[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(todos));
+    writeLocalData(KEY, TODO_SCHEMA_VERSION, todos);
   } catch {
     /* 存储满 */
   }
+}
+
+function legacyTodosForDesktop(): string | null {
+  const raw = localStorage.getItem(KEY);
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (Array.isArray(value)) return raw;
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      'version' in value &&
+      'data' in value &&
+      (value as { version?: unknown }).version === TODO_SCHEMA_VERSION &&
+      Array.isArray((value as { data?: unknown }).data)
+    ) {
+      return JSON.stringify((value as { data: Todo[] }).data);
+    }
+  } catch {
+    // 损坏记录不应进入 SQLite 迁移；hydrate 会继续读取已有数据库。
+  }
+  return null;
 }
 
 function fromNative(todo: NativeTodo): Todo {
@@ -247,7 +258,7 @@ export const useTodos = create<TodoState>((set, get) => ({
     enqueueDesktop(async () => {
       try {
         const saved = fromNative(
-          await invoke<NativeTodo>('butler_todo_add', { todo: toNativeNewTodo(todo) }),
+          await addNativeTodo(toNativeNewTodo(todo)),
         );
         desktopIds.set(id, saved.id);
         set((state) => ({
@@ -277,10 +288,7 @@ export const useTodos = create<TodoState>((set, get) => ({
       const resolvedId = resolveDesktopId(id);
       try {
         const saved = fromNative(
-          await invoke<NativeTodo>('butler_todo_update', {
-            id: resolvedId,
-            patch: toNativePatch(patch),
-          }),
+          await updateNativeTodo(resolvedId, toNativePatch(patch)),
         );
         set((state) => ({
           todos: state.todos.map((todo) =>
@@ -318,10 +326,7 @@ export const useTodos = create<TodoState>((set, get) => ({
       const resolvedId = resolveDesktopId(id);
       try {
         const saved = fromNative(
-          await invoke<NativeTodo>('butler_todo_update', {
-            id: resolvedId,
-            patch: { done },
-          }),
+          await updateNativeTodo(resolvedId, { done }),
         );
         set((state) => ({
           todos: state.todos.map((todo) =>
@@ -352,7 +357,7 @@ export const useTodos = create<TodoState>((set, get) => ({
     enqueueDesktop(async () => {
       const resolvedId = resolveDesktopId(id);
       try {
-        await invoke('butler_todo_delete', { id: resolvedId });
+        await deleteNativeTodo(resolvedId);
         desktopIds.delete(id);
       } catch (error) {
         if (previous) set((state) => ({ todos: [previous, ...state.todos] }));
@@ -376,10 +381,10 @@ export const useTodos = create<TodoState>((set, get) => ({
     enqueueDesktop(async () => {
       try {
         for (const todo of completed) {
-          await invoke('butler_todo_delete', { id: resolveDesktopId(todo.id) });
+          await deleteNativeTodo(resolveDesktopId(todo.id));
         }
       } finally {
-        const stored = await invoke<NativeTodo[]>('butler_todo_list', { filter: {} });
+        const stored = await listNativeTodos();
         set({ todos: stored.map(fromNative) });
       }
     });
@@ -387,10 +392,10 @@ export const useTodos = create<TodoState>((set, get) => ({
 }));
 
 async function hydrateDesktop(): Promise<void> {
-  const legacyJson = localStorage.getItem(KEY);
+  const legacyJson = legacyTodosForDesktop();
   if (legacyJson !== null) {
     try {
-      await invoke<number>('butler_todo_migrate_from_json', { json: legacyJson });
+      await migrateNativeTodos(legacyJson);
       localStorage.removeItem(KEY);
     } catch (error) {
       console.warn('[Todos] 旧待办迁移失败，将在下次启动时重试', error);
@@ -398,7 +403,7 @@ async function hydrateDesktop(): Promise<void> {
   }
 
   try {
-    const stored = (await invoke<NativeTodo[]>('butler_todo_list', { filter: {} })).map(fromNative);
+    const stored = (await listNativeTodos()).map(fromNative);
     const pending = useTodos.getState().todos.filter((todo) => pendingAdds.has(todo.id));
     useTodos.setState({
       todos: [...pending, ...stored.filter((todo) => !pendingAdds.has(todo.id))],

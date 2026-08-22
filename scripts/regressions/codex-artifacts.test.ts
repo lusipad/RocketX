@@ -77,9 +77,9 @@ test('Artifact 由桌面宿主在当前工作区边界内读取，不依赖 Code
   const desktop = readFileSync('apps/desktop/src-tauri/src/proc.rs', 'utf8');
   const main = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
 
-  assert.match(store, /invoke<string>\('codex_artifact_read', \{ workspaceRoot, path \}\)/);
-  assert.match(store, /invoke<void>\('codex_artifact_open', \{ workspaceRoot, path \}\)/);
-  assert.match(store, /invoke<void>\('codex_artifact_reveal', \{ workspaceRoot, path \}\)/);
+  assert.match(store, /readCodexArtifact\(workspaceRoot, path\)/);
+  assert.match(store, /openCodexArtifact\(workspaceRoot, path\)/);
+  assert.match(store, /revealCodexArtifact\(workspaceRoot, path\)/);
   assert.doesNotMatch(panel, /@tauri-apps\/plugin-opener/);
   assert.match(desktop, /fn resolve_codex_artifact\(root: &Path, target: &Path\)/);
   assert.match(desktop, /contained_existing_path\(root, target\)\?/);

@@ -108,8 +108,7 @@ test('下载页通过桌面受控命令打开文件，不再触发 opener 空 sc
   ]);
 
   assert.doesNotMatch(page, /plugin-opener/);
-  assert.match(page, /download_history_reveal/);
-  assert.match(page, /download_history_open/);
+  assert.match(page, /openDownloadedPath\(path, reveal\)/);
   assert.match(main, /fn resolve_download_history_path/);
   assert.match(main, /\.canonicalize\(\)/);
   assert.match(main, /resolved\.is_file\(\)/);
