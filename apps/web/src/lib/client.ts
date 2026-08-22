@@ -160,6 +160,13 @@ export async function openExternal(url: string): Promise<void> {
   }
 }
 
+/** 通过桌面原生命令打开已接收的本地文件，避免 WebView opener ACL 差异。 */
+export async function openLocalPath(path: string): Promise<void> {
+  if (!isTauri || !path) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_local_file', { path });
+}
+
 /**
  * 全局拦截 <a> 点击：桌面端一律走系统浏览器。
  * 挂一次即可覆盖所有链接（消息正文、卡片、预览…）。

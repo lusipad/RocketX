@@ -9,6 +9,7 @@ import { useWiTemplates } from '../stores/wiTemplates';
 import { loadUpdateSource, saveUpdateSource } from '../lib/updateSource';
 import { loadHierarchyLayout, saveHierarchyLayout } from '../stores/wiTemplates';
 import { useAuth } from '../stores/auth';
+import { useAliases } from '../stores/aliases';
 import {
   fetchWorkspaceConfigFromSource,
   parseWorkspaceConfigRemoteInput,
@@ -56,6 +57,7 @@ export function collectCurrentValues(): WorkspaceCurrentValues {
       : '',
     updateSource: updateSourceFingerprint(loadUpdateSource()),
     hierarchyLayout: loadHierarchyLayout(),
+    aliases: JSON.stringify(useAliases.getState().aliases, Object.keys(useAliases.getState().aliases).sort()),
   };
 }
 
@@ -124,6 +126,10 @@ async function applySelectedFields(
 
   if (selected.has('workItems.hierarchyLayout') && config.workItems?.hierarchyLayout) {
     saveHierarchyLayout(config.workItems.hierarchyLayout);
+  }
+
+  if (selected.has('aliases') && config.aliases) {
+    await useAliases.getState().applySharedAliases(config.aliases);
   }
 
   const importedAt = Date.now();

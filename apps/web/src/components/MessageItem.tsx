@@ -47,7 +47,7 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, renderMarkdownDoc, LinkifiedText } from '../lib/markdown';
-import { assetUrl, isTauri, rest } from '../lib/client';
+import { assetUrl, isTauri, openLocalPath, rest } from '../lib/client';
 import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
@@ -190,8 +190,7 @@ function FileAttachment({
     setBusy(true);
     try {
       if (localPath) {
-        const { openPath } = await import('@tauri-apps/plugin-opener');
-        await openPath(localPath);
+        await openLocalPath(localPath);
       } else {
         await saveFile(path, name, source);
       }

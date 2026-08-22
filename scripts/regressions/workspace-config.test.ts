@@ -147,6 +147,25 @@ test('配置文件是不可信输入：内嵌凭据和已移除 AI 配置都拒�
   );
 });
 
+test('团队配置可提供共享人名备注，但只接受稳定的用户键', () => {
+  const config = parseWorkspaceConfig(JSON.stringify({
+    version: 1,
+    aliases: { 'u:alice': '架构师' },
+  }));
+  assert.deepEqual(config.aliases, { 'u:alice': '架构师' });
+  const [field] = planWorkspaceFields(config, { aliases: '' }, {});
+  assert.equal(field.key, 'aliases');
+  assert.equal(field.selected, true);
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, aliases: { 'r:room': '频道' } })),
+    /u:<username>/,
+  );
+  assert.throws(
+    () => parseWorkspaceConfig(JSON.stringify({ version: 1, aliases: { 'u:alice': ' ' } })),
+    /u:<username>/,
+  );
+});
+
 test('字段计划：本地空值默认应用，用户改过的字段默认保留（issue #67 核心语义）', () => {
   const config = parseWorkspaceConfig(FULL_CONFIG);
   const fields = planWorkspaceFields(

@@ -34,6 +34,8 @@ export interface WorkspaceConfig {
       | 'story-split'
       | 'story-single';
   };
+  /** 团队共享的人名备注默认值；个人已有备注优先。 */
+  aliases?: Record<string, string>;
 }
 
 function normalizeUrl(value: unknown, label: string): string {
@@ -185,6 +187,19 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
     }
     config.workItems = workItems;
   }
+  if (raw.aliases !== undefined) {
+    if (!raw.aliases || typeof raw.aliases !== 'object' || Array.isArray(raw.aliases)) {
+      throw new Error('aliases 必须是对象');
+    }
+    const aliases: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw.aliases)) {
+      if (!/^u:.+/.test(key) || typeof value !== 'string' || !value.trim()) {
+        throw new Error('aliases 只允许非空的 u:<username> → 备注名');
+      }
+      aliases[key] = value.trim();
+    }
+    config.aliases = aliases;
+  }
   return config;
 }
 
@@ -220,6 +235,7 @@ export interface WorkspaceCurrentValues {
   updateSource?: string;
   /** 层级工作项当前形态 */
   hierarchyLayout?: string;
+  aliases?: string;
 }
 
 export function inlineWorkItemTemplatesFingerprint(config: WiTemplatesConfig): string {
@@ -300,6 +316,10 @@ export function planWorkspaceFields(
         lastApplied,
       ),
     );
+  }
+  if (config.aliases) {
+    const incoming = JSON.stringify(config.aliases, Object.keys(config.aliases).sort());
+    fields.push(field('aliases', '团队共享备注', incoming, current.aliases ?? '', lastApplied));
   }
   return fields;
 }

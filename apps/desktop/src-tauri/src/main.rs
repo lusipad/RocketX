@@ -249,6 +249,14 @@ fn download_history_open(app: tauri::AppHandle, path: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+fn open_local_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let target = resolve_download_history_path(&path)?;
+    app.opener()
+        .open_path(target.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| format!("无法使用系统应用打开局域网文件：{error}"))
+}
+
+#[tauri::command]
 fn download_history_reveal(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let target = resolve_download_history_path(&path)?;
     app.opener()
@@ -671,6 +679,7 @@ fn main() {
             read_autostart_enabled,
             set_autostart_enabled,
             download_history_open,
+            open_local_file,
             download_history_reveal,
             diagnostics::collect_diagnostic_logs,
             winauth::win_auth_request,

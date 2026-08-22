@@ -151,12 +151,13 @@ jobs:
         with:
           name: rocketx-${{ matrix.platform }}
           path: |
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
           if-no-files-found: warn
 
   prepare-release:

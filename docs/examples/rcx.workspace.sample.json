@@ -30,5 +30,8 @@
   },
   "workItems": {
     "hierarchyLayout": "feature-split"
+  },
+  "aliases": {
+    "u:alice": "架构师"
   }
 }

@@ -58,6 +58,8 @@ interface AliasState {
   setUserAlias: (username: string, alias: string) => void;
   /** 给会话起备注（多人直聊、频道都可以） */
   setRoomAlias: (rid: string, alias: string) => void;
+  /** 从团队配置补齐备注；已有个人备注优先。 */
+  applySharedAliases: (aliases: AliasMap) => Promise<number>;
   setNameFormat: (f: NameFormat) => void;
   userAlias: (username?: string) => string | undefined;
   roomAlias: (rid: string) => string | undefined;
@@ -266,6 +268,17 @@ export const useAliases = create<AliasState>((set, get) => ({
     set({ aliases: next });
     persist(next);
     pushToServer({ rcxAliases: next });
+  },
+
+  applySharedAliases: async (shared) => {
+    const current = get().aliases;
+    const merged = { ...shared, ...current };
+    const added = Object.keys(shared).filter((key) => !(key in current)).length;
+    if (added === 0) return 0;
+    set({ aliases: merged });
+    persist(merged);
+    await pushToServer({ rcxAliases: merged });
+    return added;
   },
 
   userAlias: (username) => (username ? get().aliases[`u:${username}`] : undefined),

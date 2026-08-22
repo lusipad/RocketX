@@ -37,3 +37,12 @@ test('桌面端允许打开已经下载到本地的文件（issue #183）', () =
 
   assert.ok(capability.permissions.includes('opener:allow-open-path'));
 });
+
+test('局域网文件卡片通过受校验的原生命令打开（issue #357）', () => {
+  const client = readFileSync('apps/web/src/lib/client.ts', 'utf8');
+  const message = readFileSync('apps/web/src/components/MessageItem.tsx', 'utf8');
+  const main = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  assert.match(client, /invoke\('open_local_file', \{ path \}\)/);
+  assert.match(message, /await openLocalPath\(localPath\)/);
+  assert.match(main, /fn open_local_file\(/);
+});

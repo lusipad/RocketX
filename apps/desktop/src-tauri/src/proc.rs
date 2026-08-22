@@ -2847,6 +2847,12 @@ pub async fn check_signed_http_update(
 /// 找安装包。目录是用户自己在设置页填的更新源，只读不写。
 #[tauri::command]
 pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, String> {
+    tauri::async_runtime::spawn_blocking(move || read_update_manifest_dir_blocking(&dir))
+        .await
+        .map_err(|error| format!("更新目录读取任务失败：{error}"))?
+}
+
+fn read_update_manifest_dir_blocking(dir: &str) -> Result<UpdateDirManifest, String> {
     let base = std::path::PathBuf::from(dir.trim());
     if !base.is_absolute() {
         return Err("更新目录必须是绝对路径（本地盘符或 \\\\server\\share 形式）".to_string());
@@ -2871,6 +2877,22 @@ pub async fn read_update_manifest_dir(dir: String) -> Result<UpdateDirManifest, 
         version: resolved.version,
         installer_type: resolved.installer_kind.cli_value().to_string(),
     })
+}
+
+fn path_is_within(base: &Path, candidate: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let base = base.to_string_lossy().to_ascii_lowercase();
+        let candidate = candidate.to_string_lossy().to_ascii_lowercase();
+        return candidate == base
+            || candidate
+                .strip_prefix(&base)
+                .is_some_and(|suffix| suffix.starts_with('\\') || suffix.starts_with('/'));
+    }
+    #[cfg(not(windows))]
+    {
+        candidate.starts_with(base)
+    }
 }
 
 fn normalize_unc_workspace_config_path(path: &str) -> Result<PathBuf, String> {
@@ -3428,7 +3450,7 @@ fn validate_manifest_package(
         std::fs::canonicalize(base_dir).map_err(|error| format!("更新目录不可访问：{error}"))?;
     let package =
         std::fs::canonicalize(package_path).map_err(|error| format!("更新包不可访问：{error}"))?;
-    if !package.starts_with(&base) {
+    if !path_is_within(&base, &package) {
         return Err("更新包不在配置的共享目录中".to_string());
     }
     let manifest_path = base.join("latest.json");
@@ -3639,6 +3661,40 @@ fn spawn_update_helper(
 /// 只启动配置目录里已探测的更新包；签名可选，SHA-256 固定本次探测内容。
 #[tauri::command]
 pub async fn launch_update_installer(
+    app: tauri::AppHandle,
+    dir: String,
+    path: String,
+    signature: Option<String>,
+    sha256: String,
+    expected_version: String,
+    installer_type: String,
+) -> Result<(), String> {
+    let result = launch_update_installer_inner(
+        app.clone(),
+        dir,
+        path,
+        signature,
+        sha256,
+        expected_version,
+        installer_type,
+    )
+    .await;
+    if let Err(error) = &result {
+        if let Ok(result_path) = update_result_path(&app) {
+            let _ = atomic_write_update_result(
+                &result_path,
+                &UpdateResult {
+                    status: UpdateResultStatus::Error,
+                    version: String::new(),
+                    message: error.clone(),
+                },
+            );
+        }
+    }
+    result
+}
+
+async fn launch_update_installer_inner(
     app: tauri::AppHandle,
     dir: String,
     path: String,
