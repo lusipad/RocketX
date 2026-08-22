@@ -46,3 +46,14 @@ test('局域网文件卡片通过受校验的原生命令打开（issue #357）'
   assert.match(message, /await openLocalPath\(localPath\)/);
   assert.match(main, /fn open_local_file\(/);
 });
+
+test('消息正文里的 UNC 路径通过受校验的原生命令打开（issue #357）', () => {
+  const client = readFileSync('apps/web/src/lib/client.ts', 'utf8');
+  const message = readFileSync('apps/web/src/components/MessageItem.tsx', 'utf8');
+  const main = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  assert.match(client, /invoke\('open_unc_path', \{ path \}\)/);
+  assert.match(message, /await openUncPath\(path\)/);
+  assert.doesNotMatch(message, /@tauri-apps\/plugin-opener/);
+  assert.match(main, /fn resolve_unc_path\(/);
+  assert.match(main, /fn open_unc_path\(/);
+});

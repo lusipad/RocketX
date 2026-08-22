@@ -47,7 +47,7 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, renderMarkdownDoc, LinkifiedText } from '../lib/markdown';
-import { assetUrl, isTauri, openLocalPath, rest } from '../lib/client';
+import { assetUrl, isTauri, openLocalPath, openUncPath, rest } from '../lib/client';
 import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
@@ -801,14 +801,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   // 消息文本里的 UNC 共享路径（\\host\share\...），渲染成可点击卡片；
   // 点击后弹确认框，再用系统默认程序打开（blueprint §5.3）。
   const uncPaths = useMemo(() => extractUncPaths(message.msg ?? ''), [message.msg]);
-  const openUncPath = async (path: string): Promise<void> => {
+  const openMessageUncPath = async (path: string): Promise<void> => {
     if (!isTauri) {
       toast.info('局域网共享路径仅桌面端可打开');
       return;
     }
     try {
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(path);
+      await openUncPath(path);
     } catch (error) {
       toast.error(error, '打开共享路径失败');
     }
@@ -1330,7 +1329,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           onCancel={() => setUncOpen(null)}
           onConfirm={() => {
             setUncOpen(null);
-            void openUncPath(uncOpen);
+            void openMessageUncPath(uncOpen);
           }}
         />
       )}

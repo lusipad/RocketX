@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.11`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.12`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.43.12` fixes two desktop-opening regressions. DSH Web sessions on supported system runtimes keep the conversation inside RocketX instead of opening the DSH home page in the system browser, and message-body UNC paths are validated and opened through the desktop host command rather than an unvalidated WebView opener call.
 
 `v0.43.11` builds on the published `v0.43.9` line. It opens the daily-work-loop line from `docs/specs/daily-loop.md` with the focus-mode MVP: a first-level navigation entry starts a timed or open-ended focus session that forces notification aggregation (the zen-mode penetration whitelist still applies), stops taskbar flashing, switches presence to busy, restores the previous presence on end, and closes with a digest card counting held-back and penetrated messages. It also adds alias import/export scoped to person aliases only (`u:` keys, filling gaps without overwriting; room aliases stay on the account-sync channel), and collapsible over-long messages with an account-synced toggle and a fold threshold estimated from half the viewport (adjustable to one or two screens in Settings → Messages).
 
@@ -57,4 +59,3 @@ Never delete and recreate a released npm version or rewrite an existing release 
 ## Plugin bundle
 
 The `Prepare Release` job packages every directory under `plugins/` into `rocketx-plugins-<version>.zip` and uploads that archive to the draft GitHub Release before checksums are generated. Regular iframe plugins in that archive can be installed with **Settings → Apps → Install local app**. Plugins that declare `native:service`, including `intranet-link`, are signed built-ins: the archive contains their auditable source, while their executable Sidecar is delivered only inside the RocketX desktop package and cannot be granted to a directory or URL install.
-

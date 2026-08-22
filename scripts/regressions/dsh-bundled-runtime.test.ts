@@ -87,6 +87,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
 
   assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";/);
   assert.match(dshRs, /const DSH_VERIFIED_VERSION: &str = "0\.1\.0-rc\.6";/);
+  assert.match(dshRs, /const DSH_NO_OPEN_VERSION: &str = "0\.1\.0-rc\.7";/);
   assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime\.tar\.gz";/);
   assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_CACHE_DIR: &str = "bundled-runtime";/);
   assert.match(dshRs, /const DSH_BUNDLED_CLI_ENTRY: \[&str; 5\]/);
@@ -102,6 +103,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.match(dshRs, /fn parse_dsh_version\(raw: &str\) -> Option<DshVersion>/);
   assert.match(dshRs, /version >= minimum/);
   assert.match(dshRs, /dsh_version_is_unverified_newer/);
+  assert.match(dshRs, /dsh_version_supports_no_open/);
   assert.match(dshRs, /低于最低支持版本 \{DSH_VERIFIED_VERSION\}/u);
   assert.match(dshRs, /尚未经过完整验证/u);
   assert.match(dshRs, /resolve_node_runtime\(app, use_private_node\)/);
