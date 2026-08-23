@@ -27,6 +27,40 @@ export interface LocalDataMigration {
   migrate: (value: unknown) => unknown;
 }
 
+export interface LocalDataMigrationPlanEntry {
+  key: string;
+  domain?: LocalDataDomain;
+  action: 'unchanged' | 'migrate' | 'rejected' | 'unknown';
+  fromVersion?: number;
+  toVersion?: number;
+  reason?: string;
+}
+
+export interface LocalDataMigrationPlan {
+  valid: boolean;
+  entries: LocalDataMigrationPlanEntry[];
+  unknownKeys: string[];
+  rejectedKeys: string[];
+}
+
+export interface LocalDataMigrationOptions {
+  storage?: LocalDataStorage;
+  keys?: readonly string[];
+  scope?: string;
+  schemas?: Readonly<Record<LocalDataDomain, LocalDataSchemaDescriptor>>;
+  dryRun?: boolean;
+  now?: () => number;
+}
+
+export interface LocalDataMigrationReport extends LocalDataMigrationPlan {
+  dryRun: boolean;
+  executed: string[];
+  skipped: string[];
+  backup: string;
+  rolledBack: boolean;
+  error?: string;
+}
+
 export interface LocalDataReadOptions {
   scope?: string;
   storage?: LocalDataStorage;
@@ -53,6 +87,8 @@ export interface LocalDataSchemaDescriptor {
   legacy: 'raw' | 'versioned';
   backend: 'local-storage' | 'native-sqlite' | 'dual';
   keyPattern?: string;
+  migrations?: readonly LocalDataMigration[];
+  validate?: (value: unknown) => boolean;
 }
 
 /** 正式领域 schema 注册表。动态账号 key 由 keyPattern 描述。 */
@@ -235,6 +271,176 @@ function listStorageKeys(storage: LocalDataStorage, keys?: readonly string[]): s
     if (key !== null && key !== undefined) result.push(key);
   }
   return result;
+}
+
+interface ParsedLocalDataRecord {
+  value: unknown;
+  version: number;
+  scope?: string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function schemaPatternMatch(schema: LocalDataSchemaDescriptor, key: string): { version?: number } | null {
+  if (schema.key === key) return {};
+  if (!schema.keyPattern) return null;
+  const parts = schema.keyPattern.split(/(\{version\}|\{server\}|\{user\})/g);
+  const source = parts.map((part) => {
+    if (part === '{version}') return '(?<version>[0-9]+)';
+    if (part === '{server}' || part === '{user}') return '[^:]+';
+    return escapeRegExp(part);
+  }).join('');
+  const match = new RegExp(`^${source}$`).exec(key);
+  if (!match) return null;
+  const version = match.groups?.version;
+  return version === undefined ? {} : { version: Number(version) };
+}
+
+function schemaForKey(
+  schemas: Readonly<Record<LocalDataDomain, LocalDataSchemaDescriptor>>,
+  key: string,
+): { schema: LocalDataSchemaDescriptor; keyVersion?: number } | null {
+  for (const schema of Object.values(schemas)) {
+    const match = schemaPatternMatch(schema, key);
+    if (match) return { schema, keyVersion: match.version };
+  }
+  return null;
+}
+
+function parseLocalDataRecord(
+  raw: string,
+  schema: LocalDataSchemaDescriptor,
+  keyVersion?: number,
+): ParsedLocalDataRecord {
+  const parsed: unknown = JSON.parse(raw);
+  if (isEnvelope(parsed)) {
+    if (!Number.isInteger(parsed.version) || parsed.version < 0) {
+      throw new Error(`本地数据 ${schema.domain} 的版本无效`);
+    }
+    return { value: parsed.data, version: parsed.version, scope: parsed.scope };
+  }
+  if (schema.legacy !== 'raw') {
+    throw new Error(`本地数据 ${schema.domain} 缺少版本 envelope`);
+  }
+  return { value: parsed, version: keyVersion ?? schema.version };
+}
+
+function planLocalDataMigrationKey(
+  key: string,
+  raw: string | null,
+  schemas: Readonly<Record<LocalDataDomain, LocalDataSchemaDescriptor>>,
+  scope?: string,
+): LocalDataMigrationPlanEntry {
+  const registered = schemaForKey(schemas, key);
+  if (!registered) return { key, action: 'unknown', reason: '未注册的本地数据 key' };
+  const { schema, keyVersion } = registered;
+  if (raw === null) return { key, domain: schema.domain, action: 'unchanged', reason: '记录不存在' };
+  try {
+    const record = parseLocalDataRecord(raw, schema, keyVersion);
+    if (scope !== undefined && record.scope !== undefined && record.scope !== scope) {
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: 'scope 不匹配' };
+    }
+    if (record.version > schema.version) {
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '记录来自未来版本' };
+    }
+    const migrated = migrateValue(record.value, record.version, schema.version, schema.migrations);
+    if (!migrated) {
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '缺少连续迁移步骤' };
+    }
+    if (schema.validate && !schema.validate(migrated.value)) {
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '迁移结果未通过 schema 校验' };
+    }
+    return {
+      key,
+      domain: schema.domain,
+      action: migrated.migrated ? 'migrate' : 'unchanged',
+      fromVersion: record.version,
+      toVersion: schema.version,
+    };
+  } catch (error) {
+    return {
+      key,
+      domain: schema.domain,
+      action: 'rejected',
+      toVersion: schema.version,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * 只读取已注册领域，生成确定性的迁移计划。计划阶段不写入 storage，
+ * 未知 key、未来版本、scope 冲突和缺失迁移都会显式拒绝。
+ */
+export function planLocalDataMigrations(options: LocalDataMigrationOptions = {}): LocalDataMigrationPlan {
+  const storage = storageFor(options.storage);
+  const schemas = options.schemas ?? LOCAL_DATA_SCHEMAS;
+  const keys = storage ? listStorageKeys(storage, options.keys) : [...(options.keys ?? [])];
+  const entries = keys
+    .map((key) => planLocalDataMigrationKey(key, storage?.getItem(key) ?? null, schemas, options.scope));
+  const unknownKeys = entries.filter((entry) => entry.action === 'unknown').map((entry) => entry.key);
+  const rejectedKeys = entries.filter((entry) => entry.action === 'rejected').map((entry) => entry.key);
+  return { valid: unknownKeys.length === 0 && rejectedKeys.length === 0, entries, unknownKeys, rejectedKeys };
+}
+
+/**
+ * 执行显式迁移。成功前先导出受影响 key 的快照；任何写入失败都会恢复
+ * 整个快照。dry-run 复用同一计划路径，因此不会隐式修改用户数据。
+ */
+export function executeLocalDataMigrations(options: LocalDataMigrationOptions = {}): LocalDataMigrationReport {
+  const storage = storageFor(options.storage);
+  const plan = planLocalDataMigrations(options);
+  const migrationKeys = plan.entries.filter((entry) => entry.action === 'migrate').map((entry) => entry.key);
+  const backup = backupLocalData({ keys: migrationKeys, storage: storage ?? undefined, now: options.now });
+  const dryRun = options.dryRun === true;
+  const skipped = plan.entries.filter((entry) => entry.action !== 'migrate').map((entry) => entry.key);
+  if (!plan.valid || dryRun || !storage) {
+    return { ...plan, dryRun, executed: [], skipped, backup, rolledBack: false };
+  }
+
+  const previous = new Map<string, string | null>();
+  const executed: string[] = [];
+  try {
+    for (const entry of plan.entries) {
+      if (entry.action !== 'migrate') continue;
+      const registered = schemaForKey(options.schemas ?? LOCAL_DATA_SCHEMAS, entry.key);
+      const schema = registered?.schema;
+      if (!schema) throw new Error(`迁移 key 未注册：${entry.key}`);
+      const raw = storage.getItem(entry.key);
+      if (raw === null) throw new Error(`迁移记录不存在：${entry.key}`);
+      const record = parseLocalDataRecord(raw, schema, registered.keyVersion);
+      const migrated = migrateValue(record.value, record.version, schema.version, schema.migrations);
+      if (!migrated) throw new Error(`迁移步骤失效：${entry.key}`);
+      previous.set(entry.key, raw);
+      writeLocalData(entry.key, schema.version, migrated.value, {
+        storage,
+        scope: record.scope ?? options.scope,
+        now: options.now,
+      });
+      executed.push(entry.key);
+    }
+    return { ...plan, dryRun: false, executed, skipped, backup, rolledBack: false };
+  } catch (error) {
+    for (const [key, raw] of previous) {
+      try {
+        if (raw === null) storage.removeItem(key);
+        else storage.setItem(key, raw);
+      } catch {
+        // 尽力恢复；报告仍明确标记已尝试回滚。
+      }
+    }
+    return {
+      ...plan,
+      dryRun: false,
+      executed: [],
+      skipped,
+      backup,
+      rolledBack: true,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export function backupLocalData(options: LocalDataBackupOptions = {}): string {

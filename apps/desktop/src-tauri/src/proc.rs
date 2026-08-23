@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStderr, ChildStdout, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -14,10 +14,31 @@ use std::{
 
 #[cfg(test)]
 use crate::native::codex::parse_semantic_version;
+#[cfg(test)]
+use crate::native::codex_contract::CODEX_MINIMUM_CANDIDATE;
+pub use crate::native::codex_contract::{
+    CodexCompatibilityStatus, CodexProcessInfo, CodexRuntimeCandidate,
+    CodexRuntimeCandidateOutcome, CodexRuntimeConfig, CodexRuntimeProbe, CodexRuntimeReasonCode,
+    CodexRuntimeSource,
+};
+use crate::native::codex_contract::{CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS};
+#[cfg(not(windows))]
+use crate::native::codex_discovery::find_program;
+use crate::native::codex_discovery::{
+    bundled_codex_paths, resolved_codex_path, standard_codex_paths, system_codex_paths,
+};
+pub use crate::native::codex_process::CodexAppServerState;
+use crate::native::codex_process::{CodexExitEvent, CodexOutputEvent, ManagedCodex, ResolvedCodex};
 use crate::native::codex_runtime as codex_runtime_policy;
-use crate::native::process::{hidden_command, kill_and_wait};
-use crate::native::supervisor::{
-    now_ms as supervisor_now_ms, observe_exit, RuntimeStatus, RuntimeSupervisor,
+use crate::native::process::{hidden_command, host_path, kill_and_wait};
+use crate::native::supervisor::{now_ms as supervisor_now_ms, observe_exit, RuntimeSupervisor};
+use crate::native::update_policy::{
+    installer_exit_code_is_success, normalize_update_version, normalize_update_version_text,
+    silent_install_failure_message, silent_install_invocation, WindowsInstallerKind,
+};
+#[cfg(test)]
+use crate::native::update_policy::{
+    summarize_installer_output, INSTALLER_LAUNCH_FAILURE_EXIT_CODE,
 };
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
@@ -43,336 +64,6 @@ const AZURE_DEVOPS_SERVER_BASE_URL_ENV_VARS: [&str; 2] = [
     "AZURE_DEVOPS_SERVER_SEARCH_BASE_URL",
     "AZURE_DEVOPS_SERVER_TESTRESULTS_BASE_URL",
 ];
-// 候选下限不是兼容承诺。只有跑过完整语义门禁的版本才进入 verified 列表；
-// 更高版本可在轻量启动探测通过后使用，但必须向用户标记为未验证。
-const CODEX_MINIMUM_CANDIDATE: &str = "0.140.0";
-const CODEX_PROTOCOL_BASELINE: &str = "0.144.4";
-const CODEX_VERIFIED_VERSIONS: &[&str] = &[CODEX_PROTOCOL_BASELINE];
-
-#[derive(Clone)]
-struct ManagedCodex {
-    process_id: String,
-    session_id: String,
-    child: Arc<Mutex<Child>>,
-    stdin: Arc<Mutex<ChildStdin>>,
-    attachments_dir: PathBuf,
-    workspace_root: String,
-    version: String,
-    runtime_source: CodexRuntimeSource,
-    supervisor: Arc<Mutex<RuntimeSupervisor>>,
-    stopping: Arc<AtomicBool>,
-}
-
-#[derive(Default)]
-pub struct CodexAppServerState {
-    processes: Arc<Mutex<HashMap<String, ManagedCodex>>>,
-    supervisors: Arc<Mutex<HashMap<String, Arc<Mutex<RuntimeSupervisor>>>>>,
-    next_id: Arc<AtomicU64>,
-}
-
-#[derive(Default)]
-pub struct CodexRuntimeConfig {
-    manual_path: Mutex<Option<PathBuf>>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexProcessInfo {
-    process_id: String,
-    version: String,
-    runtime_workspace_root: String,
-    runtime_source: CodexRuntimeSource,
-    managed_skill_roots: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CodexRuntimeSource {
-    Manual,
-    Bundled,
-    Standard,
-    System,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodexCompatibilityStatus {
-    Verified,
-    UntestedNewer,
-    Blocked,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodexRuntimeReasonCode {
-    NotFound,
-    Outdated,
-    ManualPath,
-    MissingAppServer,
-    NotLoggedIn,
-    Unavailable,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodexRuntimeCandidateOutcome {
-    Selected,
-    Rejected,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexRuntimeCandidate {
-    source: CodexRuntimeSource,
-    path: String,
-    version: Option<String>,
-    outcome: CodexRuntimeCandidateOutcome,
-    reason_code: Option<CodexRuntimeReasonCode>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexRuntimeProbe {
-    ready: bool,
-    version: Option<String>,
-    executable_path: Option<String>,
-    source: Option<CodexRuntimeSource>,
-    protocol_baseline: &'static str,
-    minimum_candidate: &'static str,
-    verified_versions: &'static [&'static str],
-    compatibility_status: CodexCompatibilityStatus,
-    reason_code: Option<CodexRuntimeReasonCode>,
-    reason: Option<String>,
-    candidates: Vec<CodexRuntimeCandidate>,
-}
-
-impl CodexRuntimeProbe {
-    fn new(
-        ready: bool,
-        version: Option<String>,
-        executable_path: Option<String>,
-        source: Option<CodexRuntimeSource>,
-        compatibility_status: CodexCompatibilityStatus,
-        reason_code: Option<CodexRuntimeReasonCode>,
-        reason: Option<String>,
-        candidates: Vec<CodexRuntimeCandidate>,
-    ) -> Self {
-        Self {
-            ready,
-            version,
-            executable_path,
-            source,
-            protocol_baseline: CODEX_PROTOCOL_BASELINE,
-            minimum_candidate: CODEX_MINIMUM_CANDIDATE,
-            verified_versions: CODEX_VERIFIED_VERSIONS,
-            compatibility_status,
-            reason_code,
-            reason,
-            candidates,
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexOutputEvent {
-    process_id: String,
-    stream: &'static str,
-    line: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexExitEvent {
-    process_id: String,
-    code: Option<i32>,
-    status: RuntimeStatus,
-    failures: u32,
-    restart_after_ms: Option<u64>,
-}
-
-#[derive(Clone)]
-struct ResolvedCodex {
-    program: PathBuf,
-    prefix_args: Vec<OsString>,
-    display_path: String,
-    source: CodexRuntimeSource,
-    version: String,
-}
-
-impl ResolvedCodex {
-    fn command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        command.args(&self.prefix_args);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        command
-    }
-}
-
-#[cfg(windows)]
-fn find_program(name: &str) -> Option<PathBuf> {
-    let output = hidden_command("where.exe")
-        .arg(name)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-}
-
-#[cfg(not(windows))]
-fn find_program(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .map(|directory| directory.join(name))
-        .find(|path| path.is_file())
-}
-
-fn resolved_codex_path(path: &Path, source: CodexRuntimeSource) -> Result<ResolvedCodex, String> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("Codex 路径不可用：{error}"))?;
-    // canonicalize 产生的 `\\?\` 扩展前缀会让 Node 无法加载作为入口脚本的
-    // codex.js，也不适合作为子进程工作目录，统一还原成常规主机路径。
-    let canonical = PathBuf::from(host_path(&canonical));
-    if !canonical.is_file() {
-        return Err("Codex 路径不是文件".to_string());
-    }
-    let name = canonical
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if name != "codex.exe" && name != "codex.cmd" && name != "codex" {
-        return Err("请选择 codex.exe 或 codex.cmd".to_string());
-    }
-    #[cfg(windows)]
-    if name == "codex.cmd" {
-        let entry = canonical
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join("node_modules")
-            .join("@openai")
-            .join("codex")
-            .join("bin")
-            .join("codex.js");
-        if !entry.is_file() {
-            return Err("codex.cmd 缺少对应的 @openai/codex 安装文件".to_string());
-        }
-        let node = canonical
-            .parent()
-            .map(|parent| parent.join("node.exe"))
-            .filter(|candidate| candidate.is_file())
-            .or_else(|| find_program("node.exe"))
-            .ok_or_else(|| "未检测到 Node.js，无法运行 codex.cmd".to_string())?;
-        return Ok(ResolvedCodex {
-            program: node,
-            prefix_args: vec![entry.into_os_string()],
-            display_path: canonical.to_string_lossy().into_owned(),
-            source,
-            version: String::new(),
-        });
-    }
-    Ok(ResolvedCodex {
-        program: canonical.clone(),
-        prefix_args: Vec::new(),
-        display_path: canonical.to_string_lossy().into_owned(),
-        source,
-        version: String::new(),
-    })
-}
-
-#[cfg(windows)]
-fn standard_codex_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        paths.push(PathBuf::from(app_data).join("npm").join("codex.cmd"));
-    }
-    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
-        paths.push(
-            PathBuf::from(user_profile)
-                .join("Codex")
-                .join("_internal")
-                .join("app")
-                .join("resources")
-                .join("codex.exe"),
-        );
-    }
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        let local = PathBuf::from(local_app_data);
-        paths.push(
-            local
-                .join("Programs")
-                .join("Codex")
-                .join("resources")
-                .join("codex.exe"),
-        );
-        paths.push(local.join("Codex").join("resources").join("codex.exe"));
-        paths.push(local.join("Codex").join("codex.exe"));
-    }
-    paths
-}
-
-#[cfg(not(windows))]
-fn standard_codex_paths() -> Vec<PathBuf> {
-    Vec::new()
-}
-
-fn bundled_codex_paths(app: &tauri::AppHandle) -> Vec<PathBuf> {
-    let executable = if cfg!(windows) { "codex.exe" } else { "codex" };
-    let mut paths = Vec::new();
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        paths.push(
-            PathBuf::from(local_app_data)
-                .join("RocketX")
-                .join("resources")
-                .join("codex")
-                .join("bin")
-                .join(executable),
-        );
-    }
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        paths.push(resource_dir.join("codex").join("bin").join(executable));
-    }
-    paths.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("codex-resources")
-            .join("codex")
-            .join("bin")
-            .join(executable),
-    );
-    paths
-}
-
-fn system_codex_paths() -> Vec<PathBuf> {
-    #[cfg(windows)]
-    {
-        ["codex.cmd", "codex.exe"]
-            .into_iter()
-            .filter_map(find_program)
-            .collect()
-    }
-    #[cfg(not(windows))]
-    {
-        find_program("codex").into_iter().collect()
-    }
-}
-
 fn classify_codex_version(version: &str) -> Result<CodexCompatibilityStatus, String> {
     Ok(
         match codex_runtime_policy::classify_version(
@@ -1279,20 +970,6 @@ mod codex_automation_file_tests {
         assert!(validate_automation_id("../outside").is_err());
         assert!(validate_automation_id("folder/task").is_err());
     }
-}
-
-fn host_path(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    #[cfg(windows)]
-    {
-        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
-            return format!(r"\\{rest}");
-        }
-        if let Some(rest) = value.strip_prefix(r"\\?\") {
-            return rest.to_string();
-        }
-    }
-    value.into_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2605,57 +2282,6 @@ pub struct SignedHttpUpdateMetadata {
     raw_json: serde_json::Value,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WindowsInstallerKind {
-    Nsis,
-    Msi,
-}
-
-impl WindowsInstallerKind {
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Nsis => "exe",
-            Self::Msi => "msi",
-        }
-    }
-
-    fn platform_key(self) -> &'static str {
-        match self {
-            Self::Nsis => "windows-x86_64",
-            Self::Msi => "windows-x86_64-msi",
-        }
-    }
-
-    fn alternate_platform_key(self) -> &'static str {
-        match self {
-            Self::Nsis => "windows-x86_64-msi",
-            Self::Msi => "windows-x86_64",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Nsis => "NSIS",
-            Self::Msi => "MSI",
-        }
-    }
-
-    fn cli_value(self) -> &'static str {
-        match self {
-            Self::Nsis => "nsis",
-            Self::Msi => "msi",
-        }
-    }
-
-    fn from_cli(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "nsis" => Some(Self::Nsis),
-            "msi" => Some(Self::Msi),
-            _ => None,
-        }
-    }
-}
-
 fn installer_kind_from_bundle_type(
     bundle_type: Option<tauri::utils::config::BundleType>,
 ) -> Result<WindowsInstallerKind, String> {
@@ -2796,11 +2422,6 @@ fn verify_update_package_identity(
         verify_update_package(path, signature)?;
     }
     Ok(())
-}
-
-fn normalize_update_version_text(version: &str) -> Option<String> {
-    let value = version.trim().trim_start_matches(['v', 'V']);
-    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn resolve_update_package(
@@ -3363,81 +2984,6 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> Result<(), String> {
     }
 }
 
-fn silent_install_invocation(
-    installer: &Path,
-    installer_kind: WindowsInstallerKind,
-) -> (String, Vec<String>) {
-    if installer_kind == WindowsInstallerKind::Msi {
-        (
-            "msiexec".to_string(),
-            vec![
-                "/i".to_string(),
-                format!("\"{}\"", installer.to_string_lossy()),
-                "/qn".to_string(),
-                "/norestart".to_string(),
-            ],
-        )
-    } else {
-        (
-            installer.to_string_lossy().into_owned(),
-            vec!["/S".to_string(), "/UPDATE".to_string()],
-        )
-    }
-}
-
-fn installer_exit_code_is_success(installer_kind: WindowsInstallerKind, code: Option<i32>) -> bool {
-    match installer_kind {
-        WindowsInstallerKind::Nsis => code == Some(0),
-        WindowsInstallerKind::Msi => matches!(code, Some(0 | 1641 | 3010)),
-    }
-}
-
-/// PowerShell 脚本在 Start-Process 抛错（如用户取消 UAC 授权）时返回的占位退出码，
-/// 用于与安装器自身的真实退出码区分，避免统一误报为「安装器退出码异常：1」。
-const INSTALLER_LAUNCH_FAILURE_EXIT_CODE: i32 = 242;
-
-/// 截取安装器输出摘要，避免把过长的 stdout/stderr 塞进错误消息。
-fn summarize_installer_output(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let trimmed = text.trim();
-    trimmed.chars().take(200).collect()
-}
-
-/// 把安装失败归因成两类：PowerShell 没能拉起安装器（UAC 取消/权限不足），
-/// 或安装器自身返回了非零退出码（附输出摘要）。
-fn silent_install_failure_message(
-    installer_kind: WindowsInstallerKind,
-    code: Option<i32>,
-    stdout: &[u8],
-    stderr: &[u8],
-) -> String {
-    let stderr = summarize_installer_output(stderr);
-    if code == Some(INSTALLER_LAUNCH_FAILURE_EXIT_CODE) {
-        let mut message = "无法启动安装程序（可能取消了管理员授权）".to_string();
-        if !stderr.is_empty() {
-            message.push_str(&format!("：{stderr}"));
-        }
-        return message;
-    }
-    let mut message = format!(
-        "{} 安装器退出码异常：{}",
-        installer_kind.label(),
-        code.unwrap_or_default()
-    );
-    let stdout = summarize_installer_output(stdout);
-    let mut details = Vec::new();
-    if !stderr.is_empty() {
-        details.push(format!("stderr：{stderr}"));
-    }
-    if !stdout.is_empty() {
-        details.push(format!("stdout：{stdout}"));
-    }
-    if !details.is_empty() {
-        message.push_str(&format!("（{}）", details.join("；")));
-    }
-    message
-}
-
 fn run_silent_installer(
     installer: &Path,
     installer_kind: WindowsInstallerKind,
@@ -3471,10 +3017,6 @@ fn run_silent_installer(
             &output.stderr,
         ))
     }
-}
-
-fn normalize_update_version(version: &str) -> Option<(u64, u64, u64)> {
-    codex_runtime_policy::normalize_update_version(version, normalize_update_version_text)
 }
 
 fn query_cli_version(path: &Path) -> Result<Option<String>, String> {

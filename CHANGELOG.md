@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.43.14 - 2026-08-23
+
+### 改进
+
+- 完成 Issue #356 本轮架构收敛：Rust 原生宿主按进程、Codex/DSH runtime、LAN 发现与文件传输职责拆分，保留 Tauri command、生命周期和 LAN wire protocol 兼容 facade。
+- Rocket.Chat client 将认证、用户、房间、消息、文件、搜索、偏好和 emoji endpoint 分域，共用统一 request context 与 capability snapshot；公开 `RcRestClient` API 不变。
+- 本地数据增加 schema 注册、版本迁移计划与 dry-run、备份/恢复和失败回滚，未知 key、未来版本和 scope 冲突显式拒绝。
+
+### 验证
+
+- Rust `cargo test --locked`：162 passed、4 ignored；`pnpm test:pure`：237 passed；全量回归：989 passed；Playwright UI 111 passed、3 skipped；Native lifecycle、Web build、typecheck、ecosystem 和 architecture checks 通过。
+
 ## v0.43.13 - 2026-08-23
 
 ### 新功能

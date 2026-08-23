@@ -7,7 +7,10 @@ import {
 import { createRocketChatDomainFacades } from '../../packages/rc-client/src/domains';
 import {
   backupLocalData,
+  executeLocalDataMigrations,
   getLocalDataSchema,
+  LOCAL_DATA_SCHEMAS,
+  planLocalDataMigrations,
   readLocalData,
   restoreLocalData,
   writeLocalData,
@@ -157,4 +160,42 @@ test('本地数据契约支持迁移、损坏隔离和 dry-run 恢复', () => {
   assert.deepEqual(dryRun.restored, ['todo']);
   assert.deepEqual(dryRun.skipped, []);
   assert.equal(getLocalDataSchema('attention').scope, 'account');
+});
+
+test('本地 schema 注册表提供 dry-run、未知 key 和未来版本门禁', () => {
+  const storage = installStorage();
+  const schemas = {
+    ...LOCAL_DATA_SCHEMAS,
+    todo: {
+      ...LOCAL_DATA_SCHEMAS.todo,
+      version: 2,
+      migrations: [{
+        from: 1,
+        to: 2,
+        migrate: (value: unknown) => ({ ...(value as object), done: false }),
+      }],
+    },
+  } as typeof LOCAL_DATA_SCHEMAS;
+
+  writeLocalData('rcx-todos', 1, { title: '旧字段' });
+  const dryRun = executeLocalDataMigrations({ schemas, dryRun: true });
+  assert.equal(dryRun.valid, true);
+  assert.deepEqual(dryRun.executed, []);
+  assert.equal(JSON.parse(storage.get('rcx-todos') ?? '').version, 1);
+
+  const plan = planLocalDataMigrations({ schemas, keys: ['rcx-todos', 'rcx-unknown'] });
+  assert.equal(plan.valid, false);
+  assert.deepEqual(plan.unknownKeys, ['rcx-unknown']);
+
+  const migrated = executeLocalDataMigrations({ schemas, keys: ['rcx-todos'] });
+  assert.deepEqual(migrated.executed, ['rcx-todos']);
+  assert.deepEqual(JSON.parse(storage.get('rcx-todos') ?? ''), {
+    version: 2,
+    data: { title: '旧字段', done: false },
+  });
+
+  writeLocalData('rcx-todos', 3, { title: 'future' });
+  const future = planLocalDataMigrations({ schemas, keys: ['rcx-todos'] });
+  assert.equal(future.valid, false);
+  assert.deepEqual(future.rejectedKeys, ['rcx-todos']);
 });

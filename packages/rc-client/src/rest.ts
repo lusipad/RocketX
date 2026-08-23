@@ -1,4 +1,3 @@
-import { tsMs } from './types';
 import type {
   RcDate,
   RcLoginData,
@@ -22,96 +21,110 @@ import {
   createRocketChatDomainFacades,
   type RocketChatDomainFacades,
 } from './domains';
+import {
+  currentAuth,
+  request as requestEndpoint,
+  RcApiError,
+  type RcRestOptions,
+  type RcRestEndpointContext,
+  type RcRestRequestContext,
+} from './request';
+import {
+  login as loginEndpoint,
+  loginWithToken as loginWithTokenEndpoint,
+  logout as logoutEndpoint,
+  me as meEndpoint,
+} from './auth';
+import {
+  getExplicitPreferences as getExplicitPreferencesEndpoint,
+  getPreferences as getPreferencesEndpoint,
+  setPreferences as setPreferencesEndpoint,
+} from './preferences';
+import {
+  getPresences as getPresencesEndpoint,
+  getUserInfo as getUserInfoEndpoint,
+  getUserInfoById as getUserInfoByIdEndpoint,
+  listUsers as listUsersEndpoint,
+  resetAvatar as resetAvatarEndpoint,
+  searchUsers as searchUsersEndpoint,
+  setAvatar as setAvatarEndpoint,
+  setStatus as setStatusEndpoint,
+  updateOwnBasicInfo as updateOwnBasicInfoEndpoint,
+} from './users';
+import {
+  deleteMessage as deleteMessageEndpoint,
+  followMessage as followMessageEndpoint,
+  getHistory as getHistoryEndpoint,
+  getMessage as getMessageEndpoint,
+  getPinnedMessages as getPinnedMessagesEndpoint,
+  getReadReceipts as getReadReceiptsEndpoint,
+  getStarredMessages as getStarredMessagesEndpoint,
+  getThreadMessages as getThreadMessagesEndpoint,
+  listCommands as listCommandsEndpoint,
+  pinMessage as pinMessageEndpoint,
+  postMessage as postMessageEndpoint,
+  react as reactEndpoint,
+  runCommand as runCommandEndpoint,
+  sendMessage as sendMessageEndpoint,
+  sendMessageRaw as sendMessageRawEndpoint,
+  starMessage as starMessageEndpoint,
+  unfollowMessage as unfollowMessageEndpoint,
+  unpinMessage as unpinMessageEndpoint,
+  unstarMessage as unstarMessageEndpoint,
+  updateMessage as updateMessageEndpoint,
+} from './messages';
+import {
+  fetchFile as fetchFileEndpoint,
+  fetchFileResponse as fetchFileResponseEndpoint,
+  getRoomFiles as getRoomFilesEndpoint,
+  uploadMedia as uploadMediaEndpoint,
+} from './files';
+import {
+  directory as directoryEndpoint,
+  getMentionedMessages as getMentionedMessagesEndpoint,
+  getMentionedMessagesPage as getMentionedMessagesPageEndpoint,
+  searchMessages as searchMessagesEndpoint,
+  spotlight as spotlightEndpoint,
+} from './search';
+import {
+  archiveRoom as archiveRoomEndpoint,
+  createDiscussion as createDiscussionEndpoint,
+  createDirectMessage as createDirectMessageEndpoint,
+  createGroup as createGroupEndpoint,
+  createTeam as createTeamEndpoint,
+  deleteRoom as deleteRoomEndpoint,
+  favoriteRoom as favoriteRoomEndpoint,
+  getMembers as getMembersEndpoint,
+  getRoomInfo as getRoomInfoEndpoint,
+  getRoomRoles as getRoomRolesEndpoint,
+  getRooms as getRoomsEndpoint,
+  getSubscriptions as getSubscriptionsEndpoint,
+  hideRoom as hideRoomEndpoint,
+  inviteToRoom as inviteToRoomEndpoint,
+  joinChannel as joinChannelEndpoint,
+  joinRoom as joinRoomEndpoint,
+  kickFromRoom as kickFromRoomEndpoint,
+  leaveRoom as leaveRoomEndpoint,
+  listTeamRooms as listTeamRoomsEndpoint,
+  listTeams as listTeamsEndpoint,
+  markRead as markReadEndpoint,
+  muteRoom as muteRoomEndpoint,
+  muteUser as muteUserEndpoint,
+  openDirectMessage as openDirectMessageEndpoint,
+  openRoom as openRoomEndpoint,
+  saveRoomSettings as saveRoomSettingsEndpoint,
+  setReadOnly as setReadOnlyEndpoint,
+  setRoomRole as setRoomRoleEndpoint,
+} from './rooms';
+import {
+  createCustomEmoji as createCustomEmojiEndpoint,
+  getCustomEmojiByName as getCustomEmojiByNameEndpoint,
+  type RcCustomEmoji,
+} from './emoji';
 
-/**
- * SHA-256 十六进制。改密码时服务端要的是哈希，不是明文。
- *
- * `crypto.subtle` 只在安全上下文里存在（https 或 localhost）。部署到
- * `http://内网IP` 时它是 undefined —— 不拦的话用户点「修改密码」会看到一句
- * 「Cannot read properties of undefined (reading 'digest')」。
- */
-async function sha256Hex(text: string): Promise<string> {
-  if (typeof crypto === 'undefined' || !crypto.subtle) {
-    throw new RcApiError(
-      '当前不是安全上下文，无法加密密码。请通过 https 访问，或改用桌面客户端。',
-      400,
-    );
-  }
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
+export type { RcCustomEmoji } from './emoji';
 
-/**
- * 含中日韩字符、且用户没手动包 /.../ 的查询，自动包成正则，绕开服务端未开
- * Message_AlwaysSearchRegExp 时中文子串搜不到的问题。纯 ASCII 查询保持原样，
- * 不改变英文搜索行为。
- */
-function wrapCjkAsRegex(text: string): string {
-  const t = text.trim();
-  if (!t) return text;
-  const hasCjk = /[一-鿿぀-ヿ가-힯]/.test(t);
-  const alreadyRegex = /^\/.*\/$/.test(t);
-  if (!hasCjk || alreadyRegex) return text;
-  return `/${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`;
-}
-
-export class RcApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public errorType?: string,
-  ) {
-    super(message);
-    this.name = 'RcApiError';
-  }
-}
-
-export interface RcRestOptions {
-  /** Rocket.Chat 服务地址，留空表示同源（开发时经 Vite 代理） */
-  baseUrl?: string;
-  /**
-   * 每次请求实时取认证信息（如从 localStorage 读）。
-   * 优先于 setAuth 注入的内存状态，可避免模块多实例/时序问题。
-   */
-  authProvider?: () => { authToken: string; userId: string } | null;
-  /**
-   * 自定义 fetch 实现。桌面端（Tauri）注入 plugin-http 的 fetch
-   * 走 Rust 通道绕开 webview CORS；缺省用全局 fetch。
-   */
-  fetchImpl?: typeof fetch;
-  /**
-   * 收到 401（未认证）时的回调。token 被吊销 / 过期后，界面本会停在已登录态、
-   * 所有操作静默 401，用户以为是网络问题反复重试。上层据此登出回登录页。
-   */
-  onAuthError?: () => void;
-}
-
-export interface RcCustomEmoji {
-  name: string;
-  aliases: string[];
-}
-
-type RcCustomEmojiPayload = {
-  name?: unknown;
-  aliases?: unknown;
-};
-
-function normalizeCustomEmojiAliases(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-  }
-  if (typeof value === 'string') {
-    return value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function sanitizeMultipartToken(value: string): string {
-  return value.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
-}
+export { RcApiError, type RcRestOptions } from './request';
 
 /**
  * Rocket.Chat REST API 客户端（api/v1）。
@@ -203,86 +216,53 @@ export class RcRestClient {
     this.userId = userId;
   }
 
+  private requestContext(): RcRestRequestContext {
+    return {
+      baseUrl: this.baseUrl,
+      authToken: this.authToken,
+      userId: this.userId,
+      capabilities: this._capabilities,
+      authProvider: this.authProvider,
+      fetchImpl: this.fetchImpl,
+      onAuthError: this.onAuthError,
+    };
+  }
+
+  private endpointContext(): RcRestEndpointContext {
+    return {
+      ...this.requestContext(),
+      request: (method, path, body, query) => this.request(method, path, body, query),
+      setAuth: (authToken, userId) => this.setAuth(authToken, userId),
+      currentUserId: () => this.currentUserId(),
+    };
+  }
+
   private async request<T>(
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
     query?: Record<string, string | number | undefined>,
   ): Promise<T> {
-    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
-    let url = `${this.baseUrl}${restBasePath}/${path}`;
-    if (query) {
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== undefined) qs.set(k, String(v));
-      }
-      const s = qs.toString();
-      if (s) url += `?${s}`;
-    }
-    const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
-    const headers: Record<string, string> = {};
-    if (!isForm) headers['Content-Type'] = 'application/json';
-    const auth =
-      this.authProvider?.() ??
-      (this.authToken && this.userId
-        ? { authToken: this.authToken, userId: this.userId }
-        : null);
-    if (auth) {
-      headers['X-Auth-Token'] = auth.authToken;
-      headers['X-User-Id'] = auth.userId;
-    }
-    const doFetch = this.fetchImpl ?? fetch;
-    const res = await doFetch(url, {
-      method,
-      headers,
-      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-    });
-    let data: any = null;
-    try {
-      data = await res.json();
-    } catch {
-      /* 空响应体 */
-    }
-    if (!res.ok) {
-      // 已带 token 的请求收到 401 = token 失效（排除 login 本身：密码错也是 401）。
-      // 通知上层登出，避免「能收消息但一操作就静默 401」的僵尸态。
-      if (res.status === 401 && auth && path !== 'login') {
-        this.onAuthError?.();
-      }
-      throw new RcApiError(
-        data?.error ?? data?.message ?? `HTTP ${res.status}`,
-        res.status,
-        data?.errorType,
-      );
-    }
-    return data as T;
+    return requestEndpoint(this.requestContext(), method, path, body, query);
   }
 
   // ---- 认证 ----
 
   async login(user: string, password: string): Promise<RcLoginData> {
-    const res = await this.request<{ data: RcLoginData }>('POST', 'login', { user, password });
-    this.setAuth(res.data.authToken, res.data.userId);
-    return res.data;
+    return loginEndpoint(this.endpointContext(), user, password);
   }
 
   /** 用已有 token 恢复会话（本地存储的 token 重新登录） */
   async loginWithToken(token: string): Promise<RcLoginData> {
-    const res = await this.request<{ data: RcLoginData }>('POST', 'login', { resume: token });
-    this.setAuth(res.data.authToken, res.data.userId);
-    return res.data;
+    return loginWithTokenEndpoint(this.endpointContext(), token);
   }
 
   async logout(): Promise<void> {
-    try {
-      await this.request('POST', 'logout');
-    } finally {
-      this.setAuth(null, null);
-    }
+    return logoutEndpoint(this.endpointContext());
   }
 
   me(): Promise<RcUser> {
-    return this.request<RcUser>('GET', 'me');
+    return meEndpoint(this.endpointContext());
   }
 
   // ---- 用户偏好（服务端持久化，跨设备同步）----
@@ -292,8 +272,7 @@ export class RcRestClient {
    * 分不清哪些是用户真改过的。想让客户端有自己的默认值，用 getExplicitPreferences。
    */
   async getPreferences(): Promise<RcPreferences> {
-    const res = await this.request<{ settings?: { preferences?: RcPreferences } }>('GET', 'me');
-    return res.settings?.preferences ?? {};
+    return getPreferencesEndpoint(this.endpointContext());
   }
 
   /**
@@ -305,27 +284,12 @@ export class RcRestClient {
    * 仅在 getPreferences 不可用时（更老的版本/代理裁剪）回退 users.info。
    */
   async getExplicitPreferences(): Promise<RcPreferences> {
-    const userId = this.currentUserId();
-    if (!userId) return {};
-    try {
-      const res = await this.request<{ preferences?: RcPreferences }>(
-        'GET',
-        'users.getPreferences',
-        undefined,
-        { userId },
-      );
-      return res.preferences ?? {};
-    } catch {
-      const res = await this.request<{
-        user?: { settings?: { preferences?: RcPreferences } };
-      }>('GET', 'users.info', undefined, { userId });
-      return res.user?.settings?.preferences ?? {};
-    }
+    return getExplicitPreferencesEndpoint(this.endpointContext());
   }
 
   /** 当前登录用户 id（authProvider 模式下 this.userId 为空，需实时取） */
   private currentUserId(): string | null {
-    return this.authProvider?.()?.userId ?? this.userId;
+    return currentAuth(this.requestContext())?.userId ?? this.userId;
   }
 
   /**
@@ -335,9 +299,7 @@ export class RcRestClient {
    * savePreferences（DDP saveUserPreferences 优先，本方法只是它的回退路径）。
    */
   async setPreferences(data: Partial<RcPreferences>): Promise<void> {
-    const userId = this.currentUserId();
-    if (!userId) throw new Error('未登录');
-    await this.request('POST', 'users.setPreferences', { userId, data });
+    return setPreferencesEndpoint(this.endpointContext(), data);
   }
 
   /**
@@ -345,61 +307,42 @@ export class RcRestClient {
    * 不拉的话，只有状态**变化**的人才会被实时流点亮——刚打开软件时会话列表一个状态点都没有。
    */
   async getPresences(): Promise<{ username: string; status?: string }[]> {
-    const res = await this.request<{ users: { username: string; status?: string }[] }>(
-      'GET',
-      'users.presence',
-    );
-    return res.users ?? [];
+    return getPresencesEndpoint(this.endpointContext());
   }
 
   /** 设置在线状态（online / away / busy / offline） */
   setStatus(status: string, message?: string): Promise<unknown> {
-    return this.request('POST', 'users.setStatus', {
-      status,
-      ...(message !== undefined ? { message } : {}),
-    });
+    return setStatusEndpoint(this.endpointContext(), status, message);
   }
 
   // ---- Teams ----
 
   async listTeams(count = 50): Promise<RcTeam[]> {
-    const res = await this.request<{ teams: RcTeam[] }>('GET', 'teams.list', undefined, { count });
-    return res.teams ?? [];
+    return listTeamsEndpoint(this.endpointContext(), count);
   }
 
   /** 创建 Team（type: 0 公开 / 1 私有） */
   async createTeam(name: string, members: string[], priv = true): Promise<RcTeam> {
-    const res = await this.request<{ team: RcTeam }>('POST', 'teams.create', {
-      name,
-      type: priv ? 1 : 0,
-      members,
-    });
-    return res.team;
+    return createTeamEndpoint(this.endpointContext(), name, members, priv);
   }
 
   /** Team 下的频道列表 */
   async listTeamRooms(teamId: string, count = 50): Promise<RcRoom[]> {
-    const res = await this.request<{ rooms: RcRoom[] }>('GET', 'teams.listRooms', undefined, {
-      teamId,
-      count,
-    });
-    return res.rooms ?? [];
+    return listTeamRoomsEndpoint(this.endpointContext(), teamId, count);
   }
 
   // ---- 会话 / 房间 ----
 
   async getSubscriptions(): Promise<RcSubscription[]> {
-    const res = await this.request<{ update: RcSubscription[] }>('GET', 'subscriptions.get');
-    return res.update ?? [];
+    return getSubscriptionsEndpoint(this.endpointContext());
   }
 
   async getRooms(): Promise<RcRoom[]> {
-    const res = await this.request<{ update: RcRoom[] }>('GET', 'rooms.get');
-    return res.update ?? [];
+    return getRoomsEndpoint(this.endpointContext());
   }
 
   markRead(rid: string): Promise<unknown> {
-    return this.request('POST', 'subscriptions.read', { rid });
+    return markReadEndpoint(this.endpointContext(), rid);
   }
 
   /**
@@ -409,32 +352,17 @@ export class RcRestClient {
    * 多人时传 `username` 会被当成一个不存在的用户名而失败。
    */
   async createDirectMessage(usernames: string | string[]): Promise<RcRoom> {
-    const list = Array.isArray(usernames) ? usernames : [usernames];
-    const body =
-      list.length > 1 ? { usernames: list.join(',') } : { username: list[0] };
-    const res = await this.request<{ room: RcRoom }>('POST', 'im.create', body);
-    return res.room;
+    return createDirectMessageEndpoint(this.endpointContext(), usernames);
   }
 
   /** 打开 DM 会话（创建后订阅可能是关闭状态，需要显式 open 才会出现在会话列表） */
   openDirectMessage(roomId: string): Promise<unknown> {
-    return this.request('POST', 'im.open', { roomId });
+    return openDirectMessageEndpoint(this.endpointContext(), roomId);
   }
 
   /** 创建群组：priv=true 走 groups.create（私有），否则 channels.create（公开频道） */
   async createGroup(name: string, members: string[], priv = true): Promise<RcRoom> {
-    if (priv) {
-      const res = await this.request<{ group: RcRoom }>('POST', 'groups.create', {
-        name,
-        members,
-      });
-      return res.group;
-    }
-    const res = await this.request<{ channel: RcRoom }>('POST', 'channels.create', {
-      name,
-      members,
-    });
-    return res.channel;
+    return createGroupEndpoint(this.endpointContext(), name, members, priv);
   }
 
   /** 目录检索：全部成员 / 公开频道（分页） */
@@ -444,24 +372,12 @@ export class RcRestClient {
     count = 50,
     offset = 0,
   ): Promise<{ result: (RcUser & RcRoom)[]; total: number }> {
-    const res = await this.request<{ result: (RcUser & RcRoom)[]; total: number }>(
-      'GET',
-      'directory',
-      undefined,
-      { text, type, count, offset, sort: '{"username":1}' },
-    );
-    return { result: res.result ?? [], total: res.total ?? 0 };
+    return directoryEndpoint(this.endpointContext(), type, text, count, offset);
   }
 
   /** 用户列表（需要 view-outside-room 权限，作为 directory 的回退） */
   async listUsers(count = 100, offset = 0): Promise<{ users: RcUser[]; total: number }> {
-    const res = await this.request<{ users: RcUser[]; total: number }>(
-      'GET',
-      'users.list',
-      undefined,
-      { count, offset },
-    );
-    return { users: res.users ?? [], total: res.total ?? 0 };
+    return listUsersEndpoint(this.endpointContext(), count, offset);
   }
 
   /**
@@ -473,60 +389,17 @@ export class RcRestClient {
     count = 100,
     offset = 0,
   ): Promise<{ users: RcUser[]; total: number; via: string }> {
-    const errors: string[] = [];
-    try {
-      const { result, total } = await this.directory('users', text, count, offset);
-      if (result.length > 0) return { users: result as RcUser[], total, via: 'directory' };
-      errors.push('directory 返回空');
-    } catch (err) {
-      errors.push(`directory: ${err instanceof Error ? err.message : err}`);
-    }
-    try {
-      const { users, total } = await this.listUsers(count, offset);
-      const filtered = text
-        ? users.filter(
-            (u) =>
-              u.username?.toLowerCase().includes(text.toLowerCase()) ||
-              (u.name ?? '').toLowerCase().includes(text.toLowerCase()),
-          )
-        : users;
-      if (filtered.length > 0) return { users: filtered, total: total || filtered.length, via: 'users.list' };
-      if (offset > 0) return { users: [], total, via: 'users.list' };
-      errors.push('users.list 返回空');
-    } catch (err) {
-      errors.push(`users.list: ${err instanceof Error ? err.message : err}`);
-    }
-    // spotlight 没有 offset，翻页时不能回退，否则会不断重复首屏。
-    if (offset > 0) return { users: [], total: 0, via: 'spotlight' };
-    try {
-      const { users } = await this.spotlight(text);
-      if (users.length > 0) return { users, total: users.length, via: 'spotlight' };
-      errors.push('spotlight 返回空');
-    } catch (err) {
-      errors.push(`spotlight: ${err instanceof Error ? err.message : err}`);
-    }
-    throw new Error(errors.join('；'));
+    return searchUsersEndpoint(this.endpointContext(), text, count, offset);
   }
 
   // ---- 消息 ----
 
   async getHistory(rid: string, type: RoomType, count = 50, latest?: string): Promise<RcMessage[]> {
-    const endpoint =
-      type === 'c' ? 'channels.history' : type === 'p' ? 'groups.history' : 'im.history';
-    const res = await this.request<{ messages: RcMessage[] }>('GET', endpoint, undefined, {
-      roomId: rid,
-      count,
-      latest,
-    });
-    // API 返回新→旧，翻转成旧→新方便渲染
-    return (res.messages ?? []).reverse();
+    return getHistoryEndpoint(this.endpointContext(), rid, type, count, latest);
   }
 
   async sendMessage(rid: string, msg: string, tmid?: string): Promise<RcMessage> {
-    const res = await this.request<{ message: RcMessage }>('POST', 'chat.sendMessage', {
-      message: { rid, msg, ...(tmid ? { tmid } : {}) },
-    });
-    return res.message;
+    return sendMessageEndpoint(this.endpointContext(), rid, msg, tmid);
   }
 
   // ---- 斜杠命令 ----
@@ -537,23 +410,12 @@ export class RcRestClient {
    * 的话，它只会变成一条字面量消息。
    */
   async listCommands(): Promise<RcSlashCommand[]> {
-    const res = await this.request<{ commands: RcSlashCommand[] }>(
-      'GET',
-      'commands.list',
-      undefined,
-      { count: 100 },
-    );
-    return res.commands ?? [];
+    return listCommandsEndpoint(this.endpointContext());
   }
 
   /** 执行斜杠命令。command 不含前导斜杠，params 是命令后面的全部内容 */
   async runCommand(command: string, rid: string, params = '', tmid?: string): Promise<void> {
-    await this.request('POST', 'commands.run', {
-      command,
-      roomId: rid,
-      params,
-      ...(tmid ? { tmid } : {}),
-    });
+    return runCommandEndpoint(this.endpointContext(), command, rid, params, tmid);
   }
 
   /**
@@ -571,21 +433,12 @@ export class RcRestClient {
     tmid?: string;
     customFields?: Record<string, unknown>;
   }): Promise<RcMessage> {
-    const res = await this.request<{ message: RcMessage }>('POST', 'chat.sendMessage', {
-      message,
-    });
-    return res.message;
+    return sendMessageRawEndpoint(this.endpointContext(), message);
   }
 
   /** 按稳定消息 id 回查；离线回灌重试报错时用它确认服务端是否已经落库。 */
   async getMessage(msgId: string): Promise<RcMessage> {
-    const res = await this.request<{ message: RcMessage }>(
-      'GET',
-      'chat.getMessage',
-      undefined,
-      { msgId },
-    );
-    return res.message;
+    return getMessageEndpoint(this.endpointContext(), msgId);
   }
 
   /** 机器人/集成用：按频道名或 roomId 发消息（支持附件卡片） */
@@ -597,22 +450,11 @@ export class RcRestClient {
     avatar?: string;
     attachments?: RcMessageAttachment[];
   }): Promise<unknown> {
-    return this.request('POST', 'chat.postMessage', params);
+    return postMessageEndpoint(this.endpointContext(), params);
   }
 
   async getCustomEmojiByName(name: string): Promise<RcCustomEmoji | null> {
-    const res = await this.request<{ emojis?: RcCustomEmojiPayload[] }>(
-      'GET',
-      'emoji-custom.all',
-      undefined,
-      { name },
-    );
-    const emoji = (res.emojis ?? []).find((item) => item?.name === name);
-    if (!emoji || typeof emoji.name !== 'string') return null;
-    return {
-      name: emoji.name,
-      aliases: normalizeCustomEmojiAliases(emoji.aliases),
-    };
+    return getCustomEmojiByNameEndpoint(this.endpointContext(), name);
   }
 
   async createCustomEmoji(params: {
@@ -621,129 +463,44 @@ export class RcRestClient {
     fileName: string;
     aliases?: string[];
   }): Promise<void> {
-    await this.postMultipart(
-      'emoji-custom.create',
-      'emoji',
-      params.file,
-      params.fileName,
-      {
-        name: params.name,
-        aliases: params.aliases?.join(','),
-      },
-    );
+    return createCustomEmojiEndpoint(this.endpointContext(), params);
   }
 
   /** emoji 传 :name: 格式；shouldReact 省略时为切换 */
   react(messageId: string, emoji: string, shouldReact?: boolean): Promise<unknown> {
-    return this.request('POST', 'chat.react', { messageId, emoji, shouldReact });
+    return reactEndpoint(this.endpointContext(), messageId, emoji, shouldReact);
   }
 
   async updateMessage(rid: string, msgId: string, text: string): Promise<RcMessage> {
-    const res = await this.request<{ message: RcMessage }>('POST', 'chat.update', {
-      roomId: rid,
-      msgId,
-      text,
-    });
-    return res.message;
+    return updateMessageEndpoint(this.endpointContext(), rid, msgId, text);
   }
 
   async deleteMessage(rid: string, msgId: string): Promise<void> {
-    const response = await this.request<{ success?: boolean }>('POST', 'chat.delete', {
-      roomId: rid,
-      msgId,
-      asUser: true,
-    });
-    if (response?.success !== true) {
-      throw new RcApiError('服务器未确认消息删除', 502);
-    }
+    return deleteMessageEndpoint(this.endpointContext(), rid, msgId);
   }
 
   /** 话题（线程）消息，按时间升序返回 */
   async getThreadMessages(tmid: string, count = 100): Promise<RcMessage[]> {
-    const res = await this.request<{ messages: RcMessage[] }>(
-      'GET',
-      'chat.getThreadMessages',
-      undefined,
-      { tmid, count },
-    );
-    const messages = res.messages ?? [];
-    messages.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
-    return messages;
+    return getThreadMessagesEndpoint(this.endpointContext(), tmid, count);
   }
 
   /** 关注讨论串，后续新回复由 Rocket.Chat 按关注关系提醒。 */
   followMessage(mid: string): Promise<unknown> {
-    return this.request('POST', 'chat.followMessage', { mid });
+    return followMessageEndpoint(this.endpointContext(), mid);
   }
 
   /** 取消关注讨论串，停止接收普通新回复提醒。 */
   unfollowMessage(mid: string): Promise<unknown> {
-    return this.request('POST', 'chat.unfollowMessage', { mid });
+    return unfollowMessageEndpoint(this.endpointContext(), mid);
   }
 
   async getMembers(rid: string, type: RoomType, count = 200): Promise<RcUser[]> {
-    const endpoint =
-      type === 'c' ? 'channels.members' : type === 'p' ? 'groups.members' : 'im.members';
-    const pageSize = Number.isFinite(count) ? Math.max(1, count) : 200;
-    const maxPages = 1_000;
-    const members = new Map<string, RcUser>();
-    let offset = 0;
-    let total: number | undefined;
-    for (let pageNumber = 0; pageNumber < maxPages; pageNumber++) {
-      const res = await this.request<{ members: RcUser[]; total?: number }>(
-        'GET',
-        endpoint,
-        undefined,
-        { roomId: rid, count: pageSize, offset },
-      );
-      const page = res.members ?? [];
-      if (Number.isFinite(res.total) && res.total! >= 0) total = Math.floor(res.total!);
-      const before = members.size;
-      for (const member of page) members.set(member._id, member);
-      if (page.length === 0) {
-        if (total !== undefined && members.size < total) {
-          throw new RcApiError(
-            `成员列表不完整：服务端报告 ${total} 人，只返回 ${members.size} 人`,
-            502,
-            'members-pagination-incomplete',
-          );
-        }
-        return [...members.values()];
-      }
-      if (members.size === before) {
-        throw new RcApiError(
-          `成员列表分页没有新增成员（offset ${offset}）`,
-          502,
-          'members-pagination-stalled',
-        );
-      }
-      offset += page.length;
-      if (total !== undefined) {
-        if (members.size >= total) return [...members.values()];
-        if (offset >= total) {
-          throw new RcApiError(
-            `成员列表不完整：服务端报告 ${total} 人，只返回 ${members.size} 个唯一成员`,
-            502,
-            'members-pagination-incomplete',
-          );
-        }
-      } else if (page.length < pageSize) {
-        return [...members.values()];
-      }
-    }
-    throw new RcApiError(
-      `成员列表分页请求达到 ${maxPages} 页上限`,
-      502,
-      'members-pagination-limit',
-    );
+    return getMembersEndpoint(this.endpointContext(), rid, type, count);
   }
 
   /** 房间完整信息（含 topic / description / announcement / 拥有者） */
   async getRoomInfo(rid: string): Promise<RcRoom> {
-    const res = await this.request<{ room: RcRoom }>('GET', 'rooms.info', undefined, {
-      roomId: rid,
-    });
-    return res.room;
+    return getRoomInfoEndpoint(this.endpointContext(), rid);
   }
 
   /**
@@ -757,18 +514,12 @@ export class RcRestClient {
     rid: string,
     settings: { topic?: string; announcement?: string; description?: string; name?: string },
   ): Promise<void> {
-    const body: Record<string, string> = { rid };
-    if (settings.topic !== undefined) body.roomTopic = settings.topic;
-    if (settings.announcement !== undefined) body.roomAnnouncement = settings.announcement;
-    if (settings.description !== undefined) body.roomDescription = settings.description;
-    if (settings.name !== undefined) body.roomName = settings.name;
-    await this.request('POST', 'rooms.saveRoomSettings', body);
+    return saveRoomSettingsEndpoint(this.endpointContext(), rid, settings);
   }
 
   /** 退出房间（DM 不支持，用 hideRoom 代替） */
   async leaveRoom(rid: string, type: RoomType): Promise<void> {
-    const endpoint = type === 'c' ? 'channels.leave' : 'groups.leave';
-    await this.request('POST', endpoint, { roomId: rid });
+    return leaveRoomEndpoint(this.endpointContext(), rid, type);
   }
 
   /**
@@ -776,8 +527,7 @@ export class RcRestClient {
    * 与 hideRoom 完全不同：hide 只是从自己的会话列表里隐掉，房间还在服务器上。
    */
   async deleteRoom(rid: string, type: RoomType): Promise<void> {
-    const endpoint = type === 'c' ? 'channels.delete' : 'groups.delete';
-    await this.request('POST', endpoint, { roomId: rid });
+    return deleteRoomEndpoint(this.endpointContext(), rid, type);
   }
 
   /**
@@ -790,48 +540,7 @@ export class RcRestClient {
     file: Blob,
     opts: { msg?: string; tmid?: string; fileName?: string } = {},
   ): Promise<void> {
-    const name = opts.fileName ?? (file instanceof File ? file.name : 'file');
-    const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-    const encoder = new TextEncoder();
-    // 文件名用原生 UTF-8（现代 multipart 解析器直接支持），只转义引号和换行
-    const safeName = name.replace(/"/g, '%22').replace(/[\r\n]/g, ' ');
-    const head = encoder.encode(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n` +
-        `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
-    );
-    const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
-    /**
-     * body 直接拼 Blob 分段，不再 arrayBuffer + Uint8Array 整体拷贝：
-     * 大文件上传时浏览器 fetch 可直接消费 Blob（零拷贝），内存峰值不再翻倍
-     * （issue #355）。桌面端 Tauri plugin-http 内部仍会物化 body（其 fetch
-     * 走 `new Request(...).arrayBuffer()`），但至少省掉这里的两次全量拷贝。
-     */
-    const body = new Blob([head, file, tail]);
-
-    const auth =
-      this.authProvider?.() ??
-      (this.authToken && this.userId
-        ? { authToken: this.authToken, userId: this.userId }
-        : null);
-    const doFetch = this.fetchImpl ?? fetch;
-    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
-    const res = await doFetch(`${this.baseUrl}${restBasePath}/rooms.media/${rid}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
-      },
-      body,
-    });
-    const data: any = await res.json().catch(() => null);
-    if (!res.ok) {
-      throw new RcApiError(data?.error ?? `HTTP ${res.status}`, res.status, data?.errorType);
-    }
-    await this.request('POST', `rooms.mediaConfirm/${rid}/${data.file._id}`, {
-      msg: opts.msg ?? '',
-      ...(opts.tmid ? { tmid: opts.tmid } : {}),
-    });
+    return uploadMediaEndpoint(this.endpointContext(), rid, file, opts);
   }
 
   // ---- 群管理 ----
@@ -841,17 +550,12 @@ export class RcRestClient {
    * 只返回「有角色的人」，普通成员不在列表里。
    */
   async getRoomRoles(rid: string, type: RoomType): Promise<RcRoomRole[]> {
-    const endpoint = type === 'c' ? 'channels.roles' : 'groups.roles';
-    const res = await this.request<{ roles: RcRoomRole[] }>('GET', endpoint, undefined, {
-      roomId: rid,
-    });
-    return res.roles ?? [];
+    return getRoomRolesEndpoint(this.endpointContext(), rid, type);
   }
 
   /** 把人移出房间 */
   kickFromRoom(rid: string, type: RoomType, userId: string): Promise<unknown> {
-    const endpoint = type === 'c' ? 'channels.kick' : 'groups.kick';
-    return this.request('POST', endpoint, { roomId: rid, userId });
+    return kickFromRoomEndpoint(this.endpointContext(), rid, type, userId);
   }
 
   /** 授予/收回房间角色。role 为 owner / moderator / leader */
@@ -862,10 +566,7 @@ export class RcRestClient {
     role: 'owner' | 'moderator' | 'leader',
     grant: boolean,
   ): Promise<unknown> {
-    const verb = grant ? 'add' : 'remove';
-    const suffix = role === 'owner' ? 'Owner' : role === 'moderator' ? 'Moderator' : 'Leader';
-    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.${verb}${suffix}`;
-    return this.request('POST', endpoint, { roomId: rid, userId });
+    return setRoomRoleEndpoint(this.endpointContext(), rid, type, userId, role, grant);
   }
 
   /**
@@ -875,33 +576,24 @@ export class RcRestClient {
    * ——这两个 REST 端点根本不存在（实测过）。服务端只在 `/mute` 命令里实现了这个能力。
    */
   muteUser(rid: string, username: string, mute: boolean): Promise<unknown> {
-    return this.runCommand(mute ? 'mute' : 'unmute', rid, `@${username}`);
+    return muteUserEndpoint(this.endpointContext(), rid, username, mute);
   }
 
   /** 归档 / 取消归档 */
   archiveRoom(rid: string, type: RoomType, archive: boolean): Promise<unknown> {
-    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.${archive ? 'archive' : 'unarchive'}`;
-    return this.request('POST', endpoint, { roomId: rid });
+    return archiveRoomEndpoint(this.endpointContext(), rid, type, archive);
   }
 
   /** 设为只读（只有房主/管理员能发言）/ 取消只读 */
   setReadOnly(rid: string, type: RoomType, readOnly: boolean): Promise<unknown> {
-    const endpoint = `${type === 'c' ? 'channels' : 'groups'}.setReadOnly`;
-    return this.request('POST', endpoint, { roomId: rid, readOnly });
+    return setReadOnlyEndpoint(this.endpointContext(), rid, type, readOnly);
   }
 
   // ---- 面板数据 ----
 
   /** 房间里传过的文件（「文件」面板） */
   async getRoomFiles(rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {
-    const endpoint =
-      type === 'c' ? 'channels.files' : type === 'p' ? 'groups.files' : 'im.files';
-    const res = await this.request<{ files: RcRoomFile[] }>('GET', endpoint, undefined, {
-      roomId: rid,
-      count,
-      sort: JSON.stringify({ uploadedAt: -1 }),
-    });
-    return res.files ?? [];
+    return getRoomFilesEndpoint(this.endpointContext(), rid, type, count);
   }
 
   /** 本房间里 @ 到我的消息（「提及我的」面板）；保留分页元数据给全局收件箱。 */
@@ -910,29 +602,12 @@ export class RcRestClient {
     offset = 0,
     count = 50,
   ): Promise<{ messages: RcMessage[]; count: number; offset: number; total: number }> {
-    const res = await this.request<{
-      messages: RcMessage[];
-      count?: number;
-      offset?: number;
-      total?: number;
-    }>(
-      'GET',
-      'chat.getMentionedMessages',
-      undefined,
-      { roomId: rid, offset, count, sort: JSON.stringify({ ts: -1 }) },
-    );
-    const messages = res.messages ?? [];
-    return {
-      messages,
-      count: res.count ?? messages.length,
-      offset: res.offset ?? offset,
-      total: res.total ?? offset + messages.length,
-    };
+    return getMentionedMessagesPageEndpoint(this.endpointContext(), rid, offset, count);
   }
 
   /** 兼容现有房间面板。 */
   async getMentionedMessages(rid: string, count = 50): Promise<RcMessage[]> {
-    return (await this.getMentionedMessagesPage(rid, 0, count)).messages;
+    return getMentionedMessagesEndpoint(this.endpointContext(), rid, count);
   }
 
   // ---- 个人资料 ----
@@ -948,20 +623,12 @@ export class RcRestClient {
     newPassword?: string;
     currentPassword?: string;
   }): Promise<RcUser> {
-    const { currentPassword, ...rest } = data;
-    const res = await this.request<{ user: RcUser }>('POST', 'users.updateOwnBasicInfo', {
-      data: {
-        ...rest,
-        // 服务端要的是 SHA-256 十六进制，不是明文
-        ...(currentPassword ? { currentPassword: await sha256Hex(currentPassword) } : {}),
-      },
-    });
-    return res.user;
+    return updateOwnBasicInfoEndpoint(this.endpointContext(), data);
   }
 
   /** 上传头像。RC 的 users.setAvatar 用 multipart，字段名固定是 image */
   async setAvatar(file: Blob, fileName = 'avatar.png'): Promise<void> {
-    await this.postMultipart('users.setAvatar', 'image', file, fileName);
+    return setAvatarEndpoint(this.endpointContext(), file, fileName);
   }
 
   /**
@@ -970,236 +637,88 @@ export class RcRestClient {
    * 它不会默认成「当前用户」。
    */
   async resetAvatar(userId?: string): Promise<void> {
-    const target = userId ?? this.currentUserId();
-    if (!target) throw new RcApiError('未登录', 401);
-    await this.request('POST', 'users.resetAvatar', { userId: target });
+    return resetAvatarEndpoint(this.endpointContext(), userId);
   }
 
   /** 查某个用户的资料（按用户名或 id） */
   async getUserInfo(usernameOrId: string): Promise<RcUser> {
-    const key = /^[a-zA-Z0-9]{17}$/.test(usernameOrId) ? 'userId' : 'username';
-    const res = await this.request<{ user: RcUser }>('GET', 'users.info', undefined, {
-      [key]: usernameOrId,
-    });
-    return res.user;
+    return getUserInfoEndpoint(this.endpointContext(), usernameOrId);
   }
 
   /** 按用户 id 查资料；不依赖 Rocket.Chat 默认的 17 位 id 长度。 */
   async getUserInfoById(userId: string): Promise<RcUser> {
-    const res = await this.request<{ user: RcUser }>('GET', 'users.info', undefined, {
-      userId,
-    });
-    return res.user;
-  }
-
-  /**
-   * 手工构造 multipart 体发到某个端点。
-   * 不用 FormData：Tauri 的 plugin-http 通道对它支持不可靠（uploadMedia 也是同样的理由）。
-   */
-  private async postMultipart(
-    path: string,
-    fieldName: string,
-    file: Blob,
-    fileName: string,
-    textFields?: Record<string, string | undefined>,
-  ): Promise<any> {
-    const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-    const encoder = new TextEncoder();
-    const fileBytes = new Uint8Array(await file.arrayBuffer());
-    const parts: Uint8Array[] = [];
-    const pushTextField = (name: string, value: string) => {
-      parts.push(
-        encoder.encode(
-          `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="${sanitizeMultipartToken(name)}"\r\n\r\n` +
-            `${value}\r\n`,
-        ),
-      );
-    };
-    for (const [name, value] of Object.entries(textFields ?? {})) {
-      if (value !== undefined) pushTextField(name, value);
-    }
-    parts.push(
-      encoder.encode(
-        `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="${sanitizeMultipartToken(fieldName)}"; filename="${sanitizeMultipartToken(fileName)}"\r\n` +
-          `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
-      ),
-    );
-    parts.push(fileBytes);
-    parts.push(encoder.encode(`\r\n--${boundary}--\r\n`));
-    const bodyLength = parts.reduce((total, part) => total + part.length, 0);
-    const body = new Uint8Array(bodyLength);
-    let offset = 0;
-    for (const part of parts) {
-      body.set(part, offset);
-      offset += part.length;
-    }
-
-    const auth =
-      this.authProvider?.() ??
-      (this.authToken && this.userId
-        ? { authToken: this.authToken, userId: this.userId }
-        : null);
-    const doFetch = this.fetchImpl ?? fetch;
-    const restBasePath = this._capabilities.endpoint.restBasePath.replace(/\/+$/, '');
-    const res = await doFetch(`${this.baseUrl}${restBasePath}/${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
-      },
-      body,
-    });
-    const data: any = await res.json().catch(() => null);
-    if (!res.ok) {
-      throw new RcApiError(data?.error ?? `HTTP ${res.status}`, res.status, data?.errorType);
-    }
-    return data;
+    return getUserInfoByIdEndpoint(this.endpointContext(), userId);
   }
 
   /** 带认证拉取站内文件，并保留响应流给桌面端直接写盘。 */
   async fetchFileResponse(path: string): Promise<Response> {
-    const auth =
-      this.authProvider?.() ??
-      (this.authToken && this.userId
-        ? { authToken: this.authToken, userId: this.userId }
-        : null);
-    const doFetch = this.fetchImpl ?? fetch;
-    const absolute = /^https?:\/\//i.test(path);
-    const base = this.baseUrl.replace(/\/+$/, '');
-    const url = absolute ? path : `${base}${path}`;
-    const ownServer = !absolute || (!!base && (url === base || url.startsWith(`${base}/`)));
-    const authHeaders: Record<string, string> =
-      auth && ownServer
-        ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId }
-        : {};
-
-    // 同源 Web 部署用 rc_uid/rc_token cookie 即可。不要再附自定义认证头：浏览器
-    // 跟随到 CDN 时 cookie 会按域自动隔离，而自定义 X-* 头可能被原样转发。
-    const cookieAuth =
-      ownServer &&
-      typeof location !== 'undefined' &&
-      new URL(url, location.href).origin === location.origin;
-
-    let res: Response;
-    if (!auth || !ownServer || cookieAuth) {
-      res = await doFetch(url, cookieAuth ? { credentials: 'include' } : {});
-    } else {
-      // 桌面端/跨源直连必须显式带 RC 头。手动跟随重定向，并且只在仍属于
-      // Rocket.Chat 本源时保留凭据；跳到 S3/CDN 后立即去掉，避免 token 泄露。
-      let current = url;
-      let headers: Record<string, string> = authHeaders;
-      const serverOrigin = base ? new URL(base).origin : '';
-      for (let redirects = 0; ; redirects += 1) {
-        // Tauri plugin-http 不识别标准 redirect:'manual'，但会读取
-        // maxRedirections:0；原生 fetch 则忽略这个扩展字段、按 manual 返回 3xx。
-        // 两者都必须在客户端逐跳处理，才能在跨源时剥离 Rocket.Chat 凭据。
-        res = await doFetch(current, {
-          headers,
-          redirect: 'manual',
-          maxRedirections: 0,
-        } as RequestInit & { maxRedirections: number });
-        if (![301, 302, 303, 307, 308].includes(res.status)) break;
-        if (redirects >= 5) throw new RcApiError('文件下载重定向次数过多', 508);
-        const locationHeader = res.headers.get('location');
-        if (!locationHeader) {
-          throw new RcApiError('文件下载发生无法安全跟随的重定向', res.status || 502);
-        }
-        current = new URL(locationHeader, current).href;
-        headers = serverOrigin && new URL(current).origin === serverOrigin ? authHeaders : {};
-      }
-    }
-    if (!res.ok) throw new RcApiError(`HTTP ${res.status}`, res.status);
-    return res;
+    return fetchFileResponseEndpoint(this.endpointContext(), path);
   }
 
   /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */
   async fetchFile(path: string): Promise<Blob> {
-    return await (await this.fetchFileResponse(path)).blob();
+    return fetchFileEndpoint(this.endpointContext(), path);
   }
 
   /** 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话） */
   async createDiscussion(prid: string, name: string, pmid?: string): Promise<RcRoom> {
-    const res = await this.request<{ discussion: RcRoom }>('POST', 'rooms.createDiscussion', {
-      prid,
-      t_name: name,
-      ...(pmid ? { pmid } : {}),
-    });
-    return res.discussion;
+    return createDiscussionEndpoint(this.endpointContext(), prid, name, pmid);
   }
 
   // ---- 会话管理 ----
 
   /** 置顶会话（Rocket.Chat 的 favorite） */
   favoriteRoom(roomId: string, favorite: boolean): Promise<unknown> {
-    return this.request('POST', 'rooms.favorite', { roomId, favorite });
+    return favoriteRoomEndpoint(this.endpointContext(), roomId, favorite);
   }
 
   /** 免打扰开关 */
   muteRoom(roomId: string, mute: boolean): Promise<unknown> {
-    return this.request('POST', 'rooms.saveNotification', {
-      roomId,
-      notifications: { disableNotifications: mute ? '1' : '0' },
-    });
+    return muteRoomEndpoint(this.endpointContext(), roomId, mute);
   }
 
   /** 从会话列表隐藏（不退出房间，有新消息会重新出现） */
   hideRoom(roomId: string, type: RoomType): Promise<unknown> {
-    const endpoint = type === 'c' ? 'channels.close' : type === 'p' ? 'groups.close' : 'im.close';
-    return this.request('POST', endpoint, { roomId });
+    return hideRoomEndpoint(this.endpointContext(), roomId, type);
   }
 
   /** 恢复已隐藏的会话。 */
   openRoom(roomId: string, type: RoomType): Promise<unknown> {
-    const endpoint = type === 'c' ? 'channels.open' : type === 'p' ? 'groups.open' : 'im.open';
-    return this.request('POST', endpoint, { roomId });
+    return openRoomEndpoint(this.endpointContext(), roomId, type);
   }
 
   // ---- 标记（星标） ----
 
   starMessage(messageId: string): Promise<unknown> {
-    return this.request('POST', 'chat.starMessage', { messageId });
+    return starMessageEndpoint(this.endpointContext(), messageId);
   }
 
   unstarMessage(messageId: string): Promise<unknown> {
-    return this.request('POST', 'chat.unStarMessage', { messageId });
+    return unstarMessageEndpoint(this.endpointContext(), messageId);
   }
 
   async getStarredMessages(rid: string, count = 50): Promise<RcMessage[]> {
-    const res = await this.request<{ messages: RcMessage[] }>(
-      'GET',
-      'chat.getStarredMessages',
-      undefined,
-      { roomId: rid, count },
-    );
-    return res.messages ?? [];
+    return getStarredMessagesEndpoint(this.endpointContext(), rid, count);
   }
 
   // ---- Pin ----
 
   pinMessage(messageId: string): Promise<unknown> {
-    return this.request('POST', 'chat.pinMessage', { messageId });
+    return pinMessageEndpoint(this.endpointContext(), messageId);
   }
 
   unpinMessage(messageId: string): Promise<unknown> {
-    return this.request('POST', 'chat.unPinMessage', { messageId });
+    return unpinMessageEndpoint(this.endpointContext(), messageId);
   }
 
   async getPinnedMessages(rid: string, count = 50): Promise<RcMessage[]> {
-    const res = await this.request<{ messages: RcMessage[] }>(
-      'GET',
-      'chat.getPinnedMessages',
-      undefined,
-      { roomId: rid, count },
-    );
-    return res.messages ?? [];
+    return getPinnedMessagesEndpoint(this.endpointContext(), rid, count);
   }
 
   // ---- 搜索 ----
 
   spotlight(query: string): Promise<{ users: RcUser[]; rooms: RcRoom[] }> {
-    return this.request('GET', 'spotlight', undefined, { query });
+    return spotlightEndpoint(this.endpointContext(), query);
   }
 
   /** 搜索某个会话内的消息 */
@@ -1209,43 +728,28 @@ export class RcRestClient {
     count = 30,
     offset = 0,
   ): Promise<RcMessage[]> {
-    const res = await this.request<{ messages: RcMessage[] }>('GET', 'chat.search', undefined, {
-      roomId: rid,
-      // 中文子串：服务端 Message_AlwaysSearchRegExp=false 时 Mongo 文本索引不切分中文，
-      // 直接搜「工作项」搜不到；手动包成 /工作项/ 走正则才命中。用户已经手包 /.../ 的不动。
-      searchText: wrapCjkAsRegex(searchText),
-      count,
-      offset,
-    });
-    return res.messages ?? [];
+    return searchMessagesEndpoint(this.endpointContext(), rid, searchText, count, offset);
   }
 
   /** 加入公开频道（搜索结果里点开未加入的频道时用） */
   joinChannel(rid: string): Promise<unknown> {
-    return this.request('POST', 'channels.join', { roomId: rid });
+    return joinChannelEndpoint(this.endpointContext(), rid);
   }
 
   /** 加入房间；旧版兼容由调用方根据房间语义选择对应路径 */
   joinRoom(rid: string): Promise<unknown> {
-    return this.request('POST', 'rooms.join', { roomId: rid });
+    return joinRoomEndpoint(this.endpointContext(), rid);
   }
 
   /** 邀请成员进群 */
   inviteToRoom(rid: string, type: RoomType, userId: string): Promise<unknown> {
-    const endpoint = type === 'c' ? 'channels.invite' : 'groups.invite';
-    return this.request('POST', endpoint, { roomId: rid, userId });
+    return inviteToRoomEndpoint(this.endpointContext(), rid, type, userId);
   }
 
   /** 消息的已读回执（需要服务端开启 Message_Read_Receipt_Enabled） */
   async getReadReceipts(
     messageId: string,
   ): Promise<{ user: RcUser; ts: RcDate }[]> {
-    const res = await this.request<{ receipts: { user: RcUser; ts: RcDate }[] }>(
-      'GET',
-      'chat.getMessageReadReceipts',
-      undefined,
-      { messageId },
-    );
-    return res.receipts ?? [];
+    return getReadReceiptsEndpoint(this.endpointContext(), messageId);
   }
 }
