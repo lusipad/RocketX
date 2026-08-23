@@ -2,7 +2,7 @@
 
 > 文档状态：**当前架构说明**。用户可见能力、平台边界和验收以 [功能规格](specs/README.md) 为准；本文件只记录稳定架构决策与实现陷阱。
 
-首次记录：2026-07-13；最近校准：2026-08-14
+首次记录：2026-07-13；最近校准：2026-08-23
 
 ## 决策 1：自研客户端 + 原版 Rocket.Chat 后端
 
@@ -47,6 +47,13 @@ rcx-hub 集中管控等平台级投入全部冻结。功能取舍以「GTD 五�
 - DSH 只在两种路径下可用：slim 连接系统里已安装且可运行的 DSH，Windows full 则在应用数据目录中使用私有固定运行时；用户无需保留 `deepseek-harness` 源码仓库，但私有 full 资源只随 full 升级。
 - 网页版保留 Rocket.Chat 与确定性工作界面，但当前没有本地 Codex 或 DSH Transport。详细降级行为见 [能力矩阵](specs/capability-matrix.md)。
 - 交互式请求按原生 Thread/Session 隔离。Codex 的三档快捷权限与 DSH 的原生 permission preset 分别处理，不能互相映射后假装等价。
+
+### Issue #356 架构收敛（2026-08-23）
+
+- **Native Host**：`proc.rs`、`dsh.rs`、`lan.rs` 保留 Tauri command、生命周期和传输编排；`native/process.rs` 提供进程原语，Codex/DSH 的 contract、discovery、process 分别隔离，`update_policy.rs` 收口更新策略，LAN 的身份/发现与接收端传输状态分别位于 `lan_discovery.rs` 和 `lan_transfer.rs`。`lan_protocol.rs` 仍是稳定的线协议与握手签名边界。
+- **Rocket.Chat 防腐层**：`RcRestClient` 只负责共享 request context、认证/错误、能力快照和兼容 facade；`auth.ts`、`users.ts`、`rooms.ts`、`messages.ts`、`files.ts`、`search.ts`、`preferences.ts`、`emoji.ts` 负责各自 endpoint，通过 `request.ts` 走同一认证和错误合同。
+- **本地数据**：`localDataContract.ts` 以 schema 注册表描述 domain、版本、scope 和 backend；迁移支持 plan/dry-run、连续版本步骤、校验、备份、恢复与失败回滚。未知 key、未来版本、scope 冲突和损坏记录不会静默覆盖，SQLite 事务迁移另行设计。
+- **兼容性**：以上模块只调整内部边界，不改变 Tauri command、Rocket.Chat REST/WebSocket/DDP、公开包 API、LAN wire protocol 或既有本地存储 key；旧 Rust 入口和 `RcRestClient` 方法继续作为 facade。
 
 ### 与 Rocket.Chat 的通信
 

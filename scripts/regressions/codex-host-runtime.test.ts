@@ -5,21 +5,22 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 
 test('Web 协议基线与桌面运行时兼容合同保持同一版本口径', async () => {
-  const [protocol, proc] = await Promise.all([
+  const [protocol, contract] = await Promise.all([
     readFile(new URL('apps/web/src/agent/protocol/compatibility.ts', root), 'utf8'),
-    readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8'),
+    readFile(new URL('apps/desktop/src-tauri/src/native/codex_contract.rs', root), 'utf8'),
   ]);
   const protocolBaseline = /CODEX_APP_SERVER_VERSION = '([^']+)'/u.exec(protocol)?.[1];
-  const desktopBaseline = /CODEX_PROTOCOL_BASELINE: &str = "([^"]+)"/u.exec(proc)?.[1];
+  const desktopBaseline = /CODEX_PROTOCOL_BASELINE: &str = "([^"]+)"/u.exec(contract)?.[1];
   const webCandidate = /CODEX_MINIMUM_CANDIDATE = '([^']+)'/u.exec(protocol)?.[1];
-  const desktopCandidate = /CODEX_MINIMUM_CANDIDATE: &str = "([^"]+)"/u.exec(proc)?.[1];
+  const desktopCandidate = /CODEX_MINIMUM_CANDIDATE: &str = "([^"]+)"/u.exec(contract)?.[1];
   assert.equal(desktopBaseline, protocolBaseline);
   assert.equal(desktopCandidate, webCandidate);
 });
 
 test('Codex sessions use the selected host workspace without an Agent Runner image', async () => {
-  const [proc, controller, workspace, sharedAgent, tauri, ci, pkg] = await Promise.all([
+  const [proc, discovery, controller, workspace, sharedAgent, tauri, ci, pkg] = await Promise.all([
     readFile(new URL('apps/desktop/src-tauri/src/proc.rs', root), 'utf8'),
+    readFile(new URL('apps/desktop/src-tauri/src/native/codex_discovery.rs', root), 'utf8'),
     readFile(new URL('apps/web/src/agent/AppServerController.ts', root), 'utf8'),
     readFile(new URL('apps/web/src/stores/codexWorkspace.ts', root), 'utf8'),
     readFile(new URL('apps/web/src/stores/sharedAgent.ts', root), 'utf8'),
@@ -28,10 +29,10 @@ test('Codex sessions use the selected host workspace without an Agent Runner ima
     readFile(new URL('package.json', root), 'utf8'),
   ]);
 
-  assert.match(proc, /bundled_codex_paths\(app\)/);
-  assert.match(proc, /resource_dir\(\)/);
-  assert.match(proc, /\["codex\.cmd", "codex\.exe"\]/);
-  assert.match(proc, /standard_codex_paths\(\)/);
+  assert.match(discovery, /fn bundled_codex_paths\(app:/);
+  assert.match(discovery, /app\.path\(\)\.resource_dir\(\)/);
+  assert.match(discovery, /\["codex\.cmd", "codex\.exe"\]/);
+  assert.match(discovery, /fn standard_codex_paths\(\)/);
   assert.match(proc, /codex_runtime_scan_from_candidates_with/);
   assert.match(proc, /codex_command_succeeds\(resolved, &\["app-server", "--help"\]\)/);
   assert.match(proc, /codex_command_succeeds\(resolved, &\["login", "status"\]\)/);

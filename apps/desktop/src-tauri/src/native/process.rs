@@ -19,6 +19,22 @@ pub(crate) fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     command
 }
 
+/// Convert Windows extended path prefixes back to paths accepted by Node and
+/// Tauri plugins.  The same normalization is used by every native adapter.
+pub(crate) fn host_path(path: &std::path::Path) -> String {
+    let value = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    value.into_owned()
+}
+
 /// Wait for a child without blocking forever on a runtime that stopped
 /// responding to its graceful shutdown request.
 pub(crate) fn wait_for_exit(

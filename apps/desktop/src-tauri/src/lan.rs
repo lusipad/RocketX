@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
     path::{Path, PathBuf},
@@ -9,11 +9,31 @@ use std::{
         Arc, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
-use crate::native::lan::{safe_file_name, transfer_paths};
-use crate::native::lan_identity as lan_identity_policy;
+use crate::native::lan::safe_file_name;
+#[cfg(test)]
+use crate::native::lan::transfer_paths;
+use crate::native::lan_discovery::{
+    announcement_from_identity, build_runtime_identity, now_ms, peer_key, random_nonce,
+    trusted_map, LanAnnouncement, PeerKey, RuntimeIdentity,
+};
+#[allow(unused_imports)]
+pub use crate::native::lan_discovery::{LanIdentityInfo, LanPeer, LanServiceInfo, TrustedDevice};
+use crate::native::lan_discovery::{PEER_TTL_MS, SERVICE_TYPE, UDP_GROUP, UDP_PORT};
+#[cfg(test)]
+use crate::native::lan_transfer::LanFileEvent;
+pub use crate::native::lan_transfer::CHUNK_BYTES;
+use crate::native::lan_transfer::{
+    finish_file_transfer, hash_file, incoming_root, prepare_file_offer, write_file_chunk,
+    IncomingTransfer, SharedTransfers,
+};
+
+#[allow(dead_code)]
+pub fn server_fingerprint(server_url: &str) -> Result<String, String> {
+    crate::native::lan_discovery::server_fingerprint(server_url)
+}
 #[cfg(test)]
 use crate::native::lan_identity::validate_scope as validate_identity_scope;
 #[cfg(test)]
@@ -23,20 +43,15 @@ pub(crate) use crate::native::lan_protocol::{
     read_control_frame, sign_transcript, verify_transcript, write_control_frame, ControlFrame,
     HandshakePeer, HandshakeTranscript,
 };
+#[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+#[cfg(test)]
 use ed25519_dalek::SigningKey;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use tauri::{Emitter, Manager};
-use zeroize::Zeroizing;
 
-const KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.lan";
-pub const CHUNK_BYTES: u32 = 1024 * 1024;
-const SERVICE_TYPE: &str = "_rcx._tcp.local.";
-const UDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 82, 67);
-const UDP_PORT: u16 = 45_826;
-const PEER_TTL_MS: u64 = 15_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -59,17 +74,8 @@ struct LanRuntime {
     connection_threads: SharedConnectionThreads,
 }
 
-struct RuntimeIdentity {
-    peer: HandshakePeer,
-    device_name: String,
-    server_fingerprint: String,
-    signing_key: SigningKey,
-}
-
-type PeerKey = (String, String);
 type SharedPeers = Arc<RwLock<HashMap<PeerKey, LanPeer>>>;
 type SharedTrusted = Arc<RwLock<HashMap<PeerKey, String>>>;
-type SharedTransfers = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
 
 struct ConnectionThread {
     stream: TcpStream,
@@ -102,44 +108,6 @@ fn reap_finished_connection_threads(shared: &SharedConnectionThreads) {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LanIdentityInfo {
-    pub device_id: String,
-    pub device_name: String,
-    pub public_key: String,
-    pub protocol_version: u16,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct TrustedDevice {
-    pub user_id: String,
-    pub device_id: String,
-    pub public_key: String,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LanPeer {
-    pub user_id: String,
-    pub device_id: String,
-    pub device_name: String,
-    pub ip: String,
-    pub port: u16,
-    pub public_key: String,
-    pub trusted: bool,
-    pub source: String,
-    pub last_seen_ms: u64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LanServiceInfo {
-    pub identity: LanIdentityInfo,
-    pub port: u16,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LanMessageEvent {
     from_user_id: String,
     from_device_id: String,
@@ -151,126 +119,11 @@ struct LanMessageEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LanFileEvent {
-    from_user_id: String,
-    from_device_id: String,
-    message_id: String,
-    room_id: String,
-    original_ts: i64,
-    file_name: String,
-    size: u64,
-    blake3: String,
-    local_path: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LanFileReceipt {
     pub message_id: String,
     pub file_name: String,
     pub size: u64,
     pub blake3: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct IncomingTransfer {
-    version: u16,
-    transfer_id: String,
-    from_user_id: String,
-    from_device_id: String,
-    message_id: String,
-    room_id: String,
-    original_ts: i64,
-    file_name: String,
-    size: u64,
-    chunk_bytes: u32,
-    chunk_count: u64,
-    blake3: String,
-    received: Vec<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LanAnnouncement {
-    version: u16,
-    server_fingerprint: String,
-    user_id: String,
-    device_id: String,
-    device_name: String,
-    port: u16,
-    public_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct StoredIdentity {
-    device_id: String,
-    secret_key: String,
-}
-
-pub fn server_fingerprint(server_url: &str) -> Result<String, String> {
-    lan_identity_policy::server_fingerprint(server_url)
-}
-
-fn identity_account(server_url: &str, user_id: &str) -> Result<String, String> {
-    lan_identity_policy::account_key(server_url, user_id)
-}
-
-fn keychain_entry(server_url: &str, user_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, &identity_account(server_url, user_id)?)
-        .map_err(|error| format!("LAN identity keychain is unavailable: {error}"))
-}
-
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
-    let mut bytes = [0_u8; N];
-    getrandom::fill(&mut bytes).map_err(|error| format!("secure random source failed: {error}"))?;
-    Ok(bytes)
-}
-
-fn decode_secret(record: &StoredIdentity) -> Result<SigningKey, String> {
-    let decoded = Zeroizing::new(
-        URL_SAFE_NO_PAD
-            .decode(&record.secret_key)
-            .map_err(|_| "stored LAN identity is invalid".to_string())?,
-    );
-    let secret: [u8; 32] = decoded
-        .as_slice()
-        .try_into()
-        .map_err(|_| "stored LAN identity has invalid length".to_string())?;
-    Ok(SigningKey::from_bytes(&secret))
-}
-
-fn load_or_create_identity(server_url: &str, user_id: &str) -> Result<StoredIdentity, String> {
-    let entry = keychain_entry(server_url, user_id)?;
-    match entry.get_password() {
-        Ok(serialized) => serde_json::from_str(&serialized)
-            .map_err(|_| "stored LAN identity record is invalid".to_string()),
-        Err(keyring::Error::NoEntry) => {
-            let secret = Zeroizing::new(random_bytes::<32>()?);
-            let record = StoredIdentity {
-                device_id: URL_SAFE_NO_PAD.encode(random_bytes::<16>()?),
-                secret_key: URL_SAFE_NO_PAD.encode(secret.as_slice()),
-            };
-            entry
-                .set_password(
-                    &serde_json::to_string(&record)
-                        .map_err(|error| format!("failed to encode LAN identity: {error}"))?,
-                )
-                .map_err(|error| format!("failed to save LAN identity: {error}"))?;
-            Ok(record)
-        }
-        Err(error) => Err(format!("failed to read LAN identity: {error}")),
-    }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn peer_key(user_id: &str, device_id: &str) -> PeerKey {
-    (user_id.to_string(), device_id.to_string())
 }
 
 fn trusted_public_key(trusted: &SharedTrusted, peer: &HandshakePeer) -> Result<String, String> {
@@ -284,22 +137,6 @@ fn trusted_public_key(trusted: &SharedTrusted, peer: &HandshakePeer) -> Result<S
         return Err("LAN peer broadcast key does not match the pinned device key".to_string());
     }
     Ok(pinned.clone())
-}
-
-fn random_nonce() -> Result<String, String> {
-    Ok(URL_SAFE_NO_PAD.encode(random_bytes::<32>()?))
-}
-
-fn announcement_from_identity(identity: &RuntimeIdentity, port: u16) -> LanAnnouncement {
-    LanAnnouncement {
-        version: PROTOCOL_VERSION,
-        server_fingerprint: identity.server_fingerprint.clone(),
-        user_id: identity.peer.user_id.clone(),
-        device_id: identity.peer.device_id.clone(),
-        device_name: identity.device_name.clone(),
-        port,
-        public_key: identity.peer.public_key.clone(),
-    }
 }
 
 fn record_peer(
@@ -448,32 +285,6 @@ fn connect_handshake(
     verify_transcript(&pinned, &transcript, &read_proof(stream)?)
 }
 
-fn trusted_map(devices: Vec<TrustedDevice>) -> Result<HashMap<PeerKey, String>, String> {
-    let mut trusted = HashMap::new();
-    for device in devices {
-        if device.user_id.is_empty()
-            || device.user_id.len() > 256
-            || device.device_id.is_empty()
-            || device.device_id.len() > 128
-            || device.user_id.chars().any(char::is_control)
-            || device.device_id.chars().any(char::is_control)
-        {
-            return Err("trusted LAN device identity is invalid".to_string());
-        }
-        let public_key = URL_SAFE_NO_PAD
-            .decode(&device.public_key)
-            .map_err(|_| "trusted LAN device public key is invalid".to_string())?;
-        if public_key.len() != 32 {
-            return Err("trusted LAN device public key has invalid length".to_string());
-        }
-        trusted.insert(
-            peer_key(&device.user_id, &device.device_id),
-            device.public_key,
-        );
-    }
-    Ok(trusted)
-}
-
 fn open_udp_discovery_socket() -> Result<UdpSocket, String> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|error| format!("failed to create UDP discovery socket: {error}"))?;
@@ -603,244 +414,6 @@ fn spawn_mdns_browser(
                 &trusted,
             );
         }
-    })
-}
-
-fn valid_transfer_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn valid_blake3(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn transfer_lock(transfers: &SharedTransfers, transfer_id: &str) -> Result<Arc<Mutex<()>>, String> {
-    let mut transfers = transfers
-        .lock()
-        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
-    Ok(transfers
-        .entry(transfer_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone())
-}
-
-fn save_transfer(path: &Path, transfer: &IncomingTransfer) -> Result<(), String> {
-    let temporary = path.with_extension("json.tmp");
-    let payload = serde_json::to_vec(transfer)
-        .map_err(|error| format!("failed to encode LAN transfer state: {error}"))?;
-    fs::write(&temporary, payload)
-        .map_err(|error| format!("failed to save LAN transfer state: {error}"))?;
-    if path.exists() {
-        fs::remove_file(path)
-            .map_err(|error| format!("failed to replace LAN transfer state: {error}"))?;
-    }
-    fs::rename(&temporary, path)
-        .map_err(|error| format!("failed to commit LAN transfer state: {error}"))
-}
-
-fn load_transfer(path: &Path) -> Result<IncomingTransfer, String> {
-    let payload =
-        fs::read(path).map_err(|error| format!("failed to read LAN transfer state: {error}"))?;
-    serde_json::from_slice(&payload)
-        .map_err(|error| format!("LAN transfer state is invalid: {error}"))
-}
-
-fn incoming_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("failed to resolve LAN receive directory: {error}"))?
-        .join("lan-incoming");
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("failed to prepare LAN receive directory: {error}"))?;
-    Ok(root)
-}
-
-fn hash_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path)
-        .map_err(|error| format!("failed to open LAN file for hashing: {error}"))?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = vec![0_u8; CHUNK_BYTES as usize];
-    loop {
-        let length = file
-            .read(&mut buffer)
-            .map_err(|error| format!("failed to hash LAN file: {error}"))?;
-        if length == 0 {
-            break;
-        }
-        hasher.update(&buffer[..length]);
-    }
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-fn prepare_file_offer(
-    root: &Path,
-    peer: &HandshakePeer,
-    transfers: &SharedTransfers,
-    offer: IncomingTransfer,
-) -> Result<Vec<u64>, String> {
-    if !valid_transfer_id(&offer.transfer_id)
-        || offer.version != PROTOCOL_VERSION
-        || offer.message_id.is_empty()
-        || offer.message_id.len() > 256
-        || offer.room_id.is_empty()
-        || offer.room_id.len() > 256
-        || offer.original_ts <= 0
-        || offer.chunk_bytes != CHUNK_BYTES
-        || offer.chunk_count != offer.size.div_ceil(CHUNK_BYTES as u64)
-        || offer.chunk_count > 8192
-        || offer.chunk_count > usize::MAX as u64
-        || !valid_blake3(&offer.blake3)
-    {
-        return Err("LAN file offer failed validation".to_string());
-    }
-    safe_file_name(&offer.file_name)?;
-    let lock = transfer_lock(transfers, &offer.transfer_id)?;
-    let _guard = lock
-        .lock()
-        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
-    let (part_path, manifest_path) = transfer_paths(root, &offer.transfer_id);
-    let transfer = if manifest_path.exists() {
-        let existing = load_transfer(&manifest_path)?;
-        if existing.transfer_id != offer.transfer_id
-            || existing.from_user_id != peer.user_id
-            || existing.from_device_id != peer.device_id
-            || existing.message_id != offer.message_id
-            || existing.room_id != offer.room_id
-            || existing.original_ts != offer.original_ts
-            || existing.file_name != offer.file_name
-            || existing.size != offer.size
-            || existing.chunk_bytes != offer.chunk_bytes
-            || existing.chunk_count != offer.chunk_count
-            || existing.blake3 != offer.blake3
-        {
-            return Err("LAN transfer id conflicts with existing state".to_string());
-        }
-        existing
-    } else {
-        let mut created = offer;
-        created.received = vec![false; created.chunk_count as usize];
-        let part = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&part_path)
-            .map_err(|error| format!("failed to create LAN partial file: {error}"))?;
-        part.set_len(created.size)
-            .map_err(|error| format!("failed to size LAN partial file: {error}"))?;
-        save_transfer(&manifest_path, &created)?;
-        created
-    };
-    Ok(transfer
-        .received
-        .iter()
-        .enumerate()
-        .filter_map(|(index, received)| (!received).then_some(index as u64))
-        .collect())
-}
-
-fn write_file_chunk(
-    root: &Path,
-    peer: &HandshakePeer,
-    transfers: &SharedTransfers,
-    transfer_id: &str,
-    index: u64,
-    claimed_hash: &str,
-    bytes: &[u8],
-) -> Result<(), String> {
-    if !valid_transfer_id(transfer_id)
-        || bytes.is_empty()
-        || bytes.len() > CHUNK_BYTES as usize
-        || !valid_blake3(claimed_hash)
-        || blake3::hash(bytes).to_hex().as_str() != claimed_hash
-    {
-        return Err("LAN file chunk failed validation".to_string());
-    }
-    let lock = transfer_lock(transfers, transfer_id)?;
-    let (part_path, manifest_path) = transfer_paths(root, transfer_id);
-    let (offset, expected) = {
-        let _guard = lock
-            .lock()
-            .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
-        let transfer = load_transfer(&manifest_path)?;
-        if transfer.from_user_id != peer.user_id
-            || transfer.from_device_id != peer.device_id
-            || index >= transfer.chunk_count
-        {
-            return Err("LAN file chunk does not match its offer".to_string());
-        }
-        let expected = if index + 1 == transfer.chunk_count {
-            (transfer.size - index * transfer.chunk_bytes as u64) as usize
-        } else {
-            transfer.chunk_bytes as usize
-        };
-        (index * transfer.chunk_bytes as u64, expected)
-    };
-    if bytes.len() != expected {
-        return Err("LAN file chunk has an invalid length".to_string());
-    }
-    let mut part = OpenOptions::new()
-        .write(true)
-        .open(&part_path)
-        .map_err(|error| format!("failed to open LAN partial file: {error}"))?;
-    part.seek(SeekFrom::Start(offset))
-        .and_then(|_| part.write_all(bytes))
-        .map_err(|error| format!("failed to write LAN file chunk: {error}"))?;
-    let _guard = lock
-        .lock()
-        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
-    let mut transfer = load_transfer(&manifest_path)?;
-    transfer.received[index as usize] = true;
-    save_transfer(&manifest_path, &transfer)
-}
-
-fn finish_file_transfer(
-    root: &Path,
-    peer: &HandshakePeer,
-    transfers: &SharedTransfers,
-    transfer_id: &str,
-) -> Result<LanFileEvent, String> {
-    let lock = transfer_lock(transfers, transfer_id)?;
-    let _guard = lock
-        .lock()
-        .map_err(|_| "LAN transfer lock is unavailable".to_string())?;
-    let (part_path, manifest_path) = transfer_paths(root, transfer_id);
-    let transfer = load_transfer(&manifest_path)?;
-    if transfer.from_user_id != peer.user_id
-        || transfer.from_device_id != peer.device_id
-        || transfer.received.iter().any(|received| !received)
-    {
-        return Err("LAN file transfer is incomplete".to_string());
-    }
-    let file_name = safe_file_name(&transfer.file_name)?;
-    let final_path = root.join(format!("{}-{file_name}", &transfer.transfer_id[..12]));
-    if part_path.exists() {
-        if hash_file(&part_path)? != transfer.blake3 {
-            return Err("LAN file failed final BLAKE3 verification".to_string());
-        }
-        if final_path.exists() {
-            if hash_file(&final_path)? != transfer.blake3 {
-                return Err("LAN receive destination already contains different data".to_string());
-            }
-            fs::remove_file(&part_path)
-                .map_err(|error| format!("failed to remove duplicate LAN partial file: {error}"))?;
-        } else {
-            fs::rename(&part_path, &final_path)
-                .map_err(|error| format!("failed to finalize LAN file: {error}"))?;
-        }
-    } else if !final_path.exists() || hash_file(&final_path)? != transfer.blake3 {
-        return Err("LAN completed file is missing or corrupted".to_string());
-    }
-    Ok(LanFileEvent {
-        from_user_id: peer.user_id.clone(),
-        from_device_id: peer.device_id.clone(),
-        message_id: transfer.message_id,
-        room_id: transfer.room_id,
-        original_ts: transfer.original_ts,
-        file_name: transfer.file_name,
-        size: transfer.size,
-        blake3: transfer.blake3,
-        local_path: final_path.to_string_lossy().to_string(),
     })
 }
 
@@ -1039,42 +612,6 @@ fn spawn_tcp_listener(
             }
         }
     })
-}
-
-fn build_runtime_identity(
-    server_url: &str,
-    user_id: &str,
-    device_name: &str,
-) -> Result<(Arc<RuntimeIdentity>, LanIdentityInfo), String> {
-    if device_name.chars().any(char::is_control) {
-        return Err("invalid device name".to_string());
-    }
-    let device_name = device_name.trim();
-    if device_name.is_empty() || device_name.len() > 128 {
-        return Err("invalid device name".to_string());
-    }
-    let record = load_or_create_identity(server_url, user_id)?;
-    let signing_key = decode_secret(&record)?;
-    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-    let info = LanIdentityInfo {
-        device_id: record.device_id.clone(),
-        device_name: device_name.to_string(),
-        public_key: public_key.clone(),
-        protocol_version: PROTOCOL_VERSION,
-    };
-    Ok((
-        Arc::new(RuntimeIdentity {
-            peer: HandshakePeer {
-                user_id: user_id.trim().to_string(),
-                device_id: record.device_id,
-                public_key,
-            },
-            device_name: device_name.to_string(),
-            server_fingerprint: server_fingerprint(server_url)?,
-            signing_key,
-        }),
-        info,
-    ))
 }
 
 #[tauri::command]

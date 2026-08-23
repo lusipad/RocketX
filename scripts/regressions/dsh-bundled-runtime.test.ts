@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，并在 prepare 合同里自证版本', async () => {
-  const [rootPackageText, runtimePackageText, tauriConfigText, fullConfigText, prepareScript, workspace, desktopWorkflow, dshRs] =
+  const [rootPackageText, runtimePackageText, tauriConfigText, fullConfigText, prepareScript, workspace, desktopWorkflow, dshRs, dshDiscoveryRs] =
     await Promise.all([
       readFile('package.json', 'utf8'),
       readFile('apps/dsh-runtime/package.json', 'utf8'),
@@ -13,6 +13,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
       readFile('pnpm-workspace.yaml', 'utf8'),
       readFile('.github/workflows/desktop.yml', 'utf8'),
       readFile('apps/desktop/src-tauri/src/dsh.rs', 'utf8'),
+      readFile('apps/desktop/src-tauri/src/native/dsh_discovery.rs', 'utf8'),
     ]);
 
   const rootPackage = JSON.parse(rootPackageText) as {
@@ -84,38 +85,43 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   const rustTestsIndex = desktopWorkflow.indexOf('- name: Rust 单元测试');
   assert.ok(prepareRuntimeIndex >= 0);
   assert.ok(rustTestsIndex > prepareRuntimeIndex);
+  const dshSource = `${dshRs}\n${dshDiscoveryRs}`;
 
-  assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";/);
-  assert.match(dshRs, /const DSH_VERIFIED_VERSION: &str = "0\.1\.0-rc\.6";/);
-  assert.match(dshRs, /const DSH_NO_OPEN_VERSION: &str = "0\.1\.0-rc\.7";/);
-  assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime\.tar\.gz";/);
-  assert.match(dshRs, /const DSH_BUNDLED_RUNTIME_CACHE_DIR: &str = "bundled-runtime";/);
-  assert.match(dshRs, /const DSH_BUNDLED_CLI_ENTRY: \[&str; 5\]/);
-  assert.match(dshRs, /resource_dir\(\)[\s\S]*DSH_BUNDLED_RUNTIME_ARCHIVE/);
-  assert.match(dshRs, /if cfg!\(debug_assertions\) \{\s*archives\.push\(development_bundled_runtime_archive\(\)\);/);
+  assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";/);
+  assert.match(dshDiscoveryRs, /const DSH_VERIFIED_VERSION: &str = "0\.1\.0-rc\.6";/);
+  assert.match(dshDiscoveryRs, /const DSH_NO_OPEN_VERSION: &str = "0\.1\.0-rc\.7";/);
+  assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime\.tar\.gz";/);
+  assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_CACHE_DIR: &str = "bundled-runtime";/);
+  assert.match(dshDiscoveryRs, /const DSH_BUNDLED_CLI_ENTRY: \[&str; 5\]/);
+  assert.match(dshDiscoveryRs, /resource_dir\(\)[\s\S]*DSH_BUNDLED_RUNTIME_ARCHIVE/);
+  assert.match(dshDiscoveryRs, /if cfg!\(debug_assertions\) \{\s*archives\.push\(development_bundled_runtime_archive\(\)\);/);
   assert.match(dshRs, /prepare_bundled_runtime_root_from_archive/);
   assert.match(dshRs, /archive\s*\.\s*unpack\(&staging_root\)/);
   assert.match(dshRs, /bundled_runtime_marker_matches/);
-  assert.match(dshRs, /if let Some\(bundled_root\) = resolve_debug_bundled_runtime_root\(\)\?/);
+  assert.match(dshSource, /(?:if|else if) let Some\(bundled_root\) = resolve_debug_bundled_runtime_root\(\)\?/);
   // bundled 运行时仍精确 pin 到验证版本；系统安装的 DSH 放开为 semver >= 最低验证版本（issue #352）
-  assert.match(dshRs, /verify_installed_dsh_version\(&node_path, &cli_path\)/);
+  assert.match(dshSource, /verify_installed_dsh_version\(&node_path, &cli_path\)/);
   assert.doesNotMatch(dshRs, /version\.trim\(\) == DSH_VERIFIED_VERSION/);
-  assert.match(dshRs, /fn parse_dsh_version\(raw: &str\) -> Option<DshVersion>/);
-  assert.match(dshRs, /version >= minimum/);
-  assert.match(dshRs, /dsh_version_is_unverified_newer/);
-  assert.match(dshRs, /dsh_version_supports_no_open/);
-  assert.match(dshRs, /低于最低支持版本 \{DSH_VERIFIED_VERSION\}/u);
-  assert.match(dshRs, /尚未经过完整验证/u);
-  assert.match(dshRs, /resolve_node_runtime\(app, use_private_node\)/);
+  assert.match(dshSource, /fn parse_dsh_version\(raw: &str\) -> Option<DshVersion>/);
+  assert.match(dshSource, /version >= minimum/);
+  assert.match(dshSource, /dsh_version_is_unverified_newer/);
+  assert.match(dshSource, /dsh_version_supports_no_open/);
+  assert.match(dshSource, /低于最低支持版本 \{DSH_VERIFIED_VERSION\}/u);
+  assert.match(dshSource, /尚未经过完整验证/u);
+  assert.match(dshSource, /resolve_node_runtime\(app, use_private_node\)/);
   assert.match(
-    dshRs,
+    dshSource,
     /if use_private_node \{\s*bundled\s*\} else \{\s*system\.into_iter\(\)\.collect\(\)/,
   );
-  assert.match(dshRs, /Slim 安装包不内置 DSH/u);
-  assert.match(dshRs, /npm install -g @deepseek-ai\/dsh@\{DSH_VERIFIED_VERSION\}/u);
-  assert.match(dshRs, /RocketX Full 安装包/u);
-  assert.match(dshRs, /pnpm_global_dsh_cli_candidates/u);
-  assert.match(dshRs, /DSH 运行需要 22\.19\+ 或 24\+/u);
+  assert.match(dshSource, /Slim 安装包不内置 DSH/u);
+  assert.match(dshSource, /npm install -g @deepseek-ai\/dsh@\{DSH_VERIFIED_VERSION\}/u);
+  assert.match(dshSource, /RocketX Full 安装包/u);
+  assert.match(dshSource, /pnpm_global_dsh_cli_candidates/u);
+  assert.match(dshSource, /DSH 运行需要 22\.19\+ 或 24\+/u);
+  assert.match(dshDiscoveryRs, /pub\(crate\) fn resolve_dsh_runtime\(/);
+  assert.match(dshDiscoveryRs, /fn installed_dsh_cli_candidates\(\)/);
+  assert.match(dshDiscoveryRs, /fn resolve_node_runtime\(/);
+  assert.match(dshDiscoveryRs, /bundled_runtime_archive_candidates\(/);
 });
 
 test('Windows 安装与换装只清理 RocketX 私有运行时，不卸载系统全局 DSH', async () => {
