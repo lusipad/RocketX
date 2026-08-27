@@ -12,6 +12,7 @@ import {
   searchMessagesGlobal,
   searchMoreMessages,
   searchLoadedMessages,
+  resolveMatchedMemberName,
   searchesSettledFor,
   type MessageSearchPage,
 } from '../../apps/web/src/lib/quickSearch';
@@ -471,6 +472,27 @@ test('自动切换保留用户当前有结果的范围，只在当前范围为�
     chooseAvailableSearchTab('all', { all: 4, convs: 0, messages: 3, files: 0, contacts: 0, work: 1 }),
     'all',
   );
+});
+
+test('多人会话逐个成员名定位命中者，供跳转进会话后高亮（issue #364）', () => {
+  assert.equal(resolveMatchedMemberName('lisi', 'lisi,wangwu'), 'lisi');
+  assert.equal(resolveMatchedMemberName('王五', '李四, 王五'), '王五');
+  assert.equal(resolveMatchedMemberName('wangwu', 'lisi，wangwu'), 'wangwu');
+  assert.equal(resolveMatchedMemberName('王五', '李四、王五'), '王五');
+  assert.equal(resolveMatchedMemberName('lisi', '李四, 王五', 'lisi,wangwu'), 'lisi');
+  assert.equal(resolveMatchedMemberName('不存在', '李四, 王五'), undefined);
+  assert.equal(resolveMatchedMemberName('四王', '李四, 王五'), undefined);
+  assert.equal(resolveMatchedMemberName('  ', '李四, 王五'), undefined);
+  assert.equal(resolveMatchedMemberName('lisi', undefined), undefined);
+});
+
+test('搜索跳转多人会话后通过成员面板定位高亮命中成员（issue #364）', () => {
+  const switcher = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
+  assert.match(switcher, /resolveMatchedMemberName\(keyword/);
+  assert.match(switcher, /setPanel\(\{ kind: 'members', highlightName \}\)/);
+  const panel = readFileSync('apps/web/src/components/MembersPanel.tsx', 'utf8');
+  assert.match(panel, /data-target-member/);
+  assert.match(panel, /rightPanel\.highlightName/);
 });
 
 test('工作搜索聚合待办、日程和 ADO 工作项，并优先标题命中', () => {

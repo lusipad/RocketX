@@ -241,6 +241,10 @@ export default function MembersPanel() {
   const cachedMembers = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
   const roomRoles = useChat((s) => (s.activeRid ? s.roomRoles[s.activeRid] : undefined)) ?? NO_ROLES;
   const muted = useChat((s) => (s.activeRid ? s.rooms[s.activeRid]?.muted : undefined));
+  // 全局搜索跳进多人会话时带过来的命中成员名，用于定位高亮（issue #364）
+  const highlightName = useChat((s) =>
+    s.rightPanel?.kind === 'members' ? s.rightPanel.highlightName : undefined,
+  );
   const seedUserStatus = useChat((s) => s.seedUserStatus);
   const userStatus = useChat((s) => s.userStatus);
   const aliases = useAliases((s) => s.aliases);
@@ -305,6 +309,17 @@ export default function MembersPanel() {
     return sortMembers(list, roomRoles);
   }, [members, keyword, roomRoles, aliases]);
 
+  const highlightTarget = highlightName?.trim().toLowerCase();
+
+  // 等成员列表渲染后把命中成员滚到视野中央（跟 FilesPanel 的 fileId 定位同款）
+  useEffect(() => {
+    if (!highlightTarget || loading) return;
+    const timer = setTimeout(() =>
+      document.querySelector<HTMLElement>('[data-target-member="true"]')?.scrollIntoView({ block: 'center' }),
+    );
+    return () => clearTimeout(timer);
+  }, [filtered, highlightTarget, loading]);
+
   return (
     <PanelShell title={`群成员${members.length ? `（${members.length}）` : ''}`}>
       <div className="flex items-center gap-2 p-3">
@@ -341,11 +356,17 @@ export default function MembersPanel() {
             const roles = rolesOf(roomRoles, m._id);
             const manageable = !!rid && canActOn(me, m, roomRoles, type);
             const mName = personName(aliases, m.username, m.name || m.username, nameFormat);
+            // 命中片段可能来自显示名或用户名（多人会话 fname 是显示名、name 是用户名）
+            const isTarget = !!highlightTarget &&
+              [m.username, m.name, mName].some((name) => name?.toLowerCase() === highlightTarget);
             return (
               <div
                 key={m._id}
+                data-target-member={isTarget || undefined}
                 onClick={() => setCard(m)}
-                className="group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-fill-hover"
+                className={`group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 ${
+                  isTarget ? 'bg-primary-light' : 'hover:bg-fill-hover'
+                }`}
               >
                 <Avatar
                   name={mName}

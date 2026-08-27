@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+// Windows 上 GNU/BSD tar 都会把「C:\…」的盘符冒号当成远端主机名，必须显式声明本地归档
+const tarLocalFlag = process.platform === 'win32' ? ['--force-local'] : [];
 const startedAt = Date.now();
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'rocketx-ecosystem-'));
 
@@ -51,13 +53,13 @@ try {
     [sdkTarball, ['package/dist/index.js', 'package/dist/index.d.ts']],
     [cliTarball, ['package/dist/create-cli.js', 'package/dist/rcx-cli.js', 'package/dist/templates/hello/index.html']],
   ]) {
-    const files = run('tar', ['-tf', tarball]).split(/\r?\n/);
+    const files = run('tar', [...tarLocalFlag, '-tf', tarball]).split(/\r?\n/);
     for (const file of expected) assert.ok(files.includes(file), `${path.basename(tarball)} is missing ${file}`);
     assert.ok(!files.some((file) => file.startsWith('package/src/')), `${path.basename(tarball)} leaked src/`);
     assert.ok(!files.some((file) => file.endsWith('.map')), `${path.basename(tarball)} leaked source maps`);
   }
 
-  const packedCliManifest = JSON.parse(run('tar', ['-xOf', cliTarball, 'package/package.json']));
+  const packedCliManifest = JSON.parse(run('tar', [...tarLocalFlag, '-xOf', cliTarball, 'package/package.json']));
   assert.equal(packedCliManifest.dependencies[sdkManifest.name], sdkManifest.version);
 
   run(npm, ['init', '-y'], cleanRoom);

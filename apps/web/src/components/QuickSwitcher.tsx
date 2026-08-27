@@ -19,6 +19,7 @@ import {
   searchMessagesGlobal,
   searchMoreMessages,
   searchLoadedMessages,
+  resolveMatchedMemberName,
   searchesSettledFor,
   type MessageSearchSource,
   type QuickSearchTab,
@@ -511,7 +512,18 @@ export default function QuickSwitcher({
       setConvFilter('unread');
       retainUnread(rid);
     }
-    void openRoom(rid);
+    // 多人会话的会话名由成员名拼成：名字命中搜索词时，进会话后在成员面板里
+    // 定位并高亮该成员，否则用户看不出这个会话为什么命中（issue #364）
+    const highlightName =
+      keyword.trim() && conversation?.isMultiDM
+        ? resolveMatchedMemberName(keyword, conversation.name)
+        : undefined;
+    // openRoom 会重置右侧面板，必须等它完成后再 setPanel（同 pickFile 的 fileId）
+    void openRoom(rid).then(() => {
+      if (highlightName) {
+        useChat.getState().setPanel({ kind: 'members', highlightName });
+      }
+    });
     setModule('messages'); // 从通讯录/工作台等模块跳转时切回消息
     onClose();
     focusComposerInput(); // 选中会话后光标直接进输入框（issue #87）

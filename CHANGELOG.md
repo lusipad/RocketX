@@ -1,5 +1,16 @@
 # 更新日志
 
+## v0.43.15 - 2026-08-27
+
+### 修复
+
+- 全局搜索同时命中多人会话和用户名时，进入该多人会话会自动打开成员面板，定位并高亮命中搜索词的成员（issue #364）。
+- 一对一私聊和多人会话也能 @ 不在会话里的人：目录搜到的会话外候选标注「不在会话中」，只插入提及文本、不邀请（对 DM 邀请会另建新会话），对方不会收到 @ 提醒；群聊的「非群成员、发送前自动拉群」行为不变。
+
+### 验证
+
+- `pnpm test:pure`：237 passed；全量回归：992 passed；Playwright UI 111 passed、3 skipped；Rust `cargo test --locked`：162 passed、4 ignored；Web build、typecheck、ecosystem 和 architecture checks 通过；顺带修复 `scripts/test-app-ecosystem.mjs` 在 Windows 上 GNU tar 把盘符冒号误判为远端主机的问题。
+
 ## v0.43.14 - 2026-08-23
 
 ### 改进

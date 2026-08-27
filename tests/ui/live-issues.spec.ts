@@ -495,8 +495,10 @@ test.describe('live：真实 Rocket.Chat 服务器验证', () => {
     expect(mirror?.sidebarShowUnread).toBe(expected);
   });
 
-  test('issue #353：DM 里 @ 出成员候选，无 all/here 广播项、不触发目录搜索', async ({ page }) => {
+  test('issue #353：DM 里 @ 出成员候选，无 all/here 广播项，也能 @ 会话外的人', async ({ page }) => {
     const user = await createDmUser('dm');
+    // 会话外的人：只建账号，与当前 DM 无关（im.create 的副产物 DM 不影响断言）
+    const outsider = await createDmUser('dm-out');
 
     await bootLive(page);
     await expect(convButton(page, user.name)).toBeVisible({ timeout: 15_000 });
@@ -527,11 +529,14 @@ test.describe('live：真实 Rocket.Chat 服务器验证', () => {
     // 没有 all/here 广播项
     await expect(mentionList.getByText('通知所有人', { exact: true })).toHaveCount(0);
     await expect(mentionList.getByText('通知在线成员', { exact: true })).toHaveCount(0);
-    await expect(mentionList.getByText('非群成员', { exact: true })).toHaveCount(0);
 
-    // 目录搜索有 250ms 防抖，等足够久确认 DM 不发出目录请求
-    await page.waitForTimeout(700);
-    expect(directoryHits).toEqual([]);
+    // 搜会话外的人（用完整用户名避免与 DM 对方前缀混淆）：目录搜索发出请求，
+    // 候选带「不在会话中」标识，而不是群聊的「非群成员」
+    await textbox.fill(`@${outsider.username}`);
+    await expect(mentionList.getByText(`@${outsider.username}`, { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(mentionList.getByText('不在会话中', { exact: true })).toBeVisible();
+    await expect(mentionList.getByText('非群成员', { exact: true })).toHaveCount(0);
+    expect(directoryHits.length).toBeGreaterThan(0);
   });
 
   test('自动离开：超时自动置 away，活动后恢复 online', async ({ page }) => {

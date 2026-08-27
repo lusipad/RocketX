@@ -19,10 +19,12 @@ export function mentionQueryAtCursor(
 
 export function shouldSearchMentionDirectory(
   mentionQuery: string | null,
-  roomType?: string,
+  _roomType?: string,
 ): boolean {
-  // DM 不能拉新人进群，目录搜索（找群外的人）无意义，保持关闭
-  return roomType !== 'd' && !!mentionQuery?.trim();
+  // 私聊也允许 @ 不在会话里的人。DM 拉不了人（RC 对 t='d' 的邀请会另建新会话），
+  // 所以目录搜到的人只插入提及文本、不走发送前邀请，对方不会收到 @ 提醒；
+  // 候选 UI 用「不在会话中」标识，与群聊的「非群成员」（会邀请）区分。
+  return !!mentionQuery?.trim();
 }
 
 export function insertMentionAtCursor(

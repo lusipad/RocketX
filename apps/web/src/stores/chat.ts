@@ -99,7 +99,7 @@ export type RightPanel =
   | { kind: 'thread'; mid: string }
   | { kind: 'pins' }
   | { kind: 'starred' }
-  | { kind: 'members' }
+  | { kind: 'members'; highlightName?: string }
   | { kind: 'search' }
   | { kind: 'info' }
   | { kind: 'files'; fileId?: string }

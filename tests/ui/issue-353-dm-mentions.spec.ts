@@ -2,8 +2,9 @@ import { expect, test, type Page } from '@playwright/test';
 import { bootAuthenticated } from './support/rocket-chat-mock';
 
 // 历史：issue #251 曾在一对一私聊里隐藏提及入口（当时认为参与者已确定）；
-// issue #353 重新放开 —— DM 出候选（仅限房间内成员），但不提供 all/here 广播项，
-// 也不触发目录搜索（DM 不能拉新人进群）。
+// issue #353 重新放开 —— DM 出候选（仅限房间内成员），不提供 all/here 广播项；
+// 之后应需求再放开 DM 目录搜索：私聊也能 @ 不在会话里的人（只插入文本、不邀请，
+// 徽标显示「不在会话中」以区别于群聊的「非群成员」）。
 async function seedComposerRoom(
   page: Page,
   roomType: 'c' | 'd',
@@ -70,17 +71,24 @@ async function seedComposerRoom(
   }, { roomType, roomId, openThread: options.openThread ?? false });
 }
 
-test('群聊与一对一私聊都保留提及入口；DM 出候选但无广播项、不触发目录搜索', async ({ page }) => {
+test('群聊与一对一私聊都保留提及入口；DM 出候选、无广播项，也能 @ 会话外的人', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   // 等 init 拉完会话列表（ready）再 seed，否则 init 的 set 会覆盖刚写入的 activeRid/订阅
   await expect(page.getByText('加载会话中…')).toHaveCount(0);
   const searchPaths: string[] = [];
-  for (const endpoint of ['directory', 'users.list', 'spotlight']) {
-    await page.route(`**/api/v1/${endpoint}**`, async (route) => {
-      searchPaths.push(new URL(route.request().url()).pathname);
-      await route.fallback();
+  // 目录搜索固定返回一个会话外用户，验证私聊也能 @ 不在会话里的人
+  await page.route('**/api/v1/directory**', async (route) => {
+    searchPaths.push(new URL(route.request().url()).pathname);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: [{ _id: 'user-outsider', username: 'outsider', name: 'Outsider' }],
+        total: 1,
+        success: true,
+      }),
     });
-  }
+  });
 
   await seedComposerRoom(page, 'c');
   const textbox = page.locator('[data-composer-input]');
@@ -98,7 +106,7 @@ test('群聊与一对一私聊都保留提及入口；DM 出候选但无广播�
   await seedComposerRoom(page, 'd');
   await expect(mentionButton).toBeVisible();
 
-  // 键入 @ 出候选：只有房间成员，没有 all/here 广播项
+  // 键入 @ 出候选：房间成员 + 目录搜到的会话外用户，没有 all/here 广播项
   await textbox.click();
   await textbox.fill('@ali');
   await expect(textbox).toHaveValue('@ali');
@@ -107,16 +115,16 @@ test('群聊与一对一私聊都保留提及入口；DM 出候选但无广播�
   await expect(mentionList.getByText('@alice', { exact: true })).toBeVisible();
   await expect(mentionList.getByText('通知所有人', { exact: true })).toHaveCount(0);
   await expect(mentionList.getByText('通知在线成员', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('非群成员', { exact: true })).toHaveCount(0);
 
-  // 目录搜索有 250ms 防抖，等足够久确认 DM 不会发出请求
-  await page.waitForTimeout(450);
-  expect(searchPaths).toEqual([]);
+  // 目录搜索 250ms 防抖后发出请求；会话外用户带「不在会话中」标识，不用群聊的「非群成员」
+  await expect(mentionList.getByText('@outsider', { exact: true })).toBeVisible({ timeout: 5_000 });
+  await expect(mentionList.getByText('不在会话中', { exact: true })).toBeVisible();
+  await expect(page.getByText('非群成员', { exact: true })).toHaveCount(0);
+  expect(searchPaths).toContain('/api/v1/directory');
 
   // DM 话题面板的提及入口也随之恢复
   await seedComposerRoom(page, 'd', 'room-direct', { openThread: true });
   await expect(threadPanel).toBeVisible();
   await expect(threadPanel.getByTitle('提及成员')).toBeVisible();
-  expect(searchPaths).toEqual([]);
   expect(pageErrors).toEqual([]);
 });

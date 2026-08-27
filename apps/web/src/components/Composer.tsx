@@ -297,8 +297,9 @@ export default function Composer() {
     const inserted = insertMentionAtCursor(text, cursor, candidate.username);
     setText(inserted.value);
     persistDraft(inserted.value); // 同上（P2-g）
-    // @ 的是群外的人 → 记下来，发送前拉进群（这样 TA 才收得到 @ 提醒）
-    const remote = candidate.isRemote
+    // @ 的是群外的人 → 记下来，发送前拉进群（这样 TA 才收得到 @ 提醒）。
+    // DM 拉不了人（对 t='d' 邀请会另建新会话），只插入提及文本，不记待邀请
+    const remote = candidate.isRemote && roomType !== 'd'
       ? remoteUsers.find((u) => u.username === candidate.username)
       : undefined;
     if (remote && !members.some((m) => m.username === candidate.username)) {
@@ -662,8 +663,15 @@ export default function Composer() {
                 </>
               )}
               {u.isRemote && (
-                <span className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-xs text-ink-3">
-                  非群成员
+                <span
+                  className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-xs text-ink-3"
+                  title={
+                    roomType === 'd'
+                      ? '对方不在此私聊中，只插入名字，不会收到 @ 提醒'
+                      : '发送前会自动把 TA 拉进群，@ 提醒可达'
+                  }
+                >
+                  {roomType === 'd' ? '不在会话中' : '非群成员'}
                 </span>
               )}
             </button>

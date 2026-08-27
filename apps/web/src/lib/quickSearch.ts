@@ -1,5 +1,6 @@
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { stripAgentSessionMarker } from '../agent/card';
+import { pinyinMatch } from './pinyin';
 
 export interface MessageSearchBackend {
   provider: () => Promise<unknown>;
@@ -53,6 +54,29 @@ export function searchesSettledFor(
 ): boolean {
   const current = keyword.trim();
   return !!current && messageKeyword === current && contactKeyword === current;
+}
+
+/**
+ * 定位多人会话里命中搜索词的成员名片段（issue #364）。
+ *
+ * 多人会话的名字是逗号拼接的成员名（「李四, 王五」/「lisi,wangwu」），整体命中时
+ * 看不出是谁命中，逐段匹配才能定位到具体成员，供跳转进会话后在成员面板里高亮。
+ * 没有任何单独片段命中（比如关键词横跨两个成员名）时返回 undefined。
+ */
+export function resolveMatchedMemberName(
+  keyword: string,
+  ...names: (string | undefined)[]
+): string | undefined {
+  const q = keyword.trim();
+  if (!q) return undefined;
+  for (const name of names) {
+    if (!name) continue;
+    const segments = name.split(/[,，、]/).map((segment) => segment.trim()).filter(Boolean);
+    for (const segment of segments) {
+      if (pinyinMatch(q, segment)) return segment;
+    }
+  }
+  return undefined;
 }
 
 /** 短时复用同一服务器、账号和会话范围的成功搜索，避免反复逐房间请求。 */
