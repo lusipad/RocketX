@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.16`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.17`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.43.17` carries the Rust formatting correction required by the release workflow so all platform build jobs can reach packaging.
 
 `v0.43.16` makes LAN file transfer explicit from the chat composer, requiring a successful one-to-one handshake before file selection; ordinary messages and server uploads no longer use LAN fallback. It also streams native uploads from disk and hides legacy LAN control messages from chat history.
 
