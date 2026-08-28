@@ -124,7 +124,9 @@ fn autostart_preference_path<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Resul
         .map_err(|error| format!("无法获取开机启动偏好目录：{error}"))
 }
 
-fn read_autostart_preference<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<Option<bool>, String> {
+fn read_autostart_preference<R: tauri::Runtime, M: Manager<R>>(
+    app: &M,
+) -> Result<Option<bool>, String> {
     let path = autostart_preference_path(app)?;
     match std::fs::read_to_string(path) {
         Ok(value) => Ok(match value.trim() {
@@ -198,7 +200,8 @@ fn write_desktop_preferences(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("无法创建桌面偏好目录：{error}"))?;
     }
-    let content = serde_json::to_vec(&records).map_err(|error| format!("无法序列化桌面偏好：{error}"))?;
+    let content =
+        serde_json::to_vec(&records).map_err(|error| format!("无法序列化桌面偏好：{error}"))?;
     std::fs::write(path, content).map_err(|error| format!("无法保存桌面偏好：{error}"))
 }
 
@@ -244,7 +247,10 @@ fn read_autostart_enabled(app: tauri::AppHandle) -> Result<Option<bool>, String>
     if !current_autostart_registration_allowed()? {
         return Ok(None);
     }
-    let registered = app.autolaunch().is_enabled().map_err(|error| error.to_string())?;
+    let registered = app
+        .autolaunch()
+        .is_enabled()
+        .map_err(|error| error.to_string())?;
     Ok(Some(read_autostart_preference(&app)?.unwrap_or(registered)))
 }
 
@@ -442,8 +448,8 @@ struct NativeMediaUploadResult {
 }
 
 fn native_media_url(server_url: &str, segments: &[&str]) -> Result<tauri::Url, String> {
-    let mut url = tauri::Url::parse(server_url)
-        .map_err(|_| "Rocket.Chat 服务器地址无效".to_string())?;
+    let mut url =
+        tauri::Url::parse(server_url).map_err(|_| "Rocket.Chat 服务器地址无效".to_string())?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || !url.username().is_empty()
