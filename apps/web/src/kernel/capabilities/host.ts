@@ -3,7 +3,6 @@ import type { CapabilityBus } from './bus';
 import type { KernelHost } from '../host';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_LAN_MESSAGE_BYTES = 48 * 1024;
 
 export interface HostCapabilityOptions {
   serverBase?: () => string;
@@ -22,10 +21,6 @@ function plainMessage(message: RcMessage): RcMessage {
 
 export function isCurrentServerFilePath(path: string, serverBase: string): boolean {
   return path.startsWith('/') || (!!serverBase && path.startsWith(`${serverBase}/`));
-}
-
-function randomMessageId(): string {
-  return crypto.randomUUID().replace(/-/g, '').slice(0, 17);
 }
 
 function encodeBlob(blob: Blob): Promise<{ type: string; size: number; base64: string }> {
@@ -50,8 +45,6 @@ export function registerHostCapabilities(
   options: HostCapabilityOptions = {},
 ): Array<() => void> {
   const serverBase = options.serverBase ?? (() => '');
-  const now = options.now ?? (() => Date.now());
-  const createMessageId = options.createMessageId ?? randomMessageId;
   const cleanups: Array<() => void> = [];
 
   cleanups.push(
@@ -109,30 +102,6 @@ export function registerHostCapabilities(
   );
   cleanups.push(
     capabilityBus.register('lan.peers', 'lan:discover', () => host.lan.listPeers()),
-  );
-  cleanups.push(
-    capabilityBus.register('lan.send', 'lan:transfer', async (params) => {
-      const object = params as Record<string, unknown> | undefined;
-      const userId = stringParam(params, 'userId');
-      const roomId = stringParam(params, 'roomId');
-      const text = stringParam(params, 'text');
-      if (!roomId || !host.rooms.isMember(roomId)) throw new Error('只能向已加入的会话发送 LAN 数据');
-      if (!userId || !host.rooms.memberIds(roomId).includes(userId)) {
-        throw new Error('LAN 接收方必须是当前会话成员');
-      }
-      if (!text || text.length > MAX_LAN_MESSAGE_BYTES) throw new Error('LAN 数据为空或超过 48 KiB');
-      const messageId =
-        typeof object?.messageId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(object.messageId)
-          ? object.messageId
-          : createMessageId();
-      await host.lan.sendChat(userId, {
-        messageId,
-        roomId,
-        originalTs: now(),
-        text,
-      });
-      return { ok: true, messageId };
-    }),
   );
   return cleanups;
 }

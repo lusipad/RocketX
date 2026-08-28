@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { ArrowDown, Bot, Copy, Download, Share2, Star, Trash2 } from 'lucide-react';
 import { useChat } from '../stores/chat';
+import { isLanControlMessage } from '../lan/protocol';
 import { usePrefs } from '../stores/prefs';
 import { useAuth } from '../stores/auth';
 import { fmtDayDivider, sameDay, systemMessageText, useDayTick } from '../lib/format';
@@ -79,8 +80,10 @@ export function messagesInMain(
   messages: readonly RcMessage[],
   showThreadsInMain: boolean,
 ): RcMessage[] {
-  return messages.filter((message) =>
-    showThreadsInMain || !message.tmid || message.tshow === true
+  return messages.filter(
+    (message) =>
+      !isLanControlMessage(message.msg) &&
+      (showThreadsInMain || !message.tmid || message.tshow === true),
   );
 }
 

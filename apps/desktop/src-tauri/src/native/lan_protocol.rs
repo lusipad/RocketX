@@ -39,6 +39,14 @@ pub(crate) enum ControlFrame {
     Proof {
         signature: String,
     },
+    Probe {
+        request_id: String,
+        signature: String,
+    },
+    ProbeAck {
+        request_id: String,
+        signature: String,
+    },
     Chat {
         message_id: String,
         room_id: String,

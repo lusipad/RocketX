@@ -31,12 +31,19 @@ use tauri::{
     Manager, WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+use tauri_plugin_http::reqwest::{
+    multipart::{Form, Part},
+    redirect::Policy,
+    Client,
+};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN_TRAY_ID: &str = "main";
 const AUTOSTART_ARG: &str = "--autostart";
 const PACKAGE_PROFILE_FILE: &str = "rocketx-package-profile";
+const AUTOSTART_PREFERENCE_FILE: &str = "autostart-preference";
+const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
 
 fn normalize_desktop_distribution_profile(value: Option<&str>) -> &'static str {
     match value.map(str::trim) {
@@ -110,6 +117,92 @@ fn current_autostart_registration_allowed() -> Result<bool, String> {
     ))
 }
 
+fn autostart_preference_path<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(AUTOSTART_PREFERENCE_FILE))
+        .map_err(|error| format!("无法获取开机启动偏好目录：{error}"))
+}
+
+fn read_autostart_preference<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<Option<bool>, String> {
+    let path = autostart_preference_path(app)?;
+    match std::fs::read_to_string(path) {
+        Ok(value) => Ok(match value.trim() {
+            "1" => Some(true),
+            "0" => Some(false),
+            _ => None,
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("无法读取开机启动偏好：{error}")),
+    }
+}
+
+fn write_autostart_preference<R: tauri::Runtime, M: Manager<R>>(
+    app: &M,
+    enabled: bool,
+) -> Result<(), String> {
+    let path = autostart_preference_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建开机启动偏好目录：{error}"))?;
+    }
+    std::fs::write(path, if enabled { "1" } else { "0" })
+        .map_err(|error| format!("无法保存开机启动偏好：{error}"))
+}
+
+fn desktop_preferences_path<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(DESKTOP_PREFERENCES_FILE))
+        .map_err(|error| format!("无法获取桌面偏好目录：{error}"))
+}
+
+#[tauri::command]
+fn read_desktop_preferences(
+    app: tauri::AppHandle,
+    scope: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = desktop_preferences_path(&app)?;
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法读取桌面偏好：{error}")),
+    };
+    let records = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+        .map_err(|error| format!("桌面偏好文件无效：{error}"))?;
+    Ok(records.get(&scope).cloned())
+}
+
+#[tauri::command]
+fn write_desktop_preferences(
+    app: tauri::AppHandle,
+    scope: String,
+    patch: serde_json::Value,
+) -> Result<(), String> {
+    let path = desktop_preferences_path(&app)?;
+    let mut records = if let Ok(raw) = std::fs::read_to_string(&path) {
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+            .map_err(|error| format!("桌面偏好文件无效：{error}"))?
+    } else {
+        serde_json::Map::new()
+    };
+    let mut current = records
+        .remove(&scope)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    if let Some(patch) = patch.as_object() {
+        current.extend(patch.clone());
+    }
+    records.insert(scope, serde_json::Value::Object(current));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建桌面偏好目录：{error}"))?;
+    }
+    let content = serde_json::to_vec(&records).map_err(|error| format!("无法序列化桌面偏好：{error}"))?;
+    std::fs::write(path, content).map_err(|error| format!("无法保存桌面偏好：{error}"))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn refresh_autostart_registration_with(
     allowed: bool,
     is_enabled: impl FnOnce() -> Result<bool, String>,
@@ -126,15 +219,24 @@ fn refresh_autostart_registration_with(
 
 fn refresh_autostart_registration<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), String> {
     let manager = app.autolaunch();
-    refresh_autostart_registration_with(
-        current_autostart_registration_allowed()?,
-        || manager.is_enabled().map_err(|error| error.to_string()),
-        || {
-            // 官方插件的 is_enabled 只检查注册表值是否存在，不检查其中的 EXE 路径。
-            // 每次正式版启动都覆盖一次，避免升级或安装目录变化后仍指向旧文件。
-            manager.enable().map_err(|error| error.to_string())
-        },
-    )
+    if !current_autostart_registration_allowed()? {
+        return Ok(());
+    }
+    let registered = manager.is_enabled().map_err(|error| error.to_string())?;
+    let remembered = read_autostart_preference(app)?;
+    if remembered == Some(false) {
+        if registered {
+            manager.disable().map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+    if remembered == Some(true) || registered {
+        // 官方插件的 is_enabled 只检查注册表值是否存在，不检查其中的 EXE 路径。
+        // 每次正式版启动都覆盖一次，避免升级或安装目录变化后仍指向旧文件。
+        manager.enable().map_err(|error| error.to_string())?;
+        write_autostart_preference(app, true)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -142,10 +244,8 @@ fn read_autostart_enabled(app: tauri::AppHandle) -> Result<Option<bool>, String>
     if !current_autostart_registration_allowed()? {
         return Ok(None);
     }
-    app.autolaunch()
-        .is_enabled()
-        .map(Some)
-        .map_err(|error| error.to_string())
+    let registered = app.autolaunch().is_enabled().map_err(|error| error.to_string())?;
+    Ok(Some(read_autostart_preference(&app)?.unwrap_or(registered)))
 }
 
 #[tauri::command]
@@ -159,7 +259,9 @@ fn set_autostart_enabled(app: tauri::AppHandle, enabled: bool) -> Result<bool, S
     } else {
         manager.disable().map_err(|error| error.to_string())?;
     }
-    manager.is_enabled().map_err(|error| error.to_string())
+    let actual = manager.is_enabled().map_err(|error| error.to_string())?;
+    write_autostart_preference(&app, enabled && actual)?;
+    Ok(actual)
 }
 
 fn validate_external_url(url: &str) -> Result<&str, String> {
@@ -329,6 +431,151 @@ fn allow_http_origin(
         .map_err(|error| error.to_string())?;
     allowed.insert(origin.clone());
     Ok(origin)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeMediaUploadResult {
+    status: u16,
+    error: Option<String>,
+    error_type: Option<String>,
+}
+
+fn native_media_url(server_url: &str, segments: &[&str]) -> Result<tauri::Url, String> {
+    let mut url = tauri::Url::parse(server_url)
+        .map_err(|_| "Rocket.Chat 服务器地址无效".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Rocket.Chat 服务器地址无效".to_string());
+    }
+    let base_path = url.path().trim_end_matches('/').to_string();
+    url.set_path(&format!("{base_path}/api/v1"));
+    url.path_segments_mut()
+        .map_err(|_| "Rocket.Chat 服务器地址无效".to_string())?
+        .extend(segments);
+    Ok(url)
+}
+
+fn native_media_response(status: u16, body: &str) -> NativeMediaUploadResult {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    NativeMediaUploadResult {
+        status,
+        error: parsed
+            .as_ref()
+            .and_then(|value| value.get("error").or_else(|| value.get("message")))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        error_type: parsed
+            .as_ref()
+            .and_then(|value| value.get("errorType"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    }
+}
+
+fn native_media_confirm_body(msg: Option<String>, tmid: Option<String>) -> serde_json::Value {
+    let mut body = serde_json::Map::from_iter([(
+        "msg".to_string(),
+        serde_json::Value::String(msg.unwrap_or_default()),
+    )]);
+    if let Some(tmid) = tmid {
+        body.insert("tmid".to_string(), serde_json::Value::String(tmid));
+    }
+    serde_json::Value::Object(body)
+}
+
+#[tauri::command]
+async fn upload_native_media(
+    webview: tauri::Webview,
+    origins: tauri::State<'_, AllowedHttpOrigins>,
+    server_url: String,
+    path: String,
+    rid: String,
+    auth_token: String,
+    user_id: String,
+    msg: Option<String>,
+    tmid: Option<String>,
+) -> Result<NativeMediaUploadResult, String> {
+    if webview.label() != "main" {
+        return Err("原生文件上传仅允许主窗口调用".to_string());
+    }
+    if rid.is_empty()
+        || rid.len() > 256
+        || rid.chars().any(char::is_control)
+        || auth_token.is_empty()
+        || user_id.is_empty()
+        || tmid.as_ref().is_some_and(|value| {
+            value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+        })
+    {
+        return Err("原生文件上传参数无效".to_string());
+    }
+    let upload_url = native_media_url(&server_url, &["rooms.media", &rid])?;
+    let origin = upload_url.origin().ascii_serialization();
+    let allowed = origins
+        .0
+        .lock()
+        .map_err(|_| "HTTP origin registry is unavailable".to_string())?
+        .contains(&origin);
+    if !allowed {
+        return Err("Rocket.Chat 服务器地址尚未由宿主授权".to_string());
+    }
+    let source = PathBuf::from(path);
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .ok_or_else(|| "本地文件名无效".to_string())?
+        .to_string();
+    let part = Part::file(&source)
+        .await
+        .map_err(|error| format!("无法读取待上传文件：{error}"))?
+        .file_name(file_name);
+    let client = Client::builder()
+        .redirect(Policy::limited(5))
+        .build()
+        .map_err(|error| format!("无法创建上传连接：{error}"))?;
+    let upload = client
+        .post(upload_url)
+        .header("X-Auth-Token", &auth_token)
+        .header("X-User-Id", &user_id)
+        .multipart(Form::new().part("file", part))
+        .send()
+        .await
+        .map_err(|error| format!("上传文件失败：{error}"))?;
+    let status = upload.status().as_u16();
+    let body = upload
+        .text()
+        .await
+        .map_err(|error| format!("无法读取上传响应：{error}"))?;
+    if !(200..300).contains(&status) {
+        return Ok(native_media_response(status, &body));
+    }
+    let file_id = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value.pointer("/file/_id")?.as_str().map(str::to_string))
+        .ok_or_else(|| "Rocket.Chat 上传响应缺少文件 ID".to_string())?;
+    let confirm_url = native_media_url(&server_url, &["rooms.mediaConfirm", &rid, &file_id])?;
+    let confirm_body = native_media_confirm_body(msg, tmid);
+    let confirm = client
+        .post(confirm_url)
+        .header("X-Auth-Token", auth_token)
+        .header("X-User-Id", user_id)
+        .json(&confirm_body)
+        .send()
+        .await
+        .map_err(|error| format!("确认文件消息失败：{error}"))?;
+    let status = confirm.status().as_u16();
+    let body = confirm
+        .text()
+        .await
+        .map_err(|error| format!("无法读取文件确认响应：{error}"))?;
+    Ok(native_media_response(status, &body))
 }
 
 #[cfg(windows)]
@@ -507,7 +754,8 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 mod tray_icon_tests {
     use super::{
         autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
-        launch_opens_main_window, normalize_desktop_distribution_profile, normalize_http_origin,
+        launch_opens_main_window, native_media_confirm_body, native_media_response,
+        native_media_url, normalize_desktop_distribution_profile, normalize_http_origin,
         refresh_autostart_registration_with, resolve_download_history_path, resolve_unc_path,
         validate_external_url,
     };
@@ -543,6 +791,34 @@ mod tray_icon_tests {
         );
         assert!(normalize_http_origin("ftp://chat.example.test").is_err());
         assert!(normalize_http_origin("https://user:secret@chat.example.test").is_err());
+    }
+
+    #[test]
+    fn native_media_request_preserves_server_subpath_and_omits_empty_thread() {
+        assert_eq!(
+            native_media_url(
+                "https://chat.example.test/rocket",
+                &["rooms.media", "room/id"]
+            )
+            .unwrap()
+            .as_str(),
+            "https://chat.example.test/rocket/api/v1/rooms.media/room%2Fid"
+        );
+        assert_eq!(
+            native_media_confirm_body(Some("caption".into()), None),
+            serde_json::json!({ "msg": "caption" })
+        );
+        assert_eq!(
+            native_media_confirm_body(None, Some("thread-id".into())),
+            serde_json::json!({ "msg": "", "tmid": "thread-id" })
+        );
+        let error = native_media_response(
+            413,
+            r#"{"error":"File too large","errorType":"error-file-too-large"}"#,
+        );
+        assert_eq!(error.status, 413);
+        assert_eq!(error.error.as_deref(), Some("File too large"));
+        assert_eq!(error.error_type.as_deref(), Some("error-file-too-large"));
     }
 
     #[test]
@@ -711,10 +987,13 @@ fn main() {
         // webview 和 reqwest 都做不到「用当前登录用户的凭据」，只能走 WinHTTP
         .invoke_handler(tauri::generate_handler![
             allow_http_origin,
+            upload_native_media,
             desktop_distribution_profile,
             open_external_url,
             read_autostart_enabled,
             set_autostart_enabled,
+            read_desktop_preferences,
+            write_desktop_preferences,
             download_history_open,
             open_local_file,
             open_unc_path,
@@ -775,6 +1054,7 @@ fn main() {
             lan::lan_service_stop,
             lan::lan_trust_replace,
             lan::lan_peers,
+            lan::lan_probe_peer,
             lan::lan_send_chat,
             lan::lan_send_file
         ])

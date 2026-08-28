@@ -44,10 +44,10 @@ test('设置页档位包含默认阈值且 0 表示任何文件', () => {
   }
 });
 
-test('阈值只管在线选路：服务器上传失败或超限时无视阈值用 LAN 兜底（结构锁定）', () => {
+test('普通原生文件上传不再自动走 LAN（结构锁定）', () => {
   const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
   // 阈值判断只出现在「在线优先选路」分支，兜底分支直接 tryLanSend()
-  assert.match(chat, /if \(shouldTryLanFileTransfer\(size, minBytes\)\) sentOverLan = await tryLanSend\(\);/);
-  assert.match(chat, /if \(overServerLimit \|\| rcFailure\) \{/);
-  assert.match(chat, /if \(!\(await tryLanSend\(\)\)\) \{/);
+  assert.match(chat, /await uploadDesktopFile\(path, rid,/);
+  assert.doesNotMatch(chat, /shouldTryLanFileTransfer/);
+  assert.doesNotMatch(chat, /tryLanSend/);
 });

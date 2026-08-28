@@ -119,6 +119,14 @@ struct LanMessageEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LanProbeEvent {
+    user_id: String,
+    device_id: String,
+    public_key: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LanFileReceipt {
     pub message_id: String,
     pub file_name: String,
@@ -220,9 +228,8 @@ fn accept_handshake(
     stream: &mut TcpStream,
     identity: &RuntimeIdentity,
     trusted: &SharedTrusted,
-) -> Result<HandshakePeer, String> {
+) -> Result<(HandshakePeer, bool), String> {
     let (initiator, initiator_nonce) = read_hello(stream)?;
-    let pinned = trusted_public_key(trusted, &initiator)?;
     let responder_nonce = random_nonce()?;
     write_control_frame(
         stream,
@@ -239,14 +246,44 @@ fn accept_handshake(
         initiator_nonce,
         responder_nonce,
     };
-    verify_transcript(&pinned, &transcript, &read_proof(stream)?)?;
-    write_control_frame(
-        stream,
-        &ControlFrame::Proof {
-            signature: sign_transcript(&identity.signing_key, &transcript),
-        },
-    )?;
-    Ok(initiator)
+    match read_control_frame(stream)? {
+        ControlFrame::Proof { signature } => {
+            let pinned = trusted_public_key(trusted, &initiator)?;
+            verify_transcript(&pinned, &transcript, &signature)?;
+            write_control_frame(
+                stream,
+                &ControlFrame::Proof {
+                    signature: sign_transcript(&identity.signing_key, &transcript),
+                },
+            )?;
+            Ok((initiator, false))
+        }
+        ControlFrame::Probe {
+            request_id,
+            signature,
+        } if !request_id.is_empty()
+            && request_id.len() <= 128
+            && !initiator.user_id.is_empty()
+            && initiator.user_id.len() <= 256
+            && !initiator.device_id.is_empty()
+            && initiator.device_id.len() <= 128
+            && initiator.device_id != identity.peer.device_id
+            && initiator.public_key.len() <= 128 =>
+        {
+            // Probe 只能复核已通过 Rocket.Chat 认证并固定过的设备，不能建立首次信任。
+            let pinned = trusted_public_key(trusted, &initiator)?;
+            verify_transcript(&pinned, &transcript, &signature)?;
+            write_control_frame(
+                stream,
+                &ControlFrame::ProbeAck {
+                    request_id,
+                    signature: sign_transcript(&identity.signing_key, &transcript),
+                },
+            )?;
+            Ok((initiator, true))
+        }
+        _ => Err("LAN handshake expected proof or probe frame".to_string()),
+    }
 }
 
 fn connect_handshake(
@@ -268,6 +305,9 @@ fn connect_handshake(
     if responder.user_id != expected.user_id || responder.device_id != expected.device_id {
         return Err("LAN responder identity does not match the discovered peer".to_string());
     }
+    if responder.public_key != expected.public_key {
+        return Err("LAN responder key does not match the discovered peer".to_string());
+    }
     let pinned = trusted_public_key(trusted, &responder)?;
     let transcript = HandshakeTranscript {
         server_fingerprint: identity.server_fingerprint.clone(),
@@ -283,6 +323,54 @@ fn connect_handshake(
         },
     )?;
     verify_transcript(&pinned, &transcript, &read_proof(stream)?)
+}
+
+fn connect_probe(
+    stream: &mut TcpStream,
+    identity: &RuntimeIdentity,
+    expected: &LanPeer,
+) -> Result<HandshakePeer, String> {
+    let initiator_nonce = random_nonce()?;
+    write_control_frame(
+        stream,
+        &ControlFrame::Hello {
+            version: PROTOCOL_VERSION,
+            peer: identity.peer.clone(),
+            nonce: initiator_nonce.clone(),
+        },
+    )?;
+    let (responder, responder_nonce) = read_hello(stream)?;
+    if responder.user_id != expected.user_id || responder.device_id != expected.device_id {
+        return Err("LAN responder identity does not match the discovered peer".to_string());
+    }
+    if responder.public_key != expected.public_key {
+        return Err("LAN responder key does not match the discovered peer".to_string());
+    }
+    let transcript = HandshakeTranscript {
+        server_fingerprint: identity.server_fingerprint.clone(),
+        initiator: identity.peer.clone(),
+        responder: responder.clone(),
+        initiator_nonce,
+        responder_nonce,
+    };
+    let request_id = random_nonce()?;
+    write_control_frame(
+        stream,
+        &ControlFrame::Probe {
+            request_id: request_id.clone(),
+            signature: sign_transcript(&identity.signing_key, &transcript),
+        },
+    )?;
+    match read_control_frame(stream)? {
+        ControlFrame::ProbeAck {
+            request_id: received,
+            signature,
+        } if received == request_id => {
+            verify_transcript(&responder.public_key, &transcript, &signature)?;
+            Ok(responder)
+        }
+        _ => Err("LAN peer returned an invalid probe acknowledgement".to_string()),
+    }
 }
 
 fn open_udp_discovery_socket() -> Result<UdpSocket, String> {
@@ -429,7 +517,19 @@ fn handle_incoming(
         .set_read_timeout(Some(FILE_IO_TIMEOUT))
         .and_then(|_| stream.set_write_timeout(Some(FILE_IO_TIMEOUT)))
         .map_err(|error| format!("failed to configure LAN file connection: {error}"))?;
-    let peer = accept_handshake(&mut stream, &identity, &trusted)?;
+    let (peer, probed) = accept_handshake(&mut stream, &identity, &trusted)?;
+    if probed {
+        app.emit(
+            "rocketx://lan-peer-probed",
+            LanProbeEvent {
+                user_id: peer.user_id,
+                device_id: peer.device_id,
+                public_key: peer.public_key,
+            },
+        )
+        .map_err(|error| format!("failed to deliver LAN probe event: {error}"))?;
+        return Ok(());
+    }
     let root = incoming_root(&app)?;
     let mut processed = false;
     loop {
@@ -833,6 +933,54 @@ pub fn lan_peers(runtime: tauri::State<'_, LanRuntimeState>) -> Result<Vec<LanPe
 }
 
 #[tauri::command]
+pub async fn lan_probe_peer(
+    runtime: tauri::State<'_, LanRuntimeState>,
+    user_id: String,
+    device_id: Option<String>,
+) -> Result<TrustedDevice, String> {
+    let (peer, identity) = {
+        let runtime = runtime
+            .0
+            .lock()
+            .map_err(|_| "LAN runtime lock is unavailable".to_string())?;
+        let current = runtime
+            .as_ref()
+            .ok_or_else(|| "LAN service is not running".to_string())?;
+        let peers = current
+            .peers
+            .read()
+            .map_err(|_| "LAN peer store is unavailable".to_string())?;
+        let peer = peers
+            .values()
+            .filter(|peer| {
+                peer.user_id == user_id
+                    && peer.trusted
+                    && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
+            })
+            .max_by_key(|peer| peer.last_seen_ms)
+            .cloned()
+            .ok_or_else(|| "no LAN peer is online for this user".to_string())?;
+        (peer, current.identity.clone())
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let address: SocketAddr = format!("{}:{}", peer.ip, peer.port)
+            .parse()
+            .map_err(|_| "LAN peer address is invalid".to_string())?;
+        let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+            .map_err(|error| format!("failed to connect LAN peer: {error}"))?;
+        configure_stream(&stream)?;
+        let responder = connect_probe(&mut stream, &identity, &peer)?;
+        Ok(TrustedDevice {
+            user_id: responder.user_id,
+            device_id: responder.device_id,
+            public_key: responder.public_key,
+        })
+    })
+    .await
+    .map_err(|error| format!("LAN probe task failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn lan_send_chat(
     runtime: tauri::State<'_, LanRuntimeState>,
     user_id: String,
@@ -1226,7 +1374,10 @@ mod tests {
         stop: Arc<AtomicBool>,
     ) -> Result<(), String> {
         configure_stream(&stream)?;
-        let peer = accept_handshake(&mut stream, &identity, &trusted)?;
+        let (peer, probed) = accept_handshake(&mut stream, &identity, &trusted)?;
+        if probed {
+            return Ok(());
+        }
         loop {
             match read_control_frame(&mut stream) {
                 Ok(ControlFrame::FileOffer {
@@ -1361,13 +1512,52 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             configure_stream(&stream).unwrap();
-            accept_handshake(&mut stream, &bob, &bob_trust).unwrap()
+            accept_handshake(&mut stream, &bob, &bob_trust).unwrap().0
         });
 
         let mut stream = TcpStream::connect(address).unwrap();
         configure_stream(&stream).unwrap();
         connect_handshake(&mut stream, &alice, &expected_bob, &alice_trust).unwrap();
         assert_eq!(server.join().unwrap(), alice.peer);
+    }
+
+    #[test]
+    fn tcp_probe_authenticates_only_already_pinned_devices() {
+        let alice = runtime_identity("alice", "alice-device", signing_key(7));
+        let bob = runtime_identity("bob", "bob-device", signing_key(9));
+        let bob_trust = Arc::new(RwLock::new(HashMap::from([(
+            peer_key("alice", "alice-device"),
+            alice.peer.public_key.clone(),
+        )])));
+        let expected_bob = LanPeer {
+            user_id: bob.peer.user_id.clone(),
+            device_id: bob.peer.device_id.clone(),
+            device_name: bob.device_name.clone(),
+            ip: Ipv4Addr::LOCALHOST.to_string(),
+            port: 0,
+            public_key: bob.peer.public_key.clone(),
+            trusted: true,
+            source: "test".to_string(),
+            last_seen_ms: 0,
+        };
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_trust = bob_trust.clone();
+        let expected_bob_peer = bob.peer.clone();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            configure_stream(&stream).unwrap();
+            accept_handshake(&mut stream, &bob, &server_trust).unwrap()
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        configure_stream(&stream).unwrap();
+        let responder = connect_probe(&mut stream, &alice, &expected_bob).unwrap();
+        let (initiator, probed) = server.join().unwrap();
+        assert!(probed);
+        assert_eq!(initiator, alice.peer);
+        assert_eq!(responder, expected_bob_peer);
+        assert_eq!(bob_trust.read().unwrap().len(), 1);
     }
 
     #[test]
@@ -1392,7 +1582,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             configure_stream(&stream).unwrap();
-            let peer = accept_handshake(&mut stream, &bob, &bob_trust).unwrap();
+            let peer = accept_handshake(&mut stream, &bob, &bob_trust).unwrap().0;
             let frame = read_control_frame(&mut stream).unwrap();
             assert_eq!(peer.user_id, "alice");
             assert_eq!(

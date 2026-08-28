@@ -29,12 +29,15 @@ test('Butler DeepSeek 视图改为官方 DSH Web iframe host，并移除自绘�
   assert.match(conversation, /type:\s*'rocketx:dsh-open-new-session'/);
   assert.match(conversation, /workspacePath:\s*workspaceRoot/);
   assert.match(conversation, /type:\s*'rocketx:dsh-focus-session'/);
+  assert.match(conversation, /type:\s*'rocketx:dsh-ready'/);
   assert.match(conversation, /DSH_FRAME_REQUEST_TIMEOUT_MS\s*=\s*12_000/);
   assert.match(conversation, /selectedHostedSessionKey && !selectedPersonalDshSessionId && !focusSessionId/);
   assert.match(conversation, /requestKey: `personal:\$\{selectedPersonalDshSessionId\}:\$\{selectedPersonalDshFocusNonce\}`/);
   assert.match(conversation, /const focusRequestKey = focusTarget\?\.requestKey \?\? null/);
-  assert.match(conversation, /if \(!desktopRuntime \|\| !frameLoaded \|\| status !== 'ready' \|\| !url \|\| bootComplete\) return;/);
-  assert.match(conversation, /\[\s*bootComplete,\s*bootNonce,\s*desktopRuntime,\s*focusRequestKey,/);
+  assert.match(conversation, /if \(!desktopRuntime \|\| !frameLoaded \|\| !frameBridgeReady \|\| status !== 'ready' \|\| !url \|\| bootComplete\) return;/);
+  assert.match(conversation, /\[\s*bootComplete,\s*bootNonce,\s*desktopRuntime,\s*frameBridgeReady,\s*focusRequestKey,/);
+  assert.match(conversation, /setFrameBridgeReady\(true\)/);
+  assert.match(conversation, /type: 'rocketx:dsh-ready-request'/);
   assert.match(conversation, /已打开你的私人房间会话/);
   assert.match(conversation, /不会新建另一条会话/);
   assert.match(conversation, /type:\s*'rocketx:dsh-ack'/);

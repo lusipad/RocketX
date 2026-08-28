@@ -1,5 +1,6 @@
 import type { RcPreferences } from '@rcx/rc-client';
 import { getLocalDataSchema, readLocalData, writeLocalData } from './localDataContract';
+import { isTauri } from './http';
 
 /**
  * 通知等偏好的本地镜像（issue #351）。
@@ -33,5 +34,40 @@ export function mergePrefsCache(patch: Partial<RcPreferences>): void {
     writeLocalData(PREFS_CACHE_KEY, PREFS_CACHE_VERSION, { ...loadPrefsCache(), ...patch });
   } catch {
     // 无痕模式或存储不可用时，服务端已经生效，镜像只是兜底，丢了不阻塞。
+  }
+}
+
+function desktopPreferenceScope(): string {
+  try {
+    return localStorage.getItem('rcx-owner') || 'anonymous';
+  } catch {
+    return 'anonymous';
+  }
+}
+
+/** Tauri 应用数据目录中的镜像，跨 WebView 存储目录变化保留。 */
+export async function loadNativePrefsCache(): Promise<Partial<RcPreferences>> {
+  if (!isTauri) return {};
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const value = await invoke<unknown | null>('read_desktop_preferences', {
+      scope: desktopPreferenceScope(),
+    });
+    return decodePrefs(value) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export async function mergeNativePrefsCache(patch: Partial<RcPreferences>): Promise<void> {
+  if (!isTauri) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('write_desktop_preferences', {
+      scope: desktopPreferenceScope(),
+      patch,
+    });
+  } catch {
+    // 原生镜像只是升级后的兜底，服务端写入成功时不能阻塞设置操作。
   }
 }

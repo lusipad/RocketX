@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RcUser } from '@rcx/rc-client';
 import { Check, Lock, Search, X } from 'lucide-react';
 import { getServerBase, rest } from '../lib/client';
-import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
-import { loadUserSearchRoster } from '../lib/userSearch';
+import { usePinyinReady } from '../lib/pinyin';
+import { loadUserSearchRoster, mergeUserSearchResults } from '../lib/userSearch';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
+import { personName, useAliases } from '../stores/aliases';
 import { settleScopedResult } from '../lib/scopedResult';
 import Avatar from './Avatar';
 import Dialog from './Dialog';
@@ -26,6 +27,8 @@ export function useUserSearch(keyword: string): { users: RcUser[]; warning: stri
     users: [],
   });
   const me = useAuth((s) => s.user?.username);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -91,17 +94,13 @@ export function useUserSearch(keyword: string): { users: RcUser[]; warning: stri
   const remote = remoteResult.query === keyword.trim() ? remoteResult.users : [];
   const users = useMemo(() => {
     if (!keyword.trim()) return roster;
-    const merged = new Map<string, RcUser>();
-    for (const u of roster) {
-      if (pinyinMatch(keyword, u.name, u.username)) merged.set(u._id, u);
-    }
-    for (const u of remote) merged.set(u._id, u);
-    return [...merged.values()].sort(
-      (a, b) =>
-        pinyinScore(keyword, a.name || a.username) -
-        pinyinScore(keyword, b.name || b.username),
+    return mergeUserSearchResults(
+      keyword,
+      roster,
+      remote,
+      (user) => personName(aliases, user.username, user.name || user.username, nameFormat),
     );
-  }, [roster, remote, keyword, pinyinReady]);
+  }, [roster, remote, keyword, aliases, nameFormat, pinyinReady]);
   return { users, warning: rosterWarning };
 }
 
@@ -117,6 +116,8 @@ const DialogShell = Dialog;
  */
 export function StartDMDialog({ onClose }: { onClose: () => void }) {
   const startDM = useChat((s) => s.startDM);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
@@ -187,7 +188,7 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
                 key={u.username}
                 className="flex items-center gap-1 rounded-full bg-primary-light px-2 py-0.5 text-xs text-primary"
               >
-                {u.name || u.username}
+                {personName(aliases, u.username, u.name || u.username, nameFormat)}
                 <button onClick={() => toggle(u)} className="hover:text-danger">
                   <X size={12} />
                 </button>
@@ -215,6 +216,7 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
       <div className="min-h-40 flex-1 overflow-y-auto px-2 pb-3">
         {users.map((u) => {
           const checked = selected.has(u.username);
+          const shownName = personName(aliases, u.username, u.name || u.username, nameFormat);
           return (
             <div
               key={u._id}
@@ -237,9 +239,9 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
                 className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 title={count > 0 ? '加入/移出本次群聊' : '直接私聊'}
               >
-                <Avatar name={u.name || u.username} username={u.username} size={32} />
+                <Avatar name={shownName} username={u.username} size={32} />
                 <span className="min-w-0">
-                  <span className="block truncate text-sm text-ink">{u.name || u.username}</span>
+                  <span className="block truncate text-sm text-ink">{shownName}</span>
                   <span className="block truncate text-xs text-ink-3">@{u.username}</span>
                 </span>
               </button>
@@ -269,6 +271,8 @@ export function CreateGroupDialog({
 }) {
   const createGroup = useChat((s) => s.createGroup);
   const createTeam = useChat((s) => s.createTeam);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const [name, setName] = useState('');
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
@@ -324,7 +328,7 @@ export function CreateGroupDialog({
                 key={u.username}
                 className="flex items-center gap-1 rounded-full bg-primary-light px-2 py-0.5 text-xs text-primary"
               >
-                {u.name || u.username}
+                {personName(aliases, u.username, u.name || u.username, nameFormat)}
                 <button onClick={() => toggle(u)} className="hover:text-danger">
                   <X size={12} />
                 </button>
@@ -345,6 +349,7 @@ export function CreateGroupDialog({
       <div className="min-h-32 flex-1 overflow-y-auto px-2">
         {users.map((u) => {
           const checked = selected.has(u.username);
+          const shownName = personName(aliases, u.username, u.name || u.username, nameFormat);
           return (
             <button
               key={u._id}
@@ -358,8 +363,8 @@ export function CreateGroupDialog({
               >
                 {checked && <Check size={12} strokeWidth={3} />}
               </span>
-              <Avatar name={u.name || u.username} username={u.username} size={28} />
-              <span className="truncate text-sm text-ink">{u.name || u.username}</span>
+              <Avatar name={shownName} username={u.username} size={28} />
+              <span className="truncate text-sm text-ink">{shownName}</span>
               <span className="text-xs text-ink-3">@{u.username}</span>
             </button>
           );

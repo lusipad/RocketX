@@ -480,6 +480,7 @@ test('多人会话逐个成员名定位命中者，供跳转进会话后高亮�
   assert.equal(resolveMatchedMemberName('wangwu', 'lisi，wangwu'), 'wangwu');
   assert.equal(resolveMatchedMemberName('王五', '李四、王五'), '王五');
   assert.equal(resolveMatchedMemberName('lisi', '李四, 王五', 'lisi,wangwu'), 'lisi');
+  assert.equal(resolveMatchedMemberName('wangwu', '项目群（李四, 王五）', 'lisi,wangwu'), 'wangwu');
   assert.equal(resolveMatchedMemberName('不存在', '李四, 王五'), undefined);
   assert.equal(resolveMatchedMemberName('四王', '李四, 王五'), undefined);
   assert.equal(resolveMatchedMemberName('  ', '李四, 王五'), undefined);
@@ -488,7 +489,12 @@ test('多人会话逐个成员名定位命中者，供跳转进会话后高亮�
 
 test('搜索跳转多人会话后通过成员面板定位高亮命中成员（issue #364）', () => {
   const switcher = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
-  assert.match(switcher, /resolveMatchedMemberName\(keyword/);
+  assert.match(switcher, /resolveMatchedMemberName\(\s*keyword/);
+  assert.match(switcher, /displayName\(aliases, conversation, nameFormat\)/);
+  assert.match(switcher, /subscription\?\.fname/);
+  assert.match(switcher, /subscription\?\.name/);
+  assert.match(switcher, /room\?\.fname/);
+  assert.match(switcher, /room\?\.name/);
   assert.match(switcher, /setPanel\(\{ kind: 'members', highlightName \}\)/);
   const panel = readFileSync('apps/web/src/components/MembersPanel.tsx', 'utf8');
   assert.match(panel, /data-target-member/);

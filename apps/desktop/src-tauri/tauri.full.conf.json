@@ -9,6 +9,7 @@
     },
     "windows": {
       "nsis": {
+        "installMode": "currentUser",
         "installerHooks": "./windows/full-installer-hooks.nsh"
       }
     }

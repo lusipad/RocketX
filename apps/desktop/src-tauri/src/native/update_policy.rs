@@ -100,6 +100,17 @@ pub(crate) fn summarize_installer_output(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn is_user_cancelled_elevation(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.contains("operation was canceled by the user")
+        || normalized.contains("operation was cancelled by the user")
+        || normalized.contains("canceled by the user")
+        || normalized.contains("cancelled by the user")
+        || message.contains("操作已被用户取消")
+        || message.contains("该操作已被用户取消")
+        || message.contains("用户取消")
+}
+
 pub(crate) fn silent_install_failure_message(
     installer_kind: WindowsInstallerKind,
     code: Option<i32>,
@@ -108,7 +119,11 @@ pub(crate) fn silent_install_failure_message(
 ) -> String {
     let stderr = summarize_installer_output(stderr);
     if code == Some(INSTALLER_LAUNCH_FAILURE_EXIT_CODE) {
-        let mut message = "无法启动安装程序（可能取消了管理员授权）".to_string();
+        let mut message = if is_user_cancelled_elevation(&stderr) {
+            "无法启动安装程序（用户取消了管理员授权）".to_string()
+        } else {
+            "无法启动安装程序".to_string()
+        };
         if !stderr.is_empty() {
             message.push_str(&format!("：{stderr}"));
         }

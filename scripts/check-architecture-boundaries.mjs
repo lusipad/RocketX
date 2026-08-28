@@ -37,6 +37,7 @@ const ADAPTER_FILES = new Set([
   'apps/web/src/lib/http.ts',
   'apps/web/src/lib/imageOcr.ts',
   'apps/web/src/lib/notify.ts',
+  'apps/web/src/lib/prefsCache.ts',
   'apps/web/src/lib/stickerLibrary.ts',
   'apps/web/src/lib/taskbar.ts',
   'apps/web/src/lib/tray.ts',

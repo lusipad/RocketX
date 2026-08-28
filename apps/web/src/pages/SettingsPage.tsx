@@ -91,8 +91,6 @@ import { resetFirstRun } from '../lib/firstRun';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { attentionReduction } from '../lib/notificationAggregation';
 import { currentLanPeers } from '../lan/runtime';
-import { LAN_FILE_MIN_BYTES_OPTIONS } from '../lan/routing';
-import { lanOutboxCapability } from '../lan/outbox';
 import { fmtSize } from '../lib/format';
 import { getRuntimeMode, persistRuntimeMode, type RuntimeMode } from '../lib/runtimeMode';
 import { roomArchiveSummaries, type AttachmentArchiveSettingsV1 } from '../lib/attachmentArchive';
@@ -556,12 +554,10 @@ function DesktopSection() {
   const [loading, setLoading] = useState(autostartAvailable);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0, metadata: 'unknown' });
+  const [lanStatus, setLanStatus] = useState({ peers: 0, trusted: 0 });
   const [scaleChanging, setScaleChanging] = useState(false);
   const uiScale = useUiPrefs((s) => s.uiScale);
   const setUiScale = useUiPrefs((s) => s.setUiScale);
-  const lanFileMinBytes = useUiPrefs((s) => s.lanFileMinBytes);
-  const setLanFileMinBytes = useUiPrefs((s) => s.setLanFileMinBytes);
 
   useEffect(() => {
     if (!autostartAvailable) return;
@@ -587,7 +583,6 @@ function DesktopSection() {
       setLanStatus({
         peers: peers.length,
         trusted: peers.filter((peer) => peer.trusted).length,
-        metadata: lanOutboxCapability(),
       });
     };
     refresh();
@@ -736,56 +731,22 @@ function DesktopSection() {
         </Row>
       )}
       <Row
-        label="断网时走局域网，联网后补回服务器"
-        hint="广播只用于发现；设备必须先通过 Rocket.Chat 认证通道固定公钥"
+        label="局域网 P2P 直传"
+        hint="仅从聊天输入区的 P2P 图标手动发起；普通消息和普通附件始终走 Rocket.Chat"
       >
         <div className="max-w-md text-sm text-ink-2">
           {!isTauri ? (
-            '网页版不启用原生 LAN socket，文件和消息继续走 Rocket.Chat。'
+            '网页版不启用原生 LAN socket，文件继续走 Rocket.Chat。'
           ) : (
             <>
               <div>
                 在线候选 {lanStatus.peers} 台，其中可信 {lanStatus.trusted} 台。
               </div>
-              <div className="mt-1 text-xs text-ink-3">
-                {lanStatus.metadata === 'server-metadata'
-                  ? '服务器保留离线原始时间元数据，其他 RocketX 设备也能恢复原时间。'
-                  : lanStatus.metadata === 'local-only'
-                    ? '服务器未启用消息自定义字段；只有参与原 LAN 会话的设备保留原始时间。'
-                    : '还没有过断网补发。第一次补发时会检查服务器能不能保留原始发送时间。'}
-              </div>
+              <div className="mt-1 text-xs text-ink-3">P2P 仅在输入区手动触发。</div>
             </>
           )}
         </div>
       </Row>
-      {isTauri && (
-        <Row
-          label="局域网直传阈值"
-          hint="达到该大小的文件才尝试 P2P 直传，小文件直接走服务器；对端不可信或传输失败时始终回退 Rocket.Chat"
-        >
-          <div role="radiogroup" aria-label="局域网直传阈值" className="flex flex-wrap gap-3">
-            {LAN_FILE_MIN_BYTES_OPTIONS.map((option) => {
-              const selected = option.value === lanFileMinBytes;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  onClick={() => setLanFileMinBytes(option.value)}
-                  className={`min-w-24 rounded-lg border px-3 py-2.5 text-left text-sm transition ${
-                    selected
-                      ? 'border-primary/70 bg-primary-light/60 font-medium text-primary'
-                      : 'border-line text-ink hover:border-ink-3 hover:bg-fill-hover'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-        </Row>
-      )}
       <Row
         label="导出诊断日志"
         hint="包含应用版本、连接状态和脱敏后的近期错误；不会包含密码、PAT、令牌或消息正文"
@@ -1737,7 +1698,6 @@ const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
   'net:fetch': '访问声明的网络地址',
   'ai:invoke': '调用 AI',
   'lan:discover': '发现局域网设备',
-  'lan:transfer': '局域网传输',
   'agent:spawn': '启动 Agent（每次确认）',
   'process:spawn': '启动本地进程（每次确认）',
   'native:service': '运行内置签名后台服务',

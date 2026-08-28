@@ -31,6 +31,7 @@ type DshFrameRequest =
   | { requestId: string; type: 'rocketx:dsh-focus-session'; sessionId: string };
 
 type DshFrameResponse =
+  | { type: 'rocketx:dsh-ready' }
   | { requestId: string; type: 'rocketx:dsh-ack' }
   | { requestId: string; type: 'rocketx:dsh-error'; error?: string };
 
@@ -43,6 +44,7 @@ export default function DshConversation() {
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [error, setError] = useState('');
   const [frameLoaded, setFrameLoaded] = useState(false);
+  const [frameBridgeReady, setFrameBridgeReady] = useState(false);
   const [bootComplete, setBootComplete] = useState(false);
   const [frameNotice, setFrameNotice] = useState<{ kind: 'working' | 'error' | 'success'; text: string } | null>(null);
   const [bootNonce, setBootNonce] = useState(0);
@@ -118,7 +120,7 @@ export default function DshConversation() {
       const onMessage = (event: MessageEvent) => {
         if (event.source !== frameWindow || event.origin !== targetOrigin) return;
         const data = event.data as DshFrameResponse | null;
-        if (!data || typeof data !== 'object' || data.requestId !== request.requestId) return;
+        if (!data || typeof data !== 'object' || !('requestId' in data) || data.requestId !== request.requestId) return;
         if (data.type !== 'rocketx:dsh-ack' && data.type !== 'rocketx:dsh-error') return;
         window.clearTimeout(timeout);
         window.removeEventListener('message', onMessage);
@@ -140,6 +142,21 @@ export default function DshConversation() {
 
   useEffect(() => {
     if (!desktopRuntime) return;
+    const onMessage = (event: MessageEvent) => {
+      const frameWindow = iframeRef.current?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow || event.origin !== targetOrigin) return;
+      const data = event.data as DshFrameResponse | null;
+      if (!data || typeof data !== 'object' || data.type !== 'rocketx:dsh-ready') return;
+      setFrameBridgeReady(true);
+    };
+    window.addEventListener('message', onMessage);
+    return () => {
+      window.removeEventListener('message', onMessage);
+    };
+  }, [desktopRuntime, targetOrigin]);
+
+  useEffect(() => {
+    if (!desktopRuntime) return;
 
     let disposed = false;
     let activeController: DshController | null = null;
@@ -148,6 +165,7 @@ export default function DshConversation() {
     setUrl('');
     setError('');
     setFrameLoaded(false);
+    setFrameBridgeReady(false);
     setBootComplete(false);
     replaceFrameNotice(null);
 
@@ -202,7 +220,7 @@ export default function DshConversation() {
   }, [attempt, desktopRuntime, personalConversationRequested]);
 
   useEffect(() => {
-    if (!desktopRuntime || !frameLoaded || status !== 'ready' || !url || bootComplete) return;
+    if (!desktopRuntime || !frameLoaded || !frameBridgeReady || status !== 'ready' || !url || bootComplete) return;
     let cancelled = false;
     setBootComplete(false);
     if (selectedHostedSessionKey && !selectedPersonalDshSessionId && !focusSessionId) {
@@ -256,6 +274,7 @@ export default function DshConversation() {
     bootComplete,
     bootNonce,
     desktopRuntime,
+    frameBridgeReady,
     focusRequestKey,
     focusSessionId,
     focusUnavailableMessage,
@@ -334,7 +353,14 @@ export default function DshConversation() {
             onLoad={() => {
               lastFocusedSessionIdRef.current = null;
               setFrameLoaded(true);
+              setFrameBridgeReady(false);
               setBootNonce((value) => value + 1);
+              if (targetOrigin) {
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: 'rocketx:dsh-ready-request' },
+                  targetOrigin,
+                );
+              }
             }}
           />
         </div>

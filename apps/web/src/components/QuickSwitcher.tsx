@@ -508,16 +508,25 @@ export default function QuickSwitcher({
 
   const pickConv = (rid: string) => {
     const conversation = conversations.find((item) => item.rid === rid);
+    const subscription = subscriptions[rid];
+    const room = rooms[rid];
     if (commandCenter && conversation && (conversation.unread > 0 || conversation.alert)) {
       setConvFilter('unread');
       retainUnread(rid);
     }
     // 多人会话的会话名由成员名拼成：名字命中搜索词时，进会话后在成员面板里
     // 定位并高亮该成员，否则用户看不出这个会话为什么命中（issue #364）
-    const highlightName =
-      keyword.trim() && conversation?.isMultiDM
-        ? resolveMatchedMemberName(keyword, conversation.name)
-        : undefined;
+    const highlightName = keyword.trim() && conversation?.isMultiDM
+      ? resolveMatchedMemberName(
+        keyword,
+        displayName(aliases, conversation, nameFormat),
+        conversation.name,
+        subscription?.fname,
+        subscription?.name,
+        room?.fname,
+        room?.name,
+      )
+      : undefined;
     // openRoom 会重置右侧面板，必须等它完成后再 setPanel（同 pickFile 的 fileId）
     void openRoom(rid).then(() => {
       if (highlightName) {

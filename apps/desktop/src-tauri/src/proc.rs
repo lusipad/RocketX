@@ -2989,16 +2989,25 @@ fn run_silent_installer(
     installer_kind: WindowsInstallerKind,
 ) -> Result<(), String> {
     let (program, args) = silent_install_invocation(installer, installer_kind);
-    let mut command = Command::new("powershell");
-    command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "try { $process = Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length-1)] -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop; exit $process.ExitCode } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 242 }",
-        ])
-        .arg(program)
-        .args(args);
+    let mut command = if installer_kind == WindowsInstallerKind::Nsis {
+        // NSIS 的默认安装模式是 currentUser。强制 RunAs 会切换到管理员的 HKCU，
+        // 也会让共享目录更新落到错误的用户安装上下文。
+        let mut command = Command::new(program);
+        command.args(args);
+        command
+    } else {
+        let mut command = Command::new("powershell");
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "try { $process = Start-Process -FilePath $args[0] -ArgumentList $args[1..($args.Length-1)] -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop; exit $process.ExitCode } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 242 }",
+            ])
+            .arg(program)
+            .args(args);
+        command
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -3723,9 +3732,19 @@ mod tests {
             b"",
             "The operation was canceled by the user.".as_bytes(),
         );
-        assert!(launch_error.contains("无法启动安装程序（可能取消了管理员授权）"));
+        assert!(launch_error.contains("无法启动安装程序（用户取消了管理员授权）"));
         assert!(launch_error.contains("canceled by the user"));
         assert!(!launch_error.contains("退出码异常"));
+
+        // 其他 Start-Process 拉起失败不能误报成用户取消管理员授权。
+        let launch_path_error = silent_install_failure_message(
+            WindowsInstallerKind::Nsis,
+            Some(INSTALLER_LAUNCH_FAILURE_EXIT_CODE),
+            b"",
+            "Access is denied".as_bytes(),
+        );
+        assert_eq!(launch_path_error, "无法启动安装程序：Access is denied");
+        assert!(!launch_path_error.contains("管理员授权"));
 
         // 安装器自身的真实非零退出码才报退出码，并附带输出摘要。
         let install_error = silent_install_failure_message(

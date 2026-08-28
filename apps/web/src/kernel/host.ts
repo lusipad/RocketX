@@ -70,10 +70,6 @@ export interface KernelLanPeer {
 
 export interface KernelLanPort {
   listPeers(): KernelLanPeer[];
-  sendChat(
-    userId: string,
-    message: { messageId: string; roomId: string; originalTs: number; text: string },
-  ): Promise<void>;
 }
 
 export interface KernelNavigationPort {

@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.15`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.16`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.43.16` makes LAN file transfer explicit from the chat composer, requiring a successful one-to-one handshake before file selection; ordinary messages and server uploads no longer use LAN fallback. It also streams native uploads from disk and hides legacy LAN control messages from chat history.
 
 `v0.43.15` fixes two conversation-targeting gaps on the published `v0.43.14` line. When a global search hits both a multi-person conversation and a username, entering that conversation now opens the members panel with the matched member located and highlighted (Issue #364). Direct and multi-person DMs can also mention people outside the conversation: directory matches are labelled as not in the conversation, insert only the mention text, and never trigger an invite (inviting into a DM would create a new conversation), while group channels keep the existing invite-before-send behavior.
 

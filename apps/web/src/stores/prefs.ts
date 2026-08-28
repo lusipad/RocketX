@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import type { RcPreferences } from '@rcx/rc-client';
 import { rest, savePreferences } from '../lib/client';
-import { loadPrefsCache, mergePrefsCache } from '../lib/prefsCache';
+import {
+  loadNativePrefsCache,
+  loadPrefsCache,
+  mergeNativePrefsCache,
+  mergePrefsCache,
+} from '../lib/prefsCache';
 import { humanError, toast } from './toast';
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -105,11 +110,13 @@ export const usePrefs = create<PrefsState>((set, get) => ({
         const explicit = await withTimeout(rest.domains.preferences.getExplicitPreferences(), 8000);
         // 合并顺序：默认值 ← 本地镜像 ← 服务端显式值。镜像填「服务端还没同步下来」的坑
         // （上次写完服务端就没再连上过），服务端显式值始终是最终裁决（跨设备同步以它为准）。
-        set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...explicit }, loaded: true, error: null });
+        const nativeCache = await loadNativePrefsCache();
+        set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache, ...explicit }, loaded: true, error: null });
       } catch (err) {
         // 拉取失败用本地镜像兜底而不是裸 DEFAULTS——否则用户关掉的通知开关
         // 重启后又恢复默认（issue #351）。error 仍要设置，设置页据此显示「重试」。
-        set({ prefs: { ...DEFAULTS, ...loadPrefsCache() }, error: humanError(err, '无法加载偏好设置') });
+        const nativeCache = await loadNativePrefsCache();
+        set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache }, error: humanError(err, '无法加载偏好设置') });
       } finally {
         inflight = null;
       }
@@ -125,6 +132,7 @@ export const usePrefs = create<PrefsState>((set, get) => ({
       // 服务端写成功后落本地镜像（issue #351）：下次启动若服务端拉取失败，
       // 用镜像兜底而不是回退默认值。失败回滚的分支不写镜像——镜像只记确认生效的。
       mergePrefsCache(patch);
+      await mergeNativePrefsCache(patch);
     } catch (err) {
       set({ prefs: prev }); // 失败回滚
       toast.error(err, '设置保存失败');

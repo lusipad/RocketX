@@ -90,6 +90,10 @@ window.__ModuleLoader__.load({
 					if (event.source !== window.parent) return;
 					const data = event.data;
 					if (typeof data !== "object" || data === null) return;
+					if (data.type === "rocketx:dsh-ready-request") {
+						postToParent({ type: "rocketx:dsh-ready" }, event.origin);
+						return;
+					}
 					if (typeof data.requestId !== "string" || data.requestId.length === 0) return;
 					if (data.type === "rocketx:dsh-open-new-session") {
 						const generation = ++requestGeneration;
@@ -105,6 +109,9 @@ window.__ModuleLoader__.load({
 					focusSession(data.requestId, data.sessionId, event.origin, generation);
 				};
 				window.addEventListener("message", onMessage);
+				postToParent({
+					type: "rocketx:dsh-ready"
+				}, "*");
 				return () => {
 					requestGeneration += 1;
 					clearWait();

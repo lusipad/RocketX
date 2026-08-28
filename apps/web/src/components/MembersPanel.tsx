@@ -44,6 +44,8 @@ const NO_ROLES: RcRoomRole[] = [];
 function AddMembersDialog({ onClose }: { onClose: () => void }) {
   const rid = useChat((s) => s.activeRid);
   const inviteMembers = useChat((s) => s.inviteMembers);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   // 多人聊天（RC 里 t 仍是 'd'）没法直接加人，会新建一个包含所有人的会话 ——
   // 这跟「往群里加人」是两种结果，得先讲清楚，不能让用户点完才发现换了个会话
   const isDirect = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t === 'd' : false));
@@ -119,6 +121,7 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
       <div className="min-h-32 px-2">
         {users.map((u) => {
           const checked = selected.has(u._id);
+          const shownName = personName(aliases, u.username, u.name || u.username, nameFormat);
           return (
             <button
               key={u._id}
@@ -132,8 +135,8 @@ function AddMembersDialog({ onClose }: { onClose: () => void }) {
               >
                 {checked && <Check size={12} strokeWidth={3} />}
               </span>
-              <Avatar name={u.name || u.username} username={u.username} size={28} />
-              <span className="truncate text-sm text-ink">{u.name || u.username}</span>
+              <Avatar name={shownName} username={u.username} size={28} />
+              <span className="truncate text-sm text-ink">{shownName}</span>
               <span className="text-xs text-ink-3">@{u.username}</span>
             </button>
           );

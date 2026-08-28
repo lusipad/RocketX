@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { RcApiError, RcRestClient } from '../../packages/rc-client/src/index';
 import { rest } from '../../apps/web/src/lib/client';
-import {
-  setUploadSizeLimitProviderForTests,
-  useChat,
-} from '../../apps/web/src/stores/chat';
+import { useChat } from '../../apps/web/src/stores/chat';
 import { humanError, useToast } from '../../apps/web/src/stores/toast';
 
 const originalUploadMedia = rest.uploadMedia;
@@ -17,10 +15,9 @@ function namedFile(name: string, size: number): File {
   return Object.assign(new Blob([new Uint8Array(size)]), { name }) as File;
 }
 
-function reset(limit: unknown) {
+function reset() {
   useChat.setState({ activeRid: rid, replyTo: null, uploading: 0 });
   useToast.setState({ toasts: [] });
-  return setUploadSizeLimitProviderForTests(async () => limit);
 }
 
 test.afterEach(() => {
@@ -29,80 +26,46 @@ test.afterEach(() => {
   useToast.setState({ toasts: [] });
 });
 
-test('上传预检：超过服务器上限的文件直接拦截，不发请求（issue #355）', async () => {
-  const restore = reset(10 * MIB);
-  try {
-    let uploads = 0;
-    rest.uploadMedia = (async () => {
-      uploads += 1;
-    }) as typeof rest.uploadMedia;
+test('上传限制由服务器响应决定，不使用公开设置在客户端提前拒绝（issue #367）', async () => {
+  reset();
+  let uploads = 0;
+  rest.uploadMedia = (async () => {
+    uploads += 1;
+  }) as typeof rest.uploadMedia;
 
-    const ok = await useChat.getState().uploadFiles([namedFile('big.bin', 11 * MIB)]);
+  const ok = await useChat.getState().uploadFiles([namedFile('big.bin', 11 * MIB)]);
 
-    assert.equal(ok, false);
-    assert.equal(uploads, 0);
-    const errorToast = useToast.getState().toasts.find((t) => t.kind === 'error');
-    assert.ok(errorToast?.message.includes('超过服务器文件大小上限 10 MB'));
-  } finally {
-    restore();
-  }
+  assert.equal(ok, true);
+  assert.equal(uploads, 1);
+  assert.equal(useToast.getState().toasts.some((toast) => toast.kind === 'error'), false);
 });
 
-test('上传预检：多文件里有一个超限就整体不发，并指出具体文件（issue #355）', async () => {
-  const restore = reset(5 * MIB);
-  try {
-    let uploads = 0;
-    rest.uploadMedia = (async () => {
-      uploads += 1;
-    }) as typeof rest.uploadMedia;
+test('多文件逐个交给服务器处理，不因客户端推测的上限整体拒绝（issue #367）', async () => {
+  reset();
+  let uploads = 0;
+  rest.uploadMedia = (async () => {
+    uploads += 1;
+  }) as typeof rest.uploadMedia;
 
-    const ok = await useChat
-      .getState()
-      .uploadFiles([namedFile('small.txt', 100), namedFile('huge.zip', 6 * MIB)]);
+  const ok = await useChat
+    .getState()
+    .uploadFiles([namedFile('small.txt', 100), namedFile('huge.zip', 6 * MIB)]);
 
-    assert.equal(ok, false);
-    assert.equal(uploads, 0);
-    const errorToast = useToast.getState().toasts.find((t) => t.kind === 'error');
-    assert.ok(errorToast?.message.includes('huge.zip'));
-    // 预检失败不吞掉输入区挂着的引用草稿
-    assert.equal(useChat.getState().replyTo, null);
-  } finally {
-    restore();
-  }
+  assert.equal(ok, true);
+  assert.equal(uploads, 2);
 });
 
 test('上传预检：未超限时照常发送（issue #355）', async () => {
-  const restore = reset(10 * MIB);
-  try {
-    const uploaded: string[] = [];
-    rest.uploadMedia = (async (_rid: string, file: Blob, opts?: { fileName?: string }) => {
-      uploaded.push(opts?.fileName ?? (file as File).name);
-    }) as typeof rest.uploadMedia;
+  reset();
+  const uploaded: string[] = [];
+  rest.uploadMedia = (async (_rid: string, file: Blob, opts?: { fileName?: string }) => {
+    uploaded.push(opts?.fileName ?? (file as File).name);
+  }) as typeof rest.uploadMedia;
 
-    const ok = await useChat.getState().uploadFiles([namedFile('a.txt', 100)]);
+  const ok = await useChat.getState().uploadFiles([namedFile('a.txt', 100)]);
 
-    assert.equal(ok, true);
-    assert.deepEqual(uploaded, ['a.txt']);
-  } finally {
-    restore();
-  }
-});
-
-test('上传预检：读不到上限设置（返回 0）时不拦截（issue #355）', async () => {
-  const restore = reset(0);
-  try {
-    let uploads = 0;
-    rest.uploadMedia = (async () => {
-      uploads += 1;
-    }) as typeof rest.uploadMedia;
-
-    const ok = await useChat.getState().uploadFiles([namedFile('big.bin', 500 * MIB)]);
-
-    assert.equal(ok, true);
-    assert.equal(uploads, 1);
-  } finally {
-    restore();
-  }
+  assert.equal(ok, true);
+  assert.deepEqual(uploaded, ['a.txt']);
 });
 
 test('humanError：服务端文件超限错误给出明确提示而不是笼统「发送失败」（issue #355）', () => {
@@ -118,20 +81,16 @@ test('humanError：服务端文件超限错误给出明确提示而不是笼统�
 });
 
 test('上传失败 toast：服务端 413 透传为明确上限提示（issue #355）', async () => {
-  const restore = reset(0);
-  try {
-    rest.uploadMedia = (async () => {
-      throw new RcApiError('File too large', 413, 'error-file-too-large');
-    }) as typeof rest.uploadMedia;
+  reset();
+  rest.uploadMedia = (async () => {
+    throw new RcApiError('File too large', 413, 'error-file-too-large');
+  }) as typeof rest.uploadMedia;
 
-    const ok = await useChat.getState().uploadFiles([namedFile('big.bin', 100)]);
+  const ok = await useChat.getState().uploadFiles([namedFile('big.bin', 100)]);
 
-    assert.equal(ok, false);
-    const errorToast = useToast.getState().toasts.find((t) => t.kind === 'error');
-    assert.equal(errorToast?.message, '文件超过服务器允许的大小上限，请压缩或拆分后再发');
-  } finally {
-    restore();
-  }
+  assert.equal(ok, false);
+  const errorToast = useToast.getState().toasts.find((t) => t.kind === 'error');
+  assert.equal(errorToast?.message, '文件超过服务器允许的大小上限，请压缩或拆分后再发');
 });
 
 test('uploadMedia：multipart 体拼成 Blob 零拷贝，不再整段 arrayBuffer（issue #355）', async () => {
@@ -194,4 +153,16 @@ test('uploadMedia：服务端返回 error-file-too-large 时 errorType 透传到
   assert.ok(error instanceof RcApiError);
   assert.equal((error as RcApiError).status, 413);
   assert.equal((error as RcApiError).errorType, 'error-file-too-large');
+});
+
+test('桌面大文件由 Rust 从磁盘流式上传，不通过 WebView IPC 传整文件数组（issue #367）', () => {
+  const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
+  const desktopFs = readFileSync('apps/web/src/platform/desktopFs.ts', 'utf8');
+  const native = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+
+  assert.match(chat, /await uploadDesktopFile\(path, rid,/);
+  assert.doesNotMatch(chat, /readDesktopFile\(path\)/);
+  assert.match(desktopFs, /invoke<NativeMediaUploadResult>\('upload_native_media'/);
+  assert.match(native, /Part::file\(&source\)/);
+  assert.match(native, /\.multipart\(Form::new\(\)\.part\("file", part\)\)/);
 });

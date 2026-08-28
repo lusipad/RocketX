@@ -1420,6 +1420,10 @@ test('DSH 私人房间会话与共享托管隔离，模型配置回到同一条 
       window.__openRequests = [];
       window.addEventListener('message', (event) => {
         const data = event.data || {};
+        if (data.type === 'rocketx:dsh-ready-request') {
+          event.source?.postMessage({ type: 'rocketx:dsh-ready' }, event.origin);
+          return;
+        }
         if (data.type === 'rocketx:dsh-focus-session') window.__focusRequests.push(data.sessionId);
         if (data.type === 'rocketx:dsh-open-new-session') window.__openRequests.push(data.workspacePath);
         event.source?.postMessage({ requestId: data.requestId, type: 'rocketx:dsh-ack' }, event.origin);
@@ -1977,6 +1981,10 @@ test('私人房间 DSH provider 错误时可直接打开 DSH 配置', async ({ p
       window.__openRequests = [];
       window.addEventListener('message', (event) => {
         const data = event.data || {};
+        if (data.type === 'rocketx:dsh-ready-request') {
+          event.source?.postMessage({ type: 'rocketx:dsh-ready' }, event.origin);
+          return;
+        }
         if (data.type === 'rocketx:dsh-open-new-session') window.__openRequests.push(data.workspacePath);
         event.source?.postMessage({ requestId: data.requestId, type: 'rocketx:dsh-ack' }, event.origin);
       });

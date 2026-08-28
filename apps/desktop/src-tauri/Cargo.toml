@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.43.15"
+version = "0.43.16"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -22,6 +22,9 @@ tauri-plugin-http = { version = "2", default-features = false, features = [
   "charset",
   "macos-system-configuration",
   "cookies",
+  "multipart",
+  "stream",
+  "json",
   "unsafe-headers",
 ] }
 tauri-plugin-opener = "2"

@@ -145,6 +145,39 @@ test('DSH focus host plugin 的 client route 提供 bundle 内容', async () => 
   assert.ok(body?.includes(Buffer.from('rocketx:dsh-focus-session')))
 })
 
+test('DSH focus client 初始化后会立即向父窗口广播 ready', async () => {
+  const { exports, emit, parent, posted } = await loadClientModule()
+  exports.apply({
+    sessions: {
+      list: createSnapshotStore(),
+      open() {},
+      clear() {},
+    },
+    workspaces: {},
+    effect(setup: () => () => void) {
+      setup()
+    },
+  })
+
+  assert.equal(
+    JSON.stringify(posted),
+    JSON.stringify([{
+      type: 'rocketx:dsh-ready',
+    }]),
+  )
+
+  posted.length = 0
+  emit({
+    source: parent,
+    origin: 'tauri://localhost',
+    data: { type: 'rocketx:dsh-ready-request' },
+  })
+  assert.equal(
+    JSON.stringify(posted),
+    JSON.stringify([{ type: 'rocketx:dsh-ready' }]),
+  )
+})
+
 test('DSH focus client 仅接受 parent 消息，并把 RocketX 工作区打开为可输入的新会话', async () => {
   const { exports, emit, parent, posted } = await loadClientModule()
   assert.equal(JSON.stringify(exports.inject), JSON.stringify(['sessions', 'workspaces']))
@@ -175,6 +208,7 @@ test('DSH focus client 仅接受 parent 消息，并把 RocketX 工作区打开�
       setup()
     },
   })
+  posted.length = 0
 
   emit({ source: {}, data: { requestId: 'ignored', type: 'rocketx:dsh-focus-session', sessionId: 'session-1' } })
   emit({
@@ -243,6 +277,7 @@ test('DSH focus client 会等待 session 出现在 list 后再 open，并对非�
       setup()
     },
   })
+  posted.length = 0
 
   emit({
     source: parent,
@@ -330,6 +365,7 @@ test('后到的聚焦请求会让尚未完成的新建请求失效，避免覆�
       setup()
     },
   })
+  posted.length = 0
 
   emit({
     source: parent,

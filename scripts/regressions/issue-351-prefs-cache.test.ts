@@ -137,3 +137,16 @@ test('prefs 镜像 key 常量与 accountScope 清单保持一致', async () => {
   const scope = await readFile(new URL('../../apps/web/src/lib/accountScope.ts', import.meta.url), 'utf8');
   assert.ok(scope.includes(`'${PREFS_CACHE_KEY}'`), 'SCOPED_KEYS 必须包含 rcx-prefs-cache');
 });
+
+test('桌面端偏好镜像落在 Tauri 应用数据目录，升级不依赖 WebView 存储', async () => {
+  const native = await readFile(new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8');
+  const prefs = await readFile(new URL('../../apps/web/src/lib/prefsCache.ts', import.meta.url), 'utf8');
+  const store = await readFile(new URL('../../apps/web/src/stores/prefs.ts', import.meta.url), 'utf8');
+  assert.match(native, /DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences\.json"/);
+  assert.match(native, /read_desktop_preferences/);
+  assert.match(native, /write_desktop_preferences/);
+  assert.match(prefs, /loadNativePrefsCache/);
+  assert.match(prefs, /mergeNativePrefsCache/);
+  assert.match(store, /await loadNativePrefsCache\(\)/);
+  assert.match(store, /await mergeNativePrefsCache\(patch\)/);
+});

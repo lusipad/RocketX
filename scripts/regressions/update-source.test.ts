@@ -105,6 +105,13 @@ test('共享目录更新：helper 接管安装、单流程并由 Rust 完成交�
   assert.doesNotMatch(`${bridge}\n${settings}`, /请按安装向导完成更新/);
 });
 
+test('Windows NSIS 安装显式固定 currentUser，升级不切换到管理员用户上下文', () => {
+  const slim = readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8');
+  const full = readFileSync('apps/desktop/src-tauri/tauri.full.conf.json', 'utf8');
+  assert.match(slim, /"nsis"\s*:\s*\{\s*"installMode"\s*:\s*"currentUser"/s);
+  assert.match(full, /"nsis"\s*:\s*\{\s*"installMode"\s*:\s*"currentUser"/s);
+});
+
 test('共享目录更新：无 Minisign 时仍携带探测得到的 SHA-256，并明确提示未签名（issue #304）', () => {
   const updateSource = readFileSync('apps/web/src/lib/updateSource.ts', 'utf8');
   const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');

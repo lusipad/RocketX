@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type { RcUser } from '../../packages/rc-client/src/index';
 import { preloadPinyin } from '../../apps/web/src/lib/pinyin';
@@ -27,6 +28,13 @@ test('联系人备注名参与拼音搜索', async () => {
     () => '小王',
   );
   assert.deepEqual(result.map((item) => item.username), ['lisi']);
+});
+
+test('新建多人会话的用户搜索接入备注显示名与统一显示（issue #363）', () => {
+  const source = readFileSync('apps/web/src/components/NewChatDialogs.tsx', 'utf8');
+  assert.match(source, /mergeUserSearchResults\(/);
+  assert.match(source, /personName\(aliases, user\.username, user\.name \|\| user\.username, nameFormat\)/);
+  assert.match(source, /const shownName = personName\(aliases, u\.username, u\.name \|\| u\.username, nameFormat\);/);
 });
 
 test('服务端结果与本地拼音结果按用户 ID 去重并以服务端数据为准', async () => {

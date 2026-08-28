@@ -18,7 +18,6 @@ import {
   rest,
   siteUrlSync,
 } from '../lib/client';
-import { fmtSize } from '../lib/format';
 import {
   normalizeMessageMaxAllowedSize,
   toSendableMessageChunks,
@@ -59,20 +58,11 @@ import { useFocus } from './focus';
 import { useNotificationAggregation } from './notificationAggregation';
 import { isLanControlMessage } from '../lan/protocol';
 import {
-  handleLanControlMessage,
-  sendLanChat,
   sendLanFile,
+  probeLanPeer,
   startLanRuntime,
   type LanFileEvent,
-  type LanMessageEvent,
 } from '../lan/runtime';
-import {
-  flushLanOutbox,
-  hydrateLanOutbox,
-  recordLanIncoming,
-  recordLanOutgoing,
-} from '../lan/outbox';
-import { shouldTryLanFileTransfer } from '../lan/routing';
 import { stripAgentSessionMarker } from '../agent/card';
 import { agentReplyNotificationTracker } from '../agent/replyNotification';
 import {
@@ -82,7 +72,6 @@ import {
 import {
   localQuoteAttachment,
   messageTime,
-  shouldUseLanFallback,
   upsertMessage,
 } from '../chat/messageProjection';
 import {
@@ -92,7 +81,7 @@ import { notifyChatMessage, rememberLocalMessage } from '../chat/notificationCoo
 import {
   conversationIsActivelyViewed,
 } from '../chat/notificationPolicy';
-import { readDesktopFile, statDesktopFile } from '../platform/desktopFs';
+import { statDesktopFile, uploadDesktopFile } from '../platform/desktopFs';
 
 /** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
@@ -266,6 +255,8 @@ interface ChatState {
   cancelUpload: () => void;
   uploadFiles: (files: File[], tmid?: string, message?: string) => Promise<boolean>;
   uploadNativeFiles: (paths: string[], tmid?: string, message?: string) => Promise<boolean>;
+  sendP2pFiles: (paths: string[]) => Promise<boolean>;
+  prepareP2p: () => Promise<boolean>;
 }
 
 export interface ChatSendResult {
@@ -282,41 +273,6 @@ async function lanRecipientIds(rid: string): Promise<string[]> {
   if (roomIds.length > 0) return [...new Set(roomIds)];
   const members = await state.loadMembers(rid);
   return [...new Set(members.map((member) => member._id).filter((id) => id !== me))];
-}
-
-async function acceptLanMessage(event: LanMessageEvent): Promise<void> {
-  const state = useChat.getState();
-  if (!state.subscriptions[event.roomId]) return;
-  const members = await state.loadMembers(event.roomId);
-  const author = members.find((member) => member._id === event.fromUserId);
-  if (!author) return;
-  const message: RcMessage = {
-    _id: event.messageId,
-    rid: event.roomId,
-    msg: event.text,
-    ts: new Date(event.originalTs).toISOString(),
-    u: { _id: author._id, username: author.username, name: author.name },
-    rocketxOriginalTs: event.originalTs,
-    rocketxOffline: true,
-  };
-  await recordLanIncoming({ ...message, originalTs: event.originalTs });
-  const current = useChat.getState();
-  const next = upsertMessage(current.messages[event.roomId] ?? [], message).sort(
-    (left, right) => messageTime(left) - messageTime(right),
-  );
-  const room = current.rooms[event.roomId];
-  useChat.setState({
-    messages: { ...current.messages, [event.roomId]: next },
-    ...(room
-      ? {
-          rooms: {
-            ...current.rooms,
-            [event.roomId]: { ...room, lastMessage: message, lm: message.ts },
-          },
-        }
-      : {}),
-  });
-  void notifyIfNeeded(message, event.roomId, current);
 }
 
 function localLanFileMessage(
@@ -609,27 +565,6 @@ export function setChatMessageSizeProviderForTests(
   };
 }
 
-// FileUpload_MaxFileSize 同为公开设置；上传前预检超限文件，不打过去再被服务器拒（issue #355）。
-let uploadSizeLimitProvider: () => Promise<unknown> = () =>
-  getPublicSetting('FileUpload_MaxFileSize');
-
-/** 服务器文件上传上限（字节）；读取失败或设置缺失时返回 0，表示不预检 */
-async function uploadMaxFileSize(): Promise<number> {
-  const value = await uploadSizeLimitProvider().catch(() => undefined);
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-/** 测试用：替换上传上限来源，返回还原函数 */
-export function setUploadSizeLimitProviderForTests(
-  provider: () => Promise<unknown>,
-): () => void {
-  const previous = uploadSizeLimitProvider;
-  uploadSizeLimitProvider = provider;
-  return () => {
-    uploadSizeLimitProvider = previous;
-  };
-}
-
 function findMessageById(
   messages: Record<string, RcMessage[]>,
   messageId: string,
@@ -669,18 +604,9 @@ async function forwardSingleMessage(msg: RcMessage, rid: string): Promise<void> 
     await rest.sendMessageRaw({ _id: randomMessageId(), rid, msg: text, attachments: others });
   }
 
-  const configuredLimit = await getPublicSetting('FileUpload_MaxFileSize').catch(() => 0);
-  const maxBytes =
-    typeof configuredLimit === 'number' && Number.isFinite(configuredLimit) ? configuredLimit : 0;
   for (const attachment of reupload) {
     try {
       const blob = await rest.fetchFile(protectedFilePath(attachment)!);
-      if (maxBytes > 0 && blob.size > maxBytes) {
-        throw new RcApiError(
-          `文件超出服务器上传上限 ${Math.round(maxBytes / 1024 / 1024)} MiB`,
-          413,
-        );
-      }
       await rest.uploadMedia(rid, blob, {
         fileName: forwardFileName(attachment),
         msg: singleFileOnly ? (text ?? '') : '',
@@ -907,17 +833,6 @@ export const useChat = create<ChatState>((set, get) => ({
     const roomMap: Record<string, RcRoom> = {};
     for (const r of rooms) roomMap[r._id] = r;
     set({ subscriptions: subMap, rooms: roomMap, ready: true });
-    const offlineMessages = await hydrateLanOutbox();
-    if (offlineMessages.length > 0) {
-      const messages = { ...get().messages };
-      for (const message of offlineMessages) {
-        messages[message.rid] = upsertMessage(messages[message.rid] ?? [], message);
-      }
-      for (const rid of new Set(offlineMessages.map((message) => message.rid))) {
-        messages[rid]?.sort((left, right) => messageTime(left) - messageTime(right));
-      }
-      set({ messages });
-    }
 
     // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
     realtime.clearStreamHandlers();
@@ -954,24 +869,6 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // 断线/恢复给出可见提示（顶部横幅 + toast 各司其职：横幅表状态，toast 表变化）
     let offlineToastId: string | null = null;
-    let flushingOutbox = false;
-    const flushOfflineMessages = async () => {
-      if (flushingOutbox) return;
-      flushingOutbox = true;
-      try {
-        await flushLanOutbox((message) => {
-          const current = get();
-          set({
-            messages: {
-              ...current.messages,
-              [message.rid]: upsertMessage(current.messages[message.rid] ?? [], message),
-            },
-          });
-        });
-      } finally {
-        flushingOutbox = false;
-      }
-    };
     realtime.onStatus = (s) => {
       const prev = get().connection;
       set({ connection: s });
@@ -989,7 +886,6 @@ export const useChat = create<ChatState>((set, get) => ({
       if (s === 'connected' && prev === 'reconnecting') {
         void backfillAfterReconnect();
       }
-      if (s === 'connected') void flushOfflineMessages();
     };
     await realtime.connect();
     await realtime.login(auth.authToken);
@@ -999,10 +895,8 @@ export const useChat = create<ChatState>((set, get) => ({
     realtime.onStream('stream-room-messages', (_eventName, args) => {
       const msg = args[0] as RcMessage | undefined;
       if (!msg?._id || !msg.rid) return;
-      if (isLanControlMessage(msg.msg)) {
-        void handleLanControlMessage(msg);
-        return;
-      }
+      // LAN 控制消息仅用于兼容旧版本遗留数据，不能作为聊天内容显示。
+      if (isLanControlMessage(msg.msg)) return;
       const rid = msg.rid;
       const state = get();
       enqueueAttachmentArchives(
@@ -1131,7 +1025,7 @@ export const useChat = create<ChatState>((set, get) => ({
       .getPresences()
       .then((users) => get().seedUserStatus(users))
       .catch(() => {});
-    void startLanRuntime(acceptLanMessage, acceptLanFile).catch((error) => {
+    void startLanRuntime(undefined, acceptLanFile).catch((error) => {
       console.warn('[rcx] LAN 服务启动失败', error);
     });
   },
@@ -1215,8 +1109,11 @@ export const useChat = create<ChatState>((set, get) => ({
       ) {
         return;
       }
-      const existing = get().messages[rid] ?? [];
-      let merged = history;
+      const existing = (get().messages[rid] ?? []).filter(
+        (message) => !isLanControlMessage(message.msg),
+      );
+      // 历史中可能包含旧版本发送的 LAN 控制消息；先过滤，再合并本地已知消息。
+      let merged = history.filter((message) => !isLanControlMessage(message.msg));
       for (const m of existing) merged = upsertMessage(merged, m);
       merged.sort((a, b) => messageTime(a) - messageTime(b));
       set({
@@ -1253,7 +1150,9 @@ export const useChat = create<ChatState>((set, get) => ({
           snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
       );
       let list = get().messages[rid] ?? [];
-      for (const m of threadMessages) list = upsertMessage(list, m);
+      for (const m of threadMessages) {
+        if (!isLanControlMessage(m.msg)) list = upsertMessage(list, m);
+      }
       list.sort((a, b) => messageTime(a) - messageTime(b));
       set({ messages: { ...get().messages, [rid]: list } });
     } catch {
@@ -1313,7 +1212,9 @@ export const useChat = create<ChatState>((set, get) => ({
         snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
     );
     let merged = get().messages[rid] ?? [];
-    for (const m of older) merged = upsertMessage(merged, m);
+    for (const m of older) {
+      if (!isLanControlMessage(m.msg)) merged = upsertMessage(merged, m);
+    }
     merged.sort((a, b) => messageTime(a) - messageTime(b));
     set({
       messages: { ...get().messages, [rid]: merged },
@@ -1480,53 +1381,6 @@ export const useChat = create<ChatState>((set, get) => ({
         }
       }
 
-      const canUseLan = delivery === 'unknown' && shouldUseLanFallback(err, opts?.tmid);
-      if (canUseLan) {
-        const recipients = await lanRecipientIds(rid).catch(() => []);
-        const originalTs = tsMs(temp.ts);
-        const deliveries = await Promise.allSettled(
-          recipients.map((userId) =>
-            sendLanChat(userId, {
-              messageId: resolvedClientId,
-              roomId: rid,
-              originalTs,
-              text: firstChunk,
-            }),
-          ),
-        );
-        if (deliveries.some((delivery) => delivery.status === 'fulfilled')) {
-          await recordLanOutgoing({ ...temp, originalTs });
-          const current = get().messages[rid] ?? [];
-          const offlineMessage: RcMessage = {
-            ...temp,
-            pending: false,
-            failed: false,
-            rocketxOriginalTs: originalTs,
-            rocketxOffline: true,
-          };
-          const room = get().rooms[rid];
-          set({
-            messages: {
-              ...get().messages,
-              [rid]: current.map((message) =>
-                message._id === resolvedClientId ? offlineMessage : message,
-              ),
-            },
-            ...(room
-              ? {
-                  rooms: {
-                    ...get().rooms,
-                    [rid]: { ...room, lastMessage: offlineMessage, lm: offlineMessage.ts },
-                  },
-                }
-              : {}),
-          });
-          toast.info('服务器不可达，消息已通过可信局域网投递');
-          useOnboarding.getState().markChecklist('sentMessage');
-          if (expectsAgentReply) agentReplyNotificationTracker.cancel(rid);
-          return { id: resolvedClientId, delivery: 'lan' as const };
-        }
-      }
       // 只对**仍是 pending** 的那条标失败：WS 回声可能已抢先把 temp 替换成真实消息
       //（同 _id、无 pending 字段），此时其实发送成功了，不能给它扣一顶失败的帽子。
       const cur = get().messages[rid] ?? [];
@@ -2364,19 +2218,8 @@ export const useChat = create<ChatState>((set, get) => ({
   uploadFiles: async (files, tmid, message) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return false;
-    // 客户端预检：超服务器上限的文件直接拦下报错，不浪费流量发出去再被拒
-    // （issue #355）。逐个检查，多文件里有一个超限就整体不发。放在消费引用
-    // （replyTo）之前，预检失败时输入区的引用草稿不会被吞掉。
-    const maxBytes = await uploadMaxFileSize();
-    if (maxBytes > 0) {
-      const oversized = files.find((file) => file.size > maxBytes);
-      if (oversized) {
-        toast.error(
-          `「${oversized.name}」超过服务器文件大小上限 ${Math.round(maxBytes / 1024 / 1024)} MB`,
-        );
-        return false;
-      }
-    }
+    // 服务器上传接口是大小限制的唯一权威。公开设置可能因缓存、代理或部署
+    // 配置与实际上传能力不一致，客户端不能据此提前拒绝（issue #367）。
     // 用图片/文件回复：主输入区挂着的引用要跟着第一个文件发出去，服务端会把
     // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
     const quote = !tmid ? get().replyTo : null;
@@ -2426,95 +2269,11 @@ export const useChat = create<ChatState>((set, get) => ({
       const caption = message?.trim();
       const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
       for (const [index, path] of paths.entries()) {
-        const fileName = path.split(/[\\/]/).pop() || 'file';
-        let sentOverLan = false;
-        // 引用/说明文字必须走服务器消息（引用附件带不过 LAN），这种场景不尝试直传。
-        const canUseLan = !tmid && !firstMessage;
-        const tryLanSend = async (): Promise<boolean> => {
-          if (!canUseLan) return false;
-          const recipients = await lanRecipientIds(rid).catch(() => []);
-          if (recipients.length !== 1) return false;
-          const messageId = randomMessageId();
-          const originalTs = Date.now();
-          try {
-            const receipt = await sendLanFile(recipients[0], path, {
-              messageId,
-              roomId: rid,
-              originalTs,
-            });
-            insertLanFileMessage(
-              localLanFileMessage(
-                {
-                  ...receipt,
-                  roomId: rid,
-                  originalTs,
-                  localPath: path,
-                },
-                me,
-                receipt.bytesPerSecond,
-              ),
-            );
-            // 首次直传成功给一次性说明（之后静默自动路由），并持久化标记。
-            const prefs = useUiPrefs.getState();
-            if (!prefs.lanP2pExplained) {
-              prefs.markLanP2pExplained();
-              toast.info(
-                `已通过局域网直传发送（${fmtSize(receipt.bytesPerSecond)}/s），可在设置中调整触发阈值`,
-              );
-            }
-            return true;
-          } catch {
-            // 未发现可信单一对端、连接中断或校验失败时静默回退 Rocket.Chat。
-            return false;
-          }
-        };
-        if (canUseLan) {
-          // 小文件走 P2P 的握手开销不划算：低于阈值（默认 50 MiB，可在设置中
-          // 调整）先走 Rocket.Chat 上传。stat 失败按 0 处理，回退路径会重新 stat。
-          const minBytes = useUiPrefs.getState().lanFileMinBytes;
-          const size = await statDesktopFile(path)
-            .then((metadata) => metadata.size)
-            .catch(() => 0);
-          if (shouldTryLanFileTransfer(size, minBytes)) sentOverLan = await tryLanSend();
-        }
-        if (!sentOverLan) {
-          const [metadata, configuredLimit] = await Promise.all([
-            statDesktopFile(path),
-            getPublicSetting('FileUpload_MaxFileSize'),
-          ]);
-          const maxBytes =
-            typeof configuredLimit === 'number' && Number.isFinite(configuredLimit)
-              ? configuredLimit
-              : 0;
-          const overServerLimit = maxBytes > 0 && metadata.size > maxBytes;
-          let rcFailure: unknown = null;
-          if (!overServerLimit) {
-            try {
-              const bytes = await readDesktopFile(path);
-              await rest.uploadMedia(rid, new Blob([bytes]), {
-                tmid,
-                fileName,
-                ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
-              });
-            } catch (error) {
-              rcFailure = error;
-            }
-          }
-          if (overServerLimit || rcFailure) {
-            // 服务器路径不可用（断网/5xx/超上传上限）时无视阈值用 LAN 兜底：
-            // 阈值只管在线时的选路，不挡离线兜底。
-            if (!(await tryLanSend())) {
-              throw (
-                rcFailure ??
-                new Error(
-                  `可信局域网传输不可用，且 Rocket.Chat 上传上限为 ${Math.round(
-                    maxBytes / 1024 / 1024,
-                  )} MiB`,
-                )
-              );
-            }
-          }
-        }
+        await statDesktopFile(path);
+        await uploadDesktopFile(path, rid, {
+          tmid,
+          ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
+        });
         set({ uploading: Math.max(0, get().uploading - 1) });
       }
       toast.dismiss(id);
@@ -2525,6 +2284,58 @@ export const useChat = create<ChatState>((set, get) => ({
         kind: 'error',
         message: humanError(error, '发送文件失败'),
       });
+      return false;
+    }
+  },
+
+  sendP2pFiles: async (paths) => {
+    const rid = get().activeRid;
+    const me = useAuth.getState().user;
+    if (!rid || !me || paths.length === 0) return false;
+    const recipients = await lanRecipientIds(rid).catch(() => []);
+    if (recipients.length !== 1) {
+      toast.error(new Error('P2P 直传仅支持一对一私聊'));
+      return false;
+    }
+    const recipient = recipients[0];
+    const id = toast.loading(`正在通过 P2P 发送 ${paths.length} 个文件…`);
+    try {
+      if (!(await probeLanPeer(recipient))) throw new Error('对方当前不可用 P2P 直传');
+      for (const path of paths) {
+        const originalTs = Date.now();
+        const receipt = await sendLanFile(recipient, path, {
+          messageId: randomMessageId(),
+          roomId: rid,
+          originalTs,
+        });
+        insertLanFileMessage(
+          localLanFileMessage({ ...receipt, roomId: rid, originalTs, localPath: path }, me, receipt.bytesPerSecond),
+        );
+      }
+      toast.dismiss(id);
+      toast.info('已通过 P2P 局域网直传发送');
+      return true;
+    } catch (error) {
+      toast.dismiss(id);
+      toast.error(error, 'P2P 直传不可用');
+      return false;
+    }
+  },
+
+  prepareP2p: async () => {
+    const rid = get().activeRid;
+    if (!rid) return false;
+    const recipients = await lanRecipientIds(rid).catch(() => []);
+    if (recipients.length !== 1) {
+      toast.error(new Error('P2P 直传仅支持一对一私聊'));
+      return false;
+    }
+    try {
+      if (!(await probeLanPeer(recipients[0]))) throw new Error('对方当前不可用 P2P 直传');
+      toast.info('P2P 握手成功，请选择要发送的文件');
+      return true;
+    } catch (error) {
+      toast.error(error, 'P2P 直传不可用');
       return false;
     }
   },

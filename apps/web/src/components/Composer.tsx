@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { RcUser } from '@rcx/rc-client';
-import { AtSign, Bot, Image, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
+import { AtSign, Bot, Image, Network, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { isTauri, rest } from '../lib/client';
 import { openDesktopDialog } from '../platform/desktopDialog';
@@ -81,6 +81,8 @@ export default function Composer() {
   const inviteMembers = useChat((s) => s.inviteMembers);
   const requestUpload = useChat((s) => s.requestUpload);
   const uploadNativeFiles = useChat((s) => s.uploadNativeFiles);
+  const prepareP2p = useChat((s) => s.prepareP2p);
+  const sendP2pFiles = useChat((s) => s.sendP2pFiles);
   const uploading = useChat((s) => s.uploading);
   const setDraft = useChat((s) => s.setDraft);
   const replyTo = useChat((s) => s.replyTo);
@@ -568,6 +570,17 @@ export default function Composer() {
     if (paths.length > 0 && await uploadNativeFiles(paths, undefined, text)) clearInput();
   };
 
+  const chooseP2pFiles = async () => {
+    if (!isTauri || !(await prepareP2p())) return;
+    const selected = await openDesktopDialog({
+      multiple: true,
+      directory: false,
+      title: '选择 P2P 文件',
+    });
+    const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : [];
+    if (paths.length > 0 && await sendP2pFiles(paths)) clearInput();
+  };
+
   const toolBtn =
     'flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink';
 
@@ -801,6 +814,16 @@ export default function Composer() {
         >
           <Paperclip size={16} />
         </button>
+        {isTauri && (
+          <button
+            title="P2P 局域网直传"
+            aria-label="P2P 局域网直传"
+            className={toolBtn}
+            onClick={() => void chooseP2pFiles()}
+          >
+            <Network size={16} />
+          </button>
+        )}
         {uploading > 0 && <span className="pl-1 text-xs text-ink-3">上传中（{uploading}）…</span>}
       </div>
       <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={onFiles} />

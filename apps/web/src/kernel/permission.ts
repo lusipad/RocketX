@@ -16,7 +16,6 @@ export const SENSITIVE_PERMISSIONS: readonly AppPermission[] = [
   'net:fetch',
   'ai:invoke',
   'lan:discover',
-  'lan:transfer',
   'native:service',
 ];
 

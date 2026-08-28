@@ -1,13 +1,8 @@
-import type { RcMessage } from '@rcx/rc-client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getServerBase, isTauri, rest } from '../lib/client';
+import { getServerBase, isTauri } from '../lib/client';
 import { useAuth } from '../stores/auth';
-import {
-  encodeLanDeviceKey,
-  parseLanDeviceKey,
-  type LanDeviceKeyEnvelope,
-} from './protocol';
+import type { LanDeviceKeyEnvelope } from './protocol';
 
 export interface LanIdentityInfo {
   deviceId: string;
@@ -57,6 +52,12 @@ export interface LanFileReceipt {
   bytesPerSecond: number;
 }
 
+interface LanProbeEvent {
+  userId: string;
+  deviceId: string;
+  publicKey: string;
+}
+
 interface LanServiceInfo {
   identity: LanIdentityInfo;
   port: number;
@@ -70,8 +71,28 @@ let peerCache: LanPeer[] = [];
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlistenMessage: UnlistenFn | null = null;
 let unlistenFile: UnlistenFn | null = null;
-const exchangeAttempts = new Map<string, number>();
-const repliedRooms = new Set<string>();
+let unlistenProbe: UnlistenFn | null = null;
+let confirmedLanUserIds: string[] = [];
+const lanStateListeners = new Set<() => void>();
+
+function publishLanState(): void {
+  for (const listener of lanStateListeners) listener();
+}
+
+function setPeerCache(peers: LanPeer[]): void {
+  peerCache = peers;
+  const availableUsers = new Set(
+    peers.filter((peer) => peer.trusted).map((peer) => peer.userId),
+  );
+  confirmedLanUserIds = confirmedLanUserIds.filter((userId) => availableUsers.has(userId));
+  publishLanState();
+}
+
+function confirmLanUser(userId: string): void {
+  if (confirmedLanUserIds.includes(userId)) return;
+  confirmedLanUserIds = [...confirmedLanUserIds, userId];
+  publishLanState();
+}
 
 async function appDataStore() {
   return (await import('../kernel/store')).kernelStore.appData;
@@ -104,62 +125,44 @@ async function pinTrustedDevice(device: LanDeviceKeyEnvelope): Promise<void> {
   await (await appDataStore()).set(scope(), deviceKey(trusted), trusted);
   trustedDevices = await loadTrustedDevices();
   if (isTauri) await invoke('lan_trust_replace', { trustedDevices });
+  setPeerCache(peerCache.map((peer) => (
+    peer.userId === trusted.userId && peer.deviceId === trusted.deviceId
+      ? { ...peer, trusted: true }
+      : peer
+  )));
 }
 
-function localEnvelope(): LanDeviceKeyEnvelope | null {
-  const user = useAuth.getState().user;
-  if (!identity || !user) return null;
-  return {
-    version: 1,
-    userId: user._id,
-    deviceId: identity.deviceId,
-    deviceName: identity.deviceName,
-    publicKey: identity.publicKey,
-  };
-}
-
-function messageId(): string {
-  const value = crypto.randomUUID().replace(/-/g, '');
-  return value.slice(0, 17);
-}
-
-async function sendIdentityToRoom(rid: string): Promise<void> {
-  const envelope = localEnvelope();
-  if (!envelope) return;
-  await rest.sendMessageRaw({
-    _id: messageId(),
-    rid,
-    msg: encodeLanDeviceKey(envelope),
+/** 仅在发送文件时调用；发一次原生通信请求，不创建或发送 Rocket.Chat 消息。 */
+export async function probeLanPeer(userId: string): Promise<boolean> {
+  if (!isTauri) return false;
+  const peer = peerCache.find((candidate) => candidate.userId === userId);
+  if (!peer || !peer.trusted || peer.userId === useAuth.getState().user?._id) return false;
+  const result = await invoke<TrustedDevice>('lan_probe_peer', {
+    userId: peer.userId,
+    deviceId: peer.deviceId,
   });
-}
-
-async function ensureKeyExchange(peer: LanPeer): Promise<void> {
-  if (peer.trusted || peer.userId === useAuth.getState().user?._id) return;
-  const key = `${peer.userId}:${peer.deviceId}`;
-  const lastAttempt = exchangeAttempts.get(key) ?? 0;
-  if (Date.now() - lastAttempt < 30_000) return;
-  exchangeAttempts.set(key, Date.now());
-  try {
-    const user = await rest.getUserInfoById(peer.userId);
-    const room = await rest.createDirectMessage(user.username);
-    await sendIdentityToRoom(room._id);
-  } catch {
-    exchangeAttempts.delete(key);
-  }
+  await pinTrustedDevice({
+    version: 1,
+    userId: result.userId,
+    deviceId: result.deviceId,
+    deviceName: peer.deviceName,
+    publicKey: result.publicKey,
+  });
+  confirmLanUser(result.userId);
+  return true;
 }
 
 async function pollPeers(): Promise<void> {
   if (!isTauri || !identity) return;
   try {
-    peerCache = await invoke<LanPeer[]>('lan_peers');
-    for (const peer of peerCache) void ensureKeyExchange(peer);
+    setPeerCache(await invoke<LanPeer[]>('lan_peers'));
   } catch {
-    peerCache = [];
+    setPeerCache([]);
   }
 }
 
 export async function startLanRuntime(
-  onMessage: (event: LanMessageEvent) => void | Promise<void>,
+  onMessage: ((event: LanMessageEvent) => void | Promise<void>) | undefined,
   onFile?: (event: LanFileEvent) => void | Promise<void>,
 ): Promise<void> {
   if (!isTauri) return;
@@ -178,14 +181,26 @@ export async function startLanRuntime(
     trustedDevices,
   });
   identity = service.identity;
-  unlistenMessage = await listen<LanMessageEvent>('rocketx://lan-message', ({ payload }) => {
-    void onMessage(payload);
-  });
+  if (onMessage) {
+    unlistenMessage = await listen<LanMessageEvent>('rocketx://lan-message', ({ payload }) => {
+      void onMessage(payload);
+    });
+  }
   if (onFile) {
     unlistenFile = await listen<LanFileEvent>('rocketx://lan-file', ({ payload }) => {
       void onFile(payload);
     });
   }
+  unlistenProbe = await listen<LanProbeEvent>('rocketx://lan-peer-probed', ({ payload }) => {
+    const peer = peerCache.find(
+      (candidate) =>
+        candidate.userId === payload.userId &&
+        candidate.deviceId === payload.deviceId &&
+        candidate.publicKey === payload.publicKey &&
+        candidate.trusted,
+    );
+    if (peer) confirmLanUser(peer.userId);
+  });
   await pollPeers();
   pollTimer = setInterval(() => void pollPeers(), 3_000);
 }
@@ -197,27 +212,26 @@ export async function stopLanRuntime(): Promise<void> {
   unlistenMessage = null;
   unlistenFile?.();
   unlistenFile = null;
+  unlistenProbe?.();
+  unlistenProbe = null;
   identity = null;
   peerCache = [];
-  exchangeAttempts.clear();
-  repliedRooms.clear();
+  confirmedLanUserIds = [];
+  publishLanState();
   if (isTauri) await invoke('lan_service_stop').catch(() => {});
-}
-
-export async function handleLanControlMessage(message: RcMessage): Promise<boolean> {
-  const envelope = parseLanDeviceKey(message.msg);
-  if (!envelope) return false;
-  if (message.u._id !== envelope.userId) return true;
-  await pinTrustedDevice(envelope);
-  if (!repliedRooms.has(message.rid)) {
-    repliedRooms.add(message.rid);
-    await sendIdentityToRoom(message.rid).catch(() => repliedRooms.delete(message.rid));
-  }
-  return true;
 }
 
 export function currentLanPeers(): LanPeer[] {
   return peerCache.slice();
+}
+
+export function subscribeLanState(listener: () => void): () => void {
+  lanStateListeners.add(listener);
+  return () => lanStateListeners.delete(listener);
+}
+
+export function confirmedLanUsersSnapshot(): readonly string[] {
+  return confirmedLanUserIds;
 }
 
 export function redactedLanPeers(peers: LanPeer[] = peerCache) {
@@ -231,27 +245,15 @@ export function redactedLanPeers(peers: LanPeer[] = peerCache) {
   }));
 }
 
-export async function sendLanChat(
-  userId: string,
-  message: { messageId: string; roomId: string; originalTs: number; text: string },
-): Promise<void> {
-  if (!isTauri) throw new Error('局域网消息仅支持桌面端');
-  await invoke('lan_send_chat', {
-    userId,
-    deviceId: null,
-    messageId: message.messageId,
-    roomId: message.roomId,
-    originalTs: message.originalTs,
-    text: message.text,
-  });
-}
-
 export async function sendLanFile(
   userId: string,
   path: string,
   payload: { messageId: string; roomId: string; originalTs: number },
 ): Promise<LanFileReceipt> {
   if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
+  if (!trustedDevices.some((device) => device.userId === userId)) {
+    await probeLanPeer(userId);
+  }
   const startedAt = performance.now();
   const receipt = await invoke<Omit<LanFileReceipt, 'bytesPerSecond'>>('lan_send_file', {
     userId,

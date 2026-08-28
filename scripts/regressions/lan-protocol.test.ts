@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   encodeLanDeviceKey,
@@ -57,4 +58,39 @@ test('应用发现能力不会泄露局域网地址、端口或设备公钥', ()
   assert.equal('ip' in peer, false);
   assert.equal('port' in peer, false);
   assert.equal('publicKey' in peer, false);
+});
+
+test('局域网密钥不会通过 Rocket.Chat 消息发送，只能在文件发送时按需探测', () => {
+  const runtime = readFileSync('apps/web/src/lan/runtime.ts', 'utf8');
+  assert.doesNotMatch(runtime, /sendMessageRaw|handleLanControlMessage|ensureKeyExchange/);
+  assert.match(runtime, /lan_probe_peer/);
+  assert.match(runtime, /export async function probeLanPeer/);
+  assert.match(runtime, /confirmLanUser\(result\.userId\)/);
+});
+
+test('旧版 LAN 控制消息不会进入实时流或历史消息列表', () => {
+  const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
+  const messageList = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
+  assert.match(chat, /if \(isLanControlMessage\(msg\.msg\)\) return;/);
+  assert.match(chat, /history\.filter\(\(message\) => !isLanControlMessage\(message\.msg\)\)/);
+  assert.match(chat, /const existing = \(get\(\)\.messages\[rid\] \?\? \[\]\)\.filter\(/);
+  assert.match(chat, /if \(!isLanControlMessage\(m\.msg\)\) list = upsertMessage\(list, m\)/);
+  assert.match(chat, /if \(!isLanControlMessage\(m\.msg\)\) merged = upsertMessage\(merged, m\)/);
+  assert.match(messageList, /!isLanControlMessage\(message\.msg\)/);
+});
+
+test('文件发送前的 LAN 探测成功后才固定对端公钥', () => {
+  const runtime = readFileSync('apps/web/src/lan/runtime.ts', 'utf8');
+  assert.match(runtime, /const result = await invoke<TrustedDevice>\('lan_probe_peer'/);
+  assert.match(runtime, /await pinTrustedDevice\(/);
+});
+
+test('P2P 只从输入区显式触发，并在发送前执行握手（issue #368）', () => {
+  const runtime = readFileSync('apps/web/src/lan/runtime.ts', 'utf8');
+  const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
+  const area = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
+  assert.match(chat, /prepareP2p: async/);
+  assert.match(chat, /if \(!\(await probeLanPeer\(recipients\[0\]\)\)\)/);
+  assert.match(readFileSync('apps/web/src/components/Composer.tsx', 'utf8'), /P2P 局域网直传/);
+  assert.doesNotMatch(area, /confirmedLanUsers/);
 });

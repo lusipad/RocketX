@@ -22,7 +22,6 @@ const manifest = parseManifest({
     'users:read',
     'files:read',
     'lan:discover',
-    'lan:transfer',
   ],
 });
 
@@ -35,7 +34,6 @@ function host(overrides: Partial<KernelHost> = {}): KernelHost {
     rid: 'room-1',
     sent: [] as Array<{ rid: string; text: string; tmid?: string }>,
     fileReads: [] as string[],
-    lanSends: [] as Array<{ userId: string; roomId: string; text: string }>,
   };
   const base: KernelHost = {
     identity: { userId: () => 'user-1' },
@@ -72,9 +70,6 @@ function host(overrides: Partial<KernelHost> = {}): KernelHost {
         source: 'mdns',
         lastSeenMs: 1,
       }],
-      sendChat: async (userId, message) => {
-        state.lanSends.push({ userId, roomId: message.roomId, text: message.text });
-      },
     },
     navigation: {
       currentModule: () => 'messages',
@@ -174,12 +169,12 @@ test('文件读取只允许当前服务器路径并保留 10 MB 上限', async (
   );
 });
 
-test('LAN 能力保留房间归属、成员校验和消息大小限制', async () => {
+test('LAN 能力仅提供已脱敏的设备发现', async () => {
   const target = host();
   const gate = new PermissionGate();
   const bus = new CapabilityBus(gate);
-  gate.setGrant({ appId, granted: ['lan:discover', 'lan:transfer'] });
-  registerHostCapabilities(bus, target, { now: () => 123, createMessageId: () => 'generated-id' });
+  gate.setGrant({ appId, granted: ['lan:discover'] });
+  registerHostCapabilities(bus, target);
   assert.deepEqual(await bus.call('lan.peers', undefined, context()), [{
     userId: 'user-2',
     deviceId: 'device-2',
@@ -188,18 +183,7 @@ test('LAN 能力保留房间归属、成员校验和消息大小限制', async (
     source: 'mdns',
     lastSeenMs: 1,
   }]);
-  assert.deepEqual(
-    await bus.call('lan.send', { roomId: 'room-1', userId: 'user-2', text: 'hi' }, context()),
-    { ok: true, messageId: 'generated-id' },
-  );
-  await assert.rejects(
-    () => bus.call('lan.send', { roomId: 'room-1', userId: 'unknown', text: 'hi' }, context()),
-    /当前会话成员/,
-  );
-  await assert.rejects(
-    () => bus.call('lan.send', { roomId: 'room-1', userId: 'user-2', text: 'x'.repeat(48 * 1024 + 1) }, context()),
-    /48 KiB/,
-  );
+  await assert.rejects(() => bus.call('lan.send', undefined, context()), /未知能力|未注册|unknown/i);
 });
 
 test('聊天桥接事件通过 Host event port 注入', async () => {

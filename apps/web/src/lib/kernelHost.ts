@@ -1,6 +1,6 @@
 import type { RoomType } from '@rcx/rc-client';
 import { rest } from './client';
-import { currentLanPeers, redactedLanPeers, sendLanChat } from '../lan/runtime';
+import { currentLanPeers, redactedLanPeers } from '../lan/runtime';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
@@ -71,7 +71,6 @@ export function createDefaultKernelHost(): KernelHost {
     },
     lan: {
       listPeers: () => redactedLanPeers(currentLanPeers()) as KernelLanPeer[],
-      sendChat: (userId, message) => sendLanChat(userId, message),
     },
     navigation: {
       currentModule: () => useUI.getState().module,
