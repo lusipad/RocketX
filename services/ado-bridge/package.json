@@ -1,6 +1,6 @@
 {
   "name": "@rcx/ado-bridge",
-  "version": "0.43.18",
+  "version": "0.43.19",
   "private": true,
   "type": "module",
   "scripts": {

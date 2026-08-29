@@ -1,4 +1,5 @@
 import { tsMs, type RcRoomFile, type RoomType } from '@rcx/rc-client';
+import { pinyinMatch } from './pinyin';
 
 export const FILE_INDEX_VERSION = 1;
 export const MAX_INDEXED_ROOMS = 20;
@@ -92,12 +93,12 @@ export function searchIndexedFiles(
   keyword: string,
   limit = 20,
 ): IndexedFileResult[] {
-  const q = keyword.trim().toLocaleLowerCase();
+  const q = keyword.trim();
   if (!q) return [];
   return index.rooms
     .flatMap((room) =>
       room.files
-        .filter((file) => file.name.toLocaleLowerCase().includes(q))
+        .filter((file) => pinyinMatch(q, file.name))
         .map((file) => ({ rid: room.rid, roomName: room.roomName, indexedAt: room.indexedAt, file })),
     )
     .sort((a, b) => tsMs(b.file.uploadedAt) - tsMs(a.file.uploadedAt) || b.indexedAt - a.indexedAt)

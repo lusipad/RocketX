@@ -1,6 +1,7 @@
 import type { CalendarEvent } from '../stores/calendar';
 import type { Todo } from '../stores/todos';
 import type { WorkItem } from '../stores/workbench';
+import { pinyinMatch, pinyinScore } from './pinyin';
 
 export type WorkSearchResult =
   | { kind: 'todo'; item: Todo }
@@ -8,11 +9,10 @@ export type WorkSearchResult =
   | { kind: 'workitem'; item: WorkItem };
 
 function matchScore(keyword: string, title: string, details: string): number | null {
-  const q = keyword.toLocaleLowerCase();
-  const normalizedTitle = title.toLocaleLowerCase();
-  if (normalizedTitle.startsWith(q)) return 0;
-  if (normalizedTitle.includes(q)) return 1;
-  return details.toLocaleLowerCase().includes(q) ? 2 : null;
+  const q = keyword.trim();
+  const titleScore = pinyinScore(q, title);
+  if (pinyinMatch(q, title)) return titleScore < 4 ? titleScore : 1;
+  return details.toLocaleLowerCase().includes(q.toLocaleLowerCase()) ? 2 : null;
 }
 
 /** 搜索已经在客户端缓存的工作数据，不触发额外网络请求。 */

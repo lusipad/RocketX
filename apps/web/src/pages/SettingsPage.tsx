@@ -1106,6 +1106,17 @@ function MessageSection() {
         />
       </Row>
 
+      <Row
+        label="中英文自动加空格"
+        hint="发送时在汉字与英文或数字之间自动补空格（随账号同步）"
+        inline
+      >
+        <Toggle
+          checked={prefs.rcxAutoFormatMixedLanguage}
+          onChange={(v) => void update({ rcxAutoFormatMixedLanguage: v })}
+        />
+      </Row>
+
       <Row label="折叠超长消息" hint="特别长的消息只显示预览，点「展开全部」看全文（随账号同步）" inline>
         <Toggle
           checked={prefs.rcxCollapseLongMessages}

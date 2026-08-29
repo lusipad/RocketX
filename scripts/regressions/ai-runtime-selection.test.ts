@@ -248,6 +248,7 @@ test('启动探测不阻塞首屏，在内核初始化前完成，并由桌面�
   const desktop = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
   const dsh = readFileSync('apps/desktop/src-tauri/src/dsh.rs', 'utf8');
   const startup = readFileSync('apps/web/src/lib/startup.ts', 'utf8');
+  const app = readFileSync('apps/web/src/App.tsx', 'utf8');
   const desktopConfig = readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8');
   const slimInstaller = readFileSync('apps/desktop/src-tauri/windows/slim-installer-hooks.nsh', 'utf8');
   const fullInstaller = readFileSync('apps/desktop/src-tauri/windows/full-installer-hooks.nsh', 'utf8');
@@ -265,6 +266,8 @@ test('启动探测不阻塞首屏，在内核初始化前完成，并由桌面�
   const kernel = startup.indexOf('await withTimeout((signal) => steps.initializeKernel(signal)');
   assert.ok(selection >= 0 && selection < coordinator && coordinator < start && start < render && render < awaitStart);
   assert.ok(apply >= 0 && apply < kernel);
+  // 运行时探测和后台任务不得阻塞已登录用户进入主界面。
+  assert.doesNotMatch(app, /startupStage !== ['"]background-ready['"]/);
   assert.match(bootstrap, /useUI\.setState\(\{ aiRuntimeProvider/);
   assert.match(settings, /readConfiguredAiRuntimeProvider\(\) \?\? getAiRuntimeProvider\(\)/);
   assert.match(settings, /选择已保留.*本次未启用/s);

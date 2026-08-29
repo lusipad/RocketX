@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getServerBase, isTauri } from '../lib/client';
+import { ensureSiteUrl, getServerBase, isTauri } from '../lib/client';
 import { useAuth } from '../stores/auth';
 import type { LanDeviceKeyEnvelope } from './protocol';
 
@@ -174,8 +174,11 @@ export async function startLanRuntime(
     (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
     navigator.platform ||
     'RocketX desktop';
+  // LAN 作用域使用 Rocket.Chat 的 canonical Site_Url，避免同一服务器一边用 IP、
+  // 一边用域名时互相被发现过滤。这里只读取服务器设置，不发起 LAN 握手。
+  const serverUrl = await ensureSiteUrl();
   const service = await invoke<LanServiceInfo>('lan_service_start', {
-    serverUrl: getServerBase() || location.origin,
+    serverUrl: serverUrl || getServerBase() || location.origin,
     userId: user._id,
     deviceName,
     trustedDevices,
@@ -259,9 +262,6 @@ export async function sendLanFile(
   payload: { messageId: string; roomId: string; originalTs: number },
 ): Promise<LanFileReceipt> {
   if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
-  if (!trustedDevices.some((device) => device.userId === userId)) {
-    await probeLanPeer(userId);
-  }
   const startedAt = performance.now();
   const receipt = await invoke<Omit<LanFileReceipt, 'bytesPerSecond'>>('lan_send_file', {
     userId,

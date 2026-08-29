@@ -175,7 +175,7 @@ export default function QuickSwitcher({
   );
   const workResults = useMemo(
     () => searchWork(keyword, todos, events, workItems),
-    [keyword, todos, events, workItems],
+    [keyword, todos, events, workItems, pinyinReady],
   );
   const filters = useMemo<SearchResultFilters>(() => ({
     sender: senderFilter,
@@ -184,7 +184,7 @@ export default function QuickSwitcher({
   }), [fileTypeFilter, senderFilter, timeFilter]);
   const filteredMessages = useMemo(
     () => filterMessageResults(messages, filters),
-    [filters, messages],
+    [filters, messages, pinyinReady],
   );
   const shownMessages = useMemo(
     () => filteredMessages.slice(0, visibleMessageCount),
@@ -194,11 +194,11 @@ export default function QuickSwitcher({
     () => searchIndexedFiles(fileIndex, keyword).filter((result) =>
       canSearchIndexedRoom(!!subscriptions[result.rid], rooms[result.rid]?.t),
     ),
-    [fileIndex, keyword, rooms, subscriptions],
+    [fileIndex, keyword, rooms, subscriptions, pinyinReady],
   );
   const fileResults = useMemo(
     () => filterFileResults(rawFileResults, filters),
-    [filters, rawFileResults],
+    [filters, rawFileResults, pinyinReady],
   );
   const activeFilterCount = (senderFilter.trim() ? 1 : 0) +
     (timeFilter === 'any' ? 0 : 1) +

@@ -23,6 +23,7 @@ import {
   toSendableMessageChunks,
 } from '../lib/messageChunks';
 import { findCommand } from '../lib/slash';
+import { formatMixedLanguageText } from '../lib/mixedLanguageFormat';
 import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
 import { playNotificationSound } from '../lib/notificationSound';
@@ -1266,9 +1267,12 @@ export const useChat = create<ChatState>((set, get) => ({
     // 引用回复：文本前缀消息链接，服务端展开为引用附件。
     // 必须 await 到服务端真正的 Site_Url——缓存没热时 siteUrlSync 会回退到
     // getServerBase()，与服务端 Site_Url 不一致就不展开（issue #9）。
-    const fullText = opts?.quote
+    const rawFullText = opts?.quote
       ? quoteLinkPrefix(opts.quote, get().subscriptions, await ensureSiteUrl()) + normalized
       : normalized;
+    const fullText = usePrefs.getState().prefs.rcxAutoFormatMixedLanguage
+      ? formatMixedLanguageText(rawFullText)
+      : rawFullText;
     const expectsAgentReply = agentReplyNotificationTracker.expect(rid, fullText);
 
     // 超长消息按服务端 Message_MaxAllowedSize 自动分段发送，而不是整条被 400 拒绝
@@ -1464,23 +1468,26 @@ export const useChat = create<ChatState>((set, get) => ({
     const failed = (get().messages[rid] ?? []).find((m) => m._id === tempId);
     // 只重发仍是失败态的：WS 回声若已把它替换成真实消息，说明其实发出去了
     if (!failed || !failed.failed) return;
+    const messageText = usePrefs.getState().prefs.rcxAutoFormatMixedLanguage
+      ? formatMixedLanguageText(failed.msg)
+      : failed.msg;
     rememberLocalMessage(tempId);
     set({
       messages: {
         ...get().messages,
         [rid]: (get().messages[rid] ?? []).map((m) =>
-          m._id === tempId ? { ...m, pending: true, failed: false } : m,
+          m._id === tempId ? { ...m, msg: messageText, pending: true, failed: false } : m,
         ),
       },
     });
-    const expectsAgentReply = agentReplyNotificationTracker.expect(rid, failed.msg);
+    const expectsAgentReply = agentReplyNotificationTracker.expect(rid, messageText);
     try {
       // 附件是本地展示用的，不随重发提交（引用信息已在消息文本前缀里）。
       // 沿用同一个 _id：上次其实已落库时（504 但服务端收到了），同 id 不会发出第二条。
       const msg = await rest.sendMessageRaw({
         _id: tempId,
         rid,
-        msg: failed.msg,
+        msg: messageText,
         ...(failed.tmid ? { tmid: failed.tmid } : {}),
       });
       set({ messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], msg) } });
@@ -2300,7 +2307,6 @@ export const useChat = create<ChatState>((set, get) => ({
     const recipient = recipients[0];
     const id = toast.loading(`正在通过 P2P 发送 ${paths.length} 个文件…`);
     try {
-      if (!(await probeLanPeer(recipient))) throw new Error('对方当前不可用 P2P 直传');
       for (const path of paths) {
         const originalTs = Date.now();
         const receipt = await sendLanFile(recipient, path, {

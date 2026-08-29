@@ -7,6 +7,7 @@ import type {
   StickerEntry,
   StickerGroup,
 } from './stickerManifest';
+import { pinyinMatch, pinyinScore } from './pinyin';
 
 export const DEFAULT_STICKER_INDEX_URL = '/stickers/index.json';
 
@@ -185,11 +186,20 @@ function searchHaystack(entry: StickerEntry): string {
 }
 
 export function searchStickerEntries(catalog: StickerCatalog, keyword: string): StickerEntry[] | null {
-  const query = keyword.trim().toLowerCase();
+  const query = keyword.trim();
   if (!query) return null;
-  const matches = catalog.entries.filter((entry) => searchHaystack(entry).includes(query));
+  const matches = catalog.entries.filter((entry) => pinyinMatch(
+    query,
+    entry.id,
+    entry.title,
+    entry.packageTitle,
+    entry.groupTitle,
+    ...entry.tags,
+  ));
   return matches.sort(
-    (a, b) => Number(searchHaystack(b).startsWith(query)) - Number(searchHaystack(a).startsWith(query)),
+    (a, b) => pinyinScore(query, a.title) - pinyinScore(query, b.title)
+      || Number(searchHaystack(b).startsWith(query.toLowerCase()))
+      - Number(searchHaystack(a).startsWith(query.toLowerCase())),
   );
 }
 

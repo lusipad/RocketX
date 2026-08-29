@@ -33,6 +33,7 @@ import { fmtConvTime } from '../lib/format';
 import { workItemTreeRows } from '../lib/workItemTree';
 import { DEFAULT_WORK_ITEM_STATE_FILTER, useUI } from '../stores/ui';
 import { runtimeFeatures } from '../lib/runtimeMode';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import CreateWorkItemDiscussionDialog from './CreateWorkItemDiscussionDialog';
 
 export const TYPE_COLORS: Record<string, string> = {
@@ -104,6 +105,7 @@ function ListHeader({
 
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
+  const pinyinReady = usePinyinReady();
   const features = runtimeFeatures();
   const [keyword, setKeyword] = useState('');
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
@@ -135,9 +137,9 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
     return items.filter(
       (w) =>
         workItemMatchesFilter(w.state, effectiveState) &&
-        (!q || w.title.toLowerCase().includes(q) || String(w.id).includes(q)),
+        (!q || pinyinMatch(q, w.title) || String(w.id).includes(q)),
     );
-  }, [items, keyword, effectiveState]);
+  }, [items, keyword, effectiveState, pinyinReady]);
   const filtering =
     (effectiveState !== DEFAULT_WORK_ITEM_STATE_FILTER && effectiveState !== '全部') ||
     keyword.trim() !== '';
@@ -412,6 +414,7 @@ function PrRow({
 
 /** 拉取请求：待我评审 / 我提的（后者以前拉了数据却根本没渲染） */
 export function PullRequestList({ prs, account }: { prs: PullRequest[]; account: string }) {
+  const pinyinReady = usePinyinReady();
   const [keyword, setKeyword] = useState('');
   // 子 tab 提到全局 store：切到别的页面再回来不重置（issue #7/#17 同一诉求）
   const tab = useUI((s) => s.prTab);
@@ -457,11 +460,10 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
     if (!q) return source;
     return source.filter(
       (pr) =>
-        pr.title.toLowerCase().includes(q) ||
-        pr.repo.toLowerCase().includes(q) ||
+        pinyinMatch(q, pr.title, pr.repo) ||
         String(pr.id).includes(q),
     );
-  }, [source, keyword]);
+  }, [source, keyword, pinyinReady]);
 
   return (
     <>
@@ -578,18 +580,17 @@ const BUILD_RESULT_LABELS: Record<string, string> = {
 };
 
 export function matchesBuildKeyword(build: Build, keyword: string): boolean {
-  const q = keyword.trim().toLowerCase();
+  const q = keyword.trim();
   if (!q) return true;
   return (
-    build.definition.toLowerCase().includes(q) ||
-    build.buildNumber.toLowerCase().includes(q) ||
-    build.project.toLowerCase().includes(q) ||
+    pinyinMatch(q, build.definition, build.buildNumber, build.project) ||
     String(build.pullRequestId ?? '').includes(q)
   );
 }
 
 /** 构建：完整列表（构建号、项目、触发人、结果都显示） */
 export function BuildList({ builds }: { builds: Build[] }) {
+  const pinyinReady = usePinyinReady();
   const [keyword, setKeyword] = useState('');
   const failedOnly = useUI((s) => s.buildsFailedOnly);
   const setFailedOnly = useUI((s) => s.setBuildsFailedOnly);
@@ -598,7 +599,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
     return builds.filter(
       (b) => (!failedOnly || b.result === 'failed') && matchesBuildKeyword(b, keyword),
     );
-  }, [builds, keyword, failedOnly]);
+  }, [builds, keyword, failedOnly, pinyinReady]);
 
   const failedCount = builds.filter((b) => b.result === 'failed').length;
 

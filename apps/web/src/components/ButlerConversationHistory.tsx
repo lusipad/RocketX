@@ -19,6 +19,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
 import { getServerBase, isTauriRuntime } from '../lib/client';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { openDesktopDialog } from '../platform/desktopDialog';
 import {
   HOSTED_SESSION_STATUS_LABEL,
@@ -121,6 +122,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const [collapsedWorkspace, setCollapsedWorkspace] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [hostedSectionExpandedOverride, setHostedSectionExpandedOverride] = useState<boolean | null>(null);
+  const pinyinReady = usePinyinReady();
   const [expandedHostedGroups, setExpandedHostedGroups] = useState<Record<string, boolean>>({});
   const desktopRuntime = isTauriRuntime();
   const codexRuntime = aiRuntimeProvider === 'codex';
@@ -194,12 +196,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     personalThreads.filter((thread) => workspaceKey(thread.cwd) === workspaceKey(path)).length,
   ])), [hostingProjectPaths, personalThreads, systemWorkspaceRoots]);
   const visibleThreads = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase('zh-CN');
+    const normalized = query.trim();
     if (!normalized) return currentWorkspaceThreads;
-    return currentWorkspaceThreads.filter((thread) => (
-      `${thread.name ?? ''}\n${thread.preview}`.toLocaleLowerCase('zh-CN').includes(normalized)
-    ));
-  }, [currentWorkspaceThreads, query]);
+    return currentWorkspaceThreads.filter((thread) => pinyinMatch(normalized, thread.name ?? '', thread.preview));
+  }, [currentWorkspaceThreads, query, pinyinReady]);
   const displayedThreads = useMemo(() => {
     if (query.trim() || historyExpanded || visibleThreads.length <= THREAD_PREVIEW_LIMIT) return visibleThreads;
     const recent = visibleThreads.slice(0, THREAD_PREVIEW_LIMIT);

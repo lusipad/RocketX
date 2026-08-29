@@ -210,6 +210,8 @@ export interface RcPreferences {
   rcxCollapseLongMessages?: boolean;
   /** 折叠时机：消息超过多少屏才折叠（默认半屏） */
   rcxLongMessageFoldAt?: 'half' | 'one' | 'two';
+  /** 发送消息时在汉字与英文/数字之间自动补空格（默认开启） */
+  rcxAutoFormatMixedLanguage?: boolean;
 }
 
 /** 服务器提供的斜杠命令 */

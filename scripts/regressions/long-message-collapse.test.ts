@@ -47,13 +47,15 @@ test('短消息（无换行）不触发折叠', () => {
   assert.equal(isLongMessage('', VIEWPORT), false);
 });
 
-test('折叠默认开启、默认半屏，两个键都是随账号同步的 RC 偏好键', async () => {
+test('消息偏好默认值与自定义键都能随账号同步', async () => {
   assert.equal(usePrefs.getState().prefs.rcxCollapseLongMessages, true);
   assert.equal(usePrefs.getState().prefs.rcxLongMessageFoldAt, 'half');
+  assert.equal(usePrefs.getState().prefs.rcxAutoFormatMixedLanguage, true);
   // 键必须在 RcPreferences 上，否则 savePreferences 类型层就存不进去
   const types = await import('node:fs/promises').then((fs) =>
     fs.readFile(new URL('../../packages/rc-client/src/types.ts', import.meta.url), 'utf8'),
   );
   assert.match(types, /rcxCollapseLongMessages\?: boolean/);
   assert.match(types, /rcxLongMessageFoldAt\?: 'half' \| 'one' \| 'two'/);
+  assert.match(types, /rcxAutoFormatMixedLanguage\?: boolean/);
 });

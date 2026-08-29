@@ -8,8 +8,15 @@ import { pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-// Windows 上 GNU/BSD tar 都会把「C:\…」的盘符冒号当成远端主机名，必须显式声明本地归档
-const tarLocalFlag = process.platform === 'win32' ? ['--force-local'] : [];
+// GNU tar 会把 Windows 盘符冒号当成远端主机名；BSD tar 不认识该选项。
+// 只在当前 tar 明确支持时传入，兼容两类 Windows 工具链。
+const tarHelp = process.platform === 'win32'
+  ? spawnSync('tar', ['--help'], { encoding: 'utf8' })
+  : undefined;
+const tarLocalFlag = process.platform === 'win32' &&
+  `${tarHelp?.stdout ?? ''}\n${tarHelp?.stderr ?? ''}`.includes('--force-local')
+  ? ['--force-local']
+  : [];
 const startedAt = Date.now();
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'rocketx-ecosystem-'));
 

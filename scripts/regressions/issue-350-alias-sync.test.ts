@@ -164,6 +164,12 @@ test('登录/resume 成功后触发备注同步，且 rcx-aliases 仍在账号�
   assert.match(accountScope, /'rcx-aliases'/);
 });
 
+test('没有保存过显示格式时默认显示备注名和原名', async () => {
+  const aliases = await readFile(new URL('../../apps/web/src/stores/aliases.ts', import.meta.url), 'utf8');
+  assert.match(aliases, /localStorage\.getItem\(FORMAT_KEY\) === 'alias' \? 'alias' : 'aliasWithReal'/);
+  assert.match(aliases, /catch \{\s*return 'aliasWithReal';/);
+});
+
 // ---- 写通道：DDP 优先（issue #350 live 验证发现 RC 8.x REST 端点拒绝自定义键）----
 
 test('实时连接就绪时写回走 DDP saveUserPreferences，自定义键不经 REST schema 校验', async () => {

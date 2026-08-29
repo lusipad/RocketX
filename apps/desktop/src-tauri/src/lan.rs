@@ -134,17 +134,22 @@ pub struct LanFileReceipt {
     pub blake3: String,
 }
 
-fn trusted_public_key(trusted: &SharedTrusted, peer: &HandshakePeer) -> Result<String, String> {
+/// 固定设备密钥是增强校验，不应阻断一次用户主动发起的 P2P 传输。
+/// 没有固定记录时使用发现公告中的公钥完成本次签名握手；有记录时仍拒绝换钥。
+fn verification_public_key(
+    trusted: &SharedTrusted,
+    peer: &HandshakePeer,
+) -> Result<String, String> {
     let trusted = trusted
         .read()
         .map_err(|_| "LAN trust store is unavailable".to_string())?;
-    let pinned = trusted
-        .get(&peer_key(&peer.user_id, &peer.device_id))
-        .ok_or_else(|| "LAN peer has no Rocket.Chat-authenticated device key".to_string())?;
-    if pinned != &peer.public_key {
-        return Err("LAN peer broadcast key does not match the pinned device key".to_string());
+    match trusted.get(&peer_key(&peer.user_id, &peer.device_id)) {
+        Some(pinned) if pinned != &peer.public_key => {
+            Err("LAN peer broadcast key does not match the pinned device key".to_string())
+        }
+        Some(pinned) => Ok(pinned.clone()),
+        None => Ok(peer.public_key.clone()),
     }
-    Ok(pinned.clone())
 }
 
 fn record_peer(
@@ -248,7 +253,7 @@ fn accept_handshake(
     };
     match read_control_frame(stream)? {
         ControlFrame::Proof { signature } => {
-            let pinned = trusted_public_key(trusted, &initiator)?;
+            let pinned = verification_public_key(trusted, &initiator)?;
             verify_transcript(&pinned, &transcript, &signature)?;
             write_control_frame(
                 stream,
@@ -321,7 +326,7 @@ fn connect_handshake(
     if responder.public_key != expected.public_key {
         return Err("LAN responder key does not match the discovered peer".to_string());
     }
-    let pinned = trusted_public_key(trusted, &responder)?;
+    let pinned = verification_public_key(trusted, &responder)?;
     let transcript = HandshakeTranscript {
         server_fingerprint: identity.server_fingerprint.clone(),
         initiator: identity.peer.clone(),
@@ -1306,13 +1311,11 @@ pub async fn lan_send_file(
         let peer = peers
             .values()
             .filter(|peer| {
-                peer.user_id == user_id
-                    && peer.trusted
-                    && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
+                peer.user_id == user_id && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
             })
             .max_by_key(|peer| peer.last_seen_ms)
             .cloned()
-            .ok_or_else(|| "no trusted LAN peer is online for this user".to_string())?;
+            .ok_or_else(|| "no LAN peer is online for this user".to_string())?;
         (peer, current.identity.clone(), current.trusted.clone())
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -1530,6 +1533,17 @@ mod tests {
         configure_stream(&stream).unwrap();
         connect_handshake(&mut stream, &alice, &expected_bob, &alice_trust).unwrap();
         assert_eq!(server.join().unwrap(), alice.peer);
+    }
+
+    #[test]
+    fn unpinned_device_uses_its_announced_key_for_the_explicit_handshake() {
+        let bob = runtime_identity("bob", "bob-device", signing_key(9));
+        let peer = bob.peer.clone();
+        let trusted = Arc::new(RwLock::new(HashMap::new()));
+        assert_eq!(
+            verification_public_key(&trusted, &peer).unwrap(),
+            peer.public_key
+        );
     }
 
     #[test]

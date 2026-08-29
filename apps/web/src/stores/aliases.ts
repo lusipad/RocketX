@@ -38,9 +38,9 @@ function persist(map: AliasMap): void {
 
 function loadFormat(): NameFormat {
   try {
-    return localStorage.getItem(FORMAT_KEY) === 'aliasWithReal' ? 'aliasWithReal' : 'alias';
+    return localStorage.getItem(FORMAT_KEY) === 'alias' ? 'alias' : 'aliasWithReal';
   } catch {
-    return 'alias';
+    return 'aliasWithReal';
   }
 }
 

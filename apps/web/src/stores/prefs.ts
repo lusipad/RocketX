@@ -61,6 +61,7 @@ const DEFAULTS = {
   rcxCollapseLongMessages: true,
   /** 超过半屏才折叠；想在消息流里看更长全文的人可在 设置 → 消息 里放宽到一屏/两屏 */
   rcxLongMessageFoldAt: 'half',
+  rcxAutoFormatMixedLanguage: true,
   useEmojis: true,
   showThreadsInMainChannel: false,
   displayAvatars: true,

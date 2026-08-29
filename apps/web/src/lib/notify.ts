@@ -21,13 +21,19 @@ export interface DesktopNotifyOptions {
 
 export type NotifyPermissionStatus = 'granted' | 'denied' | 'unavailable';
 
+/** WebView2 的 Notification.permission 可能恒为 denied，桌面端状态必须问原生插件。 */
+async function tauriPermissionGranted(): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('plugin:notification|is_permission_granted');
+}
+
 /** 申请通知权限并保留 denied/unavailable 等真实结果，供首次设置逐项展示。 */
 export async function requestNotifyPermissionStatus(): Promise<NotifyPermissionStatus> {
   if (isTauri) {
-    const { isPermissionGranted, requestPermission } = await import(
+    const { requestPermission } = await import(
       '@tauri-apps/plugin-notification'
     );
-    if (await isPermissionGranted()) return 'granted';
+    if (await tauriPermissionGranted()) return 'granted';
     return (await requestPermission()) === 'granted' ? 'granted' : 'denied';
   }
   if (typeof Notification === 'undefined') return 'unavailable';
@@ -43,8 +49,7 @@ export async function requestNotifyPermission(): Promise<boolean> {
 /** 当前是否已授权(设置页展示用) */
 export async function notifyPermissionGranted(): Promise<boolean> {
   if (isTauri) {
-    const { isPermissionGranted } = await import('@tauri-apps/plugin-notification');
-    return isPermissionGranted();
+    return tauriPermissionGranted();
   }
   return typeof Notification !== 'undefined' && Notification.permission === 'granted';
 }
@@ -52,10 +57,10 @@ export async function notifyPermissionGranted(): Promise<boolean> {
 /** 弹一条桌面通知(已在调用方做完免打扰/仅@我等过滤) */
 export async function desktopNotify(opts: DesktopNotifyOptions): Promise<boolean> {
   if (isTauri) {
-    const { isPermissionGranted, sendNotification } = await import(
+    const { sendNotification } = await import(
       '@tauri-apps/plugin-notification'
     );
-    if (!(await isPermissionGranted())) return false;
+    if (!(await tauriPermissionGranted())) return false;
     if (opts.rid && opts.mid && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)) {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('show_message_notification', {

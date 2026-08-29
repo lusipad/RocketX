@@ -1,5 +1,6 @@
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import type { IndexedFileResult } from './fileIndex';
+import { pinyinMatch } from './pinyin';
 
 export type SearchTimeRange = 'any' | '7d' | '30d' | '365d';
 export type SearchFileType = 'any' | 'image' | 'document' | 'archive' | 'other';
@@ -29,8 +30,7 @@ function afterCutoff(timestamp: number, range: SearchTimeRange, now: number): bo
 }
 
 function senderMatches(sender: string, ...candidates: (string | undefined)[]): boolean {
-  const q = sender.trim().toLocaleLowerCase();
-  return !q || candidates.some((candidate) => candidate?.toLocaleLowerCase().includes(q));
+  return pinyinMatch(sender, ...candidates);
 }
 
 export function fileTypeOf(name: string, mime?: string): Exclude<SearchFileType, 'any'> {

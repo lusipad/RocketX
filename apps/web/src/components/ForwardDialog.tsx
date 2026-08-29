@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
 import { Check, Search } from 'lucide-react';
 import { buildConversations, stripQuotePrefix, useChat } from '../stores/chat';
+import { displayName, useAliases } from '../stores/aliases';
 import { humanError } from '../stores/toast';
+import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import Avatar from './Avatar';
 import Dialog from './Dialog';
 
@@ -20,10 +22,13 @@ export default function ForwardDialog({
   const rooms = useChat((s) => s.rooms);
   const forwardMessage = useChat((s) => s.forwardMessage);
   const forwardMessages = useChat((s) => s.forwardMessages);
+  const aliases = useAliases((s) => s.aliases);
+  const nameFormat = useAliases((s) => s.nameFormat);
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pinyinReady = usePinyinReady();
 
   // 归一：多条模式用 msgs，单条模式包成一条的数组
   const msgs = messages ?? (message ? [message] : []);
@@ -36,9 +41,11 @@ export default function ForwardDialog({
   const filtered = useMemo(
     () =>
       keyword
-        ? conversations.filter((c) => c.name.toLowerCase().includes(keyword.toLowerCase()))
+        ? conversations
+            .filter((c) => pinyinMatch(keyword, displayName(aliases, c, nameFormat), c.name, c.avatarUsername))
+            .sort((a, b) => pinyinScore(keyword, displayName(aliases, a, nameFormat)) - pinyinScore(keyword, displayName(aliases, b, nameFormat)))
         : conversations,
-    [conversations, keyword],
+    [conversations, keyword, aliases, nameFormat, pinyinReady],
   );
 
   const toggle = (rid: string) => {
@@ -138,7 +145,7 @@ export default function ForwardDialog({
                 roomId={c.avatarUsername ? undefined : c.rid}
                 size={32}
               />
-              <span className="truncate text-sm text-ink">{c.name}</span>
+              <span className="truncate text-sm text-ink">{displayName(aliases, c, nameFormat)}</span>
             </button>
           );
         })}

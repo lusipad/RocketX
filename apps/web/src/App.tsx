@@ -61,12 +61,6 @@ export default function App() {
         正在加载个人设置…
       </div>
     );
-  } else if (startupStage !== 'background-ready') {
-    content = (
-      <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
-        正在启动 RocketX…
-      </div>
-    );
   } else {
     content = <MainPage />;
   }

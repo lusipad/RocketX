@@ -81,7 +81,7 @@ function toPinyin(text: string): { full: string; initials: string } | null {
  * 关键词是否命中候选项：原文包含、全拼包含、或首字母包含。
  * 传入多个字段（如姓名 + 用户名），任一命中即可。
  */
-export function pinyinMatch(keyword: string, ...fields: (string | undefined)[]): boolean {
+export function pinyinMatch(keyword: string, ...fields: (string | null | undefined)[]): boolean {
   const kw = keyword.trim().toLowerCase();
   if (!kw) return true;
 

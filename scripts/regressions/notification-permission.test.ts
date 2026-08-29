@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+test('桌面通知权限查询绕过 WebView2 的 Notification.permission', async () => {
+  const source = await readFile(new URL('../../apps/web/src/lib/notify.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /plugin:notification\|is_permission_granted/);
+  assert.match(source, /async function tauriPermissionGranted\(\)/);
+  assert.doesNotMatch(source, /const \{ isPermissionGranted, requestPermission \}/);
+  assert.doesNotMatch(source, /const \{ isPermissionGranted \} = await import\('@tauri-apps\/plugin-notification'\)/);
+});

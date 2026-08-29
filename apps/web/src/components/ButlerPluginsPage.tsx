@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppInfo, PluginDetail, PluginSummary, SkillMetadata } from '../agent/protocol/generated/v2';
 import { isTauriRuntime } from '../lib/client';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { desktopAssetUrl } from '../platform/desktopOpener';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
@@ -220,6 +221,7 @@ export default function ButlerPluginsPage() {
   const [busyKey, setBusyKey] = useState('');
   const [detailLoadingKey, setDetailLoadingKey] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const pinyinReady = usePinyinReady();
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!workspaceRoot.trim()) {
@@ -267,17 +269,13 @@ export default function ButlerPluginsPage() {
       const marketplaceLabel = firstNonEmpty(marketplace.interface?.displayName, marketplace.name) ?? marketplace.name;
       const items = marketplace.plugins.filter((plugin) => {
         if (!normalizedQuery) return true;
-        return [
+        return pinyinMatch(normalizedQuery, ...[
           pluginTitle(plugin),
           plugin.name,
           pluginSummary(plugin),
           plugin.interface?.developerName,
           ...plugin.keywords,
-        ]
-          .filter(Boolean)
-          .join('\n')
-          .toLocaleLowerCase('zh-CN')
-          .includes(normalizedQuery);
+        ]);
       });
       return items.length > 0 ? [{
         id: marketplace.name,
@@ -286,7 +284,7 @@ export default function ButlerPluginsPage() {
         items,
       }] : [];
     });
-  }, [normalizedQuery, plugins, workspaceRoot]);
+  }, [normalizedQuery, plugins, workspaceRoot, pinyinReady]);
   const installedPlugins = useMemo(() => allPluginGroups.flatMap((group) => group.items
     .filter((plugin) => plugin.installed)
     .map((plugin) => ({ marketplaceName: group.id, marketplaceLabel: group.label, plugin }))), [allPluginGroups]);
@@ -297,10 +295,8 @@ export default function ButlerPluginsPage() {
   const visibleSkills = useMemo(() => skills.filter((skill) => {
     if (scope !== 'all' && skill.scope !== scope) return false;
     if (!normalizedQuery) return true;
-    return `${skillTitle(skill)}\n${skill.name}\n${skillSummary(skill)}`
-      .toLocaleLowerCase('zh-CN')
-      .includes(normalizedQuery);
-  }), [normalizedQuery, scope, skills]);
+    return pinyinMatch(normalizedQuery, skillTitle(skill), skill.name, skillSummary(skill));
+  }), [normalizedQuery, scope, skills, pinyinReady]);
   const skillGroups = useMemo(() => {
     const order: SkillMetadata['scope'][] = ['repo', 'user', 'admin', 'system'];
     return order.flatMap((groupScope) => {
@@ -310,17 +306,13 @@ export default function ButlerPluginsPage() {
   }, [visibleSkills]);
   const visibleApps = useMemo(() => apps.filter((app) => {
     if (!normalizedQuery) return true;
-    return [
+    return pinyinMatch(normalizedQuery, ...[
       app.name,
       app.description,
       app.installUrl,
       ...app.pluginDisplayNames,
-    ]
-      .filter(Boolean)
-      .join('\n')
-      .toLocaleLowerCase('zh-CN')
-      .includes(normalizedQuery);
-  }), [apps, normalizedQuery]);
+    ]);
+  }), [apps, normalizedQuery, pinyinReady]);
 
   const loading = status === 'connecting' || refreshing;
   const hasCatalog = plugins !== null;

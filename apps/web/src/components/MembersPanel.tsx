@@ -15,6 +15,7 @@ import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { personName, useAliases } from '../stores/aliases';
 import { humanError } from '../stores/toast';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import {
   ROLE_LABELS,
   canActOn,
@@ -265,6 +266,7 @@ export default function MembersPanel() {
   const [card, setCard] = useState<UserCardTarget | null>(null);
   const [adding, setAdding] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const pinyinReady = usePinyinReady();
 
   // 角色单独一个 effect：跟成员列表无关，不能跟着 cachedMembers 一起重跑
   // （成员一变——比如踢完人——就会再打一次 channels.roles）
@@ -298,19 +300,16 @@ export default function MembersPanel() {
   }, [rid, cachedMembers, loadMembers, seedUserStatus]);
 
   const filtered = useMemo(() => {
-    const q = keyword.toLowerCase();
+    const q = keyword.trim();
     const list = q
       ? members.filter(
           (m) =>
-            m.username.toLowerCase().includes(q) ||
-            (m.name ?? '').toLowerCase().includes(q) ||
-            // 起了备注就按备注也能搜到（否则搜自己起的名字反而搜不到）
-            (aliases[`u:${m.username}`] ?? '').toLowerCase().includes(q),
+            pinyinMatch(q, m.username, m.name, aliases[`u:${m.username}`]),
         )
       : members;
     // 群主排最前：一屏看不完的大群里，谁说了算得一眼看到
     return sortMembers(list, roomRoles);
-  }, [members, keyword, roomRoles, aliases]);
+  }, [members, keyword, roomRoles, aliases, pinyinReady]);
 
   const highlightTarget = highlightName?.trim().toLowerCase();
 

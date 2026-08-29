@@ -21,6 +21,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { BUTLER_ABILITY_TEMPLATES, type ButlerAbilityTemplate } from '../lib/butlerAbilityTemplates';
 import { isTauriRuntime } from '../lib/client';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { openDesktopDialog } from '../platform/desktopDialog';
 import { describeRrule } from '../lib/codexSchedule';
 import { renderMarkdownDoc } from '../lib/markdown';
@@ -105,6 +106,7 @@ export default function ButlerRoutines() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [filter, setFilter] = useState<RoutineFilter>('all');
+  usePinyinReady();
   const [query, setQuery] = useState('');
   const createMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
@@ -227,14 +229,12 @@ export default function ButlerRoutines() {
     await resumeThread(threadId);
   };
 
-  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN');
+  const normalizedQuery = query.trim();
   const visibleRoutines = routines.filter((routine) => {
     if (filter === 'active' && !routine.enabled) return false;
     if (filter === 'paused' && routine.enabled) return false;
     if (!normalizedQuery) return true;
-    return `${routine.name}\n${routine.prompt ?? ''}\n${scheduleLabel(routine)}`
-      .toLocaleLowerCase('zh-CN')
-      .includes(normalizedQuery);
+    return pinyinMatch(normalizedQuery, routine.name, routine.prompt, scheduleLabel(routine));
   });
   const suggestedTemplates = BUTLER_ABILITY_TEMPLATES.filter((template) => (
     !!template.prompt && !template.params && !routines.some((routine) => routine.templateId === template.id)

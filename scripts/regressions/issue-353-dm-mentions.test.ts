@@ -8,8 +8,7 @@ import {
 } from '../../apps/web/src/lib/mentions';
 
 // 历史：issue #251 曾禁用 DM 提及（当时认为一对一参与者已确定）；
-// issue #353 重新放开候选（限对方成员），但不触发目录搜索；
-// 之后应需求再放开 DM 目录搜索：私聊也能 @ 不在会话里的人，
+// issue #353 重新放开候选：私聊也能 @ 不在会话里的人，
 // 只插入提及文本（DM 拉不了人，不邀请、无提醒），UI 用「不在会话中」区分。
 test('所有房型（含 d）都允许提及', () => {
   assert.equal(canMentionInRoom('d'), true);
@@ -37,4 +36,6 @@ test('私聊里的会话外候选只插入文本、不记待邀请，徽标与�
   assert.match(source, /candidate\.isRemote && roomType !== 'd'/);
   // DM 候选徽标与群聊不同
   assert.match(source, /roomType === 'd' \? '不在会话中' : '非群成员'/);
+  // 私聊外部人名来自本地花名册，拼音查询不依赖服务端原文搜索
+  assert.match(source, /loadUserSearchRoster/);
 });

@@ -14,6 +14,7 @@ import {
   mergeStickerCatalogs,
 } from '../lib/stickerLibrary';
 import { isTauri } from '../lib/client';
+import { usePinyinReady } from '../lib/pinyin';
 import { toast } from '../stores/toast';
 
 const RECENT_KEY = 'rcx-recent-stickers';
@@ -62,6 +63,7 @@ export default function StickerPicker({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [recentIds, setRecentIds] = useState<string[]>(() => loadRecentStickerIds());
   const [importing, setImporting] = useState<'files' | 'directory' | null>(null);
+  const pinyinReady = usePinyinReady();
 
   const refreshCatalog = async (): Promise<StickerCatalog> => {
     const [builtin, personal] = await Promise.all([
@@ -115,7 +117,7 @@ export default function StickerPicker({
         .filter((entry): entry is StickerEntry => !!entry),
     [catalog.entries, recentIds],
   );
-  const results = useMemo(() => searchStickerEntries(catalog, keyword), [catalog, keyword]);
+  const results = useMemo(() => searchStickerEntries(catalog, keyword), [catalog, keyword, pinyinReady]);
 
   const pick = (sticker: StickerEntry) => {
     setRecentIds(pushRecentSticker(sticker));

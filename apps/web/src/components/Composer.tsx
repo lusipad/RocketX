@@ -11,10 +11,11 @@ import {
 import type { RcUser } from '@rcx/rc-client';
 import { AtSign, Bot, Image, Network, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
-import { isTauri, rest } from '../lib/client';
+import { getServerBase, isTauri, rest } from '../lib/client';
 import { openDesktopDialog } from '../platform/desktopDialog';
 import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
+import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import { applyScopedResult, settleScopedResult } from '../lib/scopedResult';
@@ -47,6 +48,7 @@ import {
 import { matchSharedAiMention, resolveSharedAiMentionTarget } from '../lib/aiMention';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { useSharedAgent } from '../stores/sharedAgent';
+import { loadUserSearchRoster } from '../lib/userSearch';
 
 // 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
 // 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
@@ -70,6 +72,7 @@ type MentionCandidate = {
 
 export default function Composer() {
   const activeRid = useChat((s) => s.activeRid);
+  const myId = useAuth((s) => s.user?._id);
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const canMention = canMentionInRoom(roomType);
   const sharedAiStatus = useSharedAgent((s) => {
@@ -106,6 +109,7 @@ export default function Composer() {
   const [StickerPickerComponent, setStickerPickerComponent] = useState<ComponentType<StickerPickerProps> | null>(null);
   const stickerPickerLoaderRef = useRef<Promise<ComponentType<StickerPickerProps>> | null>(null);
   const [members, setMembers] = useState<RcUser[]>([]);
+  const [mentionRoster, setMentionRoster] = useState<RcUser[]>([]);
   // 目录里搜到的群外用户（@ 群外的人用，防抖搜索）
   const [remoteResult, setRemoteResult] = useState<{
     rid: string | null;
@@ -182,6 +186,28 @@ export default function Composer() {
     };
   }, [activeRid, mentionQuery, roomType]);
 
+  // 私聊也允许引用会话外的人；本地花名册补上服务端不认识的拼音查询。
+  useEffect(() => {
+    const q = mentionQuery?.trim() ?? '';
+    if (!q || roomType !== 'd') return;
+    let current = true;
+    void loadUserSearchRoster(
+      (offset) => rest.searchUsers('', 100, offset),
+      {
+        cacheKey: `${getServerBase()}\0${myId ?? ''}`,
+        isCurrent: () => current,
+        onFirstPage: (users) => setMentionRoster(users),
+      },
+    )
+      .then((result) => {
+        if (current) setMentionRoster(result.users);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [mentionQuery, myId, roomType]);
+
   const remoteUsers =
     remoteResult.rid === activeRid && remoteResult.query === mentionQuery?.trim()
       ? remoteResult.users
@@ -213,12 +239,20 @@ export default function Composer() {
       .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)));
     // 群外用户：目录搜到的、不在群成员里的，标 isRemote 拼在本地结果后面
     const memberNames = new Set([...agent, ...base].map((u) => u.username));
-    const remote = remoteUsers
+    const directoryUsers = [...new Map(
+      [...mentionRoster, ...remoteUsers].map((user) => [user.username, user]),
+    ).values()];
+    const remoteUsernames = new Set(remoteUsers.map((user) => user.username));
+    const remote = directoryUsers
+      // 服务端搜索结果已经按当前关键词匹配；本地花名册才需要补做拼音过滤。
+      .filter((u) => remoteUsernames.has(u.username) || pinyinMatch(q, aliases[`u:${u.username}`], u.name, u.username))
       .filter((u) => u.username && !memberNames.has(u.username))
       .map((u) => ({ username: u.username, name: u.name, isRemote: true, kind: 'user' as const }));
-    return [...agent, ...local, ...remote].slice(0, 8);
+    return [...agent, ...local, ...remote]
+      .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)))
+      .slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [canMention, mentionQuery, roomType, members, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
+  }, [canMention, mentionQuery, roomType, members, mentionRoster, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -677,7 +711,9 @@ export default function Composer() {
               )}
               {u.isRemote && (
                 <span
-                  className="ml-auto shrink-0 rounded bg-fill-1 px-1 text-xs text-ink-3"
+                  className={`ml-auto shrink-0 rounded px-1 text-xs text-ink-3 ${
+                    roomType === 'd' ? 'border border-line bg-fill-2' : 'bg-fill-1'
+                  }`}
                   title={
                     roomType === 'd'
                       ? '对方不在此私聊中，只插入名字，不会收到 @ 提醒'

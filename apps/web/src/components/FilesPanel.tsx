@@ -6,6 +6,7 @@ import { useChat } from '../stores/chat';
 import { useFileIndex } from '../stores/fileIndex';
 import { humanError, toast } from '../stores/toast';
 import { fmtConvTime, fmtSize } from '../lib/format';
+import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { saveFile } from '../lib/download';
 import FilePreview, { canPreview } from './FilePreview';
 import ImageLightbox from './ImageLightbox';
@@ -43,6 +44,7 @@ export default function FilesPanel() {
   const [keyword, setKeyword] = useState('');
   const [preview, setPreview] = useState<RcRoomFile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const pinyinReady = usePinyinReady();
 
   useEffect(() => {
     if (!rid) return;
@@ -72,9 +74,9 @@ export default function FilesPanel() {
   }, [files, targetFileId]);
 
   const filtered = useMemo(() => {
-    const q = keyword.trim().toLowerCase();
-    return q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
-  }, [files, keyword]);
+    const q = keyword.trim();
+    return q ? files.filter((f) => pinyinMatch(q, f.name)) : files;
+  }, [files, keyword, pinyinReady]);
 
   const download = async (f: RcRoomFile) => {
     setBusy(f._id);
