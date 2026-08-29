@@ -136,7 +136,7 @@ async function pinTrustedDevice(device: LanDeviceKeyEnvelope): Promise<void> {
 export async function probeLanPeer(userId: string): Promise<boolean> {
   if (!isTauri) return false;
   const peer = peerCache.find((candidate) => candidate.userId === userId);
-  if (!peer || !peer.trusted || peer.userId === useAuth.getState().user?._id) return false;
+  if (!peer || peer.userId === useAuth.getState().user?._id) return false;
   const result = await invoke<TrustedDevice>('lan_probe_peer', {
     userId: peer.userId,
     deviceId: peer.deviceId,
@@ -196,10 +196,18 @@ export async function startLanRuntime(
       (candidate) =>
         candidate.userId === payload.userId &&
         candidate.deviceId === payload.deviceId &&
-        candidate.publicKey === payload.publicKey &&
-        candidate.trusted,
+        candidate.publicKey === payload.publicKey,
     );
-    if (peer) confirmLanUser(peer.userId);
+    if (!peer) return;
+    void pinTrustedDevice({
+      version: 1,
+      userId: peer.userId,
+      deviceId: peer.deviceId,
+      deviceName: peer.deviceName,
+      publicKey: peer.publicKey,
+    })
+      .then(() => confirmLanUser(peer.userId))
+      .catch(() => {});
   });
   await pollPeers();
   pollTimer = setInterval(() => void pollPeers(), 3_000);

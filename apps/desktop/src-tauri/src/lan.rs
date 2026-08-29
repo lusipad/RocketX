@@ -270,9 +270,22 @@ fn accept_handshake(
             && initiator.device_id != identity.peer.device_id
             && initiator.public_key.len() <= 128 =>
         {
-            // Probe 只能复核已通过 Rocket.Chat 认证并固定过的设备，不能建立首次信任。
-            let pinned = trusted_public_key(trusted, &initiator)?;
-            verify_transcript(&pinned, &transcript, &signature)?;
+            // Probe 允许首次建立信任；已有固定设备仍必须匹配固定公钥。
+            let pinned = trusted
+                .read()
+                .map_err(|_| "LAN trust store is unavailable".to_string())?
+                .get(&peer_key(&initiator.user_id, &initiator.device_id))
+                .cloned();
+            if let Some(pinned) = pinned {
+                if pinned != initiator.public_key {
+                    return Err(
+                        "LAN peer broadcast key does not match the pinned device key".to_string(),
+                    );
+                }
+                verify_transcript(&pinned, &transcript, &signature)?;
+            } else {
+                verify_transcript(&initiator.public_key, &transcript, &signature)?;
+            }
             write_control_frame(
                 stream,
                 &ControlFrame::ProbeAck {
@@ -953,9 +966,7 @@ pub async fn lan_probe_peer(
         let peer = peers
             .values()
             .filter(|peer| {
-                peer.user_id == user_id
-                    && peer.trusted
-                    && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
+                peer.user_id == user_id && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
             })
             .max_by_key(|peer| peer.last_seen_ms)
             .cloned()
@@ -1522,13 +1533,10 @@ mod tests {
     }
 
     #[test]
-    fn tcp_probe_authenticates_only_already_pinned_devices() {
+    fn tcp_probe_authenticates_and_allows_first_trust() {
         let alice = runtime_identity("alice", "alice-device", signing_key(7));
         let bob = runtime_identity("bob", "bob-device", signing_key(9));
-        let bob_trust = Arc::new(RwLock::new(HashMap::from([(
-            peer_key("alice", "alice-device"),
-            alice.peer.public_key.clone(),
-        )])));
+        let bob_trust = Arc::new(RwLock::new(HashMap::new()));
         let expected_bob = LanPeer {
             user_id: bob.peer.user_id.clone(),
             device_id: bob.peer.device_id.clone(),
@@ -1536,7 +1544,7 @@ mod tests {
             ip: Ipv4Addr::LOCALHOST.to_string(),
             port: 0,
             public_key: bob.peer.public_key.clone(),
-            trusted: true,
+            trusted: false,
             source: "test".to_string(),
             last_seen_ms: 0,
         };
@@ -1557,7 +1565,7 @@ mod tests {
         assert!(probed);
         assert_eq!(initiator, alice.peer);
         assert_eq!(responder, expected_bob_peer);
-        assert_eq!(bob_trust.read().unwrap().len(), 1);
+        assert!(bob_trust.read().unwrap().is_empty());
     }
 
     #[test]
