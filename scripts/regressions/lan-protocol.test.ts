@@ -102,3 +102,12 @@ test('P2P 只从输入区显式触发，并在点击时执行握手（issue #368
   assert.match(readFileSync('apps/web/src/components/Composer.tsx', 'utf8'), /P2P 局域网直传/);
   assert.doesNotMatch(area, /confirmedLanUsers/);
 });
+
+test('LAN 发现同时提供组播和同网段广播兜底（issue #369）', () => {
+  const discovery = readFileSync('apps/desktop/src-tauri/src/native/lan_discovery.rs', 'utf8');
+  const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
+  assert.match(discovery, /UDP_BROADCAST: Ipv4Addr = Ipv4Addr::new\(255, 255, 255, 255\)/);
+  assert.match(lan, /set_broadcast\(true\)/);
+  assert.match(lan, /send_to\(&payload, multicast_destination\)/);
+  assert.match(lan, /send_to\(&payload, broadcast_destination\)/);
+});

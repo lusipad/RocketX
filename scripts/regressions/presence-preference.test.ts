@@ -48,5 +48,9 @@ test('登录恢复和密码登录都应用启动状态，设置页只在更新�
 
   assert.equal(auth.match(/applyStartupPresence\(data\.me, data\.userId\)/g)?.length, 2);
   assert.match(auth, /startupPresence\(getServerBase\(\), userId\)/);
+  assert.doesNotMatch(auth, /await syncBusinessMcpSession/);
+  assert.equal(auth.match(/void startBusinessMcpSync\(/g)?.length, 2);
+  assert.match(auth, /businessMcpSyncInFlight/);
+  assert.match(auth, /function applyStartupPresence\(user: RcUser, userId: string\): RcUser/);
   assert.match(settings, /await rest\.setStatus\(next, text\);[\s\S]*savePresencePreference/);
 });

@@ -94,7 +94,21 @@ async function syncBusinessMcpSession(auth: { authToken: string; userId: string 
   ]);
 }
 
+let businessMcpSyncInFlight: Promise<void> | null = null;
+
+function startBusinessMcpSync(auth: { authToken: string; userId: string }): Promise<void> {
+  const task = syncBusinessMcpSession(auth);
+  businessMcpSyncInFlight = task;
+  const clear = () => {
+    if (businessMcpSyncInFlight === task) businessMcpSyncInFlight = null;
+  };
+  void task.then(clear, clear);
+  return task;
+}
+
 async function clearBusinessMcpSession(): Promise<void> {
+  const pending = businessMcpSyncInFlight;
+  if (pending) await pending.catch(() => undefined);
   await Promise.all([
     clearBusinessMcpRocketChat(),
     clearBusinessMcpAzureDevOps(),
@@ -110,16 +124,12 @@ async function shutdownUserRuntime(): Promise<void> {
   ].map((operation) => operation.catch(() => undefined)));
 }
 
-async function applyStartupPresence(user: RcUser, userId: string): Promise<RcUser> {
+function applyStartupPresence(user: RcUser, userId: string): RcUser {
   const status = startupPresence(getServerBase(), userId);
   if (user.status === status) return user;
-  try {
-    await rest.setStatus(status);
-    return { ...user, status };
-  } catch {
-    // 在线状态失败不应把一个仍然有效的登录会话踢回登录页。
-    return user;
-  }
+  // 在线状态写回不应阻塞首屏，也不应把一个仍然有效的登录会话踢回登录页。
+  void rest.setStatus(status).catch(() => {});
+  return { ...user, status };
 }
 
 export const useAuth = create<AuthState>((set, get) => ({
@@ -142,14 +152,18 @@ export const useAuth = create<AuthState>((set, get) => ({
       const data = await rest.loginWithToken(stored.authToken);
       // 重新写一遍认证信息，确保 rc_uid/rc_token cookie 就位（头像、文件下载要用）
       saveAuth({ authToken: data.authToken, userId: data.userId });
-      await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 本地数据换主人了（换账号/首次升级）→ 搬移后重载，让各 store 重新加载
       if (ensureAccountScope(data.userId) === 'switched') {
+        await clearBusinessMcpSession();
         await shutdownUserRuntime();
         location.reload();
         return;
       }
-      set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
+      set({ status: 'authed', user: applyStartupPresence(data.me, data.userId), error: null });
+      // 业务 MCP 只影响 AI 工具配置，放到登录完成后同步，避免网络抖动拖住首屏。
+      void startBusinessMcpSync({ authToken: data.authToken, userId: data.userId }).catch((error) => {
+        console.warn('[rcx] 业务 MCP 会话同步失败', error);
+      });
       // 登录后把服务端备注名合并进本地缓存（首次登录则把本机数据迁移上传），失败不阻塞登录
       void useAliases.getState().sync();
     } catch {
@@ -165,14 +179,17 @@ export const useAuth = create<AuthState>((set, get) => ({
       await ensureHttpOrigin(getServerBase());
       const data = await rest.login(username, password);
       saveAuth({ authToken: data.authToken, userId: data.userId });
-      await syncBusinessMcpSession({ authToken: data.authToken, userId: data.userId });
       // 同一台机器换账号登录：先把上一个人的本地数据搬走、还原自己的,再重载
       if (ensureAccountScope(data.userId) === 'switched') {
+        await clearBusinessMcpSession();
         await shutdownUserRuntime();
         location.reload();
         return;
       }
-      set({ status: 'authed', user: await applyStartupPresence(data.me, data.userId), error: null });
+      set({ status: 'authed', user: applyStartupPresence(data.me, data.userId), error: null });
+      void startBusinessMcpSync({ authToken: data.authToken, userId: data.userId }).catch((error) => {
+        console.warn('[rcx] 业务 MCP 会话同步失败', error);
+      });
       // 登录后把服务端备注名合并进本地缓存（首次登录则把本机数据迁移上传），失败不阻塞登录
       void useAliases.getState().sync();
     } catch (err) {

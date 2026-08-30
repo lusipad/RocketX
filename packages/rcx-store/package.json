@@ -1,6 +1,6 @@
 {
   "name": "@rcx/rcx-store",
-  "version": "0.43.19",
+  "version": "0.43.20",
   "private": true,
   "type": "module",
   "exports": {

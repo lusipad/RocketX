@@ -21,7 +21,7 @@ use crate::native::lan_discovery::{
 };
 #[allow(unused_imports)]
 pub use crate::native::lan_discovery::{LanIdentityInfo, LanPeer, LanServiceInfo, TrustedDevice};
-use crate::native::lan_discovery::{PEER_TTL_MS, SERVICE_TYPE, UDP_GROUP, UDP_PORT};
+use crate::native::lan_discovery::{PEER_TTL_MS, SERVICE_TYPE, UDP_BROADCAST, UDP_GROUP, UDP_PORT};
 #[cfg(test)]
 use crate::native::lan_transfer::LanFileEvent;
 pub use crate::native::lan_transfer::CHUNK_BYTES;
@@ -407,6 +407,7 @@ fn open_udp_discovery_socket() -> Result<UdpSocket, String> {
     socket
         .set_multicast_ttl_v4(1)
         .and_then(|_| socket.set_multicast_loop_v4(false))
+        .and_then(|_| socket.set_broadcast(true))
         .and_then(|_| socket.set_read_timeout(Some(Duration::from_secs(1))))
         .map_err(|error| format!("failed to configure UDP discovery: {error}"))?;
     Ok(socket)
@@ -425,12 +426,15 @@ fn spawn_udp_discovery(
             Ok(payload) => payload,
             Err(_) => return,
         };
-        let destination = SocketAddrV4::new(UDP_GROUP, UDP_PORT);
+        let multicast_destination = SocketAddrV4::new(UDP_GROUP, UDP_PORT);
+        let broadcast_destination = SocketAddrV4::new(UDP_BROADCAST, UDP_PORT);
         let mut buffer = [0_u8; 8192];
         let mut next_announcement = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announcement {
-                let _ = socket.send_to(&payload, destination);
+                // 组播在 Windows 多网卡/防火墙环境下可能静默丢包；广播作为同网段兜底。
+                let _ = socket.send_to(&payload, multicast_destination);
+                let _ = socket.send_to(&payload, broadcast_destination);
                 next_announcement = Instant::now() + Duration::from_secs(3);
             }
             match socket.recv_from(&mut buffer) {

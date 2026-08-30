@@ -7,6 +7,9 @@ test('桌面通知权限查询绕过 WebView2 的 Notification.permission', asyn
 
   assert.match(source, /plugin:notification\|is_permission_granted/);
   assert.match(source, /async function tauriPermissionGranted\(\)/);
+  assert.match(source, /rcx-notification-permission/);
+  assert.match(source, /invoke<boolean \| null>/);
+  assert.match(source, /cacheNotifyPermission\(result\)/);
   assert.doesNotMatch(source, /const \{ isPermissionGranted, requestPermission \}/);
   assert.doesNotMatch(source, /const \{ isPermissionGranted \} = await import\('@tauri-apps\/plugin-notification'\)/);
 });

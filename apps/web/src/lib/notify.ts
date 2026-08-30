@@ -21,10 +21,40 @@ export interface DesktopNotifyOptions {
 
 export type NotifyPermissionStatus = 'granted' | 'denied' | 'unavailable';
 
+const NOTIFY_PERMISSION_CACHE_KEY = 'rcx-notification-permission';
+
+function readCachedNotifyPermission(): boolean | null {
+  try {
+    const value = localStorage.getItem(NOTIFY_PERMISSION_CACHE_KEY);
+    return value === 'granted' ? true : value === 'denied' ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheNotifyPermission(granted: boolean): void {
+  try {
+    localStorage.setItem(NOTIFY_PERMISSION_CACHE_KEY, granted ? 'granted' : 'denied');
+  } catch {
+    // 无痕模式或存储不可用时仍以本次原生查询结果为准。
+  }
+}
+
 /** WebView2 的 Notification.permission 可能恒为 denied，桌面端状态必须问原生插件。 */
 async function tauriPermissionGranted(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<boolean>('plugin:notification|is_permission_granted');
+  try {
+    const result = await invoke<boolean | null>('plugin:notification|is_permission_granted');
+    if (result === true || result === false) {
+      cacheNotifyPermission(result);
+      return result;
+    }
+    // Prompt 状态代表系统还未授权，不能被旧缓存误判成已开启。
+    return false;
+  } catch {
+    // 旧版插件或启动早期 IPC 暂不可用时，用上次确认过的状态恢复 UI。
+    return readCachedNotifyPermission() === true;
+  }
 }
 
 /** 申请通知权限并保留 denied/unavailable 等真实结果，供首次设置逐项展示。 */
@@ -34,7 +64,9 @@ export async function requestNotifyPermissionStatus(): Promise<NotifyPermissionS
       '@tauri-apps/plugin-notification'
     );
     if (await tauriPermissionGranted()) return 'granted';
-    return (await requestPermission()) === 'granted' ? 'granted' : 'denied';
+    const status = (await requestPermission()) === 'granted' ? 'granted' : 'denied';
+    cacheNotifyPermission(status === 'granted');
+    return status;
   }
   if (typeof Notification === 'undefined') return 'unavailable';
   if (Notification.permission !== 'default') return Notification.permission;

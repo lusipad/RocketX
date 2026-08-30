@@ -22,6 +22,7 @@ use super::lan_protocol::{HandshakePeer, PROTOCOL_VERSION};
 pub(crate) const KEYCHAIN_SERVICE: &str = "com.lusipad.rocketx.lan";
 pub(crate) const SERVICE_TYPE: &str = "_rcx._tcp.local.";
 pub(crate) const UDP_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 82, 67);
+pub(crate) const UDP_BROADCAST: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
 pub(crate) const UDP_PORT: u16 = 45_826;
 pub(crate) const PEER_TTL_MS: u64 = 15_000;
 
