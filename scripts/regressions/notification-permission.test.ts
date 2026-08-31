@@ -13,3 +13,14 @@ test('桌面通知权限查询绕过 WebView2 的 Notification.permission', asyn
   assert.doesNotMatch(source, /const \{ isPermissionGranted, requestPermission \}/);
   assert.doesNotMatch(source, /const \{ isPermissionGranted \} = await import\('@tauri-apps\/plugin-notification'\)/);
 });
+
+test('通知设置提供应用内关闭路径，不把系统权限撤销伪装成应用操作', async () => {
+  const source = await readFile(
+    new URL('../../apps/web/src/pages/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /desktopNotifications === 'nothing'/);
+  assert.match(source, /关闭桌面通知/);
+  assert.match(source, /desktopNotifications: prefs\.desktopNotifications === 'nothing' \? 'all' : 'nothing'/);
+});

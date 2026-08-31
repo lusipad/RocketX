@@ -250,7 +250,7 @@ interface ChatState {
   /** 创建团队（Team = 主频道 + 子频道）并跳转 */
   createTeam: (name: string, members: string[], priv: boolean) => Promise<string>;
   /** 从消息创建讨论（RC Discussion）并跳转 */
-  createDiscussionFrom: (msg: RcMessage) => Promise<void>;
+  createDiscussionFrom: (msg: RcMessage, name?: string) => Promise<void>;
   requestUpload: (files: File[], message?: string) => void;
   confirmUpload: (message?: string) => Promise<boolean>;
   cancelUpload: () => void;
@@ -2196,10 +2196,10 @@ export const useChat = create<ChatState>((set, get) => ({
     return team.roomId;
   },
 
-  createDiscussionFrom: async (msg) => {
+  createDiscussionFrom: async (msg, requestedName) => {
     const id = toast.loading('正在创建讨论…');
     try {
-      const name = (stripQuotePrefix(msg.msg) || '讨论').slice(0, 40);
+      const name = (requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论').slice(0, 40);
       const room = await rest.createDiscussion(msg.rid, name, msg._id);
       await refreshSubsAndRooms(set);
       await get().openRoom(room._id);

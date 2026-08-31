@@ -65,7 +65,7 @@ import { todayKey } from '../stores/todos';
 import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
-import { useDialogBehavior } from './Dialog';
+import Dialog, { useDialogBehavior } from './Dialog';
 import { findQuoteImage, quoteAttachmentText } from '../lib/messageQuote';
 import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
@@ -598,6 +598,68 @@ type MessageItemProps = {
   inThread?: boolean;
 };
 
+function CreateDiscussionDialog({
+  message,
+  onCreate,
+  onClose,
+}: {
+  message: RcMessage;
+  onCreate: (name: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState((stripQuotePrefix(message.msg) || '讨论').slice(0, 40));
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      await onCreate(trimmed);
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      title="创建讨论"
+      hint="给这条消息创建一个可持续讨论的子会话。"
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={busy || !name.trim()}
+            className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? '创建中…' : '创建讨论'}
+          </button>
+        </>
+      }
+    >
+      <label className="block px-5 pb-4 text-sm text-ink-2">
+        讨论名称
+        <input
+          autoFocus
+          value={name}
+          maxLength={40}
+          onChange={(event) => setName(event.target.value)}
+          className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-3 outline-none focus:border-primary"
+        />
+      </label>
+    </Dialog>
+  );
+}
+
 type HostedAgentAnswer = {
   provider: 'Codex' | 'DeepSeek';
   note?: string;
@@ -661,6 +723,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const [showCard, setShowCard] = useState(false);
   const [todoOpen, setTodoOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [createDiscussionOpen, setCreateDiscussionOpen] = useState(false);
   const [createWi, setCreateWi] = useState(false);
   const [aiExtracting, setAiExtracting] = useState(false);
   const [aiTodo, setAiTodo] = useState<TodoPrefill | null>(null);
@@ -696,6 +759,58 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const handOverToButler = (): void => {
     askButlerAboutMessages(message.rid, [message], '这条消息说了什么、需要我做什么？');
   };
+
+  const loadExtractionContext = async (text: string) => {
+    // 普通消息不读取历史；只有根消息或回复属于话题时才补齐上下文。
+    const rootId = message.tmid ?? (message.tcount ? message._id : undefined);
+    if (!rootId) return undefined;
+
+    const cached = useChat.getState().messages[message.rid] ?? [];
+    const byId = new Map<string, RcMessage>();
+    for (const item of cached) {
+      if (item._id === rootId || item.tmid === rootId) byId.set(item._id, item);
+    }
+    // 话题面板可能尚未打开，缓存里没有回复；读取失败时仍退回当前消息提取。
+    try {
+      for (const item of await rest.getThreadMessages(rootId)) byId.set(item._id, item);
+    } catch {
+      // 话题上下文是增强信息，不应阻断单条消息提取。
+    }
+    byId.set(message._id, message);
+
+    const ordered = [...byId.values()]
+      .sort((a, b) => tsMs(a.ts) - tsMs(b.ts))
+      .map((item) => ({
+        author: item.u.name || item.u.username,
+        text: stripQuotePrefix(stripAgentSessionMarker(item.msg ?? '')).trim(),
+        sentAt: new Date(item.rocketxOriginalTs ?? tsMs(item.ts)).toISOString(),
+        id: item._id,
+      }))
+      .filter((item) => item.text);
+    if (ordered.length === 0) return undefined;
+
+    // 保留根消息与当前消息，剩余上下文取最近 18 条，控制提示词长度。
+    const root = ordered.find((item) => item.id === rootId);
+    const recent = ordered.filter((item) => item.id !== rootId).slice(-18);
+    const selected = root ? [root, ...recent] : recent;
+    if (!selected.some((item) => item.id === message._id)) {
+      selected.push({
+        author: message.u.name || message.u.username,
+        text,
+        sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
+        id: message._id,
+      });
+    }
+    selected.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+    let budget = 12_000;
+    return selected.flatMap(({ id: _id, ...item }) => {
+      if (budget <= 0) return [];
+      const text = item.text.slice(0, Math.min(2_000, budget));
+      budget -= text.length;
+      return text ? [{ ...item, text }] : [];
+    });
+  };
+
   const extractWithAi = async (target: 'todo' | 'workitem') => {
     if (aiExtracting) return;
     const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim();
@@ -711,6 +826,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
      */
     const toastId = toast.loading('正在读这条消息…');
     try {
+      const context = await loadExtractionContext(text);
       const draft = await extractMessageAction(
         {
           rid: message.rid,
@@ -718,6 +834,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           roomName,
           author: displayName,
           text,
+          context,
           sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
         },
         codexSkillGateway('message-action-extraction', '从消息提取动作'),
@@ -831,7 +948,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           {
             label: '创建讨论',
             icon: MessagesSquare,
-            onClick: () => void createDiscussionFrom(message),
+            onClick: () => setCreateDiscussionOpen(true),
           },
         ]
       : []),
@@ -1275,6 +1392,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         />
       )}
       {forwarding && <ForwardDialog message={message} onClose={() => setForwarding(false)} />}
+      {createDiscussionOpen && (
+        <CreateDiscussionDialog
+          message={message}
+          onCreate={(name) => createDiscussionFrom(message, name)}
+          onClose={() => setCreateDiscussionOpen(false)}
+        />
+      )}
       {calendarOpen && (
         <CalendarEventDialog
           defaultDate={todayKey()}

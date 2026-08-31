@@ -16,6 +16,8 @@ export interface MessageExtractionInput {
   sentAt?: string;
   now?: Date;
   availableWorkItemTypes?: string[];
+  /** 当前消息所属话题的上下文；普通消息为空。 */
+  context?: ReadonlyArray<{ author: string; text: string; sentAt?: string }>;
 }
 
 export interface MessageActionDraft {
@@ -104,6 +106,7 @@ export async function extractMessageAction(
           `当前本地日期是 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}。`,
           'workItemType 必须从输入的 availableWorkItemTypes 中原样选择；列表为空时返回 null。',
           '相对日期必须换算成 YYYY-MM-DD；没有截止日、描述或工作项类型时使用 null；tags 必须是字符串数组。',
+          'context 是同一话题的消息，按时间顺序排列；只在这些消息明确出现时提取负责人、截止日和行动，不要补猜。',
           'JSON 示例：{"title":"修复登录失败","description":"检查生产环境 401 日志","due":"2026-07-18","workItemType":"Bug","tags":["登录","生产"]}',
         ].join('\n'),
       },
@@ -114,6 +117,7 @@ export async function extractMessageAction(
           author: input.author,
           sentAt: input.sentAt ?? null,
           message: input.text,
+          context: input.context ?? [],
           availableWorkItemTypes: input.availableWorkItemTypes ?? [],
         }),
       },

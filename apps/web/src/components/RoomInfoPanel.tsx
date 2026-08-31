@@ -220,7 +220,11 @@ export default function RoomInfoPanel() {
     // 会话越活跃请求越多。
     void refreshRoomInfo(rid).finally(() => setLoading(false));
     void loadRoomRoles(rid);
-    void loadMembers(rid).then((m) => setMemberCount(m.length));
+    void loadMembers(rid).then((m) => {
+      // 成员接口失败时 loadMembers 会返回旧缓存/空数组；不要用这个结果
+      // 覆盖 rooms.info 的人数，否则失败会把群显示成 0 人。
+      if (!useChat.getState().memberErrors[rid]) setMemberCount(m.length);
+    });
   }, [rid, loadMembers, loadRoomRoles, refreshRoomInfo]);
 
   if (!rid || !conv) return null;
@@ -232,7 +236,7 @@ export default function RoomInfoPanel() {
     : aliases[`r:${conv.rid}`];
 
   const isDM = conv.type === 'd';
-  const count = info?.usersCount ?? memberCount ?? undefined;
+  const count = memberCount ?? info?.usersCount ?? undefined;
   // 多人聊天在 RC 里仍是 DM（t='d'），没有频道那套管理能力 ——
   // 这个判断在 canManageRoom 里按房间类型做掉了，这里不用再写 !isDM
   const canManage = canManageRoom(me, roomRoles, conv.type);

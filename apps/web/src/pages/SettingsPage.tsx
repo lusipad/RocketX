@@ -1198,7 +1198,7 @@ function NotificationSection() {
 
   return (
     <>
-      <Row label="系统通知权限" inline>
+      <Row label="系统通知权限" hint="系统授权由操作系统管理；这里的关闭只停止 RocketX 的桌面通知" inline>
         <div className="flex items-center gap-2">
           <span
             className={`rounded px-2 py-1 text-xs ${
@@ -1218,6 +1218,18 @@ function NotificationSection() {
               className="h-8 rounded-md bg-primary px-3 text-xs text-white hover:bg-primary-hover"
             >
               开启
+            </button>
+          )}
+          {permission === 'granted' && (
+            <button
+              onClick={() =>
+                void update({
+                  desktopNotifications: prefs.desktopNotifications === 'nothing' ? 'all' : 'nothing',
+                })
+              }
+              className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
+            >
+              {prefs.desktopNotifications === 'nothing' ? '开启桌面通知' : '关闭桌面通知'}
             </button>
           )}
         </div>

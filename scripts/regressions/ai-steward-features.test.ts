@@ -26,6 +26,10 @@ test('消息提取完整消费 Codex Skill JSON 流并生成待办/工作项预�
     {
       rid: 'r1', mid: 'm1', roomName: '项目群', author: 'Alice',
       text: '明天修好登录 401，建一个 Bug 并打生产标签',
+      context: [
+        { author: 'Alice', text: '先确认生产环境的登录问题', sentAt: '2026-07-17T08:00:00.000Z' },
+        { author: 'Bob', text: '明天修好登录 401，建一个 Bug 并打生产标签', sentAt: '2026-07-17T09:00:00.000Z' },
+      ],
       now: new Date(2026, 6, 17, 9),
       availableWorkItemTypes: ['Task', 'Bug'],
     },
@@ -40,6 +44,7 @@ test('消息提取完整消费 Codex Skill JSON 流并生成待办/工作项预�
   assert.match(request?.messages[0].content ?? '', /JSON 示例：\{/);
   assert.doesNotMatch(request?.messages[0].content ?? '', /Task、Bug/);
   assert.match(request?.messages[1].content ?? '', /"availableWorkItemTypes":\["Task","Bug"\]/);
+  assert.match(request?.messages[1].content ?? '', /"context":\[\{"author":"Alice"/);
   assert.deepEqual(draft, {
     source: { rid: 'r1', mid: 'm1', roomName: '项目群', author: 'Alice' },
     title: '修复登录 401',
