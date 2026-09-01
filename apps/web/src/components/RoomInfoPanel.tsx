@@ -179,6 +179,7 @@ export default function RoomInfoPanel() {
   const rooms = useChat((s) => s.rooms);
   const setPanel = useChat((s) => s.setPanel);
   const loadMembers = useChat((s) => s.loadMembers);
+  const refreshMembers = useChat((s) => s.refreshMembers);
   const loadRoomRoles = useChat((s) => s.loadRoomRoles);
   const refreshRoomInfo = useChat((s) => s.refreshRoomInfo);
   const saveRoomSettings = useChat((s) => s.saveRoomSettings);
@@ -198,7 +199,11 @@ export default function RoomInfoPanel() {
   const setUserAlias = useAliases((s) => s.setUserAlias);
   const setRoomAlias = useAliases((s) => s.setRoomAlias);
 
-  const [memberCount, setMemberCount] = useState<number | null>(null);
+  // 成员数直接读 store，不留本地快照：拉人成功后 store 里的成员列表和房间人数
+  // 会一起更新，本地快照只会停在打开面板那一刻（issue #375：群人数变了、群信息
+  // 里还是一个人）。
+  const memberList = useChat((s) => (s.activeRid ? s.members[s.activeRid] : undefined));
+  const memberError = useChat((s) => (s.activeRid ? s.memberErrors[s.activeRid] : undefined));
   const [loading, setLoading] = useState(true);
   const [aliasOpen, setAliasOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -220,12 +225,17 @@ export default function RoomInfoPanel() {
     // 会话越活跃请求越多。
     void refreshRoomInfo(rid).finally(() => setLoading(false));
     void loadRoomRoles(rid);
-    void loadMembers(rid).then((m) => {
-      // 成员接口失败时 loadMembers 会返回旧缓存/空数组；不要用这个结果
-      // 覆盖 rooms.info 的人数，否则失败会把群显示成 0 人。
-      if (!useChat.getState().memberErrors[rid]) setMemberCount(m.length);
-    });
+    void loadMembers(rid);
   }, [rid, loadMembers, loadRoomRoles, refreshRoomInfo]);
+
+  // 房间人数变了（自己拉了人，或别人在其它端加/退），成员缓存不会自己失效，
+  // 这里按人数差异补一次强制刷新，避免面板停在旧成员列表上（issue #375）。
+  const roomUsersCount = rid ? rooms[rid]?.usersCount : undefined;
+  useEffect(() => {
+    if (!rid || roomUsersCount === undefined) return;
+    const cached = useChat.getState().members[rid];
+    if (cached && cached.length !== roomUsersCount) void refreshMembers(rid);
+  }, [rid, roomUsersCount, refreshMembers]);
 
   if (!rid || !conv) return null;
 
@@ -236,7 +246,9 @@ export default function RoomInfoPanel() {
     : aliases[`r:${conv.rid}`];
 
   const isDM = conv.type === 'd';
-  const count = memberCount ?? info?.usersCount ?? undefined;
+  // 成员接口失败时 store 里留的是旧缓存/空数组；这种情况回退 rooms.info 的人数，
+  // 否则一次失败就把群显示成 0 人。
+  const count = (memberError ? undefined : memberList?.length) ?? info?.usersCount ?? undefined;
   // 多人聊天在 RC 里仍是 DM（t='d'），没有频道那套管理能力 ——
   // 这个判断在 canManageRoom 里按房间类型做掉了，这里不用再写 !isDM
   const canManage = canManageRoom(me, roomRoles, conv.type);

@@ -1181,9 +1181,11 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             </div>
           )}
 
-          {/* 纯图片消息不套气泡（飞书是裸图），有文字时才有气泡底 */}
+          {/* 纯图片消息不套气泡（飞书是裸图），有文字时才有气泡底。
+              min-w-0：气泡是 flex 子项，默认 min-width:auto 会让不可断行的内容
+              （长路径、长文件名）把整行顶宽，聊天区出现横向滚动条（issue #378）。 */}
           <div
-            className={`text-sm leading-relaxed break-words ${
+            className={`min-w-0 text-sm leading-relaxed break-words ${
               hostedAgentAnswer
                 ? 'rocketx-agent-answer-body w-full'
                   : `whitespace-pre-wrap ${richMarkdown ? 'w-full px-3 py-2 text-ink' : ''} ${
@@ -1256,10 +1258,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     type="button"
                     title={isTauri ? '打开局域网共享路径' : '局域网共享路径仅桌面端可打开'}
                     onClick={() => setUncOpen(uncPath)}
-                    className="mt-1 flex max-w-full items-center gap-1.5 rounded-md border border-line px-2 py-1 text-left text-xs text-ink-2 transition hover:bg-fill-hover"
+                    className="mt-1 flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-line px-2 py-1 text-left text-xs text-ink-2 transition hover:bg-fill-hover"
                   >
                     <FolderOpen size={12} className="shrink-0 text-ink-3" />
-                    <span className="truncate">{uncPath}</span>
+                    {/* 长路径必须能断行：truncate 的 nowrap 会把卡片的最小宽度顶成整条
+                        路径的宽度，气泡跟着被撑开，整个聊天区出现横向滚动条
+                        （issue #378）。断行 + 最多两行，完整路径在打开确认框里看。 */}
+                    <span className="min-w-0 break-all line-clamp-2">{uncPath}</span>
                   </button>
                 ))}
                 {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}

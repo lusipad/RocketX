@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   compareVersions,
   isNewerNativeUpdate,
+  isNewerVersion,
+  parseVersion,
   loadUpdateSource,
   manifestUrlOf,
   parseUpdateManifest,
@@ -128,10 +130,11 @@ test('原生更新按钮点击时重新检查，不长期持有启动检查返�
   const bridge = readFileSync('apps/web/src/components/UpdaterBridge.tsx', 'utf8');
   const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
 
-  assert.match(bridge, /const freshUpdate = await checkGithubUpdate\(\)/);
-  assert.match(bridge, /const freshUpdate = await checkHttpUpdate\(config\.location\)/);
+  // 重新检查时同样带上运行时版本（issue #376），但仍必须是一次新的 check
+  assert.match(bridge, /const freshUpdate = await checkGithubUpdate\(installed\)/);
+  assert.match(bridge, /const freshUpdate = await checkHttpUpdate\(config\.location, installed\)/);
   assert.doesNotMatch(settings, /signedUpdate/);
-  assert.match(settings, /const found = config\.kind === 'github'[\s\S]*checkGithubUpdate\(\)[\s\S]*checkHttpUpdate\(config\.location\)/);
+  assert.match(settings, /const found = config\.kind === 'github'[\s\S]*checkGithubUpdate\(installed\)[\s\S]*checkHttpUpdate\(config\.location, installed\)/);
 });
 
 test('原生更新失败时复用下载提示展示错误，不留下永久 loading（issue #300）', () => {
@@ -140,4 +143,65 @@ test('原生更新失败时复用下载提示展示错误，不留下永久 load
 
   assert.equal((bridge.match(/toast\.update\(toastId, \{ kind: 'error'/g) ?? []).length, 3);
   assert.equal((settings.match(/toast\.update\(toastId, \{ kind: 'error'/g) ?? []).length, 2);
+});
+
+test('拿不到可解析的当前版本时一律判定为没有更新（issue #376）', () => {
+  // updater 通道自报的 currentVersion 缺失/为空/不是版本号时，旧实现会把它当成
+  // 0.0.0，于是任何远端版本都「更新」——同版本甚至更旧的版本也会提示升级。
+  assert.equal(isNewerNativeUpdate({ version: '0.43.21', currentVersion: '' }), false);
+  assert.equal(
+    isNewerNativeUpdate({ version: '0.43.21', currentVersion: undefined as unknown as string }),
+    false,
+  );
+  assert.equal(isNewerNativeUpdate({ version: '0.43.20', currentVersion: 'unknown' }), false);
+  assert.equal(isNewerNativeUpdate({ version: '', currentVersion: '0.43.21' }), false);
+  assert.equal(parseVersion(''), null);
+  assert.equal(parseVersion('unknown'), null);
+  assert.deepEqual(parseVersion('v0.43.21'), [0, 43, 21]);
+});
+
+test('已安装版本以运行时为准，updater 自报的 currentVersion 只作兜底（issue #376）', () => {
+  // 运行的是 0.43.21，通道却报当前版本是 0.43.18：不能因此提示装回 0.43.20
+  assert.equal(
+    isNewerNativeUpdate({ version: '0.43.20', currentVersion: '0.43.18' }, '0.43.21'),
+    false,
+  );
+  assert.equal(
+    isNewerNativeUpdate({ version: '0.43.21', currentVersion: '0.43.18' }, '0.43.21'),
+    false,
+  );
+  assert.equal(
+    isNewerNativeUpdate({ version: '0.43.22', currentVersion: '0.43.18' }, '0.43.21'),
+    true,
+  );
+});
+
+test('更新清单：当前版本不可解析时不提示更新', () => {
+  const manifest = JSON.stringify({ version: '0.43.21', platforms: {} });
+  assert.equal(parseUpdateManifest(manifest, '').hasUpdate, false);
+  assert.equal(parseUpdateManifest(manifest, 'dev').hasUpdate, false);
+  assert.equal(parseUpdateManifest(manifest, '0.43.21').hasUpdate, false);
+  assert.equal(parseUpdateManifest(manifest, '0.43.22').hasUpdate, false);
+  assert.equal(parseUpdateManifest(manifest, '0.43.20').hasUpdate, true);
+  assert.equal(isNewerVersion('0.43.21', '0.43.21'), false);
+  assert.equal(isNewerVersion('0.43.20', '0.43.21'), false);
+  assert.equal(isNewerVersion('0.44.0', '0.43.21'), true);
+});
+
+test('启动与设置页的更新检查都用运行时版本（issue #376）', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const bridge = await readFile(
+    new URL('../../apps/web/src/components/UpdaterBridge.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(bridge, /installedAppVersion\(__APP_VERSION__\)/);
+  assert.match(bridge, /checkGithubUpdate\(installed\)/);
+  assert.match(bridge, /checkHttpUpdate\(config\.location, installed\)/);
+  assert.match(bridge, /probeConfiguredSource\(config, installed\)/);
+
+  const settings = await readFile(
+    new URL('../../apps/web/src/pages/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(settings, /const installed = await installedAppVersion\(APP_VERSION\);/);
 });

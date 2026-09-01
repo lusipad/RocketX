@@ -79,20 +79,25 @@ export function saveUpdateSource(
 }
 
 /**
- * 版本比较：数字三段逐位比。容 v 前缀与预发布后缀（截到首个非数字段），
- * 段缺省按 0——共享目录里手工维护的清单不一定写得规整。
+ * 版本号解析：数字三段。容 v 前缀与预发布后缀（截到首个非数字段），段缺省按 0
+ * ——共享目录里手工维护的清单不一定写得规整。首段必须是数字，否则整个值不是
+ * 版本号，返回 null 交给调用方按「无法判断」处理。
  */
+export function parseVersion(value: string): [number, number, number] | null {
+  const parts = value.trim().replace(/^v/i, '').split('.').slice(0, 3);
+  const first = Number.parseInt(parts[0] ?? '', 10);
+  if (!Number.isFinite(first)) return null;
+  const at = (index: number): number => {
+    const part = Number.parseInt(parts[index] ?? '', 10);
+    return Number.isFinite(part) ? part : 0;
+  };
+  return [first, at(1), at(2)];
+}
+
+/** 版本比较：无法解析的一侧按 0.0.0 处理，仅供展示与排序使用。 */
 export function compareVersions(a: string, b: string): number {
-  const parse = (value: string): number[] =>
-    value
-      .trim()
-      .replace(/^v/i, '')
-      .split('.')
-      .slice(0, 3)
-      .map((part) => Number.parseInt(part, 10))
-      .map((part) => (Number.isFinite(part) ? part : 0));
-  const left = parse(a);
-  const right = parse(b);
+  const left = parseVersion(a) ?? [0, 0, 0];
+  const right = parseVersion(b) ?? [0, 0, 0];
   for (let index = 0; index < 3; index += 1) {
     const delta = (left[index] ?? 0) - (right[index] ?? 0);
     if (delta !== 0) return delta > 0 ? 1 : -1;
@@ -100,23 +105,57 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-export function isNewerNativeUpdate(
-  update: Pick<import('@tauri-apps/plugin-updater').Update, 'version' | 'currentVersion'> | null,
-): boolean {
-  return Boolean(update && compareVersions(update.version, update.currentVersion) > 0);
+/**
+ * 「有没有新版本」的唯一判据（issue #300、#376）：两侧都必须是能解析的版本号，
+ * 才允许判定为有更新。空串、undefined、非版本文本一律判定为没有更新——把拿不到
+ * 的当前版本当成 0.0.0 会让任何远端版本都「更新」，正是同版本甚至旧版本还提示
+ * 升级的成因。
+ */
+export function isNewerVersion(remote: string | undefined, installed: string | undefined): boolean {
+  const next = parseVersion(remote ?? '');
+  const current = parseVersion(installed ?? '');
+  if (!next || !current) return false;
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (next[index] ?? 0) - (current[index] ?? 0);
+    if (delta !== 0) return delta > 0;
+  }
+  return false;
 }
 
-export async function checkGithubUpdate(): Promise<import('@tauri-apps/plugin-updater').Update | null> {
+export function isNewerNativeUpdate(
+  update: Pick<import('@tauri-apps/plugin-updater').Update, 'version' | 'currentVersion'> | null,
+  installedVersion?: string,
+): boolean {
+  if (!update) return false;
+  // 已安装版本以运行时为准；updater 通道自报的 currentVersion 只作兜底。
+  return isNewerVersion(update.version, installedVersion ?? update.currentVersion);
+}
+
+/** 当前真正在跑的版本：桌面端问原生，取不到时退回构建期常量。 */
+export async function installedAppVersion(fallback: string): Promise<string> {
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app');
+    const version = await getVersion();
+    return parseVersion(version) ? version : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function checkGithubUpdate(
+  installedVersion?: string,
+): Promise<import('@tauri-apps/plugin-updater').Update | null> {
   const { check } = await import('@tauri-apps/plugin-updater');
   const update = await check({ timeout: 15_000 });
-  return isNewerNativeUpdate(update) ? update : null;
+  return isNewerNativeUpdate(update, installedVersion) ? update : null;
 }
 
 export async function checkHttpUpdate(
   location: string,
+  installedVersion?: string,
 ): Promise<import('@tauri-apps/plugin-updater').Update | null> {
   const update = await checkSignedHttpSource(location);
-  return isNewerNativeUpdate(update) ? update : null;
+  return isNewerNativeUpdate(update, installedVersion) ? update : null;
 }
 
 interface UpdateManifest {
@@ -139,7 +178,7 @@ export function parseUpdateManifest(raw: string, currentVersion: string): Update
   const windows =
     manifest.platforms?.['windows-x86_64']?.url ?? manifest.platforms?.['windows-x86_64-msi']?.url;
   return {
-    hasUpdate: compareVersions(manifest.version, currentVersion) > 0,
+    hasUpdate: isNewerVersion(manifest.version, currentVersion),
     version: manifest.version.replace(/^v/i, ''),
     notes: typeof manifest.notes === 'string' ? manifest.notes : undefined,
     downloadUrl: typeof windows === 'string' ? windows : undefined,
