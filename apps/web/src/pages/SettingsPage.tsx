@@ -32,6 +32,7 @@ import {
 import {
   checkGithubUpdate,
   checkHttpUpdate,
+  installedAppVersion,
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
@@ -2042,21 +2043,23 @@ function UpdateSourceRow() {
     setStatus(null);
     setProbe(null);
     try {
+      // 与启动检查同一判据：以运行时版本比较，构建期常量只作兜底（issue #376）
+      const installed = await installedAppVersion(APP_VERSION);
       if (config.kind === 'github') {
-        const found = await checkGithubUpdate();
+        const found = await checkGithubUpdate(installed);
         if (found) {
           setProbe({ hasUpdate: true, version: found.version });
         }
         else setStatus('已是最新版本');
       } else if (config.kind === 'http') {
-        const found = await checkHttpUpdate(config.location);
+        const found = await checkHttpUpdate(config.location, installed);
         if (found) {
           setProbe({ hasUpdate: true, version: found.version });
         } else {
           setStatus('已是最新版本');
         }
       } else {
-        const result = await probeConfiguredSource(config, APP_VERSION);
+        const result = await probeConfiguredSource(config, installed);
         if (result.hasUpdate) setProbe(result);
         else setStatus(`已是最新版本（源上为 v${result.version}）`);
       }
@@ -2072,9 +2075,10 @@ function UpdateSourceRow() {
     setUpdating(true);
     try {
       if (config.kind === 'github' || config.kind === 'http') {
+        const installed = await installedAppVersion(APP_VERSION);
         const found = config.kind === 'github'
-          ? await checkGithubUpdate()
-          : await checkHttpUpdate(config.location);
+          ? await checkGithubUpdate(installed)
+          : await checkHttpUpdate(config.location, installed);
         if (!found) return;
         const toastId = toast.loading(`正在下载并验证 RocketX ${found.version}…`);
         try {

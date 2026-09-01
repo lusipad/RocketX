@@ -3,6 +3,7 @@ import { isTauri } from '../lib/http';
 import {
   checkGithubUpdate,
   checkHttpUpdate,
+  installedAppVersion,
   launchDirInstaller,
   loadUpdateSource,
   probeConfiguredSource,
@@ -16,8 +17,8 @@ declare const __APP_VERSION__: string;
 let checked = false;
 
 /** GitHub 源:原生 updater 通道,带签名校验与全自动下载安装 */
-async function checkGithubSource(): Promise<void> {
-  const update = await checkGithubUpdate();
+async function checkGithubSource(installed: string): Promise<void> {
+  const update = await checkGithubUpdate(installed);
   if (!update) return;
 
   toast.show({
@@ -28,7 +29,7 @@ async function checkGithubSource(): Promise<void> {
       label: '更新并重启',
       onClick: () => {
         void (async () => {
-          const freshUpdate = await checkGithubUpdate();
+          const freshUpdate = await checkGithubUpdate(installed);
           if (!freshUpdate) return;
           const toastId = toast.loading(`正在下载 RocketX ${freshUpdate.version}…`);
           try {
@@ -48,10 +49,10 @@ async function checkGithubSource(): Promise<void> {
 }
 
 /** 自定义源(内网 HTTP / 共享目录):检测提醒 + 引导安装(issue #106) */
-async function checkCustomSource(): Promise<void> {
+async function checkCustomSource(installed: string): Promise<void> {
   const config = loadUpdateSource();
   if (config.kind === 'http') {
-    const update = await checkHttpUpdate(config.location);
+    const update = await checkHttpUpdate(config.location, installed);
     if (!update) return;
     toast.show({
       kind: 'info',
@@ -61,7 +62,7 @@ async function checkCustomSource(): Promise<void> {
         label: '更新并重启',
         onClick: () => {
           void (async () => {
-            const freshUpdate = await checkHttpUpdate(config.location);
+            const freshUpdate = await checkHttpUpdate(config.location, installed);
             if (!freshUpdate) return;
             const toastId = toast.loading(`正在下载并验证 RocketX ${freshUpdate.version}…`);
             try {
@@ -77,7 +78,7 @@ async function checkCustomSource(): Promise<void> {
     });
     return;
   }
-  const probe = await probeConfiguredSource(config, __APP_VERSION__);
+  const probe = await probeConfiguredSource(config, installed);
   if (!probe.hasUpdate) return;
 
   const action = probe.installerPath && probe.sha256 && probe.installerType
@@ -124,10 +125,17 @@ export default function UpdaterBridge() {
       .catch(() => undefined);
 
     const config = loadUpdateSource();
-    void (config.kind === 'github' ? checkGithubSource() : checkCustomSource()).catch((error) => {
-      // 默认 GitHub 源离线时不打扰；用户显式配置的内网源失败必须可见，避免长期误以为在自动更新。
-      if (config.kind !== 'github') toast.error(error, '自定义更新源检查失败');
-    });
+    // 版本比较一律以「当前真正在跑的版本」为准（issue #376）：构建期常量和
+    // updater 自报的 currentVersion 都可能与已安装版本对不上，一旦对不上就会
+    // 把同版本甚至更旧的版本当成新版本提示升级。
+    void installedAppVersion(__APP_VERSION__)
+      .then((installed) =>
+        config.kind === 'github' ? checkGithubSource(installed) : checkCustomSource(installed),
+      )
+      .catch((error) => {
+        // 默认 GitHub 源离线时不打扰；用户显式配置的内网源失败必须可见，避免长期误以为在自动更新。
+        if (config.kind !== 'github') toast.error(error, '自定义更新源检查失败');
+      });
   }, []);
 
   return null;

@@ -82,7 +82,9 @@ import { notifyChatMessage, rememberLocalMessage } from '../chat/notificationCoo
 import {
   conversationIsActivelyViewed,
 } from '../chat/notificationPolicy';
-import { statDesktopFile, uploadDesktopFile } from '../platform/desktopFs';
+import { statDesktopFile, uploadDesktopBlob, uploadDesktopFile } from '../platform/desktopFs';
+import { isTauri } from '../lib/http';
+import { shouldSpoolUpload } from '../lib/uploadRouting';
 
 /** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
@@ -170,7 +172,9 @@ interface ChatState {
   toggleThreadFollow: (mid: string, follow: boolean) => Promise<boolean>;
   setPanel: (panel: RightPanel) => void;
   loadOlder: () => Promise<number>;
-  loadMembers: (rid: string) => Promise<RcUser[]>;
+  loadMembers: (rid: string, options?: { force?: boolean }) => Promise<RcUser[]>;
+  /** 绕过缓存重新拉成员（别人在其它端拉了人，本地缓存不会自己失效） */
+  refreshMembers: (rid: string) => Promise<RcUser[]>;
   send: (
     text: string,
     opts?: { rid?: string; tmid?: string; quote?: RcMessage; clientId?: string; preserveWhitespace?: boolean },
@@ -345,6 +349,29 @@ async function acceptLanFile(event: LanFileEvent): Promise<void> {
   const message = localLanFileMessage(event, author);
   insertLanFileMessage(message);
   void notifyIfNeeded(message, event.roomId, state);
+}
+
+/**
+ * 内存里的文件走哪条上传通道：桌面端的大文件必须先落盘再由 Rust 流式提交，
+ * 否则请求体会在 WebView 里物化成按字节展开的数组，直接抛
+ * `RangeError: Invalid array length`（issue #377）。
+ */
+async function uploadBlobToRoom(
+  rid: string,
+  blob: Blob,
+  options: { msg?: string; tmid?: string; fileName?: string } = {},
+): Promise<void> {
+  const fileName =
+    options.fileName ?? (typeof File !== 'undefined' && blob instanceof File ? blob.name : undefined);
+  if (shouldSpoolUpload(blob.size, isTauri)) {
+    await uploadDesktopBlob(blob, rid, {
+      msg: options.msg,
+      tmid: options.tmid,
+      fileName: fileName ?? 'file',
+    });
+    return;
+  }
+  await rest.uploadMedia(rid, blob, options);
 }
 
 /** 新建 DM/群组后刷新订阅与房间（新条目要出现在会话列表里） */
@@ -608,7 +635,7 @@ async function forwardSingleMessage(msg: RcMessage, rid: string): Promise<void> 
   for (const attachment of reupload) {
     try {
       const blob = await rest.fetchFile(protectedFilePath(attachment)!);
-      await rest.uploadMedia(rid, blob, {
+      await uploadBlobToRoom(rid, blob, {
         fileName: forwardFileName(attachment),
         msg: singleFileOnly ? (text ?? '') : '',
       });
@@ -1224,11 +1251,16 @@ export const useChat = create<ChatState>((set, get) => ({
     return older.length;
   },
 
-  loadMembers: async (rid) => {
+  // 缓存里已有成员列表就不再请求；force 只在明确知道服务端已经变了时用
+  // （群人数变化、邀请成功），它会作废在途请求，保证拿到的是本次快照。
+  refreshMembers: (rid) => get().loadMembers(rid, { force: true }),
+
+  loadMembers: async (rid, options) => {
+    const force = options?.force === true;
     const cached = get().members[rid];
-    if (cached && !get().memberErrors[rid]) return cached;
+    if (!force && cached && !get().memberErrors[rid]) return cached;
     const type = get().subscriptions[rid]?.t ?? get().rooms[rid]?.t ?? 'c';
-    const version = memberVersion(rid);
+    const version = force ? invalidateMemberRequests(rid) : memberVersion(rid);
     try {
       const snapshot = await requestMemberSnapshot(rid, type, version);
       if (memberVersion(rid) !== version) return get().members[rid] ?? snapshot;
@@ -2241,8 +2273,9 @@ export const useChat = create<ChatState>((set, get) => ({
       const caption = message?.trim();
       const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
       for (const [index, file] of files.entries()) {
-        await rest.uploadMedia(rid, file, {
+        await uploadBlobToRoom(rid, file, {
           tmid,
+          fileName: file.name,
           ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
         });
         set({ uploading: get().uploading - 1 });
