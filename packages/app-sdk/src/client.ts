@@ -140,9 +140,81 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     });
   };
 
-  return {
+  const client: BridgeClient = {
     call: <TResult>(method: string, params?: unknown) =>
       request<TResult>('rcx/call', { method, params }),
+
+    app: {
+      info: () => request('rcx/call', { method: 'app.info' }),
+    },
+
+    chat: {
+      current: () => request('rcx/call', { method: 'chat.current' }),
+      history: (params = {}) => request('rcx/call', { method: 'chat.history', params }),
+      postMessage: (params) => request('rcx/call', { method: 'chat.postMessage', params }),
+    },
+
+    rooms: {
+      list: () => request('rcx/call', { method: 'rooms.list' }),
+    },
+
+    users: {
+      read: (rid) => request('rcx/call', { method: 'users.read', params: rid ? { rid } : undefined }),
+    },
+
+    files: {
+      list: (params = {}) => request('rcx/call', { method: 'files.list', params }),
+      read: (path) => {
+        if (!path.trim()) return Promise.reject(new Error('文件路径不能为空'));
+        return request('rcx/call', { method: 'files.read', params: { path } });
+      },
+      pick: () => request('rcx/call', { method: 'files.pick' }),
+    },
+
+    lan: {
+      listPeers: () => request('rcx/call', { method: 'lan.peers' }),
+    },
+
+    storage: {
+      get: (key) => {
+        if (!key.trim()) return Promise.reject(new Error('存储 key 不能为空'));
+        return request('rcx/call', { method: 'storage.get', params: { key } });
+      },
+      set: (key, value) => {
+        if (!key.trim()) return Promise.reject(new Error('存储 key 不能为空'));
+        return request('rcx/call', { method: 'storage.set', params: { key, value } });
+      },
+      delete: (key) => {
+        if (!key.trim()) return Promise.reject(new Error('存储 key 不能为空'));
+        return request('rcx/call', { method: 'storage.delete', params: { key } });
+      },
+      list: () => request('rcx/call', { method: 'storage.list' }),
+    },
+
+    net: {
+      fetch: (params) => request('rcx/call', { method: 'net.fetch', params }),
+    },
+
+    native: {
+      call: (method, params) => {
+        if (!method.trim()) return Promise.reject(new Error('native 方法名不能为空'));
+        return request('rcx/call', { method: 'native.call', params: { method, params } });
+      },
+    },
+
+    ui: {
+      notify: (props) => request('rcx/requestUI', { kind: 'notify', props }),
+    },
+
+    config: {
+      get: (name: string) => {
+        if (!name.trim()) return Promise.reject(new Error('配置名称不能为空'));
+        return request<{ name: string; value: string | null }>('rcx/call', {
+          method: 'app.config.get',
+          params: { name },
+        });
+      },
+    },
 
     requestUI: <TResult>(kind: string, props?: unknown) =>
       request<TResult>('rcx/requestUI', { kind, props }),
@@ -169,4 +241,5 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
       pending.clear();
     },
   };
+  return client;
 };

@@ -6,6 +6,7 @@ export const BASIC_PERMISSIONS: readonly AppPermission[] = [
   'users:read',
   'storage:local',
   'ui:notify',
+  'app:info',
 ];
 
 export const SENSITIVE_PERMISSIONS: readonly AppPermission[] = [
@@ -17,6 +18,8 @@ export const SENSITIVE_PERMISSIONS: readonly AppPermission[] = [
   'ai:invoke',
   'lan:discover',
   'native:service',
+  'config:read',
+  'secrets:use',
 ];
 
 export const DANGEROUS_PERMISSIONS: readonly AppPermission[] = ['agent:spawn', 'process:spawn'];

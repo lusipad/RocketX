@@ -12,4 +12,5 @@ npx rcx-app dev
 Available templates: `hello`, `kanban`, `poll`, and `oncall`.
 
 `rcx-app dev` binds to `127.0.0.1` and provides a mock Bridge plus automatic browser refresh.
-Install the directory in RocketX to verify real permissions and host capabilities.
+The preview mock covers the typed SDK surface except `native.call`, which requires a signed bundled service.
+Install the directory in RocketX to verify real permissions, room boundaries, network allowlists, and native capabilities.

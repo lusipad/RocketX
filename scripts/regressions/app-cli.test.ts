@@ -30,6 +30,10 @@ test('开发服务器只绑定回环并注入 mock Bridge 与刷新信号', asyn
     const html = await fetch(development.url).then((response) => response.text());
     assert.match(html, /__RCX_BRIDGE__/);
     assert.match(html, /__rcx_reload/);
+    assert.match(html, /method==='app\.info'/);
+    assert.match(html, /method==='net\.fetch'/);
+    assert.match(html, /method==='lan\.peers'/);
+    assert.match(html, /Unsupported mock capability: '\+method/);
     const traversal = await fetch(`${development.url}/..%2F..%2Fpackage.json`);
     assert.equal(traversal.status, 404);
   } finally {

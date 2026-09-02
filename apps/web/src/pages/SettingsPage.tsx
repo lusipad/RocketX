@@ -1715,6 +1715,7 @@ const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
   'users:read': '读取成员',
   'storage:local': '使用应用私有存储',
   'ui:notify': '发送通知',
+  'app:info': '读取应用自身信息',
   'chat:write': '代发消息',
   'chat:history': '读取历史消息',
   'files:read': '读取文件',
@@ -1725,6 +1726,8 @@ const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
   'agent:spawn': '启动 Agent（每次确认）',
   'process:spawn': '启动本地进程（每次确认）',
   'native:service': '运行内置签名后台服务',
+  'config:read': '读取声明的环境变量',
+  'secrets:use': '向签名原生服务注入密钥',
 };
 
 function AppPermissionPicker({

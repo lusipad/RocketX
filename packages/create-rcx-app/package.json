@@ -1,6 +1,6 @@
 {
   "name": "create-rcx-app",
-  "version": "0.43.22",
+  "version": "0.43.23",
   "description": "Create, validate, and preview RocketX applications",
   "type": "module",
   "bin": {

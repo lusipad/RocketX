@@ -1054,6 +1054,7 @@ fn main() {
             agent_bot::agent_bot_config_delete,
             agent_bot::agent_bot_send,
             native_service::native_service_start,
+            native_service::app_env_get,
             native_service::native_service_call,
             native_service::native_service_stop,
             lan::lan_service_start,

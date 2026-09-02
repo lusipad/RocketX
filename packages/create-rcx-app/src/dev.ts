@@ -11,16 +11,25 @@ const DEV_BOOTSTRAP = String.raw`<script>(()=>{
   const read=()=>{try{return JSON.parse(localStorage.getItem(key)||'{}')}catch{return {}}};
   const write=value=>localStorage.setItem(key,JSON.stringify(value));
   const reply=(id,result,error)=>queueMicrotask(()=>{const data={jsonrpc:'2.0',id,...(error?{error:{code:-32000,message:error}}:{result})};for(const listener of listeners)listener({data})});
+  const current=()=>({rid:'dev-room',messages:[{_id:'dev-message',rid:'dev-room',msg:'RocketX development preview',u:{username:'developer',name:'Developer'}}]});
   const call=(method,params={})=>{
     const storage=read();
+    if(method==='app.info')return {id:'dev.local.preview',version:'0.0.0',name:'RocketX Preview',publisher:'RocketX',runtime:'iframe',permissions:['app:info','chat:read','chat:write','config:read','files:read','lan:discover','net:fetch','rooms:list','storage:local','ui:notify','users:read']};
     if(method==='storage.get')return storage[params.key];
     if(method==='storage.set'){storage[params.key]=params.value;write(storage);return {ok:true}}
     if(method==='storage.delete'){delete storage[params.key];write(storage);return {ok:true}}
     if(method==='storage.list')return Object.entries(storage).map(([key,value])=>({key,value}));
-    if(method==='chat.current')return {rid:'dev-room',messages:[{_id:'dev-message',msg:'RocketX development preview',u:{username:'developer',name:'Developer'}}]};
+    if(method==='chat.current')return current();
+    if(method==='chat.history')return current().messages;
     if(method==='chat.postMessage'){console.info('[rcx-app dev] postMessage',params);return {ok:true}}
     if(method==='rooms.list')return [{rid:'dev-room',name:'Development room',type:'c',unread:0}];
     if(method==='users.read')return [{_id:'dev-user',username:'developer',name:'Developer',status:'online'}];
+    if(method==='files.list')return [];
+    if(method==='files.read')return {type:'text/plain',size:0,base64:''};
+    if(method==='files.pick')return {cancelled:true};
+    if(method==='lan.peers')return [];
+    if(method==='net.fetch')return {status:200,headers:{'content-type':'application/json'},text:'{}'};
+    if(method==='app.config.get')return {name:params.name,value:null};
     throw new Error('Unsupported mock capability: '+method);
   };
   const bridge=Object.freeze({

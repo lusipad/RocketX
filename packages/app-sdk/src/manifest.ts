@@ -17,6 +17,9 @@ export const APP_PERMISSIONS = [
   'agent:spawn',
   'process:spawn',
   'native:service',
+  'config:read',
+  'secrets:use',
+  'app:info',
 ] as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[number];
@@ -43,6 +46,11 @@ export interface NativeServiceManifest {
   protocol: 'jsonrpc-stdio';
 }
 
+export interface AppConfigManifest {
+  env?: string[];
+  secrets?: string[];
+}
+
 export interface RcxAppManifest {
   id: string;
   version: string;
@@ -53,6 +61,7 @@ export interface RcxAppManifest {
   runtime: AppRuntime;
   entry: string | { command: string; args?: string[]; env?: Record<string, string> };
   service?: NativeServiceManifest;
+  config?: AppConfigManifest;
   permissions: AppPermission[];
   netAllow?: string[];
   contributes?: Partial<Record<ExtensionPoint, ManifestContribution[]>>;
@@ -81,6 +90,17 @@ function normalizeOrigin(value: string): string {
     throw new Error(`netAllow 必须是纯 origin: ${value}`);
   }
   return url.origin;
+}
+
+function parseEnvironmentNames(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${field} 必须是字符串数组`);
+  const names = value.map((name) => requireString(name, `${field}[]`));
+  if (names.some((name) => name.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+    throw new Error(`${field} 包含非法环境变量名`);
+  }
+  if (new Set(names).size !== names.length) throw new Error(`${field} 不能重复`);
+  return names;
 }
 
 export function parseManifest(value: unknown): RcxAppManifest {
@@ -113,6 +133,36 @@ export function parseManifest(value: unknown): RcxAppManifest {
   if (new Set(permissions).size !== permissions.length) throw new Error('permissions 不能重复');
   if (raw.enabledByDefault !== undefined && typeof raw.enabledByDefault !== 'boolean') {
     throw new Error('enabledByDefault 必须是布尔值');
+  }
+
+  let config: AppConfigManifest | undefined;
+  if (raw.config !== undefined) {
+    if (!raw.config || typeof raw.config !== 'object' || Array.isArray(raw.config)) {
+      throw new Error('config 必须是对象');
+    }
+    const rawConfig = raw.config as Record<string, unknown>;
+    const env = parseEnvironmentNames(rawConfig.env, 'config.env');
+    const secrets = parseEnvironmentNames(rawConfig.secrets, 'config.secrets');
+    if (env && secrets && env.some((name) => secrets.includes(name))) {
+      throw new Error('config.env 和 config.secrets 不能重复');
+    }
+    if (env?.length && !permissions.includes('config:read')) {
+      throw new Error('声明 config.env 时必须申请 config:read');
+    }
+    if (secrets?.length) {
+      if (!permissions.includes('secrets:use')) {
+        throw new Error('声明 config.secrets 时必须申请 secrets:use');
+      }
+      if (!raw.service || runtime !== 'iframe') {
+        throw new Error('config.secrets 只允许注入 bundled native service');
+      }
+    }
+    if (env?.length || secrets?.length) {
+      config = {
+        ...(env?.length ? { env } : {}),
+        ...(secrets?.length ? { secrets } : {}),
+      };
+    }
   }
 
   const netAllow = Array.isArray(raw.netAllow)
@@ -200,6 +250,7 @@ export function parseManifest(value: unknown): RcxAppManifest {
         },
     permissions,
     ...(service ? { service } : {}),
+    ...(config ? { config } : {}),
     ...(typeof raw.icon === 'string' ? { icon: raw.icon } : {}),
     ...(typeof raw.enabledByDefault === 'boolean' ? { enabledByDefault: raw.enabledByDefault } : {}),
     ...(netAllow ? { netAllow } : {}),

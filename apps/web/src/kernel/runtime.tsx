@@ -119,11 +119,27 @@ async function startNativeService(app: InstalledApp): Promise<void> {
     appId: app.manifest.id,
     command: service.command,
     args: service.args,
+    envNames: [
+      ...(app.manifest.config?.env ?? []),
+      ...(app.manifest.config?.secrets ?? []),
+    ],
   });
 }
 
 function registerCapabilities(host: KernelHost): void {
   registerHostCapabilities(capabilityBus, host, { serverBase: getServerBase });
+  capabilityBus.register('app.info', 'app:info', (_params, context) => {
+    const app = installedApps.get(context.appId);
+    if (!app) throw new Error('应用未安装');
+    return {
+      id: app.manifest.id,
+      version: app.manifest.version,
+      name: app.manifest.name,
+      publisher: app.manifest.publisher,
+      runtime: app.manifest.runtime,
+      permissions: [...app.granted],
+    };
+  });
   capabilityBus.register('files.pick', 'files:read', async () => {
     if (!isTauri) throw new Error('文件选择仅支持桌面客户端');
     const { open } = await import('@tauri-apps/plugin-dialog');
@@ -152,6 +168,15 @@ function registerCapabilities(host: KernelHost): void {
       method: object.method,
       params: object.params ?? {},
     });
+  });
+  capabilityBus.register('app.config.get', 'config:read', async (params, context) => {
+    const name = stringParam(params, 'name');
+    if (!name || !context.manifest.config?.env?.includes(name)) {
+      throw new Error('只能读取应用声明的普通环境变量');
+    }
+    if (!isTauri) throw new Error('应用环境变量仅支持桌面客户端');
+    const values = await invoke<Record<string, string>>('app_env_get', { names: [name] });
+    return { name, value: values[name] ?? null };
   });
   capabilityBus.register('storage.get', 'storage:local', (params, context) =>
     kernelStore.appData.get(scopedAppId(context.appId), stringParam(params, 'key')),

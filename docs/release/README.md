@@ -2,9 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.22`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.23`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
-`v0.43.22` carries the update-prompt, large-file upload, group member refresh, and long shared-path layout fixes for issues #375, #376, #377, and #378.
+`v0.43.23` carries the typed App SDK capability surface, sanitized app metadata, declaration-scoped configuration and secrets handling, and the local mock Bridge needed for App SDK development and preview.
 
 `v0.43.19` carries the verified all-entry pinyin search coverage, private-chat external mentions, and explicit first-trust LAN handshake correction; internal LAN keys remain local and are never sent as chat messages.
 

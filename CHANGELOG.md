@@ -1,5 +1,22 @@
 # 更新日志
 
+## v0.43.23 - 2026-09-02
+
+### 新增
+
+- 补齐 App SDK 的类型化开发面：提供 `app`、`chat`、`rooms`、`users`、`files`、`lan`、`storage`、`net`、`native`、`ui` 和 `config` 命名空间快捷 API，并为稳定 Bridge 事件提供类型映射；原有 `bridge.call()` 继续保留。
+- 新增 `app.info` 能力和 `app:info` 权限，应用可读取自身脱敏元数据与实际授权权限，不会获得入口路径、配置变量名或其他应用信息。
+- `rcx-app dev` 的 mock Bridge 覆盖安全的类型化 SDK 能力，支持本地预览验证聊天、文件、配置、存储、局域网发现和确定性网络响应；签名 native service 仍要求真实宿主。
+
+### 修复
+
+- `users.read(rid)` 和 `files.list({ count })` 现在由宿主实际执行房间边界与数量限制，避免 SDK 参数与运行时行为不一致。
+- App manifest 支持显式声明 `config.env` 与 `config.secrets`；普通配置只按声明读取，密钥只注入签名 bundled native service，不返回给 iframe/worker。
+
+### 验证
+
+- 全量回归 1030 passed、纯逻辑 237 passed；App SDK、CLI、Web 类型检查与构建、App 生态、架构边界和 Codex 协议检查通过。
+
 ## v0.43.22 - 2026-09-01
 
 ### 修复

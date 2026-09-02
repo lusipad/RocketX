@@ -79,14 +79,20 @@ export function registerHostCapabilities(
     capabilityBus.register('rooms.list', 'rooms:list', () => host.rooms.list()),
   );
   cleanups.push(
-    capabilityBus.register('users.read', 'users:read', () => host.users.read(host.chat.current().rid)),
+    capabilityBus.register('users.read', 'users:read', (params) => {
+      const current = host.chat.current();
+      const rid = stringParam(params, 'rid', current.rid ?? '');
+      if (!rid || (!host.rooms.isMember(rid) && rid !== current.rid)) throw new Error('只能读取已加入会话的成员');
+      return host.users.read(rid);
+    }),
   );
   cleanups.push(
     capabilityBus.register('files.list', 'files:read', async (params) => {
       const rid = stringParam(params, 'rid', host.chat.current().rid ?? '');
       const type = host.rooms.typeOf(rid);
       if (!rid || !type) throw new Error('只能读取已加入会话的文件');
-      return host.files.list(rid, type, 50);
+      const count = Math.min(200, Math.max(1, Number((params as { count?: unknown } | undefined)?.count) || 50));
+      return host.files.list(rid, type, count);
     }),
   );
   cleanups.push(

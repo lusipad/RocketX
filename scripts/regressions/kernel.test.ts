@@ -40,10 +40,38 @@ test('扩展注册表拒绝跨应用重名并按 appId 完整卸载', () => {
   assert.equal(registry.get('composer.command').length, 0);
 });
 
-test('manifest 拒绝未知权限、缺少 netAllow 和远程进程权限', () => {
+test('manifest 拒绝未知权限、缺少 netAllow、非法配置和远程进程权限', () => {
   assert.equal(parseManifest(manifest).id, 'com.example.hello');
   assert.throws(() => parseManifest({ ...manifest, permissions: ['unknown'] }), /未知权限/);
   assert.throws(() => parseManifest({ ...manifest, permissions: ['net:fetch'] }), /netAllow/);
+  const configured = parseManifest({
+    ...manifest,
+    permissions: ['config:read'],
+    config: { env: ['ROCKETX_API_URL'] },
+  });
+  assert.deepEqual(configured.config, { env: ['ROCKETX_API_URL'] });
+  assert.throws(
+    () => parseManifest({ ...manifest, config: { env: ['ROCKETX_API_URL'] } }),
+    /config:read/,
+  );
+  assert.throws(
+    () =>
+      parseManifest({
+        ...manifest,
+        permissions: ['secrets:use'],
+        config: { secrets: ['ROCKETX_API_TOKEN'] },
+      }),
+    /bundled native service/,
+  );
+  assert.throws(
+    () =>
+      parseManifest({
+        ...manifest,
+        permissions: ['config:read'],
+        config: { env: ['1_INVALID'] },
+      }),
+    /非法环境变量名/,
+  );
   assert.throws(
     () =>
       parseManifest({
@@ -160,6 +188,18 @@ test('能力总线在 handler 前执行权限判定', async () => {
   assert.deepEqual(await bus.call('chat.current', undefined, context), { ok: true });
   await assert.rejects(() => bus.call('chat.postMessage', undefined, context), /未获得 chat:write/);
   await assert.rejects(() => bus.call('missing.method', undefined, context), /未知能力/);
+});
+
+test('app.info 纳入基础权限并仅暴露应用公开元数据', async () => {
+  const [manifestSource, permissionSource] = await Promise.all([
+    readFile(new URL('../../packages/app-sdk/src/manifest.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(manifestSource, /'app:info'/);
+  assert.match(permissionSource, /capabilityBus\.register\('app\.info', 'app:info'/);
+  assert.match(permissionSource, /permissions: \[\.\.\.app\.granted\]/);
+  assert.doesNotMatch(permissionSource, /entry: app\.manifest\.entry/);
+  assert.doesNotMatch(permissionSource, /config: app\.manifest\.config/);
 });
 
 test('iframe 文档注入独立 CSP 且不授予同源能力', () => {

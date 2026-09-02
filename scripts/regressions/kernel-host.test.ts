@@ -131,6 +131,10 @@ test('Host capability 保留消息快照、房间列表、用户和发送参数'
   assert.deepEqual(await bus.call('users.read', undefined, context()), [
     { _id: 'user-2', username: 'two', name: 'Two', status: 'online' },
   ]);
+  await assert.rejects(
+    () => bus.call('users.read', { rid: 'other-room' }, context()),
+    /只能读取已加入/,
+  );
   assert.deepEqual(
     await bus.call('chat.postMessage', { rid: 'room-1', text: 'hi', tmid: 'thread-1' }, context()),
     { ok: true },

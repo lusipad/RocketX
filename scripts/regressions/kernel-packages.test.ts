@@ -31,6 +31,7 @@ const TAR_BIN =
 
 test('app-sdk 暴露 manifest 单一契约并保留既有校验语义', () => {
   assert.ok(APP_PERMISSIONS.includes('chat:read'));
+  assert.ok(APP_PERMISSIONS.includes('app:info'));
   assert.ok(EXTENSION_POINTS.includes('message.action'));
   assert.equal(parseManifest({
     id: 'com.example.hello',
@@ -220,6 +221,82 @@ test('app-sdk 使用 JSON-RPC 关联并乱序完成 call 与 requestUI', async (
   bus.emit({ jsonrpc: '2.0', id: callMessage.id, result: { id: 'message-1' } });
   assert.equal(await ui, true);
   assert.deepEqual(await call, { id: 'message-1' });
+  client.destroy();
+});
+
+test('app-sdk 的配置快捷方式调用受控 app.config.get capability', async () => {
+  const bus = new FakeMessageBus();
+  const client = createBridgeClient({ target: bus, source: bus, origin: 'https://host.test' });
+  const result = client.config.get('ROCKETX_API_URL');
+  const message = bus.sent.at(-1)?.message as { id: string };
+  assert.deepEqual(bus.sent.at(-1)?.message, {
+    jsonrpc: '2.0',
+    id: message.id,
+    method: 'rcx/call',
+    params: { method: 'app.config.get', params: { name: 'ROCKETX_API_URL' } },
+  });
+  bus.emit({ jsonrpc: '2.0', id: message.id, result: { name: 'ROCKETX_API_URL', value: 'https://api.example' } });
+  assert.deepEqual(await result, { name: 'ROCKETX_API_URL', value: 'https://api.example' });
+  await assert.rejects(client.config.get(''), /配置名称不能为空/);
+  client.destroy();
+});
+
+test('app-sdk 类型化命名空间映射到既有 Bridge capability', async () => {
+  const bus = new FakeMessageBus();
+  const client = createBridgeClient({ target: bus, source: bus, origin: 'https://host.test' });
+  const requests = [
+    client.app.info(),
+    client.chat.current(),
+    client.chat.history({ rid: 'room-1', count: 20 }),
+    client.chat.postMessage({ rid: 'room-1', text: 'hello', tmid: 'thread-1' }),
+    client.rooms.list(),
+    client.users.read('room-1'),
+    client.files.list({ rid: 'room-1', count: 10 }),
+    client.files.read('/file-upload/a'),
+    client.files.pick(),
+    client.lan.listPeers(),
+    client.storage.get('key'),
+    client.storage.set('key', 'value'),
+    client.storage.delete('key'),
+    client.storage.list(),
+    client.net.fetch({ url: 'https://api.example.com/health' }),
+    client.native.call('health', { ping: true }),
+    client.ui.notify({ message: 'done', level: 'success' }),
+  ];
+  const messages = bus.sent.map(({ message }) => message as {
+    id: string;
+    method: string;
+    params?: { method?: string; params?: unknown; kind?: string; props?: unknown };
+  });
+  assert.deepEqual(messages.map((message) => message.method), [
+    ...Array(16).fill('rcx/call'),
+    'rcx/requestUI',
+  ]);
+  assert.deepEqual(messages.map((message) => message.params?.method), [
+    'app.info',
+    'chat.current',
+    'chat.history',
+    'chat.postMessage',
+    'rooms.list',
+    'users.read',
+    'files.list',
+    'files.read',
+    'files.pick',
+    'lan.peers',
+    'storage.get',
+    'storage.set',
+    'storage.delete',
+    'storage.list',
+    'net.fetch',
+    'native.call',
+    undefined,
+  ]);
+  for (const [index, message] of messages.entries()) {
+    bus.emit({ jsonrpc: '2.0', id: message.id, result: index === 8 ? { cancelled: true } : { ok: true } });
+  }
+  await Promise.all(requests);
+  await assert.rejects(client.files.read(''), /文件路径不能为空/);
+  await assert.rejects(client.storage.get(''), /存储 key 不能为空/);
   client.destroy();
 });
 

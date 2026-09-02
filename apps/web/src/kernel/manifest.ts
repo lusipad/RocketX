@@ -5,6 +5,7 @@ export {
   parseManifestJson,
   type AppPermission,
   type AppRuntime,
+  type AppConfigManifest,
   type ManifestContribution,
   type NativeServiceManifest,
   type RcxAppManifest,

@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_ENV_VALUE_BYTES: usize = 64 * 1024;
+const MAX_ENV_BYTES: usize = 256 * 1024;
 const CALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 type PendingCalls = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>>;
@@ -71,6 +73,44 @@ fn validate_command(value: &str) -> Result<&str, String> {
         return Err("native service command is invalid".to_string());
     }
     Ok(value)
+}
+
+fn validate_env_name(value: &str) -> Result<&str, String> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_alphabetic() || byte == b'_'
+            } else {
+                byte.is_ascii_alphanumeric() || byte == b'_'
+            }
+        });
+    if !valid {
+        return Err("native service environment variable name is invalid".to_string());
+    }
+    Ok(value)
+}
+
+fn resolve_environment(names: &[String]) -> Result<HashMap<String, String>, String> {
+    if names.len() > 64 {
+        return Err("native service environment variable list is too large".to_string());
+    }
+    let mut resolved = HashMap::new();
+    let mut total_bytes = 0;
+    for name in names {
+        validate_env_name(name)?;
+        if let Ok(value) = std::env::var(name) {
+            if value.len() > MAX_ENV_VALUE_BYTES {
+                return Err("native service environment variable value is too large".to_string());
+            }
+            total_bytes += value.len();
+            if total_bytes > MAX_ENV_BYTES {
+                return Err("native service environment is too large".to_string());
+            }
+            resolved.insert(name.clone(), value);
+        }
+    }
+    Ok(resolved)
 }
 
 fn executable_name(command: &str) -> String {
@@ -186,14 +226,17 @@ fn spawn_service(
     app_id: &str,
     command: &str,
     args: &[String],
+    env_names: &[String],
 ) -> Result<Arc<NativeServiceProcess>, String> {
     if args.len() > 16 || args.iter().any(|argument| argument.len() > 1024) {
         return Err("native service arguments exceed the safety limit".to_string());
     }
     let executable = service_path(app, command)?;
     let data_dir = service_data_dir(app, app_id)?;
+    let environment = resolve_environment(env_names)?;
     let mut child = hidden_command(executable)
         .args(args)
+        .envs(environment)
         .env("ROCKETX_NATIVE_SERVICE_DATA_DIR", data_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -254,6 +297,7 @@ pub fn native_service_start(
     app_id: String,
     command: String,
     args: Option<Vec<String>>,
+    env_names: Option<Vec<String>>,
 ) -> Result<(), String> {
     validate_app_id(&app_id)?;
     validate_command(&command)?;
@@ -267,9 +311,20 @@ pub fn native_service_start(
         }
         processes.remove(&app_id);
     }
-    let process = spawn_service(&app, &app_id, &command, &args.unwrap_or_default())?;
+    let process = spawn_service(
+        &app,
+        &app_id,
+        &command,
+        &args.unwrap_or_default(),
+        &env_names.unwrap_or_default(),
+    )?;
     processes.insert(app_id, process);
     Ok(())
+}
+
+#[tauri::command]
+pub fn app_env_get(names: Vec<String>) -> Result<HashMap<String, String>, String> {
+    resolve_environment(&names)
 }
 
 #[tauri::command]
@@ -383,6 +438,14 @@ mod tests {
         assert!(validate_command("cmd.exe").is_err());
         assert!(validate_app_id("dev.rocketx.intranet-link").is_ok());
         assert!(validate_app_id("../escape").is_err());
+    }
+
+    #[test]
+    fn environment_names_are_explicit_and_bounded() {
+        assert!(validate_env_name("ROCKETX_API_URL").is_ok());
+        assert!(validate_env_name("_PRIVATE_VALUE").is_ok());
+        assert!(validate_env_name("1_NOT_ALLOWED").is_err());
+        assert!(validate_env_name("A-B").is_err());
     }
 
     #[cfg(windows)]
