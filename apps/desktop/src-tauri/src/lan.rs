@@ -74,7 +74,8 @@ struct LanRuntime {
     connection_threads: SharedConnectionThreads,
 }
 
-type SharedPeers = Arc<RwLock<HashMap<PeerKey, LanPeer>>>;
+type PeerEndpointKey = (String, String, String, u16);
+type SharedPeers = Arc<RwLock<HashMap<PeerEndpointKey, LanPeer>>>;
 type SharedTrusted = Arc<RwLock<HashMap<PeerKey, String>>>;
 
 fn discovery_source_priority(source: &str) -> u8 {
@@ -83,6 +84,60 @@ fn discovery_source_priority(source: &str) -> u8 {
         "udp" => 2,
         "mdns" => 1,
         _ => 0,
+    }
+}
+
+fn compare_peer_quality(left: &LanPeer, right: &LanPeer) -> std::cmp::Ordering {
+    left.trusted
+        .cmp(&right.trusted)
+        .then_with(|| {
+            discovery_source_priority(&left.source).cmp(&discovery_source_priority(&right.source))
+        })
+        .then_with(|| left.last_seen_ms.cmp(&right.last_seen_ms))
+}
+
+fn peer_candidates(
+    peers: &HashMap<PeerEndpointKey, LanPeer>,
+    user_id: &str,
+    device_id: Option<&str>,
+    trusted_only: bool,
+) -> Vec<LanPeer> {
+    let mut candidates = peers
+        .values()
+        .filter(|peer| {
+            peer.user_id == user_id
+                && device_id.is_none_or(|id| id == peer.device_id)
+                && (!trusted_only || peer.trusted)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        compare_peer_quality(right, left)
+            .then_with(|| left.device_id.cmp(&right.device_id))
+            .then_with(|| left.ip.cmp(&right.ip))
+            .then_with(|| left.port.cmp(&right.port))
+    });
+    candidates
+}
+
+fn try_peer_candidates<T>(
+    candidates: &[LanPeer],
+    mut operation: impl FnMut(&LanPeer) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut last_error = None;
+    for peer in candidates {
+        match operation(peer) {
+            Ok(result) => return Ok(result),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    match (candidates.len(), last_error) {
+        (0, _) => Err("no LAN peer candidate is available".to_string()),
+        (1, Some(error)) => Err(error),
+        (count, Some(error)) => Err(format!(
+            "all {count} LAN peer candidates failed; last error: {error}"
+        )),
+        _ => Err("LAN peer candidates failed".to_string()),
     }
 }
 
@@ -184,11 +239,17 @@ fn record_peer(
     {
         return;
     }
-    let key = peer_key(&announcement.user_id, &announcement.device_id);
+    let trust_key = peer_key(&announcement.user_id, &announcement.device_id);
+    let endpoint_key = (
+        announcement.user_id.clone(),
+        announcement.device_id.clone(),
+        ip.to_string(),
+        announcement.port,
+    );
     let is_trusted = trusted
         .read()
         .ok()
-        .and_then(|keys| keys.get(&key).cloned())
+        .and_then(|keys| keys.get(&trust_key).cloned())
         .is_some_and(|pinned| pinned == announcement.public_key);
     if let Ok(mut peers) = peers.write() {
         let candidate = LanPeer {
@@ -202,7 +263,7 @@ fn record_peer(
             source: source.to_string(),
             last_seen_ms: now_ms(),
         };
-        match peers.get_mut(&key) {
+        match peers.get_mut(&endpoint_key) {
             Some(existing)
                 if discovery_source_priority(&existing.source)
                     > discovery_source_priority(&candidate.source) =>
@@ -213,7 +274,7 @@ fn record_peer(
                 existing.trusted = candidate.trusted;
             }
             _ => {
-                peers.insert(key, candidate);
+                peers.insert(endpoint_key, candidate);
             }
         }
     }
@@ -499,13 +560,6 @@ fn spawn_mdns_browser(
             let ServiceEvent::ServiceResolved(info) = event else {
                 continue;
             };
-            let Some(ip) = info
-                .get_addresses_v4()
-                .into_iter()
-                .find(|ip| !ip.is_unspecified())
-            else {
-                continue;
-            };
             let Some(version) = info
                 .get_property_val_str("v")
                 .and_then(|value| value.parse::<u16>().ok())
@@ -527,22 +581,29 @@ fn spawn_mdns_browser(
             let Some(public_key) = info.get_property_val_str("key") else {
                 continue;
             };
-            record_peer(
-                LanAnnouncement {
-                    version,
-                    server_fingerprint: server_fingerprint.to_string(),
-                    user_id: user_id.to_string(),
-                    device_id: device_id.to_string(),
-                    device_name: device_name.to_string(),
-                    port: info.get_port(),
-                    public_key: public_key.to_string(),
-                },
-                ip,
-                "mdns",
-                &identity,
-                &peers,
-                &trusted,
-            );
+            let announcement = LanAnnouncement {
+                version,
+                server_fingerprint: server_fingerprint.to_string(),
+                user_id: user_id.to_string(),
+                device_id: device_id.to_string(),
+                device_name: device_name.to_string(),
+                port: info.get_port(),
+                public_key: public_key.to_string(),
+            };
+            for ip in info
+                .get_addresses_v4()
+                .into_iter()
+                .filter(|ip| !ip.is_unspecified())
+            {
+                record_peer(
+                    announcement.clone(),
+                    ip,
+                    "mdns",
+                    &identity,
+                    &peers,
+                    &trusted,
+                );
+            }
         }
     })
 }
@@ -679,9 +740,10 @@ fn handle_incoming(
                 )?;
             }
             ControlFrame::FileComplete { transfer_id } => {
-                let event = finish_file_transfer(&root, &peer, &transfers, &transfer_id)?;
-                app.emit("rocketx://lan-file", event)
-                    .map_err(|error| format!("failed to deliver LAN file event: {error}"))?;
+                finish_file_transfer(&root, &peer, &transfers, &transfer_id, |event| {
+                    app.emit("rocketx://lan-file", event)
+                        .map_err(|error| format!("failed to deliver LAN file event: {error}"))
+                })?;
                 write_control_frame(&mut stream, &ControlFrame::Ack { id: transfer_id })?;
                 return Ok(());
             }
@@ -964,7 +1026,20 @@ pub fn lan_peers(runtime: tauri::State<'_, LanRuntimeState>) -> Result<Vec<LanPe
         .write()
         .map_err(|_| "LAN peer store is unavailable".to_string())?;
     peers.retain(|_, peer| peer.last_seen_ms >= cutoff);
-    let mut peers = peers.values().cloned().collect::<Vec<_>>();
+    let mut visible = HashMap::<PeerKey, LanPeer>::new();
+    for peer in peers.values() {
+        let key = peer_key(&peer.user_id, &peer.device_id);
+        match visible.get_mut(&key) {
+            Some(existing) if compare_peer_quality(peer, existing).is_gt() => {
+                *existing = peer.clone();
+            }
+            None => {
+                visible.insert(key, peer.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut peers = visible.into_values().collect::<Vec<_>>();
     peers.sort_by(|left, right| {
         right
             .trusted
@@ -980,7 +1055,7 @@ pub async fn lan_probe_peer(
     user_id: String,
     device_id: Option<String>,
 ) -> Result<TrustedDevice, String> {
-    let (peer, identity) = {
+    let (candidates, identity) = {
         let runtime = runtime
             .0
             .lock()
@@ -992,28 +1067,26 @@ pub async fn lan_probe_peer(
             .peers
             .read()
             .map_err(|_| "LAN peer store is unavailable".to_string())?;
-        let peer = peers
-            .values()
-            .filter(|peer| {
-                peer.user_id == user_id && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
-            })
-            .max_by_key(|peer| peer.last_seen_ms)
-            .cloned()
-            .ok_or_else(|| "no LAN peer is online for this user".to_string())?;
-        (peer, current.identity.clone())
+        let candidates = peer_candidates(&peers, &user_id, device_id.as_deref(), false);
+        if candidates.is_empty() {
+            return Err("no LAN peer is online for this user".to_string());
+        }
+        (candidates, current.identity.clone())
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let address: SocketAddr = format!("{}:{}", peer.ip, peer.port)
-            .parse()
-            .map_err(|_| "LAN peer address is invalid".to_string())?;
-        let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-            .map_err(|error| format!("failed to connect LAN peer: {error}"))?;
-        configure_stream(&stream)?;
-        let responder = connect_probe(&mut stream, &identity, &peer)?;
-        Ok(TrustedDevice {
-            user_id: responder.user_id,
-            device_id: responder.device_id,
-            public_key: responder.public_key,
+        try_peer_candidates(&candidates, |peer| {
+            let address: SocketAddr = format!("{}:{}", peer.ip, peer.port)
+                .parse()
+                .map_err(|_| "LAN peer address is invalid".to_string())?;
+            let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+                .map_err(|error| format!("failed to connect LAN peer: {error}"))?;
+            configure_stream(&stream)?;
+            let responder = connect_probe(&mut stream, &identity, peer)?;
+            Ok(TrustedDevice {
+                user_id: responder.user_id,
+                device_id: responder.device_id,
+                public_key: responder.public_key,
+            })
         })
     })
     .await
@@ -1052,15 +1125,9 @@ pub async fn lan_send_chat(
             .peers
             .read()
             .map_err(|_| "LAN peer store is unavailable".to_string())?;
-        let peer = peers
-            .values()
-            .filter(|peer| {
-                peer.user_id == user_id
-                    && peer.trusted
-                    && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
-            })
-            .max_by_key(|peer| peer.last_seen_ms)
-            .cloned()
+        let peer = peer_candidates(&peers, &user_id, device_id.as_deref(), true)
+            .into_iter()
+            .next()
             .ok_or_else(|| "no trusted LAN peer is online for this user".to_string())?;
         (peer, current.identity.clone(), current.trusted.clone())
     };
@@ -1187,6 +1254,7 @@ fn send_file_to_peer(
     peer: LanPeer,
     identity: Arc<RuntimeIdentity>,
     trusted: SharedTrusted,
+    file_hash: String,
     message_id: String,
     room_id: String,
     original_ts: i64,
@@ -1207,7 +1275,6 @@ fn send_file_to_peer(
         .ok_or_else(|| "LAN source file name is invalid".to_string())?
         .to_string();
     safe_file_name(&file_name)?;
-    let file_hash = hash_file(&path)?;
     let transfer_id = blake3::hash(
         format!(
             "{}\0{}\0{}\0{}",
@@ -1320,7 +1387,7 @@ pub async fn lan_send_file(
     }
     let path = fs::canonicalize(path)
         .map_err(|error| format!("failed to resolve LAN source file: {error}"))?;
-    let (peer, identity, trusted) = {
+    let (candidates, identity, trusted) = {
         let runtime = runtime
             .0
             .lock()
@@ -1332,26 +1399,34 @@ pub async fn lan_send_file(
             .peers
             .read()
             .map_err(|_| "LAN peer store is unavailable".to_string())?;
-        let peer = peers
-            .values()
-            .filter(|peer| {
-                peer.user_id == user_id && device_id.as_ref().is_none_or(|id| id == &peer.device_id)
-            })
-            .max_by_key(|peer| peer.last_seen_ms)
-            .cloned()
-            .ok_or_else(|| "no LAN peer is online for this user".to_string())?;
-        (peer, current.identity.clone(), current.trusted.clone())
+        let mut candidates = peer_candidates(&peers, &user_id, device_id.as_deref(), false);
+        if candidates.is_empty() {
+            return Err("no LAN peer is online for this user".to_string());
+        }
+        if device_id.is_none() {
+            let selected_device_id = candidates[0].device_id.clone();
+            candidates.retain(|peer| peer.device_id == selected_device_id);
+        }
+        (
+            candidates,
+            current.identity.clone(),
+            current.trusted.clone(),
+        )
     };
     tauri::async_runtime::spawn_blocking(move || {
-        send_file_to_peer(
-            path,
-            peer,
-            identity,
-            trusted,
-            message_id,
-            room_id,
-            original_ts,
-        )
+        let file_hash = hash_file(&path)?;
+        try_peer_candidates(&candidates, |peer| {
+            send_file_to_peer(
+                path.clone(),
+                peer.clone(),
+                identity.clone(),
+                trusted.clone(),
+                file_hash.clone(),
+                message_id.clone(),
+                room_id.clone(),
+                original_ts,
+            )
+        })
     })
     .await
     .map_err(|error| format!("LAN file task failed: {error}"))?
@@ -1485,8 +1560,9 @@ mod tests {
                     )?;
                 }
                 Ok(ControlFrame::FileComplete { transfer_id }) => {
-                    let event = finish_file_transfer(&root, &peer, &transfers, &transfer_id)?;
-                    completed.send(event).map_err(|error| error.to_string())?;
+                    finish_file_transfer(&root, &peer, &transfers, &transfer_id, |event| {
+                        completed.send(event).map_err(|error| error.to_string())
+                    })?;
                     write_control_frame(&mut stream, &ControlFrame::Ack { id: transfer_id })?;
                     stop.store(true, Ordering::Relaxed);
                     return Ok(());
@@ -1529,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn udp_discovery_address_is_not_overwritten_by_mdns() {
+    fn discovery_keeps_distinct_addresses_and_prefers_udp() {
         let local = runtime_identity("local", "local-device", signing_key(5));
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let trusted = Arc::new(RwLock::new(HashMap::new()));
@@ -1560,9 +1636,53 @@ mod tests {
             &trusted,
         );
 
-        let peer = peers.read().unwrap().values().next().cloned().unwrap();
-        assert_eq!(peer.ip, "192.168.1.20");
-        assert_eq!(peer.source, "udp");
+        let peers = peers.read().unwrap();
+        assert_eq!(peers.len(), 2);
+        let candidates = peer_candidates(&peers, "bob", Some("bob-device"), false);
+        assert_eq!(candidates[0].ip, "192.168.1.20");
+        assert_eq!(candidates[0].source, "udp");
+        assert_eq!(candidates[1].ip, "172.20.0.2");
+        assert_eq!(candidates[1].source, "mdns");
+    }
+
+    #[test]
+    fn peer_operation_falls_back_to_the_next_discovered_address() {
+        let candidates = [
+            LanPeer {
+                user_id: "bob".to_string(),
+                device_id: "bob-device".to_string(),
+                device_name: "Bob".to_string(),
+                ip: "192.168.1.20".to_string(),
+                port: 45826,
+                public_key: "key".to_string(),
+                trusted: false,
+                source: "udp".to_string(),
+                last_seen_ms: 2,
+            },
+            LanPeer {
+                user_id: "bob".to_string(),
+                device_id: "bob-device".to_string(),
+                device_name: "Bob".to_string(),
+                ip: "172.20.0.2".to_string(),
+                port: 45826,
+                public_key: "key".to_string(),
+                trusted: false,
+                source: "mdns".to_string(),
+                last_seen_ms: 1,
+            },
+        ];
+        let mut attempted = Vec::new();
+        let selected = try_peer_candidates(&candidates, |peer| {
+            attempted.push(peer.ip.clone());
+            if peer.ip == "192.168.1.20" {
+                Err("unreachable".to_string())
+            } else {
+                Ok(peer.ip.clone())
+            }
+        })
+        .unwrap();
+        assert_eq!(selected, "172.20.0.2");
+        assert_eq!(attempted, ["192.168.1.20", "172.20.0.2"]);
     }
 
     #[test]
@@ -1794,6 +1914,18 @@ mod tests {
         );
         let (part, _) = transfer_paths(&root, &transfer.transfer_id);
         assert_eq!(hash_file(&part).unwrap(), transfer.blake3);
+        let mut delivered = Vec::new();
+        finish_file_transfer(&root, &alice, &transfers, &transfer.transfer_id, |event| {
+            delivered.push(event);
+            Ok(())
+        })
+        .unwrap();
+        finish_file_transfer(&root, &alice, &transfers, &transfer.transfer_id, |event| {
+            delivered.push(event);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(delivered.len(), 1);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1931,6 +2063,7 @@ mod tests {
             expected_bob,
             alice,
             alice_trust,
+            file_hash.clone(),
             message_id.clone(),
             "room-1".to_string(),
             123,

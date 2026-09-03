@@ -247,7 +247,8 @@ pub(crate) fn finish_file_transfer(
     peer: &HandshakePeer,
     transfers: &SharedTransfers,
     transfer_id: &str,
-) -> Result<LanFileEvent, String> {
+    deliver: impl FnOnce(LanFileEvent) -> Result<(), String>,
+) -> Result<(), String> {
     let lock = transfer_lock(transfers, transfer_id)?;
     let _guard = lock
         .lock()
@@ -279,7 +280,11 @@ pub(crate) fn finish_file_transfer(
     } else if !final_path.exists() || hash_file(&final_path)? != transfer.blake3 {
         return Err("LAN completed file is missing or corrupted".to_string());
     }
-    Ok(LanFileEvent {
+    let delivered_path = manifest_path.with_extension("delivered");
+    if delivered_path.exists() {
+        return Ok(());
+    }
+    deliver(LanFileEvent {
         from_user_id: peer.user_id.clone(),
         from_device_id: peer.device_id.clone(),
         message_id: transfer.message_id,
@@ -289,5 +294,7 @@ pub(crate) fn finish_file_transfer(
         size: transfer.size,
         blake3: transfer.blake3,
         local_path: final_path.to_string_lossy().to_string(),
-    })
+    })?;
+    fs::write(&delivered_path, [])
+        .map_err(|error| format!("failed to record LAN file delivery: {error}"))
 }

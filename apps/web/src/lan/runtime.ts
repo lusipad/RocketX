@@ -72,7 +72,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlistenMessage: UnlistenFn | null = null;
 let unlistenFile: UnlistenFn | null = null;
 let unlistenProbe: UnlistenFn | null = null;
-let confirmedLanUserIds: string[] = [];
+const confirmedLanDevices = new Map<string, string>();
 const lanStateListeners = new Set<() => void>();
 
 function publishLanState(): void {
@@ -81,16 +81,12 @@ function publishLanState(): void {
 
 function setPeerCache(peers: LanPeer[]): void {
   peerCache = peers;
-  const availableUsers = new Set(
-    peers.filter((peer) => peer.trusted).map((peer) => peer.userId),
-  );
-  confirmedLanUserIds = confirmedLanUserIds.filter((userId) => availableUsers.has(userId));
   publishLanState();
 }
 
-function confirmLanUser(userId: string): void {
-  if (confirmedLanUserIds.includes(userId)) return;
-  confirmedLanUserIds = [...confirmedLanUserIds, userId];
+function confirmLanDevice(userId: string, deviceId: string): void {
+  if (confirmedLanDevices.get(userId) === deviceId) return;
+  confirmedLanDevices.set(userId, deviceId);
   publishLanState();
 }
 
@@ -135,20 +131,25 @@ async function pinTrustedDevice(device: LanDeviceKeyEnvelope): Promise<void> {
 /** 仅在发送文件时调用；发一次原生通信请求，不创建或发送 Rocket.Chat 消息。 */
 export async function probeLanPeer(userId: string): Promise<boolean> {
   if (!isTauri) return false;
-  const peer = peerCache.find((candidate) => candidate.userId === userId);
-  if (!peer || peer.userId === useAuth.getState().user?._id) return false;
+  if (userId === useAuth.getState().user?._id) return false;
   const result = await invoke<TrustedDevice>('lan_probe_peer', {
-    userId: peer.userId,
-    deviceId: peer.deviceId,
+    userId,
+    deviceId: null,
   });
+  const peer = peerCache.find(
+    (candidate) =>
+      candidate.userId === result.userId &&
+      candidate.deviceId === result.deviceId &&
+      candidate.publicKey === result.publicKey,
+  );
   await pinTrustedDevice({
     version: 1,
     userId: result.userId,
     deviceId: result.deviceId,
-    deviceName: peer.deviceName,
+    deviceName: peer?.deviceName ?? result.deviceId,
     publicKey: result.publicKey,
   });
-  confirmLanUser(result.userId);
+  confirmLanDevice(result.userId, result.deviceId);
   return true;
 }
 
@@ -201,15 +202,13 @@ export async function startLanRuntime(
         candidate.deviceId === payload.deviceId &&
         candidate.publicKey === payload.publicKey,
     );
-    if (!peer) return;
     void pinTrustedDevice({
       version: 1,
-      userId: peer.userId,
-      deviceId: peer.deviceId,
-      deviceName: peer.deviceName,
-      publicKey: peer.publicKey,
+      userId: payload.userId,
+      deviceId: payload.deviceId,
+      deviceName: peer?.deviceName ?? payload.deviceId,
+      publicKey: payload.publicKey,
     })
-      .then(() => confirmLanUser(peer.userId))
       .catch(() => {});
   });
   await pollPeers();
@@ -227,7 +226,7 @@ export async function stopLanRuntime(): Promise<void> {
   unlistenProbe = null;
   identity = null;
   peerCache = [];
-  confirmedLanUserIds = [];
+  confirmedLanDevices.clear();
   publishLanState();
   if (isTauri) await invoke('lan_service_stop').catch(() => {});
 }
@@ -242,7 +241,7 @@ export function subscribeLanState(listener: () => void): () => void {
 }
 
 export function confirmedLanUsersSnapshot(): readonly string[] {
-  return confirmedLanUserIds;
+  return [...confirmedLanDevices.keys()];
 }
 
 export function redactedLanPeers(peers: LanPeer[] = peerCache) {
@@ -262,10 +261,12 @@ export async function sendLanFile(
   payload: { messageId: string; roomId: string; originalTs: number },
 ): Promise<LanFileReceipt> {
   if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
+  const deviceId = confirmedLanDevices.get(userId);
+  if (!deviceId) throw new Error('P2P 握手已失效，请重新发起直传');
   const startedAt = performance.now();
   const receipt = await invoke<Omit<LanFileReceipt, 'bytesPerSecond'>>('lan_send_file', {
     userId,
-    deviceId: null,
+    deviceId,
     path,
     messageId: payload.messageId,
     roomId: payload.roomId,

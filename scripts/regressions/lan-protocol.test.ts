@@ -65,7 +65,7 @@ test('局域网密钥不会通过 Rocket.Chat 消息发送，只在 P2P 操作�
   assert.doesNotMatch(runtime, /sendMessageRaw|handleLanControlMessage|ensureKeyExchange/);
   assert.match(runtime, /lan_probe_peer/);
   assert.match(runtime, /export async function probeLanPeer/);
-  assert.match(runtime, /confirmLanUser\(result\.userId\)/);
+  assert.match(runtime, /confirmLanDevice\(result\.userId, result\.deviceId\)/);
 });
 
 test('旧版 LAN 控制消息不会进入实时流或历史消息列表', () => {
@@ -83,6 +83,16 @@ test('点击 P2P 按钮时才执行一次 LAN 握手，不通过聊天消息交�
   const runtime = readFileSync('apps/web/src/lan/runtime.ts', 'utf8');
   const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
   assert.match(runtime, /const result = await invoke<TrustedDevice>\('lan_probe_peer'/);
+  const probe = runtime.slice(runtime.indexOf('export async function probeLanPeer'), runtime.indexOf('async function pollPeers'));
+  assert.doesNotMatch(probe, /peerCache\.find[\s\S]*return false/);
+  assert.match(probe, /userId,\s+deviceId: null/);
+  assert.match(probe, /confirmLanDevice\(result\.userId, result\.deviceId\)/);
+  const passiveProbe = runtime.slice(runtime.indexOf("listen<LanProbeEvent>('rocketx://lan-peer-probed'"), runtime.indexOf('await pollPeers()'));
+  assert.doesNotMatch(passiveProbe, /confirmLanDevice/);
+  const sendFile = runtime.slice(runtime.indexOf('export async function sendLanFile'));
+  assert.match(sendFile, /const deviceId = confirmedLanDevices\.get\(userId\)/);
+  assert.match(sendFile, /if \(!deviceId\) throw new Error\(/);
+  assert.match(sendFile, /userId,\s+deviceId,\s+path/);
   assert.match(runtime, /await pinTrustedDevice\(/);
   assert.doesNotMatch(runtime, /sendMessageRaw|handleLanControlMessage|ensureKeyExchange/);
   const sendP2p = chat.slice(chat.indexOf('sendP2pFiles:'), chat.indexOf('prepareP2p:'));
