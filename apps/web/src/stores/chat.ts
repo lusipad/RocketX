@@ -1572,6 +1572,35 @@ export const useChat = create<ChatState>((set, get) => ({
       'locate',
       mid,
     );
+
+    let target = get().messages[targetRid]?.find((message) => message._id === mid);
+    if (!target) {
+      target = await rest.getMessage(mid).catch(() => undefined);
+    }
+    if (!isCurrent()) return;
+    if (target && target.rid !== targetRid) {
+      return get().jumpToMessage(mid, target.rid);
+    }
+    if (target?.tmid) {
+      await opening;
+      if (!isCurrent()) return;
+      await get().openThread(target.tmid);
+      const panel = get().rightPanel;
+      if (
+        !isCurrent() ||
+        get().activeRid !== targetRid ||
+        panel?.kind !== 'thread' ||
+        panel.mid !== target.tmid
+      ) {
+        return;
+      }
+      set({ highlightMid: mid });
+      setTimeout(() => {
+        if (isCurrent() && get().highlightMid === mid) set({ highlightMid: null });
+      }, 2600);
+      return;
+    }
+
     await opening;
     if (!isCurrent()) return;
 

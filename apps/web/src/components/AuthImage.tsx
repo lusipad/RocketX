@@ -12,6 +12,21 @@ import { AuthImageBlobCache } from '../lib/authImageCache';
 // 头像比聊天图片更常复用，必须分池：否则浏览图片或打开大通讯录会把会话头像全部挤掉。
 const blobCache = new AuthImageBlobCache(256, 128, (url) => URL.revokeObjectURL(url));
 const inflight = new Map<string, Promise<string | null>>();
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  gif: 'image/gif',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+};
+
+function imageBlobWithFallbackType(blob: Blob, path: string): Blob {
+  if (blob.type && blob.type !== 'application/octet-stream') return blob;
+  const extension = path.split(/[?#]/, 1)[0]?.split('.').at(-1)?.toLowerCase();
+  const mimeType = extension ? IMAGE_MIME_TYPES[extension] : undefined;
+  return mimeType ? blob.slice(0, blob.size, mimeType) : blob;
+}
 
 async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | null> {
   const cached = blobCache.get(path, cacheKey);
@@ -21,7 +36,7 @@ async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | 
   const promise = rest
     .fetchFile(path)
     .then((blob) => {
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(imageBlobWithFallbackType(blob, path));
       blobCache.put(path, cacheKey, url);
       return blobCache.get(path, cacheKey);
     })
@@ -92,9 +107,10 @@ export default function AuthImage({
     };
   }, [path, needsBlob, cacheKey]);
 
-  if (failed || (!src && needsBlob)) {
+  if (failed) {
     return <>{fallback ?? null}</>;
   }
+  if (!src && needsBlob) return null;
   return <img src={src ?? undefined} onError={() => setFailed(true)} {...imgProps} />;
 }
 

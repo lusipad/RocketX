@@ -570,7 +570,7 @@ const stickerMessageFixture = {
   }],
 };
 
-test('桌面图片灯箱优先显示 PP-OCRv5 本地离线后端并叠加可选择文字（issue #163）', async ({ page }) => {
+test('桌面 SVG 正常显示，并可用 PP-OCRv5 叠加可选择文字（issue #163、#382）', async ({ page }) => {
   await installFullTauriMock(page);
   const { pageErrors } = await bootAuthenticated(page);
   expect(await page.evaluate(() => ({
@@ -578,6 +578,10 @@ test('桌面图片灯箱优先显示 PP-OCRv5 本地离线后端并叠加可选�
     userAgent: navigator.userAgent,
   }))).toMatchObject({ tauri: true, userAgent: expect.stringMatching(/Windows/i) });
   await conversation(page, 'General').click();
+  const svg = page.getByRole('img', { name: 'OCR 示例.svg' });
+  await expect(svg).toBeVisible();
+  await expect.poll(() => svg.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  await expect(page.getByText('[图片加载失败：OCR 示例.svg]', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: /OCR 示例\.svg/ }).last().click();
   await page.getByRole('button', { name: '识别图片文字' }).click();
   const layer = page.getByLabel('图片识别文字');
@@ -589,6 +593,35 @@ test('桌面图片灯箱优先显示 PP-OCRv5 本地离线后端并叠加可选�
   await expect(page.getByText(/已用 PP-OCRv5 本地离线引擎\s+识别 3 处文字/)).toBeVisible();
   await expect(page.getByRole('button', { name: '复制全部识别文字' })).toBeVisible();
   expect(pageErrors).toEqual([]);
+});
+
+test('聊天记录中的 HTML 附件使用严格沙箱预览（issue #383）', async ({ page }) => {
+  await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        ...histories['room-general'],
+        {
+          _id: 'general-html-file',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:00:30.000Z',
+          u: ALICE,
+          file: { _id: 'preview-html', name: 'demo.html', type: 'text/html', size: 82 },
+          attachments: [{
+            title: 'demo.html',
+            title_link: '/file-upload/preview/demo.html',
+            title_link_download: true,
+          }],
+        },
+      ],
+    },
+  });
+  await conversation(page, 'General').click();
+
+  await page.getByRole('button', { name: /demo\.html/ }).click();
+  const htmlFrame = page.locator('iframe[title="网页预览"]');
+  await expect(htmlFrame).toHaveAttribute('sandbox', '');
+  await expect(htmlFrame.contentFrame().getByRole('heading', { name: 'Sandboxed HTML preview' })).toBeVisible();
 });
 
 test('桌面附件留存默认关闭，可配置并按房间删除且不会重新下载（issue #152、#217）', async ({ page }) => {
@@ -920,6 +953,7 @@ async function installRocketChatMock(
     historyOverrides?: Record<string, unknown[]>;
   } = {},
 ) {
+  const mockedHistories = { ...histories, ...options.historyOverrides };
   let ownStatus = ME.status;
   const sentMessages: Record<string, unknown>[] = [];
   const uploadedMessages: Record<string, unknown>[] = [];
@@ -1006,7 +1040,7 @@ async function installRocketChatMock(
     }
     if (endpoint === 'channels.history' || endpoint === 'groups.history') {
       const rid = url.searchParams.get('roomId') ?? '';
-      const history = options.historyOverrides?.[rid] ?? histories[rid] ?? [];
+      const history = mockedHistories[rid] ?? [];
       const messages = rid === 'discussion-agent'
         ? history.map((message) => {
           const referenceAt = Date.now();
@@ -1047,7 +1081,22 @@ async function installRocketChatMock(
         },
       });
     }
-    if (endpoint === 'chat.getMessage') return fulfillJson(route, { message: null }, 404);
+    if (endpoint === 'chat.getMessage') {
+      const mid = url.searchParams.get('msgId');
+      const message = Object.values(mockedHistories)
+        .flat()
+        .find((item) => item._id === mid);
+      return message
+        ? fulfillJson(route, { message })
+        : fulfillJson(route, { message: null }, 404);
+    }
+    if (endpoint === 'chat.getThreadMessages') {
+      const tmid = url.searchParams.get('tmid');
+      const messages = Object.values(mockedHistories)
+        .flat()
+        .filter((item) => item._id === tmid || item.tmid === tmid);
+      return fulfillJson(route, { messages });
+    }
     if (endpoint.endsWith('.roles')) {
       const rid = url.searchParams.get('roomId');
       return fulfillJson(route, {
@@ -1915,6 +1964,102 @@ test('显式消息定位优先于普通打开贴底（issue #143）', async ({ p
   await expect.poll(() => page.getByTestId('message-scroll').evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeGreaterThan(120);
+  expect(pageErrors).toEqual([]);
+});
+
+test('通知点击话题回复时按消息真实房间打开话题并定位回复（issue #381）', async ({ page }) => {
+  const threadRoot = {
+    _id: 'notification-thread-root',
+    rid: 'room-general',
+    msg: 'Notification thread root',
+    ts: '2026-07-17T08:00:00.000Z',
+    u: ALICE,
+    tcount: 1,
+    replies: [ME._id],
+  };
+  const threadReply = {
+    _id: 'notification-thread-reply',
+    rid: 'room-general',
+    tmid: threadRoot._id,
+    msg: 'Notification thread reply target',
+    ts: '2026-07-17T08:01:00.000Z',
+    u: ALICE,
+  };
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        ...scrollHistory('Notification filler'),
+        threadRoot,
+        threadReply,
+      ],
+    },
+  });
+
+  await conversation(page, 'Project Alpha').click();
+  await page.evaluate(async ({ mid, rid }) => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().jumpToMessage(mid, rid);
+  }, { mid: threadReply._id, rid: 'room-project' });
+
+  await expect(page.getByText('话题', { exact: true })).toBeVisible();
+  const target = page.locator('[data-message-id="notification-thread-reply"]');
+  await expect(target).toBeVisible();
+  await expect(target).toHaveClass(/bg-primary-light/);
+  expect(pageErrors).toEqual([]);
+});
+
+test('较晚的会话切换会取消仍在查询的话题通知定位（issue #381）', async ({ page }) => {
+  const threadReply = {
+    _id: 'delayed-notification-thread-reply',
+    rid: 'room-general',
+    tmid: 'delayed-notification-thread-root',
+    msg: 'Delayed notification thread reply',
+    ts: '2026-07-17T08:01:00.000Z',
+    u: ALICE,
+  };
+  const { pageErrors } = await bootAuthenticated(page);
+  await conversation(page, 'Project Alpha').click();
+
+  let markRequested = () => {};
+  const requested = new Promise<void>((resolve) => {
+    markRequested = resolve;
+  });
+  let releaseResponse = () => {};
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  await page.route('**/api/v1/chat.getMessage*', async (route) => {
+    const mid = new URL(route.request().url()).searchParams.get('msgId');
+    if (mid !== threadReply._id) return route.fallback();
+    markRequested();
+    await responseGate;
+    return fulfillJson(route, { message: threadReply });
+  });
+
+  const navigation = page.evaluate(async ({ mid, rid }) => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().jumpToMessage(mid, rid);
+  }, { mid: threadReply._id, rid: threadReply.rid });
+  await requested;
+  await conversation(page, 'Project Alpha').click();
+  releaseResponse();
+  await navigation;
+
+  expect(await page.evaluate(async () => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    const state = useChat.getState();
+    return {
+      activeRid: state.activeRid,
+      rightPanel: state.rightPanel,
+      leakedIntoProject: state.messages['room-project']?.some(
+        (message) => message._id === 'delayed-notification-thread-reply',
+      ) ?? false,
+    };
+  })).toEqual({
+    activeRid: 'room-project',
+    rightPanel: null,
+    leakedIntoProject: false,
+  });
   expect(pageErrors).toEqual([]);
 });
 
