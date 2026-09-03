@@ -111,3 +111,10 @@ test('LAN 发现同时提供组播和同网段广播兜底（issue #369）', () 
   assert.match(lan, /send_to\(&payload, multicast_destination\)/);
   assert.match(lan, /send_to\(&payload, broadcast_destination\)/);
 });
+
+test('LAN 发现优先保留 UDP 实际来源地址，避免 mDNS 虚拟网卡地址覆盖', () => {
+  const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
+  assert.match(lan, /"udp" => 2/);
+  assert.match(lan, /"mdns" => 1/);
+  assert.match(lan, /不要让它覆盖已由 UDP/);
+});

@@ -77,6 +77,15 @@ struct LanRuntime {
 type SharedPeers = Arc<RwLock<HashMap<PeerKey, LanPeer>>>;
 type SharedTrusted = Arc<RwLock<HashMap<PeerKey, String>>>;
 
+fn discovery_source_priority(source: &str) -> u8 {
+    match source {
+        // UDP 的来源地址就是对端实际发包的地址，优先于 mDNS 解析出的首个地址。
+        "udp" => 2,
+        "mdns" => 1,
+        _ => 0,
+    }
+}
+
 struct ConnectionThread {
     stream: TcpStream,
     handle: JoinHandle<()>,
@@ -182,20 +191,31 @@ fn record_peer(
         .and_then(|keys| keys.get(&key).cloned())
         .is_some_and(|pinned| pinned == announcement.public_key);
     if let Ok(mut peers) = peers.write() {
-        peers.insert(
-            key,
-            LanPeer {
-                user_id: announcement.user_id,
-                device_id: announcement.device_id,
-                device_name: announcement.device_name,
-                ip: ip.to_string(),
-                port: announcement.port,
-                public_key: announcement.public_key,
-                trusted: is_trusted,
-                source: source.to_string(),
-                last_seen_ms: now_ms(),
-            },
-        );
+        let candidate = LanPeer {
+            user_id: announcement.user_id,
+            device_id: announcement.device_id,
+            device_name: announcement.device_name,
+            ip: ip.to_string(),
+            port: announcement.port,
+            public_key: announcement.public_key,
+            trusted: is_trusted,
+            source: source.to_string(),
+            last_seen_ms: now_ms(),
+        };
+        match peers.get_mut(&key) {
+            Some(existing)
+                if discovery_source_priority(&existing.source)
+                    > discovery_source_priority(&candidate.source) =>
+            {
+                // mDNS 可能先解析到 VPN/虚拟网卡地址；不要让它覆盖已由 UDP
+                // 实际收到的可达地址，但仍刷新候选的存活时间。
+                existing.last_seen_ms = candidate.last_seen_ms;
+                existing.trusted = candidate.trusted;
+            }
+            _ => {
+                peers.insert(key, candidate);
+            }
+        }
     }
 }
 
@@ -1506,6 +1526,43 @@ mod tests {
         let mut replay = original.clone();
         replay.responder_nonce = "fresh-nonce".to_string();
         assert!(verify_transcript(&original.initiator.public_key, &replay, &signature).is_err());
+    }
+
+    #[test]
+    fn udp_discovery_address_is_not_overwritten_by_mdns() {
+        let local = runtime_identity("local", "local-device", signing_key(5));
+        let peers = Arc::new(RwLock::new(HashMap::new()));
+        let trusted = Arc::new(RwLock::new(HashMap::new()));
+        let announcement = LanAnnouncement {
+            version: PROTOCOL_VERSION,
+            server_fingerprint: local.server_fingerprint.clone(),
+            user_id: "bob".to_string(),
+            device_id: "bob-device".to_string(),
+            device_name: "Bob".to_string(),
+            port: 45826,
+            public_key: peer("bob", "bob-device", &signing_key(9)).public_key,
+        };
+
+        record_peer(
+            announcement.clone(),
+            Ipv4Addr::new(192, 168, 1, 20),
+            "udp",
+            &local,
+            &peers,
+            &trusted,
+        );
+        record_peer(
+            announcement,
+            Ipv4Addr::new(172, 20, 0, 2),
+            "mdns",
+            &local,
+            &peers,
+            &trusted,
+        );
+
+        let peer = peers.read().unwrap().values().next().cloned().unwrap();
+        assert_eq!(peer.ip, "192.168.1.20");
+        assert_eq!(peer.source, "udp");
     }
 
     #[test]
