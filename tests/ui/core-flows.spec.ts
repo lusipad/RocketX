@@ -584,6 +584,12 @@ test('桌面 SVG 正常显示，并可用 PP-OCRv5 叠加可选择文字（issue
   await expect.poll(() => svg.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByText('[图片加载失败：OCR 示例.svg]', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: /OCR 示例\.svg/ }).last().click();
+  const lightboxImage = page.getByRole('img', { name: 'OCR 示例.svg' }).last();
+  await expect(lightboxImage).toBeVisible();
+  await expect.poll(
+    () => lightboxImage.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+  ).toBeGreaterThan(0);
+  await expect(lightboxImage.locator('..')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await page.getByRole('button', { name: '识别图片文字' }).click();
   const layer = page.getByLabel('图片识别文字');
   await expect(layer).toBeVisible();
@@ -980,7 +986,7 @@ async function installRocketChatMock(
   await page.route('**/file-upload/ocr/demo.svg', (route) => route.fulfill({
     status: 200,
     contentType: 'image/svg+xml',
-    body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240"><rect width="100%" height="100%" fill="white"/><text x="40" y="100" font-size="52">RocketX 123</text><text x="40" y="180" font-size="44">本地 OCR</text></svg>',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240"><path fill="#000" d="M40 40h520v160H40z"/></svg>',
   }));
   await page.route('**/file-upload/ocr-thumb/demo.svg', (route) => route.fulfill({
     status: 200,

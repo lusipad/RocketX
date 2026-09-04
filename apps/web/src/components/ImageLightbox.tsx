@@ -202,7 +202,7 @@ export default function ImageLightbox({
           e.preventDefault();
           setDragging({ x: e.clientX - offset.x, y: e.clientY - offset.y });
         }}
-        className="relative inline-flex max-h-[86vh] max-w-[92vw]"
+        className="relative inline-flex max-h-[86vh] max-w-[92vw] rounded-md bg-white"
       >
         <AuthImage
           path={path}
