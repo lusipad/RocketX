@@ -697,6 +697,12 @@ test('桌面附件留存默认关闭，可配置并按房间删除且不会重�
         item.command === 'plugin:http|fetch' &&
         item.args?.clientConfig?.url?.includes('/file-upload/ocr/demo.svg')
       )).length,
+      thumbnailFetchCalls: (window as unknown as {
+        __tauriCalls: Array<{ command: string; args?: { clientConfig?: { url?: string } } }>;
+      }).__tauriCalls.filter((item) => (
+        item.command === 'plugin:http|fetch' &&
+        item.args?.clientConfig?.url?.includes('/file-upload/ocr-thumb/demo.svg')
+      )).length,
     };
   }, { server: SERVER, userId: ME._id });
   expect(result.archive.records).toEqual([]);
@@ -735,8 +741,17 @@ test('桌面附件留存默认关闭，可配置并按房间删除且不会重�
       item.args?.clientConfig?.url?.includes('/file-upload/ocr/demo.svg')
     )).length,
   );
-  // 打开会话会为消息预览读取一次图片；自动留存不能再发起第二次请求。
-  expect(attachmentFetchCalls).toBe(result.attachmentFetchCalls + 1);
+  const thumbnailFetchCalls = await page.evaluate(() =>
+    (window as unknown as {
+      __tauriCalls: Array<{ command: string; args?: { clientConfig?: { url?: string } } }>;
+    }).__tauriCalls.filter((item) => (
+      item.command === 'plugin:http|fetch' &&
+      item.args?.clientConfig?.url?.includes('/file-upload/ocr-thumb/demo.svg')
+    )).length,
+  );
+  // 打开会话只读取一次 PNG 缩略图；自动留存不能重新请求 SVG 原图。
+  expect(thumbnailFetchCalls).toBe(result.thumbnailFetchCalls + 1);
+  expect(attachmentFetchCalls).toBe(result.attachmentFetchCalls);
   expect(writeCalls).toHaveLength(0);
   expect(pageErrors).toEqual([]);
 });
