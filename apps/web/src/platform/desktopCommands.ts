@@ -119,6 +119,10 @@ export async function showMainWindow(): Promise<void> {
   await invoke('show_main_window');
 }
 
+export async function takePendingNotificationNavigation(): Promise<unknown | null> {
+  return invoke<unknown | null>('take_pending_notification_navigation');
+}
+
 export async function sendAgentBotMessage(input: Record<string, unknown>): Promise<unknown | null> {
   return invoke<unknown | null>('agent_bot_send', input);
 }

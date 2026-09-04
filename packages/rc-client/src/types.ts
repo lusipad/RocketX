@@ -57,6 +57,96 @@ export interface RcMessageMention {
   type?: 'user' | 'team';
 }
 
+export interface RcUiKitText {
+  type: 'plain_text' | 'mrkdwn';
+  text: string;
+  i18n?: { key: string; args?: Record<string, string | number> };
+}
+
+export interface RcUiKitOption {
+  text: RcUiKitText;
+  value: string;
+}
+
+export interface RcUiKitElement {
+  type: string;
+  appId?: string;
+  actionId?: string;
+  text?: RcUiKitText;
+  placeholder?: RcUiKitText;
+  initialValue?: string;
+  value?: string;
+  options?: RcUiKitOption[];
+}
+
+export interface RcUiKitBlock {
+  type: string;
+  appId?: string;
+  blockId?: string;
+  text?: RcUiKitText;
+  label?: RcUiKitText;
+  optional?: boolean;
+  element?: RcUiKitElement;
+  elements?: Array<RcUiKitElement | RcUiKitText>;
+  accessory?: RcUiKitElement;
+}
+
+export interface RcUiKitView {
+  id: string;
+  appId?: string;
+  title: RcUiKitText;
+  submit?: RcUiKitElement;
+  close?: RcUiKitElement;
+  blocks: RcUiKitBlock[];
+}
+
+export interface RcUiKitViewSubmitInteraction {
+  type: 'viewSubmit';
+  triggerId: string;
+  viewId: string;
+  rid?: string;
+  payload: {
+    view: RcUiKitView & {
+      state: Record<string, Record<string, unknown>>;
+    };
+  };
+}
+
+export interface RcUiKitBlockActionInteraction {
+  type: 'blockAction';
+  triggerId: string;
+  actionId: string;
+  payload: { blockId: string; value: unknown };
+  container: { type: 'message' | 'view'; id: string };
+  mid?: string;
+  tmid?: string;
+  rid?: string;
+}
+
+export type RcUiKitUserInteraction =
+  | RcUiKitViewSubmitInteraction
+  | RcUiKitBlockActionInteraction;
+
+export type RcUiKitServerInteraction =
+  | {
+      type: 'modal.open' | 'modal.update';
+      triggerId: string;
+      appId: string;
+      view: RcUiKitView;
+    }
+  | {
+      type: 'modal.close';
+      triggerId: string;
+      appId: string;
+    }
+  | {
+      type: 'errors';
+      triggerId: string;
+      appId: string;
+      viewId: string;
+      errors: Record<string, string> | Array<Record<string, string>>;
+    };
+
 export interface RcMessage {
   _id: string;
   rid: string;
@@ -93,6 +183,8 @@ export interface RcMessage {
     meta?: Record<string, string>;
   }[];
   attachments?: RcMessageAttachment[];
+  /** Rocket.Chat Apps UI Kit 结构化消息块。 */
+  blocks?: RcUiKitBlock[];
   reactions?: Record<string, { usernames: string[] }>;
   /** 服务端解析后的结构化提及；比正文正则可靠。 */
   mentions?: RcMessageMention[];
@@ -217,6 +309,8 @@ export interface RcPreferences {
 /** 服务器提供的斜杠命令 */
 export interface RcSlashCommand {
   command: string;
+  /** Apps Engine 命令所属应用；生成 UI Kit trigger 时需要。 */
+  appId?: string;
   /** 参数提示。注意可能是 i18n 键名（如 Slash_Topic_Params），要翻译后再显示 */
   params?: string;
   /** 说明。RC 返回的多半是 i18n 键名（如 Slash_Shrug_Description），别直接渲染 */

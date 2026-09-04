@@ -66,7 +66,10 @@ import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
 import Dialog, { useDialogBehavior } from './Dialog';
+import { PollMessage } from './PollMessage';
 import { findQuoteImage, quoteAttachmentText } from '../lib/messageQuote';
+import { isPollMessage } from '../lib/poll';
+import { sendUiKitMessageAction } from '../lib/uikit';
 import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
 import { useKernelContributions } from '../kernel/registry';
@@ -857,6 +860,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const pollMessage = isPollMessage(message);
   const hostedAgentAnswer = messageRenderer ? null : parseHostedAgentAnswer(visibleText);
   const rocketXSticker = messageRenderer || hostedAgentAnswer
     ? null
@@ -1106,7 +1110,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           </div>
         )}
 
-        <div className={`relative flex items-end gap-2 ${hostedAgentAnswer || richMarkdown ? 'w-full' : ''} ${
+        <div className={`relative flex items-end gap-2 ${hostedAgentAnswer || richMarkdown || pollMessage ? 'w-full' : ''} ${
           visuallyMine ? 'flex-row-reverse' : ''
         }`}>
           {/* 悬浮操作栏：整体浮在气泡上方（bottom-full = 底边贴气泡顶边），不再盖住本条
@@ -1189,7 +1193,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               hostedAgentAnswer
                 ? 'rocketx-agent-answer-body w-full'
                   : `whitespace-pre-wrap ${richMarkdown ? 'w-full px-3 py-2 text-ink' : ''} ${
-                    bareMedia || rocketXSticker || richMarkdown
+                    bareMedia || rocketXSticker || richMarkdown || pollMessage
                       ? ''
                       : `rounded-lg px-3 py-2 ${mine ? 'bg-bubble-mine text-ink' : 'bg-bubble-other text-ink'}`
                   }`
@@ -1199,7 +1203,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               <EditBox message={message} onDone={() => setEditing(false)} />
             ) : (
               <>
-                {messageRenderer ? (
+                {pollMessage ? (
+                  <PollMessage
+                    message={message}
+                    onVote={(block, element) =>
+                      sendUiKitMessageAction(message, block, element).catch((error) => {
+                        toast.error(error, '投票失败');
+                      })}
+                  />
+                ) : messageRenderer ? (
                   messageRenderer.render({ message })
                 ) : (
                   <>

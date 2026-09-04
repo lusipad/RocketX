@@ -1,5 +1,14 @@
 import { tsMs } from './types';
-import type { RcMessage, RcMessageAttachment, RcSlashCommand, RcUser, RcDate, RoomType } from './types';
+import type {
+  RcMessage,
+  RcMessageAttachment,
+  RcSlashCommand,
+  RcUiKitServerInteraction,
+  RcUiKitUserInteraction,
+  RcUser,
+  RcDate,
+  RoomType,
+} from './types';
 import { RcApiError, type RcRestEndpointContext } from './request';
 
 export interface RocketChatMessagesDomain {
@@ -49,8 +58,23 @@ export async function runCommand(
   rid: string,
   params = '',
   tmid?: string,
+  triggerId?: string,
 ): Promise<void> {
-  await context.request('POST', 'commands.run', { command, roomId: rid, params, ...(tmid ? { tmid } : {}) });
+  await context.request('POST', 'commands.run', {
+    command,
+    roomId: rid,
+    params,
+    ...(tmid ? { tmid } : {}),
+    ...(triggerId ? { triggerId } : {}),
+  });
+}
+
+export function sendUiKitInteraction(
+  context: RcRestEndpointContext,
+  appId: string,
+  interaction: RcUiKitUserInteraction,
+): Promise<RcUiKitServerInteraction> {
+  return context.request('POST', `apps/ui.interaction/${encodeURIComponent(appId)}`, interaction);
 }
 
 export async function sendMessageRaw(

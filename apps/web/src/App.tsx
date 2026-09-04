@@ -7,6 +7,7 @@ import { useDownloadHistory } from './stores/downloadHistory';
 import DesktopUiScaleBridge from './components/DesktopUiScaleBridge';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
+import UiKitModalHost from './components/UiKitModalHost';
 import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
 import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
@@ -73,6 +74,7 @@ export default function App() {
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />
       {content}
+      <UiKitModalHost />
       <Toaster />
     </>
   );

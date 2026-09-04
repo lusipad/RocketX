@@ -85,6 +85,7 @@ import {
 import { statDesktopFile, uploadDesktopBlob, uploadDesktopFile } from '../platform/desktopFs';
 import { isTauri } from '../lib/http';
 import { shouldSpoolUpload } from '../lib/uploadRouting';
+import { useUiKit } from '../lib/uikit';
 
 /** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
@@ -1002,6 +1003,10 @@ export const useChat = create<ChatState>((set, get) => ({
     });
 
     realtime.onStream('stream-notify-user', (eventName, args) => {
+      if (eventName.endsWith('/uiInteraction')) {
+        useUiKit.getState().consumeServerInteraction(args[0]);
+        return;
+      }
       const [action, payload] = args as [string, RcRoom & RcSubscription];
       if (!payload) return;
       if (eventName.endsWith('/rooms-changed')) {
@@ -1016,6 +1021,7 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     realtime.subscribe('stream-notify-user', `${auth.userId}/rooms-changed`);
     realtime.subscribe('stream-notify-user', `${auth.userId}/subscriptions-changed`);
+    realtime.subscribe('stream-notify-user', `${auth.userId}/uiInteraction`);
 
     // 全局消息流：我加入的所有房间的新消息都推过来。
     // 以前只订阅「本次会话里打开过的房间」（openRoom → subscribeRoomStreams），
@@ -1479,12 +1485,16 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     // 认不出来的命令**不发**。以前会把 `/kick @张三` 原样广播给全群——
     // 打错一个字母就变成公开处刑，宁可让用户看见「没有这个命令」。
-    if (!findCommand(get().slashCommands, command)) {
+    const serverCommand = findCommand(get().slashCommands, command);
+    if (!serverCommand) {
       toast.show({ kind: 'error', message: `没有 /${command} 这个命令` });
       return;
     }
     try {
-      await rest.runCommand(command, rid, params, tmid);
+      const triggerId = serverCommand.appId
+        ? useUiKit.getState().begin(serverCommand.appId)
+        : undefined;
+      await rest.runCommand(command, rid, params, tmid, triggerId);
       // 命令的结果由服务端产生（发消息 / 改房间 / 踢人），走实时流回来，这里不用管
     } catch (err) {
       toast.error(err, `/${command} 执行失败`);

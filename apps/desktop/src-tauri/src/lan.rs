@@ -127,10 +127,36 @@ fn try_peer_candidates<T>(
     mut operation: impl FnMut(&LanPeer) -> Result<T, String>,
 ) -> Result<T, String> {
     let mut last_error = None;
-    for peer in candidates {
+    for (index, peer) in candidates.iter().enumerate() {
+        log::info!(
+            target: crate::LAN_LOG_TARGET,
+            "LAN candidate attempt: index={}/{} source={} trusted={}",
+            index + 1,
+            candidates.len(),
+            peer.source,
+            peer.trusted
+        );
         match operation(peer) {
-            Ok(result) => return Ok(result),
-            Err(error) => last_error = Some(error),
+            Ok(result) => {
+                log::info!(
+                    target: crate::LAN_LOG_TARGET,
+                    "LAN candidate attempt: index={}/{} source={} outcome=connected",
+                    index + 1,
+                    candidates.len(),
+                    peer.source
+                );
+                return Ok(result);
+            }
+            Err(error) => {
+                log::warn!(
+                    target: crate::LAN_LOG_TARGET,
+                    "LAN candidate attempt: index={}/{} source={} outcome=failed",
+                    index + 1,
+                    candidates.len(),
+                    peer.source
+                );
+                last_error = Some(error);
+            }
         }
     }
     match (candidates.len(), last_error) {
@@ -254,6 +280,7 @@ fn record_peer(
         .and_then(|keys| keys.get(&trust_key).cloned())
         .is_some_and(|pinned| pinned == announcement.public_key);
     if let Ok(mut peers) = peers.write() {
+        let is_new_endpoint = !peers.contains_key(&endpoint_key);
         let candidate = LanPeer {
             user_id: announcement.user_id,
             device_id: announcement.device_id,
@@ -278,6 +305,14 @@ fn record_peer(
             _ => {
                 peers.insert(endpoint_key, candidate);
             }
+        }
+        if is_new_endpoint {
+            log::info!(
+                target: crate::LAN_LOG_TARGET,
+                "LAN peer candidate discovered: source={} trusted={}",
+                source,
+                is_trusted
+            );
         }
     }
 }
@@ -553,7 +588,16 @@ fn spawn_udp_discovery(
     trusted: SharedTrusted,
     stop: Arc<AtomicBool>,
 ) -> Option<JoinHandle<()>> {
-    let socket = open_udp_discovery_socket().ok()?;
+    let socket = match open_udp_discovery_socket() {
+        Ok(socket) => socket,
+        Err(_) => {
+            log::warn!(
+                target: crate::LAN_LOG_TARGET,
+                "LAN discovery socket unavailable"
+            );
+            return None;
+        }
+    };
     Some(thread::spawn(move || {
         let payload = match serde_json::to_vec(&announcement) {
             Ok(payload) => payload,
@@ -563,17 +607,31 @@ fn spawn_udp_discovery(
         let broadcast_destination = SocketAddrV4::new(UDP_BROADCAST, UDP_PORT);
         let mut buffer = [0_u8; 8192];
         let mut next_announcement = Instant::now();
+        let mut announcement_paths_logged = false;
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announcement {
                 // 组播和全局广播在 Windows 多网卡/防火墙环境下可能静默丢包；
                 // 逐接口定向广播确保每个 IPv4 网段都得到一次发现包。
-                let _ = socket.send_to(&payload, multicast_destination);
-                let _ = socket.send_to(&payload, broadcast_destination);
-                for destination in interface_broadcasts()
+                let multicast_sent = socket.send_to(&payload, multicast_destination).is_ok();
+                let broadcast_sent = socket.send_to(&payload, broadcast_destination).is_ok();
+                let directed_destinations = interface_broadcasts()
                     .into_iter()
                     .map(|ip| SocketAddrV4::new(ip, UDP_PORT))
-                {
-                    let _ = socket.send_to(&payload, destination);
+                    .collect::<Vec<_>>();
+                let directed_sent = directed_destinations
+                    .iter()
+                    .filter(|destination| socket.send_to(&payload, **destination).is_ok())
+                    .count();
+                if !announcement_paths_logged {
+                    log::info!(
+                        target: crate::LAN_LOG_TARGET,
+                        "LAN discovery announcement paths: multicast={} global_broadcast={} directed_broadcasts={}/{}",
+                        multicast_sent,
+                        broadcast_sent,
+                        directed_sent,
+                        directed_destinations.len()
+                    );
+                    announcement_paths_logged = true;
                 }
                 next_announcement = Instant::now() + Duration::from_secs(3);
             }

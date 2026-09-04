@@ -5,6 +5,8 @@ import type {
   RcRoomFile,
   RcRoomRole,
   RcSlashCommand,
+  RcUiKitServerInteraction,
+  RcUiKitUserInteraction,
   RcTeam,
   RcMessage,
   RcMessageAttachment,
@@ -65,6 +67,7 @@ import {
   postMessage as postMessageEndpoint,
   react as reactEndpoint,
   runCommand as runCommandEndpoint,
+  sendUiKitInteraction as sendUiKitInteractionEndpoint,
   sendMessage as sendMessageEndpoint,
   sendMessageRaw as sendMessageRawEndpoint,
   starMessage as starMessageEndpoint,
@@ -414,8 +417,21 @@ export class RcRestClient {
   }
 
   /** 执行斜杠命令。command 不含前导斜杠，params 是命令后面的全部内容 */
-  async runCommand(command: string, rid: string, params = '', tmid?: string): Promise<void> {
-    return runCommandEndpoint(this.endpointContext(), command, rid, params, tmid);
+  async runCommand(
+    command: string,
+    rid: string,
+    params = '',
+    tmid?: string,
+    triggerId?: string,
+  ): Promise<void> {
+    return runCommandEndpoint(this.endpointContext(), command, rid, params, tmid, triggerId);
+  }
+
+  async sendUiKitInteraction(
+    appId: string,
+    interaction: RcUiKitUserInteraction,
+  ): Promise<RcUiKitServerInteraction> {
+    return sendUiKitInteractionEndpoint(this.endpointContext(), appId, interaction);
   }
 
   /**
