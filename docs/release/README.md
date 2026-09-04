@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.27`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.28`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.43.28` fixes transparent SVG originals appearing blank in the desktop lightbox when black artwork is rendered over the black viewer background. The lightbox now provides a white image backing and the UI regression uses a transparent black SVG.
 
 `v0.43.27` adds per-interface IPv4 directed broadcasts for LAN discovery on Windows, refreshing the interface list as network adapters change. It keeps multicast and global broadcast fallbacks and addresses the remaining multi-network/VPN reachability gap in issue #369.
 

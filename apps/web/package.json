@@ -1,6 +1,6 @@
 {
   "name": "@rcx/web",
-  "version": "0.43.27",
+  "version": "0.43.28",
   "private": true,
   "type": "module",
   "scripts": {
