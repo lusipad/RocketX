@@ -1,5 +1,16 @@
 # 更新日志
 
+## v0.43.26 - 2026-09-04
+
+### 修复
+
+- 修复 Rocket.Chat 将 SVG 缩略图转换为 PNG、但缩略图 URL 仍以 `.svg` 结尾时，Windows 桌面端把 PNG 字节误标为 SVG 并显示“图片加载失败”的问题；文件读取现在按服务端响应的真实 `Content-Type` 恢复 Blob MIME（issue #382）。
+- 本地 Docker 联调环境允许上传 SVG；外部 Rocket.Chat 若按安全策略禁止该类型，客户端会明确提示联系管理员调整上传策略或压缩为 ZIP，不伪造 MIME 绕过服务器限制。
+
+### 验证
+
+- 使用真实 Rocket.Chat 8.6.1 验证 SVG 上传成功，原图与 PNG 缩略图均可读取；自动化覆盖 PNG 响应配 `.svg` URL 的 Tauri MIME 丢失场景。
+
 ## v0.43.25 - 2026-09-03
 
 ### 修复

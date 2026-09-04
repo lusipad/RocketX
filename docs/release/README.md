@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.43.25`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.43.26`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.43.26` corrects desktop SVG thumbnail rendering when Rocket.Chat returns PNG bytes from a URL that still ends in `.svg`. The Tauri file path now restores the Blob MIME from the response `Content-Type`; the local Docker stack permits SVG uploads for integration testing, while external server upload policies remain authoritative.
 
 `v0.43.25` keeps every discovered endpoint for a LAN device, falls back when the preferred UDP or mDNS address is unreachable, and sends files to the exact device that completed the signed probe. It also includes the desktop SVG, HTML preview, and notification-navigation corrections from issues #381, #382, and #383. It remains the release candidate for two-machine Windows multi-network/VPN verification of issue #369.
 

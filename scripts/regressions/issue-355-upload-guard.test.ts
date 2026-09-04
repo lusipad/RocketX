@@ -80,6 +80,28 @@ test('humanError：服务端文件超限错误给出明确提示而不是笼统�
   );
 });
 
+test('humanError：服务端拒绝 SVG 时提示管理员调整上传策略', () => {
+  assert.equal(
+    humanError(
+      new RcApiError(
+        'File type is not accepted. [error-invalid-file-type]',
+        400,
+        'error-invalid-file-type',
+      ),
+      '发送 diagram.svg 失败',
+    ),
+    '服务器禁止上传此文件类型，请联系管理员调整文件上传策略，或压缩为 ZIP 后发送',
+  );
+});
+
+test('本地开发栈允许发送 SVG，避免默认黑名单阻断联调', () => {
+  const compose = readFileSync('docker/docker-compose.yml', 'utf8');
+  assert.match(
+    compose,
+    /OVERWRITE_SETTING_FileUpload_MediaTypeBlackList:\s*['"]{2}/,
+  );
+});
+
 test('上传失败 toast：服务端 413 透传为明确上限提示（issue #355）', async () => {
   reset();
   rest.uploadMedia = (async () => {

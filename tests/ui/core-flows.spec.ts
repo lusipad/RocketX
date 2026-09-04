@@ -513,7 +513,8 @@ const histories: Record<string, unknown[]> = {
       file: { _id: 'file-ocr', name: 'OCR 示例.svg', type: 'image/svg+xml', size: 256 },
       attachments: [{
         title: 'OCR 示例.svg',
-        image_url: '/file-upload/ocr/demo.svg',
+        image_url: '/file-upload/ocr-thumb/demo.svg',
+        image_type: 'image/png',
         title_link: '/file-upload/ocr/demo.svg',
       }],
     },
@@ -965,6 +966,14 @@ async function installRocketChatMock(
     status: 200,
     contentType: 'image/svg+xml',
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240"><rect width="100%" height="100%" fill="white"/><text x="40" y="100" font-size="52">RocketX 123</text><text x="40" y="180" font-size="44">本地 OCR</text></svg>',
+  }));
+  await page.route('**/file-upload/ocr-thumb/demo.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=',
+      'base64',
+    ),
   }));
   await page.route('**/file-upload/sticker/demo-thumb.png', (route) => route.fulfill({
     status: 200,

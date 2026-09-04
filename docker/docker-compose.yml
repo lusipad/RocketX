@@ -42,6 +42,8 @@ services:
       OVERWRITE_SETTING_Message_Read_Receipt_Store_Users: 'true'
       OVERWRITE_SETTING_API_Enable_CORS: 'true'
       OVERWRITE_SETTING_API_CORS_Origin: '*'
+      # 仅用于本地联调；Rocket.Chat 默认因主动内容风险禁用 image/svg+xml。
+      OVERWRITE_SETTING_FileUpload_MediaTypeBlackList: ''
     depends_on:
       mongodb:
         condition: service_healthy

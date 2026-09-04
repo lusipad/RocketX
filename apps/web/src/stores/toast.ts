@@ -75,6 +75,9 @@ export function humanError(err: unknown, fallback = '操作失败'): string {
   if (errorType === 'error-file-too-large' || status === 413) {
     return '文件超过服务器允许的大小上限，请压缩或拆分后再发';
   }
+  if (errorType === 'error-invalid-file-type') {
+    return '服务器禁止上传此文件类型，请联系管理员调整文件上传策略，或压缩为 ZIP 后发送';
+  }
   if (/not enough permission/i.test(raw)) return '权限不足（需要管理员授权）';
   if (/enterprise/i.test(raw)) return '该功能需要 Rocket.Chat 企业版';
   if (/rate limit|too many/i.test(raw)) return '操作过于频繁，请稍后再试';

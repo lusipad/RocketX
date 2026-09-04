@@ -52,7 +52,12 @@ export async function fetchFileResponse(context: RcRestEndpointContext, path: st
 }
 
 export async function fetchFile(context: RcRestEndpointContext, path: string): Promise<Blob> {
-  return (await fetchFileResponse(context, path)).blob();
+  const response = await fetchFileResponse(context, path);
+  const blob = await response.blob();
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim();
+  return contentType && blob.type !== contentType
+    ? blob.slice(0, blob.size, contentType)
+    : blob;
 }
 
 export async function getRoomFiles(context: RcRestEndpointContext, rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {
