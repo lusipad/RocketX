@@ -1,7 +1,7 @@
 {
   "name": "rocketchatx",
   "private": true,
-  "version": "0.43.26",
+  "version": "0.43.27",
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "dev": "pnpm --filter @rcx/web dev",

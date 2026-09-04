@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::collections::HashSet;
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -494,6 +496,56 @@ fn open_udp_discovery_socket() -> Result<UdpSocket, String> {
     Ok(socket)
 }
 
+fn directed_broadcast(ip: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    let mask = u32::from(mask);
+    if mask == 0 || mask == u32::MAX {
+        return None;
+    }
+    Some(Ipv4Addr::from(u32::from(ip) | !mask))
+}
+
+#[cfg(windows)]
+fn interface_broadcasts() -> Vec<Ipv4Addr> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetIpAddrTable, MIB_IPADDRROW_XP, MIB_IPADDRTABLE,
+    };
+
+    let mut size = 0_u32;
+    unsafe {
+        GetIpAddrTable(None, &mut size, false);
+    }
+    if size == 0 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0_u32; (size as usize).div_ceil(std::mem::size_of::<u32>())];
+    let table = buffer.as_mut_ptr().cast::<MIB_IPADDRTABLE>();
+    if unsafe { GetIpAddrTable(Some(table), &mut size, false) } != 0 {
+        return Vec::new();
+    }
+    let rows: &[MIB_IPADDRROW_XP] = unsafe {
+        let first = std::ptr::addr_of!((*table).table).cast::<MIB_IPADDRROW_XP>();
+        std::slice::from_raw_parts(first, (*table).dwNumEntries as usize)
+    };
+    rows.iter()
+        .filter_map(|row| {
+            directed_broadcast(
+                Ipv4Addr::from(row.dwAddr.to_ne_bytes()),
+                Ipv4Addr::from(row.dwMask.to_ne_bytes()),
+            )
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn interface_broadcasts() -> Vec<Ipv4Addr> {
+    Vec::new()
+}
+
 fn spawn_udp_discovery(
     announcement: LanAnnouncement,
     identity: Arc<RuntimeIdentity>,
@@ -513,9 +565,16 @@ fn spawn_udp_discovery(
         let mut next_announcement = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announcement {
-                // 组播在 Windows 多网卡/防火墙环境下可能静默丢包；广播作为同网段兜底。
+                // 组播和全局广播在 Windows 多网卡/防火墙环境下可能静默丢包；
+                // 逐接口定向广播确保每个 IPv4 网段都得到一次发现包。
                 let _ = socket.send_to(&payload, multicast_destination);
                 let _ = socket.send_to(&payload, broadcast_destination);
+                for destination in interface_broadcasts()
+                    .into_iter()
+                    .map(|ip| SocketAddrV4::new(ip, UDP_PORT))
+                {
+                    let _ = socket.send_to(&payload, destination);
+                }
                 next_announcement = Instant::now() + Duration::from_secs(3);
             }
             match socket.recv_from(&mut buffer) {
@@ -1643,6 +1702,25 @@ mod tests {
         assert_eq!(candidates[0].source, "udp");
         assert_eq!(candidates[1].ip, "172.20.0.2");
         assert_eq!(candidates[1].source, "mdns");
+    }
+
+    #[test]
+    fn directed_broadcast_uses_each_interface_network() {
+        assert_eq!(
+            directed_broadcast(
+                Ipv4Addr::new(192, 168, 1, 20),
+                Ipv4Addr::new(255, 255, 255, 0),
+            ),
+            Some(Ipv4Addr::new(192, 168, 1, 255)),
+        );
+        assert_eq!(
+            directed_broadcast(Ipv4Addr::new(10, 20, 30, 40), Ipv4Addr::new(255, 255, 0, 0),),
+            Some(Ipv4Addr::new(10, 20, 255, 255)),
+        );
+        assert_eq!(
+            directed_broadcast(Ipv4Addr::new(127, 0, 0, 1), Ipv4Addr::new(255, 0, 0, 0),),
+            None,
+        );
     }
 
     #[test]

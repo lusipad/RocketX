@@ -120,6 +120,10 @@ test('LAN 发现同时提供组播和同网段广播兜底（issue #369）', () 
   assert.match(lan, /set_broadcast\(true\)/);
   assert.match(lan, /send_to\(&payload, multicast_destination\)/);
   assert.match(lan, /send_to\(&payload, broadcast_destination\)/);
+  assert.match(lan, /fn interface_broadcasts\(\) -> Vec<Ipv4Addr>/);
+  assert.match(lan, /directed_broadcast\(/);
+  assert.match(lan, /for destination in interface_broadcasts\(\)/);
+  assert.match(lan, /SocketAddrV4::new\(ip, UDP_PORT\)/);
 });
 
 test('LAN 发现优先保留 UDP 实际来源地址，避免 mDNS 虚拟网卡地址覆盖', () => {
