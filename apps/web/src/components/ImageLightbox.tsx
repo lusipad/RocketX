@@ -202,13 +202,13 @@ export default function ImageLightbox({
           e.preventDefault();
           setDragging({ x: e.clientX - offset.x, y: e.clientY - offset.y });
         }}
-        className="relative inline-flex max-h-[86vh] max-w-[92vw] rounded-md bg-white"
+        className="relative flex h-[86vh] w-[92vw] items-center justify-center overflow-hidden rounded-md bg-white"
       >
         <AuthImage
           path={path}
           alt={fileName}
-          className="block max-h-[86vh] max-w-[92vw] select-none rounded-md object-contain"
-          fallback={<div className="text-sm text-white/70">图片加载失败</div>}
+          className="block h-full w-full select-none rounded-md object-contain"
+          fallback={<div className="text-sm text-gray-600">图片加载失败</div>}
         />
         {ocr && (
           <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-md" aria-label="图片识别文字">

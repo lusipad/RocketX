@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.44.4`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.44.5`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.44.5` corrects the desktop lightbox for small images: the stage previously sized itself to the image's intrinsic dimensions (a 24×24 SVG rendered as a 24px thumb inside an 86vh backdrop), so clicking the thumbnail appeared to "show nothing". The lightbox stage is now a fixed viewport-sized canvas with `object-contain` scaling, so originals of any size are enlarged and visible.
 
 `v0.44.4` corrects desktop SVG thumbnail rendering when the server returns PNG bytes from a URL that still ends in `.svg` **and** the response declares the wrong MIME (or none): the image pipeline now sniffs the actual bytes and restores the Blob MIME from the file signature, so the WebView decodes what the server really sent (the `v0.44.3` candidate was withheld after manual testing on a real Rocket.Chat against the same broken-thumbnail case showed the failure placeholder still appeared).
 

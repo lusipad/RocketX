@@ -602,6 +602,64 @@ test('桌面 SVG 正常显示，并可用 PP-OCRv5 叠加可选择文字（issue
   expect(pageErrors).toEqual([]);
 });
 
+test('桌面小尺寸 SVG 原图（24×24）在灯箱中放大显示（issue #382 第二轮）', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        {
+          _id: 'general-svg-favicon',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:06:00.000Z',
+          u: ALICE,
+          file: { _id: 'file-svg-favicon', name: 'favicon.svg', type: 'image/svg+xml', size: 256 },
+          attachments: [{
+            title: 'favicon.svg',
+            image_url: '/file-upload/fav-thumb/demo.svg',
+            image_type: 'image/png',
+            title_link: '/file-upload/fav/demo.svg',
+          }],
+        },
+      ],
+    },
+  });
+  await page.route('**/file-upload/fav-thumb/demo.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  }));
+  await page.route('**/file-upload/fav/demo.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M22 19.2727C22 20.779 20.779 22 19.2727 22H14.7273C13.221 22 12 20.779 12 19.2727V12H19.2727C20.779 12 22 13.221 22 14.7273V19.2727Z" fill="#68C4FF"/></svg>',
+  }));
+  await conversation(page, 'General').click();
+
+  const thumb = page.getByRole('img', { name: 'favicon.svg' });
+  await expect(thumb).toBeVisible();
+  await expect.poll(() => thumb.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: /favicon\.svg/ }).last().click();
+  const lightboxImage = page.getByRole('img', { name: 'favicon.svg' }).last();
+  await expect(lightboxImage).toBeVisible();
+  await expect.poll(
+    () => lightboxImage.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+  ).toBeGreaterThan(0);
+  // 小图必须被放大到舞台尺寸（object-contain 等比），而不是按 24px 固有尺寸缩在角落
+  const rendered = await lightboxImage.evaluate((image) => ({
+    clientWidth: image.clientWidth,
+    clientHeight: image.clientHeight,
+  }));
+  expect(rendered.clientWidth).toBeGreaterThan(100);
+  expect(rendered.clientHeight).toBeGreaterThan(100);
+  await expect(lightboxImage.locator('..')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  expect(pageErrors).toEqual([]);
+});
+
 test('桌面试探说 Content-Type 但字节是 PNG 的 SVG 缩略图：按字节嗅探显示，不出现失败占位', async ({ page }) => {
   await installFullTauriMock(page);
   const { pageErrors } = await bootAuthenticated(page, {
