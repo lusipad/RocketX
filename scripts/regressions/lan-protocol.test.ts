@@ -122,7 +122,7 @@ test('LAN 发现同时提供组播和同网段广播兜底（issue #369）', () 
   assert.match(lan, /send_to\(&payload, broadcast_destination\)/);
   assert.match(lan, /fn interface_broadcasts\(\) -> Vec<Ipv4Addr>/);
   assert.match(lan, /directed_broadcast\(/);
-  assert.match(lan, /for destination in interface_broadcasts\(\)/);
+  assert.match(lan, /let directed_destinations = interface_broadcasts\(\)/);
   assert.match(lan, /SocketAddrV4::new\(ip, UDP_PORT\)/);
 });
 
@@ -131,4 +131,32 @@ test('LAN 发现优先保留 UDP 实际来源地址，避免 mDNS 虚拟网卡�
   assert.match(lan, /"udp" => 2/);
   assert.match(lan, /"mdns" => 1/);
   assert.match(lan, /不要让它覆盖已由 UDP/);
+});
+
+test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息（issue #369）', () => {
+  const main = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
+  const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
+
+  assert.match(main, /const LAN_LOG_TARGET: &str = "rocketx::lan_diagnostics"/);
+  assert.match(
+    main,
+    /metadata\.target\(\)\.starts_with\(WEBVIEW_TARGET\)[\s\S]*metadata\.target\(\) == LAN_LOG_TARGET/,
+  );
+  assert.match(lan, /LAN discovery announcement paths:/);
+  assert.match(lan, /LAN peer candidate discovered:/);
+  assert.match(lan, /LAN candidate attempt:/);
+  assert.match(lan, /outcome=failed/);
+  assert.equal(
+    [...lan.matchAll(/log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET/g)].length,
+    6,
+  );
+
+  for (const diagnostic of lan.matchAll(
+    /log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET,\s*"([^"]*LAN[^"]*)"/g,
+  )) {
+    assert.doesNotMatch(
+      diagnostic[1],
+      /\b(?:ip|port|address|user_id|device_id|public_key|server_fingerprint|path)=/i,
+    );
+  }
 });

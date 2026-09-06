@@ -22,6 +22,14 @@ use std::{
     sync::Mutex,
 };
 #[cfg(windows)]
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
+};
+#[cfg(windows)]
 use tauri::Emitter;
 use tauri::{
     image::Image,
@@ -44,6 +52,9 @@ const AUTOSTART_ARG: &str = "--autostart";
 const PACKAGE_PROFILE_FILE: &str = "rocketx-package-profile";
 const AUTOSTART_PREFERENCE_FILE: &str = "autostart-preference";
 const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
+const LAN_LOG_TARGET: &str = "rocketx::lan_diagnostics";
+#[cfg(windows)]
+const PENDING_NOTIFICATION_NAVIGATION_LIMIT: usize = 32;
 
 fn normalize_desktop_distribution_profile(value: Option<&str>) -> &'static str {
     match value.map(str::trim) {
@@ -632,11 +643,87 @@ fn show_main_window(app: tauri::AppHandle) {
     show_main(&app);
 }
 
-#[cfg(windows)]
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NotificationRoomPayload {
+    id: String,
     rid: String,
     mid: String,
+}
+
+#[cfg(windows)]
+static NEXT_NOTIFICATION_NAVIGATION_ID: AtomicU64 = AtomicU64::new(1);
+#[cfg(windows)]
+static PENDING_NOTIFICATION_NAVIGATIONS: OnceLock<Mutex<VecDeque<NotificationRoomPayload>>> =
+    OnceLock::new();
+
+#[cfg(windows)]
+fn valid_notification_target(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
+#[cfg(windows)]
+fn normalize_notification_target(value: String) -> Result<String, String> {
+    let value = value.trim().to_string();
+    if valid_notification_target(&value) {
+        Ok(value)
+    } else {
+        Err("invalid notification target".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn pending_notification_navigations() -> &'static Mutex<VecDeque<NotificationRoomPayload>> {
+    PENDING_NOTIFICATION_NAVIGATIONS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+#[cfg(windows)]
+fn new_notification_room_payload(
+    rid: String,
+    mid: String,
+) -> Result<NotificationRoomPayload, String> {
+    Ok(NotificationRoomPayload {
+        id: NEXT_NOTIFICATION_NAVIGATION_ID
+            .fetch_add(1, Ordering::Relaxed)
+            .to_string(),
+        rid: normalize_notification_target(rid)?,
+        mid: normalize_notification_target(mid)?,
+    })
+}
+
+#[cfg(windows)]
+fn push_pending_notification_navigation(
+    pending: &mut VecDeque<NotificationRoomPayload>,
+    payload: NotificationRoomPayload,
+) {
+    if pending.len() >= PENDING_NOTIFICATION_NAVIGATION_LIMIT {
+        pending.pop_front();
+    }
+    pending.push_back(payload);
+}
+
+#[cfg(windows)]
+fn queue_pending_notification_navigation(payload: NotificationRoomPayload) -> Result<(), String> {
+    let mut pending = pending_notification_navigations()
+        .lock()
+        .map_err(|_| "notification queue is unavailable".to_string())?;
+    push_pending_notification_navigation(&mut pending, payload);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn take_pending_notification_navigation() -> Result<Option<NotificationRoomPayload>, String> {
+    pending_notification_navigations()
+        .lock()
+        .map(|mut pending| pending.pop_front())
+        .map_err(|_| "notification queue is unavailable".to_string())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn take_pending_notification_navigation() -> Result<Option<NotificationRoomPayload>, String> {
+    Ok(None)
 }
 
 #[cfg(windows)]
@@ -653,17 +740,7 @@ fn show_message_notification(
     rid: String,
     mid: String,
 ) -> Result<(), String> {
-    let rid = rid.trim().to_string();
-    let mid = mid.trim().to_string();
-    if rid.is_empty()
-        || rid.len() > 256
-        || rid.chars().any(char::is_control)
-        || mid.is_empty()
-        || mid.len() > 256
-        || mid.chars().any(char::is_control)
-    {
-        return Err("invalid notification target".to_string());
-    }
+    let payload = new_notification_room_payload(rid, mid)?;
 
     let mut notification = notify_rust::Notification::new();
     notification.summary(&title).body(&body);
@@ -680,11 +757,11 @@ fn show_message_notification(
     std::thread::spawn(move || {
         let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
             if notification_opens_room(response) {
+                if let Err(error) = queue_pending_notification_navigation(payload.clone()) {
+                    log::warn!("failed to queue notification navigation: {error}");
+                }
                 show_main(&app);
-                let _ = app.emit(
-                    "notification-open-room",
-                    NotificationRoomPayload { rid, mid },
-                );
+                let _ = app.emit("notification-open-room", payload.clone());
             }
         });
     });
@@ -693,8 +770,12 @@ fn show_message_notification(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::notification_opens_room;
+    use super::{
+        new_notification_room_payload, notification_opens_room,
+        push_pending_notification_navigation,
+    };
     use notify_rust::{CloseReason, NotificationResponse};
+    use std::collections::VecDeque;
 
     #[test]
     fn only_notification_body_click_opens_room() {
@@ -705,6 +786,61 @@ mod tests {
         assert!(!notification_opens_room(&NotificationResponse::Closed(
             CloseReason::Dismissed
         )));
+    }
+
+    #[test]
+    fn notification_payload_trims_and_rejects_invalid_targets() {
+        let payload =
+            new_notification_room_payload(" room-1 ".to_string(), " message-1 ".to_string())
+                .unwrap();
+        assert_eq!(payload.rid, "room-1");
+        assert_eq!(payload.mid, "message-1");
+        assert!(!payload.id.is_empty());
+        assert!(new_notification_room_payload("".to_string(), "message".to_string()).is_err());
+        assert!(new_notification_room_payload("room".to_string(), "".to_string()).is_err());
+        assert!(
+            new_notification_room_payload("room\nother".to_string(), "message".to_string())
+                .is_err()
+        );
+        assert!(new_notification_room_payload("room".to_string(), "x".repeat(257)).is_err());
+    }
+
+    #[test]
+    fn pending_notification_queue_preserves_click_order() {
+        let first =
+            new_notification_room_payload("room-1".to_string(), "message-1".to_string()).unwrap();
+        let second =
+            new_notification_room_payload("room-2".to_string(), "message-2".to_string()).unwrap();
+        let mut pending = VecDeque::new();
+
+        push_pending_notification_navigation(&mut pending, first.clone());
+        push_pending_notification_navigation(&mut pending, second.clone());
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(pending.pop_front(), Some(first));
+        assert_eq!(pending.pop_front(), Some(second));
+    }
+
+    #[test]
+    fn pending_notification_queue_drops_oldest_when_capacity_is_reached() {
+        let mut pending = VecDeque::new();
+        for index in 0..(super::PENDING_NOTIFICATION_NAVIGATION_LIMIT + 1) {
+            push_pending_notification_navigation(
+                &mut pending,
+                new_notification_room_payload(format!("room-{index}"), format!("message-{index}"))
+                    .unwrap(),
+            );
+        }
+
+        assert_eq!(pending.len(), super::PENDING_NOTIFICATION_NAVIGATION_LIMIT);
+        assert_eq!(
+            pending.front().map(|payload| payload.rid.as_str()),
+            Some("room-1")
+        );
+        assert_eq!(
+            pending.back().map(|payload| payload.rid.as_str()),
+            Some("room-32")
+        );
     }
 }
 
@@ -1010,6 +1146,7 @@ fn main() {
             set_tray_tooltip,
             show_main_window,
             show_message_notification,
+            take_pending_notification_navigation,
             ocr::image_ocr_recognize,
             ocr::image_ocr_runtime_probe,
             butler_db::butler_todo_add,
@@ -1088,7 +1225,8 @@ fn main() {
         // 必须用原生「另存为」对话框 + 文件写入
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        // 只持久化前端显式写入的脱敏诊断事件；不接管 console，也不收集依赖日志。
+        // 只持久化前端显式写入的脱敏诊断事件和原生 LAN 诊断；
+        // 不接管 console，也不收集依赖日志。
         .plugin(
             tauri_plugin_log::Builder::new()
                 .clear_targets()
@@ -1096,7 +1234,10 @@ fn main() {
                     Target::new(TargetKind::LogDir {
                         file_name: Some("rocketx".into()),
                     })
-                    .filter(|metadata| metadata.target().starts_with(WEBVIEW_TARGET)),
+                    .filter(|metadata| {
+                        metadata.target().starts_with(WEBVIEW_TARGET)
+                            || metadata.target() == LAN_LOG_TARGET
+                    }),
                 )
                 .level(log::LevelFilter::Info)
                 .max_file_size(1_000_000)
