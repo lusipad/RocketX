@@ -136,6 +136,12 @@ export async function uploadMedia(
     fileName?: string;
     /** 取消上传：浏览器/Tauri fetch 支持 signal；rooms.mediaConfirm 前都会中断 */
     signal?: AbortSignal;
+    /**
+     * 上传字节进度（浏览器）。fetch 本身不提供「已发送字节」，要百分比只能在
+     * 浏览器里退到 XHR（upload.onprogress）；桌面端 fetch 被 Tauri 插件接管、
+     * 无进度事件，传了也不会生效——桌面百分比需要 Rust 通道（issue #385）。
+     */
+    onUploadProgress?: (loaded: number, total: number) => void;
   } = {},
 ): Promise<void> {
   const name = opts.fileName ?? (typeof File !== 'undefined' && file instanceof File ? file.name : 'file');
@@ -150,19 +156,79 @@ export async function uploadMedia(
   const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
   const body = new Blob([head, file, tail]);
   const auth = currentAuth(context);
-  const doFetch = context.fetchImpl ?? fetch;
   const restBasePath = context.capabilities.endpoint.restBasePath.replace(/\/+$/, '');
-  const response = await doFetch(`${context.baseUrl}${restBasePath}/rooms.media/${rid}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
-      ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
-    },
-    body,
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  } as RequestInit);
-  const data: any = await response.json().catch(() => null);
-  if (!response.ok) throw new RcApiError(data?.error ?? `HTTP ${response.status}`, response.status, data?.errorType);
+  const url = `${context.baseUrl}${restBasePath}/rooms.media/${rid}`;
+  const multipartHeaders: Record<string, string> = {
+    'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
+  };
+
+  // 浏览器 + 需要进度：XHR 的 upload.onprogress 是唯一拿得到「已发送字节」的通道。
+  // 桌面端 fetchImpl 是 Tauri 插件（无进度），Node 无 XHR——都保持纯 fetch 路径。
+  const browserXhr =
+    !!opts.onUploadProgress && !context.fetchImpl && typeof XMLHttpRequest !== 'undefined';
+
+  const parseResult = (status: number, text: string) => {
+    const parsed: any = (() => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    })();
+    if (status < 200 || status >= 300) {
+      throw new RcApiError(parsed?.error ?? `HTTP ${status}`, status, parsed?.errorType);
+    }
+    return parsed;
+  };
+
+  let responseStatus = 0;
+  let responseText = '';
+  if (browserXhr) {
+    responseStatus = await new Promise<number>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      for (const [header, value] of Object.entries(multipartHeaders)) {
+        xhr.setRequestHeader(header, value);
+      }
+      xhr.upload.onprogress = (event) =>
+        opts.onUploadProgress?.(event.loaded, event.total || body.size);
+      const onAbort = () => {
+        xhr.abort();
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      const cleanup = () => opts.signal?.removeEventListener('abort', onAbort);
+      const finish = (code: number) => {
+        cleanup();
+        responseText = xhr.responseText;
+        resolve(code);
+      };
+      xhr.onload = () => finish(xhr.status);
+      xhr.onerror = () => {
+        cleanup();
+        reject(new RcApiError('上传请求失败', 0));
+      };
+      xhr.onabort = () => {
+        cleanup();
+        reject(new DOMException('上传已取消', 'AbortError'));
+      };
+      xhr.send(body);
+    }).catch((err) => {
+      if (opts.signal?.aborted) throw new DOMException('上传已取消', 'AbortError');
+      throw err;
+    });
+  } else {
+    const doFetch = context.fetchImpl ?? fetch;
+    const response = await doFetch(url, {
+      method: 'POST',
+      headers: multipartHeaders,
+      body,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    } as RequestInit);
+    responseStatus = response.status;
+    responseText = await response.text();
+  }
+  const data: any = await parseResult(responseStatus, responseText);
   await context.request('POST', `rooms.mediaConfirm/${rid}/${data.file._id}`, {
     msg: opts.msg ?? '',
     ...(opts.tmid ? { tmid: opts.tmid } : {}),

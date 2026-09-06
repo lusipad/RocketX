@@ -427,7 +427,13 @@ async function acceptLanFile(event: LanFileEvent): Promise<void> {
 async function uploadBlobToRoom(
   rid: string,
   blob: Blob,
-  options: { msg?: string; tmid?: string; fileName?: string; signal?: AbortSignal } = {},
+  options: {
+    msg?: string;
+    tmid?: string;
+    fileName?: string;
+    signal?: AbortSignal;
+    onUploadProgress?: (loaded: number, total: number) => void;
+  } = {},
 ): Promise<void> {
   const fileName =
     options.fileName ?? (typeof File !== 'undefined' && blob instanceof File ? blob.name : undefined);
@@ -2635,13 +2641,30 @@ export const useChat = create<ChatState>((set, get) => ({
         : undefined;
       const caption = message?.trim();
       const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
+      // 上传百分比（issue #385）：浏览器端 XHR 能拿到已发送字节；桌面通道暂无
+      // 进度事件，回调不传。整体进度 = 已完成文件字节 + 当前文件已发送字节。
+      const totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+      let sentBytes = 0;
+      let lastPaint = 0;
+      const paintProgress = (loaded: number) => {
+        if (!totalBytes) return;
+        const now = Date.now();
+        if (now - lastPaint < 200) return;
+        lastPaint = now;
+        const overall = Math.min(totalBytes, sentBytes + loaded);
+        toast.update(id, {
+          message: `正在发送 ${label}（${Math.floor((overall / totalBytes) * 100)}%）…`,
+        });
+      };
       for (const [index, file] of files.entries()) {
         await uploadBlobToRoom(rid, file, {
           tmid,
           fileName: file.name,
           signal: controller.signal,
+          ...(isTauri ? {} : { onUploadProgress: (loaded: number) => paintProgress(loaded) }),
           ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
         });
+        sentBytes += file.size || 0;
         set({ uploading: get().uploading - 1 });
       }
       toast.dismiss(id);

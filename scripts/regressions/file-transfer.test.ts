@@ -97,3 +97,56 @@ test('上传取消信号透传给 fetch', async () => {
   // 未传 signal 时不得伪造 AbortSignal（mock 把 undefined 归一成 null 记录）
   assert.equal(signals[1], null);
 });
+
+test('浏览器 XHR 通道回调上传进度并支持取消，不落回 fetch', async () => {
+  const g = globalThis as unknown as { XMLHttpRequest?: unknown; fetch: typeof fetch };
+  const originalXhr = g.XMLHttpRequest;
+  const originalFetch = g.fetch;
+  let fetchCalled = false;
+  class FakeXHR {
+    upload = { onprogress: null as ((e: { loaded: number; total: number }) => void) | null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    ontimeout: (() => void) | null = null;
+    status = 200;
+    responseText = JSON.stringify({ file: { _id: 'xhr-1' } });
+    open(_method: string, url: string) {
+      assert.ok(url.includes('/rooms.media/'));
+    }
+    setRequestHeader(_name: string, _value: string) {}
+    send(_body: unknown) {
+      queueMicrotask(() => {
+        this.upload.onprogress?.({ loaded: 40, total: 100 });
+        this.upload.onprogress?.({ loaded: 100, total: 100 });
+      });
+    }
+    abort() {
+      this.onabort?.();
+    }
+  }
+  g.XMLHttpRequest = FakeXHR;
+  g.fetch = ((...args: unknown[]) => {
+    fetchCalled = true;
+    return originalFetch(...(args as Parameters<typeof fetch>));
+  }) as typeof fetch;
+
+  try {
+    const controller = new AbortController();
+    const client = new RcRestClient({ baseUrl: 'https://chat.example' });
+    const progresses: Array<{ loaded: number; total: number }> = [];
+    const upload = client.uploadMedia('room-1', new Blob(['data']), {
+      signal: controller.signal,
+      onUploadProgress: (loaded, total) => progresses.push({ loaded, total }),
+    });
+    // 等进度回调触发后取消——确认走的是 XHR 通道而不是 fetch
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.ok(progresses.some((p) => p.loaded === 100 && p.total === 100));
+    assert.equal(fetchCalled, false);
+    controller.abort();
+    await assert.rejects(upload, (err: Error) => err.name === 'AbortError');
+  } finally {
+    g.XMLHttpRequest = originalXhr;
+    g.fetch = originalFetch;
+  }
+});
