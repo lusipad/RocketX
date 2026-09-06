@@ -24,6 +24,7 @@ import {
 } from '../lib/messageChunks';
 import { findCommand, nearestCommand } from '../lib/slash';
 import { buildMessagePermalink } from '@rcx/rc-client';
+import { isAbortError } from '../lib/download';
 import { resolveClientCommand } from '../lib/clientCommands';
 import { composerCommands } from '../kernel/dispatch';
 import { useCommandUi } from './commandUi';
@@ -136,6 +137,9 @@ const HISTORY_PAGE = 50;
 const INACTIVE_ROOM_MESSAGE_LIMIT = 60;
 const RECENT_INACTIVE_ROOM_LIMIT = 8;
 const DRAFTS_KEY = 'rcx-drafts';
+
+/** 进行中的上传批次 → 取消句柄（issue #385：toast 上的「取消」按钮走这里） */
+const uploadCancelHandles = new Map<string, AbortController>();
 
 function loadDrafts(): Record<string, string> {
   try {
@@ -322,6 +326,8 @@ interface ChatState {
   cancelUpload: () => void;
   uploadFiles: (files: File[], tmid?: string, message?: string) => Promise<boolean>;
   uploadNativeFiles: (paths: string[], tmid?: string, message?: string) => Promise<boolean>;
+  /** 取消一批进行中的上传（issue #385）。原生流式批次不支持中断时为空操作 */
+  cancelUploadBatch: (batchId: string) => void;
   sendP2pFiles: (paths: string[]) => Promise<boolean>;
   prepareP2p: () => Promise<boolean>;
 }
@@ -421,7 +427,7 @@ async function acceptLanFile(event: LanFileEvent): Promise<void> {
 async function uploadBlobToRoom(
   rid: string,
   blob: Blob,
-  options: { msg?: string; tmid?: string; fileName?: string } = {},
+  options: { msg?: string; tmid?: string; fileName?: string; signal?: AbortSignal } = {},
 ): Promise<void> {
   const fileName =
     options.fileName ?? (typeof File !== 'undefined' && blob instanceof File ? blob.name : undefined);
@@ -430,6 +436,7 @@ async function uploadBlobToRoom(
       msg: options.msg,
       tmid: options.tmid,
       fileName: fileName ?? 'file',
+      signal: options.signal,
     });
     return;
   }
@@ -2596,6 +2603,10 @@ export const useChat = create<ChatState>((set, get) => ({
 
   cancelUpload: () => set({ pendingFiles: null, pendingUploadMessage: null }),
 
+  cancelUploadBatch: (batchId) => {
+    uploadCancelHandles.get(batchId)?.abort();
+  },
+
   uploadFiles: async (files, tmid, message) => {
     const rid = get().activeRid;
     if (!rid || files.length === 0) return false;
@@ -2607,7 +2618,17 @@ export const useChat = create<ChatState>((set, get) => ({
     if (quote) set({ replyTo: null });
     const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
     const id = toast.loading(`正在发送 ${label}…`);
+    // 上传取消（issue #385）：fetch 路径直接中断；spool 路径在落盘块之间中止。
+    // 原生流式上传（Rust 命令）暂不支持中断，那批不挂取消按钮。
+    const batchId = `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const controller = new AbortController();
+    uploadCancelHandles.set(batchId, controller);
+    // 两条路径都至少支持部分取消：fetch 路径直接中断，spool 路径在块间中止
+    // （最终一段 Rust 原生上传不可中断，abort 会在进入它之前生效）。
     set({ uploading: get().uploading + files.length });
+    toast.update(id, {
+      action: { label: '取消', onClick: () => get().cancelUploadBatch(batchId) },
+    });
     try {
       const quoteMsg = quote
         ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
@@ -2618,6 +2639,7 @@ export const useChat = create<ChatState>((set, get) => ({
         await uploadBlobToRoom(rid, file, {
           tmid,
           fileName: file.name,
+          signal: controller.signal,
           ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
         });
         set({ uploading: get().uploading - 1 });
@@ -2626,11 +2648,17 @@ export const useChat = create<ChatState>((set, get) => ({
       return true;
     } catch (err) {
       set({ uploading: 0 });
+      if (isAbortError(err) || controller.signal.aborted) {
+        toast.update(id, { kind: 'info', message: '已取消发送' });
+        return false;
+      }
       toast.update(id, {
         kind: 'error',
         message: humanError(err, `发送 ${label} 失败`),
       });
       return false;
+    } finally {
+      uploadCancelHandles.delete(batchId);
     }
   },
 

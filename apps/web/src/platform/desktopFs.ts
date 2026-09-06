@@ -65,7 +65,7 @@ function spoolToken(): string {
 export async function uploadDesktopBlob(
   blob: Blob,
   rid: string,
-  options: { msg?: string; tmid?: string; fileName: string },
+  options: { msg?: string; tmid?: string; fileName: string; signal?: AbortSignal },
 ): Promise<void> {
   if (!isTauri) throw new Error('此操作仅支持桌面端');
   const [{ appDataDir, join }, { mkdir, remove, writeFile }] = await Promise.all([
@@ -77,10 +77,15 @@ export async function uploadDesktopBlob(
   await mkdir(root, { recursive: true });
   try {
     // 逐块 append：整块传输会在 WebView 里物化成巨大数组（issue #377）。
+    // 每块前后检查取消信号：spool 阶段可随时中止；最终的原生流式上传（Rust
+    // 命令）暂不支持中断，取消会在进入它之前生效。
     for (const [start, end] of spoolChunkRanges(blob.size)) {
+      options.signal?.throwIfAborted();
       const chunk = new Uint8Array(await blob.slice(start, end).arrayBuffer());
       await writeFile(target, chunk, { append: start > 0 });
+      options.signal?.throwIfAborted();
     }
+    options.signal?.throwIfAborted();
     await uploadDesktopFile(target, rid, { msg: options.msg, tmid: options.tmid });
   } finally {
     await remove(root, { recursive: true }).catch(() => undefined);

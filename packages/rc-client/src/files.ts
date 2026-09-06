@@ -6,6 +6,14 @@ export interface RocketChatFilesDomain {
   getRoomFiles(rid: string, type: RoomType, count?: number): Promise<RcRoomFile[]>;
   fetchFile(path: string): Promise<Blob>;
   fetchFileResponse(path: string): Promise<Response>;
+  /** 流式下载并回调进度；signal 可取消（已建立的连接会被 reader.cancel 中断） */
+  fetchFileWithProgress(
+    path: string,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?: (loaded: number, total: number | null) => void;
+    },
+  ): Promise<Blob>;
 }
 
 export type RocketChatFilesSource = Partial<RocketChatFilesDomain> & {
@@ -60,6 +68,54 @@ export async function fetchFile(context: RcRestEndpointContext, path: string): P
     : blob;
 }
 
+/**
+ * 流式下载站内文件并回调进度。
+ *
+ * total 来自 content-length；chunked/压缩响应可能拿不到，此时 total 为 null，
+ * 调用方要按「只有已加载字节数」展示。响应没有 body（某些代理/老 WebView）时
+ * 退化为一次性 blob，onProgress 只会收到终值。
+ */
+export async function fetchFileWithProgress(
+  context: RcRestEndpointContext,
+  path: string,
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total: number | null) => void;
+  },
+): Promise<Blob> {
+  const response = await fetchFileResponse(context, path);
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim() || 'application/octet-stream';
+  const contentLength = response.headers.get('content-length');
+  const total = contentLength !== null && Number.isFinite(Number(contentLength))
+    ? Number(contentLength)
+    : null;
+  const body = response.body;
+  if (!body) {
+    const blob = await response.blob();
+    options?.onProgress?.(blob.size, blob.size);
+    return blob;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        loaded += value.length;
+        options?.onProgress?.(loaded, total);
+      }
+    }
+    // total 未知时补一次终值，让调用方的百分比展示能落到 100%
+    if (total === null) options?.onProgress?.(loaded, loaded);
+  } finally {
+    reader.releaseLock();
+  }
+  return new Blob(chunks as BlobPart[], { type: contentType });
+}
+
 export async function getRoomFiles(context: RcRestEndpointContext, rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {
   const endpoint = type === 'c' ? 'channels.files' : type === 'p' ? 'groups.files' : 'im.files';
   const response = await context.request<{ files: RcRoomFile[] }>('GET', endpoint, undefined, {
@@ -74,7 +130,13 @@ export async function uploadMedia(
   context: RcRestEndpointContext,
   rid: string,
   file: Blob,
-  opts: { msg?: string; tmid?: string; fileName?: string } = {},
+  opts: {
+    msg?: string;
+    tmid?: string;
+    fileName?: string;
+    /** 取消上传：浏览器/Tauri fetch 支持 signal；rooms.mediaConfirm 前都会中断 */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<void> {
   const name = opts.fileName ?? (typeof File !== 'undefined' && file instanceof File ? file.name : 'file');
   const boundary = `----rcx${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
@@ -97,7 +159,8 @@ export async function uploadMedia(
       ...(auth ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId } : {}),
     },
     body,
-  });
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  } as RequestInit);
   const data: any = await response.json().catch(() => null);
   if (!response.ok) throw new RcApiError(data?.error ?? `HTTP ${response.status}`, response.status, data?.errorType);
   await context.request('POST', `rooms.mediaConfirm/${rid}/${data.file._id}`, {
@@ -130,6 +193,10 @@ export function createRocketChatFilesDomain(source: RocketChatFilesSource): Rock
     fetchFileResponse: (path) => {
       ensureDownload();
       return required(source, 'fetchFileResponse')(path);
+    },
+    fetchFileWithProgress: (path, options) => {
+      ensureDownload();
+      return required(source, 'fetchFileWithProgress')(path, options);
     },
   };
 }

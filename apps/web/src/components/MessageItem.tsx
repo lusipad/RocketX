@@ -38,10 +38,11 @@ import {
   Trash2,
   CalendarPlus,
   FolderOpen,
+  X,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
-import { saveFile } from '../lib/download';
+import { isAbortError, saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
 import { humanError, toast } from '../stores/toast';
 import { messagesToMarkdown } from '../lib/messageOutput';
@@ -184,6 +185,9 @@ function FileAttachment({
 }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
+  // 下载进度（issue #385）：桌面流式分支回调；网页端由浏览器接管，保持 null
+  const [progress, setProgress] = useState<{ loaded: number; total: number | null } | null>(null);
+  const downloadAbortRef = useRef<AbortController | null>(null);
   // 优先用 file.name（原始文件名），attachment.title 在旧数据里可能是编码过的
   const name = fileName ?? att.title ?? '文件';
   const path = att.title_link ?? '';
@@ -196,14 +200,24 @@ function FileAttachment({
       if (localPath) {
         await openLocalPath(localPath);
       } else {
-        await saveFile(path, name, source);
+        const controller = new AbortController();
+        downloadAbortRef.current = controller;
+        await saveFile(path, name, source, {
+          signal: controller.signal,
+          onProgress: (loaded, total) => setProgress({ loaded, total }),
+        });
       }
     } catch (err) {
-      toast.error(err, '下载失败');
+      if (isAbortError(err)) toast.info('已取消下载');
+      else toast.error(err, '下载失败');
     } finally {
+      downloadAbortRef.current = null;
+      setProgress(null);
       setBusy(false);
     }
   };
+
+  const cancelDownload = () => downloadAbortRef.current?.abort();
 
   return (
     <>
@@ -219,7 +233,11 @@ function FileAttachment({
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-ink">{name}</span>
             <span className="block text-xs text-ink-3">
-              {busy
+              {busy && progress
+                ? progress.total !== null
+                  ? `下载中 ${Math.floor((progress.loaded / progress.total) * 100)}%`
+                  : fmtSize(progress.loaded)
+                : busy
                 ? localPath
                   ? '正在打开…'
                   : '下载中…'
@@ -229,14 +247,24 @@ function FileAttachment({
             </span>
           </span>
         </button>
-        <button
-          onClick={() => void download()}
-          disabled={busy}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
-          title={localPath ? '打开本地文件' : '下载'}
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-        </button>
+        {progress ? (
+          <button
+            onClick={cancelDownload}
+            title="取消下载"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-danger"
+          >
+            <X size={14} />
+          </button>
+        ) : (
+          <button
+            onClick={() => void download()}
+            disabled={busy}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
+            title={localPath ? '打开本地文件' : '下载'}
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          </button>
+        )}
       </div>
       {preview && (
         <FilePreview

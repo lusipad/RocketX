@@ -75,6 +75,7 @@ import {
 } from './messages';
 import {
   fetchFile as fetchFileEndpoint,
+  fetchFileWithProgress as fetchFileWithProgressEndpoint,
   fetchFileResponse as fetchFileResponseEndpoint,
   getRoomFiles as getRoomFilesEndpoint,
   uploadMedia as uploadMediaEndpoint,
@@ -538,7 +539,7 @@ export class RcRestClient {
   async uploadMedia(
     rid: string,
     file: Blob,
-    opts: { msg?: string; tmid?: string; fileName?: string } = {},
+    opts: { msg?: string; tmid?: string; fileName?: string; signal?: AbortSignal } = {},
   ): Promise<void> {
     return uploadMediaEndpoint(this.endpointContext(), rid, file, opts);
   }
@@ -658,6 +659,17 @@ export class RcRestClient {
   /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */
   async fetchFile(path: string): Promise<Blob> {
     return fetchFileEndpoint(this.endpointContext(), path);
+  }
+
+  /** 流式下载并回调进度（字节），signal 可取消。见 files.fetchFileWithProgress */
+  async fetchFileWithProgress(
+    path: string,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?: (loaded: number, total: number | null) => void;
+    },
+  ): Promise<Blob> {
+    return fetchFileWithProgressEndpoint(this.endpointContext(), path, options);
   }
 
   /** 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话） */
