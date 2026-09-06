@@ -16,6 +16,8 @@ mod ocr;
 mod proc;
 mod winauth;
 
+#[cfg(windows)]
+use std::{collections::VecDeque, sync::OnceLock};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -23,11 +25,6 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-};
-#[cfg(windows)]
-use std::{
-    collections::VecDeque,
-    sync::OnceLock,
 };
 #[cfg(windows)]
 use tauri::Emitter;
@@ -44,9 +41,9 @@ use tauri_plugin_http::reqwest::{
     redirect::Policy,
     Body, Client,
 };
-use tokio::io::AsyncRead;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 use tauri_plugin_opener::OpenerExt;
+use tokio::io::AsyncRead;
 
 const MAIN_TRAY_ID: &str = "main";
 const AUTOSTART_ARG: &str = "--autostart";
@@ -669,16 +666,20 @@ async fn upload_native_media(
             let now = pump_sent.load(Ordering::Relaxed);
             if now != last {
                 last = now;
-                let _ = pump_channel
-                    .send(serde_json::json!({ "event": "progress", "loaded": now, "total": file_len }));
+                let _ = pump_channel.send(
+                    serde_json::json!({ "event": "progress", "loaded": now, "total": file_len }),
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        let _ = pump_channel
-            .send(serde_json::json!({ "event": "progress", "loaded": file_len, "total": file_len }));
+        let _ = pump_channel.send(
+            serde_json::json!({ "event": "progress", "loaded": file_len, "total": file_len }),
+        );
     });
 
-    let mime = mime_guess::from_path(&source).first_or_octet_stream().to_string();
+    let mime = mime_guess::from_path(&source)
+        .first_or_octet_stream()
+        .to_string();
     let stream = CountingUploadStream {
         file,
         total: file_len,
