@@ -108,6 +108,13 @@ export class BridgeHost {
     for (const appId of this.appFrames.keys()) this.emit(appId, event, payload);
   }
 
+  /** 按谓词分发：消息内容类事件必须先过权限门（has(appId, 'chat:read')），不能 emitAll */
+  emitWhere(event: string, payload: unknown, predicate: (appId: string) => boolean): void {
+    for (const appId of this.appFrames.keys()) {
+      if (predicate(appId)) this.emit(appId, event, payload);
+    }
+  }
+
   clearApp(appId: string): void {
     for (const frame of this.appFrames.get(appId) ?? []) frame.close?.();
     this.appFrames.delete(appId);

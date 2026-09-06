@@ -10,6 +10,7 @@ import { PermissionGate } from './permission';
 import { CapabilityBus } from './capabilities/bus';
 import { registerHostCapabilities } from './capabilities/host';
 import { BridgeHost } from './bridge';
+import { diffChatMessages } from './chatEvents';
 import { kernelRegistry } from './registry';
 import { AppModule, AppPanel } from './AppFrame';
 import type { ExtensionPoint, ReservedContribution } from './types';
@@ -65,6 +66,8 @@ const SearchPanel = lazyComponent(() => import('../components/SearchPanel'));
 const RoomInfoPanel = lazyComponent(() => import('../components/RoomInfoPanel'));
 const FilesPanel = lazyComponent(() => import('../components/FilesPanel'));
 const MentionsPanel = lazyComponent(() => import('../components/MentionsPanel'));
+const KanbanPanel = lazyComponent(() => import('../components/KanbanPanel'));
+const OncallPanel = lazyComponent(() => import('../components/OncallPanel'));
 const SummaryPanel = lazyComponent(() => import('../components/SummaryPanel'));
 const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
 const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
@@ -454,6 +457,8 @@ function registerBuiltins(): void {
     ['info', RoomInfoPanel],
     ['files', FilesPanel],
     ['mentions', MentionsPanel],
+    ['kanban', KanbanPanel],
+    ['oncall', OncallPanel],
     ['ai', SummaryPanel],
     ['butler', ButlerPanel],
     ['agent', AgentPanel],
@@ -532,12 +537,14 @@ async function registerBridgeEvents(host: KernelHost): Promise<void> {
     if (state.activeRid !== previous.activeRid) {
       bridgeHost.emitAll('room.changed', { rid: state.activeRid });
     }
-    const rid = state.activeRid;
-    if (!rid || state.messages[rid] === previous.messages[rid]) return;
-    const latest = state.messages[rid]?.at(-1);
-    const previousLatest = previous.messages[rid]?.at(-1);
-    if (latest && latest._id !== previousLatest?._id) {
-      bridgeHost.emitAll('message.received', plainMessage(latest));
+    // 消息内容只推给获得 chat:read 授权的应用：零权限应用收不到消息，与
+    // chat.current / chat.history 的权限口径一致。更新事件（回应/编辑）是
+    // 应用实时计票的通道。
+    const canReadChat = (appId: string) => permissionGate.has(appId, 'chat:read');
+    const { received, updated } = diffChatMessages(state, previous);
+    if (received) bridgeHost.emitWhere('message.received', plainMessage(received), canReadChat);
+    for (const message of updated) {
+      bridgeHost.emitWhere('message.updated', plainMessage(message), canReadChat);
     }
   }));
   const root = document.documentElement;

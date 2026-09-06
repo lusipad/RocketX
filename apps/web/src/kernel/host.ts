@@ -1,4 +1,4 @@
-import type { RcMessage, RcRoomFile, RoomType } from '@rcx/rc-client';
+import type { RcMessage, RcMessageAttachment, RcRoomFile, RoomType } from '@rcx/rc-client';
 
 export interface KernelSubscription {
   rid: string;
@@ -36,6 +36,17 @@ export interface KernelChatPort {
   current(): { rid: string | null; messages: RcMessage[] };
   history(rid: string, count: number): RcMessage[];
   postMessage(rid: string, text: string, tmid?: string): Promise<{ ok: true }>;
+  /** 加/撤表情回应（应用参与投票等互动的基础；服务端校验成员身份） */
+  react(messageId: string, emoji: string, shouldReact?: boolean): Promise<void>;
+  /** 富消息发送：话题回复 + 自定义附件（事件流模式），本地立即落一份再等流对账 */
+  send(input: {
+    rid: string;
+    msg?: string;
+    tmid?: string;
+    attachments?: RcMessageAttachment[];
+  }): Promise<RcMessage>;
+  /** 读取话题全部回复（SDK 层自动翻页，事件流不会被单页截断） */
+  thread(tmid: string): Promise<RcMessage[]>;
 }
 
 export interface KernelRoomPort {

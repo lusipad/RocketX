@@ -108,6 +108,31 @@ export interface ChatPostMessageOptions {
   tmid?: string;
 }
 
+/** 表情回应：应用做投票/互动类功能的基础（应用自己的消息也是消息） */
+export interface ChatReactOptions {
+  messageId: string;
+  /** `:name:` 短名格式，例如 `:one:` */
+  emoji: string;
+  /** 省略时为切换 */
+  shouldReact?: boolean;
+}
+
+/**
+ * 富消息发送：支持话题回复（tmid）与自定义附件（attachments）。
+ * 看板/投票类应用的「事件流」就靠 tmid + attachments 组合——
+ * 事件全部落在同一条根消息的话题里，官方客户端也能读。
+ */
+export interface ChatSendOptions {
+  rid?: string;
+  msg?: string;
+  tmid?: string;
+  attachments?: unknown[];
+}
+
+export interface ChatThreadsOptions {
+  tmid: string;
+}
+
 export type RoomType = 'c' | 'p' | 'd' | 'l';
 
 export interface RoomSummary {
@@ -189,7 +214,10 @@ export interface NativeEvent {
 export interface BridgeEventMap {
   'app.activated': undefined;
   'room.changed': { rid: string | null };
+  /** 当前房间的新消息。仅推给获得 chat:read 授权的应用 */
   'message.received': ChatMessage;
+  /** 当前房间的已有消息被替换（表情回应变化、编辑）。实时计票就监听它 */
+  'message.updated': ChatMessage;
   'theme.changed': { theme: string };
   'native.event': NativeEvent;
 }
@@ -203,6 +231,9 @@ export interface BridgeClient {
     current(): Promise<ChatCurrent>;
     history(options?: ChatHistoryOptions): Promise<ChatMessage[]>;
     postMessage(options: ChatPostMessageOptions): Promise<{ ok: true }>;
+    react(options: ChatReactOptions): Promise<{ ok: true }>;
+    send(options: ChatSendOptions): Promise<ChatMessage>;
+    threads(options: ChatThreadsOptions): Promise<ChatMessage[]>;
   };
   rooms: {
     list(): Promise<RoomSummary[]>;

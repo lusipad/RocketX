@@ -66,6 +66,11 @@ export class PermissionGate {
     this.sessionDangerous.delete(appId);
   }
 
+  /** 只读查询（不审计）：事件桥按它决定要不要把消息内容推给某个应用 */
+  has(appId: string, permission: AppPermission): boolean {
+    return this.grants.get(appId)?.has(permission) === true;
+  }
+
   async authorize(appId: string, permission: AppPermission, action: string): Promise<void> {
     const granted = this.grants.get(appId)?.has(permission) === true;
     if (!granted) {

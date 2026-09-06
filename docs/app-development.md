@@ -136,6 +136,9 @@ Common capability mappings include:
 | `chat.current` | `chat:read` | Current room and a bounded recent-message view. |
 | `chat.history` | `chat:history` | Joined rooms only; count is bounded. |
 | `chat.postMessage` | `chat:write` | Joined rooms only; text length is bounded. |
+| `chat.react` | `chat:write` | React with a `:name:` emoji on any message; room membership is enforced by the server. |
+| `chat.send` | `chat:write` | Joined rooms only; rich messages with `tmid` (thread replies) and custom `attachments` (32 KB cap). This is the event-log channel for board/poll-style apps. |
+| `chat.threads` | `chat:history` | Full thread replies for a root message (auto-paginated); joined rooms only. |
 | `rooms.list` | `rooms:list` | Joined subscriptions. |
 | `users.read` | `users:read` | Members of the active room. |
 | `app.info` | `app:info` | Current app's public metadata and granted permissions. |
@@ -155,6 +158,14 @@ const info = await bridge.app.info();
 const current = await bridge.chat.current();
 const history = await bridge.chat.history({ rid: current.rid ?? undefined, count: 20 });
 await bridge.chat.postMessage({ rid: current.rid ?? undefined, text: 'Hello' });
+await bridge.chat.react({ messageId: 'message-id', emoji: ':one:' });
+const sent = await bridge.chat.send({
+  rid: current.rid ?? undefined,
+  msg: '📋 新卡片',
+  tmid: 'board-root-message-id',
+  attachments: [{ type: 'rcx-kanban', text: '', ev: { op: 'create', cardId: 'c1', title: '新卡片', column: 'todo' } }],
+});
+const thread = await bridge.chat.threads({ tmid: 'board-root-message-id' });
 const rooms = await bridge.rooms.list();
 const members = await bridge.users.read(current.rid ?? undefined);
 const files = await bridge.files.list({ rid: current.rid ?? undefined });
@@ -167,8 +178,14 @@ await bridge.ui.notify({ message: '完成', level: 'success' });
 ```
 
 Stable events are typed by the SDK: `app.activated`, `room.changed`, `message.received`,
-`theme.changed`, and `native.event`. Custom event names remain available through `bridge.on(name, listener)`.
+`message.updated`, `theme.changed`, and `native.event`. Custom event names remain available through `bridge.on(name, listener)`.
 `app.info` never exposes the app entry path, configuration names, installation source, or other apps' metadata.
+
+Message-content events (`message.received` / `message.updated`) are delivered **only to apps
+granted `chat:read`**, matching the `chat.current` / `chat.history` permission posture; `room.changed`
+carries no message content and reaches every app. `message.updated` fires when an existing message in
+the current room is replaced (reaction changes, edits) — that is the channel for live vote counters.
+Both events cover the current room only.
 
 Treat the examples as executable references rather than a complete promise of every future capability.
 

@@ -38,6 +38,20 @@ export function createDefaultKernelHost(): KernelHost {
       history: (rid, count) => useChat.getState().messages[rid]?.slice(-count) ?? [],
       postMessage: (rid, text, tmid) =>
         postBridgeMessageForPort(createDefaultKernelChatPostPort(), rid, text, tmid),
+      react: async (messageId, emoji, shouldReact) => {
+        await rest.react(messageId, emoji, shouldReact);
+      },
+      send: async (input) => {
+        const message = await rest.sendMessageRaw(input);
+        // 应用刚发的消息立即本地落卡，不等房间消息流回灌（与 sendPoll 同款）
+        const state = useChat.getState();
+        const list = state.messages[input.rid];
+        if (list && !list.some((m) => m._id === message._id)) {
+          useChat.setState({ messages: { ...state.messages, [input.rid]: [...list, message] } });
+        }
+        return message;
+      },
+      thread: (tmid) => rest.getThreadMessages(tmid),
     },
     rooms: {
       list: () =>

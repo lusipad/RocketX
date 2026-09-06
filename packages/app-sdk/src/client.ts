@@ -152,6 +152,9 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
       current: () => request('rcx/call', { method: 'chat.current' }),
       history: (params = {}) => request('rcx/call', { method: 'chat.history', params }),
       postMessage: (params) => request('rcx/call', { method: 'chat.postMessage', params }),
+      react: (params) => request('rcx/call', { method: 'chat.react', params }),
+      send: (params) => request('rcx/call', { method: 'chat.send', params }),
+      threads: (params) => request('rcx/call', { method: 'chat.threads', params }),
     },
 
     rooms: {
