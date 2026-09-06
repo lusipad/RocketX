@@ -730,15 +730,17 @@ async function main(): Promise<void> {
   check('按名字排序，方便扫', filterCommands(CMDS, '')[0].command === 'kick');
 
   // RC 返回的 description 多半是 i18n 键名（27 个命令里 24 个是），
-  // 直接显示就是把 `Slash_Shrug_Description` 糊到用户脸上
+  // 直接显示就是把 `Slash_Shrug_Description` 糊到用户脸上。
+  // 说明文案统一维护在 lib/clientCommands.ts 的 COMMAND_INFO（v0.44.0 文案重写）
   check(
-    '已知命令用中文说明，不用服务器的 i18n 键',
+    '已知命令用规范中文说明，不用服务器的 i18n 键',
     commandDesc({ command: 'kick', description: 'Remove_someone_from_room' }) ===
-      '把某人移出本频道',
+      '把成员移出当前频道',
   );
   check(
-    '未知命令 + i18n 键名描述 → 宁可留空',
-    commandDesc({ command: 'some-app-cmd', description: 'Some_App_Description' }) === '',
+    '未知命令 + i18n 键名描述 → 标注为服务器命令，不露键名也不留空',
+    commandDesc({ command: 'some-app-cmd', description: 'Some_App_Description' }) ===
+      '服务器提供的命令',
   );
   check(
     '未知命令 + 正常英文描述 → 原样透出',
