@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.44.2`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.44.3`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.44.3` carries the cross-platform compile correction required by the release workflow so all platform build jobs can reach packaging (the `v0.44.2` candidate was withheld after the desktop gate stopped at `cargo check` on Linux/macOS: the upload-cancel registry uses `std::sync::OnceLock` on every platform but its import was behind `#[cfg(windows)]`).
 
 `v0.44.2` carries the Rust formatting correction required by the release workflow so all platform build jobs can reach packaging (the `v0.44.1` candidate was withheld after the desktop gate stopped at `cargo fmt --check`).
 
