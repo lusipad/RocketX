@@ -16,8 +16,11 @@ mod ocr;
 mod proc;
 mod winauth;
 
+// OnceLock 被上传取消注册表（全平台）使用，必须无条件导入；
+// VecDeque 仅用于 Windows 通知点击队列。
 #[cfg(windows)]
-use std::{collections::VecDeque, sync::OnceLock};
+use std::collections::VecDeque;
+use std::sync::OnceLock;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
