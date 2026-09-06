@@ -1,5 +1,5 @@
 import { readFile, stat } from '@tauri-apps/plugin-fs';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { RcApiError } from '@rcx/rc-client';
 import { ensureHttpOrigin, isTauri } from '../lib/http';
 import {
@@ -26,28 +26,54 @@ interface NativeMediaUploadResult {
   errorType?: string;
 }
 
-/** 让 Rust 直接从文件句柄流式上传，避免大文件经 WebView IPC 物化为字节数组。 */
+/** 让 Rust 直接从文件句柄流式上传，避免大文件经 WebView IPC 物化为字节数组。
+ *  进度经 Tauri Channel 从 Rust 计数流推回（200ms 泵）；signal 触发时调
+ *  cancel_native_upload 让 Rust 侧真实断开在途请求（issue #385）。 */
 export async function uploadDesktopFile(
   path: string,
   rid: string,
-  options: { msg?: string; tmid?: string } = {},
+  options: {
+    msg?: string;
+    tmid?: string;
+    onProgress?: (loaded: number, total: number) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<void> {
   if (!isTauri) throw new Error('此操作仅支持桌面端');
   const serverUrl = getServerBase();
   const auth = loadStoredAuth();
   if (!serverUrl || !auth) throw new Error('Rocket.Chat 登录状态不可用');
   await ensureHttpOrigin(serverUrl);
-  const result = await invoke<NativeMediaUploadResult>('upload_native_media', {
-    serverUrl,
-    path,
-    rid,
-    authToken: auth.authToken,
-    userId: auth.userId,
-    msg: options.msg,
-    tmid: options.tmid,
-  });
-  if (result.status < 200 || result.status >= 300) {
-    throw new RcApiError(result.error ?? `HTTP ${result.status}`, result.status, result.errorType);
+  const taskId = `nt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const progress = new Channel<{ event: string; loaded: number; total: number }>();
+  progress.onmessage = (message) => {
+    if (message?.event === 'progress') options.onProgress?.(message.loaded, message.total);
+  };
+  const onAbort = () => {
+    void invoke('cancel_native_upload', { taskId }).catch(() => undefined);
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    options.signal?.throwIfAborted();
+    const result = await invoke<NativeMediaUploadResult>('upload_native_media', {
+      serverUrl,
+      path,
+      rid,
+      authToken: auth.authToken,
+      userId: auth.userId,
+      msg: options.msg,
+      tmid: options.tmid,
+      taskId,
+      progress,
+    });
+    if (result.status < 200 || result.status >= 300) {
+      throw new RcApiError(result.error ?? `HTTP ${result.status}`, result.status, result.errorType);
+    }
+  } catch (err) {
+    if (options.signal?.aborted) throw new DOMException('上传已取消', 'AbortError');
+    throw err;
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -65,7 +91,13 @@ function spoolToken(): string {
 export async function uploadDesktopBlob(
   blob: Blob,
   rid: string,
-  options: { msg?: string; tmid?: string; fileName: string; signal?: AbortSignal },
+  options: {
+    msg?: string;
+    tmid?: string;
+    fileName: string;
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total: number) => void;
+  },
 ): Promise<void> {
   if (!isTauri) throw new Error('此操作仅支持桌面端');
   const [{ appDataDir, join }, { mkdir, remove, writeFile }] = await Promise.all([
@@ -86,7 +118,12 @@ export async function uploadDesktopBlob(
       options.signal?.throwIfAborted();
     }
     options.signal?.throwIfAborted();
-    await uploadDesktopFile(target, rid, { msg: options.msg, tmid: options.tmid });
+    await uploadDesktopFile(target, rid, {
+      msg: options.msg,
+      tmid: options.tmid,
+      onProgress: options.onProgress,
+      signal: options.signal,
+    });
   } finally {
     await remove(root, { recursive: true }).catch(() => undefined);
   }

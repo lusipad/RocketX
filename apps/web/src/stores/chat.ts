@@ -443,6 +443,7 @@ async function uploadBlobToRoom(
       tmid: options.tmid,
       fileName: fileName ?? 'file',
       signal: options.signal,
+      onProgress: options.onUploadProgress,
     });
     return;
   }
@@ -2693,8 +2694,22 @@ export const useChat = create<ChatState>((set, get) => ({
     // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
     const quote = !tmid ? get().replyTo : null;
     if (quote) set({ replyTo: null });
-    const id = toast.loading(`正在发送 ${paths.length === 1 ? '文件' : `${paths.length} 个文件`}…`);
+    const label = paths.length === 1 ? '文件' : `${paths.length} 个文件`;
+    const id = toast.loading(`正在发送 ${label}…`);
+    // 原生流式上传现支持进度与取消（issue #385）：Rust 计数流经 Channel 推
+    // loaded/total，取消经 cancel_native_upload 真实断开在途请求。
+    const batchId = `nt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const controller = new AbortController();
+    uploadCancelHandles.set(batchId, controller);
     set({ uploading: get().uploading + paths.length });
+    toast.update(id, {
+      action: { label: '取消', onClick: () => get().cancelUploadBatch(batchId) },
+    });
+    const totalBytes = await Promise.all(
+      paths.map(async (path) => (await statDesktopFile(path)).size),
+    ).then((sizes) => sizes.reduce((sum, size) => sum + size, 0));
+    let sentBytes = 0;
+    let lastPaint = 0;
     try {
       const quoteMsg = quote
         ? quoteLinkPrefix(quote, get().subscriptions, await ensureSiteUrl())
@@ -2702,22 +2717,40 @@ export const useChat = create<ChatState>((set, get) => ({
       const caption = message?.trim();
       const firstMessage = quoteMsg ? `${quoteMsg}${caption ?? ''}` : caption;
       for (const [index, path] of paths.entries()) {
-        await statDesktopFile(path);
+        const { size } = await statDesktopFile(path);
         await uploadDesktopFile(path, rid, {
           tmid,
+          signal: controller.signal,
+          onProgress: (loaded) => {
+            if (!totalBytes) return;
+            const now = Date.now();
+            if (now - lastPaint < 200) return;
+            lastPaint = now;
+            const overall = Math.min(totalBytes, sentBytes + loaded);
+            toast.update(id, {
+              message: `正在发送 ${label}（${Math.floor((overall / totalBytes) * 100)}%）…`,
+            });
+          },
           ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
         });
+        sentBytes += size;
         set({ uploading: Math.max(0, get().uploading - 1) });
       }
       toast.dismiss(id);
       return true;
     } catch (error) {
       set({ uploading: 0 });
+      if (isAbortError(error) || controller.signal.aborted) {
+        toast.update(id, { kind: 'info', message: '已取消发送' });
+        return false;
+      }
       toast.update(id, {
         kind: 'error',
         message: humanError(error, '发送文件失败'),
       });
       return false;
+    } finally {
+      uploadCancelHandles.delete(batchId);
     }
   },
 

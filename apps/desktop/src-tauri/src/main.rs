@@ -17,17 +17,17 @@ mod proc;
 mod winauth;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 #[cfg(windows)]
 use std::{
     collections::VecDeque,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        OnceLock,
-    },
+    sync::OnceLock,
 };
 #[cfg(windows)]
 use tauri::Emitter;
@@ -42,8 +42,9 @@ use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_http::reqwest::{
     multipart::{Form, Part},
     redirect::Policy,
-    Client,
+    Body, Client,
 };
+use tokio::io::AsyncRead;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 use tauri_plugin_opener::OpenerExt;
 
@@ -506,6 +507,97 @@ fn native_media_confirm_body(msg: Option<String>, tmid: Option<String>) -> serde
     serde_json::Value::Object(body)
 }
 
+// ---- 原生上传的进度与取消（issue #385）----
+
+static UPLOAD_TASK_COUNTER: AtomicU64 = AtomicU64::new(1);
+static UPLOAD_CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn upload_cancel_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    UPLOAD_CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_upload_task(task_id: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut registry) = upload_cancel_registry().lock() {
+        registry.insert(task_id.to_string(), flag.clone());
+    }
+    flag
+}
+
+fn finish_upload_task(task_id: &str) {
+    if let Ok(mut registry) = upload_cancel_registry().lock() {
+        registry.remove(task_id);
+    }
+}
+
+/// Drop 时自动从注册表摘除任务，取消标记不常驻内存
+struct FinishUploadTask<'a>(&'a str);
+
+impl Drop for FinishUploadTask<'_> {
+    fn drop(&mut self) {
+        finish_upload_task(self.0);
+    }
+}
+
+#[tauri::command]
+fn cancel_native_upload(task_id: String) -> Result<(), String> {
+    let registry = upload_cancel_registry()
+        .lock()
+        .map_err(|_| "上传任务注册表不可用".to_string())?;
+    match registry.get(&task_id) {
+        Some(flag) => {
+            flag.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+        None => Err("上传任务不存在或已结束".to_string()),
+    }
+}
+
+fn valid_upload_task_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+
+/// 把待上传文件包成计数流：统计已发送字节、在块边界检查取消标记。
+/// reqwest 收到 body 错误会直接中止在途请求，取消因此能真实断开连接。
+struct CountingUploadStream {
+    file: tokio::fs::File,
+    total: u64,
+    sent: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl futures_core::Stream for CountingUploadStream {
+    // Vec<u8> 会自动 Into<Bytes>，避免直接依赖 bytes crate 的重导出路径
+    type Item = Result<Vec<u8>, std::io::Error>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.cancel.load(Ordering::Relaxed) {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("上传已取消"))));
+        }
+        if this.sent.load(Ordering::Relaxed) >= this.total {
+            return std::task::Poll::Ready(None);
+        }
+        let mut buffer = vec![0_u8; 256 * 1024];
+        let mut read_buf = tokio::io::ReadBuf::new(&mut buffer);
+        match std::pin::Pin::new(&mut this.file).poll_read(cx, &mut read_buf) {
+            std::task::Poll::Ready(Ok(())) => {
+                let filled = read_buf.filled().len();
+                if filled == 0 {
+                    return std::task::Poll::Ready(None);
+                }
+                this.sent.fetch_add(filled as u64, Ordering::Relaxed);
+                std::task::Poll::Ready(Some(Ok(buffer[..filled].to_vec())))
+            }
+            std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Some(Err(error))),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
 #[tauri::command]
 async fn upload_native_media(
     webview: tauri::Webview,
@@ -517,6 +609,8 @@ async fn upload_native_media(
     user_id: String,
     msg: Option<String>,
     tmid: Option<String>,
+    task_id: String,
+    progress: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<NativeMediaUploadResult, String> {
     if webview.label() != "main" {
         return Err("原生文件上传仅允许主窗口调用".to_string());
@@ -526,12 +620,15 @@ async fn upload_native_media(
         || rid.chars().any(char::is_control)
         || auth_token.is_empty()
         || user_id.is_empty()
+        || !valid_upload_task_id(&task_id)
         || tmid.as_ref().is_some_and(|value| {
             value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
         })
     {
         return Err("原生文件上传参数无效".to_string());
     }
+    let cancel = register_upload_task(&task_id);
+    let _finish = FinishUploadTask(&task_id);
     let upload_url = native_media_url(&server_url, &["rooms.media", &rid])?;
     let origin = upload_url.origin().ascii_serialization();
     let allowed = origins
@@ -549,10 +646,49 @@ async fn upload_native_media(
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
         .ok_or_else(|| "本地文件名无效".to_string())?
         .to_string();
-    let part = Part::file(&source)
+    let file_len = tokio::fs::metadata(&source)
         .await
         .map_err(|error| format!("无法读取待上传文件：{error}"))?
-        .file_name(file_name);
+        .len();
+    let file = tokio::fs::File::open(&source)
+        .await
+        .map_err(|error| format!("无法读取待上传文件：{error}"))?;
+    let sent = Arc::new(AtomicU64::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+
+    // 进度泵：每 200ms 把计数器推给前端；上传结束后补一次 100%
+    let pump_channel = progress.clone();
+    let pump_sent = sent.clone();
+    let pump_done = done.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last = 0_u64;
+        loop {
+            if pump_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let now = pump_sent.load(Ordering::Relaxed);
+            if now != last {
+                last = now;
+                let _ = pump_channel
+                    .send(serde_json::json!({ "event": "progress", "loaded": now, "total": file_len }));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let _ = pump_channel
+            .send(serde_json::json!({ "event": "progress", "loaded": file_len, "total": file_len }));
+    });
+
+    let mime = mime_guess::from_path(&source).first_or_octet_stream().to_string();
+    let stream = CountingUploadStream {
+        file,
+        total: file_len,
+        sent: sent.clone(),
+        cancel: cancel.clone(),
+    };
+    let part = Part::stream_with_length(Body::wrap_stream(stream), file_len)
+        .file_name(file_name)
+        .mime_str(&mime)
+        .map_err(|error| format!("无法识别文件类型：{error}"))?;
     let client = Client::builder()
         .redirect(Policy::limited(5))
         .build()
@@ -564,7 +700,15 @@ async fn upload_native_media(
         .multipart(Form::new().part("file", part))
         .send()
         .await
-        .map_err(|error| format!("上传文件失败：{error}"))?;
+        .map_err(|error| {
+            done.store(true, Ordering::Relaxed);
+            if cancel.load(Ordering::Relaxed) {
+                "上传已取消".to_string()
+            } else {
+                format!("上传文件失败：{error}")
+            }
+        })?;
+    done.store(true, Ordering::Relaxed);
     let status = upload.status().as_u16();
     let body = upload
         .text()
@@ -1147,6 +1291,7 @@ fn main() {
             show_main_window,
             show_message_notification,
             take_pending_notification_navigation,
+            cancel_native_upload,
             ocr::image_ocr_recognize,
             ocr::image_ocr_runtime_probe,
             butler_db::butler_todo_add,

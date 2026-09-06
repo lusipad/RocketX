@@ -42,6 +42,11 @@ tauri-plugin-process = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 原生上传的进度与取消（issue #385）：tokio 文件流 + 计数包装，futures-core 提供 Stream trait
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time", "macros"] }
+futures-core = "0.3"
+# 流式上传保留原始文件 Content-Type（原 Part::file 的行为）
+mime_guess = "2"
 # AI Provider 密钥只进系统凭据库；失败时不回退到文件或前端存储。
 keyring = "4.1"
 rusqlite = { version = "0.34", features = ["bundled"] }

@@ -185,6 +185,9 @@ test('桌面大文件由 Rust 从磁盘流式上传，不通过 WebView IPC 传�
   assert.match(chat, /await uploadDesktopFile\(path, rid,/);
   assert.doesNotMatch(chat, /readDesktopFile\(path\)/);
   assert.match(desktopFs, /invoke<NativeMediaUploadResult>\('upload_native_media'/);
-  assert.match(native, /Part::file\(&source\)/);
+  // v0.44.0 起 Part::file 换成计数流（issue #385 进度/取消），但数据仍是
+  // Rust 打开磁盘句柄逐块读，不经过 WebView IPC 物化
+  assert.match(native, /Part::stream_with_length\(Body::wrap_stream\(/);
+  assert.match(native, /struct CountingUploadStream \{[\s\S]*?tokio::fs::File/);
   assert.match(native, /\.multipart\(Form::new\(\)\.part\("file", part\)\)/);
 });
