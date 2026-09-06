@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.44.1`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.44.2`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.44.2` carries the Rust formatting correction required by the release workflow so all platform build jobs can reach packaging (the `v0.44.1` candidate was withheld after the desktop gate stopped at `cargo fmt --check`).
 
 `v0.44.1` fixes notification-card clicks not navigating to the referenced message (clicks arriving before WebView listeners or login recovery now queue in a desktop-side FIFO and replay once ready — issue #381) and adds full-chain LAN diagnostics logging (`rocketx::lan_diagnostics`) so real-world retests of issue #369 can be located precisely. It also delivers file-transfer progress and control (issue #385): streamed desktop downloads with percentage and cancel, cancel across all upload paths, XHR upload percentage on web, and desktop native upload progress via a Rust counting stream + Tauri Channel (the desktop upload path is rewritten from `Part::file` to the counting stream while keeping the disk-handle streaming constraint of issue #367).
 
