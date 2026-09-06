@@ -10,6 +10,12 @@ import PanelShell from './PanelShell';
 import EmojiPicker from './EmojiPicker';
 import { shouldInsertNewline, shouldSendMessage } from '../lib/sendKeys';
 import {
+  commandDesc,
+  commandParams,
+  filterCommands,
+  slashPrefix,
+} from '../lib/slash';
+import {
   canMentionInRoom,
   insertMentionAtCursor,
   mentionQueryAtCursor,
@@ -44,8 +50,22 @@ export default function ThreadPanel() {
   const [picker, setPicker] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [followLoading, setFollowLoading] = useState(false);
+  // 斜杠命令补全：话题里也认命令（拦截在 doSend 里），补全面板不能只给主输入框
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const slashListRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const serverSlashCommands = useChat((s) => s.slashCommands);
+  const slashCommands = useMemo(
+    () => composerCommands(serverSlashCommands),
+    [serverSlashCommands],
+  );
+  const slashCandidates = useMemo(
+    () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
+    [slashQuery, slashCommands],
+  );
 
   const root = useMemo(() => all?.find((m) => m._id === rootId), [all, rootId]);
   const replies = useMemo(
@@ -62,8 +82,18 @@ export default function ThreadPanel() {
     setText('');
     setPicker(false);
     setMentionQuery(null);
+    setSlashQuery(null);
     textareaRef.current?.focus();
   }, [rootId]);
+
+  // 面板会滚动，方向键翻到高亮项时要滚进可视区（主输入框同款）
+  useEffect(() => {
+    const list = slashListRef.current;
+    if (!list) return;
+    list
+      .querySelector(`[data-slash-index="${slashIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [slashIndex, slashQuery]);
 
   // 新回复进来自动滚到底
   useLayoutEffect(() => {
@@ -87,16 +117,30 @@ export default function ThreadPanel() {
     if (!value) return;
 
     // 话题里也得认斜杠命令 —— 不然在话题里打 `/kick @张三`，它会原样广播成一条文本。
-    // 这里没有补全面板（主输入框才有），但拦截是必须的。
     const commands = composerCommands(useChat.getState().slashCommands);
     const dispatched = await dispatchInput(value, { rid, runSlash, commands }, rootId);
     if (dispatched.handled) {
       if (dispatched.accepted) setText('');
+      setSlashQuery(null);
       return;
     }
 
     setText('');
     await send(value, { rid, tmid: rootId });
+  };
+
+  /** 补全命令名时只替换命令那一段，别把已打的参数吞掉（主输入框同款） */
+  const insertCommand = (command: string) => {
+    const el = textareaRef.current;
+    const cursor = el?.selectionStart ?? text.length;
+    const head = `/${command} `;
+    const next = head + text.slice(cursor);
+    setText(next);
+    setSlashQuery(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(head.length, head.length);
+    });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -112,6 +156,36 @@ export default function ThreadPanel() {
       }
       if (e.key === 'Escape') {
         setMentionQuery(null);
+        return;
+      }
+    }
+    if (!e.nativeEvent.isComposing && slashQuery !== null && slashCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIndex((i) => (i + 1) % slashCandidates.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIndex((i) => (i - 1 + slashCandidates.length) % slashCandidates.length);
+        return;
+      }
+      // Tab 永远补全；Enter 在命令名没打全时先补全，打全了（/shrug）直接执行
+      const isTab = e.key === 'Tab';
+      const isEnter = e.key === 'Enter' && !e.shiftKey;
+      if (isTab || isEnter) {
+        const typedIsComplete = slashCommands.some(
+          (c) => c.command.toLowerCase() === slashQuery.toLowerCase(),
+        );
+        if (isTab || !typedIsComplete) {
+          e.preventDefault();
+          insertCommand(slashCandidates[slashIndex].command);
+          return;
+        }
+        // 打全了：落到下面的发送逻辑，由 doSend 派发成命令
+      }
+      if (e.key === 'Escape') {
+        setSlashQuery(null);
         return;
       }
     }
@@ -214,6 +288,37 @@ export default function ThreadPanel() {
       </div>
 
       <div className="relative shrink-0 border-t border-line p-3">
+        {slashQuery !== null && slashCandidates.length > 0 && (
+          <div
+            ref={slashListRef}
+            className="absolute bottom-full left-3 z-30 mb-1 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-lg bg-surface-4 py-1 shadow-pop"
+          >
+            {slashCandidates.map((c, i) => {
+              const desc = commandDesc(c);
+              const params = commandParams(c);
+              return (
+                <button
+                  key={c.command}
+                  data-slash-index={i}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertCommand(c.command);
+                  }}
+                  onMouseEnter={() => setSlashIndex(i)}
+                  className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left ${
+                    i === slashIndex ? 'bg-primary-light' : ''
+                  }`}
+                >
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="font-medium text-ink">/{c.command}</span>
+                    {params && <span className="truncate text-xs text-ink-3">{params}</span>}
+                  </span>
+                  {desc && <span className="truncate text-xs text-ink-3">{desc}</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {showSharedAiMention && (
           <div
             id="thread-mention-list"
@@ -281,11 +386,14 @@ export default function ThreadPanel() {
               setText(e.target.value);
               emitTyping();
               setMentionQuery(mentionQueryAtCursor(e.target.value, e.target.selectionStart, roomType));
+              setSlashQuery(slashPrefix(e.target.value.slice(0, e.target.selectionStart)));
+              setSlashIndex(0);
             }}
             onKeyDown={onKeyDown}
             onClick={(e) => {
               const target = e.target as HTMLTextAreaElement;
               setMentionQuery(mentionQueryAtCursor(text, target.selectionStart, roomType));
+              setSlashQuery(slashPrefix(text.slice(0, target.selectionStart)));
             }}
             aria-autocomplete="list"
             aria-controls={showSharedAiMention ? 'thread-mention-list' : undefined}

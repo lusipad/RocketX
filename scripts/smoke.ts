@@ -11,6 +11,8 @@ import { RcRestClient, RcRealtimeClient, tsMs, type RcMessage } from '../package
 import { mergedForwardAttachments } from '../apps/web/src/lib/forward';
 import { findQuoteImage } from '../apps/web/src/lib/messageQuote';
 import { quoteMessagePrefix } from '../apps/web/src/lib/messageText';
+import { clientCommandInfo } from '../apps/web/src/lib/clientCommands';
+import { pollAttachment, pollFromMessage, pollIsClosed, pollText, pollTally } from '../apps/web/src/lib/poll';
 
 const BASE = process.env.RC_BASE_URL ?? 'http://localhost:3300';
 const USER = process.env.RC_USER ?? 'admin';
@@ -471,6 +473,16 @@ async function main() {
     return `${cmds.length} 个命令`;
   });
 
+  await check('服务端命令表全部有中文说明（无 i18n 键名露脸）', async () => {
+    const cmds = await rest.listCommands();
+    const missing = cmds.filter((c) => !clientCommandInfo(c.command));
+    assert(
+      missing.length === 0,
+      `这些命令缺中文说明，补进 clientCommands.ts：${missing.map((c) => c.command).join(', ')}`,
+    );
+    return '覆盖完整';
+  });
+
   await check('commands.run 真的执行了（不是当文本发出去）', async () => {
     // 这正是之前的 bug：/me 会被原样存成一条消息文本。
     // 走 commands.run 的话，服务端产生的是一条 t='message_snippeted' 风格的动作消息，
@@ -487,6 +499,38 @@ async function main() {
       '命令没有产生任何消息',
     );
     return '服务端执行，未泄漏成字面量';
+  });
+
+  // ---- 投票 ----
+  console.log('\n[投票]');
+  await check('投票消息附件往返 + 数字表情计票 + 结束标记', async () => {
+    const poll = { question: '冒烟投票', options: ['甲', '乙', '丙'], multi: true };
+    const sent = await rest.sendMessageRaw({
+      rid: channelId,
+      msg: pollText(poll),
+      attachments: [pollAttachment(poll)],
+    });
+    // 两个账号分别投票：共享状态在服务端，任何客户端都能看到同一份
+    await rest.react(sent._id, ':one:');
+    try {
+      await rest2.react(sent._id, ':two:');
+    } catch {
+      // 第二账号不可用时只验证单人计票
+    }
+    const history = await rest.getHistory(channelId, 'c', 10);
+    const back = history.find((m) => m._id === sent._id);
+    const parsed = back ? pollFromMessage(back) : null;
+    assert(parsed, '投票附件没有完整往返保存');
+    const tally = pollTally(parsed.poll, back, USER);
+    assert(tally.counts[0] === 1, `选项一应得 1 票，实际 ${tally.counts[0]}`);
+    assert(tally.myVotes.includes(0), '本人投票没有被计进去');
+    // 创建者结束投票：锁表情就是结束标记（chat.update 改附件会被 schema 拒收）
+    await rest.react(sent._id, ':lock:');
+    const after = await rest.getHistory(channelId, 'c', 10);
+    const closed = after.find((m) => m._id === sent._id);
+    assert(closed && pollIsClosed(parsed.poll, closed), '结束标记没有生效');
+    await rest.deleteMessage(channelId, sent._id);
+    return `3 选项共 ${tally.total} 票，已结束并清理`;
   });
 
   // ---- 群管理 ----

@@ -8,10 +8,12 @@ import { createProject, startDevServer, validateProject } from '../../packages/c
 test('脚手架生成可校验应用并拒绝越界 entry', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'rocketx-create-app-'));
   const root = path.join(temporary, 'my-poll');
-  const project = await createProject(root, 'poll');
+  // 模板只剩 hello：poll/kanban/oncall 已升级为主程序原生功能，示例不再撞名
+  const project = await createProject(root, 'hello');
   assert.equal(project.manifest.id, 'dev.local.my-poll');
   assert.equal(project.manifest.entry, 'index.html');
   await validateProject(root);
+  await assert.rejects(() => createProject(path.join(temporary, 'nope'), 'poll'), /Unknown template/);
 
   const manifestPath = path.join(root, 'rcx.app.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;

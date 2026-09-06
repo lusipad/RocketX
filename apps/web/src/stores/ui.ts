@@ -152,6 +152,8 @@ interface UIState {
   retainedUnreadRid: string | null;
   switcherOpen: boolean;
   switcherCommandCenter: boolean;
+  /** 命令帮助「点击插入」往输入框播种的命令；nonce 保证同一命令重复插入也能触发 */
+  composerSeed: { text: string; nonce: number } | null;
   /** Codex 工作区的一级视图。 */
   butlerView: ButlerWorkspaceView;
   /** 从房间跳转时需要聚焦的同一条 AI 托管会话。 */
@@ -179,6 +181,7 @@ interface UIState {
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
+  seedComposer: (text: string) => void;
   openButlerConversation: (focusSessionKey?: string) => void;
   openPersonalDshConversation: (sessionId: string | null) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
@@ -196,6 +199,7 @@ export const useUI = create<UIState>((set) => ({
   retainedUnreadRid: null,
   switcherOpen: false,
   switcherCommandCenter: false,
+  composerSeed: null,
   butlerView: 'conversation',
   selectedHostedSessionKey: null,
   selectedPersonalDshSessionId: null,
@@ -233,6 +237,8 @@ export const useUI = create<UIState>((set) => ({
   setSwitcherOpen: (open) =>
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
+  seedComposer: (text) =>
+    set((state) => ({ composerSeed: { text, nonce: (state.composerSeed?.nonce ?? 0) + 1 } })),
   openButlerConversation: (focusSessionKey?: string) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });

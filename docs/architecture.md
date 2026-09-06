@@ -107,9 +107,10 @@ emoji/颜色/中文标签，构建失败自动转红。投递走 RC 的 `chat.po
 | 打开任意会话，它就跳到列表最上面 | 会话排序**不能**把 `subscription._updatedAt` 当兜底时间：打开会话本身就会更新订阅（写 `ls`、清 `unread`/`alert`），`_updatedAt` 变成此刻。只取 `room.lm` / `room.lastMessage.ts` |
 | 多人直聊混进「单聊」 | RC 里多人直聊的 `t` 仍是 `'d'`，靠 `room.uids.length > 2` 区分（订阅上没有 `uids`）。它的 `fname` 是「张三, 李四」这样拼出来的，也不该拿某个人的头像当会话头像 |
 | 桌面端点「下载」没反应 | WebView2 / WKWebView 不认 blob URL 上的 `download` 属性。必须走 `tauri-plugin-dialog` 的「另存为」+ `tauri-plugin-fs` 写文件 |
-| `/kick @张三` 被当成普通文本广播出去 | 斜杠命令**必须**由服务端执行（`commands.run`），客户端只负责认出来并转发。RC 提供 27 个命令（`commands.list`），一个都不接的话它们全会变成字面量消息 |
+| `/kick @张三` 被当成普通文本广播出去 | 认不出的斜杠命令**绝不发**。现在命令分三类执行：客户端有实现的（纯文本改写直发 / 打开 GUI，见 `lib/clientCommands.ts`）客户端执行；无 REST 端点的（/ban 等）仍走 `commands.run`；都不认识才拦截并提示最近似命令。参数化命令一律弹 GUI（参数作预填值），不再要求用户手打 `@用户名` 语法 |
+| 投票/看板/值班表的共享状态存哪 | 服务器是未改造的 RC，没有应用存储，`chat.update` 对附件做严格 schema 校验（自定义字段被拒收，实测）。可行通道只有三条：**消息附件**（`sendMessageRaw` 自定义 type 完整往返）、**表情回应**（票数即 `:one:` 计数）、**追加消息**（看板/值班表用「根消息 + 话题事件流」，重放聚合，永不编辑）。投票的票用数字表情存，官方客户端用表情也能参与同一套计票 |
 | 禁言找不到 REST 端点 | `channels.muteUser` / `groups.muteUser` 在 RC 8.6.1 **都是 404** —— 这两个端点根本不存在。服务端只在 `/mute` 斜杠命令里实现了禁言，所以只能走 `commands.run` |
-| 命令面板显示 `Slash_Shrug_Description` | `commands.list` 返回的 `description` 多半是 **i18n 键名**（27 个里有 24 个），`/status` `/topic` 连 `params` 也是键。官方客户端自带词典去翻，我们没有 —— 得自己配中文表，翻不出来的宁可留空 |
+| 命令面板显示 `Slash_Shrug_Description` | `commands.list` 返回的 `description` 多半是 **i18n 键名**（27 个里有 24 个），`/status` `/topic` 连 `params` 也是键。说明文案统一维护在 `lib/clientCommands.ts` 的 `COMMAND_INFO`（全量中文、规范措辞），smoke 测试会对着服务端 `commands.list` 逐条断言覆盖，缺一条即失败 |
 | 对 DM 调 `groups.kick` / `groups.roles` 报 400 | 单聊和多人聊天都是 `t='d'`，**没有**频道那套管理能力（`/mute` 直接报 `d is not a valid room type`）。权限判断必须把房间类型算进去，否则全局 admin 会在多人聊天里看到一堆点了就报错的管理操作 |
 | 改密码报 `TOTP Invalid` | `users.updateOwnBasicInfo` 的 `currentPassword` 要传 **SHA-256 十六进制**，传明文会被当成 2FA 校验失败。这个接口限流是**每分钟一次**，所以一次请求必须带齐所有字段 |
 | 建了讨论，父频道里没有卡片 | RC 会发一条 `t='discussion-created'` 的消息，`msg` 是讨论名、**`drid`** 指向讨论房间。不认 `drid` 的话它会掉进系统消息的兜底分支，变成一行点不动的灰字 |

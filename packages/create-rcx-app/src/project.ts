@@ -56,8 +56,14 @@ export async function createProject(
   try {
     await access(templateRoot);
   } catch {
-    const examples = { hello: 'hello-app', kanban: 'kanban-app', poll: 'poll-app', oncall: 'oncall-app' };
-    templateRoot = fileURLToPath(new URL(`../../../examples/${examples[template]}/`, import.meta.url));
+    // 官方样板只保留 hello-app：poll/kanban/oncall 已升级为主程序原生功能，
+    // 示例再撞名会让装了示例的用户看到两个同名入口。
+    const examples: Record<string, string> = { hello: 'hello-app' };
+    const exampleDir = examples[template];
+    if (!exampleDir) {
+      throw new Error(`Unknown template "${template}". Available templates: ${Object.keys(examples).join(', ')}`);
+    }
+    templateRoot = fileURLToPath(new URL(`../../../examples/${exampleDir}/`, import.meta.url));
   }
   for (const entry of await readdir(templateRoot)) {
     await cp(path.join(templateRoot, entry), path.join(root, entry), {

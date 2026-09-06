@@ -11,6 +11,7 @@ import {
   ListRestart,
   Pin,
   Search,
+  SquareKanban,
   Star,
   Upload,
   Users,
@@ -375,6 +376,12 @@ export default function ChatArea({
               label="搜索聊天记录"
               active={rightPanel?.kind === 'search'}
               onClick={() => togglePanel({ kind: 'search' })}
+            />
+            <HeaderButton
+              icon={SquareKanban}
+              label="消息看板"
+              active={rightPanel?.kind === 'kanban'}
+              onClick={() => togglePanel({ kind: 'kanban' })}
             />
             <HeaderButton
               icon={MoreHorizontal}

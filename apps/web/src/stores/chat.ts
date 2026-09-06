@@ -22,7 +22,35 @@ import {
   normalizeMessageMaxAllowedSize,
   toSendableMessageChunks,
 } from '../lib/messageChunks';
-import { findCommand } from '../lib/slash';
+import { findCommand, nearestCommand } from '../lib/slash';
+import { buildMessagePermalink } from '@rcx/rc-client';
+import { resolveClientCommand } from '../lib/clientCommands';
+import { composerCommands } from '../kernel/dispatch';
+import { useCommandUi } from './commandUi';
+import {
+  pollAttachment,
+  pollFromMessage,
+  pollIsClosed,
+  pollText,
+  POLL_CLOSED_REACTION,
+  POLL_DIGIT_CODES,
+  type PollPayload,
+} from '../lib/poll';
+import {
+  findBoardRoot,
+  kanbanEventAttachment,
+  kanbanEventText,
+  kanbanColumnName,
+  KANBAN_BOARD_TYPE,
+} from '../lib/kanban';
+import {
+  findOncallRoot,
+  oncallEventAttachment,
+  oncallEventText,
+  oncallSummaryText,
+  ONCALL_BOARD_TYPE,
+  type OncallShift,
+} from '../lib/oncall';
 import { formatMixedLanguageText } from '../lib/mixedLanguageFormat';
 import { kernelRegistry } from '../kernel/registry';
 import { desktopNotify } from '../lib/notify';
@@ -96,6 +124,8 @@ export type RightPanel =
   | { kind: 'info' }
   | { kind: 'files'; fileId?: string }
   | { kind: 'mentions' }
+  | { kind: 'kanban' }
+  | { kind: 'oncall' }
   | { kind: 'ai' }
   | { kind: 'butler'; tmid?: string }
   | { kind: 'agent'; tmid: string }
@@ -113,6 +143,13 @@ function loadDrafts(): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+/** hideConv/restoreConv/leaveConv 只用到这三个字段；完整 Conversation 或轻量构造均可 */
+export interface ConvRef {
+  rid: string;
+  name: string;
+  type: RcSubscription['t'];
 }
 
 interface ChatState {
@@ -214,6 +251,31 @@ interface ChatState {
   editMessage: (msgId: string, text: string) => Promise<void>;
   deleteMessage: (message: Pick<RcMessage, '_id' | 'rid'>) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
+  /** 发起投票：把题目选项写进消息附件，票用数字表情回应存（跨客户端可见） */
+  sendPoll: (rid: string, poll: PollPayload) => Promise<void>;
+  /** 投票：切换某选项的数字回应；单选时先撤掉本人在其他选项的票 */
+  votePoll: (message: RcMessage, optionIndex: number) => Promise<void>;
+  /** 结束投票：创建者把附件标记为 closed */
+  closePoll: (rid: string, messageId: string) => Promise<void>;
+  /** 找到（或创建）频道看板根消息。一个频道一块看板 */
+  ensureKanbanBoard: (rid: string) => Promise<RcMessage>;
+  /** 新建看板卡片（收纳消息也走这里） */
+  addKanbanCard: (
+    rid: string,
+    input: { title: string; sourceMid?: string; column?: 'todo' | 'doing' | 'done' },
+  ) => Promise<void>;
+  /** 移动看板卡片到另一列 */
+  moveKanbanCard: (rid: string, cardId: string, to: 'todo' | 'doing' | 'done', title: string) => Promise<void>;
+  /** 删除看板卡片 */
+  removeKanbanCard: (rid: string, cardId: string, title: string) => Promise<void>;
+  /** 找到（或创建）频道值班表根消息。一个频道一张值班表 */
+  ensureOncallBoard: (rid: string) => Promise<RcMessage>;
+  /** 加一条排班 */
+  addOncallShift: (rid: string, shift: { date: string; shift: string; username: string }) => Promise<void>;
+  /** 取消一条排班 */
+  removeOncallShift: (rid: string, shiftId: string) => Promise<void>;
+  /** 把当前排班以文本快照发到频道 */
+  publishOncall: (rid: string, shifts: OncallShift[]) => Promise<void>;
   togglePin: (msg: RcMessage) => Promise<void>;
   /**
    * 从服务端拉取置顶列表并把本房间消息的 pinned 标志同步成服务端状态，
@@ -225,15 +287,15 @@ interface ChatState {
   toggleFavorite: (conv: Conversation) => Promise<void>;
   toggleMute: (conv: Conversation) => Promise<void>;
   markConvRead: (rid: string) => Promise<void>;
-  hideConv: (conv: Conversation) => Promise<void>;
-  restoreConv: (conv: Conversation) => Promise<void>;
+  hideConv: (conv: ConvRef) => Promise<void>;
+  restoreConv: (conv: ConvRef) => Promise<void>;
   /** 改群设置（话题/公告/描述/名称）；无权限时会抛出 */
   saveRoomSettings: (
     rid: string,
     settings: { topic?: string; announcement?: string; description?: string; name?: string },
   ) => Promise<void>;
   /** 退出群组（DM 只能隐藏） */
-  leaveConv: (conv: Conversation) => Promise<void>;
+  leaveConv: (conv: ConvRef) => Promise<void>;
   forwardMessage: (msg: RcMessage, rids: string[]) => Promise<void>;
   /** 多条消息转发到多个会话。merge=true 合并成一条「聊天记录」卡片，否则逐条 */
   forwardMessages: (msgs: RcMessage[], rids: string[], merge: boolean) => Promise<void>;
@@ -659,17 +721,21 @@ const STATUS_BY_NUM: Record<number, string> = {
 };
 
 /**
- * 订阅里没有就退到 rooms —— 同 roomTypeOf 的理由：未订阅的频道/讨论只有 rooms[rid]
- * 有值，少了这层兜底 'c'/'p' 会被当成 DM 拼成 `/direct/<rid>`，链接打不开。
- * 类型是 c/p 却拿不到 name 时返回空，调用方据此放弃给链接（好过给死链）。
+ * 消息所属房间的永久链接路径参数。
+ *
+ * 订阅里没有名字就退到 rooms —— 未订阅的频道/讨论只有 rooms[rid] 有值，少了这层
+ * 兜底 'c'/'p' 会被当成 DM 拼成 `/direct/<rid>`，链接打不开。链接组装统一走
+ * rc-client 的 buildMessagePermalink（c/p 用频道名、DM 用 rid，拿不到名字返回空）。
  */
-function roomPath(rid: string, subs: Record<string, RcSubscription>): string {
+function roomPermalinkArgs(rid: string, subs: Record<string, RcSubscription>): {
+  roomType: string;
+  roomNameOrId: string;
+} {
   const sub = subs[rid];
   const room = useChat.getState().rooms[rid];
-  const type = sub?.t ?? room?.t;
-  const name = sub?.name ?? room?.name;
-  if (type === 'c' || type === 'p') return name ? `${type === 'c' ? 'channel' : 'group'}/${name}` : '';
-  return `direct/${rid}`;
+  const type = sub?.t ?? room?.t ?? '';
+  const name = sub?.name ?? room?.name ?? '';
+  return { roomType: type, roomNameOrId: type === 'd' ? rid : name };
 }
 
 /**
@@ -685,20 +751,23 @@ function quoteLinkPrefix(
   subs: Record<string, RcSubscription>,
   site: string,
 ): string {
-  return quoteMessagePrefix(`${site}/${roomPath(quoted.rid, subs)}?msg=${quoted._id}`);
+  const { roomType, roomNameOrId } = roomPermalinkArgs(quoted.rid, subs);
+  return quoteMessagePrefix(
+    buildMessagePermalink(site, roomType, roomNameOrId, quoted._id),
+  );
 }
 
 /**
  * 消息的永久链接（右键「复制消息链接」）。
  *
- * 复用 roomPath —— 引用回复用的就是它，而且服务端能正确解析（引用会被展开成附件），
- * 是被验证过的。**别照着 room.name 另拼一份**：DM 的房间文档根本没有 name / fname
+ * 复用与引用回复同一套组装（服务端能正确解析、引用会被展开成附件）。
+ * **别照着 room.name 另拼一份**：DM 的房间文档根本没有 name / fname
  * （实测：room.name=undefined，名字只在订阅上），那样拼出来是 `/direct/?msg=xxx`，
  * 段名为空，打开是个死链。DM 要用 rid。
  */
 export function permalinkOf(rid: string, mid: string): string {
-  const path = roomPath(rid, useChat.getState().subscriptions);
-  return path ? `${siteUrlSync()}/${path}?msg=${mid}` : '';
+  const { roomType, roomNameOrId } = roomPermalinkArgs(rid, useChat.getState().subscriptions);
+  return buildMessagePermalink(siteUrlSync(), roomType, roomNameOrId, mid);
 }
 
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
@@ -1477,10 +1546,40 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       return;
     }
+    // 客户端有实现的命令：纯文本直发、参数化命令打开 GUI、hide 直接执行。
+    // 转发型（forward）落到下面的服务端分支。
+    const action = resolveClientCommand(command, params, rid);
+    if (action) {
+      try {
+        if (action.type === 'send') {
+          await get().send(action.text, { rid, ...(tmid ? { tmid } : {}) });
+        } else if (action.type === 'open') {
+          useCommandUi.getState().open(action.dialog);
+        } else if (action.type === 'panel') {
+          get().setPanel({ kind: action.panel });
+        } else if (action.type === 'hideConv') {
+          const conv = get().subscriptions[action.rid];
+          if (conv) {
+            await get().hideConv({ rid: conv.rid, name: conv.fname || conv.name, type: conv.t });
+          } else {
+            toast.info('当前会话已经是隐藏状态');
+          }
+        }
+        if (action.type !== 'forward') return;
+      } catch (err) {
+        toast.error(err, `/${command} 执行失败`);
+        return;
+      }
+    }
     // 认不出来的命令**不发**。以前会把 `/kick @张三` 原样广播给全群——
     // 打错一个字母就变成公开处刑，宁可让用户看见「没有这个命令」。
-    if (!findCommand(get().slashCommands, command)) {
-      toast.show({ kind: 'error', message: `没有 /${command} 这个命令` });
+    if (!action && !findCommand(get().slashCommands, command)) {
+      // 建议基于合并后的完整命令表（服务端 + 应用 + 客户端注册表），别漏了本地命令
+      const hint = nearestCommand(command, composerCommands(get().slashCommands));
+      toast.show({
+        kind: 'error',
+        message: hint ? `没有 /${command} 这个命令，你是想用 /${hint} 吗？` : `没有 /${command} 这个命令`,
+      });
       return;
     }
     try {
@@ -1779,6 +1878,220 @@ export const useChat = create<ChatState>((set, get) => ({
       await rest.react(messageId, emoji);
     } catch (err) {
       toast.error(err, '表情回应失败');
+    }
+  },
+
+  sendPoll: async (rid, poll) => {
+    try {
+      const message = await rest.sendMessageRaw({
+        rid,
+        msg: pollText(poll),
+        attachments: [pollAttachment(poll)],
+      });
+      // 立即本地落卡，不等流推送（否则刚发的投票卡片会闪一下纯文本）
+      const list = get().messages[rid];
+      if (list && !list.some((m) => m._id === message._id)) {
+        set({ messages: { ...get().messages, [rid]: [...list, message] } });
+      }
+    } catch (err) {
+      toast.error(err, '发起投票失败');
+      throw err;
+    }
+  },
+
+  votePoll: async (message, optionIndex) => {
+    const parsed = pollFromMessage(message);
+    if (!parsed) return;
+    const { poll } = parsed;
+    const my = useAuth.getState().user?.username;
+    if (!my) return;
+    if (pollIsClosed(poll, message)) {
+      toast.info('投票已经结束了');
+      return;
+    }
+    const code = POLL_DIGIT_CODES[optionIndex];
+    if (!code) return;
+    const already = !!message.reactions?.[code]?.usernames.includes(my);
+    try {
+      // 单选：先撤掉本人在其他选项上的票（服务端一次只撤一个，逐个来）
+      if (!poll.multi) {
+        const others = POLL_DIGIT_CODES.filter(
+          (c, i) => i !== optionIndex && message.reactions?.[c]?.usernames.includes(my),
+        );
+        for (const other of others) await rest.react(message._id, other, false);
+      }
+      await rest.react(message._id, code, !already);
+      // 计票由服务端的消息更新流推回来，这里不做乐观改动，避免和流对账打架
+    } catch (err) {
+      toast.error(err, '投票失败');
+    }
+  },
+
+  closePoll: async (rid, messageId) => {
+    const message = (get().messages[rid] ?? []).find((m) => m._id === messageId);
+    if (!message || !pollFromMessage(message)) return;
+    try {
+      // 锁表情就是结束标记：chat.update 改附件会被服务端 schema 拒收，表情不会；
+      // 消息更新流会把新回应推回来，卡片随即显示「已结束」。
+      await rest.react(messageId, POLL_CLOSED_REACTION);
+      toast.success('投票已结束');
+    } catch (err) {
+      toast.error(err, '结束投票失败，只有发起人能结束');
+    }
+  },
+
+  ensureKanbanBoard: async (rid) => {
+    // 先翻本地缓存，再翻最近历史，都没有才创建根消息
+    const cached = findBoardRoot(get().messages[rid] ?? []);
+    if (cached) return cached;
+    try {
+      const type = roomTypeOf(get(), rid);
+      const history = await rest.getHistory(rid, type, 100);
+      const found = findBoardRoot(history);
+      if (found) return found;
+    } catch {
+      // 历史拉不到就当作还没有看板
+    }
+    const message = await rest.sendMessageRaw({
+      rid,
+      msg: '📋 已创建消息看板，卡片都在这个话题里维护，不会刷屏',
+      attachments: [{ type: KANBAN_BOARD_TYPE, text: '消息看板' }],
+    });
+    const list = get().messages[rid];
+    if (list && !list.some((m) => m._id === message._id)) {
+      set({ messages: { ...get().messages, [rid]: [...list, message] } });
+    }
+    return message;
+  },
+
+  addKanbanCard: async (rid, input) => {
+    try {
+      const board = await get().ensureKanbanBoard(rid);
+      // 卡片 id 预生成并作为事件消息的 _id：事件重放时 cardId 就是消息 id
+      const cardId = `kc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const column = input.column ?? 'todo';
+      await rest.sendMessageRaw({
+        rid,
+        tmid: board._id,
+        _id: cardId,
+        msg: kanbanEventText({ op: 'create', title: input.title }),
+        attachments: [
+          kanbanEventAttachment({
+            op: 'create',
+            cardId,
+            title: input.title,
+            column,
+            ...(input.sourceMid ? { sourceMid: input.sourceMid } : {}),
+          }),
+        ],
+      });
+      toast.success(`已加入看板（${kanbanColumnName(column)}）`);
+    } catch (err) {
+      toast.error(err, '加入看板失败');
+      throw err;
+    }
+  },
+
+  moveKanbanCard: async (rid, cardId, to, title) => {
+    try {
+      const board = await get().ensureKanbanBoard(rid);
+      await rest.sendMessageRaw({
+        rid,
+        tmid: board._id,
+        msg: kanbanEventText({ op: 'move', title, column: to }),
+        attachments: [kanbanEventAttachment({ op: 'move', cardId, column: to })],
+      });
+    } catch (err) {
+      toast.error(err, '移动卡片失败');
+    }
+  },
+
+  removeKanbanCard: async (rid, cardId, title) => {
+    try {
+      const board = await get().ensureKanbanBoard(rid);
+      await rest.sendMessageRaw({
+        rid,
+        tmid: board._id,
+        msg: kanbanEventText({ op: 'remove', title }),
+        attachments: [kanbanEventAttachment({ op: 'remove', cardId })],
+      });
+      toast.success('已删除卡片');
+    } catch (err) {
+      toast.error(err, '删除卡片失败');
+    }
+  },
+
+  ensureOncallBoard: async (rid) => {
+    const cached = findOncallRoot(get().messages[rid] ?? []);
+    if (cached) return cached;
+    try {
+      const type = roomTypeOf(get(), rid);
+      const history = await rest.getHistory(rid, type, 100);
+      const found = findOncallRoot(history);
+      if (found) return found;
+    } catch {
+      // 同看板：历史拉不到就当作还没有
+    }
+    const message = await rest.sendMessageRaw({
+      rid,
+      msg: '📅 已创建团队值班表，排班记录都在这个话题里维护',
+      attachments: [{ type: ONCALL_BOARD_TYPE, text: '团队值班表' }],
+    });
+    const list = get().messages[rid];
+    if (list && !list.some((m) => m._id === message._id)) {
+      set({ messages: { ...get().messages, [rid]: [...list, message] } });
+    }
+    return message;
+  },
+
+  addOncallShift: async (rid, shift) => {
+    try {
+      const board = await get().ensureOncallBoard(rid);
+      const shiftId = `os-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      await rest.sendMessageRaw({
+        rid,
+        tmid: board._id,
+        _id: shiftId,
+        msg: oncallEventText({ op: 'add', shift: { id: shiftId, ...shift } }),
+        attachments: [
+          oncallEventAttachment({
+            op: 'add',
+            shiftId,
+            date: shift.date,
+            shift: shift.shift,
+            username: shift.username,
+          }),
+        ],
+      });
+      toast.success(`已排班：${shift.date} ${shift.shift} → @${shift.username}`);
+    } catch (err) {
+      toast.error(err, '排班失败');
+      throw err;
+    }
+  },
+
+  removeOncallShift: async (rid, shiftId) => {
+    try {
+      const board = await get().ensureOncallBoard(rid);
+      await rest.sendMessageRaw({
+        rid,
+        tmid: board._id,
+        msg: oncallEventText({ op: 'remove' }),
+        attachments: [oncallEventAttachment({ op: 'remove', shiftId })],
+      });
+      toast.success('已取消排班');
+    } catch (err) {
+      toast.error(err, '取消排班失败');
+    }
+  },
+
+  publishOncall: async (rid, shifts) => {
+    try {
+      await rest.sendMessage(rid, oncallSummaryText(shifts));
+      toast.success('值班表已发布到频道');
+    } catch (err) {
+      toast.error(err, '发布失败');
+      throw err;
     }
   },
 

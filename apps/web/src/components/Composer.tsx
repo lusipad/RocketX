@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { RcUser } from '@rcx/rc-client';
-import { AtSign, Bot, Image, Network, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
+import { AtSign, BarChart3, Bot, CircleHelp, Image, Network, Paperclip, Reply, SendHorizontal, Slash, Smile, X } from 'lucide-react';
 import { stripQuotePrefix, useChat } from '../stores/chat';
 import { getServerBase, isTauri, rest } from '../lib/client';
 import { openDesktopDialog } from '../platform/desktopDialog';
@@ -17,6 +17,8 @@ import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { useAuth } from '../stores/auth';
 import { usePrefs } from '../stores/prefs';
+import { useCommandUi } from '../stores/commandUi';
+import { useUI } from '../stores/ui';
 import { pinyinMatch, pinyinScore, usePinyinReady } from '../lib/pinyin';
 import { applyScopedResult, settleScopedResult } from '../lib/scopedResult';
 import {
@@ -258,6 +260,38 @@ export default function Composer() {
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
     [slashQuery, slashCommands],
   );
+
+  // 命令帮助对话框「点击插入」播种的命令文本（nonce 变化即消费一次）
+  const composerSeed = useUI((s) => s.composerSeed);
+  useEffect(() => {
+    if (!composerSeed) return;
+    const value = composerSeed.text;
+    setText((prev) => {
+      // 输入框已经是别的正文时不覆盖，避免用户打了一半的话被命令顶掉
+      const ok = !prev.trim() || /^\/[\w-]*$/.test(prev.trim());
+      return ok ? value : prev;
+    });
+    setSlashQuery(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      el?.focus();
+      el?.setSelectionRange(value.length, value.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerSeed?.nonce]);
+
+  /**
+   * 参数区提示：光标离开命令名后，把「这条命令要什么参数」常驻显示在输入框下方。
+   * 之前只有命令名补全，参数全靠背 —— /invite-all-from 这类谁记得住。
+   */
+  const paramHint = useMemo(() => {
+    const firstLine = text.split('\n')[0];
+    const m = /^\/([a-zA-Z0-9_-]+)(?:\s([\s\S]*))?$/.exec(firstLine);
+    if (!m) return null;
+    const info = slashCommands.find((c) => c.command.toLowerCase() === m[1].toLowerCase());
+    if (!info) return null;
+    return { desc: commandDesc(info), params: commandParams(info), hasArgs: !!m[2] };
+  }, [text, slashCommands]);
 
   // 面板会滚动，选中项必须跟着滚进可视区，否则按方向键翻到第 9 条以后就看不见高亮了
   useEffect(() => {
@@ -512,6 +546,12 @@ export default function Composer() {
     // 输入法合成中，方向键/回车/Esc 都归 IME 选字用，补全面板一律不拦（P2-f）
     const composing = e.nativeEvent.isComposing;
     const effectiveMode = prefsLoaded ? sendOnEnter : 'normal';
+    // Ctrl+/ 打开命令帮助（参数提示条里提到这个快捷键，就一定要能用）
+    if (!composing && e.key === '/' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      useCommandUi.getState().open({ kind: 'help' });
+      return;
+    }
     if (!composing && e.key === 'Enter' && shouldInsertNewline(effectiveMode, e)) {
       e.preventDefault();
       insertNewline();
@@ -833,6 +873,24 @@ export default function Composer() {
           </button>
         )}
         <button
+          title="命令帮助"
+          aria-label="查看全部斜杠命令"
+          className={toolBtn}
+          onClick={() => useCommandUi.getState().open({ kind: 'help' })}
+        >
+          <CircleHelp size={16} />
+        </button>
+        {activeRid && (
+          <button
+            title="发起投票"
+            aria-label="发起投票"
+            className={toolBtn}
+            onClick={() => useCommandUi.getState().open({ kind: 'poll', rid: activeRid, prefill: '' })}
+          >
+            <BarChart3 size={16} />
+          </button>
+        )}
+        <button
           title="发送图片"
           className={toolBtn}
           onClick={() =>
@@ -865,6 +923,20 @@ export default function Composer() {
       <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={onFiles} />
       <input ref={fileInputRef} type="file" multiple hidden onChange={onFiles} />
 
+      {paramHint && (
+        <div
+          data-command-hint
+          className="mb-1.5 flex items-baseline gap-2 rounded-md bg-fill-1 px-2.5 py-1.5"
+        >
+          <span className="shrink-0 text-xs text-ink-2">
+            {paramHint.params || '无参数'}
+          </span>
+          <span className="min-w-0 truncate text-xs text-ink-3">{paramHint.desc}</span>
+          {!paramHint.hasArgs && (
+            <span className="ml-auto shrink-0 text-xs text-ink-3">Ctrl+/ 查看全部命令</span>
+          )}
+        </div>
+      )}
       <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}

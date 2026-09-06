@@ -1,5 +1,6 @@
 import { parseSlash } from '../lib/slash';
 import type { RcSlashCommand } from '@rcx/rc-client';
+import { clientCommandList } from '../lib/clientCommands';
 import { kernelRegistry } from './registry';
 
 export interface InputDispatcher {
@@ -8,6 +9,11 @@ export interface InputDispatcher {
   commands: readonly RcSlashCommand[];
 }
 
+/**
+ * 已知命令的合并顺序：服务端 → 应用贡献 → 客户端注册表。
+ * 后合并的覆盖同名前者：/poll 这类原生功能必须压过示例应用的同名命令，
+ * 客户端有实现的命令也不能被服务端列表缺席拖累（缺席就拦会显得「命令无效」）。
+ */
 export function composerCommands(serverCommands: readonly RcSlashCommand[]): RcSlashCommand[] {
   const merged = new Map<string, RcSlashCommand>();
   for (const command of serverCommands) merged.set(command.command.toLowerCase(), command);
@@ -17,6 +23,9 @@ export function composerCommands(serverCommands: readonly RcSlashCommand[]): RcS
       description: command.description,
       params: command.params,
     });
+  }
+  for (const command of clientCommandList()) {
+    merged.set(command.command.toLowerCase(), command);
   }
   return [...merged.values()];
 }

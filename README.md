@@ -37,6 +37,8 @@ RocketX 不改 Rocket.Chat 服务端，只通过公开 API 通信。你可以在
 ## 主要功能
 
 - **飞书式团队消息**：三栏布局、话题、表情回应、@ 提及、文件共享、讨论卡片、消息搜索。
+- **完整斜杠命令**：30 个命令全量中文说明、参数提示条与命令帮助（`/help` 或 `Ctrl+/`）；参数化命令一律弹出图形界面（选人、选频道、确认框），不再要求手打 `@用户名` 语法。
+- **原生团队功能**：`/poll` 投票（点数字表情计票）、`/kanban` 频道看板（消息一键收纳成卡片）、`/oncall` 值班表——数据全部存服务端实时共享，**官方 Rocket.Chat 客户端也能阅读和参与**（例如用表情参与投票）。
 - **GTD 工作区**：收件箱、待办、日历、通讯录，以及可直连 Azure DevOps Server 2022 的工作台。
 - **本地 AI 管家**：启动时从 OpenAI Codex、DeepSeek Harness（DSH）或“无 AI”中三选一。选择全局生效，保存后重启生效，不会同时跑两个后端。
 - **房间共享 AI 托管**：在房间或讨论里开启共享 AI，Web 和无 AI 客户端也能看到状态、用 `@ai` 提问。
@@ -53,9 +55,22 @@ RocketX 不改 Rocket.Chat 服务端，只通过公开 API 通信。你可以在
 
 ## 截图
 
-<!-- TODO: 替换为真实产品截图或 GIF -->
+| | |
+| --- | --- |
+| ![斜杠命令补全](docs/images/slash-commands.png) | ![命令帮助](docs/images/command-help.png) |
+| *斜杠命令补全：30 个命令全量中文说明与参数提示* | *命令帮助（`/help` 或 `Ctrl+/`）：可搜索、点击插入* |
+| ![投票](docs/images/poll.png) | ![消息看板](docs/images/kanban.png) |
+| *投票：聊天内点数字表情计票，官方客户端用表情也能参与* | *频道消息看板：消息一键收纳成卡片，成员实时共享* |
+| ![值班表](docs/images/oncall.png) | ![加入频道](docs/images/join-channels.png) |
+| *团队值班表：排班实时共享，可发布文本快照到频道* | *加入频道：无需命令语法，浏览或搜索公开频道* |
 
-产品截图和演示 GIF 待补充。欢迎在 issue 中分享你使用 RocketX 的界面截图。
+**与官方 Rocket.Chat 客户端互通**——投票在官方网页端显示为可读文本 + 表情回应，官方客户端投下的票实时计入 RocketX 的投票卡片：
+
+| 官方 Rocket.Chat 网页端 | RocketX 实时计票 |
+| --- | --- |
+| ![官方客户端投票](docs/images/official-client-interop.png) | ![跨客户端计票](docs/images/cross-client-vote.png) |
+
+欢迎在 issue 中分享你使用 RocketX 的界面截图。
 
 ## 文档
 

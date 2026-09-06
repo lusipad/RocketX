@@ -27,7 +27,8 @@
 
 - 主应用的双支柱是 GTD + 注意力保护（blueprint §1），个人队列已有工作台仪表盘；
   团队规划是另一类工具，塞进主导航会稀释定位。
-- 现有 `examples/kanban-app` 已验证 `nav.module` 贡献点跑通 iframe 应用，路径可行。
+- `nav.module` 贡献点已被原生功能验证可行（消息看板已实现为 `KanbanPanel` 右面板；
+  原 `examples/kanban-app` 等本地存储示例已删除，避免与原生功能撞名）。
 
 ## 2. 前置：宿主暴露 `ado.query` 能力
 
@@ -74,10 +75,10 @@
 
 ## 5. 交付形态
 
-1. 两个应用放 `examples/`（与现有官方样板同级）起步，走 `create-rcx-app` 校验与 clean-room 门禁；
+1. 两个应用放 `examples/`（与现有官方样板 hello-app 同级）起步，走 `create-rcx-app` 校验与 clean-room 门禁；
    稳定后再决定是否提升为独立仓库 + 应用源分发。
-2. 现有 `examples/kanban-app`（消息看板 demo）保留作 SDK 教学样例，`rocketx-boards` 是独立新应用，
-   避免语义混淆可考虑把 demo 改名为 `message-board-app`。
+2. 消息看板已实现为主程序原生功能（`/kanban` + KanbanPanel），不再是示例应用；
+   新应用命名须避开原生命令名（poll/kanban/oncall 已占用）。
 
 ## 6. 里程碑建议
 

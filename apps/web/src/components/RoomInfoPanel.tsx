@@ -5,6 +5,7 @@ import {
   ArchiveRestore,
   Bell,
   BellOff,
+  CalendarClock,
   Files,
   Hash,
   Lock,
@@ -418,6 +419,14 @@ export default function RoomInfoPanel() {
                   />
                 )}
               </>
+            )}
+
+            {!isDM && (
+              <ActionRow
+                icon={CalendarClock}
+                label="团队值班表"
+                onClick={() => setPanel({ kind: 'oncall' })}
+              />
             )}
 
             <ActionRow

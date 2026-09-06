@@ -17,6 +17,7 @@
 | --- | --- |
 | [首次引导、账号与连接](onboarding-and-account.md) | 首次启动、Rocket.Chat 登录、工作区配置导入、连接切换 |
 | [消息与会话](messaging.md) | 会话列表、收发、线程、搜索、文件、通知、备注与分组 |
+| [斜杠命令与团队功能](slash-commands.md) | 30 个命令的逐项实现策略、参数化命令 GUI、投票/看板/值班表与官方客户端互通 |
 | [工作台与 Azure DevOps](workbench.md) | 确定性查询、计划层级、工作项和写操作确认 |
 | [个人效率](personal-productivity.md) | 待办、日历、通讯录、下载记录 |
 | [管家任务](butler-tasks.md) | Codex 与 DeepSeek 独立视图、原生会话、配置、审批、停止与后端边界 |

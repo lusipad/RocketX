@@ -8,6 +8,9 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
+import { pollFromMessage } from '../lib/poll';
+import { cardTitleFromMessage } from '../lib/kanban';
+import PollCard from './PollCard';
 import {
   AlertCircle,
   Bot,
@@ -29,6 +32,7 @@ import {
   Reply,
   Share2,
   SmilePlus,
+  SquareKanban,
   Star,
   Sparkles,
   Trash2,
@@ -857,11 +861,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  // 投票消息：卡片接管正文与附件展示（官方客户端看到的是正文里的题目文本）
+  const pollInfo = pollFromMessage(message);
   const hostedAgentAnswer = messageRenderer ? null : parseHostedAgentAnswer(visibleText);
   const rocketXSticker = messageRenderer || hostedAgentAnswer
     ? null
     : parseRocketXStickerShortcodeMessage(visibleText);
-  const richMarkdown = !hostedAgentAnswer && /(^|\n)(#{1,6}\s+|>\s?|```|\s*[-*+]\s+|\s*\d+[.)]\s+|\|.+\|)/.test(visibleText);
+  // 投票正文带编号列表，会误命中 markdown 判定；卡片自己排版，别套富文本容器
+  const richMarkdown = !hostedAgentAnswer && !pollInfo && /(^|\n)(#{1,6}\s+|>\s?|```|\s*[-*+]\s+|\s*\d+[.)]\s+|\|.+\|)/.test(visibleText);
   // 插件 renderer 接管整条消息的展示，折叠不介入；阈值按当前窗口与设置的折叠时机预估
   const longMessage =
     collapseLong && !messageRenderer && isLongMessage(visibleText, window.innerHeight, longMessageFoldAt);
@@ -943,6 +950,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       : []),
     { label: '转发', icon: Share2, onClick: () => setForwarding(true) },
     { label: '多选', icon: ListChecks, onClick: () => enterSelectMode(message._id) },
+    {
+      label: '加入看板',
+      icon: SquareKanban,
+      onClick: () => {
+        void useChat
+          .getState()
+          .addKanbanCard(message.rid, { title: cardTitleFromMessage(message), sourceMid: message._id });
+      },
+    },
     ...(!inThread
       ? [
           {
@@ -1225,7 +1241,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 )}
                 {hostedAgentAnswer
                   ? renderMarkdownDoc(hostedAgentAnswer.body, myUsername)
-                  : rocketXSticker
+                  : pollInfo
+                    ? <PollCard message={message} poll={pollInfo.poll} />
+                    : rocketXSticker
                     ? (
                       <AuthImage
                         path={`/emoji-custom/${encodeURIComponent(rocketXSticker.name)}.${rocketXSticker.format}`}
@@ -1240,14 +1258,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 {!message.msg && !message.attachments?.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
-                {message.attachments?.map((att, i) => (
-                  <AttachmentCard
-                    key={i}
-                    att={att}
-                    message={message}
-                    source={{ rid: message.rid, roomName, messageId: message._id }}
-                  />
-                ))}
+                {message.attachments?.map((att, i) =>
+                  pollInfo && i === pollInfo.attIndex ? null : (
+                    <AttachmentCard
+                      key={i}
+                      att={att}
+                      message={message}
+                      source={{ rid: message.rid, roomName, messageId: message._id }}
+                    />
+                  ),
+                )}
                 {message.urls
                   ?.filter((u) => u.meta && Object.keys(u.meta).length > 0)
                   .slice(0, 2)
@@ -1363,7 +1383,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           </button>
         ) : null}
 
-        <Reactions message={message} />
+        {pollInfo ? null : <Reactions message={message} />}
       </div>
 
       {/* 右侧留白，让长消息不顶满 */}

@@ -3,6 +3,7 @@ import {
   BookUser,
   Blocks,
   Calendar,
+  Hash,
   LayoutGrid,
   Keyboard,
   ListTodo,
@@ -12,11 +13,13 @@ import {
   Plus,
   Search,
   Settings,
+  Smile,
   Timer,
   Users,
   UsersRound,
 } from 'lucide-react';
 import { useAuth } from '../stores/auth';
+import { useCommandUi } from '../stores/commandUi';
 import { useChat } from '../stores/chat';
 import { isOverdue, todayKey, useTodos } from '../stores/todos';
 import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
@@ -215,6 +218,27 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                 >
                   <Users size={14} className="text-ink-2" />
                   创建团队
+                </button>
+                <div className="my-1 h-px bg-line" />
+                <button
+                  onClick={() => {
+                    setPlusMenu(false);
+                    useCommandUi.getState().open({ kind: 'join', prefill: '' });
+                  }}
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
+                >
+                  <Hash size={14} className="text-ink-2" />
+                  加入频道
+                </button>
+                <button
+                  onClick={() => {
+                    setPlusMenu(false);
+                    useCommandUi.getState().open({ kind: 'status', prefill: '' });
+                  }}
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
+                >
+                  <Smile size={14} className="text-ink-2" />
+                  设置状态
                 </button>
               </div>
             </>

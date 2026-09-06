@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Check,
   Crown,
+  Import,
   MicOff,
   MoreHorizontal,
   Search,
@@ -12,10 +13,12 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { useAuth } from '../stores/auth';
+import { useCommandUi } from '../stores/commandUi';
 import { useChat } from '../stores/chat';
 import { personName, useAliases } from '../stores/aliases';
 import { humanError } from '../stores/toast';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
+import { rest } from '../lib/client';
 import {
   ROLE_LABELS,
   canActOn,
@@ -41,20 +44,67 @@ import { SkeletonList } from './Skeleton';
  */
 const NO_ROLES: RcRoomRole[] = [];
 
-/** 添加成员弹窗 */
-function AddMembersDialog({ onClose }: { onClose: () => void }) {
-  const rid = useChat((s) => s.activeRid);
+/** 添加成员弹窗（成员面板按钮与 /invite 命令共用） */
+export function AddMembersDialog({
+  onClose,
+  rid: ridProp,
+  prefill,
+}: {
+  onClose: () => void;
+  /** 指定目标会话（/invite 命令用）；缺省邀请进当前会话 */
+  rid?: string;
+  /** 预填的用户名（"@张三 @李四"），匹配到的自动选中 */
+  prefill?: string;
+}) {
+  const activeRid = useChat((s) => s.activeRid);
+  const rid = ridProp ?? activeRid;
   const inviteMembers = useChat((s) => s.inviteMembers);
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
   // 多人聊天（RC 里 t 仍是 'd'）没法直接加人，会新建一个包含所有人的会话 ——
   // 这跟「往群里加人」是两种结果，得先讲清楚，不能让用户点完才发现换了个会话
-  const isDirect = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t === 'd' : false));
+  const isDirect = useChat((s) => {
+    const target = ridProp ?? s.activeRid;
+    return target ? s.subscriptions[target]?.t === 'd' : false;
+  });
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { users, warning: userSearchWarning } = useUserSearch(keyword);
+
+  // 命令预填：/@([\w.-]+)/ 里给的用户名逐个精确解析并选中，用户确认后再统一邀请。
+  // 优先 users.info 直查（快、不依赖搜索权限），查不到再退回目录搜索
+  useEffect(() => {
+    const wanted = [...(prefill ?? '').matchAll(/@([\w.\-]+)/g)].map((m) => m[1]);
+    if (wanted.length === 0) return;
+    let current = true;
+    void Promise.all(
+      wanted.map(async (username) => {
+        try {
+          return await rest.getUserInfo(username);
+        } catch {
+          try {
+            const { users: found } = await rest.searchUsers(username, 5);
+            return found.find((u) => u.username.toLowerCase() === username.toLowerCase()) ?? null;
+          } catch {
+            return null;
+          }
+        }
+      }),
+    ).then((found) => {
+      if (!current) return;
+      setSelected((prev) => {
+        const next = new Map(prev);
+        for (const u of found) if (u && !next.has(u._id)) next.set(u._id, u);
+        return next;
+      });
+    });
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 必须用函数式更新：直接读闭包里的 selected，同一渲染周期内的连续两次勾选
   // 会基于同一份旧 Map 计算，后一次把前一次覆盖掉，只剩一个人被选中
@@ -340,6 +390,15 @@ export default function MembersPanel() {
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary"
         >
           <UserPlus size={14} />
+        </button>
+        <button
+          title="从其他频道导入成员"
+          onClick={() =>
+            rid && useCommandUi.getState().open({ kind: 'roomPick', rid, mode: 'invite-all-from' })
+          }
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary"
+        >
+          <Import size={14} />
         </button>
       </div>
       {adding && <AddMembersDialog onClose={() => setAdding(false)} />}

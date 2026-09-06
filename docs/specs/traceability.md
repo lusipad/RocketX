@@ -127,7 +127,18 @@
 | `LOOP-AC-04`、`LOOP-AC-06` | 部分：消化卡与统计（v2 消化清单未实现） | `focus-mode.test.ts` | 消化清单批处理 UI |
 | `LOOP-AC-05` | 未实现（v4 消息待办自动消解） | — | — |
 
-## 9. 发布候选门禁
+## 9. 斜杠命令与团队功能
+
+规格：[slash-commands.md](slash-commands.md)（2026-09-06 对 Rocket.Chat 8.6.1 实测）
+
+| 验收 ID | 主要实现 | 自动化证据 | 仍需验证 |
+| --- | --- | --- | --- |
+| `SLASH-AC-01` | `lib/clientCommands.ts`、`kernel/dispatch.ts`、`stores/chat.ts` runSlash | `slash-commands.test.ts`、smoke 命令表覆盖断言（服务端命令缺中文说明即失败） | 其他 RC 版本的命令表差异 INT |
+| `SLASH-AC-02` | `lib/poll.ts`、`components/PollCard.tsx`、`CommandDialogs.tsx` | `poll.test.ts`、smoke 投票段（附件往返、双账号表情计票、结束标记） | 官方移动端表情参与 INT |
+| `SLASH-AC-03` | `lib/kanban.ts`、`lib/oncall.ts`、`components/KanbanPanel.tsx`、`components/OncallPanel.tsx` | `kanban-oncall.test.ts`、`thread-pagination.test.ts`、judge 截图验收 9/9 | 超长事件流真服务端压测 INT |
+| `SLASH-AC-04` | `kernel/capabilities/host.ts`、`kernel/bridge.ts`、`kernel/chatEvents.ts`、`packages/app-sdk` | `kernel-host.test.ts`、`chat-events.test.ts`（消息事件按 chat:read 门控有源码断言） | 第三方应用实战 |
+
+## 10. 发布候选门禁
 
 规格状态要提升为“已实现”前，至少满足：
 
@@ -137,7 +148,7 @@
 4. [能力矩阵](capability-matrix.md)、对应规格与本追踪表一致。
 5. 测试失败或尚未执行时，在实施记录中如实保留，不以旧截图代替。
 
-## 10. 不再接受的历史证据
+## 11. 不再接受的历史证据
 
 - 依赖已删除自建 Butler Memory 的测试，不能证明当前 Codex 原生 Memory。
 - 依赖已删除“派出去”界面的测试，不能证明独立委托存在。

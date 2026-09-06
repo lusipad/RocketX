@@ -36,6 +36,7 @@ import {
   nextUnreadConversation,
 } from '../lib/conversationView';
 import ShortcutHelpDialog from '../components/ShortcutHelpDialog';
+import CommandDialogs from '../components/CommandDialogs';
 import { useAuth } from '../stores/auth';
 import { useNotificationAggregation } from '../stores/notificationAggregation';
 import { desktopNotify } from '../lib/notify';
@@ -417,6 +418,7 @@ export default function MainPage() {
       )}
       {newChatOpen && <StartDMDialog onClose={() => setNewChatOpen(false)} />}
       {shortcutsOpen && <ShortcutHelpDialog onClose={() => setShortcutsOpen(false)} />}
+      <CommandDialogs />
       <FocusDigestCard />
     </div>
   );

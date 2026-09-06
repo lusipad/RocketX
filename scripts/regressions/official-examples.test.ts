@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
-const EXAMPLES = ['hello-app', 'kanban-app', 'poll-app', 'oncall-app'] as const;
+// 官方样板只保留 hello-app：poll/kanban/oncall 已升级为主程序原生功能，
+// 示例再撞名会让装了示例的用户看到两个同名入口（命令被原生覆盖、面板却是旧的本地实现）。
+const EXAMPLES = ['hello-app'] as const;
 const runtimeText = readFile(new URL('../../apps/web/src/kernel/runtime.tsx', import.meta.url), 'utf8');
 const hostCapabilityText = readFile(
   new URL('../../apps/web/src/kernel/capabilities/host.ts', import.meta.url),

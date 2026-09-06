@@ -114,11 +114,23 @@ const DialogShell = Dialog;
  * Rocket.Chat 的 im.create 本来就支持多人，只是它把这种会话的 t 仍标成 'd'。
  * 真正需要长期存在、有名字有公告的，才去「创建群组」。
  */
-export function StartDMDialog({ onClose }: { onClose: () => void }) {
+export function StartDMDialog({
+  onClose,
+  initialKeyword,
+  draft,
+  onOpened,
+}: {
+  onClose: () => void;
+  /** 预填的搜索词（/msg @用户名 打开时带上对方） */
+  initialKeyword?: string;
+  /** 首条消息草稿：会话打开后写进输入框（/msg @用户名 消息内容） */
+  draft?: string;
+  onOpened?: (rid: string) => void;
+}) {
   const startDM = useChat((s) => s.startDM);
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
-  const [keyword, setKeyword] = useState('');
+  const [keyword, setKeyword] = useState(initialKeyword ?? '');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +152,9 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await startDM(usernames);
+      const rid = await startDM(usernames);
+      if (draft && rid) useChat.getState().setDraft(rid, draft);
+      onOpened?.(rid);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : '发起会话失败');
@@ -265,18 +279,24 @@ export function StartDMDialog({ onClose }: { onClose: () => void }) {
 export function CreateGroupDialog({
   kind = 'group',
   onClose,
+  initialName,
+  initialPrivate,
 }: {
   kind?: 'group' | 'team';
   onClose: () => void;
+  /** /create 频道名 预填 */
+  initialName?: string;
+  /** /create --private 预选 */
+  initialPrivate?: boolean;
 }) {
   const createGroup = useChat((s) => s.createGroup);
   const createTeam = useChat((s) => s.createTeam);
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName ?? '');
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
-  const [priv, setPriv] = useState(true);
+  const [priv, setPriv] = useState(initialPrivate ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { users, warning: userSearchWarning } = useUserSearch(keyword);
