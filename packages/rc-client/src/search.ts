@@ -31,7 +31,9 @@ export async function directory(
     type,
     count,
     offset,
-    sort: '{"username":1}',
+    // 排序字段必须跟类型匹配：channels 传 username 会被服务端整单拒收
+    // （"Please verify the parameters"，RC 8.6.1 实测）
+    sort: type === 'users' ? '{"username":1}' : '{"name":1}',
   });
   return { result: response.result ?? [], total: response.total ?? 0 };
 }

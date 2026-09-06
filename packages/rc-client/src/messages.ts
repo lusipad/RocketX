@@ -8,7 +8,7 @@ export interface RocketChatMessagesDomain {
   sendMessage(rid: string, msg: string, tmid?: string): Promise<RcMessage>;
   sendMessageRaw(message: { _id?: string; rid: string; msg?: string; tmid?: string }): Promise<RcMessage>;
   getMessage(msgId: string): Promise<RcMessage>;
-  updateMessage(rid: string, msgId: string, text: string): Promise<RcMessage>;
+  updateMessage(rid: string, msgId: string, text: string, attachments?: RcMessageAttachment[]): Promise<RcMessage>;
   deleteMessage(rid: string, msgId: string): Promise<void>;
   react(messageId: string, emoji: string, shouldReact?: boolean): Promise<unknown>;
 }
@@ -84,8 +84,26 @@ export function react(context: RcRestEndpointContext, messageId: string, emoji: 
   return context.request('POST', 'chat.react', { messageId, emoji, shouldReact });
 }
 
-export async function updateMessage(context: RcRestEndpointContext, rid: string, msgId: string, text: string): Promise<RcMessage> {
-  const response = await context.request<{ message: RcMessage }>('POST', 'chat.update', { roomId: rid, msgId, text });
+/**
+ * 编辑消息。
+ *
+ * **注意**：`chat.update` 对 attachments 做严格 schema 校验（RC 8.6.1 实测），
+ * 自定义字段会被整条拒收（Ajv oneOf 报错）。想给消息附加自定义状态
+ * （投票结束、看板列变更等）用表情回应或追加事件消息，别走这里改附件。
+ */
+export async function updateMessage(
+  context: RcRestEndpointContext,
+  rid: string,
+  msgId: string,
+  text: string,
+  attachments?: RcMessageAttachment[],
+): Promise<RcMessage> {
+  const response = await context.request<{ message: RcMessage }>('POST', 'chat.update', {
+    roomId: rid,
+    msgId,
+    text,
+    ...(attachments ? { attachments } : {}),
+  });
   return response.message;
 }
 
@@ -94,11 +112,62 @@ export async function deleteMessage(context: RcRestEndpointContext, rid: string,
   if (response?.success !== true) throw new RcApiError('服务器未确认消息删除', 502);
 }
 
-export async function getThreadMessages(context: RcRestEndpointContext, tmid: string, count = 100): Promise<RcMessage[]> {
-  const response = await context.request<{ messages: RcMessage[] }>('GET', 'chat.getThreadMessages', undefined, { tmid, count });
-  const messages = response.messages ?? [];
-  messages.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
-  return messages;
+/**
+ * 拉取话题全部回复，自动翻页直到拉完。
+ *
+ * 单页拉取会静默截断：看板/值班表把事件流存在话题里，话题只增不减，
+ * 超过一页（默认 100 条）就会丢事件。按 _id 去重 + 短页即停，与服务端 total 对账。
+ */
+export async function getThreadMessages(
+  context: RcRestEndpointContext,
+  tmid: string,
+  count = 100,
+): Promise<RcMessage[]> {
+  const pageSize = Math.min(Math.max(count, 1), 100);
+  const collected = new Map<string, RcMessage>();
+  let offset = 0;
+  for (let page = 0; page < 100; page++) {
+    const response = await context.request<{ messages?: RcMessage[]; total?: number }>(
+      'GET',
+      'chat.getThreadMessages',
+      undefined,
+      { tmid, count: pageSize, offset },
+    );
+    const messages = response.messages ?? [];
+    // 只收首次出现的记录：翻页边界抖动可能让同一条消息重复出现，保留首次的时间戳
+    for (const message of messages) {
+      if (!collected.has(message._id)) collected.set(message._id, message);
+    }
+    if (messages.length < pageSize) break;
+    offset += messages.length;
+    if (response.total !== undefined && collected.size >= response.total) break;
+  }
+  const list = [...collected.values()];
+  list.sort((a, b) => tsMs(a.ts) - tsMs(b.ts));
+  return list;
+}
+
+/**
+ * 组装 RC 官方消息永久链接。
+ *
+ * c/p 用频道名（channel/<name>、group/<name>），DM 用 rid（direct/<rid>——
+ * DM 的房间文档没有 name，名字只在订阅上）。c/p 拿不到 name 时返回空串，
+ * 调用方据此放弃给链接（好过给死链）。siteUrl 必须与服务端 Site_Url 精确一致，
+ * 否则引用回复不会被服务端展开。
+ */
+export function buildMessagePermalink(
+  siteUrl: string,
+  roomType: string,
+  roomNameOrId: string,
+  messageId: string,
+): string {
+  const base = siteUrl.replace(/\/+$/, '');
+  if (roomType === 'c' || roomType === 'p') {
+    if (!roomNameOrId) return '';
+    return `${base}/${roomType === 'c' ? 'channel' : 'group'}/${roomNameOrId}?msg=${messageId}`;
+  }
+  if (roomType === 'd') return `${base}/direct/${roomNameOrId}?msg=${messageId}`;
+  return '';
 }
 
 export function followMessage(context: RcRestEndpointContext, mid: string): Promise<unknown> {

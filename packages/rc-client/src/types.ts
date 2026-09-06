@@ -14,6 +14,8 @@ export interface RcUser {
   username: string;
   name?: string;
   status?: string;
+  /** 状态文案（users.setStatus 的 message 参数；users.info/me 返回，订阅流上不一定有） */
+  statusText?: string;
   emails?: { address: string; verified?: boolean }[];
   avatarETag?: string;
   /** 全局角色（admin / user / bot…）。admin 在所有房间里通吃 */
@@ -48,6 +50,13 @@ export interface RcMessageAttachment {
   attachments?: RcMessageAttachment[];
   fields?: RcMessageAttachmentField[];
   collapsed?: boolean;
+  /**
+   * RocketX 原生功能的扩展载荷：投票（poll）/ 看板·值班表事件（ev）。
+   * `sendMessageRaw` 能完整写入并读回；**`chat.update` 会整条拒收**（服务端
+   * 对附件做严格 schema 校验），修改这类状态请用表情回应或追加事件消息。
+   */
+  poll?: unknown;
+  ev?: unknown;
 }
 
 export interface RcMessageMention {

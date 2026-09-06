@@ -196,6 +196,12 @@ export function joinRoom(context: RcRestEndpointContext, rid: string): Promise<u
   return context.request('POST', 'rooms.join', { roomId: rid });
 }
 
+/**
+ * 逐个邀请用户进房。
+ *
+ * **没有** inviteAll 可用：`channels.inviteAll` / `groups.inviteAll` 在
+ * RC 8.6.1 都是 404（实测，同 muteUser 一类缺失端点），批量邀请只能循环本方法。
+ */
 export function inviteToRoom(context: RcRestEndpointContext, rid: string, type: RoomType, userId: string): Promise<unknown> {
   return context.request('POST', type === 'c' ? 'channels.invite' : 'groups.invite', { roomId: rid, userId });
 }

@@ -471,8 +471,8 @@ export class RcRestClient {
     return reactEndpoint(this.endpointContext(), messageId, emoji, shouldReact);
   }
 
-  async updateMessage(rid: string, msgId: string, text: string): Promise<RcMessage> {
-    return updateMessageEndpoint(this.endpointContext(), rid, msgId, text);
+  async updateMessage(rid: string, msgId: string, text: string, attachments?: RcMessageAttachment[]): Promise<RcMessage> {
+    return updateMessageEndpoint(this.endpointContext(), rid, msgId, text, attachments);
   }
 
   async deleteMessage(rid: string, msgId: string): Promise<void> {
