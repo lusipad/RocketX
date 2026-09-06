@@ -1,5 +1,11 @@
 # 更新日志
 
+## v0.44.4 - 2026-09-06
+
+### 修复
+
+- 修复真实 Rocket.Chat 缩略图链路中 SVG 仍显示「图片装载失败」的问题（issue #382 第二轮）：服务端把 SVG 缩略图转成 PNG，但 URL 仍是 `.svg` 且响应头可能谎报/缺失 MIME；此前按「声明 Content-Type → URL 后缀兜底」标记 blob，PNG 字节被按 SVG 解码必然失败。现在图片 blob 一律按文件头魔数嗅探真实格式（PNG/JPEG/GIF/WebP/BMP/SVG），再回退声明 MIME 与 URL 后缀；新增 6 项回归与桌面 UI 谎报 Content-Type 用例。该修复只影响客户端渲染，不绕过服务端上传类型策略。
+
 ## v0.44.3 - 2026-09-06
 
 ### 修复

@@ -602,6 +602,59 @@ test('桌面 SVG 正常显示，并可用 PP-OCRv5 叠加可选择文字（issue
   expect(pageErrors).toEqual([]);
 });
 
+test('桌面试探说 Content-Type 但字节是 PNG 的 SVG 缩略图：按字节嗅探显示，不出现失败占位', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        {
+          _id: 'general-svg-lying-ct',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:05:00.000Z',
+          u: ALICE,
+          file: { _id: 'file-svg-lying', name: '未命名.svg', type: 'image/svg+xml', size: 132 },
+          attachments: [{
+            title: '未命名.svg',
+            image_url: '/file-upload/ocr-thumb-lying/demo.svg',
+            image_type: 'image/svg+xml',
+            title_link: '/file-upload/ocr-lying/demo.svg',
+          }],
+        },
+      ],
+    },
+  });
+  await page.route('**/file-upload/ocr-thumb-lying/demo.svg', (route) => route.fulfill({
+    status: 200,
+    // 服务端谎报：URL 与 Content-Type 都写 .svg / image/svg+xml，字节实际是 PNG
+    contentType: 'image/svg+xml',
+    body: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  }));
+  await page.route('**/file-upload/ocr-lying/demo.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  }));
+  await conversation(page, 'General').click();
+  const svg = page.getByRole('img', { name: '未命名.svg' });
+  await expect(svg).toBeVisible();
+  await expect.poll(() => svg.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  await expect(page.getByText('[图片加载失败：未命名.svg]', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: /未命名\.svg/ }).last().click();
+  const lightboxImage = page.getByRole('img', { name: '未命名.svg' }).last();
+  await expect(lightboxImage).toBeVisible();
+  await expect.poll(
+    () => lightboxImage.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+  ).toBeGreaterThan(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('聊天记录中的 HTML 附件使用严格沙箱预览（issue #383）', async ({ page }) => {
   await bootAuthenticated(page, {
     historyOverrides: {
