@@ -6,6 +6,7 @@ mod business_mcp;
 mod butler_db;
 mod diagnostics;
 mod dsh;
+mod firewall;
 mod lan;
 #[cfg(test)]
 mod live_e2e;

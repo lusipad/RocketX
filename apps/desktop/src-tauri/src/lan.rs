@@ -945,6 +945,14 @@ pub fn lan_service_start(
     device_name: String,
     trusted_devices: Vec<TrustedDevice>,
 ) -> Result<LanServiceInfo, String> {
+    // Windows 防火墙默认拦截入站 UDP/TCP，LAN 发现与直传会直接失败（issue #369）。
+    // 幂等添加程序级放行规则；失败不阻断（第三方安全软件可能拦截），仅记录日志。
+    if let Err(error) = crate::firewall::ensure_lan_firewall_rule() {
+        log::warn!(
+            target: crate::LAN_LOG_TARGET,
+            "LAN firewall rule could not be configured: {error}"
+        );
+    }
     let mut runtime_guard = runtime
         .0
         .lock()
