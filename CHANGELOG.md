@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.44.9 - 2026-09-07
+
+### 修复
+
+- 修复两台 Windows 设备用不同 URL 登录同一服务器时互相发现不了的问题（issue #369：`no LAN peer is online`）：LAN 服务器指纹之前对 `server_url` 逐字节哈希，两台设备经不同入口（内网 IP / 主机名 / localhost / 登录 URL 与 Site_Url 不一致）接入时指纹不同，发现公告在 `record_peer` 被静默丢弃。现在指纹对同服务器 URL 归一化（scheme/host 大小写、默认端口、尾斜杠、query/fragment），localhost↔127.0.0.1 等价，同时保留主机与 scheme 区分不同服务器。
+- 为 Windows 添加 LAN 入站防火墙放行规则（`RocketX LAN P2P`，程序级，仅域+专用网络配置文件）：Windows 防火墙默认拦截入站 UDP 45826 与随机 TCP 监听端口，且 Tauri 应用不会弹出浏览器式「允许访问」对话框——这是 P2P 发现失败的另一常见根因（即使两台设备 ping 得通）。LAN 服务启动时幂等添加，失败仅记录日志不阻断。
+- LAN 诊断日志回归同步覆盖率：v0.44.8 候选的门禁曾因诊断日志新增防火墙行导致旧的行数断言失败而撤回，本版随指纹/防火墙修复一起把断言更新为适配后的行为。
+
+### 验证
+
+- 新增 5 项 LAN 指纹归一化回归（同服务器 URL 变体归一、不同服务器保持隔离、localhost 别名、默认端口剥离、scheme 区分）；Rust 177 passed（4 ignored）；LAN 协议回归 10 passed。
+
 ## v0.44.8 - 2026-09-07
 
 ### 修复

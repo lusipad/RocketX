@@ -146,9 +146,10 @@ test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息�
   assert.match(lan, /LAN peer candidate discovered:/);
   assert.match(lan, /LAN candidate attempt:/);
   assert.match(lan, /outcome=failed/);
+  // 6 条发现/候选诊断 + 1 条防火墙放行失败提示（firewall 行与诊断行共用 LAN target）
   assert.equal(
     [...lan.matchAll(/log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET/g)].length,
-    6,
+    7,
   );
 
   for (const diagnostic of lan.matchAll(
