@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Download, Loader2, Maximize2, Minus, Plus, ScanText, X } from 'lucide-react';
 import AuthImage from './AuthImage';
@@ -17,6 +17,8 @@ import { runtimeFeatures } from '../lib/runtimeMode';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
+const STAGE_MAX_W = 0.92;
+const STAGE_MAX_H = 0.86;
 
 /** 图片大图查看器：适应窗口、滚轮/按钮缩放、拖拽平移、下载 */
 export default function ImageLightbox({
@@ -37,7 +39,14 @@ export default function ImageLightbox({
   const [ocr, setOcr] = useState<ImageOcrResult | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState('');
+  // 图片实际解码尺寸：用于把白色承载背景垫在「图片显示区域」，而不是垫满整个舞台
+  // （v0.44.5 给普通 PNG 也加了大白边，issue #386）。自然尺寸未知前不给白底。
+  const [decodeSize, setDecodeSize] = useState<{ width: number; height: number } | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const ocrAvailable = runtimeFeatures().ocr && desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
+
+  const resetDecodeSize = () => setDecodeSize(null);
+  useEffect(() => resetDecodeSize, [path]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -109,6 +118,23 @@ export default function ImageLightbox({
           transformOrigin: 'center',
           cursor: dragging ? 'grabbing' : 'grab',
         };
+
+  // 白色承载区域 = 图片解码尺寸按舞台约束等比缩放后的实际显示框。
+  // 只有透明画布（SVG 等）需要它衬托内容；普通图片的显示框与内容重合，白底不外露。
+  const stageBox = stageRef.current?.getBoundingClientRect();
+  let backing: { width?: number; height?: number } | undefined;
+  if (decodeSize && stageBox) {
+    const scale = Math.min(
+      (stageBox.width * STAGE_MAX_W) / decodeSize.width,
+      (stageBox.height * STAGE_MAX_H) / decodeSize.height,
+    );
+    backing = {
+      width: Math.max(1, Math.round(decodeSize.width * scale)),
+      height: Math.max(1, Math.round(decodeSize.height * scale)),
+    };
+  } else if (decodeSize) {
+    backing = { width: decodeSize.width, height: decodeSize.height };
+  }
 
   const btn =
     'flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white transition hover:bg-white/25';
@@ -195,6 +221,7 @@ export default function ImageLightbox({
       </div>
 
       <div
+        ref={stageRef}
         style={stageStyle}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => {
@@ -202,14 +229,26 @@ export default function ImageLightbox({
           e.preventDefault();
           setDragging({ x: e.clientX - offset.x, y: e.clientY - offset.y });
         }}
-        className="relative flex h-[86vh] w-[92vw] items-center justify-center overflow-hidden rounded-md bg-white"
+        className="relative flex h-[86vh] w-[92vw] items-center justify-center overflow-hidden"
       >
-        <AuthImage
-          path={path}
-          alt={fileName}
-          className="block h-full w-full select-none rounded-md object-contain"
-          fallback={<div className="text-sm text-gray-600">图片加载失败</div>}
-        />
+        {/* 白色承载只垫图片显示框：小图/透明 SVG 放大时可见，普通 PNG 不留大白边（issue #386） */}
+        <div
+          className="relative flex items-center justify-center overflow-hidden rounded-md bg-white"
+          style={backing}
+        >
+          <AuthImage
+            path={path}
+            alt={fileName}
+            className="block h-full w-full select-none rounded-md object-contain"
+            fallback={<div className="text-sm text-gray-600">图片加载失败</div>}
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+                setDecodeSize({ width: image.naturalWidth, height: image.naturalHeight });
+              }
+            }}
+          />
+        </div>
         {ocr && (
           <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-md" aria-label="图片识别文字">
             {ocr.words.map((word, index) => (

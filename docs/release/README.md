@@ -2,7 +2,9 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.44.5`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.44.6`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+
+`v0.44.6` corrects the lightbox white backing so it only wraps the decoded image box (transparent SVGs still need the white canvas as a contrast bed), while the stage itself stays transparent. The `v0.44.5` candidate laid a full-stage white canvas behind every image, adding a large white border to ordinary PNGs; a UI regression now asserts that opaque images show no white margin and that the white backing matches the image's rendered size.
 
 `v0.44.5` corrects the desktop lightbox for small images: the stage previously sized itself to the image's intrinsic dimensions (a 24×24 SVG rendered as a 24px thumb inside an 86vh backdrop), so clicking the thumbnail appeared to "show nothing". The lightbox stage is now a fixed viewport-sized canvas with `object-contain` scaling, so originals of any size are enlarged and visible.
 

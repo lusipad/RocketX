@@ -660,6 +660,75 @@ test('桌面小尺寸 SVG 原图（24×24）在灯箱中放大显示（issue #38
   expect(pageErrors).toEqual([]);
 });
 
+test('桌面普通 PNG 灯箱：放大显示且不出现整幅白边（issue #386）', async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        {
+          _id: 'general-png-photo',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:07:00.000Z',
+          u: ALICE,
+          file: { _id: 'file-png-photo', name: '照片.png', type: 'image/png', size: 256 },
+          attachments: [{
+            title: '照片.png',
+            image_url: '/file-upload/png-thumb/demo.png',
+            image_type: 'image/png',
+            title_link: '/file-upload/png/demo.png',
+          }],
+        },
+      ],
+    },
+  });
+  // 1×1 不透明 PNG：天然尺寸 1×1，放大显示后白底不应超出图片显示框
+  const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=';
+  await page.route('**/file-upload/png-thumb/demo.png', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from(onePixelPng, 'base64'),
+  }));
+  await page.route('**/file-upload/png/demo.png', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from(onePixelPng, 'base64'),
+  }));
+  await conversation(page, 'General').click();
+
+  const thumb = page.getByRole('img', { name: '照片.png' });
+  await expect(thumb).toBeVisible();
+  await expect.poll(() => thumb.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: /照片\.png/ }).last().click();
+  const lightboxImage = page.getByRole('img', { name: '照片.png' }).last();
+  await expect(lightboxImage).toBeVisible();
+  await expect.poll(
+    () => lightboxImage.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+  ).toBeGreaterThan(0);
+
+  const layout = await lightboxImage.evaluate((image) => {
+    const backing = image.parentElement as HTMLElement | null;
+    const stage = backing?.parentElement as HTMLElement | null;
+    return {
+      img: { width: image.clientWidth, height: image.clientHeight },
+      backing: backing ? { width: backing.clientWidth, height: backing.clientHeight } : null,
+      backingBg: backing ? getComputedStyle(backing).backgroundColor : null,
+      stageBg: stage ? getComputedStyle(stage).backgroundColor : null,
+    };
+  });
+  // 小图被放大
+  expect(layout.img.width).toBeGreaterThan(100);
+  expect(layout.img.height).toBeGreaterThan(100);
+  // 白底只垫图片显示框（±2px），不超出
+  expect(layout.backing).not.toBeNull();
+  expect(Math.abs(layout.backing!.width - layout.img.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(layout.backing!.height - layout.img.height)).toBeLessThanOrEqual(2);
+  // 舞台本身不再整体白底（v0.44.5 的整幅白边回归）
+  expect(layout.stageBg).not.toBe('rgb(255, 255, 255)');
+  expect(pageErrors).toEqual([]);
+});
+
 test('桌面试探说 Content-Type 但字节是 PNG 的 SVG 缩略图：按字节嗅探显示，不出现失败占位', async ({ page }) => {
   await installFullTauriMock(page);
   const { pageErrors } = await bootAuthenticated(page, {
