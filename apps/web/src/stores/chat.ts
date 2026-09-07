@@ -348,6 +348,29 @@ async function lanRecipientIds(rid: string): Promise<string[]> {
   return [...new Set(members.map((member) => member._id).filter((id) => id !== me))];
 }
 
+/**
+ * 把 Rust 通道的英文错误换算成可操作的中文提示；错误详情随摘要保留。
+ * 现场复测时不用看英文串也能知道卡在哪一层，并指引导出 lan_diagnostics 日志。
+ */
+function lanP2pFriendlyError(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/no LAN peer is online for this user/i.test(raw)) {
+    return new Error(
+      '没有发现对方设备的局域网入口（对方可能未开客户端、未登录同一服务器，或两台设备不在同一局域网段）。请确认双方在线并且处于同一网络，导出两端 LAN 诊断日志（rocketx::lan_diagnostics）后重试。',
+    );
+  }
+  if (/no LAN peer candidate is available/i.test(raw)) {
+    return new Error('找到了对方设备但所有候选连接地址都不可达。请检查两端防火墙是否放行 RocketX 的 UDP/TCP 局域网端口，并导出两端 LAN 诊断日志。');
+  }
+  if (/LAN service is not running/i.test(raw)) {
+    return new Error('局域网直传服务未启动。请重新登录或重启客户端后再试；仍失败请导出诊断日志。');
+  }
+  if (/failed to connect LAN peer/i.test(raw)) {
+    return new Error(`连接对方设备失败：${raw}`);
+  }
+  return new Error(raw);
+}
+
 function localLanFileMessage(
   event: Pick<
     LanFileEvent,
@@ -2782,7 +2805,7 @@ export const useChat = create<ChatState>((set, get) => ({
       return true;
     } catch (error) {
       toast.dismiss(id);
-      toast.error(error, 'P2P 直传不可用');
+      toast.error(lanP2pFriendlyError(error), 'P2P 直传不可用');
       return false;
     }
   },
@@ -2800,7 +2823,7 @@ export const useChat = create<ChatState>((set, get) => ({
       toast.info('P2P 握手成功，请选择要发送的文件');
       return true;
     } catch (error) {
-      toast.error(error, 'P2P 直传不可用');
+      toast.error(lanP2pFriendlyError(error), 'P2P 直传不可用');
       return false;
     }
   },

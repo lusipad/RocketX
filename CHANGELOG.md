@@ -1,5 +1,11 @@
 # 更新日志
 
+## v0.44.7 - 2026-09-07
+
+### 变更
+
+- LAN P2P 直传失败提示改为可排查的中文指引（issue #369 配套）：Rust 通道返回的英文错误（`no LAN peer is online for this user` / `no LAN peer candidate is available` / `LAN service is not running` / 连接失败）现在映射为分步排查提示——未发现对方设备时提示确认双方在线且在同一网段并导出诊断日志；找到设备但连接不可达时提示检查两端防火墙；并保留原始错误摘要。现场复测不再需要查英文串才能定位卡层。
+
 ## v0.44.6 - 2026-09-07
 
 ### 修复
