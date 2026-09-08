@@ -1,5 +1,15 @@
 # Release evidence and publication
 
+## Local version preparation
+
+先在 `CHANGELOG.md` 手工填写目标版本的 `## vX.Y.Z - YYYY-MM-DD` 条目，再运行
+`pnpm sync-version X.Y.Z`。工具保留该条目的日期与正文；缺少目标条目时失败，且不写入任何文件。
+随后运行 `pnpm precheck:release`：先检查配置与三处文档版本，再依次运行 CI check job 中的
+typecheck、check:architecture、test:pure、test:regression（包含完整 release-contract 测试）。
+本地快速预检不包含 codex:protocol:check（需要固定版本 Codex CLI）、test:ui 与
+test:ui:release（需要 Playwright Chromium）、Web build 与 test:ecosystem（额外的构建和
+clean-room 打包安装成本）；这些步骤仍由 CI 完整执行，本地预检不替代 CI 发布门禁。
+
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
 The current release target is `v0.44.11`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
