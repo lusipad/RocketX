@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const packageFiles = [
+export const packageFiles = [
   'package.json',
   'apps/web/package.json',
   'apps/desktop/package.json',
@@ -32,18 +32,25 @@ async function readJson(relativePath) {
   return JSON.parse(await readFile(path.join(repoRoot, relativePath), 'utf8'));
 }
 
-export async function verifyVersions(version) {
+export async function verifyVersions(version, { root = repoRoot, onRead = () => {} } = {}) {
+  async function readText(relativePath) {
+    onRead(relativePath);
+    return readFile(path.join(root, relativePath), 'utf8');
+  }
+  async function readJson(relativePath) {
+    return JSON.parse(await readText(relativePath));
+  }
   const failures = [];
   for (const relativePath of packageFiles) {
     const manifest = await readJson(relativePath);
     if (manifest.version !== version) failures.push(`${relativePath}: ${manifest.version ?? '<missing>'}`);
   }
 
-  const cargo = await readFile(path.join(repoRoot, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
+  const cargo = await readText('apps/desktop/src-tauri/Cargo.toml');
   const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(cargo)?.[1];
   if (cargoVersion !== version) failures.push(`apps/desktop/src-tauri/Cargo.toml: ${cargoVersion ?? '<missing>'}`);
 
-  const cargoLock = await readFile(path.join(repoRoot, 'apps/desktop/src-tauri/Cargo.lock'), 'utf8');
+  const cargoLock = await readText('apps/desktop/src-tauri/Cargo.lock');
   const lockedVersion = /\[\[package\]\]\r?\nname = "rocketx"\r?\nversion = "([^"]+)"/.exec(cargoLock)?.[1];
   if (lockedVersion !== version) failures.push(`apps/desktop/src-tauri/Cargo.lock: ${lockedVersion ?? '<missing>'}`);
 
@@ -61,6 +68,15 @@ export async function verifyVersions(version) {
   }
   if (cli.dependencies?.['@rcx/app-sdk']) {
     failures.push('packages/create-rcx-app/package.json still depends on @rcx/app-sdk');
+  }
+
+  const escapedVersion = version.replaceAll('.', '\\.');
+  for (const [relativePath, pattern] of [
+    ['CHANGELOG.md', new RegExp(`^## v${escapedVersion} - \\d{4}-\\d{2}-\\d{2}\\r?$`, 'm')],
+    ['docs/release/README.md', new RegExp('current release target is `v' + escapedVersion + '`')],
+    ['docs/compatibility.md', new RegExp('RocketX `v' + escapedVersion + '` desktop line is split\\.')],
+  ]) {
+    if (!pattern.test(await readText(relativePath))) failures.push(`${relativePath}: missing v${version} release assertion`);
   }
 
   if (failures.length) {

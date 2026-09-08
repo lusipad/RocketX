@@ -7,6 +7,8 @@
     "dev": "pnpm --filter @rcx/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "sync-version": "node scripts/sync-version.mjs",
+    "precheck:release": "node scripts/precheck-release.mjs && pnpm typecheck && pnpm check:architecture && pnpm test:pure && pnpm test:regression",
     "bridge": "pnpm --filter @rcx/ado-bridge dev",
     "smoke": "tsx scripts/smoke.ts",
     "spike:rc-offline-contract": "tsx scripts/spike-rc-offline-contract.ts",
