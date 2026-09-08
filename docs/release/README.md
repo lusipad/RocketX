@@ -1,15 +1,5 @@
 # Release evidence and publication
 
-## Local version preparation
-
-先在 `CHANGELOG.md` 手工填写目标版本的 `## vX.Y.Z - YYYY-MM-DD` 条目，再运行
-`pnpm sync-version X.Y.Z`。工具保留该条目的日期与正文；缺少目标条目时失败，且不写入任何文件。
-随后运行 `pnpm precheck:release`：先检查配置与三处文档版本，再依次运行 CI check job 中的
-typecheck、check:architecture、test:pure、test:regression（包含完整 release-contract 测试）。
-本地快速预检不包含 codex:protocol:check（需要固定版本 Codex CLI）、test:ui 与
-test:ui:release（需要 Playwright Chromium）、Web build 与 test:ecosystem（额外的构建和
-clean-room 打包安装成本）；这些步骤仍由 CI 完整执行，本地预检不替代 CI 发布门禁。
-
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
 The current release target is `v0.44.11`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
@@ -101,12 +91,14 @@ The active `Protect immutable v* release tags` ruleset prevents updates, force-p
 ## Release sequence
 
 1. Verify that the protected environments and immutable `v*` tag ruleset above are still active.
-2. Commit the dated changelog section. For a major version of 1 or higher, also commit the real README PNG/GIF and two evidence JSON files.
+2. Author the dated `## vX.Y.Z - YYYY-MM-DD` section in `CHANGELOG.md` by hand, then run `pnpm sync-version X.Y.Z` to align every version surface in one step; the tool preserves the changelog date and body, and writes nothing at all when the target section is missing. Run `pnpm precheck:release` and commit only after it passes. For a major version of 1 or higher, also commit the real README PNG/GIF and two evidence JSON files.
 3. Push `release/vX.Y.Z` at the verified `main` commit. `Tag Version` refuses any other commit, mismatched version, or existing tag; 1.0+ additionally refuses missing visuals or external evidence.
 4. `Desktop Build` creates a draft Release and builds the Windows NSIS slim, MSI, and full installers; the macOS universal DMG and updater archive; the Linux AppImage, DEB, and RPM packages; updater metadata and signatures. Slim artifacts only probe installed runtimes and accept system DSH only after RocketX has verified the exact `0.1.0-rc.6` support line; the Windows full installer carries the private DSH/Codex/private-Node payloads and the OCR resources. It does not publish the draft.
 5. `Prepare Release` runs after the multi-platform `build` job succeeds. It packages the plugin bundle, verifies all uploaded artifacts, generates `SHA256SUMS.txt`, and writes the release notes from `CHANGELOG.md` into the draft Release. It does not publish the draft.
 6. If the release changes the public SDK or CLI and npm delivery is required, run `Publish npm packages` with confirmation `publish vX.Y.Z`. The protected job publishes `@lusipad/rocketx` first and `create-rcx-app` second. Bootstrap each new package against the immutable tag with npm's interactive identity flow, then bind this exact workflow as its Trusted Publisher; later releases use GitHub OIDC without a stored npm token. This step is independent from the desktop Release.
 7. Review the draft, then run `Publish GitHub Release` with the same confirmation. It rechecks the three-platform artifacts and checksums, publishes the new Release as Latest, and asserts `gh api repos/$GITHUB_REPOSITORY/releases/latest` returns the new tag.
+
+`pnpm precheck:release` verifies the release contract and the three documentation version surfaces first, then runs typecheck, architecture checks, pure tests, and the regression suite. It deliberately skips `codex:protocol:check` (needs the pinned Codex CLI), `test:ui` and `test:ui:release` (need Playwright Chromium), and the Web build with `test:ecosystem` (extra build and clean-room packaging cost). CI still runs all of them, and platform-conditional compilation can only fail on the three-platform matrix, so the local precheck shortens the feedback loop but never replaces the CI release gate.
 
 Never delete and recreate a released npm version or rewrite an existing release tag.
 
