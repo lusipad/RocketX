@@ -67,8 +67,7 @@ pub struct LanRuntimeState(Mutex<Option<LanRuntime>>);
 
 struct LanRuntime {
     stop: Arc<AtomicBool>,
-    mdns: ServiceDaemon,
-    service_fullname: String,
+    mdns: Option<(ServiceDaemon, String)>,
     peers: SharedPeers,
     trusted: SharedTrusted,
     identity: Arc<RuntimeIdentity>,
@@ -519,13 +518,25 @@ fn open_udp_discovery_socket() -> Result<UdpSocket, String> {
         .bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, UDP_PORT).into())
         .map_err(|error| format!("failed to bind UDP discovery socket: {error}"))?;
     let socket: UdpSocket = socket.into();
-    socket
+    let multicast = socket
         .join_multicast_v4(&UDP_GROUP, &Ipv4Addr::UNSPECIFIED)
-        .map_err(|error| format!("failed to join UDP discovery group: {error}"))?;
+        .and_then(|_| socket.set_multicast_ttl_v4(1))
+        .and_then(|_| socket.set_multicast_loop_v4(false));
+    configure_udp_discovery_socket(socket, multicast)
+}
+
+fn configure_udp_discovery_socket(
+    socket: UdpSocket,
+    multicast: std::io::Result<()>,
+) -> Result<UdpSocket, String> {
+    if multicast.is_err() {
+        log::warn!(
+            target: crate::LAN_LOG_TARGET,
+            "LAN multicast unavailable; continuing with broadcast discovery"
+        );
+    }
     socket
-        .set_multicast_ttl_v4(1)
-        .and_then(|_| socket.set_multicast_loop_v4(false))
-        .and_then(|_| socket.set_broadcast(true))
+        .set_broadcast(true)
         .and_then(|_| socket.set_read_timeout(Some(Duration::from_secs(1))))
         .map_err(|error| format!("failed to configure UDP discovery: {error}"))?;
     Ok(socket)
@@ -982,71 +993,73 @@ pub fn lan_service_start(
         .map_err(|error| format!("failed to configure LAN listener: {error}"))?;
 
     let announcement = announcement_from_identity(&identity, port);
-    let mdns = ServiceDaemon::new().map_err(|error| format!("failed to start mDNS: {error}"))?;
-    let receiver = mdns
-        .browse(SERVICE_TYPE)
-        .map_err(|error| format!("failed to browse mDNS services: {error}"))?;
-    let version = announcement.version.to_string();
-    let properties = [
-        ("v", version.as_str()),
-        ("server", announcement.server_fingerprint.as_str()),
-        ("user", announcement.user_id.as_str()),
-        ("device", announcement.device_id.as_str()),
-        ("name", announcement.device_name.as_str()),
-        ("key", announcement.public_key.as_str()),
-    ];
-    let instance = format!(
-        "rocketx-{}-{}",
-        &blake3::hash(user_id.as_bytes()).to_hex()[..10],
-        &blake3::hash(announcement.device_id.as_bytes()).to_hex()[..10]
-    );
-    let hostname = format!("{instance}.local.");
-    let service = ServiceInfo::new(
-        SERVICE_TYPE,
-        &instance,
-        &hostname,
-        "",
-        port,
-        &properties[..],
-    )
-    .map_err(|error| format!("failed to build mDNS service: {error}"))?
-    .enable_addr_auto();
-    let service_fullname = service.get_fullname().to_string();
-    mdns.register(service)
-        .map_err(|error| format!("failed to register mDNS service: {error}"))?;
+    let mdns = (|| {
+        let mdns =
+            ServiceDaemon::new().map_err(|error| format!("failed to start mDNS: {error}"))?;
+        let setup = (|| {
+            let receiver = mdns
+                .browse(SERVICE_TYPE)
+                .map_err(|error| format!("failed to browse mDNS services: {error}"))?;
+            let version = announcement.version.to_string();
+            let properties = [
+                ("v", version.as_str()),
+                ("server", announcement.server_fingerprint.as_str()),
+                ("user", announcement.user_id.as_str()),
+                ("device", announcement.device_id.as_str()),
+                ("name", announcement.device_name.as_str()),
+                ("key", announcement.public_key.as_str()),
+            ];
+            let instance = format!(
+                "rocketx-{}-{}",
+                &blake3::hash(user_id.as_bytes()).to_hex()[..10],
+                &blake3::hash(announcement.device_id.as_bytes()).to_hex()[..10]
+            );
+            let hostname = format!("{instance}.local.");
+            let service = ServiceInfo::new(
+                SERVICE_TYPE,
+                &instance,
+                &hostname,
+                "",
+                port,
+                &properties[..],
+            )
+            .map_err(|error| format!("failed to build mDNS service: {error}"))?
+            .enable_addr_auto();
+            let service_fullname = service.get_fullname().to_string();
+            mdns.register(service)
+                .map_err(|error| format!("failed to register mDNS service: {error}"))?;
+            Ok::<_, String>((service_fullname, receiver))
+        })();
+        match setup {
+            Ok((fullname, receiver)) => Ok((mdns, fullname, receiver)),
+            Err(error) => {
+                let _ = mdns.shutdown();
+                Err(error)
+            }
+        }
+    })();
 
-    let mut threads = vec![
-        spawn_tcp_listener(
-            app,
-            listener,
-            identity.clone(),
-            trusted.clone(),
-            transfers,
-            stop.clone(),
-            connection_threads.clone(),
-        ),
-        spawn_mdns_browser(
-            receiver,
-            identity.clone(),
-            peers.clone(),
-            trusted.clone(),
-            stop.clone(),
-        ),
-    ];
-    if let Some(thread) = spawn_udp_discovery(
+    let mut threads = vec![spawn_tcp_listener(
+        app,
+        listener,
+        identity.clone(),
+        trusted.clone(),
+        transfers,
+        stop.clone(),
+        connection_threads.clone(),
+    )];
+    let mdns = spawn_discovery_threads(
+        mdns,
         announcement,
         identity.clone(),
         peers.clone(),
         trusted.clone(),
         stop.clone(),
-    ) {
-        threads.push(thread);
-    }
-
+        &mut threads,
+    );
     *runtime_guard = Some(LanRuntime {
         stop,
         mdns,
-        service_fullname,
         peers,
         trusted,
         identity,
@@ -1073,10 +1086,53 @@ pub fn lan_service_stop(runtime: tauri::State<'_, LanRuntimeState>) -> Result<()
     Ok(())
 }
 
+fn spawn_discovery_threads(
+    mdns: Result<(ServiceDaemon, String, mdns_sd::Receiver<ServiceEvent>), String>,
+    announcement: LanAnnouncement,
+    identity: Arc<RuntimeIdentity>,
+    peers: SharedPeers,
+    trusted: SharedTrusted,
+    stop: Arc<AtomicBool>,
+    threads: &mut Vec<JoinHandle<()>>,
+) -> Option<(ServiceDaemon, String)> {
+    let mdns = match mdns {
+        Ok((mdns, fullname, receiver)) => {
+            threads.push(spawn_mdns_browser(
+                receiver,
+                identity.clone(),
+                peers.clone(),
+                trusted.clone(),
+                stop.clone(),
+            ));
+            Some((mdns, fullname))
+        }
+        Err(_) => {
+            log::warn!(
+                target: crate::LAN_LOG_TARGET,
+                "LAN mDNS unavailable; continuing with UDP discovery"
+            );
+            None
+        }
+    };
+    if let Some(thread) = spawn_udp_discovery(
+        announcement,
+        identity.clone(),
+        peers.clone(),
+        trusted.clone(),
+        stop.clone(),
+    ) {
+        threads.push(thread);
+    }
+
+    mdns
+}
+
 fn stop_runtime(current: LanRuntime) {
     current.stop.store(true, Ordering::Relaxed);
-    let _ = current.mdns.unregister(&current.service_fullname);
-    let _ = current.mdns.shutdown();
+    if let Some((mdns, service_fullname)) = current.mdns {
+        let _ = mdns.unregister(&service_fullname);
+        let _ = mdns.shutdown();
+    }
     for thread in current.threads {
         let _ = thread.join();
     }
@@ -1768,6 +1824,48 @@ mod tests {
         assert_eq!(candidates[0].source, "udp");
         assert_eq!(candidates[1].ip, "172.20.0.2");
         assert_eq!(candidates[1].source, "mdns");
+    }
+
+    #[test]
+    fn mdns_start_failure_still_starts_udp_discovery() {
+        let identity = Arc::new(runtime_identity("alice", "alice-device", signing_key(7)));
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut threads = Vec::new();
+        let mdns = spawn_discovery_threads(
+            Err("mDNS unavailable".to_string()),
+            announcement_from_identity(&identity, 12345),
+            identity,
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(RwLock::new(HashMap::new())),
+            stop.clone(),
+            &mut threads,
+        );
+        stop.store(true, Ordering::Relaxed);
+        assert!(mdns.is_none());
+        assert_eq!(threads.len(), 1, "UDP discovery must start without mDNS");
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn udp_socket_remains_usable_when_multicast_setup_fails() {
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Unsupported,
+        ] {
+            let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let receiver =
+                configure_udp_discovery_socket(receiver, Err(std::io::Error::from(kind))).unwrap();
+            assert!(receiver.broadcast().unwrap());
+            let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            sender
+                .send_to(b"discovery", receiver.local_addr().unwrap())
+                .unwrap();
+            let mut buffer = [0_u8; 32];
+            let (length, _) = receiver.recv_from(&mut buffer).unwrap();
+            assert_eq!(&buffer[..length], b"discovery");
+        }
     }
 
     #[test]

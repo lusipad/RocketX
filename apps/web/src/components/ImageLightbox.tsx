@@ -39,8 +39,8 @@ export default function ImageLightbox({
   const [ocr, setOcr] = useState<ImageOcrResult | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState('');
-  // 图片实际解码尺寸：用于把白色承载背景垫在「图片显示区域」，而不是垫满整个舞台
-  // （v0.44.5 给普通 PNG 也加了大白边，issue #386）。自然尺寸未知前不给白底。
+  // 图片实际解码尺寸用于约束承载区域；仅 SVG 需要白底衬托透明黑色图形。
+  const needsWhiteBacking = /\.svg(?:[?#]|$)/i.test(fileName || path);
   const [decodeSize, setDecodeSize] = useState<{ width: number; height: number } | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const ocrAvailable = runtimeFeatures().ocr && desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
@@ -120,7 +120,7 @@ export default function ImageLightbox({
         };
 
   // 白色承载区域 = 图片解码尺寸按舞台约束等比缩放后的实际显示框。
-  // 只有透明画布（SVG 等）需要它衬托内容；普通图片的显示框与内容重合，白底不外露。
+  // PNG 等图片保留透明背景，避免透明区域被涂白。
   const stageBox = stageRef.current?.getBoundingClientRect();
   let backing: { width?: number; height?: number } | undefined;
   if (decodeSize && stageBox) {
@@ -231,9 +231,9 @@ export default function ImageLightbox({
         }}
         className="relative flex h-[86vh] w-[92vw] items-center justify-center overflow-hidden"
       >
-        {/* 白色承载只垫图片显示框：小图/透明 SVG 放大时可见，普通 PNG 不留大白边（issue #386） */}
+        {/* SVG 保留对比底色，普通图片不添加白底（issue #386）。 */}
         <div
-          className="relative flex items-center justify-center overflow-hidden rounded-md bg-white"
+          className={`relative flex items-center justify-center overflow-hidden rounded-md${needsWhiteBacking ? ' bg-white' : ''}`}
           style={backing}
         >
           <AuthImage

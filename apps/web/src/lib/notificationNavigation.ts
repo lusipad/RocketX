@@ -43,7 +43,17 @@ export function notificationDestination(target: { rid: string }): 'butler-view' 
 export function queueNotificationTarget(
   queue: readonly NotificationNavigationTarget[],
   target: NotificationNavigationTarget,
+  acceptedIds?: Set<string>,
 ): NotificationNavigationTarget[] {
+  // 原生事件和补拉可能在目标已出队后交错到达，去重必须覆盖执行中的导航。
+  if (target.id && acceptedIds) {
+    if (acceptedIds.has(target.id)) return [...queue];
+    acceptedIds.add(target.id);
+    if (acceptedIds.size > 256) {
+      const oldest = acceptedIds.values().next().value;
+      if (oldest !== undefined) acceptedIds.delete(oldest);
+    }
+  }
   const key = notificationTargetKey(target);
   return queue.some((entry) => notificationTargetKey(entry) === key)
     ? [...queue]

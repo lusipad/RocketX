@@ -19,6 +19,7 @@ export default function NotificationNavigationBridge() {
   const authStatus = useAuth((s) => s.status);
   const chatReady = useChat((s) => s.ready);
   const pendingTargetsRef = useRef<NotificationNavigationTarget[]>([]);
+  const acceptedIdsRef = useRef(new Set<string>());
   const handlingRef = useRef(false);
   const refreshRef = useRef<(() => void) | null>(null);
 
@@ -58,7 +59,11 @@ export default function NotificationNavigationBridge() {
     const enqueuePayload = (payload: unknown) => {
       const target = notificationTarget(payload);
       if (!target) return;
-      pendingTargetsRef.current = queueNotificationTarget(pendingTargetsRef.current, target);
+      pendingTargetsRef.current = queueNotificationTarget(
+        pendingTargetsRef.current,
+        target,
+        acceptedIdsRef.current,
+      );
       flushPending();
     };
 
@@ -99,6 +104,7 @@ export default function NotificationNavigationBridge() {
       cancelled = true;
       refreshRef.current = null;
       pendingTargetsRef.current = [];
+      acceptedIdsRef.current.clear();
       unlisten?.();
     };
   }, []);

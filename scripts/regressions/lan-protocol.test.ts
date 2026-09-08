@@ -133,6 +133,14 @@ test('LAN 发现优先保留 UDP 实际来源地址，避免 mDNS 虚拟网卡�
   assert.match(lan, /不要让它覆盖已由 UDP/);
 });
 
+test('LAN 发现渠道失败互不阻断（issue #369）', () => {
+  const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
+  assert.doesNotMatch(lan, /join_multicast_v4[^;]*\?;/);
+  assert.match(lan, /mdns: Option<\(ServiceDaemon, String\)>/);
+  assert.match(lan, /LAN mDNS unavailable; continuing with UDP discovery/);
+  assert.match(lan, /if let Some\(\(mdns, service_fullname\)\) = current.mdns/);
+});
+
 test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息（issue #369）', () => {
   const main = readFileSync('apps/desktop/src-tauri/src/main.rs', 'utf8');
   const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
@@ -146,10 +154,10 @@ test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息�
   assert.match(lan, /LAN peer candidate discovered:/);
   assert.match(lan, /LAN candidate attempt:/);
   assert.match(lan, /outcome=failed/);
-  // 6 条发现/候选诊断 + 1 条防火墙放行失败提示（firewall 行与诊断行共用 LAN target）
+  // 发现/候选诊断、防火墙提示以及两条发现渠道降级提示。
   assert.equal(
     [...lan.matchAll(/log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET/g)].length,
-    7,
+    9,
   );
 
   for (const diagnostic of lan.matchAll(

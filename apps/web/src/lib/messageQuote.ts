@@ -1,4 +1,5 @@
 import type { RcMessageAttachment } from '@rcx/rc-client';
+import { stripQuotePrefix } from './messageText';
 
 function attachmentContentLines(attachment: RcMessageAttachment): string[] {
   const fields = (attachment.fields ?? []).map((field) => {
@@ -10,7 +11,7 @@ function attachmentContentLines(attachment: RcMessageAttachment): string[] {
 
   return [
     attachment.title?.trim() ?? '',
-    attachment.text?.trim() ?? '',
+    stripQuotePrefix(attachment.text ?? '').trim(),
     attachment.description?.trim() ?? '',
     ...fields,
     ...(attachment.attachments ?? []).flatMap(attachmentContentLines),
@@ -18,7 +19,7 @@ function attachmentContentLines(attachment: RcMessageAttachment): string[] {
 }
 
 export function quoteAttachmentText(attachment: RcMessageAttachment): string | undefined {
-  const text = attachment.text?.trim();
+  const text = stripQuotePrefix(attachment.text ?? '').trim();
   if (text) return text;
 
   const lines = (attachment.attachments ?? []).flatMap(attachmentContentLines);

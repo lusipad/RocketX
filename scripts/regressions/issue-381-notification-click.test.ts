@@ -74,6 +74,46 @@ test('同一条原生通知被事件监听和补拉同时收到时只保留一�
   assert.deepEqual(queue, [target]);
 });
 
+test('即时事件已开始定位后，补拉旧通知不能覆盖较新的点击', () => {
+  const first = { id: 'native-a', rid: 'room-123', mid: 'message-a' };
+  const second = { id: 'native-b', rid: 'room-123', mid: 'message-b' };
+  const acceptedIds = new Set<string>();
+  let queue = queueNotificationTarget([], first, acceptedIds);
+  const started = takeQueuedNotificationTarget(queue, 'authed', true);
+  queue = queueNotificationTarget(started.queue, second, acceptedIds);
+  queue = queueNotificationTarget(queue, first, acceptedIds);
+  queue = queueNotificationTarget(queue, second, acceptedIds);
+  assert.deepEqual([started.target, ...queue], [first, second]);
+
+  queue = takeQueuedNotificationTarget(queue, 'authed', true).queue;
+  assert.deepEqual(queueNotificationTarget(queue, second, acceptedIds), []);
+});
+
+test('同一消息的新原生点击和不带 ID 的后续点击仍可再次导航', () => {
+  const acceptedIds = new Set<string>();
+  const target = { rid: 'room-123', mid: 'message-456' };
+  queueNotificationTarget([], { ...target, id: 'native-a' }, acceptedIds);
+  assert.deepEqual(
+    queueNotificationTarget([], { ...target, id: 'native-b' }, acceptedIds),
+    [{ ...target, id: 'native-b' }],
+  );
+  queueNotificationTarget([], target, acceptedIds);
+  assert.deepEqual(queueNotificationTarget([], target, acceptedIds), [target]);
+});
+
+test('原生通知去重历史有界且保留最近处理的目标', () => {
+  const acceptedIds = new Set<string>();
+  for (let i = 0; i < 300; i++) {
+    queueNotificationTarget([], { id: `native-${i}`, rid: 'room', mid: `message-${i}` }, acceptedIds);
+  }
+  assert.equal(acceptedIds.size, 256);
+  assert.equal(acceptedIds.has('native-0'), false);
+  assert.deepEqual(
+    queueNotificationTarget([], { id: 'native-299', rid: 'room', mid: 'message-299' }, acceptedIds),
+    [],
+  );
+});
+
 test('Windows 原生通知点击链路保留补拉兜底，避免 listener 或 ready 过早丢事件', async () => {
   const [notifySource, bridgeSource, commandsSource, mainSource] = await Promise.all([
     readFile(new URL('../../apps/web/src/lib/notify.ts', import.meta.url), 'utf8'),
@@ -88,6 +128,7 @@ test('Windows 原生通知点击链路保留补拉兜底，避免 listener 或 r
 
   assert.match(bridgeSource, /takePendingNotificationNavigation/);
   assert.match(bridgeSource, /queueNotificationTarget/);
+  assert.match(bridgeSource, /queueNotificationTarget\(\s*pendingTargetsRef\.current,\s*target,\s*acceptedIdsRef\.current/);
   assert.match(bridgeSource, /takeQueuedNotificationTarget/);
   assert.match(bridgeSource, /useAuth\(\(s\) => s\.status\)/);
   assert.match(bridgeSource, /useChat\(\(s\) => s\.ready\)/);

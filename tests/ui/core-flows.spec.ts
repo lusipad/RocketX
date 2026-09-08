@@ -682,8 +682,16 @@ test('桌面普通 PNG 灯箱：放大显示且不出现整幅白边（issue #38
       ],
     },
   });
-  // 1×1 不透明 PNG：天然尺寸 1×1，放大显示后白底不应超出图片显示框
-  const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZNE8AAAAASUVORK5CYII=';
+  // 透明 PNG 的空白区域也不能被灯箱涂白。
+  const onePixelPng = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 24;
+    canvas.height = 24;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#68c4ff';
+    context.fillRect(8, 8, 8, 8);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
   await page.route('**/file-upload/png-thumb/demo.png', (route) => route.fulfill({
     status: 200,
     contentType: 'image/png',
@@ -720,12 +728,13 @@ test('桌面普通 PNG 灯箱：放大显示且不出现整幅白边（issue #38
   // 小图被放大
   expect(layout.img.width).toBeGreaterThan(100);
   expect(layout.img.height).toBeGreaterThan(100);
-  // 白底只垫图片显示框（±2px），不超出
+  // 承载区域贴合图片显示框（±2px），不超出
   expect(layout.backing).not.toBeNull();
   expect(Math.abs(layout.backing!.width - layout.img.width)).toBeLessThanOrEqual(2);
   expect(Math.abs(layout.backing!.height - layout.img.height)).toBeLessThanOrEqual(2);
   // 舞台本身不再整体白底（v0.44.5 的整幅白边回归）
   expect(layout.stageBg).not.toBe('rgb(255, 255, 255)');
+  expect(layout.backingBg).toBe('rgba(0, 0, 0, 0)');
   expect(pageErrors).toEqual([]);
 });
 
