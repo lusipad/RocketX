@@ -14,6 +14,13 @@ import {
   type ImageOcrResult,
 } from '../lib/imageOcr';
 import { runtimeFeatures } from '../lib/runtimeMode';
+import {
+  shouldCloseLightbox,
+  stagePointerDown,
+  stagePointerIdle,
+  stagePointerMove,
+  type StagePointerState,
+} from '../lib/lightboxInteraction';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
@@ -43,6 +50,8 @@ export default function ImageLightbox({
   const needsWhiteBacking = /\.svg(?:[?#]|$)/i.test(fileName || path);
   const [decodeSize, setDecodeSize] = useState<{ width: number; height: number } | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  // 拖拽平移松手时浏览器同样派发 click，用它区分「点了一下」和「拖了一把」（issue #388）
+  const stagePointerRef = useRef<StagePointerState>(stagePointerIdle);
   const ocrAvailable = runtimeFeatures().ocr && desktopLocalOcrAvailable('__TAURI_INTERNALS__' in window);
 
   const resetDecodeSize = () => setDecodeSize(null);
@@ -147,6 +156,7 @@ export default function ImageLightbox({
       onWheel={onWheel}
       onMouseMove={(e) => {
         if (!dragging) return;
+        stagePointerRef.current = stagePointerMove(stagePointerRef.current);
         setOffset({ x: e.clientX - dragging.x, y: e.clientY - dragging.y });
       }}
       onMouseUp={() => setDragging(null)}
@@ -223,8 +233,18 @@ export default function ImageLightbox({
       <div
         ref={stageRef}
         style={stageStyle}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          // 承载区铺满 92vw × 86vh，图片周围的空白都落在它身上：
+          // 点中的是承载区自身、且这一下没有拖动过，就等同于点遮罩，放行冒泡去关闭（issue #388）。
+          // 点在图片或 OCR 文字层上，以及拖拽平移松手带出的 click，都仍然吞掉。
+          const close = shouldCloseLightbox({
+            hitStageItself: e.target === e.currentTarget,
+            pointerMoved: stagePointerRef.current.moved,
+          });
+          if (!close) e.stopPropagation();
+        }}
         onMouseDown={(e) => {
+          stagePointerRef.current = stagePointerDown();
           if (zoom === null || (ocr && !e.altKey)) return;
           e.preventDefault();
           setDragging({ x: e.clientX - offset.x, y: e.clientY - offset.y });
@@ -273,7 +293,7 @@ export default function ImageLightbox({
             已用 {ocrBackendLabel(ocr.backend)} 识别 {ocr.words.length} 处文字（{ocr.language}） · 拖选复制 · Alt+拖拽平移
           </span>
         ) : (
-          <span>滚轮缩放 · 拖拽平移 · Esc 关闭</span>
+          <span>滚轮缩放 · 拖拽平移 · 点击空白或 Esc 关闭</span>
         )}
       </div>
     </div>,
