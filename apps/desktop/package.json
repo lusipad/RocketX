@@ -1,6 +1,6 @@
 {
   "name": "@rcx/desktop",
-  "version": "0.44.12",
+  "version": "0.44.13",
   "private": true,
   "scripts": {
     "dev": "tauri dev",
