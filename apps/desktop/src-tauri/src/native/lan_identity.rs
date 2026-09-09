@@ -94,6 +94,44 @@ pub(crate) fn server_fingerprint(server_url: &str) -> Result<String, String> {
         .to_string())
 }
 
+/// 服务器自报身份（Rocket.Chat 的 `uniqueID` 公开设置）的哈希域，
+/// 与接入 URL 归一化的兜底值分属不同前缀，避免两种算法意外相等。
+const SERVER_ID_DOMAIN: &str = "rcx-lan-server-id\0";
+const MAX_SERVER_ID_LEN: usize = 256;
+
+/// 服务器自报的身份可用时才允许充当指纹：非空、无控制字符、长度合规。
+fn usable_server_id(server_id: Option<&str>) -> Option<&str> {
+    let value = server_id?.trim();
+    if value.is_empty() || value.len() > MAX_SERVER_ID_LEN || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value)
+}
+
+/// 指纹的权威输入是「服务器是谁」，不是「客户端怎么连」。
+///
+/// issue #369：指纹原先只由接入 URL 决定，两台设备一边填 IP、一边填主机名登录
+/// 同一台 Rocket.Chat，算出的指纹不同，公告在 `record_peer` 就被静默丢掉，界面
+/// 只提示「对方当前不可用 P2P 直传」。改用服务器自报的 `uniqueID` 后，IP /
+/// 主机名 / HTTP / HTTPS 入口得到同一个指纹，不同服务器仍天然不同，也不需要
+/// DNS 解析。读不到 `uniqueID`（旧版本、网络失败）时退回原来的 URL 归一化。
+///
+/// 注意这个值同时是握手 transcript 的绑定字段（见 `lan_protocol`），
+/// 因此只能有一个权威值：按两套指纹分别放行发现，会得到「能发现、但签名永远
+/// 验不过」的连接。
+pub(crate) fn server_fingerprint_for(
+    server_url: &str,
+    server_id: Option<&str>,
+) -> Result<String, String> {
+    let (server_url, _) = validate_scope(server_url, "fingerprint")?;
+    match usable_server_id(server_id) {
+        Some(id) => Ok(blake3::hash(format!("{SERVER_ID_DOMAIN}{id}").as_bytes())
+            .to_hex()
+            .to_string()),
+        None => server_fingerprint(server_url),
+    }
+}
+
 pub(crate) fn account_key(server_url: &str, user_id: &str) -> Result<String, String> {
     let (server_url, user_id) = validate_scope(server_url, user_id)?;
     let mut input = Vec::with_capacity(server_url.len() + user_id.len() + 1);
@@ -123,7 +161,86 @@ pub(crate) fn validate_scope<'a, 'b>(
 
 #[cfg(test)]
 mod tests {
-    use super::{account_key, normalize_server_url, server_fingerprint, validate_scope};
+    use super::{
+        account_key, normalize_server_url, server_fingerprint, server_fingerprint_for,
+        validate_scope,
+    };
+
+    #[test]
+    fn server_id_makes_every_entry_url_agree_on_one_server() {
+        // issue #369 的真正根因：指纹原先由「客户端怎么连」决定，两台机器一边用
+        // IP、一边用主机名登录同一台服务器就永远发现不了对方。改由服务器自报的
+        // uniqueID 决定后，入口地址不再影响身份。
+        let unique_id = "2cfa8f73-0198-4d12-99d0-9cbdd50f21dc";
+        let entries = [
+            "http://192.168.1.10:3300",
+            "http://myserver:3300",
+            "http://chat.corp",
+            "https://chat.corp",
+            "https://chat.corp/rocketchat",
+        ];
+        let first = server_fingerprint_for(entries[0], Some(unique_id)).unwrap();
+        for entry in &entries[1..] {
+            assert_eq!(
+                server_fingerprint_for(entry, Some(unique_id)).unwrap(),
+                first,
+                "entry: {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn different_servers_still_get_different_fingerprints() {
+        let a =
+            server_fingerprint_for("http://192.168.1.10:3300", Some("server-a-unique")).unwrap();
+        let b =
+            server_fingerprint_for("http://192.168.1.10:3300", Some("server-b-unique")).unwrap();
+        assert_ne!(a, b, "不同 uniqueID 的服务器不能撞车");
+        // 服务器身份指纹与「接入 URL 归一化」的兜底值也必须不同，
+        // 否则新旧算法会在某些输入上意外相等。
+        assert_ne!(a, server_fingerprint("http://192.168.1.10:3300").unwrap());
+    }
+
+    #[test]
+    fn missing_or_unusable_server_id_falls_back_to_url_normalisation() {
+        let fallback = server_fingerprint("http://192.168.1.10:3300").unwrap();
+        for server_id in [None, Some(""), Some("   "), Some("bad\nid")] {
+            assert_eq!(
+                server_fingerprint_for("http://192.168.1.10:3300", server_id).unwrap(),
+                fallback,
+                "server_id: {server_id:?}"
+            );
+        }
+        // 超长值同样退回兜底，不进哈希。
+        let long = "x".repeat(257);
+        assert_eq!(
+            server_fingerprint_for("http://192.168.1.10:3300", Some(&long)).unwrap(),
+            fallback
+        );
+    }
+
+    #[test]
+    fn server_id_fingerprint_ignores_surrounding_whitespace() {
+        assert_eq!(
+            server_fingerprint_for("http://a.example", Some(" unique-id ")).unwrap(),
+            server_fingerprint_for("http://b.example", Some("unique-id")).unwrap()
+        );
+    }
+
+    #[test]
+    fn server_id_does_not_bypass_scope_validation() {
+        assert!(server_fingerprint_for("https://chat.example\n", Some("unique-id")).is_err());
+        assert!(server_fingerprint_for("", Some("unique-id")).is_err());
+    }
+
+    #[test]
+    fn account_key_stays_bound_to_the_entry_url() {
+        // 设备身份的钥匙串作用域不跟着指纹改：改了会让已有设备身份全部失联。
+        assert_ne!(
+            account_key("http://192.168.1.10:3300", "user").unwrap(),
+            account_key("http://myserver:3300", "user").unwrap()
+        );
+    }
 
     #[test]
     fn identity_scope_rejects_controls_and_is_server_bound() {

@@ -8,6 +8,11 @@ import {
   rest,
 } from '../lib/client';
 import { AuthImageBlobCache } from '../lib/authImageCache';
+import {
+  AUTH_IMAGE_EMPTY_RESPONSE,
+  AUTH_IMAGE_RENDER_FAILED,
+  writeAuthImageDiagnostic,
+} from '../lib/authImageDiagnostic';
 import { imageBlobWithDetectedMime } from '../lib/imageMime';
 
 // 头像比聊天图片更常复用，必须分池：否则浏览图片或打开大通讯录会把会话头像全部挤掉。
@@ -21,13 +26,22 @@ async function loadAuthedBlob(path: string, cacheKey: string): Promise<string | 
   if (running) return running;
   const promise = rest
     .fetchFile(path)
-    .then((blob) => imageBlobWithDetectedMime(blob, path))
+    .then((blob) => {
+      // 零字节响应交给 <img> 只会得到一次无信息的 onError，在这里就判掉。
+      if (blob.size === 0) throw new Error(AUTH_IMAGE_EMPTY_RESPONSE);
+      return imageBlobWithDetectedMime(blob, path);
+    })
     .then((blob) => {
       const url = URL.createObjectURL(blob);
       blobCache.put(path, cacheKey, url);
       return blobCache.get(path, cacheKey);
     })
-    .catch(() => null)
+    .catch((error: unknown) => {
+      // 失败原因必须留下可区分、可导出的证据（issue #382）：401、网络中断、
+      // 空响应、解码异常在界面上是同一句话，在日志里不能是同一句话。
+      void writeAuthImageDiagnostic(path, error);
+      return null;
+    })
     .finally(() => inflight.delete(cacheKey));
   inflight.set(cacheKey, promise);
   return promise;
@@ -98,7 +112,17 @@ export default function AuthImage({
     return <>{fallback ?? null}</>;
   }
   if (!src && needsBlob) return null;
-  return <img src={src ?? undefined} onError={() => setFailed(true)} {...imgProps} />;
+  return (
+    <img
+      src={src ?? undefined}
+      onError={() => {
+        // 字节已经拿到却渲染不出来，与「根本没取到」是两回事，日志要分得开。
+        void writeAuthImageDiagnostic(path, new Error(AUTH_IMAGE_RENDER_FAILED));
+        setFailed(true);
+      }}
+      {...imgProps}
+    />
+  );
 }
 
 // 下载统一走 lib/download.ts 的 saveFile（桌面端需要原生保存对话框，见那里的说明）

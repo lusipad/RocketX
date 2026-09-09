@@ -154,10 +154,10 @@ test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息�
   assert.match(lan, /LAN peer candidate discovered:/);
   assert.match(lan, /LAN candidate attempt:/);
   assert.match(lan, /outcome=failed/);
-  // 发现/候选诊断、防火墙提示以及两条发现渠道降级提示。
+  // 发现/候选诊断、防火墙提示、两条发现渠道降级提示，外加过滤闸的拒绝分类。
   assert.equal(
     [...lan.matchAll(/log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET/g)].length,
-    9,
+    10,
   );
 
   for (const diagnostic of lan.matchAll(
@@ -168,4 +168,21 @@ test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息�
       /\b(?:ip|port|address|user_id|device_id|public_key|server_fingerprint|path)=/i,
     );
   }
+});
+
+test('LAN 公告被过滤掉时留下拒绝分类，而不是静默 return（issue #369）', () => {
+  const lan = readFileSync('apps/desktop/src-tauri/src/lan.rs', 'utf8');
+
+  // 过滤闸的判定要可单测，不能内联成一个巨型布尔表达式。
+  assert.match(lan, /fn classify_announcement\(/);
+  assert.match(lan, /enum AnnouncementRejection/);
+  for (const reason of ['"version"', '"malformed"', '"self"', '"server_fingerprint"']) {
+    assert.ok(lan.includes(reason), `缺少拒绝分类 ${reason}`);
+  }
+  // 日志只带原因枚举、来源与计数；「因指纹不匹配丢弃了多少条」由 total 单独可读。
+  assert.match(lan, /"LAN announcement rejected: reason=\{\} source=\{\} total=\{\}"/);
+  // 自我回声每 3 秒一次，逐条打会把日志冲掉。
+  assert.match(lan, /fn should_log_rejection\(count: u64\) -> bool/);
+  // 旧的静默 return 不能再出现。
+  assert.doesNotMatch(lan, /\|\| announcement\.server_fingerprint != local\.server_fingerprint/);
 });

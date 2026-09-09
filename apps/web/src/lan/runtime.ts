@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { ensureSiteUrl, getServerBase, isTauri } from '../lib/client';
+import { ensureSiteUrl, getPublicSetting, getServerBase, isTauri } from '../lib/client';
+import { normalizeLanServerId } from '../lib/lanServerScope';
 import { useAuth } from '../stores/auth';
 import type { LanDeviceKeyEnvelope } from './protocol';
 
@@ -178,8 +179,14 @@ export async function startLanRuntime(
   // LAN 作用域使用 Rocket.Chat 的 canonical Site_Url，避免同一服务器一边用 IP、
   // 一边用域名时互相被发现过滤。这里只读取服务器设置，不发起 LAN 握手。
   const serverUrl = await ensureSiteUrl();
+  // 服务器自报的 uniqueID 才是发现指纹的权威输入：Site_Url 未配置或两端各填各的
+  // 入口地址时，按 URL 算出的指纹互不相等，公告会在原生端被静默丢掉（issue #369）。
+  // 读不到就传 null，原生端退回原来的 URL 归一化。serverUrl 保持不变——它同时是
+  // 设备身份钥匙串的作用域。
+  const serverId = normalizeLanServerId(await getPublicSetting('uniqueID'));
   const service = await invoke<LanServiceInfo>('lan_service_start', {
     serverUrl: serverUrl || getServerBase() || location.origin,
+    serverId,
     userId: user._id,
     deviceName,
     trustedDevices,

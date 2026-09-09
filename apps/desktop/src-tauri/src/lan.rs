@@ -7,7 +7,7 @@ use std::{
     net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
@@ -243,18 +243,65 @@ fn verification_public_key(
     }
 }
 
-fn record_peer(
-    announcement: LanAnnouncement,
+/// 公告被这道闸丢掉的原因。
+///
+/// issue #369 前六轮修复全在「怎么把包发出去」，但公告收到之后还有一道过滤闸，
+/// 而闸上的每个分支原先都是零日志的 `return`。结果是「被服务器指纹过滤掉」与
+/// 「根本没收到包」在诊断日志里完全同形——盲区恰好盖住最可能的根因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnnouncementRejection {
+    Version,
+    Malformed,
+    SelfEcho,
+    ServerFingerprint,
+}
+
+impl AnnouncementRejection {
+    /// 只暴露原因枚举，不带任何端点或身份信息。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Version => "version",
+            Self::Malformed => "malformed",
+            Self::SelfEcho => "self",
+            Self::ServerFingerprint => "server_fingerprint",
+        }
+    }
+
+    fn slot(self) -> usize {
+        match self {
+            Self::Version => 0,
+            Self::Malformed => 1,
+            Self::SelfEcho => 2,
+            Self::ServerFingerprint => 3,
+        }
+    }
+}
+
+static REJECTION_COUNTS: [AtomicU64; 4] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// 自己的广播每 3 秒就会被自己收到一次，逐条打日志会把日志冲掉。首条与之后每
+/// 32 条各留一行：首条证明「接收链路是通的」，计数给出真实规模。
+pub(crate) fn should_log_rejection(count: u64) -> bool {
+    count == 1 || count % 32 == 0
+}
+
+/// 判定顺序刻意如此：先排掉协议不匹配与畸形包、再排掉自我回声，最后剩下的
+/// `ServerFingerprint` 才明确意味着「收到了另一台设备的合法公告，但两端算出的
+/// 服务器身份不同」——这正是 #369 需要单独看到的那一类。
+pub(crate) fn classify_announcement(
+    announcement: &LanAnnouncement,
     ip: Ipv4Addr,
-    source: &str,
     local: &RuntimeIdentity,
-    peers: &SharedPeers,
-    trusted: &SharedTrusted,
-) {
-    if announcement.version != PROTOCOL_VERSION
-        || announcement.server_fingerprint != local.server_fingerprint
-        || announcement.device_id == local.peer.device_id
-        || announcement.user_id.is_empty()
+) -> Option<AnnouncementRejection> {
+    if announcement.version != PROTOCOL_VERSION {
+        return Some(AnnouncementRejection::Version);
+    }
+    if announcement.user_id.is_empty()
         || announcement.user_id.len() > 256
         || announcement.device_id.is_empty()
         || announcement.device_id.len() > 128
@@ -264,6 +311,36 @@ fn record_peer(
         || announcement.port == 0
         || ip.is_unspecified()
     {
+        return Some(AnnouncementRejection::Malformed);
+    }
+    if announcement.device_id == local.peer.device_id {
+        return Some(AnnouncementRejection::SelfEcho);
+    }
+    if announcement.server_fingerprint != local.server_fingerprint {
+        return Some(AnnouncementRejection::ServerFingerprint);
+    }
+    None
+}
+
+fn record_peer(
+    announcement: LanAnnouncement,
+    ip: Ipv4Addr,
+    source: &str,
+    local: &RuntimeIdentity,
+    peers: &SharedPeers,
+    trusted: &SharedTrusted,
+) {
+    if let Some(reason) = classify_announcement(&announcement, ip, local) {
+        let total = REJECTION_COUNTS[reason.slot()].fetch_add(1, Ordering::Relaxed) + 1;
+        if should_log_rejection(total) {
+            log::info!(
+                target: crate::LAN_LOG_TARGET,
+                "LAN announcement rejected: reason={} source={} total={}",
+                reason.as_str(),
+                source,
+                total
+            );
+        }
         return;
     }
     let trust_key = peer_key(&announcement.user_id, &announcement.device_id);
@@ -952,6 +1029,8 @@ pub fn lan_service_start(
     keychain: tauri::State<'_, LanKeychainLock>,
     runtime: tauri::State<'_, LanRuntimeState>,
     server_url: String,
+    // server_id 是 Rocket.Chat 自报的 uniqueID；缺失时指纹退回接入 URL 归一化（issue #369）。
+    server_id: Option<String>,
     user_id: String,
     device_name: String,
     trusted_devices: Vec<TrustedDevice>,
@@ -975,7 +1054,8 @@ pub fn lan_service_start(
         .0
         .lock()
         .map_err(|_| "LAN identity keychain lock is unavailable".to_string())?;
-    let (identity, identity_info) = build_runtime_identity(&server_url, &user_id, &device_name)?;
+    let (identity, identity_info) =
+        build_runtime_identity(&server_url, server_id.as_deref(), &user_id, &device_name)?;
     let trusted = Arc::new(RwLock::new(trusted_map(trusted_devices)?));
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let transfers = Arc::new(Mutex::new(HashMap::new()));
@@ -1824,6 +1904,102 @@ mod tests {
         assert_eq!(candidates[0].source, "udp");
         assert_eq!(candidates[1].ip, "172.20.0.2");
         assert_eq!(candidates[1].source, "mdns");
+    }
+
+    #[test]
+    fn every_rejection_branch_reports_its_own_category() {
+        // issue #369：这道闸原先 8 个分支全是零日志的 return，
+        // 「被指纹过滤掉」与「根本没收到包」因此无法区分。
+        let local = runtime_identity("local", "local-device", signing_key(5));
+        let good = LanAnnouncement {
+            version: PROTOCOL_VERSION,
+            server_fingerprint: local.server_fingerprint.clone(),
+            user_id: "bob".to_string(),
+            device_id: "bob-device".to_string(),
+            device_name: "Bob".to_string(),
+            port: 45826,
+            public_key: peer("bob", "bob-device", &signing_key(9)).public_key,
+        };
+        let reachable = Ipv4Addr::new(192, 168, 1, 20);
+        assert_eq!(classify_announcement(&good, reachable, &local), None);
+
+        let mut wrong_version = good.clone();
+        wrong_version.version = PROTOCOL_VERSION + 1;
+        assert_eq!(
+            classify_announcement(&wrong_version, reachable, &local),
+            Some(AnnouncementRejection::Version)
+        );
+
+        let mut self_echo = good.clone();
+        self_echo.device_id = local.peer.device_id.clone();
+        assert_eq!(
+            classify_announcement(&self_echo, reachable, &local),
+            Some(AnnouncementRejection::SelfEcho)
+        );
+
+        let mut other_server = good.clone();
+        other_server.server_fingerprint = "server-b".to_string();
+        assert_eq!(
+            classify_announcement(&other_server, reachable, &local),
+            Some(AnnouncementRejection::ServerFingerprint)
+        );
+
+        // 畸形包的每个判据都要落在 Malformed，而不是被误报成指纹不匹配。
+        let mut empty_user = good.clone();
+        empty_user.user_id = String::new();
+        let mut long_user = good.clone();
+        long_user.user_id = "u".repeat(257);
+        let mut empty_device = good.clone();
+        empty_device.device_id = String::new();
+        let mut long_device = good.clone();
+        long_device.device_id = "d".repeat(129);
+        let mut empty_name = good.clone();
+        empty_name.device_name = String::new();
+        let mut long_name = good.clone();
+        long_name.device_name = "n".repeat(129);
+        let mut long_key = good.clone();
+        long_key.public_key = "k".repeat(129);
+        let mut no_port = good.clone();
+        no_port.port = 0;
+        for malformed in [
+            &empty_user,
+            &long_user,
+            &empty_device,
+            &long_device,
+            &empty_name,
+            &long_name,
+            &long_key,
+            &no_port,
+        ] {
+            assert_eq!(
+                classify_announcement(malformed, reachable, &local),
+                Some(AnnouncementRejection::Malformed)
+            );
+        }
+        assert_eq!(
+            classify_announcement(&good, Ipv4Addr::UNSPECIFIED, &local),
+            Some(AnnouncementRejection::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejection_categories_carry_no_endpoint_or_identity_data() {
+        for reason in [
+            AnnouncementRejection::Version,
+            AnnouncementRejection::Malformed,
+            AnnouncementRejection::SelfEcho,
+            AnnouncementRejection::ServerFingerprint,
+        ] {
+            let label = reason.as_str();
+            assert!(!label.contains('='), "分类标签只能是原因枚举：{label}");
+            assert!(label.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+        // 自我回声每 3 秒一次，不能逐条刷屏；首条与每 32 条各留一行。
+        assert!(should_log_rejection(1));
+        assert!(!should_log_rejection(2));
+        assert!(!should_log_rejection(31));
+        assert!(should_log_rejection(32));
+        assert!(should_log_rejection(64));
     }
 
     #[test]

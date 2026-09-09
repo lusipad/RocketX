@@ -199,8 +199,11 @@ pub(crate) fn trusted_map(devices: Vec<TrustedDevice>) -> Result<HashMap<PeerKey
     Ok(trusted)
 }
 
+/// `server_id` 是 Rocket.Chat 自报的 `uniqueID`；读不到时传 `None`，指纹退回
+/// 接入 URL 归一化（见 `lan_identity::server_fingerprint_for`，issue #369）。
 pub(crate) fn build_runtime_identity(
     server_url: &str,
+    server_id: Option<&str>,
     user_id: &str,
     device_name: &str,
 ) -> Result<(Arc<RuntimeIdentity>, LanIdentityInfo), String> {
@@ -228,7 +231,7 @@ pub(crate) fn build_runtime_identity(
                 public_key,
             },
             device_name: device_name.to_string(),
-            server_fingerprint: server_fingerprint(server_url)?,
+            server_fingerprint: lan_identity::server_fingerprint_for(server_url, server_id)?,
             signing_key,
         }),
         info,
