@@ -70,7 +70,8 @@ import { todayKey } from '../stores/todos';
 import CalendarEventDialog from './CalendarEventDialog';
 import UserCard from './UserCard';
 import CreateWorkItemDialog from './CreateWorkItemDialog';
-import Dialog, { useDialogBehavior } from './Dialog';
+import { useDialogBehavior } from './Dialog';
+import CreateDiscussionDialog from './CreateDiscussionDialog';
 import { findQuoteImage, quoteAttachmentText } from '../lib/messageQuote';
 import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
@@ -630,68 +631,6 @@ type MessageItemProps = {
   inThread?: boolean;
 };
 
-function CreateDiscussionDialog({
-  message,
-  onCreate,
-  onClose,
-}: {
-  message: RcMessage;
-  onCreate: (name: string) => Promise<void>;
-  onClose: () => void;
-}) {
-  const [name, setName] = useState((stripQuotePrefix(message.msg) || '讨论').slice(0, 40));
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    const trimmed = name.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    try {
-      await onCreate(trimmed);
-      onClose();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog
-      title="创建讨论"
-      hint="给这条消息创建一个可持续讨论的子会话。"
-      onClose={busy ? () => {} : onClose}
-      footer={
-        <>
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
-          >
-            取消
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy || !name.trim()}
-            className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy ? '创建中…' : '创建讨论'}
-          </button>
-        </>
-      }
-    >
-      <label className="block px-5 pb-4 text-sm text-ink-2">
-        讨论名称
-        <input
-          autoFocus
-          value={name}
-          maxLength={40}
-          onChange={(event) => setName(event.target.value)}
-          className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-3 outline-none focus:border-primary"
-        />
-      </label>
-    </Dialog>
-  );
-}
-
 type HostedAgentAnswer = {
   provider: 'Codex' | 'DeepSeek';
   note?: string;
@@ -786,6 +725,8 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const roomName = useChat(
     (s) => s.subscriptions[message.rid]?.fname || s.subscriptions[message.rid]?.name || '会话',
   );
+  // 服务端关掉讨论后不再摆入口（issue：#369 现场的「创建讨论」路径一并收口）
+  const discussionsEnabled = useChat((s) => s.discussionsEnabled);
 
   const displayName = message.u.name || message.u.username;
   const handOverToButler = (): void => {
@@ -987,7 +928,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           .addKanbanCard(message.rid, { title: cardTitleFromMessage(message), sourceMid: message._id });
       },
     },
-    ...(!inThread
+    ...(!inThread && discussionsEnabled
       ? [
           {
             label: '创建讨论',

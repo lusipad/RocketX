@@ -7,7 +7,11 @@ import {
   type RcRoomRole,
   type RcSlashCommand,
   type RcSubscription,
+  type RcTeam,
+  type RcTeamMember,
+  type RcTeamRoom,
   type RcUser,
+  type RoomType,
   type RealtimeStatus,
 } from '@rcx/rc-client';
 import {
@@ -64,6 +68,15 @@ import {
   protectedFilePath,
 } from '../lib/forward';
 import { quoteMessagePrefix, stripQuotePrefix } from '../lib/messageText';
+import { slugifyRoomName } from '@rcx/rc-client';
+import {
+  COPY_ALL_CAP,
+  COPY_PAGE_SIZE,
+  COPY_SEND_INTERVAL_MS,
+  isCopyableMessage,
+  selectRecent,
+} from '../lib/historyCopy';
+import { openHistoryCopy } from './historyCopyUi';
 import {
   canApplyRetainedRoomResult,
   omitRoomEntries,
@@ -158,6 +171,8 @@ export interface ConvRef {
 
 interface ChatState {
   ready: boolean;
+  /** 服务端 `Discussion_enabled`；未知时保持 true */
+  discussionsEnabled: boolean;
   connection: RealtimeStatus;
   subscriptions: Record<string, RcSubscription>;
   rooms: Record<string, RcRoom>;
@@ -319,8 +334,50 @@ interface ChatState {
   createGroup: (name: string, members: string[], priv: boolean) => Promise<string>;
   /** 创建团队（Team = 主频道 + 子频道）并跳转 */
   createTeam: (name: string, members: string[], priv: boolean) => Promise<string>;
+  // ---- 团队管理（Team）----
+  /** 团队下的房间（合并 listRooms 与 listChildren） */
+  loadTeamRooms: (teamId: string) => Promise<RcTeamRoom[]>;
+  /** 团队成员 */
+  loadTeamMembers: (teamId: string) => Promise<RcTeamMember[]>;
+  /** 团队信息（含 createdBy / 房间数） */
+  loadTeamInfo: (teamId: string) => Promise<RcTeam>;
+  /** 团队维度加成员 */
+  addTeamMembers: (teamId: string, usernames: string[]) => Promise<number>;
+  /** 团队维度移除成员 */
+  removeTeamMember: (teamId: string, userId: string) => Promise<void>;
+  /** 在团队下新建频道并跳转 */
+  createTeamRoom: (teamId: string, name: string, priv: boolean) => Promise<string>;
+  /** 把已有房间挂到团队下 */
+  addRoomsToTeam: (teamId: string, roomIds: string[]) => Promise<number>;
+  /** 把房间移出团队（房间保留） */
+  removeRoomFromTeam: (teamId: string, roomId: string) => Promise<void>;
+  /** 指定团队主频道 */
+  setTeamMainRoom: (teamId: string, roomId: string) => Promise<void>;
+  /** 改团队名 */
+  renameTeam: (teamId: string, name: string) => Promise<void>;
+  /** 解散团队（可一并删除团队房间） */
+  deleteTeam: (teamId: string, roomsToRemove?: string[]) => Promise<void>;
+  /** 退出团队 */
+  leaveTeam: (teamId: string) => Promise<void>;
+  /** 频道 / 群组 → 团队 */
+  convertRoomToTeam: (rid: string, type: RoomType, teamName: string) => Promise<void>;
+  /** 把服务器上所有用户加进房间 */
+  addAllUsersToRoom: (rid: string, type: RoomType, activeUsersOnly?: boolean) => Promise<void>;
   /** 从消息创建讨论（RC Discussion）并跳转 */
   createDiscussionFrom: (msg: RcMessage, name?: string) => Promise<void>;
+  /**
+   * 直接在房间里创建讨论并跳转（不带 `pmid`）。
+   * Rocket.Chat 的 `rooms.createDiscussion` 允许没有来源消息 —— 群里一条消息都
+   * 没有时这是唯一可用的入口。
+   */
+  createDiscussionInRoom: (rid: string, name?: string) => Promise<void>;
+  /** 发起多人聊天/加人后，把原会话的聊天记录复制到新会话 */
+  copyHistoryToRoom: (
+    sourceRid: string,
+    targetRid: string,
+    limit: number,
+    options?: { onProgress?: (copied: number, total: number) => void; signal?: AbortSignal },
+  ) => Promise<{ copied: number; skipped: number }>;
   requestUpload: (files: File[], message?: string) => void;
   confirmUpload: (message?: string) => Promise<boolean>;
   cancelUpload: () => void;
@@ -476,6 +533,7 @@ async function uploadBlobToRoom(
 /** 新建 DM/群组后刷新订阅与房间（新条目要出现在会话列表里） */
 async function refreshSubsAndRooms(
   set: (partial: Partial<ChatState>) => void,
+  get: () => ChatState = () => useChat.getState(),
 ): Promise<void> {
   const [subs, rooms] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
   const subMap: Record<string, RcSubscription> = {};
@@ -483,6 +541,40 @@ async function refreshSubsAndRooms(
   const roomMap: Record<string, RcRoom> = {};
   for (const r of rooms) roomMap[r._id] = r;
   set({ subscriptions: subMap, rooms: roomMap });
+  mergeServerDrafts(subs, set, get);
+}
+
+/**
+ * 把服务端草稿并进本地。
+ *
+ * `subscriptions.get` 的返回里本来就带 `draft`（真机实测），所以登录/刷新时顺手把
+ * 别的设备写的草稿捞回来，不用逐房间请求 `getOne`。
+ *
+ * **只在本地该房间没有草稿时才写**：本地有内容说明本机是更新的那一份，覆盖会把
+ * 用户正在打的字抹掉。
+ */
+function mergeServerDrafts(
+  subs: RcSubscription[],
+  set: (partial: Partial<ChatState>) => void,
+  get: () => ChatState,
+): void {
+  const current = get().drafts;
+  const merged = { ...current };
+  let changed = false;
+  for (const sub of subs) {
+    const draft = sub.draft?.trim();
+    if (!draft) continue;
+    if (merged[sub.rid]) continue;
+    merged[sub.rid] = draft;
+    changed = true;
+  }
+  if (!changed) return;
+  set({ drafts: merged });
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(merged));
+  } catch {
+    /* 忽略 */
+  }
 }
 
 const subscribeRoomStreams = createActiveRoomStreams(
@@ -679,6 +771,127 @@ async function messageMaxAllowedSize(): Promise<number> {
   return size;
 }
 
+/**
+ * 草稿同步到服务端（`rooms.saveDraft`）。
+ *
+ * 策略：本地写 localStorage 立即生效（离线可用、随手打字不卡），另外**防抖**推服务端，
+ * 让草稿跨设备可见。失败不提示、不清本地——草稿丢不起，服务端失败时本地仍是权威。
+ */
+const DRAFT_SYNC_DELAY_MS = 1200;
+const draftSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleDraftSync(rid: string, text: string): void {
+  const existing = draftSyncTimers.get(rid);
+  if (existing) clearTimeout(existing);
+  draftSyncTimers.set(
+    rid,
+    setTimeout(() => {
+      draftSyncTimers.delete(rid);
+      void rest.saveDraft(rid, text).catch(() => {
+        /* 离线/限流：本地草稿仍然在，下次输入会再试 */
+      });
+    }, DRAFT_SYNC_DELAY_MS),
+  );
+}
+
+/**
+ * 打开房间时把服务端草稿同步下来。
+ *
+ * 只在**本地没有草稿**时才用服务端的值：本地有内容说明本机是更新的那一份，
+ * 直接覆盖会把用户刚打的字抹掉。
+ */
+async function pullServerDraft(rid: string, set: (partial: Partial<ChatState>) => void, get: () => ChatState): Promise<void> {
+  if (get().drafts[rid]) return;
+  try {
+    const subscription = await rest.getSubscription(rid);
+    const draft = subscription?.draft?.trim();
+    if (!draft) return;
+    // 期间用户可能已经开始输入了，再确认一次
+    if (get().drafts[rid]) return;
+    const drafts = { ...get().drafts, [rid]: draft };
+    set({ drafts });
+    try {
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+    } catch {
+      /* 忽略 */
+    }
+  } catch {
+    /* 取不到就算了，本地草稿照常 */
+  }
+}
+
+/**
+ * 把用户名解析成用户对象（团队加成员用）。
+ *
+ * `teams.addMembers` 要的是 `userId`，而界面上的选择器给的是用户名。逐个走
+ * `users.info` 直查（快且不依赖目录权限），查不到再退回目录搜索。
+ */
+async function resolveUsersByUsername(usernames: string[]): Promise<RcUser[]> {
+  const wanted = [...new Set(usernames.map((name) => name.trim().replace(/^@/, '')).filter(Boolean))];
+  const users = await Promise.all(
+    wanted.map(async (username) => {
+      try {
+        return await rest.getUserInfo(username);
+      } catch {
+        try {
+          const { users: found } = await rest.searchUsers(username, 5);
+          return found.find((user) => user.username.toLowerCase() === username.toLowerCase()) ?? null;
+        } catch {
+          return null;
+        }
+      }
+    }),
+  );
+  return users.filter((user): user is RcUser => !!user?._id);
+}
+
+/**
+ * `Discussion_enabled`（默认 true）：管理员关掉讨论后，创建入口不该还摆在那里让
+ * 用户点了才吃服务端错误。取值读不到时（老服务端、限流）按「开启」处理，宁可让
+ * 服务端拒绝，也不要凭一次读取失败把功能藏起来。
+ */
+let discussionEnabledProvider: () => Promise<unknown> = () => getPublicSetting('Discussion_enabled');
+let discussionEnabledCache: boolean | undefined;
+
+export function normalizeDiscussionEnabled(value: unknown): boolean {
+  return value === false || value === 'false' ? false : true;
+}
+
+async function discussionsEnabled(): Promise<boolean> {
+  if (discussionEnabledCache !== undefined) return discussionEnabledCache;
+  const value = await discussionEnabledProvider().catch(() => undefined);
+  const enabled = normalizeDiscussionEnabled(value);
+  discussionEnabledCache = enabled;
+  return enabled;
+}
+
+/** 取服务端讨论开关，并把结果同步进 store（入口按它决定是否显示）。 */
+async function ensureDiscussionsEnabled(): Promise<boolean> {
+  const enabled = await discussionsEnabled();
+  if (useChat.getState().discussionsEnabled !== enabled) {
+    useChat.setState({ discussionsEnabled: enabled });
+  }
+  return enabled;
+}
+
+/** 会话就绪后刷新讨论开关，供界面隐藏入口用。 */
+export async function refreshDiscussionsCapability(): Promise<boolean> {
+  return ensureDiscussionsEnabled();
+}
+
+/** 测试用：替换讨论开关来源并清掉缓存，返回还原函数 */
+export function setDiscussionEnabledProviderForTests(
+  provider: () => Promise<unknown>,
+): () => void {
+  const previous = discussionEnabledProvider;
+  discussionEnabledProvider = provider;
+  discussionEnabledCache = undefined;
+  return () => {
+    discussionEnabledProvider = previous;
+    discussionEnabledCache = undefined;
+  };
+}
+
 /** 测试用：替换长度上限来源并清掉缓存，返回还原函数 */
 export function setChatMessageSizeProviderForTests(
   provider: () => Promise<unknown>,
@@ -810,6 +1023,7 @@ export function permalinkOf(rid: string, mid: string): string {
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
 /** 消息文本开头的引用链接（渲染与预览时隐藏） */
 export { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
+export { slugifyRoomName } from '@rcx/rc-client';
 
 export {
   localQuoteAttachment,
@@ -863,6 +1077,8 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
 
 export const useChat = create<ChatState>((set, get) => ({
   ready: false,
+  /** 服务端 Discussion_enabled；未知时保持 true，不凭一次读取失败藏功能 */
+  discussionsEnabled: true,
   connection: 'idle',
   subscriptions: {},
   rooms: {},
@@ -944,6 +1160,8 @@ export const useChat = create<ChatState>((set, get) => ({
     void getPublicSetting('Message_Read_Receipt_Enabled').then((v) => {
       if (v === false) receiptsSupported = false;
     });
+    // 讨论开关：管理员关掉后创建入口不该还摆在那里（读取失败按开启处理）
+    void refreshDiscussionsCapability();
     // 命令表：拉不到就当没有命令，输入框退回纯文本，不该拖住整个初始化
     void rest
       .listCommands()
@@ -1212,6 +1430,9 @@ export const useChat = create<ChatState>((set, get) => ({
       userIntent: false,
       jumpVisible: false,
     });
+
+    // 服务端草稿（换设备/换客户端时把未发送的内容接上）；本地有草稿就不覆盖
+    void pullServerDraft(rid, set, get);
 
     const { historyLoaded, subscriptions, rooms } = get();
     subscribeRoomStreams(rid);
@@ -1824,8 +2045,17 @@ export const useChat = create<ChatState>((set, get) => ({
       const usernames = [
         ...new Set([...existing.map((u) => u.username), ...users.map((u) => u.username)]),
       ].filter((u) => u && u !== me);
-      await get().startDM(usernames);
-      toast.info('多人聊天不支持直接加人（Rocket.Chat 的限制），已新建一个包含所有人的会话');
+      // startDM 会跳进新会话，返回值就是新房间的 id
+      const targetRid = await get().startDM(usernames);
+      // 新会话是空的、且 RC 不会给任何「承接自旧会话」的提示，用户很容易以为记录丢了。
+      // 所以这里直接给一个「把原会话记录带过来」的入口（30 / 100 / 全部）。
+      toast.show({
+        kind: 'info',
+        message: `已新建包含所有人的会话；原会话「${get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '私聊'}」的历史仍在那里`,
+        // 给操作按钮留足点击时间（默认 info 只停 2.8 秒）
+        duration: 12_000,
+        action: { label: '带过来', onClick: () => openHistoryCopy({ sourceRid: rid, targetRid }) },
+      });
       return;
     }
 
@@ -2558,6 +2788,53 @@ export const useChat = create<ChatState>((set, get) => ({
     );
   },
 
+  copyHistoryToRoom: async (sourceRid, targetRid, limit, options) => {
+    if (sourceRid === targetRid) return { copied: 0, skipped: 0 };
+    const source = get().subscriptions[sourceRid] ?? get().rooms[sourceRid];
+    const type = source?.t ?? 'c';
+    const site = await ensureSiteUrl();
+
+    // 拉取：一页页往回翻，直到够 limit 条或到底（issue：#369 之后统一走 getHistory）
+    const collected: RcMessage[] = [];
+    let latest: string | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const batch = await rest.getHistory(sourceRid, type, COPY_PAGE_SIZE, latest);
+      if (batch.length === 0) break;
+      collected.push(...batch);
+      const enough = limit > 0 && collected.filter(isCopyableMessage).length >= limit;
+      if (enough || batch.length < COPY_PAGE_SIZE) break;
+      if (collected.length >= COPY_ALL_CAP) break;
+      // getHistory 已经翻成正序，最早的一条就是下一页的游标
+      latest = batch[0]._id;
+    }
+
+    const candidates = selectRecent(collected, limit).filter(isCopyableMessage);
+    const total = candidates.length;
+    let copied = 0;
+    for (const message of candidates) {
+      if (options?.signal?.aborted) break;
+      const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim();
+      const prefix = quoteLinkPrefix(message, get().subscriptions, site);
+      try {
+        await rest.sendMessageRaw({
+          _id: randomMessageId(),
+          rid: targetRid,
+          // 引用链接 + 正文：服务端会展开成官方引用块，发送人显示的是原作者
+          msg: text ? `${prefix}${text}` : prefix.trim(),
+        });
+        copied += 1;
+      } catch (error) {
+        // 单条失败不该中断整批：继续复制剩下的，最后在提示里说明数量差异
+        console.warn('[rcx] 复制聊天记录时有一条失败', error);
+      }
+      options?.onProgress?.(copied, total);
+      if (COPY_SEND_INTERVAL_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, COPY_SEND_INTERVAL_MS));
+      }
+    }
+    return { copied, skipped: total - copied };
+  },
+
   enterSelectMode: (mid) => set({ selectMode: true, selectedMids: new Set([mid]) }),
   toggleSelectMid: (mid) => {
     const next = new Set(get().selectedMids);
@@ -2577,6 +2854,8 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch {
       /* 存储满时忽略 */
     }
+    // 本地立即生效（离线也能用），同时防抖同步到服务端，让草稿跨设备可见
+    scheduleDraftSync(rid, text);
   },
 
   startDM: async (usernames) => {
@@ -2607,13 +2886,143 @@ export const useChat = create<ChatState>((set, get) => ({
     return team.roomId;
   },
 
+  // ---- 团队管理 ----
+
+  loadTeamRooms: async (teamId) => {
+    // listRooms 在真机（RC 8.6）上连团队创建者都拿到 0 条，所以走 listChildren：
+    // 传 teamId 能列出团队房间，并且已经补上 teamMain（主频道标记）。
+    return rest.listTeamRoomsViaChildren(teamId, 100);
+  },
+
+  loadTeamMembers: async (teamId) => rest.listTeamMembers(teamId, 200),
+
+  loadTeamInfo: async (teamId) => rest.getTeamInfo(teamId),
+
+  addTeamMembers: async (teamId, usernames) => {
+    const users = await resolveUsersByUsername(usernames);
+    if (users.length === 0) throw new Error('没有找到要添加的用户');
+    await rest.addTeamMembers(teamId, users.map((user) => ({ userId: user._id })));
+    await refreshSubsAndRooms(set);
+    toast.success(`已把 ${users.length} 人加入团队`);
+    return users.length;
+  },
+
+  removeTeamMember: async (teamId, userId) => {
+    // 不传 rooms：服务端会把他从团队的所有房间里移除（团队语义下的「移除成员」）
+    await rest.removeTeamMember(teamId, userId);
+    await refreshSubsAndRooms(set);
+    toast.success('已把该成员移出团队');
+  },
+
+  createTeamRoom: async (teamId, name, priv) => {
+    // 两步法：REST 的 groups.create / channels.create **不接受 teamId**（schema 里有这个
+    // 字段，但 handler 根本不读它，真机实测建出来的房间没有 teamId）。RC 客户端的做法
+    // 是「先建普通房间，再 teams.addRooms 挂到团队下」，这里照做。
+    const room = await rest.createGroup(name, [], priv);
+    await rest.addTeamRooms(teamId, [room._id]);
+    await refreshSubsAndRooms(set);
+    await get().openRoom(room._id);
+    toast.success(`已在团队下创建「${room.fname || room.name || name}」`);
+    return room._id;
+  },
+
+  addRoomsToTeam: async (teamId, roomIds) => {
+    await rest.addTeamRooms(teamId, roomIds);
+    await refreshSubsAndRooms(set);
+    toast.success(`已把 ${roomIds.length} 个房间挂到团队下`);
+    return roomIds.length;
+  },
+
+  removeRoomFromTeam: async (teamId, roomId) => {
+    await rest.removeTeamRoom(teamId, roomId);
+    await refreshSubsAndRooms(set);
+    toast.success('已把房间移出团队（房间本身保留）');
+  },
+
+  setTeamMainRoom: async (teamId, roomId) => {
+    void teamId;
+    await rest.updateTeamRoom(roomId, true);
+    await refreshSubsAndRooms(set);
+    toast.success('已设为主频道');
+  },
+
+  renameTeam: async (teamId, name) => {
+    // updateRoom: true 让服务端把主频道的名字一起改掉，避免团队名与主频道名不一致
+    await rest.updateTeam(teamId, { name, updateRoom: true });
+    await refreshSubsAndRooms(set);
+    toast.success('团队名称已更新');
+  },
+
+  deleteTeam: async (teamId, roomsToRemove) => {
+    await rest.deleteTeam(teamId, roomsToRemove);
+    await refreshSubsAndRooms(set);
+    toast.success(
+      roomsToRemove && roomsToRemove.length > 0
+        ? `团队已解散，并删除了 ${roomsToRemove.length} 个团队房间`
+        : '团队已解散（房间保留为普通房间）',
+    );
+  },
+
+  leaveTeam: async (teamId) => {
+    await rest.leaveTeam(teamId);
+    await refreshSubsAndRooms(set);
+    toast.success('已退出团队');
+  },
+
+  convertRoomToTeam: async (rid, type, teamName) => {
+    // 团队名沿用房间名（服务端不接受自定义 teamName），所以这里的 teamName 只用于提示
+    await rest.convertRoomToTeam(rid, type);
+    await refreshSubsAndRooms(set);
+    toast.success(`已把「${teamName}」转换为团队`);
+  },
+
+  addAllUsersToRoom: async (rid, type, activeUsersOnly = false) => {
+    await rest.addAllUsersToRoom(rid, type, activeUsersOnly);
+    await refreshSubsAndRooms(set);
+    // 服务端批量加完人后，成员缓存必须作废重拉：否则面板还是旧的几个人
+    invalidateMemberRequests(rid);
+    await get().loadMembers(rid, { force: true }).catch(() => undefined);
+    toast.success(activeUsersOnly ? '已把在线用户加入本群' : '已把服务器上所有用户加入本群');
+  },
+
   createDiscussionFrom: async (msg, requestedName) => {
     const id = toast.loading('正在创建讨论…');
     try {
-      const name = (requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论').slice(0, 40);
+      if (!(await ensureDiscussionsEnabled())) {
+        toast.update(id, { kind: 'error', message: '本服务器的讨论功能已被管理员关闭' });
+        return;
+      }
+      // 名称来源是消息原文时必然带空格/标点/中文，先按服务端 slug 规则清洗（issue #392）；
+      // 提示语与界面显示都用清洗后的名字，保证「看到的名字 = 实际创建的讨论名」。
+      const name = slugifyRoomName(
+        requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论',
+        'discussion',
+      );
       const room = await rest.createDiscussion(msg.rid, name, msg._id);
       await refreshSubsAndRooms(set);
       await get().openRoom(room._id);
+      toast.update(id, { kind: 'success', message: `已创建讨论「${name}」` });
+    } catch (err) {
+      toast.update(id, { kind: 'error', message: humanError(err, '创建讨论失败') });
+    }
+  },
+
+  createDiscussionInRoom: async (rid, requestedName) => {
+    const id = toast.loading('正在创建讨论…');
+    try {
+      if (!(await ensureDiscussionsEnabled())) {
+        toast.update(id, { kind: 'error', message: '本服务器的讨论功能已被管理员关闭' });
+        return;
+      }
+      const room = get().rooms[rid];
+      // 不带 pmid：Rocket.Chat 允许讨论没有来源消息，群里还没有消息时也能开。
+      const name = slugifyRoomName(
+        requestedName?.trim() || room?.fname || room?.name || '讨论',
+        'discussion',
+      );
+      const discussion = await rest.createDiscussion(rid, name);
+      await refreshSubsAndRooms(set);
+      await get().openRoom(discussion._id);
       toast.update(id, { kind: 'success', message: `已创建讨论「${name}」` });
     } catch (err) {
       toast.update(id, { kind: 'error', message: humanError(err, '创建讨论失败') });

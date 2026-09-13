@@ -5,12 +5,14 @@ import {
   Check,
   Crown,
   Import,
+  Info,
   MicOff,
   MoreHorizontal,
   Search,
   Shield,
   UserMinus,
   UserPlus,
+  Users,
 } from 'lucide-react';
 import { useAuth } from '../stores/auth';
 import { useCommandUi } from '../stores/commandUi';
@@ -22,6 +24,7 @@ import { rest } from '../lib/client';
 import {
   ROLE_LABELS,
   canActOn,
+  canInviteMembers,
   canTransferOwnership,
   isMuted,
   rolesOf,
@@ -287,8 +290,7 @@ function MemberMenu({
   );
 }
 
-/** 群成员面板：搜索 + 成员列表（带角色）+ 添加成员 + 管理操作 */
-export default function MembersPanel() {
+/** 群成员面板：搜索 + 成员列表（带角色）+ 添加成员 + 管理操作 */export default function MembersPanel() {
   const rid = useChat((s) => s.activeRid);
   const loadMembers = useChat((s) => s.loadMembers);
   const loadRoomRoles = useChat((s) => s.loadRoomRoles);
@@ -308,6 +310,14 @@ export default function MembersPanel() {
   const type = useChat((s) =>
     s.activeRid ? (s.subscriptions[s.activeRid]?.t ?? s.rooms[s.activeRid]?.t ?? 'c') : 'c',
   );
+  // 谁能加人：讨论只有创建者能（服务端 error-not-allowed 实测），DM 只能新建会话
+  const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
+  // 只有讨论需要收口：非创建者在讨论里加人必然 error-not-allowed（真机实测）。
+  // 其他房间（含私聊）保持宽松判定，交给服务端的 add-user 权限决定。
+  const canInvite = canInviteMembers(me, room);
+  const inviteBlockedReason = !canInvite
+    ? '只有讨论的创建者能往讨论里加人（Rocket.Chat 限制）。可以让创建者拉人，或改用群组 / 频道。'
+    : null;
 
   const [members, setMembers] = useState<RcUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -315,6 +325,7 @@ export default function MembersPanel() {
   const [keyword, setKeyword] = useState('');
   const [card, setCard] = useState<UserCardTarget | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addAllOpen, setAddAllOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const pinyinReady = usePinyinReady();
 
@@ -323,6 +334,27 @@ export default function MembersPanel() {
   useEffect(() => {
     if (rid) void loadRoomRoles(rid);
   }, [rid, loadRoomRoles]);
+
+  /**
+   * 打开个人卡片时补一次 `users.info`。
+   *
+   * 成员列表接口（`channels.members`）**不返回 `active`**，而停用/启用账号的动作
+   * 依赖这个字段决定按钮文案，所以点开时才按需拉一次（不给整页成员列表加 N 次请求）。
+   */
+  const openMemberCard = async (member: RcUser): Promise<void> => {
+    setCard(member);
+    if (member.active !== undefined) return;
+    try {
+      const full = await rest.getUserInfoById(member._id);
+      setCard((current) =>
+        current && current._id === member._id
+          ? { ...current, name: full.name ?? current.name, active: full.active }
+          : current,
+      );
+    } catch {
+      /* 取不到就不显示账号管理里的状态，不影响其他动作 */
+    }
+  };
 
   // 单一入口拉取（之前两个 effect 都会调用 → 每次打开发两次请求）
   useEffect(() => {
@@ -386,22 +418,50 @@ export default function MembersPanel() {
         </div>
         <button
           title="添加成员"
+          disabled={!canInvite}
           onClick={() => setAdding(true)}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-fill-1 disabled:hover:text-ink-2"
         >
           <UserPlus size={14} />
         </button>
         <button
           title="从其他频道导入成员"
+          disabled={!canInvite}
           onClick={() =>
             rid && useCommandUi.getState().open({ kind: 'roomPick', rid, mode: 'invite-all-from' })
           }
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-fill-1 disabled:hover:text-ink-2"
         >
           <Import size={14} />
         </button>
+        {/* 全部加人：公开频道走 channels.addAll、私有群组走 groups.addAll。
+            这两个端点在讨论/DM 上不适用（讨论按创建者权限收口，DM 只能新建会话） */}
+        {(type === 'c' || type === 'p') && !room?.prid && (
+          <button
+            title="把服务器上的用户全部加进来"
+            disabled={!canInvite}
+            onClick={() => setAddAllOpen(true)}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-fill-1 disabled:hover:text-ink-2"
+          >
+            <Users size={14} />
+          </button>
+        )}
       </div>
       {adding && <AddMembersDialog onClose={() => setAdding(false)} />}
+      {addAllOpen && rid && (
+        <AddAllMembersDialog
+          rid={rid}
+          type={type}
+          roomLabel={room?.fname || room?.name || '本群'}
+          onClose={() => setAddAllOpen(false)}
+        />
+      )}
+      {inviteBlockedReason && (
+        <div className="mx-3 mb-2 flex items-start gap-1.5 rounded-md bg-fill-1 px-2.5 py-2 text-xs leading-relaxed text-ink-3">
+          <Info size={12} className="mt-0.5 shrink-0" />
+          {inviteBlockedReason}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {loading && <SkeletonList rows={5} avatar={32} />}
@@ -424,7 +484,7 @@ export default function MembersPanel() {
               <div
                 key={m._id}
                 data-target-member={isTarget || undefined}
-                onClick={() => setCard(m)}
+                onClick={() => void openMemberCard(m)}
                 className={`group relative flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 ${
                   isTarget ? 'bg-primary-light' : 'hover:bg-fill-hover'
                 }`}
@@ -503,5 +563,86 @@ export default function MembersPanel() {
       </div>
       {card && <UserCard user={card} onClose={() => setCard(null)} />}
     </PanelShell>
+  );
+}
+
+/**
+ * 「把服务器上的用户全部加进来」（`channels.addAll` / `groups.addAll`）。
+ *
+ * 默认只加**在线/活跃**用户更安全：公开频道一次性拉上全公司的人很容易造成骚扰，
+ * 所以默认勾选「只加在线用户」，要全员需要用户显式取消勾选。
+ */
+function AddAllMembersDialog({
+  rid,
+  type,
+  roomLabel,
+  onClose,
+}: {
+  rid: string;
+  type: RoomType;
+  roomLabel: string;
+  onClose: () => void;
+}) {
+  const addAllUsersToRoom = useChat((s) => s.addAllUsersToRoom);
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <Dialog
+      title="批量加人"
+      hint={
+        type === 'c'
+          ? '把服务器上的用户加入这个公开频道。'
+          : '把服务器上的用户加入这个私有群组。'
+      }
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              void addAllUsersToRoom(rid, type, activeOnly)
+                .then(onClose)
+                .catch((err) => setError(humanError(err, '批量加人失败')))
+                .finally(() => setBusy(false));
+            }}
+            className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
+          >
+            {busy ? '添加中…' : '开始添加'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3 px-5 pb-4">
+        <div className="text-sm text-ink-2">
+          目标：<span className="text-ink">{roomLabel}</span>
+        </div>
+        <label className="flex cursor-pointer items-start gap-1.5 text-xs text-ink-2">
+          <input
+            type="checkbox"
+            checked={activeOnly}
+            onChange={(event) => setActiveOnly(event.target.checked)}
+            className="mt-0.5 accent-primary"
+          />
+          <span>
+            只加在线用户（推荐）
+            <span className="mt-0.5 block text-ink-3">
+              取消勾选会把「服务器上的所有用户」都加进来，包括长期不活跃的账号；这个操作会给他们都产生一条入群提示。
+            </span>
+          </span>
+        </label>
+        {error && <div className="text-xs text-danger">{error}</div>}
+      </div>
+    </Dialog>
   );
 }

@@ -10,6 +10,7 @@ import {
   LogOut,
   MessageCircle,
   MessageCirclePlus,
+  MessagesSquare,
   Plus,
   Search,
   Settings,
@@ -32,6 +33,7 @@ import UserCard from './UserCard';
 import { ConfirmDialog } from './Dialog';
 import FocusDialog, { formatRemaining, useNow } from './FocusDialog';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
+import CreateRoomDiscussionDialog from './CreateRoomDiscussionDialog';
 
 const MODULE_META: Record<string, {
   label: string;
@@ -101,11 +103,12 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
     },
   ].filter((section) => section.modules.length > 0);
   const [plusMenu, setPlusMenu] = useState(false);
-  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
+  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | 'discussion' | null>(null);
   const [selfCard, setSelfCard] = useState(false);
   // 专注模式一级入口（daily-loop 规格 v1）
   const [focusDialog, setFocusDialog] = useState(false);
   const focusSession = useFocus((s) => s.session);
+  const discussionsEnabled = useChat((s) => s.discussionsEnabled);
   const focusNow = useNow(!!focusSession);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const plusButtonRef = useRef<HTMLButtonElement>(null);
@@ -219,6 +222,19 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   <Users size={14} className="text-ink-2" />
                   创建团队
                 </button>
+                {/* Rocket.Chat 允许不选消息直接开讨论；服务端关掉讨论后不给入口 */}
+                {discussionsEnabled && (
+                  <button
+                    onClick={() => {
+                      setPlusMenu(false);
+                      setDialog('discussion');
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
+                  >
+                    <MessagesSquare size={14} className="text-ink-2" />
+                    创建讨论
+                  </button>
+                )}
                 <div className="my-1 h-px bg-line" />
                 <button
                   onClick={() => {
@@ -372,6 +388,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       {(dialog === 'group' || dialog === 'team') && (
         <CreateGroupDialog kind={dialog} onClose={closeCreateDialog} />
       )}
+      {dialog === 'discussion' && <CreateRoomDiscussionDialog onClose={closeCreateDialog} />}
       {focusDialog && <FocusDialog onClose={() => setFocusDialog(false)} />}
       {selfCard && user && (
         <UserCard

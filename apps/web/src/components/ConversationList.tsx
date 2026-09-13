@@ -11,6 +11,7 @@ import {
   FolderMinus,
   Hash,
   Lock,
+  MessagesSquare,
   Pin,
   PinOff,
   Plus,
@@ -30,6 +31,7 @@ import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import ContextMenu, { type MenuItem } from './ContextMenu';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
+import CreateRoomDiscussionDialog from './CreateRoomDiscussionDialog';
 
 const FILTER_TITLE: Record<ConvFilter, string> = {
   all: '消息',
@@ -334,12 +336,14 @@ function LoadingConversations() {
 
 /** 每个分类下「新建」对应什么动作；没有对应动作的分类（未读、@我…）不显示入口 */
 const NEW_ACTIONS: Partial<
-  Record<ConvFilter, { label: string; dialog: 'dm' | 'group' | 'team'; icon: typeof Plus }>
+  Record<ConvFilter, { label: string; dialog: 'dm' | 'group' | 'team' | 'discussion'; icon: typeof Plus }>
 > = {
   dm: { label: '发起私聊', dialog: 'dm', icon: User },
   multi: { label: '发起多人聊天', dialog: 'dm', icon: UsersRound },
   groups: { label: '创建群组', dialog: 'group', icon: Hash },
   teams: { label: '创建团队', dialog: 'team', icon: Users },
+  // 讨论也能不依赖消息创建，所以「讨论」分类下有明确的新建动作（Rocket.Chat 原生同款）
+  discussions: { label: '创建讨论', dialog: 'discussion', icon: MessagesSquare },
 };
 
 export default function ConversationList({
@@ -351,7 +355,7 @@ export default function ConversationList({
 }) {
   // 跨过零点后「昨天 / 周X」这类相对时间要跟着变
   useDayTick();
-  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | null>(null);
+  const [dialog, setDialog] = useState<'dm' | 'group' | 'team' | 'discussion' | null>(null);
   const [bgMenu, setBgMenu] = useState<{ x: number; y: number } | null>(null);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -384,14 +388,16 @@ export default function ConversationList({
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   const viewMode = prefs.sidebarViewMode;
   const showAvatar = prefs.sidebarDisplayAvatar;
+  const discussionsEnabled = useChat((s) => s.discussionsEnabled);
   const showHeaders = !avatarOnly && !folder && filter === 'all' && prefs.sidebarGroupByType;
   const title = folder ? folder.name : FILTER_TITLE[filter];
 
   /**
    * 当前分类下「新建」意味着什么。
    * 在「多人聊天」里想新建，要的显然是多人聊天，而不是让人回到左上角的 + 再选一遍。
+   * 服务端关掉讨论后，讨论分类下不再给这个入口。
    */
-  const newAction = NEW_ACTIONS[filter];
+  const newAction = filter === 'discussions' && !discussionsEnabled ? undefined : NEW_ACTIONS[filter];
 
   const openNew = () => {
     if (!newAction) return;
@@ -525,6 +531,7 @@ export default function ConversationList({
       {(dialog === 'group' || dialog === 'team') && (
         <CreateGroupDialog kind={dialog} onClose={() => setDialog(null)} />
       )}
+      {dialog === 'discussion' && <CreateRoomDiscussionDialog onClose={() => setDialog(null)} />}
     </aside>
   );
 }

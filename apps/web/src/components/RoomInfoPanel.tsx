@@ -3,15 +3,19 @@ import type { RcRoomRole } from '@rcx/rc-client';
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpRight,
   Bell,
   BellOff,
   CalendarClock,
+  Copy,
   Files,
   Hash,
+  Loader2,
   Lock,
   LogOut,
   Megaphone,
   MessageSquareOff,
+  MessagesSquare,
   Pencil,
   Pin,
   PinOff,
@@ -29,7 +33,10 @@ import { canManageRoom, canTransferOwnership } from '../lib/roomAdmin';
 import { fmtDayDivider } from '../lib/format';
 import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
-import { ConfirmDialog } from './Dialog';
+import { ConfirmDialog, default as Dialog } from './Dialog';
+import CreateRoomDiscussionDialog from './CreateRoomDiscussionDialog';
+import { openHistoryCopy } from '../stores/historyCopyUi';
+import { openTeamPanel } from '../stores/teamUi';
 import PanelShell from './PanelShell';
 import { SkeletonList } from './Skeleton';
 
@@ -190,6 +197,8 @@ export default function RoomInfoPanel() {
   const setRoomReadOnly = useChat((s) => s.setRoomReadOnly);
   const archiveConv = useChat((s) => s.archiveConv);
   const deleteConv = useChat((s) => s.deleteConv);
+  const discussionsEnabled = useChat((s) => s.discussionsEnabled);
+  const convertRoomToTeam = useChat((s) => s.convertRoomToTeam);
   // `?? NO_ROLES` 不能写进选择器里：那样每次调用都返回新数组，
   // useSyncExternalStore 会判定状态一直在变 → 无限循环 → 白屏
   const roomRoles = useChat((s) => (s.activeRid ? s.roomRoles[s.activeRid] : undefined)) ?? NO_ROLES;
@@ -209,6 +218,10 @@ export default function RoomInfoPanel() {
   const [aliasOpen, setAliasOpen] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 在房间里创建讨论（Rocket.Chat 允许不带来源消息）
+  const [discussionOpen, setDiscussionOpen] = useState(false);
+  // 把当前频道/群组升级为团队
+  const [convertTeamOpen, setConvertTeamOpen] = useState(false);
 
   const conv = useMemo(
     () => buildConversations(subscriptions, rooms).find((c) => c.rid === rid),
@@ -393,6 +406,54 @@ export default function RoomInfoPanel() {
               label="查看文件"
               onClick={() => setPanel({ kind: 'files' })}
             />
+            {/* 私聊「加人」会新建一个空会话，历史留在原处（RC 没有搬迁消息的接口），
+                所以给一个把记录带到别的会话去的入口 */}
+            <ActionRow
+              icon={Copy}
+              label="复制聊天记录到其他会话"
+              onClick={() => openHistoryCopy({ sourceRid: rid })}
+            />
+
+            {/* 讨论相关。
+                Rocket.Chat 拒绝嵌套讨论（`error-nested-discussion`），所以讨论里不给
+                「再建讨论」；而「讨论 → 频道」在 RC 里没有 REST 端点（8.6 实测
+                `channels/groups.convertToChannel` 都是 404），需要自建频道并搬迁消息，
+                属于独立工作项，这里不放假按钮。 */}
+            {discussionsEnabled && (conv.type === 'c' || conv.type === 'p') && !conv.isDiscussion && (
+              <>
+                <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
+                  讨论
+                </div>
+                <ActionRow
+                  icon={MessagesSquare}
+                  label="在此房间创建讨论"
+                  onClick={() => setDiscussionOpen(true)}
+                />
+              </>
+            )}
+
+            {/* 团队：当前房间属于某个团队时，进入团队维度的管理（成员 / 房间 / 解散）。
+                不是团队房间时，允许把这个频道/群组升级成团队（RC 的频道 → 团队）。 */}
+            {(conv.type === 'c' || conv.type === 'p') && (
+              <>
+                <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
+                  团队
+                </div>
+                {conv.teamId ? (
+                  <ActionRow
+                    icon={Users}
+                    label="管理所属团队"
+                    onClick={() => openTeamPanel({ teamId: conv.teamId })}
+                  />
+                ) : (
+                  <ActionRow
+                    icon={ArrowUpRight}
+                    label="把这个频道转换为团队"
+                    onClick={() => setConvertTeamOpen(true)}
+                  />
+                )}
+              </>
+            )}
 
             {/* 管理操作：只有群主 / 管理员 / 系统管理员看得见 */}
             {canManage && (
@@ -472,6 +533,78 @@ export default function RoomInfoPanel() {
           onClose={() => setConfirmLeave(false)}
         />
       )}
+      {discussionOpen && (
+        <CreateRoomDiscussionDialog rid={rid} onClose={() => setDiscussionOpen(false)} />
+      )}
+      {convertTeamOpen && (
+        <ConvertToTeamDialog
+          defaultName={info?.fname || info?.name || shownName}
+          onSubmit={async () => {
+            await convertRoomToTeam(rid, conv.type, info?.fname || info?.name || shownName);
+            setConvertTeamOpen(false);
+          }}
+          onClose={() => setConvertTeamOpen(false)}
+        />
+      )}
     </PanelShell>
+  );
+}
+
+/** 频道 / 群组 → 团队（RC 的 convertToTeam，会新建同名团队并把本房间作为主频道） */
+function ConvertToTeamDialog({
+  defaultName,
+  onSubmit,
+  onClose,
+}: {
+  defaultName: string;
+  onSubmit: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <Dialog
+      title="转换为团队"
+      hint="本频道会成为团队的主频道，之后可以在团队下继续新建频道、统一管理成员。"
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              void onSubmit()
+                .then(onClose)
+                .catch((err) => setError(err instanceof Error ? err.message : '转换失败'))
+                .finally(() => setBusy(false));
+            }}
+            className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Users size={14} />}
+            {busy ? '转换中…' : '转换为团队'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3 px-5 pb-4">
+        <div className="text-sm text-ink-2">
+          将转换：<span className="text-ink">{defaultName}</span>
+        </div>
+        <div className="text-xs leading-relaxed text-ink-3">
+          Rocket.Chat 的转换接口不接受自定义团队名，团队会直接使用当前频道名
+          「{defaultName}」。需要别的名字请先改频道名。
+        </div>
+        {error && <div className="text-xs text-danger">{error}</div>}
+      </div>
+    </Dialog>
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  RcCustomUserStatus,
   RcDate,
   RcLoginData,
   RcPreferences,
@@ -6,6 +7,8 @@ import type {
   RcRoomRole,
   RcSlashCommand,
   RcTeam,
+  RcTeamMember,
+  RcTeamRoom,
   RcMessage,
   RcMessageAttachment,
   RcRoom,
@@ -43,6 +46,11 @@ import {
 import {
   getPresences as getPresencesEndpoint,
   getUserInfo as getUserInfoEndpoint,
+  createCustomUserStatus as createCustomUserStatusEndpoint,
+  deleteCustomUserStatus as deleteCustomUserStatusEndpoint,
+  listCustomUserStatuses as listCustomUserStatusesEndpoint,
+  setActiveStatus as setActiveStatusEndpoint,
+  updateCustomUserStatus as updateCustomUserStatusEndpoint,
   getUserInfoById as getUserInfoByIdEndpoint,
   listUsers as listUsersEndpoint,
   resetAvatar as resetAvatarEndpoint,
@@ -88,31 +96,48 @@ import {
   spotlight as spotlightEndpoint,
 } from './search';
 import {
+  addAllUsersToRoom as addAllUsersToRoomEndpoint,
+  addTeamMembers as addTeamMembersEndpoint,
+  addTeamRooms as addTeamRoomsEndpoint,
   archiveRoom as archiveRoomEndpoint,
+  convertRoomToTeam as convertRoomToTeamEndpoint,
   createDiscussion as createDiscussionEndpoint,
   createDirectMessage as createDirectMessageEndpoint,
   createGroup as createGroupEndpoint,
   createTeam as createTeamEndpoint,
   deleteRoom as deleteRoomEndpoint,
+  deleteTeam as deleteTeamEndpoint,
   favoriteRoom as favoriteRoomEndpoint,
   getMembers as getMembersEndpoint,
   getRoomInfo as getRoomInfoEndpoint,
   getRoomRoles as getRoomRolesEndpoint,
   getRooms as getRoomsEndpoint,
   getSubscriptions as getSubscriptionsEndpoint,
+  getSubscription as getSubscriptionEndpoint,
+  saveDraft as saveDraftEndpoint,
+  getTeamInfo as getTeamInfoEndpoint,
   hideRoom as hideRoomEndpoint,
   inviteToRoom as inviteToRoomEndpoint,
   joinChannel as joinChannelEndpoint,
   joinRoom as joinRoomEndpoint,
   kickFromRoom as kickFromRoomEndpoint,
   leaveRoom as leaveRoomEndpoint,
+  leaveTeam as leaveTeamEndpoint,
+  listTeamMembers as listTeamMembersEndpoint,
+  listTeamChildren as listTeamChildrenEndpoint,
   listTeamRooms as listTeamRoomsEndpoint,
+  listTeamRoomsViaChildren as listTeamRoomsViaChildrenEndpoint,
   listTeams as listTeamsEndpoint,
   markRead as markReadEndpoint,
   muteRoom as muteRoomEndpoint,
   muteUser as muteUserEndpoint,
   openDirectMessage as openDirectMessageEndpoint,
   openRoom as openRoomEndpoint,
+  removeTeamMember as removeTeamMemberEndpoint,
+  removeTeamRoom as removeTeamRoomEndpoint,
+  updateTeam as updateTeamEndpoint,
+  updateTeamMember as updateTeamMemberEndpoint,
+  updateTeamRoom as updateTeamRoomEndpoint,
   saveRoomSettings as saveRoomSettingsEndpoint,
   setReadOnly as setReadOnlyEndpoint,
   setRoomRole as setRoomRoleEndpoint,
@@ -328,14 +353,99 @@ export class RcRestClient {
   }
 
   /** Team 下的频道列表 */
-  async listTeamRooms(teamId: string, count = 50): Promise<RcRoom[]> {
+  async listTeamRooms(teamId: string, count = 50): Promise<RcTeamRoom[]> {
     return listTeamRoomsEndpoint(this.endpointContext(), teamId, count);
+  }
+
+  /** 团队房间（走 listChildren：listRooms 在真机上返回空，见 rooms.ts 注释） */
+  async listTeamRoomsViaChildren(teamId: string, count = 100): Promise<RcTeamRoom[]> {
+    return listTeamRoomsViaChildrenEndpoint(this.endpointContext(), teamId, count);
+  }
+
+  /** 团队下挂在某个团队房间下的子房间 */
+  async listTeamChildren(parentRoomId: string, count = 100): Promise<RcTeamRoom[]> {
+    return listTeamChildrenEndpoint(this.endpointContext(), parentRoomId, count);
+  }
+
+  /** 团队信息（含 createdBy / 房间数） */
+  async getTeamInfo(teamId: string): Promise<RcTeam> {
+    return getTeamInfoEndpoint(this.endpointContext(), teamId);
+  }
+
+  /** 团队成员列表 */
+  async listTeamMembers(teamId: string, count = 100): Promise<RcTeamMember[]> {
+    return listTeamMembersEndpoint(this.endpointContext(), teamId, count);
+  }
+
+  /** 团队维度加成员（进主频道） */
+  addTeamMembers(teamId: string, members: Array<{ userId: string; roles?: string[] }>): Promise<unknown> {
+    return addTeamMembersEndpoint(this.endpointContext(), teamId, members);
+  }
+
+  /** 团队维度移除成员（默认从团队所有房间移除） */
+  removeTeamMember(teamId: string, userId: string, rooms?: string[]): Promise<unknown> {
+    return removeTeamMemberEndpoint(this.endpointContext(), teamId, userId, rooms);
+  }
+
+  /** 团队成员改角色 */
+  updateTeamMember(teamId: string, userId: string, roles: string[]): Promise<unknown> {
+    return updateTeamMemberEndpoint(this.endpointContext(), teamId, userId, roles);
+  }
+
+  /** 把已有房间挂到团队下 */
+  addTeamRooms(teamId: string, rooms: string[]): Promise<unknown> {
+    return addTeamRoomsEndpoint(this.endpointContext(), teamId, rooms);
+  }
+
+  /** 把房间移出团队（房间保留） */
+  removeTeamRoom(teamId: string, roomId: string): Promise<unknown> {
+    return removeTeamRoomEndpoint(this.endpointContext(), teamId, roomId);
+  }
+
+  /** 指定/取消团队主频道 */
+  updateTeamRoom(roomId: string, isDefault: boolean): Promise<unknown> {
+    return updateTeamRoomEndpoint(this.endpointContext(), roomId, isDefault);
+  }
+
+  /** 改团队名/类型 */
+  updateTeam(teamId: string, data: { name?: string; type?: 0 | 1; updateRoom?: boolean }): Promise<unknown> {
+    return updateTeamEndpoint(this.endpointContext(), teamId, data);
+  }
+
+  /** 退出团队 */
+  leaveTeam(teamId: string, rooms?: string[]): Promise<unknown> {
+    return leaveTeamEndpoint(this.endpointContext(), teamId, rooms);
+  }
+
+  /** 解散团队（roomsToRemove 里的房间一并删除） */
+  deleteTeam(teamId: string, roomsToRemove?: string[]): Promise<unknown> {
+    return deleteTeamEndpoint(this.endpointContext(), teamId, roomsToRemove);
+  }
+
+  /** 频道 / 群组 → 团队（团队名沿用房间名） */
+  convertRoomToTeam(rid: string, type: RoomType): Promise<unknown> {
+    return convertRoomToTeamEndpoint(this.endpointContext(), rid, type);
+  }
+
+  /** 把服务器上所有用户加进房间（公开频道 / 私有群组） */
+  addAllUsersToRoom(rid: string, type: RoomType, activeUsersOnly = false): Promise<unknown> {
+    return addAllUsersToRoomEndpoint(this.endpointContext(), rid, type, activeUsersOnly);
   }
 
   // ---- 会话 / 房间 ----
 
   async getSubscriptions(): Promise<RcSubscription[]> {
     return getSubscriptionsEndpoint(this.endpointContext());
+  }
+
+  /** 单个订阅（含服务端草稿；`subscriptions.get` 不返回 draft） */
+  async getSubscription(rid: string): Promise<RcSubscription | null> {
+    return getSubscriptionEndpoint(this.endpointContext(), rid);
+  }
+
+  /** 保存草稿到服务端（跨设备） */
+  async saveDraft(rid: string, draft: string, tmid?: string): Promise<unknown> {
+    return saveDraftEndpoint(this.endpointContext(), rid, draft, tmid);
   }
 
   async getRooms(): Promise<RcRoom[]> {
@@ -361,9 +471,17 @@ export class RcRestClient {
     return openDirectMessageEndpoint(this.endpointContext(), roomId);
   }
 
-  /** 创建群组：priv=true 走 groups.create（私有），否则 channels.create（公开频道） */
-  async createGroup(name: string, members: string[], priv = true): Promise<RcRoom> {
-    return createGroupEndpoint(this.endpointContext(), name, members, priv);
+  /**
+   * 创建群组：priv=true 走 groups.create（私有），否则 channels.create（公开频道）。
+   * 注意这两个端点都不接受 `teamId`，团队频道请用 `addTeamRooms` 两步走。
+   */
+  async createGroup(
+    name: string,
+    members: string[],
+    priv = true,
+    options: { readOnly?: boolean } = {},
+  ): Promise<RcRoom> {
+    return createGroupEndpoint(this.endpointContext(), name, members, priv, options);
   }
 
   /** 目录检索：全部成员 / 公开频道（分页） */
@@ -619,6 +737,10 @@ export class RcRestClient {
    */
   async updateOwnBasicInfo(data: {
     name?: string;
+    nickname?: string;
+    bio?: string;
+    statusText?: string;
+    statusType?: string;
     email?: string;
     username?: string;
     newPassword?: string;
@@ -631,7 +753,6 @@ export class RcRestClient {
   async setAvatar(file: Blob, fileName = 'avatar.png'): Promise<void> {
     return setAvatarEndpoint(this.endpointContext(), file, fileName);
   }
-
   /**
    * 移除头像，回到 RC 生成的默认首字母图。
    * userId 必须显式给 —— 传空对象服务端会拒（"required userId or username param was not provided"），
@@ -644,6 +765,30 @@ export class RcRestClient {
   /** 查某个用户的资料（按用户名或 id） */
   async getUserInfo(usernameOrId: string): Promise<RcUser> {
     return getUserInfoEndpoint(this.endpointContext(), usernameOrId);
+  }
+
+  // ---- 自定义用户状态 ----
+
+  /** 服务端定义的全部自定义状态 */
+  async listCustomUserStatuses(count = 100): Promise<RcCustomUserStatus[]> {
+    return listCustomUserStatusesEndpoint(this.endpointContext(), count);
+  }
+
+  async createCustomUserStatus(name: string, statusType?: string): Promise<RcCustomUserStatus> {
+    return createCustomUserStatusEndpoint(this.endpointContext(), name, statusType);
+  }
+
+  async updateCustomUserStatus(id: string, name: string, statusType?: string): Promise<RcCustomUserStatus> {
+    return updateCustomUserStatusEndpoint(this.endpointContext(), id, name, statusType);
+  }
+
+  async deleteCustomUserStatus(id: string): Promise<unknown> {
+    return deleteCustomUserStatusEndpoint(this.endpointContext(), id);
+  }
+
+  /** 停用 / 启用账号（管理员；需要 edit-other-user-active-status 权限） */
+  async setUserActiveStatus(userId: string, active: boolean): Promise<{ user: { _id: string; active: boolean } }> {
+    return setActiveStatusEndpoint(this.endpointContext(), userId, active);
   }
 
   /** 按用户 id 查资料；不依赖 Rocket.Chat 默认的 17 位 id 长度。 */
@@ -672,7 +817,10 @@ export class RcRestClient {
     return fetchFileWithProgressEndpoint(this.endpointContext(), path, options);
   }
 
-  /** 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话） */
+  /**
+   * 从某条消息创建讨论（Rocket.Chat Discussion，父房间的子会话）。
+   * `pmid` 可省略 —— 直接在一个房间里开讨论时不需要来源消息。
+   */
   async createDiscussion(prid: string, name: string, pmid?: string): Promise<RcRoom> {
     return createDiscussionEndpoint(this.endpointContext(), prid, name, pmid);
   }

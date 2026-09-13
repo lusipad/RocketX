@@ -16,10 +16,28 @@ export interface RcUser {
   status?: string;
   /** 状态文案（users.setStatus 的 message 参数；users.info/me 返回，订阅流上不一定有） */
   statusText?: string;
+  /** 自定义状态 id：指向 `custom-user-status.list` 里的某条（经 updateOwnBasicInfo 设置） */
+  statusType?: string;
+  /** 昵称：与 name（真实姓名）不同的短称呼 */
+  nickname?: string;
+  /** 个人简介 */
+  bio?: string;
   emails?: { address: string; verified?: boolean }[];
+  /** 头像是否带 etag（换头像后用来破缓存） */
   avatarETag?: string;
+  /** 账号是否启用（`users.info` 返回；成员列表接口不返回，未知时为 undefined） */
+  active?: boolean;
   /** 全局角色（admin / user / bot…）。admin 在所有房间里通吃 */
   roles?: string[];
+}
+
+/** 自定义用户状态（`custom-user-status.*`） */
+export interface RcCustomUserStatus {
+  _id: string;
+  name: string;
+  /** 关联的在线状态：online / away / busy / offline（空串表示未指定） */
+  statusType?: string;
+  _updatedAt?: RcDate;
 }
 
 export interface RcMessageAttachmentField {
@@ -182,6 +200,13 @@ export interface RcSubscription {
   teamId?: string;
   /** 免打扰 */
   disableNotifications?: boolean;
+  /**
+   * 服务端保存的未发送草稿。
+   *
+   * `subscriptions.get` 与 `subscriptions.getOne` **都会返回**这个字段（RC 8.6 实测），
+   * 所以启动时一次 `getSubscriptions` 就能把所有房间的草稿带回来，不必逐个 `getOne`。
+   */
+  draft?: string;
   ls?: RcDate;
   _updatedAt: RcDate;
   u: { _id: string; username: string };
@@ -261,7 +286,27 @@ export interface RcTeam {
   roomId: string;
   createdAt: RcDate;
   createdBy: { _id: string; username: string };
-  rooms?: number;
+  /** `teams.info` / `teams.listRooms` 会带房间 id 列表；`teams.list` 只给数量 */
+  rooms?: string[] | number;
+  /** 团队主频道名（部分端点返回） */
+  roomName?: string;
+  /** 团队说明（`teams.update` 可改） */
+  description?: string;
+}
+
+/** 团队成员（`teams.members`）：用户字段 + 团队角色 + 加入时间 */
+export interface RcTeamMember extends RcUser {
+  roles?: string[];
+  /** 团队里的加入时间（部分端点返回） */
+  ts?: RcDate;
+}
+
+/** 团队下的房间（`teams.listRooms` / `teams.listChildren`） */
+export interface RcTeamRoom extends RcRoom {
+  /** 是否是团队主频道 */
+  isDefault?: boolean;
+  /** 父房间：`teams.listChildren` 用它表示「挂在哪个团队房间下」 */
+  parentRoomId?: string;
 }
 
 export interface RcLoginData {

@@ -138,6 +138,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = '确定',
   danger = true,
+  extra,
   onConfirm,
   onClose,
 }: {
@@ -145,13 +146,15 @@ export function ConfirmDialog({
   message: string;
   confirmLabel?: string;
   danger?: boolean;
+  /** 确认按钮上方的附加选项（如「同时删除房间」这类会改变后果的开关） */
+  extra?: ReactNode;
   onConfirm: () => void;
   onClose: () => void;
 }) {
   return (
     <Dialog
       title={title}
-      width={340}
+      width={360}
       onClose={onClose}
       footer={
         <>
@@ -175,7 +178,10 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="px-5 pb-2 text-sm leading-relaxed text-ink-2">{message}</div>
+      <div className="space-y-2 px-5 pb-3 text-sm leading-relaxed text-ink-2">
+        <div>{message}</div>
+        {extra}
+      </div>
     </Dialog>
   );
 }

@@ -80,6 +80,32 @@ export function isMuted(muted: string[] | undefined, username: string): boolean 
   return (muted ?? []).includes(username);
 }
 
+/**
+ * 能不能往这个房间加人。
+ *
+ * 只对**讨论**做收口，其余房间保持宽松 —— 「加人」本来就由服务端的 `add-user`
+ * 权限决定，RocketX 不再自作主张地提前禁用：
+ *
+ *   - 讨论（t='p' + prid）：**只有创建者能加人**。实测（RC 8.6）讨论创建者
+ *     `groups.invite` 成功；父群成员（非讨论成员）与讨论普通成员都是
+ *     `error-not-allowed`，而且 `add-user` 权限默认 roles=[] 也不影响创建者，
+ *     说明是 RC 对讨论创建者的特殊放行。所以这里可以放心地提前禁用并说明原因。
+ *   - 其他房间（频道 / 群组 / 私聊 / 多人聊天）：一律返回 true，包括私聊 ——
+ *     私聊的「加人」本来就不是 invite，而是新建一个包含所有人的会话，
+ *     由 `inviteMembers` 自己分流，界面不必禁用（老行为也是如此）。
+ *     这里是刻意保守的选择：如果某个部署手工给 `user` 角色配了 `add-user`，
+ *     提前禁用会误伤，而放着让服务端判定的代价只是多一次明确的错误提示。
+ */
+export function canInviteMembers(
+  me: RcUser | null,
+  room: { prid?: string; u?: { _id: string } } | undefined,
+): boolean {
+  if (!me) return false;
+  if (!room?.prid) return true;
+  if (me.roles?.includes('admin')) return true;
+  return room.u?._id === me._id;
+}
+
 /** 成员排序：群主 → 管理员 → 负责人 → 普通成员，同级按名字 */
 export function sortMembers(members: RcUser[], roomRoles: RcRoomRole[]): RcUser[] {
   const rank = (u: RcUser) => {

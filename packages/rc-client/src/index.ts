@@ -6,6 +6,7 @@ export * from './domains';
 export * from './auth';
 export * from './users';
 export * from './rooms';
+export * from './roomName';
 export * from './messages';
 export * from './files';
 export * from './search';

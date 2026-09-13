@@ -10,7 +10,7 @@ import {
   selectEnvironmentForProject,
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
-import { useChat } from '../stores/chat';
+import { slugifyRoomName, useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import type { WorkItem } from '../stores/workbench';
 import Dialog from './Dialog';
@@ -48,6 +48,8 @@ export default function CreateWorkItemDiscussionDialog({
   const bindDiscussion = useAgentEnvironments((state) => state.bindDiscussion);
 
   const parentRooms = useMemo(
+    // Rocket.Chat 明确拒绝嵌套讨论（`error-nested-discussion`，8.6 实测），
+    // 所以父房间候选必须排除讨论本身（`prid` 非空）。
     () => Object.values(rooms)
       .filter((room) => (room.t === 'c' || room.t === 'p') && !room.prid && !!subscriptions[room._id])
       .sort((left, right) => roomLabel(left, left._id).localeCompare(roomLabel(right, right._id), 'zh-CN')),
@@ -65,7 +67,9 @@ export default function CreateWorkItemDiscussionDialog({
   );
   const [parentRid, setParentRid] = useState(defaultParent);
   const [environmentId, setEnvironmentId] = useState(defaultEnvironment?.id ?? '');
-  const [discussionName, setDiscussionName] = useState(`#${item.id} ${item.title}`.slice(0, 100));
+  // 讨论名必须过服务端 slug 校验（issue #392）：`#123 中文标题` 直接发会被拒，
+  // 所以默认值就先按 slug 规则生成，用户看到的就是最终房间名。
+  const [discussionName, setDiscussionName] = useState(() => slugifyRoomName(`#${item.id} ${item.title}`, `work-item-${item.id}`));
   const [startAgent, setStartAgent] = useState(true);
   const [writeBack, setWriteBack] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -85,7 +89,7 @@ export default function CreateWorkItemDiscussionDialog({
     setBusy(true);
     let discussionRid = '';
     try {
-      const resolvedName = discussionName.trim() || `#${item.id} ${item.title}`;
+      const resolvedName = slugifyRoomName(discussionName.trim() || `#${item.id} ${item.title}`, `work-item-${item.id}`);
       const room = await rest.createDiscussion(parentRid, resolvedName);
       discussionRid = room._id;
       useChat.setState((state) => ({ rooms: { ...state.rooms, [room._id]: room } }));

@@ -11,6 +11,8 @@ import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
 import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
+import { HistoryCopyDialogHost } from './components/CopyHistoryDialog';
+import { TeamPanelHost } from './components/TeamPanel';
 import { useUI } from './stores/ui';
 
 export default function App() {
@@ -74,6 +76,10 @@ export default function App() {
       <NotificationNavigationBridge />
       {content}
       <Toaster />
+      {/* 复制聊天记录：触发点在别处（加人后的提示、群信息面板），这里统一呈现 */}
+      <HistoryCopyDialogHost />
+      {/* 团队管理面板：同上，入口在群信息与会话列表 */}
+      <TeamPanelHost />
     </>
   );
 }

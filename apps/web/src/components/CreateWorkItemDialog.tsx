@@ -14,7 +14,7 @@ import {
   useWiTemplates,
   type HierarchyLayout,
 } from '../stores/wiTemplates';
-import { useChat } from '../stores/chat';
+import { slugifyRoomName, useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import { rest } from '../lib/client';
 import { useDialogBehavior } from './Dialog';
@@ -163,7 +163,8 @@ export default function CreateWorkItemDialog({
 
       if (createDiscussion && rid) {
         setProgress('创建讨论组…');
-        const discName = `#${top.id} ${top.title}`.slice(0, 100);
+        // 讨论名要过服务端 slug 校验：`#123 中文标题` 原样发会被拒（issue #392）。
+        const discName = slugifyRoomName(`#${top.id} ${top.title}`, `work-item-${top.id}`);
         const room = await rest.createDiscussion(rid, discName);
 
         const lines = created.map((w) => `- **${w.type}** [#${w.id} ${w.title}](${w.webUrl})`);
