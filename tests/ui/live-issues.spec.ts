@@ -40,6 +40,10 @@ let originalEnableAutoAway: unknown;
 let originalIdleTimeLimit: unknown;
 
 const createdChannelIds: string[] = [];
+/** 本次测试创建的团队：afterAll 用 teams.delete 收尾 */
+const createdTeamIds: string[] = [];
+/** 团队主频道 id：必须留到 teams.delete 之后再删，否则团队会变成删不掉的孤儿记录 */
+const createdTeamMainRoomIds: string[] = [];
 const createdDmIds: string[] = [];
 const createdUserIds: string[] = [];
 
@@ -103,8 +107,11 @@ async function readAdminStatus(): Promise<string | null> {
 }
 
 /** 创建测试用户并与 admin 建 DM，返回基本信息；资源登记到清理列表。 */
+/** 同一毫秒内连续调用也必须拿到不同名字，否则会话列表里两个同名用户无法区分 */
+let liveUserSeq = 0;
+
 async function createDmUser(tag: string): Promise<{ username: string; name: string; userId: string; dmRid: string }> {
-  const suffix = Date.now().toString(36);
+  const suffix = `${Date.now().toString(36)}${(liveUserSeq++).toString(36)}`;
   const username = `rcx-live-${tag}-${suffix}`;
   const name = `Live测试${tag}${suffix}`;
   const created = await rcApi<{ user?: { _id?: string } }>('users.create', {
@@ -244,8 +251,22 @@ test.describe('live：真实 Rocket.Chat 服务器验证', () => {
       enableAutoAway: (originalEnableAutoAway as boolean | undefined) ?? true,
       idleTimeLimit: (originalIdleTimeLimit as number | undefined) ?? 300,
     }).catch(() => {});
+    // 顺序很重要：**先删团队频道，再解散团队，最后删主频道**。
+    // 团队解散不会连带删频道，提前删主频道又会让团队变成 REST 删不掉的孤儿记录
+    // （teams.delete 报 invalid-room，只能进数据库清）。
     for (const roomId of createdChannelIds) {
-      await rcApi('channels.delete', { body: { roomId } }).catch(() => {});
+      if (createdTeamMainRoomIds.includes(roomId)) continue;
+      await rcApi('channels.delete', { body: { roomId } }).catch(() => {
+        return rcApi('groups.delete', { body: { roomId } }).catch(() => {});
+      });
+    }
+    for (const teamId of createdTeamIds) {
+      await rcApi('teams.delete', { body: { teamId } }).catch(() => {});
+    }
+    for (const roomId of createdTeamMainRoomIds) {
+      await rcApi('channels.delete', { body: { roomId } }).catch(() => {
+        return rcApi('groups.delete', { body: { roomId } }).catch(() => {});
+      });
     }
     for (const roomId of createdDmIds) {
       await rcApi('im.close', { body: { roomId } }).catch(() => {});
@@ -556,5 +577,393 @@ test.describe('live：真实 Rocket.Chat 服务器验证', () => {
     await expect
       .poll(async () => readAdminStatus(), { timeout: 15_000, intervals: [300, 800, 1_500] })
       .toBe('online');
+  });
+
+  /**
+   * 房间级创建讨论：Rocket.Chat 的 `rooms.createDiscussion` 不要求 `pmid`，所以
+   * 「群里一条消息都没有」时也应该能开讨论。此前 RocketX 只有「消息右键 → 创建
+   * 讨论」一条路径，空群根本没有入口。
+   */
+  test('空群里可以直接创建讨论（不需要先有消息）', async ({ page }) => {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const groupName = `rcx-live-disc-${suffix}`;
+    const created = await rcApi<{ group: { _id: string } }>('groups.create', {
+      body: { name: groupName, members: [] },
+    });
+    const groupRid = created.group._id;
+    createdChannelIds.push(groupRid);
+
+    await bootLive(page);
+    await expect(convButton(page, groupName)).toBeVisible({ timeout: 15_000 });
+    await convButton(page, groupName).click();
+
+    // 打开群信息 → 讨论分组里的入口
+    await page.getByTitle('查看群信息').first().click();
+    await page.getByRole('button', { name: '在此房间创建讨论' }).click();
+
+    const dialog = page.getByRole('dialog', { name: '创建讨论' });
+    await expect(dialog).toBeVisible();
+    // 讨论名默认留空时用房间名，这里显式填一个便于断言
+    const discussionName = `empty-room-disc-${suffix}`;
+    await dialog.getByLabel('讨论名称').fill(discussionName);
+    // exact：关闭按钮的 aria-label 是「关闭创建讨论」，不带 exact 会命中两个
+    await dialog.getByRole('button', { name: '创建讨论', exact: true }).click();
+
+    // 服务端真的建出来了：父房间必须是这个空群
+    await expect
+      .poll(
+        async () => {
+          const res = await rcApi<{ discussions: Array<{ _id: string; prid: string; fname?: string }> }>(
+            'rooms.getDiscussions',
+            { query: { roomId: groupRid } },
+          );
+          return res.discussions.find((item) => item.fname === discussionName)?.prid ?? null;
+        },
+        { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(groupRid);
+
+    // 打开讨论后清理（父群删除不会连带删讨论）
+    const discussions = await rcApi<{ discussions: Array<{ _id: string; fname?: string }> }>(
+      'rooms.getDiscussions',
+      { query: { roomId: groupRid } },
+    );
+    for (const item of discussions.discussions) {
+      if (item.fname === discussionName) createdChannelIds.push(item._id);
+    }
+  });
+
+  /** 「+」菜单里的创建讨论：不指定父房间，由弹窗里的房间选择器决定。 */
+  test('「+」菜单可以挑选房间创建讨论', async ({ page }) => {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const groupName = `rcx-live-disc-${suffix}`;
+    const created = await rcApi<{ group: { _id: string } }>('groups.create', {
+      body: { name: groupName, members: [] },
+    });
+    const groupRid = created.group._id;
+    createdChannelIds.push(groupRid);
+
+    await bootLive(page);
+    await page.getByTitle('发起聊天 / 创建群组').click();
+    await page.getByRole('menu').getByRole('button', { name: '创建讨论' }).click();
+
+    const dialog = page.getByRole('dialog', { name: '创建讨论' });
+    await expect(dialog).toBeVisible();
+    const discussionName = `menu-disc-${suffix}`;
+    await dialog.getByLabel('所属房间').selectOption({ label: groupName });
+    await dialog.getByLabel('讨论名称').fill(discussionName);
+    await dialog.getByRole('button', { name: '创建讨论', exact: true }).click();
+
+    await expect
+      .poll(
+        async () => {
+          const res = await rcApi<{ discussions: Array<{ _id: string; prid: string; fname?: string }> }>(
+            'rooms.getDiscussions',
+            { query: { roomId: groupRid } },
+          );
+          return res.discussions.find((item) => item.fname === discussionName)?.prid ?? null;
+        },
+        { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(groupRid);
+
+    const discussions = await rcApi<{ discussions: Array<{ _id: string; fname?: string }> }>(
+      'rooms.getDiscussions',
+      { query: { roomId: groupRid } },
+    );
+    for (const item of discussions.discussions) {
+      if (item.fname === discussionName) createdChannelIds.push(item._id);
+    }
+  });
+
+  /**
+   * 讨论里的「添加成员」：讨论是 t='p'（私有群），服务端允许创建者邀请
+   * （`groups.invite` 实测成功），所以成员面板的添加按钮在讨论里必须真的能用。
+   */
+  test('讨论里可以通过成员面板添加成员', async ({ page }) => {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const groupName = `rcx-live-disc-inv-${suffix}`;
+    const created = await rcApi<{ group: { _id: string } }>('groups.create', {
+      body: { name: groupName, members: [] },
+    });
+    const groupRid = created.group._id;
+    createdChannelIds.push(groupRid);
+    const discussionName = `live-inv-${suffix}`;
+    const discussion = await rcApi<{ discussion: { _id: string; t: string } }>('rooms.createDiscussion', {
+      body: { prid: groupRid, t_name: discussionName },
+    });
+    const discussionRid = discussion.discussion._id;
+    createdChannelIds.push(discussionRid);
+
+    const invitee = await createDmUser('disc-inv');
+
+    // 记录邀请请求，用来区分「界面没发请求」与「请求被服务端拒绝」
+    const inviteCalls: string[] = [];
+    page.on('response', (res) => {
+      const url = res.url();
+      if (url.includes('.invite')) inviteCalls.push(`${url.split('/api/v1/')[1]} → HTTP ${res.status()}`);
+    });
+
+    await bootLive(page);
+    await expect(convButton(page, groupName)).toBeVisible({ timeout: 15_000 });
+    await convButton(page, groupName).click();
+
+    // 父群里的讨论卡片
+    await page.getByRole('button', { name: new RegExp(discussionName) }).first().click();
+    await expect(page.locator('header').getByText(discussionName)).toBeVisible({ timeout: 15_000 });
+
+    await page.getByTitle('查看群信息').first().click();
+    await page.getByRole('button', { name: '查看群成员' }).click();
+    await page.getByTitle('添加成员').click();
+
+    const dialog = page.getByRole('dialog', { name: '添加成员' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByPlaceholder('搜索用户').fill(invitee.username);
+    await dialog.getByText(`@${invitee.username}`, { exact: true }).click();
+    await dialog.getByRole('button', { name: /^添加/ }).click();
+
+    // 关键断言：界面必须发出邀请请求（groups.invite），且服务端接受
+    await expect.poll(() => inviteCalls.length, { timeout: 15_000, intervals: [300, 800, 1_500] }).toBeGreaterThan(0);
+    expect(inviteCalls.join(' | ')).toContain('groups.invite');
+    expect(inviteCalls.join(' | ')).toContain('HTTP 200');
+
+    // 服务端成员列表里真的出现了这个人
+    await expect
+      .poll(
+        async () => {
+          const res = await rcApi<{ members: Array<{ username: string }> }>('groups.members', {
+            query: { roomId: discussionRid, count: '50' },
+          });
+          return res.members.some((member) => member.username === invitee.username);
+        },
+        { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(true);
+  });
+
+  /**
+   * 讨论的非创建者：服务端对讨论普通成员加人返回 `error-not-allowed`（实测），
+   * 所以界面必须提前禁用入口并说明原因，而不是让人点完才发现。
+   */
+  test('讨论里非创建者的添加成员入口被禁用并说明原因', async ({ page }) => {
+    const suffix = Math.random().toString(36);
+    const username = `rcx-live-discmem-${suffix}`;
+    const password = `Rcx-live#${suffix}Aa`;
+    const created = await rcApi<{ user?: { _id?: string } }>('users.create', {
+      body: {
+        username,
+        name: `讨论成员${suffix}`,
+        email: `${username}@rcx-live.example.com`,
+        password,
+        verified: true,
+        joinDefaultChannels: false,
+      },
+    });
+    const memberUserId = created.user?._id;
+    if (!memberUserId) throw new Error('users.create 未返回用户 id');
+    createdUserIds.push(memberUserId);
+
+    const groupName = `rcx-live-disc-block-${suffix}`;
+    const group = await rcApi<{ group: { _id: string } }>('groups.create', {
+      body: { name: groupName, members: [username] },
+    });
+    createdChannelIds.push(group.group._id);
+
+    // admin 建讨论并把普通用户加进去（admin 是创建者，服务端允许）
+    const discussionName = `block-disc-${suffix}`;
+    const discussion = await rcApi<{ discussion: { _id: string } }>('rooms.createDiscussion', {
+      body: { prid: group.group._id, t_name: discussionName },
+    });
+    const discussionRid = discussion.discussion._id;
+    createdChannelIds.push(discussionRid);
+    await rcApi('groups.invite', { body: { roomId: discussionRid, userId: memberUserId } });
+
+    // 用这个普通用户登录（不能复用 admin 的会话）
+    const login = await fetch(`${RC}/api/v1/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: username, password }),
+    }).then((r) => r.json() as Promise<{ data?: { authToken?: string; userId?: string } }>);
+    const memberToken = login.data?.authToken;
+    const memberId = login.data?.userId;
+    if (!memberToken || !memberId) throw new Error('普通用户登录失败');
+
+    await page.addInitScript(
+      ({ server, userId, authToken }) => {
+        localStorage.setItem('rcx-server', server);
+        localStorage.setItem('rcx-auth', JSON.stringify({ authToken, userId }));
+        localStorage.setItem('rcx-owner', `${userId}@${server}`);
+        localStorage.setItem(
+          `rcx-onboarding-v1:${encodeURIComponent(server)}:${encodeURIComponent(userId)}`,
+          JSON.stringify({ version: 1, ado: 'skipped', checklist: { startedConversation: true } }),
+        );
+      },
+      { server: RC, userId: memberId, authToken: memberToken },
+    );
+    await page.goto('/');
+    await page.getByRole('navigation', { name: 'RocketX 主导航' }).waitFor({ timeout: 30_000 });
+    await expect(page.getByText('加载会话中…')).toHaveCount(0, { timeout: 30_000 });
+
+    await expect(convButton(page, groupName)).toBeVisible({ timeout: 15_000 });
+    await convButton(page, groupName).click();
+    await page.getByRole('button', { name: new RegExp(discussionName) }).first().click();
+    await expect(page.locator('header').getByText(discussionName)).toBeVisible({ timeout: 15_000 });
+
+    await page.getByTitle('查看群信息').first().click();
+    await page.getByRole('button', { name: '查看群成员' }).click();
+
+    const addButton = page.getByTitle('添加成员');
+    await expect(addButton).toBeDisabled();
+    await expect(page.getByText(/只有讨论的创建者能往讨论里加人/)).toBeVisible();
+  });
+
+  /**
+   * 把某个会话的聊天记录复制到另一个会话（RC 没有搬移消息的接口，只能转发）。
+   *
+   * 这里测的是这个功能本身：打开弹窗 → 选来源/目标/条数 → 复制成功，
+   * 且新会话里能拿到带引用块（原作者）的副本，原会话一条不少。
+   * 「加人后提示里的带过来入口」由回归用例覆盖（toast action 的连线）。
+   */
+  test('可以把会话的聊天记录复制到另一个会话', async ({ page }) => {
+    const peer = await createDmUser('hist');
+    const others = await createDmUser('hist-new');
+    const marker = `历史标记-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 原会话：两条可识别的历史
+    await rcApi('chat.postMessage', { body: { roomId: peer.dmRid, text: `${marker}-A` } });
+    await rcApi('chat.postMessage', { body: { roomId: peer.dmRid, text: `${marker}-B` } });
+    const before = await rcApi<{ messages: RcMessage[] }>('im.history', {
+      query: { roomId: peer.dmRid, count: '50' },
+    });
+
+    // 目标会话：模拟「加人后新建的会话」
+    const target = await rcApi<{ room: { _id: string } }>('im.create', {
+      body: { usernames: `${peer.username},${others.username}` },
+    });
+    const targetRid = target.room._id;
+    createdDmIds.push(targetRid);
+    expect(targetRid).not.toBe(peer.dmRid);
+
+    await bootLive(page);
+    // 目标多人会话里也含这个人的名字，所以这里必须取第一个（原一对一私聊）
+    await expect(convButton(page, peer.name).first()).toBeVisible({ timeout: 15_000 });
+    await convButton(page, peer.name).first().click();
+
+    // 群信息 → 复制聊天记录到其他会话
+    await page.getByTitle('查看群信息').first().click();
+    await page.getByRole('button', { name: '复制聊天记录到其他会话' }).click();
+
+    const copyDialog = page.getByRole('dialog', { name: '复制聊天记录' });
+    await expect(copyDialog).toBeVisible();
+    await expect(copyDialog.getByLabel('从哪个会话复制')).toHaveValue(peer.dmRid);
+    await copyDialog.getByLabel('复制到哪个会话').selectOption(targetRid);
+    await copyDialog.getByRole('button', { name: '最近 30 条' }).click();
+    await copyDialog.getByRole('button', { name: '开始复制' }).click();
+
+    // 目标会话里出现两条带引用链接的副本
+    await expect
+      .poll(
+        async () => {
+          const res = await rcApi<{ messages: RcMessage[] }>('im.history', {
+            query: { roomId: targetRid, count: '100' },
+          });
+          return res.messages.filter((m) => m.msg?.includes(marker)).length;
+        },
+        { timeout: 60_000, intervals: [1_000, 2_000, 3_000] },
+      )
+      .toBe(2);
+
+    const copied = await rcApi<{ messages: RcMessage[] }>('im.history', {
+      query: { roomId: targetRid, count: '100' },
+    });
+    const copiedTexts = copied.messages
+      .filter((m) => m.msg?.includes(marker))
+      .map((m) => m.msg ?? '');
+    // 复制是「转发副本」：每条带指向原消息的引用链接，显示原作者
+    expect(copiedTexts.every((text) => text.startsWith('[ ]('))).toBe(true);
+
+    // 原会话一条不少（复制而不是搬移）
+    const after = await rcApi<{ messages: RcMessage[] }>('im.history', {
+      query: { roomId: peer.dmRid, count: '50' },
+    });
+    expect(after.messages.length).toBe(before.messages.length);
+  });
+
+  /**
+   * 团队管理：团队此前只能创建、管不了。这里走真实入口（团队主频道的群信息 →
+   * 管理所属团队），在面板里新建团队频道、添加成员，并回到服务端核对结果。
+   */
+  test('团队主频道里可以管理团队（新建频道 / 添加成员）', async ({ page }) => {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const created = await rcApi<{ team: { _id: string; roomId: string; name: string } }>('teams.create', {
+      body: { name: `rcx-live-team-${suffix}`, type: 1, members: [] },
+    });
+    const teamId = created.team._id;
+    const mainRoomId = created.team.roomId;
+    createdTeamIds.push(teamId);
+    createdTeamMainRoomIds.push(mainRoomId);
+    createdChannelIds.push(mainRoomId);
+
+    const member = await createDmUser('teammate');
+
+    await bootLive(page);
+    await convButton(page, created.team.name).first().click();
+    await page.getByTitle('查看群信息').first().click();
+    await page.getByRole('button', { name: '管理所属团队' }).click();
+
+    const panel = page.getByRole('dialog', { name: /团队管理/ });
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+    // 主频道被标出来
+    await expect(panel.getByText('主频道')).toBeVisible();
+    await expect(panel.getByText(/1 个房间/)).toBeVisible();
+
+    // 新建团队频道
+    const roomName = `live-troom-${suffix}`;
+    await panel.getByRole('button', { name: /新建团队频道/ }).click();
+    const newRoomDialog = page.getByRole('dialog', { name: '新建团队频道' });
+    await newRoomDialog.getByLabel('频道名称').fill(roomName);
+    await newRoomDialog.getByRole('button', { name: '创建' }).click();
+
+    // 服务端确认：新频道已挂到团队下
+    await expect
+      .poll(
+        async () => {
+          const rooms = await rcApi<{ data: Array<{ _id?: string; name?: string; fname?: string }> }>(
+            'teams.listChildren',
+            { query: { teamId } },
+          );
+          const created = rooms.data.find((room) => (room.name ?? room.fname) === roomName);
+          // 记下来交给 afterAll 删：团队解散不会连带删掉团队频道，漏记就会留下孤儿房间
+          // （房间还带着 teamId，REST 侧再也删不掉，只能进数据库清）。
+          if (created?._id && !createdChannelIds.includes(created._id)) {
+            createdChannelIds.push(created._id);
+          }
+          return !!created;
+        },
+        { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(true);
+
+    // 添加成员
+    await panel.getByRole('button', { name: /成员（/ }).click();
+    await panel.getByRole('button', { name: /添加成员/ }).click();
+    const addDialog = page.getByRole('dialog', { name: '添加团队成员' });
+    await addDialog.getByPlaceholder('搜索用户').fill(member.username);
+    await addDialog.getByText(`@${member.username}`, { exact: true }).click();
+    await addDialog.getByRole('button', { name: /^添加/ }).click();
+
+    // 服务端确认：团队成员里出现了这个人（teams.members 只返回活跃用户，
+    // 所以这里查 team_member 的等价来源 —— 团队主频道成员）
+    await expect
+      .poll(
+        async () => {
+          const res = await rcApi<{ members: Array<{ username: string }> }>('groups.members', {
+            query: { roomId: mainRoomId, count: '50' },
+          });
+          return res.members.some((item) => item.username === member.username);
+        },
+        { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+      )
+      .toBe(true);
   });
 });
