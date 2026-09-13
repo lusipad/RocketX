@@ -24,6 +24,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { getServerBase, isTauri, rest } from '../lib/client';
+import type { RcCustomUserStatus } from '@rcx/rc-client';
 import {
   isPresenceStatus,
   savePresencePreference,
@@ -169,6 +170,20 @@ function AccountSection() {
   const [name, setName] = useState(user?.name ?? '');
   const [nameBusy, setNameBusy] = useState(false);
 
+  /**
+   * 自定义状态：只管理服务端的状态**列表**。
+   *
+   * 真机实测（RC 8.6）：`users.setStatus` 只接受 online/away/busy/offline 四种字面量，
+   * 传自定义状态 id 直接 400；改走 `users.updateOwnBasicInfo.statusType` 时服务端不报错，
+   * 但那个值最终进的是 presence 逻辑（`setUserStatusMethod` 按在线状态处理），
+   * REST 会话下 `users.info` 的 status 不会变成自定义状态、statusText 也不落。
+   * 也就是说**「把某个自定义状态挂到自己身上」是 DDP/presence 侧的能力，REST 做不到**。
+   * 所以这里只做列表的增删改（这部分接口真实可用），不提供「应用到我」的假按钮。
+   */
+  const [statuses, setStatuses] = useState<RcCustomUserStatus[]>([]);
+  const [newStatusName, setNewStatusName] = useState('');
+  const [statusBusy, setStatusBusy] = useState(false);
+
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [newPw2, setNewPw2] = useState('');
@@ -176,6 +191,79 @@ function AccountSection() {
   const [pwError, setPwError] = useState<string | null>(null);
 
   useEffect(() => setName(user?.name ?? ''), [user?.name]);
+
+  // 自定义状态列表：只在打开设置页时拉一次
+  useEffect(() => {
+    let current = true;
+    void rest
+      .listCustomUserStatuses(100)
+      .then((list) => {
+        if (current) setStatuses(list);
+      })
+      .catch(() => {
+        /* 取不到就不显示这一节，不影响其他设置 */
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  /**
+   * 昵称 / 简介一起提交。
+   *
+   * `users.updateOwnBasicInfo` 在服务端限流**每分钟 1 次**，所以刻意把两项合并成
+   * 一次请求；每项单独保存会在第二次被 429 打回。
+   */
+  const [nickname, setNickname] = useState(user?.nickname ?? '');
+  const [bio, setBio] = useState(user?.bio ?? '');
+  const [profileBusy, setProfileBusy] = useState(false);
+
+  useEffect(() => {
+    setNickname(user?.nickname ?? '');
+    setBio(user?.bio ?? '');
+  }, [user?.nickname, user?.bio]);
+
+  const saveProfile = async (): Promise<void> => {
+    setProfileBusy(true);
+    try {
+      await rest.updateOwnBasicInfo({ nickname, bio });
+      await refreshUser();
+      toast.success('个人资料已更新');
+    } catch (err) {
+      toast.error(err, '资料更新失败');
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const removeStatus = async (id: string): Promise<void> => {
+    setStatusBusy(true);
+    try {
+      await rest.deleteCustomUserStatus(id);
+      setStatuses((prev) => prev.filter((item) => item._id !== id));
+      toast.success('已删除该状态');
+    } catch (err) {
+      toast.error(err, '删除状态失败');
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const createStatus = async (): Promise<void> => {
+    const name = newStatusName.trim();
+    if (!name) return;
+    setStatusBusy(true);
+    try {
+      const created = await rest.createCustomUserStatus(name);
+      setStatuses((prev) => [...prev, created]);
+      setNewStatusName('');
+      toast.success(`已创建状态「${name}」`);
+    } catch (err) {
+      toast.error(err, '创建状态失败');
+    } finally {
+      setStatusBusy(false);
+    }
+  };
 
   // 自动离开等外部变化直接写 auth store（applyLocalStatus），不经过本组件的 useState，
   // 状态只靠初始化读一次就会滞后高亮——订阅 user.status 同步进来。
@@ -400,6 +488,88 @@ function AccountSection() {
           >
             {saved ? '已保存' : '保存'}
           </button>
+        </div>
+      </Row>
+
+      <Row label="昵称" hint="比姓名更短的称呼；留空则只显示姓名">
+        <input
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value)}
+          placeholder="例如：老王"
+          maxLength={60}
+          className={inputCls}
+        />
+      </Row>
+
+      <Row label="个人简介" hint="成员资料卡里展示的一段自我介绍">
+        <textarea
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          placeholder="写点什么介绍自己…"
+          maxLength={240}
+          rows={3}
+          className={`${inputCls} h-auto resize-none py-2`}
+        />
+      </Row>
+
+      <Row
+        label="保存个人资料"
+        hint="昵称与简介一起提交：服务端对 users.updateOwnBasicInfo 限流每分钟 1 次，分开保存会被打回"
+      >
+        <button
+          onClick={() => void saveProfile()}
+          disabled={profileBusy}
+          className="h-9 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
+        >
+          {profileBusy ? '保存中…' : '保存昵称与简介'}
+        </button>
+      </Row>
+
+      <Row
+        label="自定义状态（服务端列表）"
+        hint="这里维护服务器上的自定义状态清单。注意：Rocket.Chat 的接口无法把自定义状态挂到自己身上（那部分只在官方客户端的实时协议里），所以这里只做清单管理"
+      >
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {statuses.length === 0 && (
+              <span className="text-xs text-ink-3">服务端还没有自定义状态</span>
+            )}
+            {statuses.map((item) => (
+              <span key={item._id} className="inline-flex items-center">
+                <span className="h-8 rounded-l-md border border-line px-3 text-xs leading-8 text-ink-2">
+                  {item.name}
+                  {item.statusType ? <span className="ml-1 text-ink-3">· {item.statusType}</span> : null}
+                </span>
+                <button
+                  title="删除这个状态"
+                  disabled={statusBusy}
+                  onClick={() => void removeStatus(item._id)}
+                  className="h-8 rounded-r-md border border-l-0 border-line px-1.5 text-ink-3 transition hover:text-danger disabled:opacity-40"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={newStatusName}
+              onChange={(e) => setNewStatusName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void createStatus();
+              }}
+              placeholder="新增状态名，例如「专注中」"
+              maxLength={60}
+              className="h-8 flex-1 rounded-md border border-line bg-surface-4 px-2.5 text-xs outline-none focus:border-primary"
+            />
+            <button
+              disabled={statusBusy || !newStatusName.trim()}
+              onClick={() => void createStatus()}
+              className="h-8 shrink-0 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-40"
+            >
+              添加
+            </button>
+          </div>
         </div>
       </Row>
 

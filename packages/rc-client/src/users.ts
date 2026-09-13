@@ -1,4 +1,4 @@
-import type { RcUser } from './types';
+import type { RcCustomUserStatus, RcUser } from './types';
 import { RcApiError, postMultipart, type RcRestEndpointContext } from './request';
 
 export interface RocketChatUsersDomain {
@@ -9,6 +9,10 @@ export interface RocketChatUsersDomain {
   getUserInfoById(userId: string): Promise<RcUser>;
   updateOwnBasicInfo(data: {
     name?: string;
+    nickname?: string;
+    bio?: string;
+    statusText?: string;
+    statusType?: string;
     email?: string;
     username?: string;
     newPassword?: string;
@@ -16,6 +20,11 @@ export interface RocketChatUsersDomain {
   }): Promise<RcUser>;
   setAvatar(file: Blob, fileName?: string): Promise<void>;
   resetAvatar(userId?: string): Promise<void>;
+  listCustomUserStatuses(count?: number): Promise<RcCustomUserStatus[]>;
+  createCustomUserStatus(name: string, statusType?: string): Promise<RcCustomUserStatus>;
+  updateCustomUserStatus(id: string, name: string, statusType?: string): Promise<RcCustomUserStatus>;
+  deleteCustomUserStatus(id: string): Promise<unknown>;
+  setActiveStatus(userId: string, active: boolean): Promise<{ user: { _id: string; active: boolean } }>;
 }
 
 export type RocketChatUsersSource = Partial<RocketChatUsersDomain>;
@@ -92,15 +101,106 @@ export async function searchUsers(
   throw new Error(errors.join('；'));
 }
 
+/**
+ * 改自己的资料。
+ *
+ * 注意 `users.updateOwnBasicInfo` 在服务端有**每分钟 1 次**的限流
+ * （`numRequestsAllowed: 1, intervalTimeInMS: 60000`），所以界面必须把多个字段
+ * 合并成一次提交，不能每改一项发一次。
+ *
+ * 自定义状态是走这里设置的：`statusType` 传 `custom-user-status.list` 里的 id，
+ * **不是** `users.setStatus`（那个端点只接受 online/away/busy/offline 四种字面量）。
+ */
 export async function updateOwnBasicInfo(
   context: RcRestEndpointContext,
-  data: { name?: string; email?: string; username?: string; newPassword?: string; currentPassword?: string },
+  data: {
+    name?: string;
+    nickname?: string;
+    bio?: string;
+    statusText?: string;
+    statusType?: string;
+    email?: string;
+    username?: string;
+    newPassword?: string;
+    currentPassword?: string;
+  },
 ): Promise<RcUser> {
   const { currentPassword, ...rest } = data;
   const response = await context.request<{ user: RcUser }>('POST', 'users.updateOwnBasicInfo', {
     data: { ...rest, ...(currentPassword ? { currentPassword: await sha256Hex(currentPassword) } : {}) },
   });
   return response.user;
+}
+
+/** 删除用户（管理员） */
+export function deleteUser(context: RcRestEndpointContext, userId: string): Promise<unknown> {
+  return context.request('POST', 'users.delete', { userId });
+}
+
+/**
+ * 停用 / 启用账号（管理员）。
+ *
+ * 需要 `edit-other-user-active-status` 或 `manage-moderation-actions` 权限。
+ * 这是「停用」而不是删除：账号无法登录，历史消息与成员关系保留。
+ */
+export function setActiveStatus(
+  context: RcRestEndpointContext,
+  userId: string,
+  active: boolean,
+): Promise<{ user: { _id: string; active: boolean } }> {
+  return context.request<{ user: { _id: string; active: boolean } }>(
+    'POST',
+    'users.setActiveStatus',
+    { userId, activeStatus: active },
+  );
+}
+
+/** 自定义用户状态列表（服务端全量，不限于自己创建的） */
+export async function listCustomUserStatuses(
+  context: RcRestEndpointContext,
+  count = 100,
+): Promise<RcCustomUserStatus[]> {
+  const response = await context.request<{ statuses: RcCustomUserStatus[] }>(
+    'GET',
+    'custom-user-status.list',
+    undefined,
+    { count },
+  );
+  return response.statuses ?? [];
+}
+
+/** 新建自定义状态（`statusType` 可选：online / away / busy / offline） */
+export async function createCustomUserStatus(
+  context: RcRestEndpointContext,
+  name: string,
+  statusType?: string,
+): Promise<RcCustomUserStatus> {
+  const response = await context.request<{ customUserStatus: RcCustomUserStatus }>(
+    'POST',
+    'custom-user-status.create',
+    { name, ...(statusType ? { statusType } : {}) },
+  );
+  return response.customUserStatus;
+}
+
+/** 改自定义状态（`name` 必填，服务端要求） */
+export async function updateCustomUserStatus(
+  context: RcRestEndpointContext,
+  id: string,
+  name: string,
+  statusType?: string,
+): Promise<RcCustomUserStatus> {
+  const response = await context.request<{ customUserStatus: RcCustomUserStatus }>(
+    'POST',
+    'custom-user-status.update',
+    { _id: id, name, ...(statusType ? { statusType } : {}) },
+  );
+  return response.customUserStatus;
+}
+
+/** 删自定义状态（参数名是 `customUserStatusId`，不是 `_id`） */
+export function deleteCustomUserStatus(context: RcRestEndpointContext, id: string): Promise<unknown> {
+  return context.request('POST', 'custom-user-status.delete', { customUserStatusId: id });
 }
 
 export async function setAvatar(context: RcRestEndpointContext, file: Blob, fileName = 'avatar.png'): Promise<void> {
@@ -140,5 +240,11 @@ export function createRocketChatUsersDomain(source: RocketChatUsersSource): Rock
     updateOwnBasicInfo: (data) => required(source, 'updateOwnBasicInfo')(data),
     setAvatar: (file, fileName) => required(source, 'setAvatar')(file, fileName),
     resetAvatar: (userId) => required(source, 'resetAvatar')(userId),
+    listCustomUserStatuses: (count) => required(source, 'listCustomUserStatuses')(count),
+    createCustomUserStatus: (name, statusType) => required(source, 'createCustomUserStatus')(name, statusType),
+    updateCustomUserStatus: (id, name, statusType) =>
+      required(source, 'updateCustomUserStatus')(id, name, statusType),
+    deleteCustomUserStatus: (id) => required(source, 'deleteCustomUserStatus')(id),
+    setActiveStatus: (userId, active) => required(source, 'setActiveStatus')(userId, active),
   };
 }
