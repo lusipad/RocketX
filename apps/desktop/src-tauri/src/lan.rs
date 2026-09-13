@@ -2000,8 +2000,7 @@ mod tests {
         // A 机读到了 uniqueID；B 机 `settings.public` 超时，退回接入 URL 归一化。
         let read_unique_id =
             crate::native::lan_identity::server_fingerprint_for(entry, Some(unique_id)).unwrap();
-        let read_failed =
-            crate::native::lan_identity::server_fingerprint_for(entry, None).unwrap();
+        let read_failed = crate::native::lan_identity::server_fingerprint_for(entry, None).unwrap();
         assert_ne!(
             read_unique_id, read_failed,
             "单边降级必须产生不同指纹，否则这条用例没有覆盖真实缺陷"
