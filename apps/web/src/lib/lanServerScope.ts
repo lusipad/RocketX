@@ -17,7 +17,11 @@ const MAX_SERVER_ID_LENGTH = 256;
 function hasControlCharacter(value: string): boolean {
   return [...value].some((char) => {
     const code = char.charCodeAt(0);
-    return code < 0x20 || code === 0x7f;
+    // 必须与原生端 `char::is_control()` 一致：ASCII 控制字符，**以及** C1 段
+    // （U+0080–U+009F）。只判 < 0x20 与 0x7f 会放过 C1，于是前端把值传下去、
+    // 原生端 `build_runtime_identity` 报 "invalid Rocket.Chat server URL"，
+    // 整个 LAN 服务起不来（issue #369 里最难查的一类：静默能力丢失）。
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f);
   });
 }
 

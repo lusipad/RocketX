@@ -54,6 +54,7 @@ export function setServerBase(url: string): void {
     // 换服务器后清理与旧服务器绑定的缓存
     localStorage.removeItem('rcx-site-url');
     siteUrlCache = null;
+    clearCachedSettings();
   }
 }
 
@@ -91,17 +92,133 @@ try {
 }
 
 /**
- * 读一个公开设置（不需要登录）。
- * 用来在调用前就知道服务器支不支持某个功能，而不是打过去挨一个 400 再降级。
+ * 从 `settings.public` 响应里按 `_id` 取出我们**要的那个**设置。
+ *
+ * 不能再用 `settings[0]`：至少到 Rocket.Chat 6.x，`settings.public?_id=X` 会**忽略
+ * `_id` 过滤**，返回一页（默认 50 条）按字母序排的设置，首条是
+ * `API_Apply_permission_view-outside-room_on_users-list`。于是所有 `settings[0].value`
+ * 的调用都读到了别人的值：`uniqueID` 拿到 `false` → LAN 指纹退回接入 URL 归一化
+ * （issue #369 的症状）；`Site_Url` 也拿到别人的值 → 引用链接前缀全错。
  */
+function pickPublicSetting(data: unknown, id: string): unknown {
+  const settings = (data as { settings?: unknown } | null)?.settings;
+  const list = Array.isArray(settings) ? settings : settings ? [settings] : [];
+  for (const entry of list) {
+    const setting = entry as { _id?: unknown; value?: unknown } | null;
+    if (setting && setting._id === id) return setting.value;
+  }
+  return undefined;
+}
+
+async function queryPublicSettings(
+  id: string,
+  options: { all?: boolean },
+): Promise<{ data: any; found: boolean }> {
+  const query = new URLSearchParams({ _id: id });
+  // count=0 在老服务端表示「不限页大小」，一次拿到全部设置；新服务端 `_id` 已生效，
+  // 这个参数无关紧要。用它替代分页，避免逐页翻 359 条设置。
+  if (options.all) query.set('count', '0');
+  const res = await httpFetch(`${getServerBase()}/api/v1/settings.public?${query.toString()}`);
+  const data: any = await res.json();
+  const settings = data?.settings;
+  const found = (Array.isArray(settings) ? settings : settings ? [settings] : []).some(
+    (entry: { _id?: unknown } | null) => entry?._id === id,
+  );
+  return { data, found };
+}
+
+/**
+ * 公开设置的本地缓存。
+ *
+ * 必要性来自真实服务端：Rocket.Chat 6.x 对 `settings.public` 限流很紧，连续几次查询
+ * 就持续返回 429，而老服务端要走 `count=0` 全量查询（359 条）更重。一次读失败就会让
+ * LAN 指纹当次退回接入 URL 归一化（issue #369 的单边降级），所以成功的读取必须跨
+ * 重启保留，失败也不能反复重试打爆限流。
+ */
+function settingCacheKey(id: string): string {
+  return `rcx-setting:${getServerBase()}:${id}`;
+}
+
+function readCachedSetting(id: string): { hit: boolean; value: unknown } {
+  try {
+    const raw = localStorage.getItem(settingCacheKey(id));
+    if (raw === null) return { hit: false, value: undefined };
+    return { hit: true, value: JSON.parse(raw) };
+  } catch {
+    return { hit: false, value: undefined };
+  }
+}
+
+function writeCachedSetting(id: string, value: unknown): void {
+  try {
+    localStorage.setItem(settingCacheKey(id), JSON.stringify(value));
+  } catch {
+    /* 隐私模式 / 配额满：缓存只是优化，不影响本次结果 */
+  }
+}
+
+/** 换服务器时清掉所有公开设置缓存（键里带服务端地址，但没必要留着）。 */
+function clearCachedSettings(): void {
+  try {
+    const prefix = 'rcx-setting:';
+    const stale: string[] = [];
+    // Node 的 localStorage 替身不一定实现 `length`/`key()`；有就清，没有就跳过。
+    const length = typeof localStorage.length === 'number' ? localStorage.length : 0;
+    for (let index = 0; index < length; index += 1) {
+      const key = typeof localStorage.key === 'function' ? localStorage.key(index) : null;
+      if (key?.startsWith(prefix)) stale.push(key);
+    }
+    for (const key of stale) localStorage.removeItem(key);
+  } catch {
+    /* 读取失败时忽略 */
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 读一个公开设置（不需要登录）。
+ *
+ * 读不到（服务端没有这个设置、或请求失败）时返回 `undefined`。调用方必须把
+ * `undefined` 当成「不知道」而不是「值为空」——LAN 指纹来源就是靠这个区分
+ * #369 的单边降级（见 `lan/runtime.ts` 与原生端 `fingerprint_source`）。
+ *
+ * 老服务端忽略 `_id` 过滤时，第一次请求的 50 条里通常找不到我们要的设置
+ * （`uniqueID` 按字母序排在末尾），此时再用 `count=0` 拉全量重试一次；限流
+ * 导致的 429 再退避重试一次，成功结果写入本地缓存。
+ */
+async function readPublicSetting(id: string): Promise<unknown> {
+  const cached = readCachedSetting(id);
+  if (cached.hit) return cached.value;
+
+  // 限流（429）是真实服务端的常态：退避一次仍失败就不缓存，下次会话再试，
+  // 绝不在这里把「读不到」写进缓存。
+  for (const attempt of [0, 1]) {
+    if (attempt > 0) await sleep(600);
+    try {
+      const first = await queryPublicSettings(id, {});
+      if (!first.found) {
+        const all = await queryPublicSettings(id, { all: true });
+        if (!all.found) return undefined;
+        const value = pickPublicSetting(all.data, id);
+        writeCachedSetting(id, value);
+        return value;
+      }
+      const value = pickPublicSetting(first.data, id);
+      writeCachedSetting(id, value);
+      return value;
+    } catch {
+      /* 下一轮重试 */
+    }
+  }
+  return undefined;
+}
+
 export async function getPublicSetting(id: string): Promise<unknown> {
   try {
-    const res = await httpFetch(
-      `${getServerBase()}/api/v1/settings.public?_id=${encodeURIComponent(id)}`,
-    );
-    const data: any = await res.json();
-    const setting = Array.isArray(data?.settings) ? data.settings[0] : data?.settings;
-    return setting?.value;
+    return await readPublicSetting(id);
   } catch {
     return undefined;
   }
@@ -110,10 +227,8 @@ export async function getPublicSetting(id: string): Promise<unknown> {
 export async function ensureSiteUrl(): Promise<string> {
   if (siteUrlCache) return siteUrlCache;
   try {
-    const res = await httpFetch(`${getServerBase()}/api/v1/settings.public?_id=Site_Url`);
-    const data: any = await res.json();
-    const setting = Array.isArray(data?.settings) ? data.settings[0] : data?.settings;
-    const value = typeof setting?.value === 'string' ? setting.value.replace(/\/+$/, '') : '';
+    const raw = await readPublicSetting('Site_Url');
+    const value = typeof raw === 'string' ? raw.replace(/\/+$/, '') : '';
     if (value) {
       siteUrlCache = value;
       localStorage.setItem(SITE_URL_KEY, value);

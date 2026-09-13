@@ -33,6 +33,13 @@ pub struct LanIdentityInfo {
     pub device_name: String,
     pub public_key: String,
     pub protocol_version: u16,
+    /// 指纹是从哪个输入算出来的：`server_id`（服务器自报 uniqueID，IP/主机名/HTTP/HTTPS
+    /// 入口都等价）或 `url`（读不到 uniqueID 时退回接入 URL 归一化）。
+    ///
+    /// issue #369：这两者混用的两端**永远发现不了对方**，而此前没有任何一条日志能区分
+    /// 一台设备用的是哪一种。前端读不到 `settings.public` 时会静默退回 `url`，日志里
+    /// 与「被指纹过滤掉」同形，所以连续七轮修复都在盲改发包链路。
+    pub fingerprint_source: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -217,11 +224,20 @@ pub(crate) fn build_runtime_identity(
     let record = load_or_create_identity(server_url, user_id)?;
     let signing_key = decode_secret(&record)?;
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    // 两端的指纹来源必须一致才能互相发现（issue #369）。这里的判定与
+    // `server_fingerprint_for` 内部的 `usable_server_id` 是同一个判据，所以
+    // 报告的来源与实际采用的算法不会脱节。
+    let fingerprint_source = if lan_identity::usable_server_id(server_id).is_some() {
+        "server_id"
+    } else {
+        "url"
+    };
     let info = LanIdentityInfo {
         device_id: record.device_id.clone(),
         device_name: device_name.to_string(),
         public_key: public_key.clone(),
         protocol_version: PROTOCOL_VERSION,
+        fingerprint_source,
     };
     Ok((
         Arc::new(RuntimeIdentity {

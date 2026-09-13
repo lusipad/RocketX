@@ -100,7 +100,7 @@ const SERVER_ID_DOMAIN: &str = "rcx-lan-server-id\0";
 const MAX_SERVER_ID_LEN: usize = 256;
 
 /// 服务器自报的身份可用时才允许充当指纹：非空、无控制字符、长度合规。
-fn usable_server_id(server_id: Option<&str>) -> Option<&str> {
+pub(crate) fn usable_server_id(server_id: Option<&str>) -> Option<&str> {
     let value = server_id?.trim();
     if value.is_empty() || value.len() > MAX_SERVER_ID_LEN || value.chars().any(char::is_control) {
         return None;

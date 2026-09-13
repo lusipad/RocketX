@@ -1056,6 +1056,13 @@ pub fn lan_service_start(
         .map_err(|_| "LAN identity keychain lock is unavailable".to_string())?;
     let (identity, identity_info) =
         build_runtime_identity(&server_url, server_id.as_deref(), &user_id, &device_name)?;
+    // issue #369：两端指纹来源不一致（一端读到 uniqueID、一端退回接入 URL）时永远发现
+    // 不了对方，而此前没有任何一条日志能区分。只记来源分类，不记 URL、指纹或身份。
+    log::info!(
+        target: crate::LAN_LOG_TARGET,
+        "LAN server fingerprint source={}",
+        identity_info.fingerprint_source
+    );
     let trusted = Arc::new(RwLock::new(trusted_map(trusted_devices)?));
     let peers = Arc::new(RwLock::new(HashMap::new()));
     let transfers = Arc::new(Mutex::new(HashMap::new()));
@@ -1979,6 +1986,50 @@ mod tests {
         assert_eq!(
             classify_announcement(&good, Ipv4Addr::UNSPECIFIED, &local),
             Some(AnnouncementRejection::Malformed)
+        );
+    }
+
+    /// issue #369：只要一端读到了 `uniqueID`、另一端读不到，两端指纹就分属不同哈希域，
+    /// 公告必然被判成 `server_fingerprint` 丢掉——而两端界面只显示「对方当前不可用
+    /// P2P 直传」。这条用例把「单边降级」钉成已知行为，并保证它落在可读的分类上。
+    #[test]
+    fn one_sided_unique_id_read_failure_is_reported_as_fingerprint_mismatch() {
+        let unique_id = "2cfa8f73-0198-4d12-99d0-9cbdd50f21dc";
+        let entry = "http://192.168.1.30:3300";
+
+        // A 机读到了 uniqueID；B 机 `settings.public` 超时，退回接入 URL 归一化。
+        let read_unique_id =
+            crate::native::lan_identity::server_fingerprint_for(entry, Some(unique_id)).unwrap();
+        let read_failed =
+            crate::native::lan_identity::server_fingerprint_for(entry, None).unwrap();
+        assert_ne!(
+            read_unique_id, read_failed,
+            "单边降级必须产生不同指纹，否则这条用例没有覆盖真实缺陷"
+        );
+
+        // 两种来源要与实际采用的算法一致，日志才不会指错方向。
+        assert!(crate::native::lan_identity::usable_server_id(Some(unique_id)).is_some());
+        assert!(crate::native::lan_identity::usable_server_id(None).is_none());
+
+        let local = RuntimeIdentity {
+            peer: peer("alice", "alice-device", &signing_key(5)),
+            device_name: "Alice".to_string(),
+            server_fingerprint: read_unique_id,
+            signing_key: signing_key(5),
+        };
+        let announcement = LanAnnouncement {
+            version: PROTOCOL_VERSION,
+            server_fingerprint: read_failed,
+            user_id: "bob".to_string(),
+            device_id: "bob-device".to_string(),
+            device_name: "Bob".to_string(),
+            port: 45826,
+            public_key: peer("bob", "bob-device", &signing_key(9)).public_key,
+        };
+        assert_eq!(
+            classify_announcement(&announcement, Ipv4Addr::new(192, 168, 1, 31), &local),
+            Some(AnnouncementRejection::ServerFingerprint),
+            "单边降级必须以 server_fingerprint 分类留下证据，而不是静默丢弃"
         );
     }
 
