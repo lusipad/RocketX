@@ -27,6 +27,8 @@ export function isAbortError(err: unknown): boolean {
  *   必须用 Rust 通道把文件取回来（顺便绕开 CORS），再走原生「另存为」对话框。
  *   提供 signal / onProgress 时走流式分块读取：边读边回调进度，取消即中断；
  *   超大文件（>512MB）退回整流直写，避免等量内存缓冲。
+ *   字节流由 `rest.openFileStream` 提供：传输被代理/安全网关掐断时按 Range 自动
+ *   续传，收不满 content-length 绝不落盘半截文件（issue #393）。
  *
  * - **网页端**：绝不能用 fetch。Rocket.Chat 只给 `/api/v1/*` 开了 CORS，
  *   `/file-upload/*` 的预检 OPTIONS 不返回 200 —— 服务器地址一旦跨域，
@@ -52,22 +54,20 @@ export async function saveFile(
     ]);
     const target = await save({ defaultPath: fileName });
     if (!target) return; // 用户取消了保存对话框，不是错误
-    const response = await rest.fetchFileResponse(path);
-    if (!response.body) throw new Error('文件响应没有可读取的内容');
-
-    const totalHeader = Number(response.headers.get('content-length'));
-    const total = Number.isFinite(totalHeader) ? totalHeader : null;
+    // openFileStream 负责中断续传：HTML 之类被代理压缩/掐断的附件不再一次失败到底
+    // （issue #393）；续不回来时抛的是带中文解释的 RcDownloadInterruptedError。
+    const { stream, total } = await rest.openFileStream(path, { signal: options?.signal });
 
     if ((total ?? Infinity) > PROGRESS_BUFFER_LIMIT) {
       // 超大文件：整流直写不占内存，放弃细粒度进度
       options?.onProgress?.(0, total);
-      await writeFile(target, response.body);
+      await writeFile(target, stream);
       options?.onProgress?.(total ?? 0, total);
       useDownloadHistory.getState().record(fileNameOfDownloadPath(target, fileName), target, source);
       return;
     }
 
-    const reader = response.body.getReader();
+    const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
     let loaded = 0;
     const onAbort = () => void reader.cancel().catch(() => undefined);

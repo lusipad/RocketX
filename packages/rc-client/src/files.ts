@@ -6,6 +6,8 @@ export interface RocketChatFilesDomain {
   getRoomFiles(rid: string, type: RoomType, count?: number): Promise<RcRoomFile[]>;
   fetchFile(path: string): Promise<Blob>;
   fetchFileResponse(path: string): Promise<Response>;
+  /** 断点续传的文件字节流；桌面端下载与预览都走它（issue #393） */
+  openFileStream(path: string, options?: FileStreamOptions): Promise<FileByteStream>;
   /** 流式下载并回调进度；signal 可取消（已建立的连接会被 reader.cancel 中断） */
   fetchFileWithProgress(
     path: string,
@@ -20,23 +22,95 @@ export type RocketChatFilesSource = Partial<RocketChatFilesDomain> & {
   capabilities?: RocketChatCapabilities;
 };
 
-export async function fetchFileResponse(context: RcRestEndpointContext, path: string): Promise<Response> {
+/**
+ * 下载中断后的续传次数上限。
+ *
+ * 反向代理、安全网关和杀毒软件最爱掐的就是 HTML 附件：连接在传到一半时被断开，
+ * 桌面端底层 reqwest 把任何 body 传输错误都显示成 `error decoding response body`
+ * （issue #393）。一次性失败对用户毫无意义 —— 先按 Range 续传，续不上就整文件重下。
+ */
+const DOWNLOAD_RESUME_LIMIT = 3;
+
+/**
+ * 站内文件请求一律要求不压缩。
+ *
+ * 桌面端的 tauri-plugin-http 没有开 reqwest 的 gzip/br 特性：一旦中间的反向代理
+ * 按 `text/html` 压缩了响应，客户端既解不开、也校验不了长度。浏览器会忽略这个
+ * 禁止修改的请求头（网页端本来就由浏览器解压），桌面端则借 `unsafe-headers`
+ * 真的发出去，把「html 下载到一半失败 / 存下来打不开」这类问题挡在源头。
+ */
+const IDENTITY_ENCODING: Record<string, string> = { 'Accept-Encoding': 'identity' };
+
+export interface FileStreamOptions {
+  /** 取消下载：中断读取，不再续传 */
+  signal?: AbortSignal;
+}
+
+export interface FileByteStream {
+  /** 传输中断时自动续传的字节流 */
+  stream: ReadableStream<Uint8Array>;
+  /** content-length；chunked / 压缩响应拿不到时为 null */
+  total: number | null;
+  /** content-type 的主体部分（去掉 charset 等参数）；响应没给时为 null */
+  contentType: string | null;
+}
+
+/** 传输被掐断且续传用尽时抛它，保留原始错误，别让英文底层串直接糊到用户脸上 */
+export class RcDownloadInterruptedError extends Error {
+  constructor(
+    public loaded: number,
+    public total: number | null,
+    cause: unknown,
+  ) {
+    const raw = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `下载中断：与服务器的连接在传输过程中被切断（已自动续传 ${DOWNLOAD_RESUME_LIMIT} 次仍未成功）。`
+      + '常见原因是反向代理、安全网关或杀毒软件掐断了附件传输，请检查服务器与代理配置后重试。'
+      + `（原始错误：${raw}）`,
+    );
+    this.name = 'RcDownloadInterruptedError';
+    this.cause = cause;
+  }
+}
+
+function isAbort(err: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError')
+    || (err instanceof Error && err.name === 'AbortError')
+  );
+}
+
+/** content-length 缺失时必须是 null：`Number(null)` 是 0，会把进度算成 Infinity% */
+export function parseContentLength(value: string | null): number | null {
+  if (value === null || value.trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export async function fetchFileResponse(
+  context: RcRestEndpointContext,
+  path: string,
+  extraHeaders?: Record<string, string>,
+): Promise<Response> {
   const auth = currentAuth(context);
   const doFetch = context.fetchImpl ?? fetch;
   const absolute = /^https?:\/\//i.test(path);
   const base = context.baseUrl.replace(/\/+$/, '');
   const url = absolute ? path : `${base}${path}`;
   const ownServer = !absolute || (!!base && (url === base || url.startsWith(`${base}/`)));
+  const extra = { ...IDENTITY_ENCODING, ...extraHeaders };
   const authHeaders: Record<string, string> = auth && ownServer
-    ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId }
-    : {};
+    ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId, ...extra }
+    : { ...extra };
   const cookieAuth = ownServer
     && typeof location !== 'undefined'
     && new URL(url, location.href).origin === location.origin;
 
   let response: Response;
   if (!auth || !ownServer || cookieAuth) {
-    response = await doFetch(url, cookieAuth ? { credentials: 'include' } : {});
+    response = await doFetch(url, cookieAuth
+      ? { credentials: 'include', headers: extra }
+      : { headers: extra });
   } else {
     let current = url;
     let headers: Record<string, string> = authHeaders;
@@ -52,50 +126,145 @@ export async function fetchFileResponse(context: RcRestEndpointContext, path: st
       const locationHeader = response.headers.get('location');
       if (!locationHeader) throw new RcApiError('文件下载发生无法安全跟随的重定向', response.status || 502);
       current = new URL(locationHeader, current).href;
-      headers = serverOrigin && new URL(current).origin === serverOrigin ? authHeaders : {};
+      headers = serverOrigin && new URL(current).origin === serverOrigin ? authHeaders : { ...extra };
     }
   }
   if (!response.ok) throw new RcApiError(`HTTP ${response.status}`, response.status);
   return response;
 }
 
-export async function fetchFile(context: RcRestEndpointContext, path: string): Promise<Blob> {
-  const response = await fetchFileResponse(context, path);
-  const blob = await response.blob();
-  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim();
-  return contentType && blob.type !== contentType
-    ? blob.slice(0, blob.size, contentType)
-    : blob;
+/**
+ * 打开一条「断了会自己接上」的文件字节流。
+ *
+ * 传输中断（桌面端表现为 `error decoding response body`，网页端是 network error）
+ * 时先用 `Range: bytes=<已收字节>-` 续传；服务端不支持 Range（回 200 而不是 206）
+ * 就整文件重下、丢掉已经拿到的前缀，对调用方始终是一条连续、完整的字节流。
+ * 续传次数用尽才抛 RcDownloadInterruptedError —— 带中文解释和原始错误。
+ *
+ * 响应没有 body（某些代理 / 老 WebView）时退化成一次性 blob 包成的单块流。
+ */
+export async function openFileStream(
+  context: RcRestEndpointContext,
+  path: string,
+  options?: FileStreamOptions,
+): Promise<FileByteStream> {
+  const first = await fetchFileResponse(context, path);
+  const contentType = first.headers.get('content-type')?.split(';', 1)[0]?.trim() || null;
+  const total = parseContentLength(first.headers.get('content-length'));
+
+  if (!first.body) {
+    const blob = await first.blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return {
+      contentType,
+      total: total ?? bytes.length,
+      stream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (bytes.length) controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    };
+  }
+
+  let reader = first.body.getReader();
+  let loaded = 0;
+  /** 服务端不支持 Range 时重下整个文件，这里记下还要丢掉多少字节 */
+  let skip = 0;
+  let resumes = 0;
+
+  /**
+   * 接着已收到的字节续传。返回 false 表示服务端说没有更多字节了（416），按读完处理；
+   * 续传次数用尽则抛 RcDownloadInterruptedError，带上最后一次的原始错误。
+   */
+  const resumeFrom = async (cause: unknown): Promise<boolean> => {
+    let lastError = cause;
+    while (resumes < DOWNLOAD_RESUME_LIMIT) {
+      resumes += 1;
+      try {
+        const response = await fetchFileResponse(context, path, { Range: `bytes=${loaded}-` });
+        if (!response.body) throw new RcApiError('续传响应没有可读取的内容', response.status || 502);
+        reader = response.body.getReader();
+        // 206 就是从断点接上；200 说明服务端不认 Range，整文件重下、丢掉已有前缀
+        skip = response.status === 206 ? 0 : loaded;
+        return true;
+      } catch (err) {
+        if (isAbort(err)) throw err;
+        // 416 = 请求区间越过文件末尾。长度未知时这就是「已经传完了」；
+        // content-length 明说还差字节的话，它只能是服务端自相矛盾，照样算失败。
+        if (err instanceof RcApiError && err.status === 416 && total === null) return false;
+        lastError = err;
+      }
+    }
+    throw new RcDownloadInterruptedError(loaded, total, lastError);
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (err) {
+          if (isAbort(err) || options?.signal?.aborted) throw err;
+          if (!(await resumeFrom(err))) {
+            controller.close();
+            return;
+          }
+          continue;
+        }
+        if (chunk.done) {
+          // 取消之后 read() 也会正常返回 done，别把用户主动取消当成中断去续传
+          if (options?.signal?.aborted) {
+            controller.close();
+            return;
+          }
+          // content-length 说还有字节没到：连接是「干净地」断在半路（chunked 提前收尾、
+          // 代理截断），照样当作中断续传，绝不把半截文件当成功交出去。
+          if (total !== null && loaded < total) {
+            if (!(await resumeFrom(new Error(`响应提前结束：只收到 ${loaded}/${total} 字节`)))) {
+              controller.close();
+              return;
+            }
+            continue;
+          }
+          controller.close();
+          return;
+        }
+        let value = chunk.value;
+        if (!value || value.length === 0) continue;
+        if (skip > 0) {
+          if (value.length <= skip) {
+            skip -= value.length;
+            continue;
+          }
+          value = value.subarray(skip);
+          skip = 0;
+        }
+        loaded += value.length;
+        controller.enqueue(value);
+        return;
+      }
+    },
+    cancel(reason) {
+      void reader.cancel(reason).catch(() => undefined);
+    },
+  });
+
+  return { stream, total, contentType };
 }
 
-/**
- * 流式下载站内文件并回调进度。
- *
- * total 来自 content-length；chunked/压缩响应可能拿不到，此时 total 为 null，
- * 调用方要按「只有已加载字节数」展示。响应没有 body（某些代理/老 WebView）时
- * 退化为一次性 blob，onProgress 只会收到终值。
- */
-export async function fetchFileWithProgress(
+/** 收完整条流；中断续传由 openFileStream 兜住 */
+async function drain(
   context: RcRestEndpointContext,
   path: string,
   options?: {
     signal?: AbortSignal;
     onProgress?: (loaded: number, total: number | null) => void;
   },
-): Promise<Blob> {
-  const response = await fetchFileResponse(context, path);
-  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim() || 'application/octet-stream';
-  const contentLength = response.headers.get('content-length');
-  const total = contentLength !== null && Number.isFinite(Number(contentLength))
-    ? Number(contentLength)
-    : null;
-  const body = response.body;
-  if (!body) {
-    const blob = await response.blob();
-    options?.onProgress?.(blob.size, blob.size);
-    return blob;
-  }
-  const reader = body.getReader();
+): Promise<{ chunks: Uint8Array[]; contentType: string | null }> {
+  const { stream, total, contentType } = await openFileStream(context, path, { signal: options?.signal });
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let loaded = 0;
   try {
@@ -113,7 +282,33 @@ export async function fetchFileWithProgress(
   } finally {
     reader.releaseLock();
   }
-  return new Blob(chunks as BlobPart[], { type: contentType });
+  return { chunks, contentType };
+}
+
+export async function fetchFile(context: RcRestEndpointContext, path: string): Promise<Blob> {
+  // 类型留空而不是兜底成 octet-stream：<img src=blob:> 和剪贴板都按 blob.type 走，
+  // 服务端没给 content-type 时让浏览器自己嗅探，别塞一个错的进去。
+  const { chunks, contentType } = await drain(context, path);
+  return new Blob(chunks as BlobPart[], { type: contentType ?? '' });
+}
+
+/**
+ * 流式下载站内文件并回调进度。
+ *
+ * total 来自 content-length；chunked/压缩响应可能拿不到，此时 total 为 null，
+ * 调用方要按「只有已加载字节数」展示。传输中断由 openFileStream 自动续传，
+ * 续不回来才抛错（RcDownloadInterruptedError）。
+ */
+export async function fetchFileWithProgress(
+  context: RcRestEndpointContext,
+  path: string,
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total: number | null) => void;
+  },
+): Promise<Blob> {
+  const { chunks, contentType } = await drain(context, path, options);
+  return new Blob(chunks as BlobPart[], { type: contentType ?? 'application/octet-stream' });
 }
 
 export async function getRoomFiles(context: RcRestEndpointContext, rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {
@@ -259,6 +454,10 @@ export function createRocketChatFilesDomain(source: RocketChatFilesSource): Rock
     fetchFileResponse: (path) => {
       ensureDownload();
       return required(source, 'fetchFileResponse')(path);
+    },
+    openFileStream: (path, options) => {
+      ensureDownload();
+      return required(source, 'openFileStream')(path, options);
     },
     fetchFileWithProgress: (path, options) => {
       ensureDownload();
