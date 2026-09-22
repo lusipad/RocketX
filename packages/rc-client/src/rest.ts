@@ -86,7 +86,10 @@ import {
   fetchFileWithProgress as fetchFileWithProgressEndpoint,
   fetchFileResponse as fetchFileResponseEndpoint,
   getRoomFiles as getRoomFilesEndpoint,
+  openFileStream as openFileStreamEndpoint,
   uploadMedia as uploadMediaEndpoint,
+  type FileByteStream,
+  type FileStreamOptions,
 } from './files';
 import {
   directory as directoryEndpoint,
@@ -799,6 +802,11 @@ export class RcRestClient {
   /** 带认证拉取站内文件，并保留响应流给桌面端直接写盘。 */
   async fetchFileResponse(path: string): Promise<Response> {
     return fetchFileResponseEndpoint(this.endpointContext(), path);
+  }
+
+  /** 断点续传的文件字节流；传输被掐断时按 Range 自动接上（issue #393） */
+  async openFileStream(path: string, options?: FileStreamOptions): Promise<FileByteStream> {
+    return openFileStreamEndpoint(this.endpointContext(), path, options);
   }
 
   /** 带认证拉取站内文件（头像/上传附件），桌面端 <img> 无法带凭据时用 */

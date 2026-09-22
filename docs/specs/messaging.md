@@ -86,6 +86,7 @@
 | 搜索 API 不支持中文子串 | 返回零结果或服务端错误，并提示服务器限制 | 可改为精确词或联系管理员开启配置 |
 | 在线状态缺失 | 不显示在线绿点或显示未知 | 不用最后消息时间推断在线 |
 | 文件无权限/已删除 | 下载失败提示 | 不创建有效下载记录；重新获取权限后重试 |
+| 下载传输被中断（代理/安全网关掐断连接、响应提前截断） | 客户端自动续传，续不回来时提示中断原因与原始错误 | 不落盘半截文件；不创建下载记录 |
 | 浏览器跨域阻止请求 | 显示连接失败 | 通过同源部署/代理修复，不降级到不安全绕过 |
 
 ## 10. 验收标准
@@ -98,6 +99,7 @@
 - `MSG-AC-06`：桌面文件下载可保存到用户选择位置并写入当前账号的下载记录；网页版使用浏览器下载。
 - `MSG-AC-07`：断线恢复后新消息和房间状态能重新同步，不要求用户刷新整个应用。
 - `MSG-AC-08`：普通打开在布局稳定后 `bottomGap <= 2px`；消息定位、翻页锚点和用户主动离底不被覆盖，滚动诊断可随桌面诊断日志脱敏导出。
+- `MSG-AC-09`：站内文件下载在传输中断时按 `Range` 自动续传（服务端不支持 Range 则整文件重下），收不满 `content-length` 一律按失败处理，不把半截文件写到磁盘或记进下载记录。
 
 ## 11. 实现与测试证据
 
@@ -106,6 +108,7 @@
 - 自动化：`scripts/regressions/quick-search.test.ts`、`scripts/regressions/search-filters.test.ts`
 - 自动化：`scripts/regressions/user-search.test.ts`、`scripts/regressions/user-directory.test.ts`
 - 自动化：`scripts/regressions/file-index.test.ts`、`scripts/regressions/download-history.test.ts`
+- 自动化：`scripts/regressions/file-transfer.test.ts`、`scripts/regressions/issue-393-download-resume.test.ts`
 - 自动化：`scripts/regressions/message-scroll.test.ts`、`scripts/regressions/diagnostics.test.ts`
 - UI：`tests/ui/core-flows.spec.ts`、`tests/ui/download-history.spec.ts`
 
