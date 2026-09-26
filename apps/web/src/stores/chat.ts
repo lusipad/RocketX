@@ -101,11 +101,15 @@ import { useFocus } from './focus';
 import { useNotificationAggregation } from './notificationAggregation';
 import { isLanControlMessage } from '../lan/protocol';
 import {
+  checkLanFirewall,
+  repairLanFirewall,
   sendLanFile,
   probeLanPeer,
   startLanRuntime,
+  waitForLanPeer,
   type LanFileEvent,
 } from '../lan/runtime';
+import { lanFirewallFailureHint, withLanFirewallGate } from '../lan/firewall';
 import { stripAgentSessionMarker } from '../agent/card';
 import { agentReplyNotificationTracker } from '../agent/replyNotification';
 import {
@@ -413,7 +417,7 @@ function lanP2pFriendlyError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
   if (/no LAN peer is online for this user/i.test(raw)) {
     return new Error(
-      '没有发现对方设备的局域网入口（对方可能未开客户端、未登录同一服务器，或两台设备不在同一局域网段）。请确认双方在线并且处于同一网络，导出两端 LAN 诊断日志（rocketx::lan_diagnostics）后重试。',
+      '没有发现对方设备的局域网入口（对方可能未开客户端、未登录同一服务器，或两台设备不在同一局域网段）。请确认双方在线并且处于同一网络；仍失败请导出两端 LAN 诊断日志（rocketx::lan_diagnostics）。',
     );
   }
   if (/no LAN peer candidate is available/i.test(raw)) {
@@ -423,9 +427,27 @@ function lanP2pFriendlyError(error: unknown): Error {
     return new Error('局域网直传服务未启动。请重新登录或重启客户端后再试；仍失败请导出诊断日志。');
   }
   if (/failed to connect LAN peer/i.test(raw)) {
-    return new Error(`连接对方设备失败：${raw}`);
+    // 发现了对方却连不进去，最常见的是对方的防火墙挡了入站；对方只要在与你的私聊里
+    // 点一次 P2P 直传，就会在他那边检查并请求授权。
+    return new Error(
+      `连接对方设备失败，对方的防火墙可能拦截了连接。请让对方在与你的私聊里点一次 P2P 直传按钮，按提示允许管理员授权后再试。（${raw}）`,
+    );
   }
   return new Error(raw);
+}
+
+/**
+ * P2P 失败时先看本机防火墙：两端任一端入站被挡都会失败，而本机这一端是唯一能当场
+ * 查清并当场修好的（issue #369）。对方那一端只能请对方在私聊里点一次 P2P 直传。
+ */
+async function lanP2pFailure(error: unknown, recipient: string): Promise<Error> {
+  const friendly = lanP2pFriendlyError(error);
+  const firewall = await checkLanFirewall(recipient).catch(() => null);
+  const hint = firewall ? lanFirewallFailureHint(firewall) : null;
+  if (!hint) return friendly;
+  return hint.cause
+    ? new Error(`${hint.text}（原始错误：${friendly.message}）`)
+    : new Error(`${friendly.message}${hint.text}`);
 }
 
 function localLanFileMessage(
@@ -3214,7 +3236,7 @@ export const useChat = create<ChatState>((set, get) => ({
       return true;
     } catch (error) {
       toast.dismiss(id);
-      toast.error(lanP2pFriendlyError(error), 'P2P 直传不可用');
+      toast.error(await lanP2pFailure(error, recipient), 'P2P 直传不可用');
       return false;
     }
   },
@@ -3227,12 +3249,28 @@ export const useChat = create<ChatState>((set, get) => ({
       toast.error(new Error('P2P 直传仅支持一对一私聊'));
       return false;
     }
+    const recipient = recipients[0];
     try {
-      if (!(await probeLanPeer(recipients[0]))) throw new Error('对方当前不可用 P2P 直传');
+      // 默认不碰防火墙、不要管理员权限：只在点击 P2P 时检查；确定被挡才请求授权，
+      // 拿不准时先直传，失败了再请求授权并重试一次。
+      await withLanFirewallGate({
+        check: () => checkLanFirewall(recipient),
+        repair: () => repairLanFirewall(recipient),
+        waitForPeer: () => waitForLanPeer(recipient),
+        attempt: async () => {
+          if (!(await probeLanPeer(recipient))) throw new Error('对方当前不可用 P2P 直传');
+        },
+        onElevate: (reason) =>
+          toast.info(
+            reason === 'blocked'
+              ? '本机防火墙没有放行 RocketX 的局域网连接，请在系统弹窗中允许管理员授权'
+              : '直传没有连通，可能是本机防火墙未完全放行；允许管理员授权后会自动重试',
+          ),
+      });
       toast.info('P2P 握手成功，请选择要发送的文件');
       return true;
     } catch (error) {
-      toast.error(lanP2pFriendlyError(error), 'P2P 直传不可用');
+      toast.error(await lanP2pFailure(error, recipient), 'P2P 直传不可用');
       return false;
     }
   },

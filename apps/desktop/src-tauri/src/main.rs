@@ -1350,7 +1350,9 @@ fn main() {
             lan::lan_peers,
             lan::lan_probe_peer,
             lan::lan_send_chat,
-            lan::lan_send_file
+            lan::lan_send_file,
+            firewall::lan_firewall_check,
+            firewall::lan_firewall_repair
         ])
         .manage(AllowedHttpOrigins(Mutex::new(HashSet::new())))
         .manage(native::host::NativeHost::default())

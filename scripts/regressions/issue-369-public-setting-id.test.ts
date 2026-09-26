@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ensureSiteUrl, getPublicSetting, setServerBase } from '../../apps/web/src/lib/client';
+import {
+  ensureSiteUrl,
+  getPublicSetting,
+  readPublicSettingResult,
+  setServerBase,
+} from '../../apps/web/src/lib/client';
 
 /**
  * issue #369（真正的单边降级来源）：`settings.public?_id=X` 在 Rocket.Chat 6.x 上
@@ -79,7 +84,7 @@ test('老服务端忽略 _id 过滤时，仍然取到我们要的那个设置值
   // 服务端没给这个设置时必须返回 undefined（调用方据此退回旧算法），
   // 而不是把首条那个无关设置的值当成答案。
   assert.equal(await getPublicSetting('Message_Read_Receipt_Enabled'), undefined);
-  assert.ok(calls() > 2, '老服务端要先试一次按页查询，再拉全量重试');
+  assert.equal(calls(), 2, '老服务端先试一次按页查询、再拉一次全量；第二个设置直接从全量结果里取');
 });
 
 test('读到的设置会被缓存，限流时不再重复打服务端（issue #369）', async () => {
@@ -92,22 +97,104 @@ test('读到的设置会被缓存，限流时不再重复打服务端（issue #3
   assert.equal(calls(), afterFirst, '第二次读取必须命中本地缓存');
 });
 
+/** Rocket.Chat 限流时的真实形状：429 + JSON 错误体（不是网络异常）。 */
+function rateLimited(): Response {
+  return new Response(
+    JSON.stringify({
+      success: false,
+      error: 'Error, too many requests. Please slow down. [error-too-many-requests]',
+    }),
+    { status: 429, headers: { 'content-type': 'application/json' } },
+  );
+}
+
 test('读取失败不写缓存，下次仍会重试', async () => {
   setServerBase('http://chat.corp:3300');
   let calls = 0;
   globalThis.fetch = (async () => {
     calls += 1;
-    return new Response(JSON.stringify({ status: 'error' }), {
-      status: 429,
-      headers: { 'content-type': 'application/json' },
-    });
+    return rateLimited();
   }) as typeof fetch;
 
   assert.equal(await getPublicSetting('uniqueID'), undefined);
-  assert.ok(calls >= 2, '限流时会退避重试一次');
   const afterFailure = calls;
   assert.equal(await getPublicSetting('uniqueID'), undefined);
   assert.ok(calls > afterFailure, '失败结果不进缓存，下次仍会重新请求');
+});
+
+test('429 的 JSON 错误体是「失败」而不是「没有这个设置」，退避后重试能拿到值（issue #369）', async () => {
+  // 旧实现：httpFetch 不对非 2xx 抛错，429 的 JSON 被当成「没找到」，30ms 内返回
+  // undefined，指纹当次静默退回接入 URL——正是 #369 的单边降级。
+  setServerBase('http://chat.corp:3300');
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) return rateLimited();
+    return new Response(
+      JSON.stringify({ settings: [{ _id: 'uniqueID', value: 'after-backoff' }], success: true }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as typeof fetch;
+
+  const startedAt = Date.now();
+  assert.equal(await getPublicSetting('uniqueID'), 'after-backoff');
+  assert.equal(calls, 2, '限流后只退避重试一次按页查询，不该把 429 当成老服务端去拉全量');
+  assert.ok(Date.now() - startedAt >= 500, '重试前必须真的退避');
+});
+
+test('区分「失败」与「服务端没有这个设置」：LAN 指纹只在后者才允许退回 URL（issue #369）', async () => {
+  setServerBase('http://chat.corp:3300');
+  globalThis.fetch = (async () => rateLimited()) as typeof fetch;
+  assert.deepEqual(await readPublicSettingResult('uniqueID'), { status: 'failed' });
+
+  setServerBase('http://new.corp:3300');
+  // 新服务端尊重 `_id` 过滤：没有这个设置时返回空列表，不必再拉全量。
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ settings: [], count: 0, total: 0, success: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  assert.deepEqual(await readPublicSettingResult('uniqueID'), { status: 'missing' });
+  assert.equal(calls, 1, '空列表说明服务端已按 _id 过滤，不该再发 count=0 的重查询');
+});
+
+test('同一设置的并发读取只发一次请求（启动时 init 与 LAN 各读一次 Site_Url）', async () => {
+  setServerBase('http://chat.corp:3300');
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return new Response(
+      JSON.stringify({ settings: [{ _id: 'Site_Url', value: 'http://chat.corp:3300/' }], success: true }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as typeof fetch;
+
+  const [first, second] = await Promise.all([ensureSiteUrl(), getPublicSetting('Site_Url')]);
+  assert.equal(first, 'http://chat.corp:3300');
+  assert.equal(second, 'http://chat.corp:3300/');
+  assert.equal(calls, 1);
+});
+
+test('老服务端的全量设置只拉一次，之后的设置直接从同一份结果里取', async () => {
+  setServerBase('http://chat.corp:3300');
+  const all = [
+    { _id: 'API_Embed', value: true },
+    ...Array.from({ length: 60 }, (_, index) => ({ _id: `Filler_${index}`, value: index })),
+    { _id: 'Discussion_enabled', value: true },
+    { _id: 'Site_Url', value: 'http://chat.corp:3300/' },
+    { _id: 'uniqueID', value: 'legacy-id' },
+  ];
+  const calls = stubLegacyFetch(all);
+
+  assert.equal(await getPublicSetting('uniqueID'), 'legacy-id');
+  assert.equal(await getPublicSetting('Discussion_enabled'), true);
+  assert.equal(await getPublicSetting('Message_Read_Receipt_Enabled'), undefined);
+  assert.equal(await ensureSiteUrl(), 'http://chat.corp:3300');
+  assert.equal(calls(), 2, '一次按页查询发现是老服务端，一次全量；其余都从全量结果里取');
 });
 
 test('Site_Url 不再取到无关设置的值（issue #369 连带缺陷）', async () => {
