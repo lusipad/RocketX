@@ -87,10 +87,45 @@ export function parseContentLength(value: string | null): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+export interface FileRequestOptions {
+  /** 续传用的 Range / If-Range 等附加请求头 */
+  headers?: Record<string, string>;
+  /** 取消：交给底层 fetch，在途请求也要真的断掉 */
+  signal?: AbortSignal;
+}
+
+/**
+ * 校验 206 响应的 Content-Range，返回该丢掉多少重复字节。
+ *
+ * 只看状态码是不够的：代理和缓存会回 206 却给出另一段区间（实测常见的是直接回整个
+ * 文件的 `bytes 0-N/N`）。那样把字节原样追加就会拼出 `abc` + `abcdef` 这种坏文件，
+ * 而且 loaded 越过 total 之后流还会「成功」收尾、坏文件照样落盘。
+ * 起点比已收字节小 → 丢掉重叠部分；大 → 中间会留空洞，只能算失败。
+ */
+export function resumedSkip(
+  contentRange: string | null,
+  loaded: number,
+  total: number | null,
+): number {
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(contentRange?.trim() ?? '');
+  if (!match) {
+    throw new RcApiError(`续传响应的 Content-Range 无法解析：${contentRange ?? '(缺失)'}`, 206);
+  }
+  const start = Number(match[1]);
+  const size = match[3] === '*' ? null : Number(match[3]);
+  if (total !== null && size !== null && size !== total) {
+    throw new RcApiError(`续传时文件长度变了（${total} → ${size}），放弃拼接`, 206);
+  }
+  if (start > loaded) {
+    throw new RcApiError(`续传响应跳过了字节（要 ${loaded}，给 ${start}），会留空洞`, 206);
+  }
+  return loaded - start;
+}
+
 export async function fetchFileResponse(
   context: RcRestEndpointContext,
   path: string,
-  extraHeaders?: Record<string, string>,
+  request?: FileRequestOptions,
 ): Promise<Response> {
   const auth = currentAuth(context);
   const doFetch = context.fetchImpl ?? fetch;
@@ -98,7 +133,8 @@ export async function fetchFileResponse(
   const base = context.baseUrl.replace(/\/+$/, '');
   const url = absolute ? path : `${base}${path}`;
   const ownServer = !absolute || (!!base && (url === base || url.startsWith(`${base}/`)));
-  const extra = { ...IDENTITY_ENCODING, ...extraHeaders };
+  const extra = { ...IDENTITY_ENCODING, ...request?.headers };
+  const abort = request?.signal ? { signal: request.signal } : {};
   const authHeaders: Record<string, string> = auth && ownServer
     ? { 'X-Auth-Token': auth.authToken, 'X-User-Id': auth.userId, ...extra }
     : { ...extra };
@@ -109,8 +145,8 @@ export async function fetchFileResponse(
   let response: Response;
   if (!auth || !ownServer || cookieAuth) {
     response = await doFetch(url, cookieAuth
-      ? { credentials: 'include', headers: extra }
-      : { headers: extra });
+      ? { credentials: 'include', headers: extra, ...abort }
+      : { headers: extra, ...abort });
   } else {
     let current = url;
     let headers: Record<string, string> = authHeaders;
@@ -120,6 +156,7 @@ export async function fetchFileResponse(
         headers,
         redirect: 'manual',
         maxRedirections: 0,
+        ...abort,
       } as RequestInit & { maxRedirections: number });
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       if (redirects >= 5) throw new RcApiError('文件下载重定向次数过多', 508);
@@ -148,9 +185,12 @@ export async function openFileStream(
   path: string,
   options?: FileStreamOptions,
 ): Promise<FileByteStream> {
-  const first = await fetchFileResponse(context, path);
+  const first = await fetchFileResponse(context, path, { signal: options?.signal });
   const contentType = first.headers.get('content-type')?.split(';', 1)[0]?.trim() || null;
   const total = parseContentLength(first.headers.get('content-length'));
+  // 续传要带上实体校验器：文件在中途被替换时服务端会回 200 全量而不是 206，
+  // 我们的 200 分支正好整文件重下，不会把两个版本的字节拼在一起。
+  const validator = first.headers.get('etag') ?? first.headers.get('last-modified');
 
   if (!first.body) {
     const blob = await first.blob();
@@ -182,11 +222,21 @@ export async function openFileStream(
     while (resumes < DOWNLOAD_RESUME_LIMIT) {
       resumes += 1;
       try {
-        const response = await fetchFileResponse(context, path, { Range: `bytes=${loaded}-` });
+        const response = await fetchFileResponse(context, path, {
+          headers: {
+            Range: `bytes=${loaded}-`,
+            ...(validator ? { 'If-Range': validator } : {}),
+          },
+          signal: options?.signal,
+        });
         if (!response.body) throw new RcApiError('续传响应没有可读取的内容', response.status || 502);
+        // 状态码不足以证明「接上了」：代理和缓存会回 206 却给另一段区间。
+        // 按 Content-Range 说的起点对齐，对不上宁可失败重试，也不拼出一个坏文件。
+        const nextSkip = response.status === 206
+          ? resumedSkip(response.headers.get('content-range'), loaded, total)
+          : loaded; // 200：服务端不认 Range（或实体已变），整文件重下、丢掉已有前缀
         reader = response.body.getReader();
-        // 206 就是从断点接上；200 说明服务端不认 Range，整文件重下、丢掉已有前缀
-        skip = response.status === 206 ? 0 : loaded;
+        skip = nextSkip;
         return true;
       } catch (err) {
         if (isAbort(err)) throw err;
@@ -202,6 +252,11 @@ export async function openFileStream(
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       for (;;) {
+        // 由流自己响应取消：调用方可能把流整个交给 writeFile，没机会插 abort 监听
+        if (options?.signal?.aborted) {
+          await reader.cancel().catch(() => undefined);
+          throw new DOMException('下载已取消', 'AbortError');
+        }
         let chunk: ReadableStreamReadResult<Uint8Array>;
         try {
           chunk = await reader.read();

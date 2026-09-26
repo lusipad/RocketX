@@ -58,11 +58,15 @@ export async function saveFile(
     // （issue #393）；续不回来时抛的是带中文解释的 RcDownloadInterruptedError。
     const { stream, total } = await rest.openFileStream(path, { signal: options?.signal });
 
-    if ((total ?? Infinity) > PROGRESS_BUFFER_LIMIT) {
+    // 只有「明确知道很大」才整流直写：长度未知时（chunked / 被代理改写）必须走下面的
+    // 分块分支，否则进度与取消都没了——issue #393 里出问题的恰恰就是这种响应。
+    if (total !== null && total > PROGRESS_BUFFER_LIMIT) {
       // 超大文件：整流直写不占内存，放弃细粒度进度
       options?.onProgress?.(0, total);
       await writeFile(target, stream);
-      options?.onProgress?.(total ?? 0, total);
+      // 流自己会在 signal 触发时抛 AbortError，这里兜住「写完那一刻才取消」的窄缝
+      if (options?.signal?.aborted) throw new DOMException('下载已取消', 'AbortError');
+      options?.onProgress?.(total, total);
       useDownloadHistory.getState().record(fileNameOfDownloadPath(target, fileName), target, source);
       return;
     }
