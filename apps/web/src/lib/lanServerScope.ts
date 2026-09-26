@@ -37,3 +37,55 @@ export function normalizeLanServerId(value: unknown): string | null {
   if (hasControlCharacter(trimmed)) return null;
   return trimmed;
 }
+
+/** 「这次没读到」的退避档位：首次失败后依次等 2s、5s、15s、30s、60s，共约两分钟。 */
+const SERVER_ID_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000] as const;
+
+/**
+ * 读 `uniqueID` 的结局。只有 `failed` 需要重试；`missing` 表示服务端确实没有这个设置，
+ * 与 `lib/client` 的 `PublicSettingResult` 同形（这里不直接依赖它，保持本模块纯函数）。
+ */
+type ServerIdRead =
+  | { status: 'found'; value: unknown }
+  | { status: 'missing' }
+  | { status: 'failed' };
+
+export interface ResolvedLanServerId {
+  serverId: string | null;
+  /**
+   * `server_id`：读到了可用的服务器身份；`missing`：服务端没有（老版本），退回 URL；
+   * `unavailable`：重试用尽仍读不到，退回 URL——此时若对方读到了，两端会互相发现不了；
+   * `cancelled`：等待期间会话已结束。
+   */
+  outcome: 'server_id' | 'missing' | 'unavailable' | 'cancelled';
+}
+
+/**
+ * 解析 LAN 指纹要用的服务器身份。
+ *
+ * issue #369：一端读到 uniqueID、另一端因为一次限流退回 URL，两端指纹来源不同，就永远
+ * 互相发现不了。所以「这次没读到」必须退避重试，只有「服务端确实没有」才立刻退回。
+ */
+export async function resolveLanServerId(
+  read: () => Promise<ServerIdRead>,
+  options: {
+    delaysMs?: readonly number[];
+    sleep?: (ms: number) => Promise<void>;
+    isCancelled?: () => boolean;
+  } = {},
+): Promise<ResolvedLanServerId> {
+  const delays = options.delaysMs ?? SERVER_ID_RETRY_DELAYS_MS;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const isCancelled = options.isCancelled ?? (() => false);
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await read();
+    if (result.status === 'found') {
+      const serverId = normalizeLanServerId(result.value);
+      return serverId ? { serverId, outcome: 'server_id' } : { serverId: null, outcome: 'missing' };
+    }
+    if (result.status === 'missing') return { serverId: null, outcome: 'missing' };
+    if (attempt >= delays.length) return { serverId: null, outcome: 'unavailable' };
+    await sleep(delays[attempt]);
+    if (isCancelled()) return { serverId: null, outcome: 'cancelled' };
+  }
+}

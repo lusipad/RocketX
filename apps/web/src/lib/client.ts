@@ -55,6 +55,8 @@ export function setServerBase(url: string): void {
     localStorage.removeItem('rcx-site-url');
     siteUrlCache = null;
     clearCachedSettings();
+    legacySnapshot = null;
+    inflightSettings.clear();
   }
 }
 
@@ -100,31 +102,70 @@ try {
  * 的调用都读到了别人的值：`uniqueID` 拿到 `false` → LAN 指纹退回接入 URL 归一化
  * （issue #369 的症状）；`Site_Url` 也拿到别人的值 → 引用链接前缀全错。
  */
-function pickPublicSetting(data: unknown, id: string): unknown {
+function findPublicSetting(
+  data: unknown,
+  id: string,
+): { found: true; value: unknown } | { found: false; listed: number } {
   const settings = (data as { settings?: unknown } | null)?.settings;
   const list = Array.isArray(settings) ? settings : settings ? [settings] : [];
   for (const entry of list) {
     const setting = entry as { _id?: unknown; value?: unknown } | null;
-    if (setting && setting._id === id) return setting.value;
+    if (setting && setting._id === id) return { found: true, value: setting.value };
   }
-  return undefined;
+  return { found: false, listed: list.length };
 }
 
-async function queryPublicSettings(
-  id: string,
-  options: { all?: boolean },
-): Promise<{ data: any; found: boolean }> {
-  const query = new URLSearchParams({ _id: id });
-  // count=0 在老服务端表示「不限页大小」，一次拿到全部设置；新服务端 `_id` 已生效，
-  // 这个参数无关紧要。用它替代分页，避免逐页翻 359 条设置。
-  if (options.all) query.set('count', '0');
+/**
+ * 读一个公开设置的三种结局。`failed`（限流、5xx、网络异常）与 `missing`（服务端确实
+ * 没有这个设置）必须分开：LAN 指纹只在 `missing` 时才允许退回接入 URL 归一化，
+ * `failed` 时退回会造出两端指纹来源不一致、互相永远发现不了的单边降级（issue #369）。
+ */
+export type PublicSettingResult =
+  | { status: 'found'; value: unknown }
+  | { status: 'missing' }
+  | { status: 'failed' };
+
+async function fetchPublicSettings(query: URLSearchParams): Promise<unknown> {
   const res = await httpFetch(`${getServerBase()}/api/v1/settings.public?${query.toString()}`);
-  const data: any = await res.json();
-  const settings = data?.settings;
-  const found = (Array.isArray(settings) ? settings : settings ? [settings] : []).some(
-    (entry: { _id?: unknown } | null) => entry?._id === id,
-  );
-  return { data, found };
+  // httpFetch 与 fetch 一样不对非 2xx 抛错。Rocket.Chat 的 429 错误体也是 JSON，
+  // 不在这里拦住就会被当成「服务端没有这个设置」，退避重试永远走不到。
+  if (!res.ok) throw new Error(`settings.public HTTP ${res.status}`);
+  return res.json();
+}
+
+/**
+ * 老服务端（忽略 `_id` 过滤）的全量公开设置，按服务端地址在内存里共享一份。
+ *
+ * 一次 `count=0` 就能回答本次会话的所有设置。原先每个设置各拉一遍 359 条，启动时
+ * Site_Url / 已读回执 / 讨论开关 / uniqueID 并发下来近十次请求，排在最后的 `uniqueID`
+ * 正好撞上限流——这是单边降级在真实服务端上的来源。
+ */
+let legacySnapshot: { base: string; settings: Promise<unknown> } | null = null;
+
+function legacyPublicSettings(id: string): Promise<unknown> {
+  const base = getServerBase();
+  if (legacySnapshot?.base === base) return legacySnapshot.settings;
+  // count=0 在老服务端表示「不限页大小」，一次拿到全部设置，避免逐页翻。
+  const settings = fetchPublicSettings(new URLSearchParams({ _id: id, count: '0' }));
+  const snapshot = { base, settings };
+  legacySnapshot = snapshot;
+  settings.catch(() => {
+    // 失败的全量结果不能留着，否则之后的读取都会复用这个失败。
+    if (legacySnapshot === snapshot) legacySnapshot = null;
+  });
+  return settings;
+}
+
+async function queryPublicSetting(id: string): Promise<PublicSettingResult> {
+  if (legacySnapshot?.base !== getServerBase()) {
+    const page = findPublicSetting(await fetchPublicSettings(new URLSearchParams({ _id: id })), id);
+    if (page.found) return { status: 'found', value: page.value };
+    // 空列表说明服务端按 `_id` 过滤了，只是没有这个设置；非空却不含它，说明这是
+    // 忽略过滤、按页返回别的设置的老服务端，要去全量结果里找。
+    if (page.listed === 0) return { status: 'missing' };
+  }
+  const all = findPublicSetting(await legacyPublicSettings(id), id);
+  return all.found ? { status: 'found', value: all.value } : { status: 'missing' };
 }
 
 /**
@@ -178,47 +219,50 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * 读一个公开设置（不需要登录）。
- *
- * 读不到（服务端没有这个设置、或请求失败）时返回 `undefined`。调用方必须把
- * `undefined` 当成「不知道」而不是「值为空」——LAN 指纹来源就是靠这个区分
- * #369 的单边降级（见 `lan/runtime.ts` 与原生端 `fingerprint_source`）。
- *
- * 老服务端忽略 `_id` 过滤时，第一次请求的 50 条里通常找不到我们要的设置
- * （`uniqueID` 按字母序排在末尾），此时再用 `count=0` 拉全量重试一次；限流
- * 导致的 429 再退避重试一次，成功结果写入本地缓存。
- */
-async function readPublicSetting(id: string): Promise<unknown> {
-  const cached = readCachedSetting(id);
-  if (cached.hit) return cached.value;
+/** 同一设置的并发读取共用一个请求（启动时 init 与 LAN 会各读一次 Site_Url）。 */
+const inflightSettings = new Map<string, Promise<PublicSettingResult>>();
 
-  // 限流（429）是真实服务端的常态：退避一次仍失败就不缓存，下次会话再试，
-  // 绝不在这里把「读不到」写进缓存。
+async function resolvePublicSetting(id: string): Promise<PublicSettingResult> {
+  // 限流（429）是真实服务端的常态：退避一次仍失败就报 `failed`，不写缓存，
+  // 绝不把「读不到」当成「没有这个设置」。
   for (const attempt of [0, 1]) {
     if (attempt > 0) await sleep(600);
     try {
-      const first = await queryPublicSettings(id, {});
-      if (!first.found) {
-        const all = await queryPublicSettings(id, { all: true });
-        if (!all.found) return undefined;
-        const value = pickPublicSetting(all.data, id);
-        writeCachedSetting(id, value);
-        return value;
-      }
-      const value = pickPublicSetting(first.data, id);
-      writeCachedSetting(id, value);
-      return value;
+      const result = await queryPublicSetting(id);
+      if (result.status === 'found') writeCachedSetting(id, result.value);
+      return result;
     } catch {
       /* 下一轮重试 */
     }
   }
-  return undefined;
+  return { status: 'failed' };
 }
 
+/**
+ * 读一个公开设置（不需要登录），并告诉调用方是「读到了」「服务端没有」还是「这次读失败」。
+ *
+ * 老服务端忽略 `_id` 过滤时，第一次请求的 50 条里通常找不到我们要的设置
+ * （`uniqueID` 按字母序排在末尾），此时改用本会话共享的全量结果；成功结果写入本地缓存。
+ */
+export function readPublicSettingResult(id: string): Promise<PublicSettingResult> {
+  const cached = readCachedSetting(id);
+  if (cached.hit) return Promise.resolve({ status: 'found', value: cached.value });
+  const key = settingCacheKey(id);
+  const pending = inflightSettings.get(key);
+  if (pending) return pending;
+  const task = resolvePublicSetting(id).finally(() => inflightSettings.delete(key));
+  inflightSettings.set(key, task);
+  return task;
+}
+
+/**
+ * 读一个公开设置；读不到（服务端没有、或请求失败）时返回 `undefined`。
+ * 需要区分这两种情况的调用方（LAN 指纹）用 `readPublicSettingResult`。
+ */
 export async function getPublicSetting(id: string): Promise<unknown> {
   try {
-    return await readPublicSetting(id);
+    const result = await readPublicSettingResult(id);
+    return result.status === 'found' ? result.value : undefined;
   } catch {
     return undefined;
   }
@@ -227,7 +271,7 @@ export async function getPublicSetting(id: string): Promise<unknown> {
 export async function ensureSiteUrl(): Promise<string> {
   if (siteUrlCache) return siteUrlCache;
   try {
-    const raw = await readPublicSetting('Site_Url');
+    const raw = await getPublicSetting('Site_Url');
     const value = typeof raw === 'string' ? raw.replace(/\/+$/, '') : '';
     if (value) {
       siteUrlCache = value;

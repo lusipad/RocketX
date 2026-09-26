@@ -73,6 +73,38 @@ struct LanRuntime {
     identity: Arc<RuntimeIdentity>,
     threads: Vec<JoinHandle<()>>,
     connection_threads: SharedConnectionThreads,
+    /// TCP 监听端口（随机分配）；防火墙检查要用它判断端口限定的规则是否覆盖直传。
+    port: u16,
+}
+
+/// 防火墙检查需要的 LAN 现场：本机 TCP 监听端口，以及已发现的对方地址。
+///
+/// 对方地址决定「局域网实际走哪块网卡」，从而决定该看哪个网络配置文件；服务没运行
+/// 或还没发现对方时返回空，由检查逻辑退回按物理网卡判断。
+pub(crate) fn firewall_target(
+    runtime: &LanRuntimeState,
+    user_id: Option<&str>,
+) -> (Option<u16>, Vec<Ipv4Addr>) {
+    let Ok(runtime) = runtime.0.lock() else {
+        return (None, Vec::new());
+    };
+    let Some(current) = runtime.as_ref() else {
+        return (None, Vec::new());
+    };
+    let peers = match (user_id, current.peers.read()) {
+        (Some(user_id), Ok(peers)) => {
+            let mut ips = peers
+                .values()
+                .filter(|peer| peer.user_id == user_id)
+                .filter_map(|peer| peer.ip.parse::<Ipv4Addr>().ok())
+                .collect::<Vec<_>>();
+            ips.sort();
+            ips.dedup();
+            ips
+        }
+        _ => Vec::new(),
+    };
+    (Some(current.port), peers)
 }
 
 type PeerEndpointKey = (String, String, String, u16);
@@ -696,6 +728,7 @@ fn spawn_udp_discovery(
         let mut buffer = [0_u8; 8192];
         let mut next_announcement = Instant::now();
         let mut announcement_paths_logged = false;
+        let mut receive_errors = 0_u64;
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announcement {
                 // 组播和全局广播在 Windows 多网卡/防火墙环境下可能静默丢包；
@@ -744,7 +777,22 @@ fn spawn_udp_discovery(
                         error.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) => {}
-                Err(_) => break,
+                Err(error) => {
+                    // 原先这里直接 break：发现线程静默退出，本机既不再广播也不再接收，
+                    // 且没有任何日志。Windows 上 UDP 收到 ICMP 端口不可达会让下一次
+                    // recv_from 报 ConnectionReset，超长数据报会报 MessageSize——都只是
+                    // 单个包的问题，不该拖垮整条发现链路。
+                    receive_errors += 1;
+                    if should_log_rejection(receive_errors) {
+                        log::warn!(
+                            target: crate::LAN_LOG_TARGET,
+                            "LAN discovery receive error: kind={:?} total={}",
+                            error.kind(),
+                            receive_errors
+                        );
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
             }
         }
     }))
@@ -1035,14 +1083,8 @@ pub fn lan_service_start(
     device_name: String,
     trusted_devices: Vec<TrustedDevice>,
 ) -> Result<LanServiceInfo, String> {
-    // Windows 防火墙默认拦截入站 UDP/TCP，LAN 发现与直传会直接失败（issue #369）。
-    // 幂等添加程序级放行规则；失败不阻断（第三方安全软件可能拦截），仅记录日志。
-    if let Err(error) = crate::firewall::ensure_lan_firewall_rule() {
-        log::warn!(
-            target: crate::LAN_LOG_TARGET,
-            "LAN firewall rule could not be configured: {error}"
-        );
-    }
+    // 防火墙不在这里碰：启动时既不检查也不请求管理员权限，只在用户点击 P2P 时
+    // 由前端调用 `lan_firewall_check` / `lan_firewall_repair`（issue #369）。
     let mut runtime_guard = runtime
         .0
         .lock()
@@ -1152,6 +1194,7 @@ pub fn lan_service_start(
         identity,
         threads,
         connection_threads,
+        port,
     });
     Ok(LanServiceInfo {
         identity: identity_info,
@@ -1517,6 +1560,11 @@ fn send_file_chunks(
     Ok(())
 }
 
+/// 等待接收方完成整文件校验的时限：按 20 MiB/s 的保守磁盘速度估算，下限 30 秒。
+fn completion_timeout(size: u64) -> Duration {
+    FILE_IO_TIMEOUT.max(Duration::from_secs(size / (20 * 1024 * 1024) + 30))
+}
+
 fn send_file_to_peer(
     path: PathBuf,
     peer: LanPeer,
@@ -1613,6 +1661,10 @@ fn send_file_to_peer(
             .map_err(|_| "LAN file stream panicked".to_string())??;
     }
     let mut complete = connect_to_peer(&peer, &identity, &trusted)?;
+    // 接收方要先对整个文件做一遍 BLAKE3 才回确认；大文件在慢盘上远超 30 秒。
+    complete
+        .set_read_timeout(Some(completion_timeout(size)))
+        .map_err(|error| format!("failed to configure LAN file connection: {error}"))?;
     write_control_frame(
         &mut complete,
         &ControlFrame::FileComplete {
@@ -1706,6 +1758,17 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+
+    #[test]
+    fn completion_timeout_grows_with_file_size() {
+        assert_eq!(completion_timeout(0), FILE_IO_TIMEOUT);
+        assert_eq!(
+            completion_timeout(100 * 1024 * 1024),
+            FILE_IO_TIMEOUT.max(Duration::from_secs(35))
+        );
+        // 8 GiB 按 20 MiB/s 需要约 410 秒，远超原先固定的 30 秒。
+        assert!(completion_timeout(8 * 1024 * 1024 * 1024) >= Duration::from_secs(400));
+    }
 
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])

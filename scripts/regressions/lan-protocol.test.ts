@@ -106,7 +106,7 @@ test('P2P 只从输入区显式触发，并在点击时执行握手（issue #368
   const chat = readFileSync('apps/web/src/stores/chat.ts', 'utf8');
   const area = readFileSync('apps/web/src/components/ChatArea.tsx', 'utf8');
   assert.match(chat, /prepareP2p: async/);
-  assert.match(chat, /if \(!\(await probeLanPeer\(recipients\[0\]\)\)\)/);
+  assert.match(chat, /if \(!\(await probeLanPeer\(recipient\)\)\)/);
   const sendP2p = chat.slice(chat.indexOf('sendP2pFiles:'), chat.indexOf('prepareP2p:'));
   assert.doesNotMatch(sendP2p, /probeLanPeer\(/);
   assert.match(readFileSync('apps/web/src/components/Composer.tsx', 'utf8'), /P2P 局域网直传/);
@@ -158,7 +158,8 @@ test('LAN 原生诊断写入可导出的日志且不记录端点或身份信息�
   // 对方，这条日志是唯一能把这种混用从「被指纹过滤掉」里分出来的证据。
   assert.match(lan, /"LAN server fingerprint source=\{\}"/);
   assert.match(lan, /identity_info\.fingerprint_source/);
-  // 发现/候选诊断、防火墙提示、两条发现渠道降级提示、指纹来源，外加过滤闸的拒绝分类。
+  // 发现/候选诊断、两条发现渠道降级提示、指纹来源、过滤闸的拒绝分类，
+  // 外加发现线程的接收错误（原先静默 break，线程退出后本机既不广播也不接收）。
   assert.equal(
     [...lan.matchAll(/log::(?:info|warn)!\(\s*target: crate::LAN_LOG_TARGET/g)].length,
     11,

@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { ensureSiteUrl, getPublicSetting, getServerBase, isTauri } from '../lib/client';
-import { normalizeLanServerId } from '../lib/lanServerScope';
+import { ensureSiteUrl, getServerBase, isTauri, readPublicSettingResult } from '../lib/client';
+import { resolveLanServerId } from '../lib/lanServerScope';
 import { useAuth } from '../stores/auth';
+import { UNKNOWN_LAN_FIREWALL, type LanFirewallStatus } from './firewall';
 import type { LanDeviceKeyEnvelope } from './protocol';
 
 export interface LanIdentityInfo {
@@ -74,6 +75,8 @@ let unlistenMessage: UnlistenFn | null = null;
 let unlistenFile: UnlistenFn | null = null;
 let unlistenProbe: UnlistenFn | null = null;
 const confirmedLanDevices = new Map<string, string>();
+/** 每次启动/停止都换代；等待服务器身份期间会话结束或重新启动时，旧的启动流程自行作废。 */
+let lanGeneration = 0;
 const lanStateListeners = new Set<() => void>();
 
 function publishLanState(): void {
@@ -171,6 +174,8 @@ export async function startLanRuntime(
   const user = useAuth.getState().user;
   if (!user) return;
   await stopLanRuntime();
+  const generation = ++lanGeneration;
+  const superseded = () => generation !== lanGeneration;
   trustedDevices = await loadTrustedDevices();
   const deviceName =
     (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
@@ -181,9 +186,18 @@ export async function startLanRuntime(
   const serverUrl = await ensureSiteUrl();
   // 服务器自报的 uniqueID 才是发现指纹的权威输入：Site_Url 未配置或两端各填各的
   // 入口地址时，按 URL 算出的指纹互不相等，公告会在原生端被静默丢掉（issue #369）。
-  // 读不到就传 null，原生端退回原来的 URL 归一化。serverUrl 保持不变——它同时是
-  // 设备身份钥匙串的作用域。
-  const serverId = normalizeLanServerId(await getPublicSetting('uniqueID'));
+  // 服务端确实没有才传 null（原生端退回 URL 归一化）；这次没读到（限流/网络）则退避
+  // 重试，否则一端 server_id、一端 url，两端永远互相发现不了。serverUrl 保持不变——
+  // 它同时是设备身份钥匙串的作用域。
+  const { serverId, outcome } = await resolveLanServerId(() => readPublicSettingResult('uniqueID'), {
+    isCancelled: superseded,
+  });
+  if (outcome === 'cancelled' || superseded()) return;
+  if (outcome === 'unavailable') {
+    console.warn(
+      '[rcx] LAN 多次读取服务器身份（uniqueID）失败，本次按接入地址计算指纹；若对方读到了服务器身份，两端会互相发现不了，重启客户端可重试',
+    );
+  }
   const service = await invoke<LanServiceInfo>('lan_service_start', {
     serverUrl: serverUrl || getServerBase() || location.origin,
     serverId,
@@ -223,6 +237,7 @@ export async function startLanRuntime(
 }
 
 export async function stopLanRuntime(): Promise<void> {
+  lanGeneration += 1;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
   unlistenMessage?.();
@@ -281,4 +296,41 @@ export async function sendLanFile(
   });
   const elapsedSeconds = Math.max((performance.now() - startedAt) / 1_000, 0.001);
   return { ...receipt, bytesPerSecond: receipt.size / elapsedSeconds };
+}
+
+/**
+ * 等对方设备出现在发现列表里。刚放行防火墙时，对方的公告每 3 秒才广播一次，
+ * 不等一下就握手必然报「没有发现对方设备」。
+ */
+export async function waitForLanPeer(userId: string, timeoutMs = 8_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await pollPeers();
+    if (peerCache.some((peer) => peer.userId === userId)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+}
+
+/**
+ * 只读判定本机防火墙对 RocketX 局域网入站的放行情况（原生端，无需提权）。
+ * `userId` 是对方：原生端用对方已发现的地址定位局域网实际走的网卡。
+ */
+export async function checkLanFirewall(userId?: string): Promise<LanFirewallStatus> {
+  if (!isTauri) return { ...UNKNOWN_LAN_FIREWALL, state: 'unsupported' };
+  return invoke<LanFirewallStatus>('lan_firewall_check', { userId: userId ?? null });
+}
+
+/**
+ * 弹一次 UAC，删除本程序的入站规则（含弹窗生成的阻止规则）并添加放行规则。
+ * 只在用户点击 P2P 直传、且本机入站被挡（或直传失败后）时调用；用户拒绝提权时返回 null。
+ */
+export async function repairLanFirewall(userId?: string): Promise<LanFirewallStatus | null> {
+  if (!isTauri) return { ...UNKNOWN_LAN_FIREWALL, state: 'unsupported' };
+  try {
+    return await invoke<LanFirewallStatus>('lan_firewall_repair', { userId: userId ?? null });
+  } catch (error) {
+    if (String(error) === 'cancelled') return null;
+    throw error;
+  }
 }
