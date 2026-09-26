@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { RcRestClient } from '../../packages/rc-client/src/rest';
-import { RcDownloadInterruptedError } from '../../packages/rc-client/src/files';
+import { RcDownloadInterruptedError, resumedSkip } from '../../packages/rc-client/src/files';
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -97,7 +97,10 @@ test('content-length 未收满就干净结束也当作中断续传（issue #393�
       call += 1;
       // 代理提前收尾：HTTP 层「正常」结束，但只给了 3/6 字节
       if (call === 1) return partialResponse([bytes('abc')], 'end', { 'content-length': '6' });
-      return partialResponse([bytes('def')], 'end', { 'content-length': '3' }, 206);
+      return partialResponse([bytes('def')], 'end', {
+        'content-length': '3',
+        'content-range': 'bytes 3-5/6',
+      }, 206);
     }) as typeof fetch,
   });
 
@@ -183,7 +186,7 @@ test('取消下载不触发续传（issue #393）', async () => {
   assert.equal(call, 1);
 });
 
-test('取消后的 done 不触发续传，不把半截内容当完整文件（issue #393）', async () => {
+test('取消后既不续传，也不把半截内容当完整文件交出去（issue #393）', async () => {
   const controller = new AbortController();
   let call = 0;
   const client = new RcRestClient({
@@ -198,7 +201,7 @@ test('取消后的 done 不触发续传，不把半截内容当完整文件（is
             streamController.enqueue(bytes('ab'));
             return;
           }
-          // 取消后底层 read() 正常返回 done：content-length 没收满也不能重新发请求
+          // 取消后底层 read() 正常返回 done：既不能重新发请求，也不能当成读完
           controller.abort();
           streamController.close();
         },
@@ -207,9 +210,98 @@ test('取消后的 done 不触发续传，不把半截内容当完整文件（is
     }) as typeof fetch,
   });
 
-  const blob = await client.fetchFileWithProgress('/file-upload/a', { signal: controller.signal });
-  assert.equal(await blob.text(), 'ab');
+  await assert.rejects(
+    client.fetchFileWithProgress('/file-upload/a', { signal: controller.signal }),
+    (err: unknown) => err instanceof Error && err.name === 'AbortError',
+  );
   assert.equal(call, 1);
+});
+
+test('206 响应给错区间时不拼出坏文件（PR #394 评审）', async () => {
+  let call = 0;
+  const client = new RcRestClient({
+    baseUrl: 'https://chat.example',
+    fetchImpl: (async () => {
+      call += 1;
+      if (call === 1) return partialResponse([bytes('abc')], 'error', { 'content-length': '6' });
+      // 代理回 206 却给了整个文件：原样追加会拼成 abcabcdef，loaded 还会越过 total
+      return partialResponse([bytes('abcdef')], 'end', {
+        'content-length': '6',
+        'content-range': 'bytes 0-5/6',
+      }, 206);
+    }) as typeof fetch,
+  });
+
+  const blob = await client.fetchFile('/file-upload/a');
+  assert.equal(await blob.text(), 'abcdef');
+  assert.equal(call, 2);
+});
+
+test('Content-Range 校验：重叠丢重复、缺头/空洞/改长度一律拒绝（PR #394 评审）', () => {
+  assert.equal(resumedSkip('bytes 6-12/13', 6, 13), 0);
+  // 起点比已收字节小：丢掉重叠的那几字节
+  assert.equal(resumedSkip('bytes 0-5/6', 3, 6), 3);
+  assert.throws(() => resumedSkip(null, 3, 6), /Content-Range/);
+  assert.throws(() => resumedSkip('bytes */6', 3, 6), /Content-Range/);
+  // 起点越过已收字节：中间会留空洞
+  assert.throws(() => resumedSkip('bytes 5-9/10', 3, 10), /空洞/);
+  // 文件在续传途中被换掉
+  assert.throws(() => resumedSkip('bytes 3-9/10', 3, 6), /长度变了/);
+});
+
+test('续传请求带上 Range 与 If-Range 实体校验器（PR #394 评审）', async () => {
+  const sent: Array<Record<string, string>> = [];
+  let call = 0;
+  const client = new RcRestClient({
+    baseUrl: 'https://chat.example',
+    fetchImpl: (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      sent.push((init?.headers ?? {}) as Record<string, string>);
+      call += 1;
+      if (call === 1) {
+        return partialResponse([bytes('ab')], 'error', { 'content-length': '4', etag: '"v1"' });
+      }
+      return partialResponse([bytes('cd')], 'end', { 'content-range': 'bytes 2-3/4' }, 206);
+    }) as typeof fetch,
+  });
+
+  assert.equal(await (await client.fetchFile('/file-upload/a')).text(), 'abcd');
+  assert.equal(sent[1].Range, 'bytes=2-');
+  assert.equal(sent[1]['If-Range'], '"v1"');
+});
+
+test('长度未知的下载仍然可取消：流自己响应 signal（PR #394 评审）', async () => {
+  const controller = new AbortController();
+  const client = new RcRestClient({
+    baseUrl: 'https://chat.example',
+    fetchImpl: (async () => {
+      // 没有 content-length：total 为 null，桌面端会把整条流交给 writeFile
+      let sent = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(streamController) {
+            sent += 1;
+            if (sent === 2) controller.abort();
+            streamController.enqueue(bytes('x'));
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      );
+    }) as typeof fetch,
+  });
+
+  const { stream, total } = await client.openFileStream('/file-upload/a', { signal: controller.signal });
+  assert.equal(total, null);
+  // 消费方完全不看 signal（writeFile 就是这样），取消也必须在流上生效
+  await assert.rejects(
+    (async () => {
+      const reader = stream.getReader();
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) return;
+      }
+    })(),
+    (err: unknown) => err instanceof Error && err.name === 'AbortError',
+  );
 });
 
 test('桌面下载走断点续传通道，且 content-length 缺失时 total 不被当成 0（issue #393）', () => {
@@ -217,4 +309,7 @@ test('桌面下载走断点续传通道，且 content-length 缺失时 total 不
   assert.match(download, /rest\.openFileStream\(path, \{ signal: options\?\.signal \}\)/);
   // Number(null) === 0 会把进度算成 Infinity%，总长度只能由 openFileStream 给出
   assert.doesNotMatch(download, /Number\(response\.headers\.get\('content-length'\)\)/);
+  // 长度未知（total 为 null）不能落到整流直写分支：那条路没有进度，也曾吞掉取消
+  assert.match(download, /if \(total !== null && total > PROGRESS_BUFFER_LIMIT\) \{/);
+  assert.doesNotMatch(download, /\(total \?\? Infinity\) > PROGRESS_BUFFER_LIMIT/);
 });
