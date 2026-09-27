@@ -207,6 +207,11 @@ async function installFullTauriMock(page: Page) {
           }
           if (command === 'plugin:path|resolve_directory') return 'C:\\Users\\tester\\AppData\\Roaming\\com.lusipad.rocketx';
           if (command === 'plugin:path|join') return (invokeArgs?.paths ?? []).join('\\');
+          if (command === 'download_history_open') {
+            const failure = (window as unknown as { __failDownloadHistoryOpen?: string }).__failDownloadHistoryOpen;
+            if (failure) throw failure;
+            return null;
+          }
           if (command === 'plugin:fs|mkdir') return null;
           if (command === 'plugin:fs|exists') {
             const path = normalizeFsPath(String(invokeArgs?.path ?? ''));
@@ -818,6 +823,91 @@ test('聊天记录中的 HTML 附件使用严格沙箱预览（issue #383）', a
   const htmlFrame = page.locator('iframe[title="网页预览"]');
   await expect(htmlFrame).toHaveAttribute('sandbox', '');
   await expect(htmlFrame.contentFrame().getByRole('heading', { name: 'Sandboxed HTML preview' })).toBeVisible();
+});
+
+test('桌面已下载过的附件点击直接打开本地文件，文件没了才重新下载', async ({ page }) => {
+  const localFile = 'C:\\Users\\tester\\Downloads\\发布包.zip';
+  await installFullTauriMock(page);
+  await page.addInitScript(({ server, userId, filePath }) => {
+    const key = `rcx-download-history-v1:${encodeURIComponent(server.toLocaleLowerCase())}:${encodeURIComponent(userId)}`;
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'download-zip',
+        fileName: '发布包.zip',
+        path: filePath,
+        completedAt: Date.parse('2026-07-17T09:00:00.000Z'),
+        source: { rid: 'room-general', roomName: 'General', messageId: 'general-zip-file' },
+      }],
+    }));
+  }, { server: SERVER, userId: ME._id, filePath: localFile });
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [
+        ...histories['room-general'],
+        {
+          _id: 'general-zip-file',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:00:30.000Z',
+          u: ALICE,
+          file: { _id: 'file-zip', name: '发布包.zip', type: 'application/zip', size: 2048 },
+          attachments: [{
+            title: '发布包.zip',
+            title_link: '/file-upload/file-zip/release.zip',
+            title_link_download: true,
+          }],
+        },
+        {
+          _id: 'general-zip-other',
+          rid: 'room-general',
+          msg: '',
+          ts: '2026-07-17T08:00:40.000Z',
+          u: ALICE,
+          file: { _id: 'file-zip-other', name: '另一个包.zip', type: 'application/zip', size: 1024 },
+          attachments: [{
+            title: '另一个包.zip',
+            title_link: '/file-upload/file-zip-other/other.zip',
+            title_link_download: true,
+          }],
+        },
+      ],
+    },
+  });
+  const desktopCalls = () => page.evaluate(() =>
+    (window as unknown as { __tauriCalls: Array<{ command: string; args?: unknown }> }).__tauriCalls
+      .filter((item) => item.command === 'download_history_open' || item.command === 'plugin:dialog|save')
+      .map((item) => ({ command: item.command, args: item.command === 'download_history_open' ? item.args : undefined })),
+  );
+  await conversation(page, 'General').click();
+
+  const card = page.getByRole('button', { name: /发布包\.zip/ });
+  await expect(card).toContainText('已下载');
+  await expect(page.getByRole('button', { name: /另一个包\.zip/ })).not.toContainText('已下载');
+
+  // 已下载：点卡片直接用系统应用打开，不弹「另存为」
+  await card.click();
+  await expect.poll(desktopCalls).toEqual([
+    { command: 'download_history_open', args: { path: localFile } },
+  ]);
+
+  // 本地文件被删了：提示后退回正常下载流程
+  await page.evaluate(() => {
+    (window as unknown as { __failDownloadHistoryOpen: string }).__failDownloadHistoryOpen = '下载文件不存在或已被移动';
+  });
+  await page.getByRole('button', { name: '打开本地文件', exact: true }).click();
+  await expect(page.getByText('本地文件已不在，重新下载')).toBeVisible();
+  await expect.poll(desktopCalls).toEqual([
+    { command: 'download_history_open', args: { path: localFile } },
+    { command: 'download_history_open', args: { path: localFile } },
+    { command: 'plugin:dialog|save', args: undefined },
+  ]);
+
+  // 「重新下载」始终可用，直接走另存为
+  await expect(page.getByRole('button', { name: '重新下载', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '重新下载', exact: true }).click();
+  await expect.poll(async () => (await desktopCalls()).filter((item) => item.command === 'plugin:dialog|save').length).toBe(2);
+  expect(pageErrors).toEqual([]);
 });
 
 test('桌面附件留存默认关闭，可配置并按房间删除且不会重新下载（issue #152、#217）', async ({ page }) => {
