@@ -19,6 +19,7 @@ import {
   Copy,
   Link2,
   Download,
+  ExternalLink,
   File as FileIcon,
   Image as ImageIcon,
   ListChecks,
@@ -43,7 +44,13 @@ import {
 import AuthImage from './AuthImage';
 import FilePreview, { canPreview } from './FilePreview';
 import { isAbortError, saveFile } from '../lib/download';
-import type { DownloadSourceV1 } from '../lib/downloadHistory';
+import {
+  findMessageDownload,
+  isDownloadMissingError,
+  type DownloadSourceV1,
+} from '../lib/downloadHistory';
+import { useDownloadHistory } from '../stores/downloadHistory';
+import { openDownloadedPath } from '../platform/desktopCommands';
 import { humanError, toast } from '../stores/toast';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import { isLongMessage } from '../lib/longMessage';
@@ -170,6 +177,10 @@ function ImageAttachment({
  * 文件附件卡片。
  * 文本/代码/Markdown/PDF 点一下直接预览（飞书就是这个行为，不必先下载再找），
  * 其余类型点击即下载。下载按钮永远在，两种类型都能存到本地。
+ *
+ * 桌面端已经下载过的附件（下载记录里有这条消息）：点击直接用系统应用打开本地文件，
+ * 不再弹「另存为」；右侧另给「打开本地文件」和「重新下载」。本地文件被删或被移走时
+ * 提示一句后退回正常下载，不能只报个错就算了。
  */
 function FileAttachment({
   att,
@@ -184,7 +195,8 @@ function FileAttachment({
   localPath?: string;
   source: DownloadSourceV1;
 }) {
-  const [busy, setBusy] = useState(false);
+  // 进行中的动作：null 空闲；打开本地文件与下载在状态行上要说清是哪一个
+  const [busy, setBusy] = useState<'open' | 'download' | null>(null);
   const [preview, setPreview] = useState(false);
   // 下载进度（issue #385）：桌面流式分支回调；网页端由浏览器接管，保持 null
   const [progress, setProgress] = useState<{ loaded: number; total: number | null } | null>(null);
@@ -193,40 +205,76 @@ function FileAttachment({
   const name = fileName ?? att.title ?? '文件';
   const path = att.title_link ?? '';
   const previewable = !localPath && canPreview(name);
+  // 下载记录只在桌面端有本地路径；局域网直传的文件已经有 localPath，不需要再查
+  const downloaded = useDownloadHistory((s) =>
+    isTauri && !localPath ? findMessageDownload(s.history.records, source) : undefined,
+  );
+  const opensLocal = !!localPath || !!downloaded;
 
-  const download = async () => {
+  const saveRemote = async () => {
+    setBusy('download');
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
+    await saveFile(path, name, source, {
+      signal: controller.signal,
+      onProgress: (loaded, total) => setProgress({ loaded, total }),
+    });
+  };
+
+  const run = async (action: () => Promise<void>) => {
     if ((!path && !localPath) || busy) return;
-    setBusy(true);
+    setBusy('open');
     try {
-      if (localPath) {
-        await openLocalPath(localPath);
-      } else {
-        const controller = new AbortController();
-        downloadAbortRef.current = controller;
-        await saveFile(path, name, source, {
-          signal: controller.signal,
-          onProgress: (loaded, total) => setProgress({ loaded, total }),
-        });
-      }
+      await action();
     } catch (err) {
       if (isAbortError(err)) toast.info('已取消下载');
       else toast.error(err, '下载失败');
     } finally {
       downloadAbortRef.current = null;
       setProgress(null);
-      setBusy(false);
+      setBusy(null);
     }
   };
 
+  /** 主动作：局域网文件和已下载文件直接打开，其余下载 */
+  const openOrDownload = () =>
+    run(async () => {
+      if (localPath) {
+        await openLocalPath(localPath);
+        return;
+      }
+      if (downloaded) {
+        try {
+          await openDownloadedPath(downloaded.path, false);
+          return;
+        } catch (err) {
+          // 文件还在、只是打不开（比如没有关联程序），重新下载也解决不了
+          if (!isDownloadMissingError(err)) {
+            toast.error(err, '无法打开文件');
+            return;
+          }
+          toast.info('本地文件已不在，重新下载');
+        }
+      }
+      await saveRemote();
+    });
+
+  const redownload = () => run(saveRemote);
+
   const cancelDownload = () => downloadAbortRef.current?.abort();
+
+  const iconButton =
+    'flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50';
+  const idleHint = previewable ? '点击预览' : opensLocal ? '打开本地文件' : '点击下载';
+  const idleTag = localPath ? '局域网文件' : downloaded ? '已下载' : previewable ? '点击预览' : '';
 
   return (
     <>
       <div className="mt-1.5 flex w-64 items-center gap-3 rounded-lg bg-surface-4 shadow-raise p-3 transition hover:border-primary">
         <button
-          onClick={() => (previewable ? setPreview(true) : void download())}
+          onClick={() => (previewable ? setPreview(true) : void openOrDownload())}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
-          title={previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载'}
+          title={idleHint}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
             <FileIcon size={16} />
@@ -238,13 +286,11 @@ function FileAttachment({
                 ? progress.total !== null
                   ? `下载中 ${Math.floor((progress.loaded / progress.total) * 100)}%`
                   : fmtSize(progress.loaded)
-                : busy
-                ? localPath
-                  ? '正在打开…'
-                  : '下载中…'
-                : `${fmtSize(size)}${
-                    previewable ? ' · 点击预览' : localPath ? ' · 局域网文件' : ''
-                  }`.trim() || (previewable ? '点击预览' : localPath ? '打开本地文件' : '点击下载')}
+                : busy === 'open'
+                ? '正在打开…'
+                : busy === 'download'
+                ? '下载中…'
+                : [fmtSize(size), idleTag].filter(Boolean).join(' · ') || idleHint}
             </span>
           </span>
         </button>
@@ -256,11 +302,32 @@ function FileAttachment({
           >
             <X size={14} />
           </button>
+        ) : downloaded ? (
+          <>
+            <button
+              onClick={() => void openOrDownload()}
+              disabled={!!busy}
+              className={iconButton}
+              title="打开本地文件"
+              aria-label="打开本地文件"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
+            </button>
+            <button
+              onClick={() => void redownload()}
+              disabled={!!busy}
+              className={iconButton}
+              title="重新下载"
+              aria-label="重新下载"
+            >
+              <Download size={14} />
+            </button>
+          </>
         ) : (
           <button
-            onClick={() => void download()}
-            disabled={busy}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50"
+            onClick={() => void openOrDownload()}
+            disabled={!!busy}
+            className={iconButton}
             title={localPath ? '打开本地文件' : '下载'}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}

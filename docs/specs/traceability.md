@@ -40,6 +40,7 @@
 | `MSG-AC-07` | `stores/chat.ts`、实时客户端 | `tests/ui/core-flows.spec.ts` | 真实断网/恢复 INT |
 | `MSG-AC-08` | `stores/chat.ts`、`components/MessageList.tsx`、`lib/messageScrollDiagnostics.ts` | `message-scroll.test.ts`、`diagnostics.test.ts`、`tests/ui/core-flows.spec.ts` | Windows WebView2 连续切房与三平台正式包 MAN |
 | `MSG-AC-09` | `packages/rc-client/src/files.ts`、`apps/web/src/lib/download.ts` | `issue-393-download-resume.test.ts`、`file-transfer.test.ts` | 真实反向代理掐断 HTML 附件传输 |
+| `MSG-AC-10` | `components/MessageItem.tsx`、`lib/downloadHistory.ts`、Tauri `download_history_open` | `download-history.test.ts`、`tests/ui/core-flows.spec.ts` | Windows 正式包点击已下载附件、删除本地文件后再点击 |
 
 ## 4. 工作台与个人效率
 

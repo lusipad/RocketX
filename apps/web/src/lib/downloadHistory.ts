@@ -42,6 +42,27 @@ export function isAbsoluteLocalPath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path) || path.startsWith('/');
 }
 
+/**
+ * 这条消息的附件最近一次下载到了哪里。记录按完成时间倒序，第一条命中即最新。
+ * 只按 rid + messageId 认：同名文件在不同消息里是不同的文件，不能按文件名猜。
+ */
+export function findMessageDownload(
+  records: readonly DownloadRecordV1[],
+  source: Pick<DownloadSourceV1, 'rid' | 'messageId'>,
+): DownloadRecordV1 | undefined {
+  return records.find(
+    (record) => record.source?.rid === source.rid && record.source.messageId === source.messageId,
+  );
+}
+
+/** 与 Rust 端 resolve_download_history_path 的报错保持一致：文件被删或被移走 */
+export const DOWNLOAD_MISSING_MESSAGE = '下载文件不存在或已被移动';
+
+export function isDownloadMissingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(DOWNLOAD_MISSING_MESSAGE);
+}
+
 function isDownloadSource(value: unknown): value is DownloadSourceV1 {
   if (!value || typeof value !== 'object') return false;
   const source = value as Partial<DownloadSourceV1>;

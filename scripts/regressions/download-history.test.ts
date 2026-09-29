@@ -5,9 +5,12 @@ import {
   MAX_DOWNLOAD_HISTORY,
   addDownloadRecord,
   downloadHistoryStorageKey,
+  DOWNLOAD_MISSING_MESSAGE,
   emptyDownloadHistory,
   fileNameOfDownloadPath,
+  findMessageDownload,
   isAbsoluteLocalPath,
+  isDownloadMissingError,
   parseDownloadHistory,
   type DownloadRecordV1,
 } from '../../apps/web/src/lib/downloadHistory';
@@ -112,4 +115,29 @@ test('下载页通过桌面受控命令打开文件，不再触发 opener 空 sc
   assert.match(main, /fn resolve_download_history_path/);
   assert.match(main, /\.canonicalize\(\)/);
   assert.match(main, /resolved\.is_file\(\)/);
+});
+
+test('已下载的消息附件按 rid + messageId 找到最近一次下载，同名文件不串', () => {
+  const source = (rid: string, messageId: string) => ({ rid, roomName: rid, messageId });
+  let history = emptyDownloadHistory();
+  history = addDownloadRecord(history, { ...record('old', 1), source: source('room-a', 'm1') });
+  history = addDownloadRecord(history, { ...record('other-room', 2), source: source('room-b', 'm1') });
+  history = addDownloadRecord(history, { ...record('legacy', 3) });
+  history = addDownloadRecord(history, { ...record('new', 4), source: source('room-a', 'm1') });
+
+  assert.equal(findMessageDownload(history.records, { rid: 'room-a', messageId: 'm1' })?.id, 'new');
+  assert.equal(findMessageDownload(history.records, { rid: 'room-b', messageId: 'm1' })?.id, 'other-room');
+  assert.equal(findMessageDownload(history.records, { rid: 'room-a', messageId: 'm2' }), undefined);
+});
+
+test('本地文件缺失的判定与 Rust 端报错一致，其它打开失败不当成缺失', async () => {
+  const main = await readFile(
+    new URL('../../apps/desktop/src-tauri/src/main.rs', import.meta.url),
+    'utf8',
+  );
+  assert.ok(main.includes(`"${DOWNLOAD_MISSING_MESSAGE}"`));
+  // Tauri invoke 失败时 reject 的是 Rust 端 Err 里的字符串本身
+  assert.equal(isDownloadMissingError(DOWNLOAD_MISSING_MESSAGE), true);
+  assert.equal(isDownloadMissingError(new Error(DOWNLOAD_MISSING_MESSAGE)), true);
+  assert.equal(isDownloadMissingError('无法使用系统应用打开文件：no application'), false);
 });
