@@ -10,7 +10,7 @@ import {
   selectEnvironmentForProject,
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
-import { slugifyRoomName, useChat } from '../stores/chat';
+import { normalizeDiscussionName, useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import type { WorkItem } from '../stores/workbench';
 import Dialog from './Dialog';
@@ -69,7 +69,7 @@ export default function CreateWorkItemDiscussionDialog({
   const [environmentId, setEnvironmentId] = useState(defaultEnvironment?.id ?? '');
   // 讨论名必须过服务端 slug 校验（issue #392）：`#123 中文标题` 直接发会被拒，
   // 所以默认值就先按 slug 规则生成，用户看到的就是最终房间名。
-  const [discussionName, setDiscussionName] = useState(() => slugifyRoomName(`#${item.id} ${item.title}`, `work-item-${item.id}`));
+  const [discussionName, setDiscussionName] = useState(() => normalizeDiscussionName(`#${item.id} ${item.title}`, `work-item-${item.id}`));
   const [startAgent, setStartAgent] = useState(true);
   const [writeBack, setWriteBack] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -89,7 +89,7 @@ export default function CreateWorkItemDiscussionDialog({
     setBusy(true);
     let discussionRid = '';
     try {
-      const resolvedName = slugifyRoomName(discussionName.trim() || `#${item.id} ${item.title}`, `work-item-${item.id}`);
+      const resolvedName = normalizeDiscussionName(discussionName.trim() || `#${item.id} ${item.title}`, `work-item-${item.id}`);
       const room = await rest.createDiscussion(parentRid, resolvedName);
       discussionRid = room._id;
       useChat.setState((state) => ({ rooms: { ...state.rooms, [room._id]: room } }));

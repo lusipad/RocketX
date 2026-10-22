@@ -68,7 +68,7 @@ import {
   protectedFilePath,
 } from '../lib/forward';
 import { quoteMessagePrefix, stripQuotePrefix } from '../lib/messageText';
-import { slugifyRoomName } from '@rcx/rc-client';
+import { normalizeDiscussionName } from '@rcx/rc-client';
 import {
   COPY_ALL_CAP,
   COPY_PAGE_SIZE,
@@ -1045,7 +1045,7 @@ export function permalinkOf(rid: string, mid: string): string {
 /** 本地乐观展示用的引用附件（服务器确认后会被展开后的正式附件替换） */
 /** 消息文本开头的引用链接（渲染与预览时隐藏） */
 export { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
-export { slugifyRoomName } from '@rcx/rc-client';
+export { normalizeDiscussionName, slugifyRoomName } from '@rcx/rc-client';
 
 export {
   localQuoteAttachment,
@@ -3016,9 +3016,9 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       // 名称来源是消息原文时必然带空格/标点/中文，先按服务端 slug 规则清洗（issue #392）；
       // 提示语与界面显示都用清洗后的名字，保证「看到的名字 = 实际创建的讨论名」。
-      const name = slugifyRoomName(
+      const name = normalizeDiscussionName(
         requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论',
-        'discussion',
+        '讨论',
       );
       const room = await rest.createDiscussion(msg.rid, name, msg._id);
       await refreshSubsAndRooms(set);
@@ -3038,9 +3038,9 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       const room = get().rooms[rid];
       // 不带 pmid：Rocket.Chat 允许讨论没有来源消息，群里还没有消息时也能开。
-      const name = slugifyRoomName(
+      const name = normalizeDiscussionName(
         requestedName?.trim() || room?.fname || room?.name || '讨论',
-        'discussion',
+        '讨论',
       );
       const discussion = await rest.createDiscussion(rid, name);
       await refreshSubsAndRooms(set);

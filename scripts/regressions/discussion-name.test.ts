@@ -26,10 +26,9 @@ test('右键创建讨论先允许编辑讨论名称，再把名称传给创建�
 });
 
 /**
- * issue #392：讨论名会作为 `rooms.createDiscussion` 的 `t_name` 发给服务端，必须
- * 先过服务端 slug 校验。此前消息原文（带空格/标点/中文）被原样发出。
+ * issue #397：讨论名称支持中文，不走 ASCII slug 转换（Rocket.Chat 服务端讨论名是展示名 fname，跳过房间名校验）。
  */
-test('创建讨论的入口都把名称交给 slug 清洗，而不是直接发原文', async () => {
+test('创建讨论的入口支持中文讨论名称，且统一规范化首尾空白与长度截断', async () => {
   const dialog = await readFile(
     new URL('../../apps/web/src/components/CreateDiscussionDialog.tsx', import.meta.url),
     'utf8',
@@ -47,13 +46,12 @@ test('创建讨论的入口都把名称交给 slug 清洗，而不是直接发�
     'utf8',
   );
 
-  // 弹窗实时显示最终房间名，避免「输入的名字」和「实际创建的名字」不一致。
-  assert.match(dialog, /const finalName = slugifyRoomName\(/);
-  assert.match(dialog, /房间名将创建为 \$\{finalName\}|\{finalName === name\.trim\(\) \? `房间名 \$\{finalName\}`/);
-  // store 是唯一发请求的地方：提示语也用清洗后的名字。
-  assert.match(chatStore, /const name = slugifyRoomName\(/);
+  // 弹窗使用 normalizeDiscussionName 保留中文与空格输入
+  assert.match(dialog, /const finalName = normalizeDiscussionName\(/);
+  // store 是唯一发请求的地方：提示语与参数都使用规范化讨论名
+  assert.match(chatStore, /const name = normalizeDiscussionName\(/);
   assert.match(chatStore, /已创建讨论「\$\{name\}」/);
-  // 工作项两条路径此前用 `#123 标题` 直接建讨论。
-  assert.match(workItemDialog, /const discName = slugifyRoomName\(`#\$\{top\.id\} \$\{top\.title\}`/);
-  assert.match(workItemDiscussionDialog, /slugifyRoomName\(discussionName\.trim\(\)/);
+  // 工作项两条路径支持中文标题建讨论，不再被清洗成纯哈希
+  assert.match(workItemDialog, /const discName = normalizeDiscussionName\(`#\$\{top\.id\} \$\{top\.title\}`/);
+  assert.match(workItemDiscussionDialog, /normalizeDiscussionName\(discussionName\.trim\(\)/);
 });

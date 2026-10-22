@@ -48,9 +48,8 @@ test('不带 pmid 也能创建讨论：空群/新群不用先有消息（真机�
   assert.equal(seen[0].path, 'rooms.createDiscussion');
   assert.equal(seen[0].body.prid, 'room-general');
   assert.equal('pmid' in seen[0].body, false, '房间级创建不能带 pmid');
-  // 名称仍走 issue #392 的 slug 清洗（服务端只放行 [0-9a-zA-Z-_.]，中文会被摘要兜底）
-  assert.equal(seen[0].body.t_name, slugifyRoomName('方案讨论', 'discussion'));
-  assert.match(seen[0].body.t_name as string, /^[0-9a-zA-Z-_.]+$/);
+  // 讨论名称保留中文（issue #397，服务端跳过 slug 校验）
+  assert.equal(seen[0].body.t_name, '方案讨论');
 });
 
 test('带 pmid 时仍然原样透传（从消息创建的老路径不变）', async () => {

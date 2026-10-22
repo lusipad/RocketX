@@ -4,6 +4,7 @@ import {
   createDiscussion,
   createGroup,
   createTeam,
+  normalizeDiscussionName,
   RcRestClient,
   ROOM_NAME_MAX_LENGTH,
   saveRoomSettings,
@@ -24,8 +25,9 @@ const rejectingFetch = (seen: Array<{ path: string; body: Record<string, unknown
     const path = String(input).replace(/^.*\/api\/v1\//, '');
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
     seen.push({ path, body });
-    const name = (body.t_name ?? body.name ?? body.roomName) as string | undefined;
-    if (name === undefined || !SERVER_SLUG_RE.test(name)) {
+    const isDiscussion = path.includes('createDiscussion');
+    const name = (isDiscussion ? undefined : (body.name ?? body.roomName)) as string | undefined;
+    if (name !== undefined && !SERVER_SLUG_RE.test(name)) {
       return new Response(
         JSON.stringify({
           status: 'error',
@@ -77,16 +79,26 @@ test('超长名字截断后仍保留区分度且不超上限', () => {
   );
 });
 
-test('创建讨论组会把消息原文清洗成合法房间名（issue #392）', async () => {
+test('讨论名规范化：保留中文、空格与常用符号，截断超长，空值兜底（issue #397）', () => {
+  assert.equal(normalizeDiscussionName('需求评审'), '需求评审');
+  assert.equal(normalizeDiscussionName('  Trim  Me  '), 'Trim  Me');
+  assert.equal(normalizeDiscussionName('#123 工作项讨论 🎉'), '#123 工作项讨论 🎉');
+  assert.equal(normalizeDiscussionName(''), '讨论');
+  assert.equal(normalizeDiscussionName('   ', '备用'), '备用');
+  const long = '标'.repeat(80);
+  assert.equal(normalizeDiscussionName(long).length, ROOM_NAME_MAX_LENGTH);
+});
+
+test('创建讨论组保留中文与空格等原名（issue #397）', async () => {
   const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
   const rc = client(seen);
 
-  // 走真实调用路径：消息原文里同时有空格、中文和标点。
+  // 走真实调用路径：讨论名称保留中文（Rocket.Chat 讨论名是 fname，跳过房间名 slug 校验）
   await rc.createDiscussion('parent-room', '引用块 + @ 的消息没有显示出来', 'msg-1');
 
   assert.equal(seen[0].path, 'rooms.createDiscussion');
   const name = seen[0].body.t_name as string;
-  assert.match(name, SERVER_SLUG_RE, `t_name=${name}`);
+  assert.equal(name, '引用块 + @ 的消息没有显示出来');
   assert.equal(seen[0].body.prid, 'parent-room');
   assert.equal(seen[0].body.pmid, 'msg-1');
 });
@@ -115,21 +127,20 @@ test('改房间名时也走同一套清洗规则', async () => {
   assert.match(seen[0].body.roomName as string, SERVER_SLUG_RE);
 });
 
-test('真实服务端会拒掉的房间名，清洗后必须被接受', async () => {
+test('真实服务端对频道群组会拒掉的房间名，清洗后必须被接受（issue #392）', async () => {
   const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
   const rc = client(seen);
 
-  // 反向校验：先证明同一套服务端规则确实会拒掉原始名字 —— 这个回归测试测的是真实
-  // 约束，而不是我们自己编出来的规则。
-  const raw = await rejectingFetch(seen)('https://chat.example/api/v1/rooms.createDiscussion', {
+  // 反向校验：证明 groups.create 确实会拒掉原始名字
+  const raw = await rejectingFetch(seen)('https://chat.example/api/v1/groups.create', {
     method: 'POST',
-    body: JSON.stringify({ prid: 'parent', t_name: '#123 工作项标题' }),
+    body: JSON.stringify({ name: '#123 工作项标题' }),
   });
   assert.equal(raw.status, 400);
   assert.equal((await raw.json()).errorType, 'error-invalid-room-name');
 
-  await createDiscussion(rc.endpointContext(), 'parent', '#123 工作项标题', 'msg-9');
+  await rc.createGroup('#123 工作项标题', ['alice']);
 
   assert.equal(seen.length, 2);
-  assert.match(seen[1].body.t_name as string, SERVER_SLUG_RE);
+  assert.match(seen[1].body.name as string, SERVER_SLUG_RE);
 });

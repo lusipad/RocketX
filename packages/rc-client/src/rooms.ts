@@ -10,7 +10,7 @@ import type {
   RoomType,
 } from './types';
 import { RcApiError, type RcRestEndpointContext } from './request';
-import { slugifyRoomName } from './roomName';
+import { normalizeDiscussionName, slugifyRoomName } from './roomName';
 
 export interface RocketChatRoomsDomain {
   getSubscriptions(): Promise<RcSubscription[]>;
@@ -483,7 +483,7 @@ export function setReadOnly(context: RcRestEndpointContext, rid: string, type: R
 }
 
 /**
- * 创建讨论组（issue #392）。
+ * 创建讨论组（issue #397 支持中文与空格，Rocket.Chat 讨论名是 fname，服务端跳过 slug 校验）。
  *
  * `name` 必须过服务端 slug 校验，否则 REST 返回
  * `X is not a valid room name. [error-invalid-room-name]`。
@@ -492,7 +492,7 @@ export function setReadOnly(context: RcRestEndpointContext, rid: string, type: R
 export async function createDiscussion(context: RcRestEndpointContext, prid: string, name: string, pmid?: string): Promise<RcRoom> {
   const response = await context.request<{ discussion: RcRoom }>('POST', 'rooms.createDiscussion', {
     prid,
-    t_name: slugifyRoomName(name, 'discussion'),
+    t_name: normalizeDiscussionName(name, '讨论'),
     ...(pmid ? { pmid } : {}),
   });
   return response.discussion;

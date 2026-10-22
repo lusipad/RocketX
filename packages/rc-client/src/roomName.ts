@@ -73,3 +73,16 @@ export function slugifyRoomName(input: string, fallback = 'room'): string {
 
   return slug.slice(0, ROOM_NAME_MAX_LENGTH).replace(/[-_.]+$/, '') || safeFallback.slice(0, ROOM_NAME_MAX_LENGTH);
 }
+
+/**
+ * 讨论名称处理：
+ * 讨论在 Rocket.Chat 服务端对应的是展示名（`fname`），真正的房间名由服务端的
+ * `Random.id()` 随机生成，服务端源码显式跳过了房间名 slug 校验（`isDiscussion ? name : getValidRoomName(...)`）。
+ * 讨论名称支持中文、空格和常用符号，不需要也不能走 ASCII slug 清洗（issue #397）。
+ * 这里去除首尾空白、截断至最大长度（ROOM_NAME_MAX_LENGTH）以及空值兜底。
+ */
+export function normalizeDiscussionName(input: string, fallback = '讨论'): string {
+  const trimmed = (input ?? '').trim();
+  if (!trimmed) return (fallback ?? '讨论').slice(0, ROOM_NAME_MAX_LENGTH);
+  return trimmed.slice(0, ROOM_NAME_MAX_LENGTH);
+}

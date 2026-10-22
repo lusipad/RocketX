@@ -20,8 +20,20 @@ export const isTauri = isTauriRuntime();
  * HTTP/HTTPS API。传空 Origin 后由插件移除该头，其余调用参数保持不变。
  */
 export function prepareTauriRequestInit(init?: RequestInit): RequestInit {
-  const headers = new Headers(init?.headers);
-  headers.set('Origin', '');
+  const rawHeaders = init?.headers;
+  const headers: Record<string, string> = {};
+  if (rawHeaders instanceof Headers) {
+    rawHeaders.forEach((val, key) => {
+      headers[key] = val;
+    });
+  } else if (Array.isArray(rawHeaders)) {
+    for (const [key, val] of rawHeaders) {
+      headers[key] = val;
+    }
+  } else if (rawHeaders) {
+    Object.assign(headers, rawHeaders);
+  }
+  headers['Origin'] = '';
   return { ...init, headers };
 }
 
@@ -29,7 +41,7 @@ const tauriFetch: typeof fetch = (async (input: RequestInfo | URL, init?: Reques
   const rawUrl = input instanceof Request ? input.url : input.toString();
   const url = new URL(rawUrl, location.href);
   if ((url.protocol === 'http:' || url.protocol === 'https:') && !grantedOrigins.has(url.origin)) {
-    throw new Error(`HTTP origin 尚未由宿主授权: ${url.origin}`);
+    await ensureHttpOrigin(url);
   }
   const { fetch: pluginFetch } = await import('@tauri-apps/plugin-http');
   return pluginFetch(input, prepareTauriRequestInit(init));

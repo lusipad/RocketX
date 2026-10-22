@@ -187,7 +187,9 @@ export async function openFileStream(
 ): Promise<FileByteStream> {
   const first = await fetchFileResponse(context, path, { signal: options?.signal });
   const contentType = first.headers.get('content-type')?.split(';', 1)[0]?.trim() || null;
-  const total = parseContentLength(first.headers.get('content-length'));
+  const contentEncoding = first.headers.get('content-encoding')?.trim().toLowerCase();
+  const isCompressed = !!contentEncoding && contentEncoding !== 'identity';
+  const total = isCompressed ? null : parseContentLength(first.headers.get('content-length'));
   // 续传要带上实体校验器：文件在中途被替换时服务端会回 200 全量而不是 206，
   // 我们的 200 分支正好整文件重下，不会把两个版本的字节拼在一起。
   const validator = first.headers.get('etag') ?? first.headers.get('last-modified');

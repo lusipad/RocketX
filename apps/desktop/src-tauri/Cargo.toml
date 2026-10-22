@@ -26,6 +26,9 @@ tauri-plugin-http = { version = "2", default-features = false, features = [
   "stream",
   "json",
   "unsafe-headers",
+  "gzip",
+  "brotli",
+  "deflate",
 ] }
 tauri-plugin-opener = "2"
 # 文件下载：webview 不认 <a download> + blob，必须走原生保存对话框 + 文件写入

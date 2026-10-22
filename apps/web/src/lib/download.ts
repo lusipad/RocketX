@@ -107,7 +107,11 @@ export async function saveFile(
   }
 
   const a = document.createElement('a');
-  a.href = path.startsWith('/') ? assetUrl(path) : path;
+  let href = path.startsWith('/') ? assetUrl(path) : path;
+  if (/^\/(?:file-upload|ufs)\//i.test(path) && !href.includes('download')) {
+    href += (href.includes('?') ? '&' : '?') + 'download';
+  }
+  a.href = href;
   a.download = fileName; // 同源时生效；跨域时由服务端的 Content-Disposition 决定
   a.rel = 'noreferrer';
   document.body.appendChild(a);

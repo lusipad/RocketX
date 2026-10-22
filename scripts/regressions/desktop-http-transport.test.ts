@@ -16,16 +16,20 @@ test('桌面 HTTP/HTTPS 使用系统证书库并移除 WebView Origin', async ()
   // 这个上游兼容特性会启用 reqwest/system-proxy，Windows 与 macOS 都读取系统代理。
   assert.match(dependency, /macos-system-configuration/);
   assert.match(dependency, /unsafe-headers/);
+  assert.match(dependency, /"gzip"/);
+  assert.match(dependency, /"brotli"/);
+  assert.match(dependency, /"deflate"/);
   assert.doesNotMatch(dependency, /dangerous-settings/);
 
-  const original = { method: 'POST', headers: { 'X-Test': 'present' } } satisfies RequestInit;
+  const original = { method: 'POST', headers: { 'X-Test': 'present', 'Accept-Encoding': 'identity' } } satisfies RequestInit;
   const prepared = prepareTauriRequestInit(original);
-  const headers = new Headers(prepared.headers);
+  const headers = prepared.headers as Record<string, string>;
 
   assert.equal(prepared.method, 'POST');
-  assert.equal(headers.get('X-Test'), 'present');
-  assert.equal(headers.get('Origin'), '');
-  assert.deepEqual(original.headers, { 'X-Test': 'present' });
+  assert.equal(headers['X-Test'], 'present');
+  assert.equal(headers['Accept-Encoding'], 'identity');
+  assert.equal(headers['Origin'], '');
+  assert.deepEqual(original.headers, { 'X-Test': 'present', 'Accept-Encoding': 'identity' });
 
   assert.equal(await ensureHttpOrigin('http://chat.example.test/path'), 'http://chat.example.test');
   assert.equal(

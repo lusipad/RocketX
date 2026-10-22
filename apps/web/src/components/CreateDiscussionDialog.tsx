@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Loader2, MessagesSquare } from 'lucide-react';
-import { slugifyRoomName, stripQuotePrefix } from '../stores/chat';
+import { normalizeDiscussionName, stripQuotePrefix } from '../stores/chat';
 import type { RcMessage, RcRoom } from '@rcx/rc-client';
 import Dialog from './Dialog';
 
@@ -32,10 +32,9 @@ export default function CreateDiscussionDialog({
     return (seed || defaultName || '').slice(0, 40);
   });
   const [busy, setBusy] = useState(false);
-  // 服务端只接受 slug 字符集，消息原文里的空格/标点/中文都会被清洗（issue #392）。
-  // 这里实时显示最终房间名，避免用户以为创建出来的名字和自己输入的不一样。
+  // 讨论名支持中文与空格（issue #397，服务端跳过 slug 校验）。
   const fallback = message ? stripQuotePrefix(message.msg) : defaultName ?? '';
-  const finalName = slugifyRoomName(name.trim() || fallback || '讨论', 'discussion');
+  const finalName = normalizeDiscussionName(name.trim() || fallback || '讨论', '讨论');
 
   const submit = async () => {
     if (busy) return;
@@ -87,9 +86,11 @@ export default function CreateDiscussionDialog({
           placeholder="不填则按来源自动生成"
           className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-3 outline-none focus:border-primary"
         />
-        <span className="mt-1 block text-xs text-ink-3">
-          {finalName === name.trim() ? `房间名 ${finalName}` : `房间名将创建为 ${finalName}`}
-        </span>
+        {finalName !== name.trim() && (
+          <span className="mt-1 block text-xs text-ink-3">
+            讨论名称将创建为 {finalName}
+          </span>
+        )}
       </label>
     </Dialog>
   );
