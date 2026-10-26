@@ -1,14 +1,7 @@
 /**
- * Rocket.Chat 房间名（slug）约束。
- *
- * issue #392：服务端对房间名有 slug 校验（默认 `UTF8_Channel_Names_Validation`
- * 等价于 `/^[0-9a-zA-Z-_.]+$/`），不满足时 REST 直接返回
- * `X is not a valid room name. [error-invalid-room-name]`。而创建讨论组的几条
- * 路径此前把「消息原文」或「#123 工作项标题」直接当讨论名发出去：消息原文里
- * 的空格、标点、中文一律违规，于是「在群里创建讨论组」必然失败。
- *
- * 这里把清洗集中到 rc-client 边界，让所有调用方（右键创建讨论、工作项讨论、
- * 工作项创建后建讨论）共用同一套规则，而不是各自 `trim()` 一下。
+ * Rocket.Chat 内部房间名（slug）与展示名称使用不同的规则。
+ * 创建普通群组/团队的旧入口仍使用 slug；讨论创建和房间重命名传展示名称，
+ * 由服务端根据房间类型与工作区命名设置处理，不能在客户端丢弃中文（issue #397）。
  */
 
 /**
@@ -32,7 +25,7 @@ const DIGEST_LENGTH = 8;
 
 /**
  * 名字被清洗后仍要保证区分度：多个不同的中文标题清成同一个 `-` 就会互相撞名，
- * 表现为「第二次创建讨论提示房间已存在」。这里用原始名字算一个稳定摘要。
+ * 表现为「第二次创建房间提示房间已存在」。这里用原始名字算一个稳定摘要。
  */
 function nameDigest(value: string): string {
   let hash = 0x811c9dc5;
@@ -51,7 +44,7 @@ function nameDigest(value: string): string {
  * - 去掉首尾分隔符，避免出现 `-foo` / `foo-` 这类看着像残缺的名字；
  * - 长度上限 `ROOM_NAME_MAX_LENGTH`；
  * - 清洗后为空（例如纯中文名）时用 `fallback` + 原始名字摘要兜底，
- *   既不违反字符集，也不会让同一父群下的多条讨论撞名。
+ *   既不违反字符集，也不会让不同的中文房间名全部撞名。
  */
 export function slugifyRoomName(input: string, fallback = 'room'): string {
   const raw = (input ?? '').trim();
@@ -74,15 +67,18 @@ export function slugifyRoomName(input: string, fallback = 'room'): string {
   return slug.slice(0, ROOM_NAME_MAX_LENGTH).replace(/[-_.]+$/, '') || safeFallback.slice(0, ROOM_NAME_MAX_LENGTH);
 }
 
-/**
- * 讨论名称处理：
- * 讨论在 Rocket.Chat 服务端对应的是展示名（`fname`），真正的房间名由服务端的
- * `Random.id()` 随机生成，服务端源码显式跳过了房间名 slug 校验（`isDiscussion ? name : getValidRoomName(...)`）。
- * 讨论名称支持中文、空格和常用符号，不需要也不能走 ASCII slug 清洗（issue #397）。
- * 这里去除首尾空白、截断至最大长度（ROOM_NAME_MAX_LENGTH）以及空值兜底。
- */
+/** 展示名称保留 Unicode；空值由调用方决定拒绝还是兜底。 */
+export function normalizeRoomDisplayName(input: string): string {
+  const normalized = (input ?? '')
+    .replace(/[\t\n\r]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // 保持原有 UTF-16 长度上限，但不能从 emoji / 扩展汉字的代理对中间截断。
+  return normalized.slice(0, ROOM_NAME_MAX_LENGTH).replace(/[\uD800-\uDBFF]$/, '').trimEnd();
+}
+
+/** 讨论创建使用展示名（fname），与重命名共用清理规则，另提供空值兜底。 */
 export function normalizeDiscussionName(input: string, fallback = '讨论'): string {
-  const trimmed = (input ?? '').trim();
-  if (!trimmed) return (fallback ?? '讨论').slice(0, ROOM_NAME_MAX_LENGTH);
-  return trimmed.slice(0, ROOM_NAME_MAX_LENGTH);
+  return normalizeRoomDisplayName(input) || normalizeRoomDisplayName(fallback) || '讨论';
 }

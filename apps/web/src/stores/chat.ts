@@ -2530,16 +2530,44 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   saveRoomSettings: async (rid, settings) => {
-    const room = get().rooms[rid];
     try {
       await rest.saveRoomSettings(rid, settings);
-      // 服务端不一定推送房间更新，本地先合并一份
-      if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, ...settings } } });
-      toast.success('已保存');
     } catch (err) {
-      toast.error(err, '保存失败，可能是你没有该群的管理权限');
+      if (err instanceof RcApiError && err.errorType === 'error-invalid-room-name') {
+        toast.error(new Error('服务器不接受此房间名称，请联系管理员检查房间命名设置'));
+      } else {
+        toast.error(err, '保存失败');
+      }
       throw err;
     }
+
+    if (settings.name !== undefined) {
+      try {
+        // RC 只返回保存状态。讨论修改 fname，普通群还可能生成新的 name，
+        // 必须回读并同步会话订阅，不能把输入直接覆盖内部 name（issue #397）。
+        const info = await rest.getRoomInfo(rid);
+        set((state) => {
+          const sub = state.subscriptions[rid];
+          return {
+            rooms: { ...state.rooms, [rid]: { ...state.rooms[rid], ...info, fname: info.fname } },
+            subscriptions: sub ? {
+              ...state.subscriptions,
+              [rid]: { ...sub, name: info.name ?? sub.name, fname: info.fname },
+            } : state.subscriptions,
+          };
+        });
+      } catch {
+        // 写入已经成功，不能提示保存失败或伪造未经确认的新名称。
+        toast.info('名称已保存，但刷新失败；请重新打开群信息确认');
+        return;
+      }
+    } else {
+      set((state) => {
+        const room = state.rooms[rid];
+        return room ? { rooms: { ...state.rooms, [rid]: { ...room, ...settings } } } : {};
+      });
+    }
+    toast.success('已保存');
   },
 
   // ---- 群管理 ----
@@ -3014,8 +3042,7 @@ export const useChat = create<ChatState>((set, get) => ({
         toast.update(id, { kind: 'error', message: '本服务器的讨论功能已被管理员关闭' });
         return;
       }
-      // 名称来源是消息原文时必然带空格/标点/中文，先按服务端 slug 规则清洗（issue #392）；
-      // 提示语与界面显示都用清洗后的名字，保证「看到的名字 = 实际创建的讨论名」。
+      // 消息原文作为讨论展示名，保留中文与标点并统一清理空白。
       const name = normalizeDiscussionName(
         requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论',
         '讨论',
