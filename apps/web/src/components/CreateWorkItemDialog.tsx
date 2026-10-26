@@ -163,7 +163,7 @@ export default function CreateWorkItemDialog({
 
       if (createDiscussion && rid) {
         setProgress('创建讨论组…');
-        // 讨论名要过服务端 slug 校验：`#123 中文标题` 原样发会被拒（issue #392）。
+        // 讨论使用展示名，保留工作项编号与中文标题。
         const discName = normalizeDiscussionName(`#${top.id} ${top.title}`, `work-item-${top.id}`);
         const room = await rest.createDiscussion(rid, discName);
 

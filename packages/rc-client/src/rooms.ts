@@ -10,7 +10,7 @@ import type {
   RoomType,
 } from './types';
 import { RcApiError, type RcRestEndpointContext } from './request';
-import { normalizeDiscussionName, slugifyRoomName } from './roomName';
+import { normalizeDiscussionName, normalizeRoomDisplayName, slugifyRoomName } from './roomName';
 
 export interface RocketChatRoomsDomain {
   getSubscriptions(): Promise<RcSubscription[]>;
@@ -437,7 +437,12 @@ export async function saveRoomSettings(
   if (settings.topic !== undefined) body.roomTopic = settings.topic;
   if (settings.announcement !== undefined) body.roomAnnouncement = settings.announcement;
   if (settings.description !== undefined) body.roomDescription = settings.description;
-  if (settings.name !== undefined) body.roomName = slugifyRoomName(settings.name, 'room');
+  if (settings.name !== undefined) {
+    // roomName 是展示名称：讨论更新 fname，普通群由服务端生成/校验内部名称。
+    const displayName = normalizeRoomDisplayName(settings.name);
+    if (!displayName) throw new RcApiError('房间名称不能为空', 400, 'error-empty-room-name');
+    body.roomName = displayName;
+  }
   await context.request('POST', 'rooms.saveRoomSettings', body);
 }
 
@@ -485,9 +490,7 @@ export function setReadOnly(context: RcRestEndpointContext, rid: string, type: R
 /**
  * 创建讨论组（issue #397 支持中文与空格，Rocket.Chat 讨论名是 fname，服务端跳过 slug 校验）。
  *
- * `name` 必须过服务端 slug 校验，否则 REST 返回
- * `X is not a valid room name. [error-invalid-room-name]`。
- * 调用方传消息原文或「#123 标题」时必然带空格/中文，所以这里统一清洗。
+ * `t_name` 是展示名称，不能把消息原文或「#123 标题」转换为 ASCII slug。
  */
 export async function createDiscussion(context: RcRestEndpointContext, prid: string, name: string, pmid?: string): Promise<RcRoom> {
   const response = await context.request<{ discussion: RcRoom }>('POST', 'rooms.createDiscussion', {

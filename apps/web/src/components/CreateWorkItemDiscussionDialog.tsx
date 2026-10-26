@@ -67,8 +67,7 @@ export default function CreateWorkItemDiscussionDialog({
   );
   const [parentRid, setParentRid] = useState(defaultParent);
   const [environmentId, setEnvironmentId] = useState(defaultEnvironment?.id ?? '');
-  // 讨论名必须过服务端 slug 校验（issue #392）：`#123 中文标题` 直接发会被拒，
-  // 所以默认值就先按 slug 规则生成，用户看到的就是最终房间名。
+  // 讨论展示名保留工作项编号与中文标题，预览和提交共用规范化规则。
   const [discussionName, setDiscussionName] = useState(() => normalizeDiscussionName(`#${item.id} ${item.title}`, `work-item-${item.id}`));
   const [startAgent, setStartAgent] = useState(true);
   const [writeBack, setWriteBack] = useState(false);

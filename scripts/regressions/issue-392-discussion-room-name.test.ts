@@ -14,9 +14,8 @@ import {
 /**
  * issue #392：在群里创建讨论组失败 `is not a valid room name. [error-invalid-room-name]`。
  *
- * 服务端默认的房间名 slug 校验只放行 ASCII 字母数字与 `-_.`。这里用同一套规则
- * 伪造一个「会拒掉非法房间名」的服务端，确保 rc-client 边界永远不发非法名字，
- * 而不是等真实服务端回一个 400。
+ * 普通群组/团队的创建入口仍使用 ASCII slug。讨论创建和重命名传展示名，
+ * 不能把这些接口的入参也当作内部 slug 校验；真实部署的命名设置需另做冒烟验证。
  */
 const SERVER_SLUG_RE = /^[0-9a-zA-Z-_.]+$/;
 
@@ -25,8 +24,9 @@ const rejectingFetch = (seen: Array<{ path: string; body: Record<string, unknown
     const path = String(input).replace(/^.*\/api\/v1\//, '');
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
     seen.push({ path, body });
-    const isDiscussion = path.includes('createDiscussion');
-    const name = (isDiscussion ? undefined : (body.name ?? body.roomName)) as string | undefined;
+    const name = (path === 'groups.create' || path === 'channels.create' || path === 'teams.create')
+      ? body.name as string | undefined
+      : undefined;
     if (name !== undefined && !SERVER_SLUG_RE.test(name)) {
       return new Response(
         JSON.stringify({
@@ -81,7 +81,7 @@ test('超长名字截断后仍保留区分度且不超上限', () => {
 
 test('讨论名规范化：保留中文、空格与常用符号，截断超长，空值兜底（issue #397）', () => {
   assert.equal(normalizeDiscussionName('需求评审'), '需求评审');
-  assert.equal(normalizeDiscussionName('  Trim  Me  '), 'Trim  Me');
+  assert.equal(normalizeDiscussionName('  Trim  Me  '), 'Trim Me');
   assert.equal(normalizeDiscussionName('#123 工作项讨论 🎉'), '#123 工作项讨论 🎉');
   assert.equal(normalizeDiscussionName(''), '讨论');
   assert.equal(normalizeDiscussionName('   ', '备用'), '备用');
@@ -117,14 +117,14 @@ test('创建群组与团队同样不会把中文名原样发给服务端（issue
   }
 });
 
-test('改房间名时也走同一套清洗规则', async () => {
+test('改房间名传展示名称，保留中文与空格（issue #397）', async () => {
   const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
   const rc = client(seen);
 
   await saveRoomSettings(rc.endpointContext(), 'rid-1', { name: '新的 房间名' });
 
   assert.equal(seen[0].path, 'rooms.saveRoomSettings');
-  assert.match(seen[0].body.roomName as string, SERVER_SLUG_RE);
+  assert.equal(seen[0].body.roomName, '新的 房间名');
 });
 
 test('真实服务端对频道群组会拒掉的房间名，清洗后必须被接受（issue #392）', async () => {

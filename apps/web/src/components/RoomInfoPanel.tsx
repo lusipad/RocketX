@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RcRoomRole } from '@rcx/rc-client';
 import {
   Archive,
@@ -70,10 +70,14 @@ function EditableField({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const composing = useRef(false);
 
   useEffect(() => setDraft(value ?? ''), [value]);
 
   const save = async () => {
+    if (saving.current || composing.current) return;
+    saving.current = true;
     setBusy(true);
     try {
       await onSave(draft.trim());
@@ -81,6 +85,7 @@ function EditableField({
     } catch {
       setDraft(value ?? ''); // 没权限就退回去，不要留着假状态
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   };
@@ -115,11 +120,27 @@ function EditableField({
           ) : (
             <input
               autoFocus
+              aria-label={label}
               value={draft}
+              disabled={busy}
               onChange={(e) => setDraft(e.target.value)}
+              onCompositionStart={() => { composing.current = true; }}
+              onCompositionEnd={() => { composing.current = false; }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void save();
-                if (e.key === 'Escape') setEditing(false);
+                if (composing.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+                  // 选词时的 Escape 也不能冒泡到全局快捷键并关闭群信息面板。
+                  e.stopPropagation();
+                  return;
+                }
+                if (busy) return;
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void save();
+                }
+                if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  setEditing(false);
+                }
               }}
               className="h-8 w-full rounded-md border border-primary px-2 text-sm outline-none"
             />
