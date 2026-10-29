@@ -35,7 +35,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.equal(rootPackage.scripts?.['prepare:dsh-runtime'], 'node scripts/prepare-dsh-runtime.mjs');
   assert.equal(runtimePackage.name, '@rcx/dsh-runtime');
   assert.equal(runtimePackage.private, true);
-  assert.equal(runtimePackage.dependencies?.['@deepseek-ai/dsh'], '0.1.0-rc.6');
+  assert.equal(runtimePackage.dependencies?.['@deepseek-ai/dsh'], '0.2.1-rc.2');
 
   assert.doesNotMatch(tauriConfig.build?.beforeDevCommand ?? '', /prepare:dsh-runtime/);
   assert.equal(tauriConfig.build?.beforeBuildCommand, 'pnpm -w prepare:sidecars && pnpm --filter @rcx/web build');
@@ -75,7 +75,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.match(prepareScript, /assert\.equal\(\s*versionProbe\.stdout\.trim\(\),\s*dshVersion/u);
   assert.match(prepareScript, /Prepared DSH runtime at \$\{deployRoot\} \(\$\{summary\.files\} files, \$\{summary\.bytes\} bytes\)/);
 
-  assert.match(workspace, /'@deepseek-ai\/dsh-subprocess-local@0\.1\.0-rc\.6': true/);
+  assert.match(workspace, /'@deepseek-ai\/dsh-subprocess-local@0\.2\.1-rc\.2': true/);
   assert.match(workspace, /'node-pty@1\.1\.0': true/);
   assert.match(workspace, /injectWorkspacePackages: true/);
   assert.match(workspace, /minimumReleaseAgeExclude:\s*\n\s*- '@deepseek-ai\/\*'/);
@@ -88,7 +88,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   const dshSource = `${dshRs}\n${dshDiscoveryRs}`;
 
   assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";/);
-  assert.match(dshDiscoveryRs, /const DSH_VERIFIED_VERSION: &str = "0\.1\.0-rc\.6";/);
+  assert.match(dshDiscoveryRs, /const DSH_VERIFIED_VERSION: &str = "0\.2\.1-rc\.2";/);
   assert.match(dshDiscoveryRs, /const DSH_NO_OPEN_VERSION: &str = "0\.1\.0-rc\.7";/);
   assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_ARCHIVE: &str = "dsh-runtime\.tar\.gz";/);
   assert.match(dshDiscoveryRs, /const DSH_BUNDLED_RUNTIME_CACHE_DIR: &str = "bundled-runtime";/);

@@ -1849,10 +1849,11 @@ mod tests {
 
     #[test]
     fn installed_dsh_accepts_semver_range_above_minimum() {
-        assert!(!dsh_version_is_compatible("0.1.0-rc.5"));
-        assert!(dsh_version_is_compatible("0.1.0-rc.6"));
-        assert!(dsh_version_is_compatible(" 0.1.0-rc.6\n"));
-        assert!(dsh_version_is_compatible("0.1.0-rc.7"));
+        assert!(!dsh_version_is_compatible("0.1.0-rc.6"));
+        assert!(!dsh_version_is_compatible("0.2.1-rc.1"));
+        assert!(dsh_version_is_compatible("0.2.1-rc.2"));
+        assert!(dsh_version_is_compatible(" 0.2.1-rc.2\n"));
+        assert!(dsh_version_is_compatible("0.2.1-rc.3"));
         assert!(dsh_version_is_compatible("1.0.0-rc.1"));
         // 无连字符预发布格式规范化为 1.0.0-rcalpha07 后参与比较
         assert!(dsh_version_is_compatible("1.0.0rcalpha07"));
@@ -1863,9 +1864,10 @@ mod tests {
 
     #[test]
     fn installed_dsh_flags_unverified_newer_versions() {
-        assert!(!dsh_version_is_unverified_newer("0.1.0-rc.5"));
         assert!(!dsh_version_is_unverified_newer("0.1.0-rc.6"));
-        assert!(dsh_version_is_unverified_newer("0.1.0-rc.7"));
+        assert!(!dsh_version_is_unverified_newer("0.2.1-rc.1"));
+        assert!(!dsh_version_is_unverified_newer("0.2.1-rc.2"));
+        assert!(dsh_version_is_unverified_newer("0.2.1-rc.3"));
         assert!(dsh_version_is_unverified_newer("1.0.0rcalpha07"));
         assert!(!dsh_version_is_unverified_newer("nightly"));
     }
@@ -1874,6 +1876,7 @@ mod tests {
     fn installed_dsh_no_open_capability_matches_cli_version() {
         assert!(!dsh_version_supports_no_open("0.1.0-rc.6"));
         assert!(dsh_version_supports_no_open("0.1.0-rc.7"));
+        assert!(dsh_version_supports_no_open("0.2.1-rc.2"));
         assert!(dsh_version_supports_no_open("1.0.0"));
         assert!(!dsh_version_supports_no_open("nightly"));
     }

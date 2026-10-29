@@ -4,6 +4,6 @@
   "version": "0.0.0",
   "description": "Private deployable DSH runtime bundle for RocketX desktop packaging",
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.6"
+    "@deepseek-ai/dsh": "0.2.1-rc.2"
   }
 }

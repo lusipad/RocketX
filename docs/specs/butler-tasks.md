@@ -36,7 +36,7 @@
 
 - 顶部/左侧 RocketX 导航中的“管家”进入任务面；RocketX 全局导航不能因进入管家而消失。
 - Codex 视图要求先配置真实本地目录作为托管项目，桌面端发现通过门禁且已登录的 Codex。
-- DeepSeek 视图使用当前托管项目目录；默认 slim 连接系统里已安装且可运行、且已被 RocketX 验证为 `0.1.0-rc.6` 的 DSH，Windows full 则使用同版本私有固定 DSH 运行时。RocketX 只负责通过 bridge 拉起官方 DSH Web、拿到本地 loopback URL 并嵌入 iframe，发送前需在官方 DSH Web 中配置 DeepSeek API Key；官方 DSH Web 没有外部输入注入协议，所以无房间目标的交接会复制提示词并打开 DSH Web，用户再粘贴发送。
+- DeepSeek 视图使用当前托管项目目录；默认 slim 连接系统里已安装且可运行、且已被 RocketX 验证为 `0.2.1-rc.2` 的 DSH，Windows full 则使用同版本私有固定 DSH 运行时。RocketX 只负责通过 bridge 拉起官方 DSH Web、拿到本地 loopback URL 并嵌入 iframe，发送前需在官方 DSH Web 中配置 DeepSeek API Key；官方 DSH Web 没有外部输入注入协议，所以无房间目标的交接会复制提示词并打开 DSH Web，用户再粘贴发送。
 - 性能模式关闭时才提供 AI 任务执行。
 
 ## 4. 主流程

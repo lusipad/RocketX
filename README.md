@@ -84,7 +84,7 @@ RocketX 不改 Rocket.Chat 服务端，只通过公开 API 通信。你可以在
 
 - 只使用 Rocket.Chat 公开 API（`/api/v1/*`、`/websocket`），不改服务端、不私建数据表。
 - 已验证服务端版本：**Rocket.Chat 8.6.x**（docker 镜像已固定为 8.6.1）。
-- 原生集成的密钥停留在本地密钥边界；DSH `0.1.0-rc.6` 使用私有 `DSH_HOME/.credentials.yaml`，不会回显给 RocketX。
+- 原生集成的密钥停留在本地密钥边界；DSH `0.2.1-rc.2` 使用私有 `DSH_HOME/.credentials.yaml`，不会回显给 RocketX。
 
 完整安全政策见 [SECURITY.md](SECURITY.md)。
 

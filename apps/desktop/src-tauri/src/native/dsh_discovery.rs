@@ -17,7 +17,7 @@ use super::{
     process::{hidden_command, host_path},
 };
 
-pub(crate) const DSH_VERIFIED_VERSION: &str = "0.1.0-rc.6";
+pub(crate) const DSH_VERIFIED_VERSION: &str = "0.2.1-rc.2";
 pub(crate) const DSH_NO_OPEN_VERSION: &str = "0.1.0-rc.7";
 pub(crate) const DSH_ROOT_DIR: &str = "dsh";
 pub(crate) const DSH_BUNDLED_RUNTIME_DIR: &str = "dsh-runtime";

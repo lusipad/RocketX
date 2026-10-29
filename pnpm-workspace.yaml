@@ -4,11 +4,14 @@ packages:
   - services/*
 injectWorkspacePackages: true
 allowBuilds:
-  '@deepseek-ai/dsh-subprocess-local@0.1.0-rc.6': true
+  '@deepseek-ai/dsh-subprocess-local@0.2.1-rc.2': true
   '@google/genai@1.52.0': false
+  '@google/genai@2.21.0': false
   esbuild: true
+  'koffi@3.1.1': true
   'koffi@3.1.4': true
   'node-pty@1.1.0': true
+  'node-pty@1.2.0-beta.15': true
   'protobufjs@7.6.5': false
 minimumReleaseAgeExclude:
   - '@deepseek-ai/*'

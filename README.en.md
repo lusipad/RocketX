@@ -156,7 +156,7 @@ RocketX applications run behind a manifest, permission gate, and JSON-RPC bridge
 - RocketX uses public `/api/v1/*` and `/websocket` interfaces and does not patch the Rocket.Chat server.
 - Rocket.Chat **8.6.1** is the pinned, fully tested server in the repository. Other versions are not implied by that result. See [docs/compatibility.md](docs/compatibility.md) for the verified version matrix.
 - The optional Windows "Feiq / IPMSG" plugin owns its protocol Sidecar and uses UDP/TCP 2425. Standard IPMSG supports messages and ordinary files; original Intranet Link peers are limited to `1@shiyeline` discovery and text on 2425. Private port 9011 is not implemented, and legacy peers never inherit RocketX LAN trust.
-- Secrets for native integrations stay in their documented local secret boundary. RocketX uses the operating-system credential store where its native integration supports it; DSH `0.1.0-rc.6` instead owns a private `DSH_HOME/.credentials.yaml`, and the official DSH Web flow keeps the secret in that local store rather than echoing it back to RocketX.
+- Secrets for native integrations stay in their documented local secret boundary. RocketX uses the operating-system credential store where its native integration supports it; DSH `0.2.1-rc.2` instead owns a private `DSH_HOME/.credentials.yaml`, and the official DSH Web flow keeps the secret in that local store rather than echoing it back to RocketX.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Third-party licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
